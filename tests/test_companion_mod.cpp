@@ -161,3 +161,100 @@ TEST_F(CompanionModTest, HandlesFailedHandshakeGracefully) {
     }
     EXPECT_TRUE(foundFailLog);
 }
+
+TEST_F(CompanionModTest, InvokesEngineStereoRenderingTogglesDuringMapExecution) {
+    // Inject mock engine stereo functions
+    RunLuauChunk(L, R"(
+        _G.capturedStereoCalls = {}
+        function setStereoRendering(enable)
+            table.insert(_G.capturedStereoCalls, { fn = "setStereoRendering", val = enable })
+        end
+        function setInvertStereoRendering(invert)
+            table.insert(_G.capturedStereoCalls, { fn = "setInvertStereoRendering", val = invert })
+        end
+    )", "=setupStereoGlobals");
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Call loadMap
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
+
+    // Verify setStereoRendering(true) and setInvertStereoRendering(false) were called
+    int checkStatus = RunLuauChunk(L, R"(
+        assert(#_G.capturedStereoCalls >= 2, "Expected at least 2 stereo calls")
+        assert(_G.capturedStereoCalls[1].fn == "setStereoRendering" and _G.capturedStereoCalls[1].val == true)
+        assert(_G.capturedStereoCalls[2].fn == "setInvertStereoRendering" and _G.capturedStereoCalls[2].val == false)
+    )", "=checkStereoCalls");
+    EXPECT_EQ(checkStatus, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
+
+    // Verify log message
+    bool foundStereoLog = false;
+    for (const auto& msg : s_capturedLogs) {
+        if (msg.find("Invoked engine stereo rendering toggle: setStereoRendering(true)") != std::string::npos) {
+            foundStereoLog = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundStereoLog);
+
+    // Call deleteMap and verify setStereoRendering(false)
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMapCall"), 0);
+    int checkRestore = RunLuauChunk(L, R"(
+        local last = _G.capturedStereoCalls[#_G.capturedStereoCalls]
+        assert(last.fn == "setStereoRendering" and last.val == false)
+    )", "=checkRestore");
+    EXPECT_EQ(checkRestore, 0);
+
+    bool foundRestoreLog = false;
+    for (const auto& msg : s_capturedLogs) {
+        if (msg.find("Restored engine stereo rendering toggle: setStereoRendering(false)") != std::string::npos) {
+            foundRestoreLog = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundRestoreLog);
+}
+
+TEST_F(CompanionModTest, LogsStereoTelemetryProbeResolutionDuringMapUpdate) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
+
+    // Call update(16.6)
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
+
+    // Verify telemetry log or status
+    bool foundTelemetryLog = false;
+    for (const auto& msg : s_capturedLogs) {
+        if (msg.find("Telemetry Probe") != std::string::npos || msg.find("telemetry") != std::string::npos) {
+            foundTelemetryLog = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundTelemetryLog);
+}
+
+TEST_F(CompanionModTest, HandlesMissingStereoRenderingTogglesGracefully) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Without setting setStereoRendering, loadMap should not throw
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
+
+    bool foundMissingLog = false;
+    for (const auto& msg : s_capturedLogs) {
+        if (msg.find("setStereoRendering") != std::string::npos && msg.find("not found") != std::string::npos) {
+            foundMissingLog = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundMissingLog);
+}
+

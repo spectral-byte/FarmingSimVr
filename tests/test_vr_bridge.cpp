@@ -82,3 +82,38 @@ TEST_F(VrBridgeTest, ExposesVersionAndIsReadyAndHandshakeToLuauScript) {
         FAIL() << "Luau script error: " << (err ? err : "unknown error");
     }
 }
+
+TEST_F(VrBridgeTest, ExposesStereoTelemetryAndStereoStatusToLuauScript) {
+    auto probe = std::make_shared<fs25vr::GraphicsTelemetryProbe>();
+    fs25vr::VRBridge bridge(nullptr, probe);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    D3D12_VIEWPORT vp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
+    probe->RecordViewports(1, &vp);
+    probe->OnFrameBoundary();
+
+    std::string script = R"(
+        assert(type(VRBridge.getStereoTelemetry) == "function", "getStereoTelemetry must be a function")
+        assert(type(VRBridge.isStereoActive) == "function", "isStereoActive must be a function")
+
+        local t = VRBridge.getStereoTelemetry()
+        assert(type(t) == "table", "getStereoTelemetry must return a table")
+        assert(t.frameIndex == 1, "frameIndex must be 1")
+        assert(t.maxViewports == 1, "maxViewports must be 1")
+        assert(t.passCount == 1, "passCount must be 1")
+        assert(type(t.nativeStereo) == "boolean", "nativeStereo must be boolean")
+        assert(type(t.afrFallback) == "boolean", "afrFallback must be boolean")
+        assert(type(t.verdict) == "string", "verdict must be string")
+        assert(type(t.summary) == "string", "summary must be string")
+
+        local active = VRBridge.isStereoActive()
+        assert(type(active) == "boolean", "isStereoActive must return boolean")
+    )";
+
+    int status = RunLuauString(L, script);
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+}
+

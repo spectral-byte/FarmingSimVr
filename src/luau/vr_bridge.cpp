@@ -8,8 +8,10 @@ VRBridge& VRBridge::Instance() {
     return instance;
 }
 
-VRBridge::VRBridge(std::shared_ptr<OpenXrManager> openXrManager)
-    : m_openXrManager(openXrManager ? std::move(openXrManager) : std::make_shared<OpenXrManager>()) {
+VRBridge::VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
+                   std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe)
+    : m_openXrManager(openXrManager ? std::move(openXrManager) : std::make_shared<OpenXrManager>()),
+      m_telemetryProbe(telemetryProbe ? std::move(telemetryProbe) : std::shared_ptr<GraphicsTelemetryProbe>(&GraphicsTelemetryProbe::Instance(), [](auto*) {})) {
 }
 
 bool VRBridge::IsInjected(lua_State* L) {
@@ -34,7 +36,7 @@ bool VRBridge::Inject(lua_State* L) {
     int origTop = lua_gettop(L);
 
     // Create table for VRBridge
-    lua_createtable(L, 0, 4);
+    lua_createtable(L, 0, 6);
 
     // VRBridge.version = "1.0.0"
     lua_pushstring(L, m_version.c_str());
@@ -49,6 +51,16 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushlightuserdata(L, this);
     lua_pushcclosure(L, &VRBridge::Lua_Handshake, "handshake", 1);
     lua_setfield(L, -2, "handshake");
+
+    // VRBridge.getStereoTelemetry = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetStereoTelemetry, "getStereoTelemetry", 1);
+    lua_setfield(L, -2, "getStereoTelemetry");
+
+    // VRBridge.isStereoActive = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_IsStereoActive, "isStereoActive", 1);
+    lua_setfield(L, -2, "isStereoActive");
 
     // Set as global variable _G["VRBridge"]
     lua_setglobal(L, "VRBridge");
@@ -96,6 +108,52 @@ int VRBridge::Lua_Handshake(lua_State* L) {
     lua_pushstring(L, modeStr);
     lua_setfield(L, -2, "mode");
 
+    return 1;
+}
+
+int VRBridge::Lua_GetStereoTelemetry(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    auto* probe = (self && self->m_telemetryProbe) ? self->m_telemetryProbe.get() : &GraphicsTelemetryProbe::Instance();
+
+    ProbeSnapshot snap = probe->GetSnapshot();
+
+    lua_createtable(L, 0, 7);
+
+    lua_pushinteger(L, static_cast<int>(snap.frameIndex));
+    lua_setfield(L, -2, "frameIndex");
+
+    lua_pushinteger(L, static_cast<int>(snap.maxViewports));
+    lua_setfield(L, -2, "maxViewports");
+
+    lua_pushinteger(L, static_cast<int>(snap.passCount));
+    lua_setfield(L, -2, "passCount");
+
+    lua_pushboolean(L, snap.nativeStereo ? 1 : 0);
+    lua_setfield(L, -2, "nativeStereo");
+
+    lua_pushboolean(L, snap.afrFallback ? 1 : 0);
+    lua_setfield(L, -2, "afrFallback");
+
+    const char* verdictStr = "Inconclusive";
+    switch (snap.verdict) {
+    case StereoVerdict::NativeStereoDetected: verdictStr = "NativeStereoDetected"; break;
+    case StereoVerdict::AfrFallbackRequired: verdictStr = "AfrFallbackRequired"; break;
+    default: break;
+    }
+    lua_pushstring(L, verdictStr);
+    lua_setfield(L, -2, "verdict");
+
+    lua_pushstring(L, snap.summary.c_str());
+    lua_setfield(L, -2, "summary");
+
+    return 1;
+}
+
+int VRBridge::Lua_IsStereoActive(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    auto* probe = (self && self->m_telemetryProbe) ? self->m_telemetryProbe.get() : &GraphicsTelemetryProbe::Instance();
+
+    lua_pushboolean(L, probe->HasNativeStereoDetected() ? 1 : 0);
     return 1;
 }
 

@@ -73,6 +73,10 @@ set(CORE_SOURCES
     src/proxy/system_dxgi.cpp
     src/proxy/dxgi_proxy.cpp
     src/proxy/dxgi_proxy.h
+    src/telemetry/graphics_telemetry_probe.h
+    src/telemetry/graphics_telemetry_probe.cpp
+    src/telemetry/d3d12_interceptor.h
+    src/telemetry/d3d12_interceptor.cpp
 )
 
 # DXGI Proxy DLL target
@@ -105,6 +109,8 @@ add_executable(fs25_vr_tests
     tests/test_vr_bridge.cpp
     tests/test_luau_interceptor.cpp
     tests/test_companion_mod.cpp
+    tests/test_graphics_telemetry_probe.cpp
+    tests/test_d3d12_instrumentation.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
