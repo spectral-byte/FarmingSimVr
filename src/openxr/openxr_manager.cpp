@@ -108,11 +108,43 @@ bool OpenXrManager::Initialize() {
     XrSystemProperties systemProps{XR_TYPE_SYSTEM_PROPERTIES};
     if (m_dispatch->GetSystemProperties(m_instance, m_runtimeInfo.systemId, &systemProps) == XR_SUCCESS) {
         m_runtimeInfo.systemName = systemProps.systemName;
+        m_runtimeInfo.maxSwapchainImageWidth = systemProps.graphicsProperties.maxSwapchainImageWidth;
+        m_runtimeInfo.maxSwapchainImageHeight = systemProps.graphicsProperties.maxSwapchainImageHeight;
+        m_runtimeInfo.maxLayerCount = systemProps.graphicsProperties.maxLayerCount;
+        m_runtimeInfo.orientationTracking = (systemProps.trackingProperties.orientationTracking != XR_FALSE);
+        m_runtimeInfo.positionTracking = (systemProps.trackingProperties.positionTracking != XR_FALSE);
+
         std::stringstream ss;
         ss << "OpenXR HMD System acquired: " << m_runtimeInfo.systemName
-           << " (System ID: " << m_runtimeInfo.systemId << ")";
+           << " (System ID: " << m_runtimeInfo.systemId << ")\n"
+           << "  - Capabilities: Max Swapchain " << m_runtimeInfo.maxSwapchainImageWidth
+           << "x" << m_runtimeInfo.maxSwapchainImageHeight
+           << ", Max Layers: " << m_runtimeInfo.maxLayerCount
+           << ", Orientation Tracking: " << (m_runtimeInfo.orientationTracking ? "Supported" : "Unsupported")
+           << ", Position Tracking: " << (m_runtimeInfo.positionTracking ? "Supported" : "Unsupported");
         LogInfo(ss.str());
     }
+
+    XrGraphicsRequirementsD3D12KHR graphicsRequirements{XR_TYPE_GRAPHICS_REQUIREMENTS_D3D12_KHR};
+    res = m_dispatch->GetD3D12GraphicsRequirementsKHR(m_instance, m_runtimeInfo.systemId, &graphicsRequirements);
+    if (res != XR_SUCCESS) {
+        std::stringstream ss;
+        ss << "Failed to query OpenXR D3D12 graphics requirements (result " << res << "). Silently entering Pass-Through Mode.";
+        LogInfo(ss.str());
+
+        m_dispatch->DestroyInstance(m_instance);
+        m_instance = XR_NULL_HANDLE;
+        m_state = OpenXrState::PassThrough;
+        return true;
+    }
+
+    m_runtimeInfo.minFeatureLevel = graphicsRequirements.minFeatureLevel;
+    m_runtimeInfo.adapterLuid = graphicsRequirements.adapterLuid;
+
+    std::stringstream ss;
+    ss << "OpenXR D3D12 Graphics Requirements verified (Min Feature Level: 0x"
+       << std::hex << m_runtimeInfo.minFeatureLevel << std::dec << ").";
+    LogInfo(ss.str());
 
     m_state = OpenXrState::Active;
     LogInfo("OpenXR lifecycle successfully established in Active VR Mode.");

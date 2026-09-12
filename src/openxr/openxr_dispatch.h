@@ -46,6 +46,11 @@ public:
         XrInstance instance,
         XrSystemId systemId,
         XrSystemProperties* properties) = 0;
+
+    virtual XrResult GetD3D12GraphicsRequirementsKHR(
+        XrInstance instance,
+        XrSystemId systemId,
+        XrGraphicsRequirementsD3D12KHR* graphicsRequirements) = 0;
 };
 
 class NativeOpenXrDispatch : public IOpenXrDispatch {
@@ -87,6 +92,21 @@ public:
         XrSystemId systemId,
         XrSystemProperties* properties) override {
         return xrGetSystemProperties(instance, systemId, properties);
+    }
+
+    XrResult GetD3D12GraphicsRequirementsKHR(
+        XrInstance instance,
+        XrSystemId systemId,
+        XrGraphicsRequirementsD3D12KHR* graphicsRequirements) override {
+        PFN_xrGetD3D12GraphicsRequirementsKHR pfnGetD3D12GraphicsRequirements = nullptr;
+        XrResult res = xrGetInstanceProcAddr(
+            instance,
+            "xrGetD3D12GraphicsRequirementsKHR",
+            reinterpret_cast<PFN_xrVoidFunction*>(&pfnGetD3D12GraphicsRequirements));
+        if (res != XR_SUCCESS || !pfnGetD3D12GraphicsRequirements) {
+            return res != XR_SUCCESS ? res : XR_ERROR_FUNCTION_UNSUPPORTED;
+        }
+        return pfnGetD3D12GraphicsRequirements(instance, systemId, graphicsRequirements);
     }
 };
 

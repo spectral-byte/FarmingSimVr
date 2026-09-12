@@ -100,6 +100,9 @@ public:
         return XR_ERROR_FORM_FACTOR_UNAVAILABLE;
     }
 
+    XrResult getD3D12RequirementsResult = XR_SUCCESS;
+    D3D_FEATURE_LEVEL mockMinFeatureLevel = D3D_FEATURE_LEVEL_12_0;
+
     XrResult GetSystemProperties(
         XrInstance /*instance*/,
         XrSystemId /*systemId*/,
@@ -110,6 +113,25 @@ public:
         if (properties) {
             strncpy_s(properties->systemName, mockSystemName.c_str(), XR_MAX_SYSTEM_NAME_SIZE - 1);
             properties->systemId = mockSystemId;
+            properties->graphicsProperties.maxSwapchainImageWidth = 4096;
+            properties->graphicsProperties.maxSwapchainImageHeight = 4096;
+            properties->graphicsProperties.maxLayerCount = 16;
+            properties->trackingProperties.orientationTracking = XR_TRUE;
+            properties->trackingProperties.positionTracking = XR_TRUE;
+        }
+        return XR_SUCCESS;
+    }
+
+    XrResult GetD3D12GraphicsRequirementsKHR(
+        XrInstance /*instance*/,
+        XrSystemId /*systemId*/,
+        XrGraphicsRequirementsD3D12KHR* graphicsRequirements) override {
+        if (getD3D12RequirementsResult != XR_SUCCESS) {
+            return getD3D12RequirementsResult;
+        }
+        if (graphicsRequirements) {
+            graphicsRequirements->minFeatureLevel = mockMinFeatureLevel;
+            graphicsRequirements->adapterLuid = { 0x1234, 0x5678 };
         }
         return XR_SUCCESS;
     }
@@ -149,7 +171,21 @@ TEST(OpenXrManagerTest, EntersPassThroughWhenFormFactorUnavailable) {
     EXPECT_EQ(manager.GetState(), OpenXrState::PassThrough);
     EXPECT_TRUE(manager.IsPassThrough());
     EXPECT_FALSE(manager.IsActive());
-    // Instance was created then destroyed on fallback
+    // Instance was created then destroyed upon entering Pass-Through Mode
+    EXPECT_TRUE(mockDispatch->createInstanceCalled);
+    EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
+}
+
+TEST(OpenXrManagerTest, EntersPassThroughWhenD3D12RequirementsFails) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->getD3D12RequirementsResult = XR_ERROR_RUNTIME_FAILURE;
+
+    OpenXrManager manager(mockDispatch);
+    EXPECT_TRUE(manager.Initialize());
+    EXPECT_EQ(manager.GetState(), OpenXrState::PassThrough);
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.IsActive());
     EXPECT_TRUE(mockDispatch->createInstanceCalled);
     EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
 }
@@ -172,6 +208,12 @@ TEST(OpenXrManagerTest, InitializesActiveWhenHmdPresent) {
     EXPECT_EQ(info.systemId, 12345);
     EXPECT_EQ(info.systemName, "Mock HMD Device");
     EXPECT_TRUE(info.d3d12ExtensionSupported);
+    EXPECT_EQ(info.maxSwapchainImageWidth, 4096);
+    EXPECT_EQ(info.maxSwapchainImageHeight, 4096);
+    EXPECT_EQ(info.maxLayerCount, 16);
+    EXPECT_TRUE(info.orientationTracking);
+    EXPECT_TRUE(info.positionTracking);
+    EXPECT_EQ(info.minFeatureLevel, D3D_FEATURE_LEVEL_12_0);
 
     manager.Shutdown();
     EXPECT_TRUE(mockDispatch->destroyInstanceCalled);

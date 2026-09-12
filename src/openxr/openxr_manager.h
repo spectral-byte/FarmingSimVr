@@ -20,6 +20,16 @@ struct OpenXrRuntimeInfo {
     XrSystemId systemId = XR_NULL_SYSTEM_ID;
     std::string systemName;
     bool d3d12ExtensionSupported = false;
+
+    uint32_t maxSwapchainImageWidth = 0;
+    uint32_t maxSwapchainImageHeight = 0;
+    uint32_t maxLayerCount = 0;
+
+    bool orientationTracking = false;
+    bool positionTracking = false;
+
+    D3D_FEATURE_LEVEL minFeatureLevel = D3D_FEATURE_LEVEL_11_0;
+    LUID adapterLuid{};
 };
 
 class OpenXrManager {
