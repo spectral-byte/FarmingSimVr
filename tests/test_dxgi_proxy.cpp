@@ -20,6 +20,7 @@ public:
     XrResult GetInstanceProperties(XrInstance, XrInstanceProperties*) override { return XR_ERROR_RUNTIME_UNAVAILABLE; }
     XrResult GetSystem(XrInstance, const XrSystemGetInfo*, XrSystemId*) override { return XR_ERROR_RUNTIME_UNAVAILABLE; }
     XrResult GetSystemProperties(XrInstance, XrSystemId, XrSystemProperties*) override { return XR_ERROR_RUNTIME_UNAVAILABLE; }
+    XrResult EnumerateViewConfigurationViews(XrInstance, XrSystemId, XrViewConfigurationType, uint32_t, uint32_t*, XrViewConfigurationView*) override { return XR_ERROR_RUNTIME_UNAVAILABLE; }
     XrResult GetD3D12GraphicsRequirementsKHR(XrInstance, XrSystemId, XrGraphicsRequirementsD3D12KHR*) override { return XR_ERROR_RUNTIME_UNAVAILABLE; }
     XrResult CreateSession(XrInstance, const XrSessionCreateInfo*, XrSession*) override { return XR_ERROR_FUNCTION_UNSUPPORTED; }
     XrResult DestroySession(XrSession) override { return XR_SUCCESS; }
@@ -173,6 +174,24 @@ public:
         }
         return XR_SUCCESS;
     }
+    uint32_t mockRecommendedViewWidth[2] = { 2160, 2160 };
+    uint32_t mockRecommendedViewHeight[2] = { 2160, 2160 };
+    XrResult EnumerateViewConfigurationViews(XrInstance, XrSystemId, XrViewConfigurationType, uint32_t viewCapacityInput, uint32_t* viewCountOutput, XrViewConfigurationView* configurationViews) override {
+        if (viewCountOutput) *viewCountOutput = 2;
+        if (viewCapacityInput >= 2 && configurationViews) {
+            for (uint32_t i = 0; i < 2; ++i) {
+                configurationViews[i].type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
+                configurationViews[i].next = nullptr;
+                configurationViews[i].recommendedImageRectWidth = mockRecommendedViewWidth[i];
+                configurationViews[i].recommendedImageRectHeight = mockRecommendedViewHeight[i];
+                configurationViews[i].maxImageRectWidth = 4096;
+                configurationViews[i].maxImageRectHeight = 4096;
+                configurationViews[i].recommendedSwapchainSampleCount = 1;
+                configurationViews[i].maxSwapchainSampleCount = 4;
+            }
+        }
+        return XR_SUCCESS;
+    }
     XrResult GetD3D12GraphicsRequirementsKHR(XrInstance, XrSystemId, XrGraphicsRequirementsD3D12KHR* reqs) override {
         if (reqs) {
             reqs->minFeatureLevel = D3D_FEATURE_LEVEL_12_0;
@@ -303,6 +322,63 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE MockQueryInterface(IUnknown*, REF
 }
 __declspec(noinline) ULONG STDMETHODCALLTYPE MockAddRef(IUnknown*) { return 2; }
 __declspec(noinline) ULONG STDMETHODCALLTYPE MockRelease(IUnknown*) { return 1; }
+
+static void* s_activeMockDevice = nullptr;
+static void* s_activeMockQueue = nullptr;
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockDeviceQI(IUnknown* self, REFIID riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    if (riid == __uuidof(ID3D12Device) || riid == __uuidof(IUnknown)) {
+        *ppv = self;
+        return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+}
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockQueueQI(IUnknown* self, REFIID riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    if (riid == __uuidof(ID3D12CommandQueue) || riid == __uuidof(IUnknown)) {
+        *ppv = self;
+        return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+}
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockQueueGetDevice(ID3D12CommandQueue*, REFIID riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    if ((riid == __uuidof(ID3D12Device) || riid == __uuidof(IUnknown)) && s_activeMockDevice) {
+        *ppv = s_activeMockDevice;
+        return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+}
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockSwapChainQI(IUnknown* self, REFIID riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    if (riid == __uuidof(IDXGISwapChain) || riid == __uuidof(IDXGISwapChain1) || riid == __uuidof(IUnknown)) {
+        *ppv = self;
+        return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+}
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockSwapChainGetDeviceWithQueue(IDXGISwapChain*, REFIID riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    if ((riid == __uuidof(ID3D12CommandQueue) || riid == __uuidof(IUnknown)) && s_activeMockQueue) {
+        *ppv = s_activeMockQueue;
+        return S_OK;
+    }
+    if (riid == __uuidof(ID3D12Device) && s_activeMockDevice) {
+        *ppv = s_activeMockDevice;
+        return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+}
 
 __declspec(noinline) HRESULT STDMETHODCALLTYPE MockGetDevice(IDXGISwapChain*, REFIID, void** ppv) {
     if (ppv) *ppv = nullptr;
@@ -473,6 +549,189 @@ TEST(DxgiProxyTest, OnPresentGatesAfrPacingBehindTelemetryProbe) {
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+}
+
+struct MockD3D12Environment {
+    std::vector<void*> devVTable;
+    std::vector<void*> queueVTable;
+    MockComObject mockDevice{ nullptr };
+    MockComObject mockQueue{ nullptr };
+
+    MockD3D12Environment() : devVTable(20, nullptr), queueVTable(20, nullptr) {
+        devVTable[0] = reinterpret_cast<void*>(&MockDeviceQI);
+        devVTable[1] = reinterpret_cast<void*>(&MockAddRef);
+        devVTable[2] = reinterpret_cast<void*>(&MockRelease);
+        mockDevice.vtable = devVTable.data();
+
+        queueVTable[0] = reinterpret_cast<void*>(&MockQueueQI);
+        queueVTable[1] = reinterpret_cast<void*>(&MockAddRef);
+        queueVTable[2] = reinterpret_cast<void*>(&MockRelease);
+        queueVTable[7] = reinterpret_cast<void*>(&MockQueueGetDevice);
+        mockQueue.vtable = queueVTable.data();
+
+        s_activeMockDevice = &mockDevice;
+        s_activeMockQueue = &mockQueue;
+    }
+
+    ~MockD3D12Environment() {
+        s_activeMockDevice = nullptr;
+        s_activeMockQueue = nullptr;
+    }
+
+    IUnknown* GetDeviceUnknown() { return reinterpret_cast<IUnknown*>(&mockDevice); }
+    IUnknown* GetQueueUnknown() { return reinterpret_cast<IUnknown*>(&mockQueue); }
+    ID3D12Device* GetDevice() { return reinterpret_cast<ID3D12Device*>(&mockDevice); }
+    ID3D12CommandQueue* GetQueue() { return reinterpret_cast<ID3D12CommandQueue*>(&mockQueue); }
+};
+
+TEST(DxgiProxyTest, ConsolidatesDeviceAndQueueExtractionFromCommandQueue) {
+    MockD3D12Environment env;
+
+    ComPtr<ID3D12Device> extractedDevice;
+    ComPtr<ID3D12CommandQueue> extractedQueue;
+
+    EXPECT_TRUE(DxgiProxy::ExtractD3D12DeviceAndQueue(
+        env.GetQueueUnknown(), extractedDevice, extractedQueue));
+    EXPECT_EQ(extractedQueue.Get(), env.GetQueue());
+    EXPECT_EQ(extractedDevice.Get(), env.GetDevice());
+
+    DxgiProxy proxy;
+    EXPECT_TRUE(proxy.ResolveD3D12DeviceAndQueue(env.GetQueueUnknown()));
+    EXPECT_EQ(proxy.GetD3D12CommandQueue(), env.GetQueue());
+    EXPECT_EQ(proxy.GetD3D12Device(), env.GetDevice());
+}
+
+TEST(DxgiProxyTest, ConsolidatesDeviceAndQueueExtractionFromDevice) {
+    MockD3D12Environment env;
+
+    ComPtr<ID3D12Device> extractedDevice;
+    ComPtr<ID3D12CommandQueue> extractedQueue;
+
+    EXPECT_TRUE(DxgiProxy::ExtractD3D12DeviceAndQueue(
+        env.GetDeviceUnknown(), extractedDevice, extractedQueue));
+    EXPECT_EQ(extractedDevice.Get(), env.GetDevice());
+    EXPECT_EQ(extractedQueue.Get(), nullptr);
+
+    DxgiProxy proxy;
+    EXPECT_TRUE(proxy.ResolveD3D12DeviceAndQueue(env.GetDeviceUnknown()));
+    EXPECT_EQ(proxy.GetD3D12Device(), env.GetDevice());
+    EXPECT_EQ(proxy.GetD3D12CommandQueue(), nullptr);
+}
+
+TEST(DxgiProxyTest, ConsolidatesDeviceAndQueueExtractionFromSwapChain) {
+    MockD3D12Environment env;
+
+    std::vector<void*> scVTable(30, nullptr);
+    scVTable[0] = reinterpret_cast<void*>(&MockSwapChainQI);
+    scVTable[1] = reinterpret_cast<void*>(&MockAddRef);
+    scVTable[2] = reinterpret_cast<void*>(&MockRelease);
+    scVTable[7] = reinterpret_cast<void*>(&MockSwapChainGetDeviceWithQueue);
+    MockComObject mockSwapChain{ scVTable.data() };
+
+    ComPtr<ID3D12Device> extractedDevice;
+    ComPtr<ID3D12CommandQueue> extractedQueue;
+
+    EXPECT_TRUE(DxgiProxy::ExtractD3D12DeviceAndQueue(
+        reinterpret_cast<IUnknown*>(&mockSwapChain), extractedDevice, extractedQueue));
+    EXPECT_EQ(extractedQueue.Get(), env.GetQueue());
+    EXPECT_EQ(extractedDevice.Get(), env.GetDevice());
+}
+
+TEST(DxgiProxyTest, CreateSwapChainInterceptorsConsolidateDeviceAndQueueExtraction) {
+    MockD3D12Environment env;
+
+    DxgiProxy proxy;
+    DxgiProxy::Intercept_CreateSwapChain(nullptr, env.GetQueueUnknown(), nullptr, nullptr);
+    EXPECT_EQ(proxy.GetD3D12CommandQueue(), env.GetQueue());
+    EXPECT_EQ(proxy.GetD3D12Device(), env.GetDevice());
+
+    proxy.SetD3D12DeviceAndQueue(nullptr, nullptr);
+    EXPECT_EQ(proxy.GetD3D12Device(), nullptr);
+    EXPECT_EQ(proxy.GetD3D12CommandQueue(), nullptr);
+
+    DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, env.GetQueueUnknown(), nullptr, nullptr, nullptr, nullptr, nullptr);
+    EXPECT_EQ(proxy.GetD3D12CommandQueue(), env.GetQueue());
+    EXPECT_EQ(proxy.GetD3D12Device(), env.GetDevice());
+}
+
+TEST(DxgiProxyTest, ConfiguresRecommendedOpenXrEyeSwapchainDimensionsOnPresent) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    mockDispatch->mockRecommendedViewWidth[0] = 2064;
+    mockDispatch->mockRecommendedViewHeight[0] = 2208;
+    mockDispatch->mockRecommendedViewWidth[1] = 2160;
+    mockDispatch->mockRecommendedViewHeight[1] = 2160;
+
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+
+    EXPECT_EQ(openXrManager->GetRecommendedEyeWidth(0), 2064u);
+    EXPECT_EQ(openXrManager->GetRecommendedEyeHeight(0), 2208u);
+    EXPECT_EQ(openXrManager->GetRecommendedEyeWidth(1), 2160u);
+    EXPECT_EQ(openXrManager->GetRecommendedEyeHeight(1), 2160u);
+    EXPECT_FALSE(openXrManager->HasEyeSwapchains());
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    std::vector<void*> scVTable(30, nullptr);
+    scVTable[0] = reinterpret_cast<void*>(&MockSwapChainQI);
+    scVTable[1] = reinterpret_cast<void*>(&MockAddRef);
+    scVTable[2] = reinterpret_cast<void*>(&MockRelease);
+    scVTable[7] = reinterpret_cast<void*>(&MockGetDevice);
+    scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
+    scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
+    scVTable[12] = reinterpret_cast<void*>(&MockGetDesc); // Returns 1920x1080
+    MockComObject mockSwapChain{ scVTable.data() };
+
+    auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
+
+    proxy.OnPresent(pSwapChain, 0, 0);
+
+    EXPECT_TRUE(openXrManager->HasEyeSwapchains());
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(0).width, 2064u);
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(0).height, 2208u);
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(1).width, 2160u);
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(1).height, 2160u);
+}
+
+TEST(DxgiProxyTest, FallsBackToBackbufferDimensionsWhenRecommendedDimensionsUnavailable) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    mockDispatch->mockRecommendedViewWidth[0] = 0;
+    mockDispatch->mockRecommendedViewHeight[0] = 0;
+    mockDispatch->mockRecommendedViewWidth[1] = 0;
+    mockDispatch->mockRecommendedViewHeight[1] = 0;
+
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+
+    EXPECT_FALSE(openXrManager->HasEyeSwapchains());
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    std::vector<void*> scVTable(30, nullptr);
+    scVTable[0] = reinterpret_cast<void*>(&MockSwapChainQI);
+    scVTable[1] = reinterpret_cast<void*>(&MockAddRef);
+    scVTable[2] = reinterpret_cast<void*>(&MockRelease);
+    scVTable[7] = reinterpret_cast<void*>(&MockGetDevice);
+    scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
+    scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
+    scVTable[12] = reinterpret_cast<void*>(&MockGetDesc); // Returns 1920x1080
+    MockComObject mockSwapChain{ scVTable.data() };
+
+    auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
+
+    proxy.OnPresent(pSwapChain, 0, 0);
+
+    EXPECT_TRUE(openXrManager->HasEyeSwapchains());
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(0).width, 1920u);
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(0).height, 1080u);
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(1).width, 1920u);
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(1).height, 1080u);
 }
 
 } // namespace fs25vr

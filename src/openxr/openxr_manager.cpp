@@ -147,6 +147,29 @@ bool OpenXrManager::Initialize() {
         LogInfo(ss.str());
     }
 
+    uint32_t viewConfigCount = 0;
+    res = m_dispatch->EnumerateViewConfigurationViews(
+        m_instance, m_runtimeInfo.systemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &viewConfigCount, nullptr);
+    if (res == XR_SUCCESS && viewConfigCount > 0) {
+        m_viewConfigViews.assign(viewConfigCount, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
+        res = m_dispatch->EnumerateViewConfigurationViews(
+            m_instance, m_runtimeInfo.systemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+            viewConfigCount, &viewConfigCount, m_viewConfigViews.data());
+        if (res == XR_SUCCESS && !m_viewConfigViews.empty()) {
+            m_runtimeInfo.recommendedEyeWidth = m_viewConfigViews[0].recommendedImageRectWidth;
+            m_runtimeInfo.recommendedEyeHeight = m_viewConfigViews[0].recommendedImageRectHeight;
+
+            std::stringstream ss;
+            ss << "OpenXR Recommended View Configuration: "
+               << m_runtimeInfo.recommendedEyeWidth << "x" << m_runtimeInfo.recommendedEyeHeight;
+            if (m_viewConfigViews.size() > 1) {
+                ss << " (Right Eye: " << m_viewConfigViews[1].recommendedImageRectWidth
+                   << "x" << m_viewConfigViews[1].recommendedImageRectHeight << ")";
+            }
+            LogInfo(ss.str());
+        }
+    }
+
     XrGraphicsRequirementsD3D12KHR graphicsRequirements{XR_TYPE_GRAPHICS_REQUIREMENTS_D3D12_KHR};
     res = m_dispatch->GetD3D12GraphicsRequirementsKHR(m_instance, m_runtimeInfo.systemId, &graphicsRequirements);
     if (res != XR_SUCCESS) {
@@ -198,6 +221,7 @@ void OpenXrManager::Shutdown() {
     m_useSimulatedProjections = false;
     m_eyeProjections[0] = {};
     m_eyeProjections[1] = {};
+    m_viewConfigViews.clear();
     m_device = nullptr;
     m_queue = nullptr;
 }
@@ -471,6 +495,20 @@ void OpenXrManager::SetSimulatedProjection(uint32_t eyeIndex, const EyeProjectio
     m_eyeProjections[eyeIndex] = proj;
 }
 
+uint32_t OpenXrManager::GetRecommendedEyeWidth(uint32_t eyeIndex) const {
+    if (eyeIndex < m_viewConfigViews.size() && m_viewConfigViews[eyeIndex].recommendedImageRectWidth > 0) {
+        return m_viewConfigViews[eyeIndex].recommendedImageRectWidth;
+    }
+    return m_runtimeInfo.recommendedEyeWidth;
+}
+
+uint32_t OpenXrManager::GetRecommendedEyeHeight(uint32_t eyeIndex) const {
+    if (eyeIndex < m_viewConfigViews.size() && m_viewConfigViews[eyeIndex].recommendedImageRectHeight > 0) {
+        return m_viewConfigViews[eyeIndex].recommendedImageRectHeight;
+    }
+    return m_runtimeInfo.recommendedEyeHeight;
+}
+
 void OpenXrManager::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue) {
     if (device) m_device = device;
     if (queue) m_queue = queue;
@@ -489,12 +527,17 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
     }
 
     for (uint32_t i = 0; i < 2; ++i) {
+        uint32_t eyeWidth = (width != 0) ? width : GetRecommendedEyeWidth(i);
+        uint32_t eyeHeight = (height != 0) ? height : GetRecommendedEyeHeight(i);
+        if (eyeWidth == 0) eyeWidth = 1920;
+        if (eyeHeight == 0) eyeHeight = 1080;
+
         XrSwapchainCreateInfo createInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
         createInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
         createInfo.format = format;
         createInfo.sampleCount = 1;
-        createInfo.width = width;
-        createInfo.height = height;
+        createInfo.width = eyeWidth;
+        createInfo.height = eyeHeight;
         createInfo.faceCount = 1;
         createInfo.arraySize = 1;
         createInfo.mipCount = 1;
@@ -517,15 +560,15 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
                 reinterpret_cast<XrSwapchainImageBaseHeader*>(m_eyeSwapchains[i].images.data()));
         }
 
-        m_eyeSwapchains[i].width = width;
-        m_eyeSwapchains[i].height = height;
+        m_eyeSwapchains[i].width = eyeWidth;
+        m_eyeSwapchains[i].height = eyeHeight;
         m_eyeSwapchains[i].format = format;
         m_eyeSwapchains[i].lastCopiedIndex = 0;
         m_eyeSwapchains[i].hasCopiedFrame = false;
     }
 
     m_hasEyeSwapchains = true;
-    LogInfo("OpenXrManager: Created stereoscopic eye swapchains (" + std::to_string(width) + "x" + std::to_string(height) + ").");
+    LogInfo("OpenXrManager: Created stereoscopic eye swapchains (" + std::to_string(m_eyeSwapchains[0].width) + "x" + std::to_string(m_eyeSwapchains[0].height) + ").");
     return true;
 }
 

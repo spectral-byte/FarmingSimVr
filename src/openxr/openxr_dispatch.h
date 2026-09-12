@@ -47,6 +47,14 @@ public:
         XrSystemId systemId,
         XrSystemProperties* properties) = 0;
 
+    virtual XrResult EnumerateViewConfigurationViews(
+        XrInstance instance,
+        XrSystemId systemId,
+        XrViewConfigurationType viewConfigurationType,
+        uint32_t viewCapacityInput,
+        uint32_t* viewCountOutput,
+        XrViewConfigurationView* configurationViews) = 0;
+
     virtual XrResult GetD3D12GraphicsRequirementsKHR(
         XrInstance instance,
         XrSystemId systemId,
@@ -168,6 +176,17 @@ public:
         XrSystemId systemId,
         XrSystemProperties* properties) override {
         return xrGetSystemProperties(instance, systemId, properties);
+    }
+
+    XrResult EnumerateViewConfigurationViews(
+        XrInstance instance,
+        XrSystemId systemId,
+        XrViewConfigurationType viewConfigurationType,
+        uint32_t viewCapacityInput,
+        uint32_t* viewCountOutput,
+        XrViewConfigurationView* configurationViews) override {
+        return xrEnumerateViewConfigurationViews(
+            instance, systemId, viewConfigurationType, viewCapacityInput, viewCountOutput, configurationViews);
     }
 
     XrResult GetD3D12GraphicsRequirementsKHR(

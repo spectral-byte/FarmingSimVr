@@ -24,6 +24,8 @@ struct OpenXrRuntimeInfo {
     std::string systemName;
     bool d3d12ExtensionSupported = false;
 
+    uint32_t recommendedEyeWidth = 0;
+    uint32_t recommendedEyeHeight = 0;
     uint32_t maxSwapchainImageWidth = 0;
     uint32_t maxSwapchainImageHeight = 0;
     uint32_t maxLayerCount = 0;
@@ -146,11 +148,15 @@ public:
     void SetSimulatedProjection(uint32_t eyeIndex, const EyeProjection& proj);
     static EyeProjection ComputeProjectionFromFov(const XrFovf& fov);
 
+    uint32_t GetRecommendedEyeWidth(uint32_t eyeIndex = 0) const;
+    uint32_t GetRecommendedEyeHeight(uint32_t eyeIndex = 0) const;
+    const std::vector<XrViewConfigurationView>& GetViewConfigurationViews() const { return m_viewConfigViews; }
+
     void SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue);
     ID3D12Device* GetD3D12Device() const { return m_device; }
     ID3D12CommandQueue* GetD3D12CommandQueue() const { return m_queue; }
 
-    bool CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    bool CreateEyeSwapchains(uint32_t width = 0, uint32_t height = 0, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
     void DestroyEyeSwapchains();
     bool HasEyeSwapchains() const { return m_hasEyeSwapchains; }
     const EyeSwapchain& GetEyeSwapchain(uint32_t eyeIndex = 0) const;
@@ -224,6 +230,8 @@ private:
     EyeProjection m_eyeProjections[2];
     EyeProjection m_simulatedProjections[2];
     bool m_useSimulatedProjections = false;
+
+    std::vector<XrViewConfigurationView> m_viewConfigViews;
 
     bool CheckD3D12ExtensionSupport();
 };

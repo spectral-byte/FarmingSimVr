@@ -93,6 +93,59 @@ void DxgiProxy::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue*
     }
 }
 
+bool DxgiProxy::ExtractD3D12DeviceAndQueue(
+    IUnknown* source,
+    Microsoft::WRL::ComPtr<ID3D12Device>& outDevice,
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue>& outQueue) {
+    if (!source) {
+        return false;
+    }
+
+    // 1. Check if source is directly an ID3D12CommandQueue
+    if (!outQueue) {
+        source->QueryInterface(IID_PPV_ARGS(&outQueue));
+    }
+
+    // 2. Check if source is an IDXGISwapChain
+    if (!outQueue || !outDevice) {
+        Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain;
+        if (SUCCEEDED(source->QueryInterface(IID_PPV_ARGS(&swapChain)))) {
+            if (!outQueue) {
+                swapChain->GetDevice(IID_PPV_ARGS(&outQueue));
+            }
+            if (!outDevice) {
+                swapChain->GetDevice(IID_PPV_ARGS(&outDevice));
+            }
+        }
+    }
+
+    // 3. Check if source is directly an ID3D12Device
+    if (!outDevice) {
+        source->QueryInterface(IID_PPV_ARGS(&outDevice));
+    }
+
+    // 4. If queue is present but device is still null, query device from queue
+    if (outQueue && !outDevice) {
+        outQueue->GetDevice(IID_PPV_ARGS(&outDevice));
+    }
+
+    return (outDevice != nullptr || outQueue != nullptr);
+}
+
+bool DxgiProxy::ResolveD3D12DeviceAndQueue(IUnknown* source) {
+    if (!source) {
+        return false;
+    }
+    Microsoft::WRL::ComPtr<ID3D12Device> device = m_d3d12Device;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue = m_d3d12Queue;
+
+    if (ExtractD3D12DeviceAndQueue(source, device, queue)) {
+        SetD3D12DeviceAndQueue(device.Get(), queue.Get());
+        return true;
+    }
+    return false;
+}
+
 bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
         return false;
@@ -193,47 +246,32 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
     Microsoft::WRL::ComPtr<ID3D12Resource> backBuffer;
 
     if (swapChain) {
-        // Ensure D3D12 device and command queue
-        if (!m_d3d12Queue) {
-            Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
-            if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&queue)))) {
-                m_d3d12Queue = queue;
-            }
-        }
-        if (!m_d3d12Device) {
-            if (m_d3d12Queue) {
-                Microsoft::WRL::ComPtr<ID3D12Device> device;
-                if (SUCCEEDED(m_d3d12Queue->GetDevice(IID_PPV_ARGS(&device)))) {
-                    m_d3d12Device = device;
-                }
-            } else {
-                Microsoft::WRL::ComPtr<ID3D12Device> device;
-                if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&device)))) {
-                    m_d3d12Device = device;
-                }
-            }
+        // Ensure D3D12 device and command queue via consolidated helper
+        if (!m_d3d12Queue || !m_d3d12Device) {
+            ResolveD3D12DeviceAndQueue(swapChain);
         }
 
-        if (m_d3d12Device && m_d3d12Queue) {
-            m_openXrManager->SetD3D12DeviceAndQueue(m_d3d12Device.Get(), m_d3d12Queue.Get());
-        }
-
-        // Ensure OpenXR eye swapchains exist
+        // Ensure OpenXR eye swapchains exist using runtime-recommended dimensions
         if (!m_openXrManager->HasEyeSwapchains()) {
+            DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
             DXGI_SWAP_CHAIN_DESC desc{};
-            if (SUCCEEDED(swapChain->GetDesc(&desc)) && desc.BufferDesc.Width > 0 && desc.BufferDesc.Height > 0) {
-                m_openXrManager->CreateEyeSwapchains(desc.BufferDesc.Width, desc.BufferDesc.Height, desc.BufferDesc.Format);
+            if (SUCCEEDED(swapChain->GetDesc(&desc))) {
+                if (desc.BufferDesc.Format != DXGI_FORMAT_UNKNOWN) {
+                    format = desc.BufferDesc.Format;
+                }
             } else {
                 Microsoft::WRL::ComPtr<ID3D12Resource> testBuffer;
                 if (SUCCEEDED(swapChain->GetBuffer(0, IID_PPV_ARGS(&testBuffer)))) {
                     D3D12_RESOURCE_DESC resDesc = testBuffer->GetDesc();
-                    m_openXrManager->CreateEyeSwapchains(
-                        static_cast<uint32_t>(resDesc.Width),
-                        static_cast<uint32_t>(resDesc.Height),
-                        resDesc.Format
-                    );
+                    if (resDesc.Format != DXGI_FORMAT_UNKNOWN) {
+                        format = resDesc.Format;
+                    }
                 }
             }
+
+            // Passing 0, 0 instructs CreateEyeSwapchains to query each eye's runtime-recommended
+            // view configuration dimensions independently.
+            m_openXrManager->CreateEyeSwapchains(0, 0, format);
         }
 
         UINT bufferIndex = 0;
@@ -298,16 +336,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
     IDXGIFactory* self, IUnknown* pDevice, DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain) {
     DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
     if (pDevice) {
-        Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
-        Microsoft::WRL::ComPtr<ID3D12Device> device;
-        if (SUCCEEDED(pDevice->QueryInterface(IID_PPV_ARGS(&queue)))) {
-            queue->GetDevice(IID_PPV_ARGS(&device));
-        } else if (SUCCEEDED(pDevice->QueryInterface(IID_PPV_ARGS(&device)))) {
-            // direct device
-        }
-        if (device || queue) {
-            proxy->SetD3D12DeviceAndQueue(device.Get(), queue.Get());
-        }
+        proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**)>(
         proxy->m_detourCreateSwapChain.GetOriginal()
@@ -325,16 +354,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     IDXGISwapChain1** ppSwapChain) {
     DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
     if (pDevice) {
-        Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
-        Microsoft::WRL::ComPtr<ID3D12Device> device;
-        if (SUCCEEDED(pDevice->QueryInterface(IID_PPV_ARGS(&queue)))) {
-            queue->GetDevice(IID_PPV_ARGS(&device));
-        } else if (SUCCEEDED(pDevice->QueryInterface(IID_PPV_ARGS(&device)))) {
-            // direct device
-        }
-        if (device || queue) {
-            proxy->SetD3D12DeviceAndQueue(device.Get(), queue.Get());
-        }
+        proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
         proxy->m_detourCreateSwapChainForHwnd.GetOriginal()

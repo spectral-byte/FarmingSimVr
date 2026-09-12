@@ -50,6 +50,12 @@ public:
     void OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval = 0, UINT flags = 0, const DXGI_PRESENT_PARAMETERS* params = nullptr);
 
     void SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue);
+    static bool ExtractD3D12DeviceAndQueue(
+        IUnknown* source,
+        Microsoft::WRL::ComPtr<ID3D12Device>& outDevice,
+        Microsoft::WRL::ComPtr<ID3D12CommandQueue>& outQueue);
+    bool ResolveD3D12DeviceAndQueue(IUnknown* source);
+
     ID3D12Device* GetD3D12Device() const { return m_d3d12Device.Get(); }
     ID3D12CommandQueue* GetD3D12CommandQueue() const { return m_d3d12Queue.Get(); }
 

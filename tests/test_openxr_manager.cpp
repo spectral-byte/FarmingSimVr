@@ -122,6 +122,37 @@ public:
         return XR_SUCCESS;
     }
 
+    XrResult enumerateViewConfigViewsResult = XR_SUCCESS;
+    std::vector<XrViewConfigurationView> mockViewConfigViews = {
+        { XR_TYPE_VIEW_CONFIGURATION_VIEW, nullptr, 2064, 4096, 2208, 4096, 1, 4 },
+        { XR_TYPE_VIEW_CONFIGURATION_VIEW, nullptr, 2064, 4096, 2208, 4096, 1, 4 }
+    };
+
+    XrResult EnumerateViewConfigurationViews(
+        XrInstance /*instance*/,
+        XrSystemId /*systemId*/,
+        XrViewConfigurationType /*viewConfigurationType*/,
+        uint32_t viewCapacityInput,
+        uint32_t* viewCountOutput,
+        XrViewConfigurationView* configurationViews) override {
+        if (enumerateViewConfigViewsResult != XR_SUCCESS) {
+            return enumerateViewConfigViewsResult;
+        }
+        if (viewCountOutput) {
+            *viewCountOutput = static_cast<uint32_t>(mockViewConfigViews.size());
+        }
+        if (viewCapacityInput == 0) {
+            return XR_SUCCESS;
+        }
+        uint32_t count = (viewCapacityInput < mockViewConfigViews.size())
+                             ? viewCapacityInput
+                             : static_cast<uint32_t>(mockViewConfigViews.size());
+        for (uint32_t i = 0; i < count; ++i) {
+            configurationViews[i] = mockViewConfigViews[i];
+        }
+        return XR_SUCCESS;
+    }
+
     XrResult GetD3D12GraphicsRequirementsKHR(
         XrInstance /*instance*/,
         XrSystemId /*systemId*/,
@@ -863,6 +894,59 @@ TEST(OpenXrManagerTest, HeadPoseConsolidatesStructuredPrimitives) {
     EXPECT_EQ(pose.rotation.pitch, 0.15f);
     EXPECT_EQ(pose.rotation.yaw, -0.25f);
     EXPECT_EQ(pose.rotation.roll, 0.05f);
+}
+
+TEST(OpenXrManagerTest, QueriesRecommendedViewConfigurationDimensions) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->mockViewConfigViews = {
+        { XR_TYPE_VIEW_CONFIGURATION_VIEW, nullptr, 2160, 4096, 2160, 4096, 1, 4 },
+        { XR_TYPE_VIEW_CONFIGURATION_VIEW, nullptr, 2160, 4096, 2160, 4096, 1, 4 }
+    };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+
+    EXPECT_EQ(manager.GetRuntimeInfo().recommendedEyeWidth, 2160u);
+    EXPECT_EQ(manager.GetRuntimeInfo().recommendedEyeHeight, 2160u);
+    EXPECT_EQ(manager.GetRecommendedEyeWidth(0), 2160u);
+    EXPECT_EQ(manager.GetRecommendedEyeHeight(0), 2160u);
+    EXPECT_EQ(manager.GetRecommendedEyeWidth(1), 2160u);
+    EXPECT_EQ(manager.GetRecommendedEyeHeight(1), 2160u);
+
+    const auto& views = manager.GetViewConfigurationViews();
+    ASSERT_EQ(views.size(), 2u);
+    EXPECT_EQ(views[0].recommendedImageRectWidth, 2160u);
+    EXPECT_EQ(views[0].recommendedImageRectHeight, 2160u);
+}
+
+TEST(OpenXrManagerTest, CreatesEyeSwapchainsWithRecommendedDimensionsWhenDefaulted) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->mockViewConfigViews = {
+        { XR_TYPE_VIEW_CONFIGURATION_VIEW, nullptr, 2064, 4096, 2208, 4096, 1, 4 },
+        { XR_TYPE_VIEW_CONFIGURATION_VIEW, nullptr, 2064, 4096, 2208, 4096, 1, 4 }
+    };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    EXPECT_TRUE(manager.CreateEyeSwapchains(0, 0, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB));
+    EXPECT_TRUE(manager.HasEyeSwapchains());
+
+    const auto& leftChain = manager.GetEyeSwapchain(0);
+    EXPECT_EQ(leftChain.width, 2064u);
+    EXPECT_EQ(leftChain.height, 2208u);
+
+    const auto& rightChain = manager.GetEyeSwapchain(1);
+    EXPECT_EQ(rightChain.width, 2064u);
+    EXPECT_EQ(rightChain.height, 2208u);
+
+    ASSERT_GE(mockDispatch->lastSwapchainCreateInfos.size(), 2u);
+    EXPECT_EQ(mockDispatch->lastSwapchainCreateInfos[0].width, 2064u);
+    EXPECT_EQ(mockDispatch->lastSwapchainCreateInfos[0].height, 2208u);
 }
 
 } // namespace fs25vr
