@@ -117,3 +117,82 @@ TEST_F(VrBridgeTest, ExposesStereoTelemetryAndStereoStatusToLuauScript) {
     }
 }
 
+TEST_F(VrBridgeTest, ExposesHeadPoseToLuauScript) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.x = 0.12f;
+    simPose.y = -0.05f;
+    simPose.z = 0.88f;
+    simPose.pitch = 0.25f;
+    simPose.yaw = -0.15f;
+    simPose.roll = 0.05f;
+    simPose.qx = 0.12f;
+    simPose.qy = -0.07f;
+    simPose.qz = 0.02f;
+    simPose.qw = 0.99f;
+    simPose.isValid = true;
+    simPose.positionTracked = true;
+    simPose.orientationTracked = true;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string script = R"(
+        assert(type(VRBridge.getHeadPose) == "function", "getHeadPose must be function")
+        assert(type(VRBridge.recenter) == "function", "recenter must be function")
+
+        local pose = VRBridge.getHeadPose()
+        assert(type(pose) == "table", "getHeadPose must return table")
+        assert(math.abs(pose.x - 0.12) < 0.001, "pose.x mismatch")
+        assert(math.abs(pose.y - (-0.05)) < 0.001, "pose.y mismatch")
+        assert(math.abs(pose.z - 0.88) < 0.001, "pose.z mismatch")
+        assert(math.abs(pose.pitch - 0.25) < 0.001, "pose.pitch mismatch")
+        assert(math.abs(pose.yaw - (-0.15)) < 0.001, "pose.yaw mismatch")
+        assert(math.abs(pose.roll - 0.05) < 0.001, "pose.roll mismatch")
+        assert(pose.isValid == true, "pose.isValid must be true")
+        assert(pose.isPositionTracked == true, "pose.isPositionTracked must be true")
+        assert(pose.isOrientationTracked == true, "pose.isOrientationTracked must be true")
+    )";
+
+    int status = RunLuauString(L, script);
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+}
+
+TEST_F(VrBridgeTest, RecenterViaLuauResetsTranslationalOffsets) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.x = 1.5f;
+    simPose.y = 0.5f;
+    simPose.z = -2.0f;
+    simPose.pitch = 0.1f;
+    simPose.yaw = 0.3f;
+    simPose.isValid = true;
+    simPose.positionTracked = true;
+    simPose.orientationTracked = true;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string script = R"(
+        local res = VRBridge.recenter()
+        assert(type(res) == "table", "recenter must return table")
+        assert(res.success == true, "recenter success must be true")
+
+        local pose = VRBridge.getHeadPose()
+        assert(math.abs(pose.x) < 0.001, "recenter must zero x")
+        assert(math.abs(pose.y) < 0.001, "recenter must zero y")
+        assert(math.abs(pose.z) < 0.001, "recenter must zero z")
+    )";
+
+    int status = RunLuauString(L, script);
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+}
+

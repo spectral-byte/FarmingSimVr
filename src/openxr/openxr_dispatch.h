@@ -51,6 +51,28 @@ public:
         XrInstance instance,
         XrSystemId systemId,
         XrGraphicsRequirementsD3D12KHR* graphicsRequirements) = 0;
+
+    virtual XrResult CreateSession(
+        XrInstance instance,
+        const XrSessionCreateInfo* createInfo,
+        XrSession* session) = 0;
+
+    virtual XrResult DestroySession(
+        XrSession session) = 0;
+
+    virtual XrResult CreateReferenceSpace(
+        XrSession session,
+        const XrReferenceSpaceCreateInfo* createInfo,
+        XrSpace* space) = 0;
+
+    virtual XrResult DestroySpace(
+        XrSpace space) = 0;
+
+    virtual XrResult LocateSpace(
+        XrSpace space,
+        XrSpace baseSpace,
+        XrTime time,
+        XrSpaceLocation* location) = 0;
 };
 
 class NativeOpenXrDispatch : public IOpenXrDispatch {
@@ -107,6 +129,38 @@ public:
             return res != XR_SUCCESS ? res : XR_ERROR_FUNCTION_UNSUPPORTED;
         }
         return pfnGetD3D12GraphicsRequirements(instance, systemId, graphicsRequirements);
+    }
+
+    XrResult CreateSession(
+        XrInstance instance,
+        const XrSessionCreateInfo* createInfo,
+        XrSession* session) override {
+        return xrCreateSession(instance, createInfo, session);
+    }
+
+    XrResult DestroySession(
+        XrSession session) override {
+        return xrDestroySession(session);
+    }
+
+    XrResult CreateReferenceSpace(
+        XrSession session,
+        const XrReferenceSpaceCreateInfo* createInfo,
+        XrSpace* space) override {
+        return xrCreateReferenceSpace(session, createInfo, space);
+    }
+
+    XrResult DestroySpace(
+        XrSpace space) override {
+        return xrDestroySpace(space);
+    }
+
+    XrResult LocateSpace(
+        XrSpace space,
+        XrSpace baseSpace,
+        XrTime time,
+        XrSpaceLocation* location) override {
+        return xrLocateSpace(space, baseSpace, time, location);
     }
 };
 

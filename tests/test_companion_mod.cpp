@@ -258,3 +258,186 @@ TEST_F(CompanionModTest, HandlesMissingStereoRenderingTogglesGracefully) {
     EXPECT_TRUE(foundMissingLog);
 }
 
+TEST_F(CompanionModTest, MetadataDescriptorDeclaresRecenterActionAndInputBinding) {
+    std::string modDescContent = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
+    ASSERT_FALSE(modDescContent.empty());
+
+    EXPECT_NE(modDescContent.find("<action name=\"VR_RECENTER\""), std::string::npos);
+    EXPECT_NE(modDescContent.find("<actionBinding action=\"VR_RECENTER\""), std::string::npos);
+    EXPECT_NE(modDescContent.find("KEY_numPad5"), std::string::npos);
+}
+
+TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBinding) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.x = 0.15f;
+    simPose.y = 0.05f;
+    simPose.z = -0.10f;
+    simPose.pitch = 0.20f;
+    simPose.yaw = -0.30f;
+    simPose.roll = 0.02f;
+    simPose.isValid = true;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Setup mock engine scene graph functions
+    ASSERT_EQ(RunLuauChunk(L, R"(
+        _G.cameraTransforms = {}
+        function getParent(node) return 300 end
+        function localToLocal(fromNode, toNode, x, y, z)
+            return x + 1.0, y + 2.0, z + 3.0
+        end
+        function localRotationToLocal(fromNode, toNode, rx, ry, rz)
+            return rx, ry, rz
+        end
+        function setTranslation(node, x, y, z)
+            _G.cameraTransforms.translation = { node = node, x = x, y = y, z = z }
+        end
+        function setRotation(node, rx, ry, rz)
+            _G.cameraTransforms.rotation = { node = node, rx = rx, ry = ry, rz = rz }
+        end
+
+        _G.mockInsideCam = {
+            isInside = true,
+            cameraNode = 100,
+            headTrackingNode = 200,
+            cameraPositionNode = 50
+        }
+        _G.mockOutsideCam = {
+            isInside = false,
+            cameraNode = 101,
+            headTrackingNode = nil,
+            cameraPositionNode = 51
+        }
+    )", "=setupCameraMocks"), 0);
+
+    // Update inside camera
+    int updateInside = RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockInsideCam, 16.6)", "=updateInside");
+    EXPECT_EQ(updateInside, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
+
+    // Verify inside camera applied 1:1 motion and localToLocal cab binding
+    ASSERT_EQ(RunLuauChunk(L, R"(
+        assert(_G.cameraTransforms.translation ~= nil, "translation must be set")
+        assert(_G.cameraTransforms.translation.node == 100, "must target inside cameraNode")
+        -- localToLocal added (1.0, 2.0, 3.0) to (0.15, 0.05, -0.10)
+        assert(math.abs(_G.cameraTransforms.translation.x - 1.15) < 0.001, "x transform mismatch")
+        assert(math.abs(_G.cameraTransforms.translation.y - 2.05) < 0.001, "y transform mismatch")
+        assert(math.abs(_G.cameraTransforms.translation.z - 2.90) < 0.001, "z transform mismatch")
+
+        assert(_G.cameraTransforms.rotation ~= nil, "rotation must be set")
+        assert(math.abs(_G.cameraTransforms.rotation.rx - 0.20) < 0.001, "pitch mismatch")
+        assert(math.abs(_G.cameraTransforms.rotation.ry - (-0.30)) < 0.001, "yaw mismatch")
+        assert(math.abs(_G.cameraTransforms.rotation.rz - 0.02) < 0.001, "roll mismatch")
+    )", "=verifyInsideCam"), 0);
+
+    // Clear and test outside camera
+    RunLuauChunk(L, "_G.cameraTransforms = {}", "=clearTransforms");
+    int updateOutside = RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockOutsideCam, 16.6)", "=updateOutside");
+    EXPECT_EQ(updateOutside, 0);
+    // Exterior camera must not have translation or rotation modified
+    ASSERT_EQ(RunLuauChunk(L, "assert(_G.cameraTransforms.translation == nil, 'exterior camera must not be modified')", "=verifyOutsideCam"), 0);
+}
+
+TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.x = 0.04f;
+    simPose.y = -0.03f;
+    simPose.z = 0.02f;
+    simPose.pitch = 0.12f;
+    simPose.yaw = 0.18f;
+    simPose.roll = -0.01f;
+    simPose.isValid = true;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Setup player camera mock
+    ASSERT_EQ(RunLuauChunk(L, R"(
+        _G.playerCamTransforms = {}
+        function getTranslation(node)
+            return 0.0, 1.8, 0.0 -- Base head height in meters
+        end
+        function setTranslation(node, x, y, z)
+            _G.playerCamTransforms.translation = { node = node, x = x, y = y, z = z }
+        end
+        function setRotation(node, rx, ry, rz)
+            _G.playerCamTransforms.rotation = { node = node, rx = rx, ry = ry, rz = rz }
+        end
+
+        _G.mockPlayerCam = {
+            isFirstPerson = true,
+            firstPersonCamera = 500
+        }
+    )", "=setupPlayerCamMocks"), 0);
+
+    // Initialize base translation
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraMakeCurrent(_G.mockPlayerCam)", "=makeCurrentCall"), 0);
+
+    // Update player camera (walking / crouching)
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCam"), 0);
+
+    // Verify 6DOF tracking offset applied relative to base height (0, 1.8, 0)
+    ASSERT_EQ(RunLuauChunk(L, R"(
+        assert(_G.playerCamTransforms.translation ~= nil, "player translation must be set")
+        assert(_G.playerCamTransforms.translation.node == 500, "must target firstPersonCamera")
+        assert(math.abs(_G.playerCamTransforms.translation.x - 0.04) < 0.001, "x offset mismatch")
+        assert(math.abs(_G.playerCamTransforms.translation.y - 1.77) < 0.001, "y (1.8 - 0.03) mismatch")
+        assert(math.abs(_G.playerCamTransforms.translation.z - 0.02) < 0.001, "z offset mismatch")
+
+        assert(_G.playerCamTransforms.rotation ~= nil, "player rotation must be set")
+        assert(math.abs(_G.playerCamTransforms.rotation.rx - 0.12) < 0.001, "pitch mismatch")
+        assert(math.abs(_G.playerCamTransforms.rotation.ry - 0.18) < 0.001, "yaw mismatch")
+        assert(math.abs(_G.playerCamTransforms.rotation.rz - (-0.01)) < 0.001, "roll mismatch")
+    )", "=verifyPlayerCam"), 0);
+}
+
+TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirmation) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.x = 0.5f;
+    simPose.y = 0.2f;
+    simPose.z = -0.3f;
+    simPose.isValid = true;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Call recenter action
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenterCall"), 0);
+
+    // Verify translational offsets are zeroed
+    ASSERT_EQ(RunLuauChunk(L, R"(
+        local pose = VRBridge.getHeadPose()
+        assert(math.abs(pose.x) < 0.001, "recenter must zero x")
+        assert(math.abs(pose.y) < 0.001, "recenter must zero y")
+        assert(math.abs(pose.z) < 0.001, "recenter must zero z")
+    )", "=checkZeroedPose"), 0);
+
+    // Verify recenter logged
+    bool foundRecenterLog = false;
+    for (const auto& msg : s_capturedLogs) {
+        if (msg.find("Recenter Action") != std::string::npos) {
+            foundRecenterLog = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundRecenterLog);
+}
+

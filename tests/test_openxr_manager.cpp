@@ -135,6 +135,63 @@ public:
         }
         return XR_SUCCESS;
     }
+
+    XrResult createSessionResult = XR_SUCCESS;
+    XrResult destroySessionResult = XR_SUCCESS;
+    XrResult createReferenceSpaceResult = XR_SUCCESS;
+    XrResult destroySpaceResult = XR_SUCCESS;
+    XrResult locateSpaceResult = XR_SUCCESS;
+
+    bool createSessionCalled = false;
+    bool destroySessionCalled = false;
+    XrSpaceLocation mockSpaceLocation{
+        XR_TYPE_SPACE_LOCATION,
+        nullptr,
+        XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT |
+        XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT,
+        { {0.0f, 0.0f, 0.0f, 1.0f}, {0.1f, 0.2f, -0.3f} }
+    };
+
+    XrResult CreateSession(
+        XrInstance /*instance*/,
+        const XrSessionCreateInfo* /*createInfo*/,
+        XrSession* session) override {
+        createSessionCalled = true;
+        if (createSessionResult != XR_SUCCESS) return createSessionResult;
+        if (session) *session = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xCAFE0001));
+        return XR_SUCCESS;
+    }
+
+    XrResult DestroySession(XrSession /*session*/) override {
+        destroySessionCalled = true;
+        return destroySessionResult;
+    }
+
+    XrResult CreateReferenceSpace(
+        XrSession /*session*/,
+        const XrReferenceSpaceCreateInfo* /*createInfo*/,
+        XrSpace* space) override {
+        if (createReferenceSpaceResult != XR_SUCCESS) return createReferenceSpaceResult;
+        static uintptr_t s_spaceHandle = 0x50ACE001;
+        if (space) *space = reinterpret_cast<XrSpace>(s_spaceHandle++);
+        return XR_SUCCESS;
+    }
+
+    XrResult DestroySpace(XrSpace /*space*/) override {
+        return destroySpaceResult;
+    }
+
+    XrResult LocateSpace(
+        XrSpace /*space*/,
+        XrSpace /*baseSpace*/,
+        XrTime /*time*/,
+        XrSpaceLocation* location) override {
+        if (locateSpaceResult != XR_SUCCESS) return locateSpaceResult;
+        if (location) {
+            *location = mockSpaceLocation;
+        }
+        return XR_SUCCESS;
+    }
 };
 
 TEST(OpenXrManagerTest, EntersPassThroughWhenRuntimeUnavailable) {
@@ -218,6 +275,62 @@ TEST(OpenXrManagerTest, InitializesActiveWhenHmdPresent) {
     manager.Shutdown();
     EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
     EXPECT_EQ(manager.GetState(), OpenXrState::Uninitialized);
+}
+
+TEST(OpenXrManagerTest, PollsHeadPoseFromOpenXrSpaceAndCalculatesEulerAngles) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    float sinPitch = std::sin(0.5235988f * 0.5f);
+    float cosPitch = std::cos(0.5235988f * 0.5f);
+    mockDispatch->mockSpaceLocation.pose.position = { 0.1f, 0.2f, 0.3f };
+    mockDispatch->mockSpaceLocation.pose.orientation = { sinPitch, 0.0f, 0.0f, cosPitch };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    HeadPose pose = manager.PollHeadPose();
+    EXPECT_TRUE(pose.isValid);
+    EXPECT_TRUE(pose.positionTracked);
+    EXPECT_TRUE(pose.orientationTracked);
+    EXPECT_NEAR(pose.x, 0.1f, 0.001f);
+    EXPECT_NEAR(pose.y, 0.2f, 0.001f);
+    EXPECT_NEAR(pose.z, 0.3f, 0.001f);
+    EXPECT_NEAR(pose.pitch, 0.5235988f, 0.005f);
+    EXPECT_NEAR(pose.yaw, 0.0f, 0.005f);
+    EXPECT_NEAR(pose.roll, 0.0f, 0.005f);
+}
+
+TEST(OpenXrManagerTest, RecenteringZeroesTranslationalAndYawOffsets) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    float sinYaw = std::sin(0.3f * 0.5f);
+    float cosYaw = std::cos(0.3f * 0.5f);
+    mockDispatch->mockSpaceLocation.pose.position = { 0.5f, 1.2f, -0.4f };
+    mockDispatch->mockSpaceLocation.pose.orientation = { 0.0f, sinYaw, 0.0f, cosYaw };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    HeadPose before = manager.PollHeadPose();
+    EXPECT_NEAR(before.x, 0.5f, 0.001f);
+    EXPECT_NEAR(before.y, 1.2f, 0.001f);
+    EXPECT_NEAR(before.z, -0.4f, 0.001f);
+
+    manager.Recenter();
+
+    HeadPose after = manager.PollHeadPose();
+    EXPECT_NEAR(after.x, 0.0f, 0.001f);
+    EXPECT_NEAR(after.y, 0.0f, 0.001f);
+    EXPECT_NEAR(after.z, 0.0f, 0.001f);
+    EXPECT_NEAR(after.yaw, 0.0f, 0.005f);
+
+    mockDispatch->mockSpaceLocation.pose.position = { 0.6f, 1.25f, -0.42f };
+    HeadPose moved = manager.PollHeadPose();
+    EXPECT_NEAR(moved.y, 0.05f, 0.005f);
 }
 
 } // namespace fs25vr

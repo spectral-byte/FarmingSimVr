@@ -28,7 +28,7 @@ DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
                      std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe,
                      std::shared_ptr<D3D12Interceptor> d3d12Interceptor)
     : m_systemDxgi(systemDxgi ? std::move(systemDxgi) : std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {})),
-      m_openXrManager(openXrManager ? std::move(openXrManager) : std::make_shared<OpenXrManager>()),
+      m_openXrManager(openXrManager ? std::move(openXrManager) : std::shared_ptr<OpenXrManager>(&OpenXrManager::Instance(), [](auto*) {})),
       m_luauInterceptor(luauInterceptor ? std::move(luauInterceptor) : std::shared_ptr<LuauInterceptor>(&LuauInterceptor::Instance(), [](auto*) {})),
       m_telemetryProbe(telemetryProbe ? std::move(telemetryProbe) : std::shared_ptr<GraphicsTelemetryProbe>(&GraphicsTelemetryProbe::Instance(), [](auto*) {})),
       m_d3d12Interceptor(d3d12Interceptor ? std::move(d3d12Interceptor) : std::shared_ptr<D3D12Interceptor>(&D3D12Interceptor::Instance(), [](auto*) {})) {
@@ -43,6 +43,8 @@ void DxgiProxy::EnsureVrInitialized() {
             LogInfo("Injector operating in Pass-Through Mode (forwarding all calls silently).");
         } else if (m_openXrManager->IsActive()) {
             LogInfo("Injector operating in Active VR Mode.");
+            m_openXrManager->CreateSession();
+            m_openXrManager->CreateTrackingSpaces();
         }
         if (m_luauInterceptor) {
             m_luauInterceptor->AttachToEngine();

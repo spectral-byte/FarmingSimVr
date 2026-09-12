@@ -23,11 +23,17 @@ public:
     bool IsReady() const;
     bool PerformHandshake();
     std::shared_ptr<GraphicsTelemetryProbe> GetTelemetryProbe() const { return m_telemetryProbe; }
+    std::shared_ptr<OpenXrManager> GetOpenXrManager() const { return m_openXrManager; }
+
+    HeadPose GetHeadPose();
+    void Recenter();
 
     static int Lua_IsReady(lua_State* L);
     static int Lua_Handshake(lua_State* L);
     static int Lua_GetStereoTelemetry(lua_State* L);
     static int Lua_IsStereoActive(lua_State* L);
+    static int Lua_GetHeadPose(lua_State* L);
+    static int Lua_Recenter(lua_State* L);
 
 private:
     std::shared_ptr<OpenXrManager> m_openXrManager;

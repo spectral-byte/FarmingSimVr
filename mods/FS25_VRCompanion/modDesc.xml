@@ -17,4 +17,13 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
     <extraSourceFiles>
         <sourceFile filename="src/VRCompanion.lua"/>
     </extraSourceFiles>
+    <actions>
+        <action name="VR_RECENTER" category="VEHICLE PLAYER"/>
+    </actions>
+    <inputBinding>
+        <actionBinding action="VR_RECENTER">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad5"/>
+            <binding device="GAMEPAD_DEFAULT" input="BUTTON_11"/>
+        </actionBinding>
+    </inputBinding>
 </modDesc>
