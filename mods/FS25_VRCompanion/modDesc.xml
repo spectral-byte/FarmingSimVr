@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<modDesc descVersion="94">
+    <author>FS25 VR Team</author>
+    <version>1.0.0.0</version>
+    <title>
+        <en>FS25 VR Companion Mod</en>
+        <de>FS25 VR Begleit-Mod</de>
+    </title>
+    <description>
+<en><![CDATA[In-engine Luau Companion Mod for Farming Simulator 25 Virtual Reality.
+Interfaces directly with the native Injector via the in-process VRBridge table,
+coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
+</en>
+    </description>
+    <multiplayer supported="true"/>
+    <iconFilename>icon_vr.dds</iconFilename>
+    <extraSourceFiles>
+        <sourceFile filename="src/VRCompanion.lua"/>
+    </extraSourceFiles>
+</modDesc>

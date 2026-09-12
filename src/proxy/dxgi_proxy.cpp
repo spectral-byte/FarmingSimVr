@@ -23,9 +23,11 @@ DxgiProxy& DxgiProxy::Instance() {
 }
 
 DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
-                     std::shared_ptr<OpenXrManager> openXrManager)
+                     std::shared_ptr<OpenXrManager> openXrManager,
+                     std::shared_ptr<LuauInterceptor> luauInterceptor)
     : m_systemDxgi(systemDxgi ? std::move(systemDxgi) : std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {})),
-      m_openXrManager(openXrManager ? std::move(openXrManager) : std::make_shared<OpenXrManager>()) {
+      m_openXrManager(openXrManager ? std::move(openXrManager) : std::make_shared<OpenXrManager>()),
+      m_luauInterceptor(luauInterceptor ? std::move(luauInterceptor) : std::shared_ptr<LuauInterceptor>(&LuauInterceptor::Instance(), [](auto*) {})) {
 }
 
 void DxgiProxy::EnsureVrInitialized() {
@@ -38,6 +40,10 @@ void DxgiProxy::EnsureVrInitialized() {
         } else if (m_openXrManager->IsActive()) {
             LogInfo("Injector operating in Active VR Mode.");
         }
+        if (m_luauInterceptor) {
+            m_luauInterceptor->AttachToEngine();
+        }
+        LogInfo("In-process Luau state interception channel armed.");
     }
 }
 

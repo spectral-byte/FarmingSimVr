@@ -20,10 +20,12 @@ ehthumbs_vista.db
 build/
 bin/
 out/
+scratch/
 *.log
 *.exe
 *.dll
 *.lib
 *.pdb
 *.exp
-
+*.zip
+*.obj
