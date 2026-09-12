@@ -473,12 +473,12 @@ TEST(OpenXrManagerTest, PollsHeadPoseFromOpenXrSpaceAndCalculatesEulerAngles) {
     EXPECT_TRUE(pose.isValid);
     EXPECT_TRUE(pose.positionTracked);
     EXPECT_TRUE(pose.orientationTracked);
-    EXPECT_NEAR(pose.x, 0.1f, 0.001f);
-    EXPECT_NEAR(pose.y, 0.2f, 0.001f);
-    EXPECT_NEAR(pose.z, 0.3f, 0.001f);
-    EXPECT_NEAR(pose.pitch, 0.5235988f, 0.005f);
-    EXPECT_NEAR(pose.yaw, 0.0f, 0.005f);
-    EXPECT_NEAR(pose.roll, 0.0f, 0.005f);
+    EXPECT_NEAR(pose.position.x, 0.1f, 0.001f);
+    EXPECT_NEAR(pose.position.y, 0.2f, 0.001f);
+    EXPECT_NEAR(pose.position.z, 0.3f, 0.001f);
+    EXPECT_NEAR(pose.rotation.pitch, 0.5235988f, 0.005f);
+    EXPECT_NEAR(pose.rotation.yaw, 0.0f, 0.005f);
+    EXPECT_NEAR(pose.rotation.roll, 0.0f, 0.005f);
 }
 
 TEST(OpenXrManagerTest, RecenteringZeroesTranslationalAndYawOffsets) {
@@ -495,21 +495,25 @@ TEST(OpenXrManagerTest, RecenteringZeroesTranslationalAndYawOffsets) {
     ASSERT_TRUE(manager.CreateTrackingSpaces());
 
     HeadPose before = manager.PollHeadPose();
-    EXPECT_NEAR(before.x, 0.5f, 0.001f);
-    EXPECT_NEAR(before.y, 1.2f, 0.001f);
-    EXPECT_NEAR(before.z, -0.4f, 0.001f);
+    EXPECT_NEAR(before.position.x, 0.5f, 0.001f);
+    EXPECT_NEAR(before.position.y, 1.2f, 0.001f);
+    EXPECT_NEAR(before.position.z, -0.4f, 0.001f);
 
     manager.Recenter();
 
     HeadPose after = manager.PollHeadPose();
-    EXPECT_NEAR(after.x, 0.0f, 0.001f);
-    EXPECT_NEAR(after.y, 0.0f, 0.001f);
-    EXPECT_NEAR(after.z, 0.0f, 0.001f);
-    EXPECT_NEAR(after.yaw, 0.0f, 0.005f);
+    EXPECT_NEAR(after.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(after.position.y, 0.0f, 0.001f);
+    EXPECT_NEAR(after.position.z, 0.0f, 0.001f);
+    EXPECT_NEAR(after.rotation.yaw, 0.0f, 0.005f);
+    EXPECT_NEAR(after.orientation.x, 0.0f, 0.001f);
+    EXPECT_NEAR(after.orientation.y, 0.0f, 0.001f);
+    EXPECT_NEAR(after.orientation.z, 0.0f, 0.001f);
+    EXPECT_NEAR(after.orientation.w, 1.0f, 0.001f);
 
     mockDispatch->mockSpaceLocation.pose.position = { 0.6f, 1.25f, -0.42f };
     HeadPose moved = manager.PollHeadPose();
-    EXPECT_NEAR(moved.y, 0.05f, 0.005f);
+    EXPECT_NEAR(moved.position.y, 0.05f, 0.005f);
 }
 
 TEST(OpenXrManagerTest, LocatesViewsAndExtractsAsymmetricFovTangents) {
@@ -646,10 +650,8 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     manager.SetSimulatedProjection(1, OpenXrManager::ComputeProjectionFromFov(rightFov));
 
     HeadPose simPose;
-    simPose.x = 0.0f;
-    simPose.y = 1.6f;
-    simPose.z = 0.0f;
-    simPose.qw = 1.0f;
+    simPose.position = Vector3(0.0f, 1.6f, 0.0f);
+    simPose.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     simPose.isValid = true;
     manager.SetSimulatedPose(simPose);
     manager.SetIpd(0.064f);
@@ -696,10 +698,8 @@ TEST(OpenXrManagerTest, CapturesSeparateTemporalPosesPerEyeAndRotatesByQuaternio
 
     // Frame 0 (t_2k): Left eye captured with pose at (0, 1.6, 0), identity orientation
     HeadPose leftPose;
-    leftPose.x = 0.0f;
-    leftPose.y = 1.6f;
-    leftPose.z = 0.0f;
-    leftPose.qw = 1.0f;
+    leftPose.position = Vector3(0.0f, 1.6f, 0.0f);
+    leftPose.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     leftPose.isValid = true;
     manager.SetSimulatedPose(leftPose);
 
@@ -708,13 +708,8 @@ TEST(OpenXrManagerTest, CapturesSeparateTemporalPosesPerEyeAndRotatesByQuaternio
     // Frame 1 (t_2k+1): Head moves to (0.1, 1.6, 0.2) and rotates 90 degrees around Y (yaw = +pi/2)
     // Quaternion for +90 deg around Y: (0, sin(45 deg), 0, cos(45 deg)) = (0, 0.7071068, 0, 0.7071068)
     HeadPose rightPose;
-    rightPose.x = 0.1f;
-    rightPose.y = 1.6f;
-    rightPose.z = 0.2f;
-    rightPose.qx = 0.0f;
-    rightPose.qy = 0.7071068f;
-    rightPose.qz = 0.0f;
-    rightPose.qw = 0.7071068f;
+    rightPose.position = Vector3(0.1f, 1.6f, 0.2f);
+    rightPose.orientation = Quaternion(0.0f, 0.7071068f, 0.0f, 0.7071068f);
     rightPose.isValid = true;
     manager.SetSimulatedPose(rightPose);
 
@@ -741,6 +736,133 @@ TEST(OpenXrManagerTest, CapturesSeparateTemporalPosesPerEyeAndRotatesByQuaternio
     EXPECT_NEAR(view1.pose.position.y, 1.6f, 0.001f);
     EXPECT_NEAR(view1.pose.position.z, 0.168f, 0.001f);
     EXPECT_NEAR(view1.pose.orientation.y, 0.7071068f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, StructuredMathTypesConstructAndSupportOperations) {
+    Vector3 v(1.0f, 2.0f, 3.0f);
+    EXPECT_EQ(v.x, 1.0f);
+    EXPECT_EQ(v.y, 2.0f);
+    EXPECT_EQ(v.z, 3.0f);
+
+    Vector3 vDef;
+    EXPECT_EQ(vDef.x, 0.0f);
+    EXPECT_EQ(vDef.y, 0.0f);
+    EXPECT_EQ(vDef.z, 0.0f);
+    EXPECT_TRUE(v == Vector3(1.0f, 2.0f, 3.0f));
+    EXPECT_FALSE(v == vDef);
+
+    Quaternion q(0.1f, 0.2f, 0.3f, 0.9f);
+    EXPECT_EQ(q.x, 0.1f);
+    EXPECT_EQ(q.y, 0.2f);
+    EXPECT_EQ(q.z, 0.3f);
+    EXPECT_EQ(q.w, 0.9f);
+
+    Quaternion qDef;
+    EXPECT_EQ(qDef.w, 1.0f);
+    EXPECT_TRUE(q == Quaternion(0.1f, 0.2f, 0.3f, 0.9f));
+
+    // Quaternion multiplication test: two 45-degree yaw rotations compose to 90 degrees
+    float sinHalf45 = std::sin((3.14159265f / 4.0f) * 0.5f);
+    float cosHalf45 = std::cos((3.14159265f / 4.0f) * 0.5f);
+    Quaternion qYaw45(0.0f, sinHalf45, 0.0f, cosHalf45);
+    Quaternion qYaw90 = qYaw45 * qYaw45;
+    EulerAngles yawAngles = OpenXrManager::QuaternionToEuler(qYaw90);
+    EXPECT_NEAR(yawAngles.yaw, 3.14159265f / 2.0f, 0.001f);
+
+    EulerAngles ea(0.4f, 0.5f, 0.6f);
+    EXPECT_EQ(ea.pitch, 0.4f);
+    EXPECT_EQ(ea.yaw, 0.5f);
+    EXPECT_EQ(ea.roll, 0.6f);
+
+    EulerAngles eaDef;
+    EXPECT_EQ(eaDef.pitch, 0.0f);
+}
+
+TEST(OpenXrManagerTest, QuaternionToEulerConvertsStructuredQuaternionToEulerAngles) {
+    EulerAngles zeroAngles = OpenXrManager::QuaternionToEuler(Quaternion(0.0f, 0.0f, 0.0f, 1.0f));
+    EXPECT_NEAR(zeroAngles.pitch, 0.0f, 0.0001f);
+    EXPECT_NEAR(zeroAngles.yaw, 0.0f, 0.0001f);
+    EXPECT_NEAR(zeroAngles.roll, 0.0f, 0.0001f);
+
+    float sinHalfPitch = std::sin(0.5235988f * 0.5f);
+    float cosHalfPitch = std::cos(0.5235988f * 0.5f);
+    EulerAngles pitchAngles = OpenXrManager::QuaternionToEuler(Quaternion(sinHalfPitch, 0.0f, 0.0f, cosHalfPitch));
+    EXPECT_NEAR(pitchAngles.pitch, 0.5235988f, 0.001f);
+    EXPECT_NEAR(pitchAngles.yaw, 0.0f, 0.001f);
+    EXPECT_NEAR(pitchAngles.roll, 0.0f, 0.001f);
+
+    float sinHalfYaw = std::sin(0.7853982f * 0.5f);
+    float cosHalfYaw = std::cos(0.7853982f * 0.5f);
+    EulerAngles yawAngles = OpenXrManager::QuaternionToEuler(Quaternion(0.0f, sinHalfYaw, 0.0f, cosHalfYaw));
+    EXPECT_NEAR(yawAngles.pitch, 0.0f, 0.001f);
+    EXPECT_NEAR(yawAngles.yaw, 0.7853982f, 0.001f);
+    EXPECT_NEAR(yawAngles.roll, 0.0f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, RotateVectorByQuaternionRotatesVector3Correctly) {
+    float sin45 = std::sin(3.14159265f / 4.0f);
+    float cos45 = std::cos(3.14159265f / 4.0f);
+    Quaternion qYaw90(0.0f, sin45, 0.0f, cos45);
+    Vector3 vX(1.0f, 0.0f, 0.0f);
+
+    Vector3 rotated = OpenXrManager::RotateVectorByQuaternion(qYaw90, vX);
+    EXPECT_NEAR(rotated.x, 0.0f, 0.001f);
+    EXPECT_NEAR(rotated.y, 0.0f, 0.001f);
+    EXPECT_NEAR(rotated.z, -1.0f, 0.001f);
+
+    Quaternion qPitch90(sin45, 0.0f, 0.0f, cos45);
+    Vector3 vY(0.0f, 1.0f, 0.0f);
+    Vector3 rotatedPitch = OpenXrManager::RotateVectorByQuaternion(qPitch90, vY);
+    EXPECT_NEAR(rotatedPitch.x, 0.0f, 0.001f);
+    EXPECT_NEAR(rotatedPitch.y, 0.0f, 0.001f);
+    EXPECT_NEAR(rotatedPitch.z, 1.0f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, ComputesStereoEyePositionsAndPosesCorrectly) {
+    HeadPose headPose(
+        Vector3(0.0f, 1.7f, 0.0f),
+        Quaternion(0.0f, 0.0f, 0.0f, 1.0f),
+        EulerAngles(0.0f, 0.0f, 0.0f),
+        true, true, true
+    );
+
+    float ipd = 0.064f;
+    Vector3 leftEye = OpenXrManager::ComputeEyePosition(headPose, ipd, 0);
+    Vector3 rightEye = OpenXrManager::ComputeEyePosition(headPose, ipd, 1);
+
+    EXPECT_NEAR(leftEye.x, -0.032f, 0.001f);
+    EXPECT_NEAR(leftEye.y, 1.7f, 0.001f);
+    EXPECT_NEAR(leftEye.z, 0.0f, 0.001f);
+
+    EXPECT_NEAR(rightEye.x, 0.032f, 0.001f);
+    EXPECT_NEAR(rightEye.y, 1.7f, 0.001f);
+    EXPECT_NEAR(rightEye.z, 0.0f, 0.001f);
+
+    HeadPose leftEyePose = OpenXrManager::ComputeEyePose(headPose, ipd, 0);
+    EXPECT_TRUE(leftEyePose.isValid);
+    EXPECT_NEAR(leftEyePose.position.x, -0.032f, 0.001f);
+    EXPECT_NEAR(leftEyePose.position.y, 1.7f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, HeadPoseConsolidatesStructuredPrimitives) {
+    HeadPose pose(
+        Vector3(1.5f, 2.5f, -3.5f),
+        Quaternion(0.1f, 0.2f, 0.3f, 0.9f),
+        EulerAngles(0.15f, -0.25f, 0.05f)
+    );
+
+    EXPECT_EQ(pose.position.x, 1.5f);
+    EXPECT_EQ(pose.position.y, 2.5f);
+    EXPECT_EQ(pose.position.z, -3.5f);
+
+    EXPECT_EQ(pose.orientation.x, 0.1f);
+    EXPECT_EQ(pose.orientation.y, 0.2f);
+    EXPECT_EQ(pose.orientation.z, 0.3f);
+    EXPECT_EQ(pose.orientation.w, 0.9f);
+
+    EXPECT_EQ(pose.rotation.pitch, 0.15f);
+    EXPECT_EQ(pose.rotation.yaw, -0.25f);
+    EXPECT_EQ(pose.rotation.roll, 0.05f);
 }
 
 } // namespace fs25vr

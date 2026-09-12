@@ -8,7 +8,6 @@ VRCompanion.name = g_currentModName or "FS25_VRCompanion"
 VRCompanion.version = "1.0.0.0"
 VRCompanion.handshakeComplete = false
 VRCompanion.stereoToggled = false
-VRCompanion.stereoInversionToggled = false
 VRCompanion.lastReportedVerdict = nil
 VRCompanion.frameTicks = 0
 VRCompanion.vehicleCameraHooked = false
@@ -54,12 +53,6 @@ function VRCompanion:loadMap(name)
         print("[FS25_VR] Invoked engine stereo rendering toggle: setStereoRendering(true)")
     else
         print("[FS25_VR] Engine stereo rendering toggle 'setStereoRendering' not found in Luau environment.")
-    end
-
-    if type(setInvertStereoRendering) == "function" then
-        setInvertStereoRendering(false)
-        self.stereoInversionToggled = true
-        print("[FS25_VR] Invoked engine stereo inversion toggle: setInvertStereoRendering(false)")
     end
 
     -- 3. Query initial telemetry probe status if available
@@ -235,6 +228,20 @@ function VRCompanion:requiresAfrFallback()
     return true
 end
 
+function VRCompanion:computeEyeOffset(pose, eyeIndex, afrFallback)
+    if not afrFallback then
+        return 0, 0, 0
+    end
+    local ipd = self:getIpd()
+    local halfIpd = ipd * 0.5
+    local eyeOffsetX = (eyeIndex == 1) and halfIpd or -halfIpd
+    local qx = (pose and pose.qx) or 0
+    local qy = (pose and pose.qy) or 0
+    local qz = (pose and pose.qz) or 0
+    local qw = (pose and pose.qw) or 1
+    return rotateVectorByQuaternion(qx, qy, qz, qw, eyeOffsetX, 0, 0)
+end
+
 function VRCompanion:onVehicleCameraUpdate(cam, dt)
     -- Only apply 6DOF tracking and projection to interior in-cab cameras
     if not cam or not cam.isInside or cam.cameraNode == nil then
@@ -262,20 +269,10 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     local tx, ty, tz = pose.x, pose.y, pose.z
     local pitch, yaw, roll = pose.pitch, pose.yaw, pose.roll
 
-    local eyeTx, eyeTy, eyeTz = tx, ty, tz
-    if afrFallback then
-        local ipd = self:getIpd()
-        local halfIpd = ipd * 0.5
-        local eyeOffsetX = (eyeIndex == 1) and halfIpd or -halfIpd
-        local qx = pose.qx or 0
-        local qy = pose.qy or 0
-        local qz = pose.qz or 0
-        local qw = pose.qw or 1
-        local eyeRotX, eyeRotY, eyeRotZ = rotateVectorByQuaternion(qx, qy, qz, qw, eyeOffsetX, 0, 0)
-        eyeTx = tx + eyeRotX
-        eyeTy = ty + eyeRotY
-        eyeTz = tz + eyeRotZ
-    end
+    local eyeRotX, eyeRotY, eyeRotZ = self:computeEyeOffset(pose, eyeIndex, afrFallback)
+    local eyeTx = tx + eyeRotX
+    local eyeTy = ty + eyeRotY
+    local eyeTz = tz + eyeRotZ
 
     local camParent = 0
     if type(getParent) == "function" then
@@ -340,17 +337,7 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
         return
     end
 
-    local eyeRotX, eyeRotY, eyeRotZ = 0, 0, 0
-    if afrFallback then
-        local ipd = self:getIpd()
-        local halfIpd = ipd * 0.5
-        local eyeOffsetX = (eyeIndex == 1) and halfIpd or -halfIpd
-        local qx = pose.qx or 0
-        local qy = pose.qy or 0
-        local qz = pose.qz or 0
-        local qw = pose.qw or 1
-        eyeRotX, eyeRotY, eyeRotZ = rotateVectorByQuaternion(qx, qy, qz, qw, eyeOffsetX, 0, 0)
-    end
+    local eyeRotX, eyeRotY, eyeRotZ = self:computeEyeOffset(pose, eyeIndex, afrFallback)
 
     local base = self:getPlayerBaseTranslation(cam)
     local tx = (base.x or base[1]) + pose.x + eyeRotX
@@ -365,6 +352,58 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     end
 end
 
+function VRCompanion:realignVehicleCameraToSeat(cam)
+    if not cam or not cam.cameraNode then
+        return
+    end
+
+    local camParent = 0
+    if type(getParent) == "function" then
+        camParent = getParent(cam.cameraNode)
+    end
+
+    local cabTransX, cabTransY, cabTransZ = 0, 0, 0
+    local cabRotX, cabRotY, cabRotZ = 0, 0, 0
+
+    if cam.headTrackingNode ~= nil and camParent ~= 0 then
+        if type(localToLocal) == "function" then
+            cabTransX, cabTransY, cabTransZ = localToLocal(cam.headTrackingNode, camParent, 0, 0, 0)
+        end
+        if type(localRotationToLocal) == "function" then
+            cabRotX, cabRotY, cabRotZ = localRotationToLocal(cam.headTrackingNode, camParent, 0, 0, 0)
+        end
+    else
+        cabTransX = cam.origTransX or cam.transX or 0
+        cabTransY = cam.origTransY or cam.transY or 0
+        cabTransZ = cam.origTransZ or cam.transZ or 0
+    end
+
+    if type(setTranslation) == "function" then
+        setTranslation(cam.cameraNode, cabTransX, cabTransY, cabTransZ)
+    end
+    if type(setRotation) == "function" then
+        setRotation(cam.cameraNode, cabRotX, cabRotY, cabRotZ)
+    end
+end
+
+function VRCompanion:realignPlayerCameraToRoot(cam)
+    if not cam or not cam.firstPersonCamera then
+        return
+    end
+
+    local base = self:getPlayerBaseTranslation(cam)
+    local tx = base.x or base[1] or 0
+    local ty = base.y or base[2] or 0
+    local tz = base.z or base[3] or 0
+
+    if type(setTranslation) == "function" then
+        setTranslation(cam.firstPersonCamera, tx, ty, tz)
+    end
+    if type(setRotation) == "function" then
+        setRotation(cam.firstPersonCamera, 0, 0, 0)
+    end
+end
+
 function VRCompanion:onRecenterAction()
     print("[FS25_VR] Recenter Action triggered.")
     if VRBridge ~= nil and type(VRBridge.recenter) == "function" then
@@ -374,12 +413,14 @@ function VRCompanion:onRecenterAction()
     -- Realign vehicle cockpit driver seat origin if seated in a vehicle
     local vehCam = self:getActiveVehicleCamera()
     if vehCam and vehCam.isInside then
+        self:realignVehicleCameraToSeat(vehCam)
         print("[FS25_VR] Cockpit head pose realigned to driver seat reference origin.")
     end
 
     -- Realign on-foot player camera relative to character root
     local playerCam = self:getPlayerCamera()
     if playerCam and playerCam.firstPersonCamera ~= nil then
+        self:realignPlayerCameraToRoot(playerCam)
         print("[FS25_VR] On-foot head pose realigned to character root reference origin.")
     end
 

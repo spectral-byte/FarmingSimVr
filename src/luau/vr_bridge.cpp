@@ -89,16 +89,6 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushcclosure(L, &VRBridge::Lua_GetEyeProjection, "getEyeProjection", 1);
     lua_setfield(L, -2, "getEyeProjection");
 
-    // VRBridge.getProjection = alias to getEyeProjection
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetEyeProjection, "getProjection", 1);
-    lua_setfield(L, -2, "getProjection");
-
-    // VRBridge.getViews = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetViews, "getViews", 1);
-    lua_setfield(L, -2, "getViews");
-
     // VRBridge.getFrameParity = function() [bound with 'this' upvalue]
     lua_pushlightuserdata(L, this);
     lua_pushcclosure(L, &VRBridge::Lua_GetFrameParity, "getFrameParity", 1);
@@ -243,34 +233,34 @@ int VRBridge::Lua_GetHeadPose(lua_State* L) {
 
     lua_createtable(L, 0, 13);
 
-    lua_pushnumber(L, pose.x);
+    lua_pushnumber(L, pose.position.x);
     lua_setfield(L, -2, "x");
 
-    lua_pushnumber(L, pose.y);
+    lua_pushnumber(L, pose.position.y);
     lua_setfield(L, -2, "y");
 
-    lua_pushnumber(L, pose.z);
+    lua_pushnumber(L, pose.position.z);
     lua_setfield(L, -2, "z");
 
-    lua_pushnumber(L, pose.pitch);
+    lua_pushnumber(L, pose.rotation.pitch);
     lua_setfield(L, -2, "pitch");
 
-    lua_pushnumber(L, pose.yaw);
+    lua_pushnumber(L, pose.rotation.yaw);
     lua_setfield(L, -2, "yaw");
 
-    lua_pushnumber(L, pose.roll);
+    lua_pushnumber(L, pose.rotation.roll);
     lua_setfield(L, -2, "roll");
 
-    lua_pushnumber(L, pose.qx);
+    lua_pushnumber(L, pose.orientation.x);
     lua_setfield(L, -2, "qx");
 
-    lua_pushnumber(L, pose.qy);
+    lua_pushnumber(L, pose.orientation.y);
     lua_setfield(L, -2, "qy");
 
-    lua_pushnumber(L, pose.qz);
+    lua_pushnumber(L, pose.orientation.z);
     lua_setfield(L, -2, "qz");
 
-    lua_pushnumber(L, pose.qw);
+    lua_pushnumber(L, pose.orientation.w);
     lua_setfield(L, -2, "qw");
 
     lua_pushboolean(L, pose.isValid ? 1 : 0);
@@ -305,7 +295,7 @@ EyeProjection VRBridge::GetEyeProjection(uint32_t eyeIndex) {
 }
 
 void VRBridge::PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, uint32_t eyeIndex) {
-    lua_createtable(L, 0, 20);
+    lua_createtable(L, 0, 15);
 
     lua_pushnumber(L, proj.fovY);
     lua_setfield(L, -2, "fovY");
@@ -318,24 +308,6 @@ void VRBridge::PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, u
 
     lua_pushnumber(L, proj.yOffset);
     lua_setfield(L, -2, "yOffset");
-
-    lua_pushnumber(L, proj.xOffset);
-    lua_setfield(L, -2, "offsetX");
-
-    lua_pushnumber(L, proj.yOffset);
-    lua_setfield(L, -2, "offsetY");
-
-    lua_pushnumber(L, proj.xOffset);
-    lua_setfield(L, -2, "xOffsetTan");
-
-    lua_pushnumber(L, proj.yOffset);
-    lua_setfield(L, -2, "yOffsetTan");
-
-    lua_pushnumber(L, proj.xOffsetNorm);
-    lua_setfield(L, -2, "xOffsetNorm");
-
-    lua_pushnumber(L, proj.yOffsetNorm);
-    lua_setfield(L, -2, "yOffsetNorm");
 
     lua_pushnumber(L, proj.tanLeft);
     lua_setfield(L, -2, "tanLeft");
@@ -395,28 +367,6 @@ int VRBridge::Lua_GetEyeProjection(lua_State* L) {
     return 1;
 }
 
-int VRBridge::Lua_GetViews(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) self = &Instance();
-
-    EyeProjection leftProj = self->GetEyeProjection(0);
-    EyeProjection rightProj = self->GetEyeProjection(1);
-
-    lua_createtable(L, 2, 2);
-
-    PushEyeProjectionTable(L, leftProj, 0);
-    lua_pushvalue(L, -1);
-    lua_rawseti(L, -3, 1);
-    lua_setfield(L, -2, "left");
-
-    PushEyeProjectionTable(L, rightProj, 1);
-    lua_pushvalue(L, -1);
-    lua_rawseti(L, -3, 2);
-    lua_setfield(L, -2, "right");
-
-    return 1;
-}
-
 void VRBridge::AdvanceFrame() {
     m_frameIndex++;
     m_frameParity = static_cast<uint32_t>(m_frameIndex % 2);
@@ -443,17 +393,7 @@ void VRBridge::SetIpd(float ipd) {
 
 HeadPose VRBridge::GetEyePose(uint32_t eyeIndex) {
     HeadPose pose = GetHeadPose();
-    if (!pose.isValid) return pose;
-    float eyeSign = (eyeIndex == 1) ? 1.0f : -1.0f;
-    float halfIpd = GetIpd() * 0.5f;
-    float rx = 0.0f, ry = 0.0f, rz = 0.0f;
-    OpenXrManager::RotateVectorByQuaternion(pose.qx, pose.qy, pose.qz, pose.qw,
-                                            eyeSign * halfIpd, 0.0f, 0.0f,
-                                            rx, ry, rz);
-    pose.x += rx;
-    pose.y += ry;
-    pose.z += rz;
-    return pose;
+    return OpenXrManager::ComputeEyePose(pose, GetIpd(), eyeIndex);
 }
 
 int VRBridge::Lua_RequiresAfrFallback(lua_State* L) {
@@ -502,16 +442,16 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
 
     HeadPose pose = self->GetEyePose(eyeIndex);
     lua_createtable(L, 0, 14);
-    lua_pushnumber(L, pose.x); lua_setfield(L, -2, "x");
-    lua_pushnumber(L, pose.y); lua_setfield(L, -2, "y");
-    lua_pushnumber(L, pose.z); lua_setfield(L, -2, "z");
-    lua_pushnumber(L, pose.pitch); lua_setfield(L, -2, "pitch");
-    lua_pushnumber(L, pose.yaw); lua_setfield(L, -2, "yaw");
-    lua_pushnumber(L, pose.roll); lua_setfield(L, -2, "roll");
-    lua_pushnumber(L, pose.qx); lua_setfield(L, -2, "qx");
-    lua_pushnumber(L, pose.qy); lua_setfield(L, -2, "qy");
-    lua_pushnumber(L, pose.qz); lua_setfield(L, -2, "qz");
-    lua_pushnumber(L, pose.qw); lua_setfield(L, -2, "qw");
+    lua_pushnumber(L, pose.position.x); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, pose.position.y); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, pose.position.z); lua_setfield(L, -2, "z");
+    lua_pushnumber(L, pose.rotation.pitch); lua_setfield(L, -2, "pitch");
+    lua_pushnumber(L, pose.rotation.yaw); lua_setfield(L, -2, "yaw");
+    lua_pushnumber(L, pose.rotation.roll); lua_setfield(L, -2, "roll");
+    lua_pushnumber(L, pose.orientation.x); lua_setfield(L, -2, "qx");
+    lua_pushnumber(L, pose.orientation.y); lua_setfield(L, -2, "qy");
+    lua_pushnumber(L, pose.orientation.z); lua_setfield(L, -2, "qz");
+    lua_pushnumber(L, pose.orientation.w); lua_setfield(L, -2, "qw");
     lua_pushboolean(L, pose.isValid ? 1 : 0); lua_setfield(L, -2, "isValid");
     lua_pushboolean(L, pose.positionTracked ? 1 : 0); lua_setfield(L, -2, "isPositionTracked");
     lua_pushboolean(L, pose.orientationTracked ? 1 : 0); lua_setfield(L, -2, "isOrientationTracked");

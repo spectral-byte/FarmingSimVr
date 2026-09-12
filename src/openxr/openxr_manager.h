@@ -35,23 +35,63 @@ struct OpenXrRuntimeInfo {
     LUID adapterLuid{};
 };
 
-struct HeadPose {
+struct Vector3 {
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
 
-    float qx = 0.0f;
-    float qy = 0.0f;
-    float qz = 0.0f;
-    float qw = 1.0f;
+    constexpr Vector3() = default;
+    constexpr Vector3(float x_, float y_, float z_) : x(x_), y(y_), z(z_) {}
 
+    bool operator==(const Vector3& other) const = default;
+};
+
+struct Quaternion {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float w = 1.0f;
+
+    constexpr Quaternion() = default;
+    constexpr Quaternion(float x_, float y_, float z_, float w_) : x(x_), y(y_), z(z_), w(w_) {}
+
+    bool operator==(const Quaternion& other) const = default;
+
+    constexpr Quaternion operator*(const Quaternion& o) const {
+        return Quaternion(
+            w * o.x + x * o.w + y * o.z - z * o.y,
+            w * o.y - x * o.z + y * o.w + z * o.x,
+            w * o.z + x * o.y - y * o.x + z * o.w,
+            w * o.w - x * o.x - y * o.y - z * o.z
+        );
+    }
+};
+
+struct EulerAngles {
     float pitch = 0.0f; // radians (X-axis)
     float yaw = 0.0f;   // radians (Y-axis)
     float roll = 0.0f;  // radians (Z-axis)
 
+    constexpr EulerAngles() = default;
+    constexpr EulerAngles(float pitch_, float yaw_, float roll_) : pitch(pitch_), yaw(yaw_), roll(roll_) {}
+
+    bool operator==(const EulerAngles& other) const = default;
+};
+
+struct HeadPose {
+    Vector3 position{ 0.0f, 0.0f, 0.0f };
+    Quaternion orientation{ 0.0f, 0.0f, 0.0f, 1.0f };
+    EulerAngles rotation{ 0.0f, 0.0f, 0.0f };
+
     bool isValid = false;
     bool positionTracked = false;
     bool orientationTracked = false;
+
+    constexpr HeadPose() = default;
+    constexpr HeadPose(const Vector3& pos, const Quaternion& ori, const EulerAngles& rot,
+                       bool valid = true, bool posTracked = true, bool oriTracked = true)
+        : position(pos), orientation(ori), rotation(rot),
+          isValid(valid), positionTracked(posTracked), orientationTracked(oriTracked) {}
 };
 
 struct EyeProjection {
@@ -136,11 +176,10 @@ public:
     bool HasSession() const { return m_session != XR_NULL_HANDLE; }
     bool HasTrackingSpaces() const { return m_localSpace != XR_NULL_HANDLE && m_viewSpace != XR_NULL_HANDLE; }
 
-    static void QuaternionToEuler(float qx, float qy, float qz, float qw,
-                                  float& pitch, float& yaw, float& roll);
-    static void RotateVectorByQuaternion(float qx, float qy, float qz, float qw,
-                                         float vx, float vy, float vz,
-                                         float& rx, float& ry, float& rz);
+    static EulerAngles QuaternionToEuler(const Quaternion& q);
+    static Vector3 RotateVectorByQuaternion(const Quaternion& q, const Vector3& v);
+    static Vector3 ComputeEyePosition(const HeadPose& headPose, float ipd, uint32_t eyeIndex);
+    static HeadPose ComputeEyePose(const HeadPose& headPose, float ipd, uint32_t eyeIndex);
 
     const HeadPose& GetCapturedEyePose(uint32_t eyeIndex = 0) const {
         return m_capturedEyePoses[eyeIndex >= 2 ? 0 : eyeIndex];
@@ -148,9 +187,7 @@ public:
 
 private:
     struct RecenterOffset {
-        float x = 0.0f;
-        float y = 0.0f;
-        float z = 0.0f;
+        Vector3 position{ 0.0f, 0.0f, 0.0f };
         float yaw = 0.0f;
     };
 

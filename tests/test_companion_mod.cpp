@@ -96,7 +96,7 @@ TEST_F(CompanionModTest, MetadataDescriptorIsValid) {
     std::string modDescContent = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
     ASSERT_FALSE(modDescContent.empty());
 
-    EXPECT_NE(modDescContent.find("<modDesc descVersion="), std::string::npos);
+    EXPECT_NE(modDescContent.find("<modDesc descVersion=\"105\">"), std::string::npos);
     EXPECT_NE(modDescContent.find("<title>"), std::string::npos);
     EXPECT_NE(modDescContent.find("<version>1.0.0.0</version>"), std::string::npos);
     EXPECT_NE(modDescContent.find("<extraSourceFiles>"), std::string::npos);
@@ -202,11 +202,10 @@ TEST_F(CompanionModTest, InvokesEngineStereoRenderingTogglesDuringMapExecution) 
     // Call loadMap
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
 
-    // Verify setStereoRendering(true) and setInvertStereoRendering(false) were called
+    // Verify setStereoRendering(true) was called and redundant setInvertStereoRendering was NOT called
     int checkStatus = RunLuauChunk(L, R"(
-        assert(#_G.capturedStereoCalls >= 2, "Expected at least 2 stereo calls")
+        assert(#_G.capturedStereoCalls == 1, "Expected exactly 1 stereo call")
         assert(_G.capturedStereoCalls[1].fn == "setStereoRendering" and _G.capturedStereoCalls[1].val == true)
-        assert(_G.capturedStereoCalls[2].fn == "setInvertStereoRendering" and _G.capturedStereoCalls[2].val == false)
     )", "=checkStereoCalls");
     EXPECT_EQ(checkStatus, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
 
@@ -291,12 +290,8 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresRecenterActionAndInputBinding
 TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBinding) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
     fs25vr::HeadPose simPose;
-    simPose.x = 0.15f;
-    simPose.y = 0.05f;
-    simPose.z = -0.10f;
-    simPose.pitch = 0.20f;
-    simPose.yaw = -0.30f;
-    simPose.roll = 0.02f;
+    simPose.position = fs25vr::Vector3(0.15f, 0.05f, -0.10f);
+    simPose.rotation = fs25vr::EulerAngles(0.20f, -0.30f, 0.02f);
     simPose.isValid = true;
     oxr->SetSimulatedPose(simPose);
 
@@ -369,12 +364,8 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
 TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
     fs25vr::HeadPose simPose;
-    simPose.x = 0.04f;
-    simPose.y = -0.03f;
-    simPose.z = 0.02f;
-    simPose.pitch = 0.12f;
-    simPose.yaw = 0.18f;
-    simPose.roll = -0.01f;
+    simPose.position = fs25vr::Vector3(0.04f, -0.03f, 0.02f);
+    simPose.rotation = fs25vr::EulerAngles(0.12f, 0.18f, -0.01f);
     simPose.isValid = true;
     oxr->SetSimulatedPose(simPose);
 
@@ -429,39 +420,92 @@ TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking
 TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirmation) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
     fs25vr::HeadPose simPose;
-    simPose.x = 0.5f;
-    simPose.y = 0.2f;
-    simPose.z = -0.3f;
+    simPose.position = fs25vr::Vector3(0.5f, 0.2f, -0.3f);
     simPose.isValid = true;
     oxr->SetSimulatedPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
+    bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
     ASSERT_FALSE(scriptContent.empty());
     ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
 
+    // Setup mock scene graph, active vehicle camera, and player camera
+    ASSERT_EQ(RunLuauChunk(L, R"(
+        _G.vehTrans = {}
+        _G.playerTrans = {}
+        function setTranslation(node, x, y, z)
+            if node == 100 then
+                _G.vehTrans = { x = x, y = y, z = z }
+            elseif node == 200 then
+                _G.playerTrans = { x = x, y = y, z = z }
+            end
+        end
+        function setRotation(node, rx, ry, rz) end
+        function getTranslation(node) return 0.0, 1.8, 0.0 end
+        function getParent(node) return 0 end
+
+        local mockInsideCam = {
+            isInside = true,
+            cameraNode = 100,
+            origTransX = 0.0,
+            origTransY = 1.5,
+            origTransZ = 0.5
+        }
+        local mockPlayerCam = {
+            isFirstPerson = true,
+            firstPersonCamera = 200
+        }
+        _G.g_currentMission = {
+            controlledVehicle = {
+                getActiveCamera = function(self) return mockInsideCam end
+            },
+            player = {
+                camera = mockPlayerCam
+            }
+        }
+
+        -- Pre-update cameras with non-zero pose to simulate offset before recentering
+        VRCompanion:onVehicleCameraUpdate(mockInsideCam, 16.6)
+        VRCompanion:onPlayerCameraUpdate(mockPlayerCam, 16.6)
+        assert(math.abs(_G.vehTrans.x - 0.5) < 0.001, "pre-recenter veh x must match simPose")
+        assert(math.abs(_G.playerTrans.x - 0.5) < 0.001, "pre-recenter player x must match simPose")
+    )", "=setupRecenterMocks"), 0);
+
     // Call recenter action
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenterCall"), 0);
 
-    // Verify translational offsets are zeroed
+    // Verify translational offsets are zeroed in bridge and camera node positions are actively realigned
     ASSERT_EQ(RunLuauChunk(L, R"(
         local pose = VRBridge.getHeadPose()
         assert(math.abs(pose.x) < 0.001, "recenter must zero x")
         assert(math.abs(pose.y) < 0.001, "recenter must zero y")
         assert(math.abs(pose.z) < 0.001, "recenter must zero z")
-    )", "=checkZeroedPose"), 0);
+
+        -- Verify camera node positions are actively realigned to driver seat and player character roots
+        assert(math.abs(_G.vehTrans.x - 0.0) < 0.001, "realigned vehicle x must be 0")
+        assert(math.abs(_G.vehTrans.y - 1.5) < 0.001, "realigned vehicle y must be base seat height 1.5")
+        assert(math.abs(_G.vehTrans.z - 0.5) < 0.001, "realigned vehicle z must be base seat depth 0.5")
+
+        assert(math.abs(_G.playerTrans.x - 0.0) < 0.001, "realigned player x must be 0")
+        assert(math.abs(_G.playerTrans.y - 1.8) < 0.001, "realigned player y must be base player height 1.8")
+        assert(math.abs(_G.playerTrans.z - 0.0) < 0.001, "realigned player z must be 0")
+    )", "=checkZeroedPoseAndNodes"), 0);
 
     // Verify recenter logged
     bool foundRecenterLog = false;
+    bool foundVehicleRealignLog = false;
+    bool foundPlayerRealignLog = false;
     for (const auto& msg : s_capturedLogs) {
-        if (msg.find("Recenter Action") != std::string::npos) {
-            foundRecenterLog = true;
-            break;
-        }
+        if (msg.find("Recenter Action") != std::string::npos) foundRecenterLog = true;
+        if (msg.find("Cockpit head pose realigned") != std::string::npos) foundVehicleRealignLog = true;
+        if (msg.find("On-foot head pose realigned") != std::string::npos) foundPlayerRealignLog = true;
     }
     EXPECT_TRUE(foundRecenterLog);
+    EXPECT_TRUE(foundVehicleRealignLog);
+    EXPECT_TRUE(foundPlayerRealignLog);
 }
 
 TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCamera) {
@@ -598,12 +642,8 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
-    simPose.x = 0.0f;
-    simPose.y = 0.0f;
-    simPose.z = 0.0f;
-    simPose.pitch = 0.0f;
-    simPose.yaw = 0.0f;
-    simPose.roll = 0.0f;
+    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     oxr->SetSimulatedPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -670,12 +710,8 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
-    simPose.x = 0.0f;
-    simPose.y = 0.0f;
-    simPose.z = 0.0f;
-    simPose.pitch = 0.0f;
-    simPose.yaw = 0.0f;
-    simPose.roll = 0.0f;
+    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     oxr->SetSimulatedPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -741,9 +777,7 @@ TEST_F(CompanionModTest, SkipsAfrAlternationWhenRequiresAfrFallbackIsFalse) {
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
-    simPose.x = 0.0f;
-    simPose.y = 0.0f;
-    simPose.z = 0.0f;
+    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     oxr->SetSimulatedPose(simPose);
 
     auto probe = std::make_shared<fs25vr::GraphicsTelemetryProbe>();

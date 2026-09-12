@@ -58,7 +58,7 @@ Farming Simulator 25 (FS25) represents a significant generational shift for GIAN
 4. **On-Foot Tracking Gap:** Vanilla `PlayerCamera.lua` omits head-tracking entirely. However, the underlying C++ engine API (`isHeadTrackingAvailable()`, `getHeadTrackingTranslation()`, `getHeadTrackingRotation()`) remains globally accessible in Luau. A lightweight Lua script mod can bridge this gap and provide native 6DOF head-tracking on-foot.
 5. **Stereoscopic Rendering Paths:**
    - *Depth-Buffer Reprojection (ReShade SuperDepth3D + OpenXR Companion):* Immediate 100% operational baseline. High performance, zero crash overhead, full multiplayer compatibility.
-   - *Native D3D12 OpenXR Injector (Proxy DLL):* Intercepts `IDXGISwapChain::Present` and command queues. Feasible via **Alternate Eye Rendering (AFR)** or **Sequential Dual-Pass Command List Duplication**. Undocumented engine exports (`setStereoRendering`) confirm internal stereoscopic scaffolding within GIANTS Engine 10.
+   - *Native D3D12 OpenXR Injector (Proxy DLL):* Intercepts `IDXGISwapChain::Present` and command queues. Feasible via **Alternate Frame Rendering (AFR)** or **Sequential Dual-Pass Command List Duplication**. Undocumented engine exports (`setStereoRendering`) confirm internal stereoscopic scaffolding within GIANTS Engine 10.
 
 ---
 
@@ -136,7 +136,7 @@ GIANTS Engine represents all scene cameras as transform nodes in the I3D Scenegr
 | `getFovY` | `(entityId cameraId)` | Retrieves the vertical Field of View (in radians). |
 | `setNearClip` | `(entityId cameraId, float nearClip)` | Sets near clipping plane distance (typically 0.15m). |
 | `setFarClip` | `(entityId cameraId, float farClip)` | Sets far clipping plane distance (typically 2000.0m). |
-| `setProjectionOffset` | `(entityId cameraId, float x, float y)` | **Crucial for VR:** Sets asymmetric frustum projection offsets. |
+| `setProjectionOffset` | `(entityId cameraId, float x, float y)` | **Crucial for VR:** Sets Oblique Frustum projection offsets. |
 | `getProjectionOffset` | `(entityId cameraId)` | Retrieves the current horizontal/vertical projection offsets. |
 | `projectToCamera` | `(entityId cameraId, float x, float y, float z)` | Projects world space 3D coordinates to screen coordinates. |
 | `transformToViewSpace`| `(entityId cameraId, float x, float y, float z)` | Converts world coordinates directly to camera view space. |
@@ -291,7 +291,7 @@ Because FS25 expects a standard TrackIR / `NPClient64.dll` provider, OpenXR head
 
 ## 4. Stereoscopic 3D & VR Camera Rendering Options
 
-True VR requires stereoscopic 3D rendering: presenting distinct perspective views to the left and right eyes with appropriate horizontal inter-pupillary displacement (IPD) and asymmetric projection frustums.
+True VR requires stereoscopic 3D rendering: presenting distinct perspective views to the left and right eyes with appropriate horizontal inter-pupillary displacement (IPD) and Oblique Frustums.
 
 ### 4.1 Option A: Hooked D3D12 OpenXR Injector (Proxy DLL)
 
@@ -636,7 +636,7 @@ VRHeadTracking = {}
 VRHeadTracking.name = "VRHeadTracking"
 
 function VRHeadTracking:init()
-    print("[VRHeadTracking] Initializing FS25 VR Head Tracking Bridge...")
+    print("[VRCompanion] Initializing FS25 VR Companion Mod...")
 
     -- Hook PlayerCamera update routine
     PlayerCamera.update = Utils.appendedFunction(PlayerCamera.update, VRHeadTracking.onPlayerCameraUpdate)
@@ -726,7 +726,7 @@ For complete true-geometric VR without depth-buffer reprojection:
    - On frame $2k+1$: Shift camera view transform to Right Eye ($+\frac{\text{IPD}}{2}$). Copy swapchain backbuffer to `XrSwapchainImageD3D12KHR` for View 1.
    - Call `xrEndFrame` submitting both views simultaneously to the VR compositor.
 5. **Multi-Camera Frustum Alignment:**
-   - Utilize FS25's native `setProjectionOffset(cameraId, xOffset, yOffset)` via Lua inter-process communication (IPC) or memory injection to apply asymmetric lens frustums calculated from `XrView.fov`.
+   - Utilize FS25's native `setProjectionOffset(cameraId, xOffset, yOffset)` via the in-process VRBridge table injection to apply Oblique Frustums calculated from `XrView.fov`.
 
 ---
 

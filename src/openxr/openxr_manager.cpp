@@ -265,32 +265,55 @@ bool OpenXrManager::CreateTrackingSpaces() {
     return true;
 }
 
-void OpenXrManager::QuaternionToEuler(float qx, float qy, float qz, float qw,
-                                      float& pitch, float& yaw, float& roll) {
-    float sinPitch = 2.0f * (qw * qx - qy * qz);
+EulerAngles OpenXrManager::QuaternionToEuler(const Quaternion& q) {
+    EulerAngles angles;
+    float sinPitch = 2.0f * (q.w * q.x - q.y * q.z);
     if (std::abs(sinPitch) >= 0.99999f) {
-        pitch = std::copysign(3.14159265f / 2.0f, sinPitch);
-        yaw = 2.0f * std::atan2(qy, qw);
-        roll = 0.0f;
+        angles.pitch = std::copysign(3.14159265f / 2.0f, sinPitch);
+        angles.yaw = 2.0f * std::atan2(q.y, q.w);
+        angles.roll = 0.0f;
     } else {
-        pitch = std::asin(std::clamp(sinPitch, -1.0f, 1.0f));
-        yaw = std::atan2(2.0f * (qw * qy + qx * qz), 1.0f - 2.0f * (qx * qx + qy * qy));
-        roll = std::atan2(2.0f * (qw * qz + qx * qy), 1.0f - 2.0f * (qx * qx + qz * qz));
+        angles.pitch = std::asin(std::clamp(sinPitch, -1.0f, 1.0f));
+        angles.yaw = std::atan2(2.0f * (q.w * q.y + q.x * q.z), 1.0f - 2.0f * (q.x * q.x + q.y * q.y));
+        angles.roll = std::atan2(2.0f * (q.w * q.z + q.x * q.y), 1.0f - 2.0f * (q.x * q.x + q.z * q.z));
     }
+    return angles;
 }
 
-void OpenXrManager::RotateVectorByQuaternion(float qx, float qy, float qz, float qw,
-                                             float vx, float vy, float vz,
-                                             float& rx, float& ry, float& rz) {
+Vector3 OpenXrManager::RotateVectorByQuaternion(const Quaternion& q, const Vector3& v) {
     // t = 2 * cross(q.xyz, v)
-    float tx = 2.0f * (qy * vz - qz * vy);
-    float ty = 2.0f * (qz * vx - qx * vz);
-    float tz = 2.0f * (qx * vy - qy * vx);
+    float tx = 2.0f * (q.y * v.z - q.z * v.y);
+    float ty = 2.0f * (q.z * v.x - q.x * v.z);
+    float tz = 2.0f * (q.x * v.y - q.y * v.x);
 
     // v' = v + qw * t + cross(q.xyz, t)
-    rx = vx + qw * tx + (qy * tz - qz * ty);
-    ry = vy + qw * ty + (qz * tx - qx * tz);
-    rz = vz + qw * tz + (qx * ty - qy * tx);
+    return Vector3(
+        v.x + q.w * tx + (q.y * tz - q.z * ty),
+        v.y + q.w * ty + (q.z * tx - q.x * tz),
+        v.z + q.w * tz + (q.x * ty - q.y * tx)
+    );
+}
+
+Vector3 OpenXrManager::ComputeEyePosition(const HeadPose& headPose, float ipd, uint32_t eyeIndex) {
+    float eyeSign = (eyeIndex == 1) ? 1.0f : -1.0f;
+    float halfIpd = ipd * 0.5f;
+    Vector3 rotated = RotateVectorByQuaternion(
+        headPose.orientation,
+        Vector3(eyeSign * halfIpd, 0.0f, 0.0f)
+    );
+    return Vector3(
+        headPose.position.x + rotated.x,
+        headPose.position.y + rotated.y,
+        headPose.position.z + rotated.z
+    );
+}
+
+HeadPose OpenXrManager::ComputeEyePose(const HeadPose& headPose, float ipd, uint32_t eyeIndex) {
+    HeadPose eyePose = headPose;
+    if (headPose.isValid) {
+        eyePose.position = ComputeEyePosition(headPose, ipd, eyeIndex);
+    }
+    return eyePose;
 }
 
 HeadPose OpenXrManager::PollHeadPose(XrTime time) {
@@ -312,17 +335,9 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
         bool posValid = (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
         bool oriValid = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
 
-        m_rawPose.x = location.pose.position.x;
-        m_rawPose.y = location.pose.position.y;
-        m_rawPose.z = location.pose.position.z;
-
-        m_rawPose.qx = location.pose.orientation.x;
-        m_rawPose.qy = location.pose.orientation.y;
-        m_rawPose.qz = location.pose.orientation.z;
-        m_rawPose.qw = location.pose.orientation.w;
-
-        QuaternionToEuler(m_rawPose.qx, m_rawPose.qy, m_rawPose.qz, m_rawPose.qw,
-                          m_rawPose.pitch, m_rawPose.yaw, m_rawPose.roll);
+        m_rawPose.position = Vector3(location.pose.position.x, location.pose.position.y, location.pose.position.z);
+        m_rawPose.orientation = Quaternion(location.pose.orientation.x, location.pose.orientation.y, location.pose.orientation.z, location.pose.orientation.w);
+        m_rawPose.rotation = QuaternionToEuler(m_rawPose.orientation);
 
         m_rawPose.positionTracked = (location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
         m_rawPose.orientationTracked = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
@@ -331,20 +346,21 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
 
     HeadPose recentered = m_rawPose;
     if (m_hasRecenter) {
-        float dx = m_rawPose.x - m_recenterOffset.x;
-        float dy = m_rawPose.y - m_recenterOffset.y;
-        float dz = m_rawPose.z - m_recenterOffset.z;
+        float dx = m_rawPose.position.x - m_recenterOffset.position.x;
+        float dy = m_rawPose.position.y - m_recenterOffset.position.y;
+        float dz = m_rawPose.position.z - m_recenterOffset.position.z;
 
         float cosY = std::cos(-m_recenterOffset.yaw);
         float sinY = std::sin(-m_recenterOffset.yaw);
 
-        recentered.x = dx * cosY - dz * sinY;
-        recentered.y = dy;
-        recentered.z = dx * sinY + dz * cosY;
+        recentered.position.x = dx * cosY - dz * sinY;
+        recentered.position.y = dy;
+        recentered.position.z = dx * sinY + dz * cosY;
 
-        recentered.yaw = m_rawPose.yaw - m_recenterOffset.yaw;
-        while (recentered.yaw > 3.14159265f) recentered.yaw -= 6.2831853f;
-        while (recentered.yaw < -3.14159265f) recentered.yaw += 6.2831853f;
+        float halfNegYaw = -m_recenterOffset.yaw * 0.5f;
+        Quaternion qYawInv(0.0f, std::sin(halfNegYaw), 0.0f, std::cos(halfNegYaw));
+        recentered.orientation = qYawInv * m_rawPose.orientation;
+        recentered.rotation = QuaternionToEuler(recentered.orientation);
     }
 
     m_lastPose = recentered;
@@ -352,10 +368,8 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
 }
 
 void OpenXrManager::Recenter() {
-    m_recenterOffset.x = m_rawPose.x;
-    m_recenterOffset.y = m_rawPose.y;
-    m_recenterOffset.z = m_rawPose.z;
-    m_recenterOffset.yaw = m_rawPose.yaw;
+    m_recenterOffset.position = m_rawPose.position;
+    m_recenterOffset.yaw = m_rawPose.rotation.yaw;
     m_hasRecenter = true;
     LogInfo("OpenXrManager: Head pose recentered.");
 }
@@ -363,8 +377,8 @@ void OpenXrManager::Recenter() {
 void OpenXrManager::SetSimulatedPose(const HeadPose& pose) {
     m_simulatedPose = pose;
     m_useSimulatedPose = true;
-    m_rawPose = pose;
-    m_lastPose = pose;
+    m_rawPose = m_simulatedPose;
+    m_lastPose = m_simulatedPose;
 }
 
 EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov) {
@@ -693,23 +707,17 @@ bool OpenXrManager::SubmitFramePair() {
         projViews[i].fov.angleUp = m_eyeProjections[i].angleUp;
         projViews[i].fov.angleDown = m_eyeProjections[i].angleDown;
 
-        float eyeSign = (i == 1) ? 1.0f : -1.0f;
-        float halfIpd = m_ipd * 0.5f;
-
         const HeadPose& eyePose = m_capturedEyePoses[i];
-        float rx = 0.0f, ry = 0.0f, rz = 0.0f;
-        RotateVectorByQuaternion(eyePose.qx, eyePose.qy, eyePose.qz, eyePose.qw,
-                                 eyeSign * halfIpd, 0.0f, 0.0f,
-                                 rx, ry, rz);
+        Vector3 eyePos = ComputeEyePosition(eyePose, m_ipd, i);
 
-        projViews[i].pose.position.x = eyePose.x + rx;
-        projViews[i].pose.position.y = eyePose.y + ry;
-        projViews[i].pose.position.z = eyePose.z + rz;
+        projViews[i].pose.position.x = eyePos.x;
+        projViews[i].pose.position.y = eyePos.y;
+        projViews[i].pose.position.z = eyePos.z;
 
-        projViews[i].pose.orientation.x = eyePose.qx;
-        projViews[i].pose.orientation.y = eyePose.qy;
-        projViews[i].pose.orientation.z = eyePose.qz;
-        projViews[i].pose.orientation.w = eyePose.qw;
+        projViews[i].pose.orientation.x = eyePose.orientation.x;
+        projViews[i].pose.orientation.y = eyePose.orientation.y;
+        projViews[i].pose.orientation.z = eyePose.orientation.z;
+        projViews[i].pose.orientation.w = eyePose.orientation.w;
 
         projViews[i].subImage.swapchain = m_eyeSwapchains[i].handle;
         projViews[i].subImage.imageRect.offset = { 0, 0 };

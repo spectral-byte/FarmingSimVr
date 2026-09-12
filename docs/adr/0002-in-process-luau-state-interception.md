@@ -8,6 +8,6 @@ Accepted
 
 ## Considered Options
 - Shared memory / memory-mapped file with custom disk reading (rejected: Luau sandbox lacks raw memory access, and disk polling causes frame stutters).
-- TrackIR / NPClient protocol multiplexing (rejected: `TRACKIRDATA` only carries 6DOF pose data, lacking fields for asymmetric projection offsets, eye indices, and frame sync).
+- TrackIR / NPClient protocol multiplexing (rejected: `TRACKIRDATA` only carries 6DOF pose data, lacking fields for Oblique Frustum projection offsets, eye indices, and frame sync).
 - Direct binary patching of `FarmingSimulator2025Game.exe` (rejected: breaks base-game integrity checks and fails on game updates).
 - In-process Luau hook via `isHeadTrackingAvailable` (selected: zero game binary modifications, bypasses Luau sandbox cleanly, and enables zero-copy C-to-Lua telemetry).

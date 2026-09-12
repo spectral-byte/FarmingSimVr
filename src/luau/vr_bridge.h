@@ -48,7 +48,6 @@ public:
     static int Lua_GetHeadPose(lua_State* L);
     static int Lua_Recenter(lua_State* L);
     static int Lua_GetEyeProjection(lua_State* L);
-    static int Lua_GetViews(lua_State* L);
 
     static int Lua_GetFrameParity(lua_State* L);
     static int Lua_GetFrameIndex(lua_State* L);

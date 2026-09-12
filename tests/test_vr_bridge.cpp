@@ -120,16 +120,9 @@ TEST_F(VrBridgeTest, ExposesStereoTelemetryAndStereoStatusToLuauScript) {
 TEST_F(VrBridgeTest, ExposesHeadPoseToLuauScript) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
     fs25vr::HeadPose simPose;
-    simPose.x = 0.12f;
-    simPose.y = -0.05f;
-    simPose.z = 0.88f;
-    simPose.pitch = 0.25f;
-    simPose.yaw = -0.15f;
-    simPose.roll = 0.05f;
-    simPose.qx = 0.12f;
-    simPose.qy = -0.07f;
-    simPose.qz = 0.02f;
-    simPose.qw = 0.99f;
+    simPose.position = fs25vr::Vector3(0.12f, -0.05f, 0.88f);
+    simPose.rotation = fs25vr::EulerAngles(0.25f, -0.15f, 0.05f);
+    simPose.orientation = fs25vr::Quaternion(0.12f, -0.07f, 0.02f, 0.99f);
     simPose.isValid = true;
     simPose.positionTracked = true;
     simPose.orientationTracked = true;
@@ -165,11 +158,8 @@ TEST_F(VrBridgeTest, ExposesHeadPoseToLuauScript) {
 TEST_F(VrBridgeTest, RecenterViaLuauResetsTranslationalOffsets) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
     fs25vr::HeadPose simPose;
-    simPose.x = 1.5f;
-    simPose.y = 0.5f;
-    simPose.z = -2.0f;
-    simPose.pitch = 0.1f;
-    simPose.yaw = 0.3f;
+    simPose.position = fs25vr::Vector3(1.5f, 0.5f, -2.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.1f, 0.3f, 0.0f);
     simPose.isValid = true;
     simPose.positionTracked = true;
     simPose.orientationTracked = true;
@@ -196,7 +186,7 @@ TEST_F(VrBridgeTest, RecenterViaLuauResetsTranslationalOffsets) {
     }
 }
 
-TEST_F(VrBridgeTest, ExposesEyeProjectionAndViewsToLuauScript) {
+TEST_F(VrBridgeTest, ExposesEyeProjectionAndPrunesAliasesInLuauScript) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
 
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
@@ -210,8 +200,9 @@ TEST_F(VrBridgeTest, ExposesEyeProjectionAndViewsToLuauScript) {
 
     std::string script = R"luau(
         assert(type(VRBridge.getEyeProjection) == "function", "getEyeProjection must be a function")
-        assert(type(VRBridge.getViews) == "function", "getViews must be a function")
-        assert(type(VRBridge.getProjection) == "function", "getProjection alias must be a function")
+        -- Unrequested view accessor and redundant aliases must be pruned
+        assert(VRBridge.getViews == nil, "getViews must be pruned")
+        assert(VRBridge.getProjection == nil, "getProjection alias must be pruned")
 
         -- Eye 0 (Left Eye)
         local left = VRBridge.getEyeProjection(0)
@@ -221,8 +212,14 @@ TEST_F(VrBridgeTest, ExposesEyeProjectionAndViewsToLuauScript) {
         assert(math.abs(left.xOffset - (-0.23052)) < 0.005, "left xOffset mismatch")
         assert(math.abs(left.yOffset) < 0.005, "left yOffset mismatch")
         assert(math.abs(left.fovY - 1.70) < 0.01, "left fovY mismatch")
-        assert(left.offsetX ~= nil and math.abs(left.offsetX - left.xOffset) < 0.0001, "offsetX alias mismatch")
-        assert(left.offsetY ~= nil and math.abs(left.offsetY - left.yOffset) < 0.0001, "offsetY alias mismatch")
+
+        -- Verify redundant aliases are pruned from projection table
+        assert(left.offsetX == nil, "offsetX alias must be pruned")
+        assert(left.offsetY == nil, "offsetY alias must be pruned")
+        assert(left.xOffsetTan == nil, "xOffsetTan alias must be pruned")
+        assert(left.yOffsetTan == nil, "yOffsetTan alias must be pruned")
+        assert(left.xOffsetNorm == nil, "xOffsetNorm alias must be pruned")
+        assert(left.yOffsetNorm == nil, "yOffsetNorm alias must be pruned")
 
         -- Eye 1 (Right Eye)
         local right = VRBridge.getEyeProjection(1)
@@ -237,21 +234,13 @@ TEST_F(VrBridgeTest, ExposesEyeProjectionAndViewsToLuauScript) {
         assert(left.xOffset < 0.0, "left xOffset must be negative (nasal/temporal)")
         assert(right.xOffset > 0.0, "right xOffset must be positive")
 
-        -- Views array and table
-        local views = VRBridge.getViews()
-        assert(type(views) == "table", "getViews must return table")
-        assert(views[1] ~= nil and views[2] ~= nil, "views array entries [1] and [2] must exist")
-        assert(views.left ~= nil and views.right ~= nil, "views.left and views.right must exist")
-        assert(math.abs(views.left.xOffset - left.xOffset) < 0.0001, "views.left must match left")
-        assert(math.abs(views.right.xOffset - right.xOffset) < 0.0001, "views.right must match right")
-
         -- Flexible indexing
         local byStrL = VRBridge.getEyeProjection("left")
         local byStrR = VRBridge.getEyeProjection("right")
         assert(math.abs(byStrL.xOffset - left.xOffset) < 0.0001, "byStrL mismatch")
         assert(math.abs(byStrR.xOffset - right.xOffset) < 0.0001, "byStrR mismatch")
 
-        -- Default call without argument
+        -- Default call without argument returns active parity eye
         local def = VRBridge.getEyeProjection()
         assert(def.isValid == true, "default projection must be valid")
         assert(math.abs(def.xOffset - left.xOffset) < 0.0001, "default must be left eye")
@@ -334,10 +323,9 @@ TEST_F(VrBridgeTest, ExposesFrameParityAndFrameIndexAndIpdToLuau) {
 TEST_F(VrBridgeTest, ExposesEyePoseWithInterpupillaryShiftToLuau) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
     fs25vr::HeadPose simPose;
-    simPose.x = 0.0f;
-    simPose.y = 1.7f;
-    simPose.z = 0.0f;
-    simPose.yaw = 0.0f;
+    simPose.position = fs25vr::Vector3(0.0f, 1.7f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
+    simPose.orientation = fs25vr::Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     simPose.isValid = true;
     oxr->SetSimulatedPose(simPose);
     oxr->SetIpd(0.064f);
