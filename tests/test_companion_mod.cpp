@@ -734,4 +734,72 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     )luau", "=verifyFrame1OnFoot"), 0);
 }
 
+TEST_F(CompanionModTest, SkipsAfrAlternationWhenRequiresAfrFallbackIsFalse) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    XrFovf fov{ -0.90f, 0.90f, 0.85f, -0.85f };
+    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(fov));
+
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.x = 0.0f;
+    simPose.y = 0.0f;
+    simPose.z = 0.0f;
+    oxr->SetSimulatedPose(simPose);
+
+    auto probe = std::make_shared<fs25vr::GraphicsTelemetryProbe>();
+    // Configure probe with native stereo detected
+    D3D12_VIEWPORT vps[2]{
+        { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
+        { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
+    };
+    D3D12_RECT scissors[2]{
+        { 0, 0, 1920, 1080 },
+        { 1920, 0, 3840, 1080 }
+    };
+    probe->RecordViewports(2, vps);
+    probe->RecordScissorRects(2, scissors);
+    probe->OnFrameBoundary();
+
+    ASSERT_TRUE(probe->HasNativeStereoDetected());
+    ASSERT_FALSE(probe->RequiresAfrFallback());
+
+    fs25vr::VRBridge bridge(oxr, probe);
+    bridge.SetIpd(0.064f);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.cameraTranslations = {}
+        function setTranslation(node, x, y, z)
+            _G.cameraTranslations[node] = { x = x, y = y, z = z }
+        end
+        function setRotation(node, rx, ry, rz)
+        end
+
+        _G.mockVehicleCam = {
+            isInside = true,
+            cameraNode = 301,
+            origTransX = 0, origTransY = 1.5, origTransZ = 0
+        }
+    )luau", "=setupNativeStereoVehicleMocks"), 0);
+
+    // Frame 0: should NOT shift by IPD offset
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateNativeFrame0"), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(math.abs(_G.cameraTranslations[301].x) < 0.001, "translation x must remain centered when native stereo detected")
+    )luau", "=verifyNativeFrame0"), 0);
+
+    // Advance frame parity
+    bridge.AdvanceFrame();
+    // Frame 1: should still NOT shift by IPD offset
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateNativeFrame1"), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(math.abs(_G.cameraTranslations[301].x) < 0.001, "translation x must remain centered on next frame when native stereo detected")
+    )luau", "=verifyNativeFrame1"), 0);
+}
+
 

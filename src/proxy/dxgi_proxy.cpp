@@ -20,7 +20,14 @@ HRESULT ForwardFactoryCall(const char* funcName, PFN pfn, Args&&... args) {
 } // anonymous namespace
 
 DxgiProxy& DxgiProxy::Instance() {
-    static DxgiProxy instance;
+    static DxgiProxy instance(
+        std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {}),
+        std::shared_ptr<OpenXrManager>(&OpenXrManager::Instance(), [](auto*) {}),
+        std::shared_ptr<LuauInterceptor>(&LuauInterceptor::Instance(), [](auto*) {}),
+        std::shared_ptr<GraphicsTelemetryProbe>(&GraphicsTelemetryProbe::Instance(), [](auto*) {}),
+        std::shared_ptr<D3D12Interceptor>(&D3D12Interceptor::Instance(), [](auto*) {}),
+        std::shared_ptr<VRBridge>(&VRBridge::Instance(), [](auto*) {})
+    );
     return instance;
 }
 
@@ -33,7 +40,7 @@ DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
     : m_systemDxgi(systemDxgi ? std::move(systemDxgi) : std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {})),
       m_openXrManager(openXrManager ? std::move(openXrManager) : std::shared_ptr<OpenXrManager>(&OpenXrManager::Instance(), [](auto*) {})),
       m_luauInterceptor(luauInterceptor ? std::move(luauInterceptor) : std::shared_ptr<LuauInterceptor>(&LuauInterceptor::Instance(), [](auto*) {})),
-      m_telemetryProbe(telemetryProbe ? std::move(telemetryProbe) : std::shared_ptr<GraphicsTelemetryProbe>(&GraphicsTelemetryProbe::Instance(), [](auto*) {})),
+      m_telemetryProbe(std::move(telemetryProbe)),
       m_d3d12Interceptor(d3d12Interceptor ? std::move(d3d12Interceptor) : std::shared_ptr<D3D12Interceptor>(&D3D12Interceptor::Instance(), [](auto*) {})),
       m_vrBridge(vrBridge ? std::move(vrBridge) : std::shared_ptr<VRBridge>(&VRBridge::Instance(), [](auto*) {})) {
     s_activeProxy = this;
@@ -241,6 +248,11 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
     }
 
     if (m_openXrManager->HasEyeSwapchains()) {
+        // Gate AFR pacing behind telemetry fallback check per ADR-0003
+        if (m_telemetryProbe && !m_telemetryProbe->RequiresAfrFallback()) {
+            return;
+        }
+
         uint32_t parity = m_vrBridge ? m_vrBridge->GetFrameParity() : 0;
         m_openXrManager->CopyBackBufferToEye(parity, pBackBuffer);
 

@@ -655,6 +655,9 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     manager.SetIpd(0.064f);
 
     EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    // Verified pair completion: only eye 0 has copied, eye 1 has not. SubmitFramePair must fail.
+    EXPECT_FALSE(manager.SubmitFramePair());
+
     EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
 
     EXPECT_EQ(manager.GetSubmittedFramePairCount(), 0u);
@@ -678,6 +681,66 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     EXPECT_NEAR(leftView.pose.position.x, -0.032f, 0.001f);
     EXPECT_NEAR(rightView.pose.position.x, 0.032f, 0.001f);
     EXPECT_NEAR(rightView.pose.position.x - leftView.pose.position.x, 0.064f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, CapturesSeparateTemporalPosesPerEyeAndRotatesByQuaternionIn3D) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+    manager.SetIpd(0.064f);
+
+    // Frame 0 (t_2k): Left eye captured with pose at (0, 1.6, 0), identity orientation
+    HeadPose leftPose;
+    leftPose.x = 0.0f;
+    leftPose.y = 1.6f;
+    leftPose.z = 0.0f;
+    leftPose.qw = 1.0f;
+    leftPose.isValid = true;
+    manager.SetSimulatedPose(leftPose);
+
+    EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+
+    // Frame 1 (t_2k+1): Head moves to (0.1, 1.6, 0.2) and rotates 90 degrees around Y (yaw = +pi/2)
+    // Quaternion for +90 deg around Y: (0, sin(45 deg), 0, cos(45 deg)) = (0, 0.7071068, 0, 0.7071068)
+    HeadPose rightPose;
+    rightPose.x = 0.1f;
+    rightPose.y = 1.6f;
+    rightPose.z = 0.2f;
+    rightPose.qx = 0.0f;
+    rightPose.qy = 0.7071068f;
+    rightPose.qz = 0.0f;
+    rightPose.qw = 0.7071068f;
+    rightPose.isValid = true;
+    manager.SetSimulatedPose(rightPose);
+
+    EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+
+    // Submit the pair
+    EXPECT_TRUE(manager.SubmitFramePair());
+    ASSERT_EQ(mockDispatch->lastSubmittedProjectionViews.size(), 2u);
+
+    const auto& view0 = mockDispatch->lastSubmittedProjectionViews[0];
+    const auto& view1 = mockDispatch->lastSubmittedProjectionViews[1];
+
+    // Left eye was captured at t_2k (leftPose):
+    // Left eye position: x = 0.0 - 0.032 = -0.032, y = 1.6, z = 0.0
+    EXPECT_NEAR(view0.pose.position.x, -0.032f, 0.001f);
+    EXPECT_NEAR(view0.pose.position.y, 1.6f, 0.001f);
+    EXPECT_NEAR(view0.pose.position.z, 0.0f, 0.001f);
+    EXPECT_NEAR(view0.pose.orientation.w, 1.0f, 0.001f);
+
+    // Right eye was captured at t_2k+1 (rightPose):
+    // Rotating (0.032, 0, 0) by +90 deg around Y yields (0, 0, -0.032) in standard right-handed coordinates
+    // Right eye position: x = 0.1 + 0.0 = 0.1, y = 1.6, z = 0.2 - 0.032 = 0.168
+    EXPECT_NEAR(view1.pose.position.x, 0.1f, 0.001f);
+    EXPECT_NEAR(view1.pose.position.y, 1.6f, 0.001f);
+    EXPECT_NEAR(view1.pose.position.z, 0.168f, 0.001f);
+    EXPECT_NEAR(view1.pose.orientation.y, 0.7071068f, 0.001f);
 }
 
 } // namespace fs25vr

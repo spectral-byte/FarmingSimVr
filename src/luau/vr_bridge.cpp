@@ -11,7 +11,14 @@ VRBridge& VRBridge::Instance() {
 VRBridge::VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
                    std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe)
     : m_openXrManager(openXrManager ? std::move(openXrManager) : std::shared_ptr<OpenXrManager>(&OpenXrManager::Instance(), [](auto*) {})),
-      m_telemetryProbe(telemetryProbe ? std::move(telemetryProbe) : std::shared_ptr<GraphicsTelemetryProbe>(&GraphicsTelemetryProbe::Instance(), [](auto*) {})) {
+      m_telemetryProbe(std::move(telemetryProbe)) {
+}
+
+bool VRBridge::RequiresAfrFallback() const {
+    if (!m_telemetryProbe) {
+        return true;
+    }
+    return m_telemetryProbe->RequiresAfrFallback();
 }
 
 bool VRBridge::IsInjected(lua_State* L) {
@@ -62,6 +69,11 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushcclosure(L, &VRBridge::Lua_IsStereoActive, "isStereoActive", 1);
     lua_setfield(L, -2, "isStereoActive");
 
+    // VRBridge.getRequiresAfrFallback = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_RequiresAfrFallback, "getRequiresAfrFallback", 1);
+    lua_setfield(L, -2, "getRequiresAfrFallback");
+
     // VRBridge.getHeadPose = function() [bound with 'this' upvalue]
     lua_pushlightuserdata(L, this);
     lua_pushcclosure(L, &VRBridge::Lua_GetHeadPose, "getHeadPose", 1);
@@ -106,16 +118,6 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushlightuserdata(L, this);
     lua_pushcclosure(L, &VRBridge::Lua_GetEyePose, "getEyePose", 1);
     lua_setfield(L, -2, "getEyePose");
-
-    // VRBridge.advanceFrame = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_AdvanceFrame, "advanceFrame", 1);
-    lua_setfield(L, -2, "advanceFrame");
-
-    // VRBridge.setFrameParity = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_SetFrameParity, "setFrameParity", 1);
-    lua_setfield(L, -2, "setFrameParity");
 
     // Set metatable on VRBridge table for dynamic property access (__index)
     lua_createtable(L, 0, 1);
@@ -444,11 +446,21 @@ HeadPose VRBridge::GetEyePose(uint32_t eyeIndex) {
     if (!pose.isValid) return pose;
     float eyeSign = (eyeIndex == 1) ? 1.0f : -1.0f;
     float halfIpd = GetIpd() * 0.5f;
-    float cosY = std::cos(pose.yaw);
-    float sinY = std::sin(pose.yaw);
-    pose.x += eyeSign * halfIpd * cosY;
-    pose.z -= eyeSign * halfIpd * sinY;
+    float rx = 0.0f, ry = 0.0f, rz = 0.0f;
+    OpenXrManager::RotateVectorByQuaternion(pose.qx, pose.qy, pose.qz, pose.qw,
+                                            eyeSign * halfIpd, 0.0f, 0.0f,
+                                            rx, ry, rz);
+    pose.x += rx;
+    pose.y += ry;
+    pose.z += rz;
     return pose;
+}
+
+int VRBridge::Lua_RequiresAfrFallback(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+    lua_pushboolean(L, self->RequiresAfrFallback() ? 1 : 0);
+    return 1;
 }
 
 int VRBridge::Lua_GetFrameParity(lua_State* L) {
@@ -507,30 +519,16 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
     return 1;
 }
 
-int VRBridge::Lua_AdvanceFrame(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) self = &Instance();
-    self->AdvanceFrame();
-    lua_pushinteger(L, self->GetFrameParity());
-    return 1;
-}
-
-int VRBridge::Lua_SetFrameParity(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) self = &Instance();
-    if (lua_gettop(L) >= 1 && lua_isnumber(L, 1)) {
-        self->SetFrameParity(static_cast<uint32_t>(lua_tointeger(L, 1)));
-    }
-    lua_pushinteger(L, self->GetFrameParity());
-    return 1;
-}
-
 int VRBridge::Lua_Index(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
 
     if (lua_isstring(L, 2)) {
         const char* key = lua_tostring(L, 2);
+        if (strcmp(key, "requiresAfrFallback") == 0) {
+            lua_pushboolean(L, self->RequiresAfrFallback() ? 1 : 0);
+            return 1;
+        }
         if (strcmp(key, "frameParity") == 0) {
             lua_pushinteger(L, self->GetFrameParity());
             return 1;

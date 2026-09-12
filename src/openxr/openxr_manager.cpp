@@ -30,6 +30,10 @@ OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
 
 OpenXrManager::~OpenXrManager() {
     Shutdown();
+    if (m_copyFenceEvent) {
+        CloseHandle(m_copyFenceEvent);
+        m_copyFenceEvent = nullptr;
+    }
 }
 
 bool OpenXrManager::CheckD3D12ExtensionSupport() {
@@ -275,6 +279,20 @@ void OpenXrManager::QuaternionToEuler(float qx, float qy, float qz, float qw,
     }
 }
 
+void OpenXrManager::RotateVectorByQuaternion(float qx, float qy, float qz, float qw,
+                                             float vx, float vy, float vz,
+                                             float& rx, float& ry, float& rz) {
+    // t = 2 * cross(q.xyz, v)
+    float tx = 2.0f * (qy * vz - qz * vy);
+    float ty = 2.0f * (qz * vx - qx * vz);
+    float tz = 2.0f * (qx * vy - qy * vx);
+
+    // v' = v + qw * t + cross(q.xyz, t)
+    rx = vx + qw * tx + (qy * tz - qz * ty);
+    ry = vy + qw * ty + (qz * tx - qx * tz);
+    rz = vz + qw * tz + (qx * ty - qy * tx);
+}
+
 HeadPose OpenXrManager::PollHeadPose(XrTime time) {
     if (!m_useSimulatedPose) {
         if (m_session == XR_NULL_HANDLE || m_localSpace == XR_NULL_HANDLE || m_viewSpace == XR_NULL_HANDLE) {
@@ -498,6 +516,20 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
 }
 
 void OpenXrManager::DestroyEyeSwapchains() {
+    if (m_copyFence && m_queue && m_copyFenceValue > 0) {
+        if (m_copyFence->GetCompletedValue() < m_copyFenceValue) {
+            if (m_copyFenceEvent) {
+                m_copyFence->SetEventOnCompletion(m_copyFenceValue, m_copyFenceEvent);
+                WaitForSingleObject(m_copyFenceEvent, INFINITE);
+            }
+        }
+    }
+    m_copyFence.Reset();
+    m_copyFenceValue = 0;
+    if (m_copyFenceEvent) {
+        CloseHandle(m_copyFenceEvent);
+        m_copyFenceEvent = nullptr;
+    }
     for (uint32_t i = 0; i < 2; ++i) {
         if (m_eyeSwapchains[i].handle != XR_NULL_HANDLE) {
             m_dispatch->DestroySwapchain(m_eyeSwapchains[i].handle);
@@ -520,6 +552,9 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
     if (eyeIndex >= 2 || !m_hasEyeSwapchains) {
         return false;
     }
+
+    // Cache the captured head pose at the moment this eye's frame is copied
+    m_capturedEyePoses[eyeIndex] = m_lastPose;
 
     XrSwapchain swapchain = m_eyeSwapchains[eyeIndex].handle;
     if (swapchain == XR_NULL_HANDLE) {
@@ -550,8 +585,25 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
         if (!m_copyCommandList && m_copyAllocator) {
             m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_copyAllocator.Get(), nullptr, IID_PPV_ARGS(&m_copyCommandList));
         }
+        if (!m_copyFence) {
+            m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_copyFence));
+            m_copyFenceValue = 0;
+            if (!m_copyFenceEvent) {
+                m_copyFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+            }
+        }
 
         if (m_copyCommandList && m_copyAllocator) {
+            // Synchronize with previous copy execution to prevent command allocator reuse while GPU is reading
+            if (m_copyFence && m_copyFenceValue > 0) {
+                if (m_copyFence->GetCompletedValue() < m_copyFenceValue) {
+                    if (m_copyFenceEvent) {
+                        m_copyFence->SetEventOnCompletion(m_copyFenceValue, m_copyFenceEvent);
+                        WaitForSingleObject(m_copyFenceEvent, INFINITE);
+                    }
+                }
+            }
+
             m_copyAllocator->Reset();
             m_copyCommandList->Reset(m_copyAllocator.Get(), nullptr);
 
@@ -584,6 +636,11 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
                 m_copyCommandList->Close();
                 ID3D12CommandList* lists[] = { m_copyCommandList.Get() };
                 m_queue->ExecuteCommandLists(1, lists);
+
+                if (m_copyFence) {
+                    m_copyFenceValue++;
+                    m_queue->Signal(m_copyFence.Get(), m_copyFenceValue);
+                }
             }
         }
     }
@@ -602,6 +659,11 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
 bool OpenXrManager::SubmitFramePair() {
     if (!m_hasEyeSwapchains || m_session == XR_NULL_HANDLE) {
+        return false;
+    }
+
+    // Verified pair completion: enforce both eyes have copied a frame before submitting
+    if (!m_eyeSwapchains[0].hasCopiedFrame || !m_eyeSwapchains[1].hasCopiedFrame) {
         return false;
     }
 
@@ -633,17 +695,21 @@ bool OpenXrManager::SubmitFramePair() {
 
         float eyeSign = (i == 1) ? 1.0f : -1.0f;
         float halfIpd = m_ipd * 0.5f;
-        float cosY = std::cos(m_lastPose.yaw);
-        float sinY = std::sin(m_lastPose.yaw);
 
-        projViews[i].pose.position.x = m_lastPose.x + eyeSign * halfIpd * cosY;
-        projViews[i].pose.position.y = m_lastPose.y;
-        projViews[i].pose.position.z = m_lastPose.z - eyeSign * halfIpd * sinY;
+        const HeadPose& eyePose = m_capturedEyePoses[i];
+        float rx = 0.0f, ry = 0.0f, rz = 0.0f;
+        RotateVectorByQuaternion(eyePose.qx, eyePose.qy, eyePose.qz, eyePose.qw,
+                                 eyeSign * halfIpd, 0.0f, 0.0f,
+                                 rx, ry, rz);
 
-        projViews[i].pose.orientation.x = m_lastPose.qx;
-        projViews[i].pose.orientation.y = m_lastPose.qy;
-        projViews[i].pose.orientation.z = m_lastPose.qz;
-        projViews[i].pose.orientation.w = m_lastPose.qw;
+        projViews[i].pose.position.x = eyePose.x + rx;
+        projViews[i].pose.position.y = eyePose.y + ry;
+        projViews[i].pose.position.z = eyePose.z + rz;
+
+        projViews[i].pose.orientation.x = eyePose.qx;
+        projViews[i].pose.orientation.y = eyePose.qy;
+        projViews[i].pose.orientation.z = eyePose.qz;
+        projViews[i].pose.orientation.w = eyePose.qw;
 
         projViews[i].subImage.swapchain = m_eyeSwapchains[i].handle;
         projViews[i].subImage.imageRect.offset = { 0, 0 };

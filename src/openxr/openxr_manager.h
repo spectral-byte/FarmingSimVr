@@ -138,6 +138,13 @@ public:
 
     static void QuaternionToEuler(float qx, float qy, float qz, float qw,
                                   float& pitch, float& yaw, float& roll);
+    static void RotateVectorByQuaternion(float qx, float qy, float qz, float qw,
+                                         float vx, float vy, float vz,
+                                         float& rx, float& ry, float& rz);
+
+    const HeadPose& GetCapturedEyePose(uint32_t eyeIndex = 0) const {
+        return m_capturedEyePoses[eyeIndex >= 2 ? 0 : eyeIndex];
+    }
 
 private:
     struct RecenterOffset {
@@ -160,6 +167,9 @@ private:
     ID3D12CommandQueue* m_queue = nullptr;
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_copyAllocator;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_copyCommandList;
+    Microsoft::WRL::ComPtr<ID3D12Fence> m_copyFence;
+    uint64_t m_copyFenceValue = 0;
+    HANDLE m_copyFenceEvent = nullptr;
 
     EyeSwapchain m_eyeSwapchains[2];
     bool m_hasEyeSwapchains = false;
@@ -168,6 +178,7 @@ private:
 
     HeadPose m_rawPose;
     HeadPose m_lastPose;
+    HeadPose m_capturedEyePoses[2]{};
     RecenterOffset m_recenterOffset;
     bool m_hasRecenter = false;
     bool m_useSimulatedPose = false;

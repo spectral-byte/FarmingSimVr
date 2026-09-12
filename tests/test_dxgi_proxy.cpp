@@ -425,5 +425,55 @@ TEST(DxgiProxyTest, AttachFactoryHooksCreateSwapChain) {
     EXPECT_FALSE(proxy.IsFactoryAttached());
 }
 
+TEST(DxgiProxyTest, OnPresentGatesAfrPacingBehindTelemetryProbe) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto probe = std::make_shared<GraphicsTelemetryProbe>();
+    // Case 1: Native stereo detected -> probe->RequiresAfrFallback() is false
+    D3D12_VIEWPORT vps[2]{
+        { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
+        { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
+    };
+    D3D12_RECT scissors[2]{
+        { 0, 0, 1920, 1080 },
+        { 1920, 0, 3840, 1080 }
+    };
+    probe->RecordViewports(2, vps);
+    probe->RecordScissorRects(2, scissors);
+    probe->OnFrameBoundary();
+
+    ASSERT_TRUE(probe->HasNativeStereoDetected());
+    ASSERT_FALSE(probe->RequiresAfrFallback());
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, probe);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, probe, nullptr, vrBridge);
+
+    // OnPresent should skip AFR copy and pacing
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_FALSE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // Case 2: Monoscopic pipeline -> probe->RequiresAfrFallback() is true
+    probe->Reset();
+    D3D12_VIEWPORT monoVp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
+    D3D12_RECT monoScissor{ 0, 0, 1920, 1080 };
+    for (int i = 0; i < 5; ++i) {
+        probe->RecordViewports(1, &monoVp);
+        probe->RecordScissorRects(1, &monoScissor);
+        probe->OnFrameBoundary();
+    }
+    ASSERT_TRUE(probe->RequiresAfrFallback());
+
+    // OnPresent should now execute AFR copy and advance parity
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+}
+
 } // namespace fs25vr
 

@@ -29,6 +29,8 @@ public:
     void Recenter();
     EyeProjection GetEyeProjection(uint32_t eyeIndex = 0);
 
+    bool RequiresAfrFallback() const;
+
     uint32_t GetFrameParity() const { return m_frameParity; }
     uint64_t GetFrameIndex() const { return m_frameIndex; }
     void AdvanceFrame();
@@ -42,6 +44,7 @@ public:
     static int Lua_Handshake(lua_State* L);
     static int Lua_GetStereoTelemetry(lua_State* L);
     static int Lua_IsStereoActive(lua_State* L);
+    static int Lua_RequiresAfrFallback(lua_State* L);
     static int Lua_GetHeadPose(lua_State* L);
     static int Lua_Recenter(lua_State* L);
     static int Lua_GetEyeProjection(lua_State* L);
@@ -51,8 +54,6 @@ public:
     static int Lua_GetFrameIndex(lua_State* L);
     static int Lua_GetIpd(lua_State* L);
     static int Lua_GetEyePose(lua_State* L);
-    static int Lua_AdvanceFrame(lua_State* L);
-    static int Lua_SetFrameParity(lua_State* L);
     static int Lua_Index(lua_State* L);
 
     static void PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, uint32_t eyeIndex);

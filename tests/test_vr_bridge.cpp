@@ -286,24 +286,14 @@ TEST_F(VrBridgeTest, ExposesFrameParityAndFrameIndexAndIpdToLuau) {
         assert(type(VRBridge.getIpd) == "function", "getIpd must be a function")
         assert(math.abs(VRBridge.getIpd() - 0.064) < 0.001, "getIpd() default must be ~0.064")
 
-        -- Advance frame to frame 1 (parity 1 = Right eye)
-        assert(type(VRBridge.advanceFrame) == "function", "advanceFrame must be function")
-        local newParity = VRBridge.advanceFrame()
-        assert(newParity == 1, "advanceFrame must return 1")
-        assert(VRBridge.frameParity == 1, "VRBridge.frameParity must now be 1")
-        assert(VRBridge.getFrameParity() == 1, "VRBridge.getFrameParity() must now be 1")
-        assert(VRBridge.frameIndex == 1, "VRBridge.frameIndex must now be 1")
+        -- Mutating parity functions must NOT be exposed to Lua (read-only for scripts)
+        assert(VRBridge.advanceFrame == nil, "VRBridge.advanceFrame must not be exposed to Lua")
+        assert(VRBridge.setFrameParity == nil, "VRBridge.setFrameParity must not be exposed to Lua")
 
-        -- Advance frame to frame 2 (parity 0 = Left eye)
-        newParity = VRBridge.advanceFrame()
-        assert(newParity == 0, "advanceFrame must return 0")
-        assert(VRBridge.frameParity == 0, "VRBridge.frameParity must now be 0")
-        assert(VRBridge.frameIndex == 2, "VRBridge.frameIndex must now be 2")
-
-        -- Direct setFrameParity
-        assert(type(VRBridge.setFrameParity) == "function", "setFrameParity must be function")
-        VRBridge.setFrameParity(1)
-        assert(VRBridge.frameParity == 1, "VRBridge.frameParity must be 1 after setFrameParity(1)")
+        -- requiresAfrFallback property and function
+        assert(VRBridge.requiresAfrFallback == true, "requiresAfrFallback property must be true")
+        assert(type(VRBridge.getRequiresAfrFallback) == "function", "getRequiresAfrFallback must be function")
+        assert(VRBridge.getRequiresAfrFallback() == true, "getRequiresAfrFallback() must return true")
     )luau";
 
     int status = RunLuauString(L, script);
@@ -311,6 +301,34 @@ TEST_F(VrBridgeTest, ExposesFrameParityAndFrameIndexAndIpdToLuau) {
         const char* err = lua_tostring(L, -1);
         FAIL() << "Luau script error: " << (err ? err : "unknown error");
     }
+
+    // Advance frame from native C++ to frame 1 (parity 1 = Right eye)
+    bridge.AdvanceFrame();
+    EXPECT_EQ(bridge.GetFrameParity(), 1u);
+    EXPECT_EQ(bridge.GetFrameIndex(), 1u);
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.frameParity == 1, "VRBridge.frameParity must now be 1")
+        assert(VRBridge.getFrameParity() == 1, "VRBridge.getFrameParity() must now be 1")
+        assert(VRBridge.frameIndex == 1, "VRBridge.frameIndex must now be 1")
+    )luau"), 0);
+
+    // Advance frame from native C++ to frame 2 (parity 0 = Left eye)
+    bridge.AdvanceFrame();
+    EXPECT_EQ(bridge.GetFrameParity(), 0u);
+    EXPECT_EQ(bridge.GetFrameIndex(), 2u);
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.frameParity == 0, "VRBridge.frameParity must now be 0")
+        assert(VRBridge.frameIndex == 2, "VRBridge.frameIndex must now be 2")
+    )luau"), 0);
+
+    // Direct C++ SetFrameParity
+    bridge.SetFrameParity(1);
+    EXPECT_EQ(bridge.GetFrameParity(), 1u);
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.frameParity == 1, "VRBridge.frameParity must be 1 after native SetFrameParity(1)")
+    )luau"), 0);
 }
 
 TEST_F(VrBridgeTest, ExposesEyePoseWithInterpupillaryShiftToLuau) {
@@ -353,4 +371,51 @@ TEST_F(VrBridgeTest, ExposesEyePoseWithInterpupillaryShiftToLuau) {
         const char* err = lua_tostring(L, -1);
         FAIL() << "Luau script error: " << (err ? err : "unknown error");
     }
+}
+
+TEST_F(VrBridgeTest, RequiresAfrFallbackReflectsTelemetryProbeVerdict) {
+    auto probe = std::make_shared<fs25vr::GraphicsTelemetryProbe>();
+    fs25vr::VRBridge bridge(nullptr, probe);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    // Initially 0 frames, Inconclusive -> RequiresAfrFallback() is false
+    EXPECT_FALSE(bridge.RequiresAfrFallback());
+
+    // Record 5 monoscopic frames
+    D3D12_VIEWPORT vp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
+    D3D12_RECT scissor{ 0, 0, 1920, 1080 };
+    for (int i = 0; i < 5; ++i) {
+        probe->RecordViewports(1, &vp);
+        probe->RecordScissorRects(1, &scissor);
+        probe->OnFrameBoundary();
+    }
+
+    EXPECT_TRUE(probe->RequiresAfrFallback());
+    EXPECT_TRUE(bridge.RequiresAfrFallback());
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.requiresAfrFallback == true, "must be true when AFR fallback required")
+        assert(VRBridge.getRequiresAfrFallback() == true, "must return true when AFR fallback required")
+    )luau"), 0);
+
+    // Reset probe and simulate native stereo pass
+    probe->Reset();
+    D3D12_VIEWPORT vps[2]{
+        { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
+        { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
+    };
+    D3D12_RECT scissors[2]{
+        { 0, 0, 1920, 1080 },
+        { 1920, 0, 3840, 1080 }
+    };
+    probe->RecordViewports(2, vps);
+    probe->RecordScissorRects(2, scissors);
+    probe->OnFrameBoundary();
+
+    EXPECT_TRUE(probe->HasNativeStereoDetected());
+    EXPECT_FALSE(probe->RequiresAfrFallback());
+    EXPECT_FALSE(bridge.RequiresAfrFallback());
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.requiresAfrFallback == false, "must be false when native stereo detected")
+        assert(VRBridge.getRequiresAfrFallback() == false, "must return false when native stereo detected")
+    )luau"), 0);
 }
