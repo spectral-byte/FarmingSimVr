@@ -72,6 +72,21 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushcclosure(L, &VRBridge::Lua_Recenter, "recenter", 1);
     lua_setfield(L, -2, "recenter");
 
+    // VRBridge.getEyeProjection = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetEyeProjection, "getEyeProjection", 1);
+    lua_setfield(L, -2, "getEyeProjection");
+
+    // VRBridge.getProjection = alias to getEyeProjection
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetEyeProjection, "getProjection", 1);
+    lua_setfield(L, -2, "getProjection");
+
+    // VRBridge.getViews = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetViews, "getViews", 1);
+    lua_setfield(L, -2, "getViews");
+
     // Set as global variable _G["VRBridge"]
     lua_setglobal(L, "VRBridge");
 
@@ -240,6 +255,126 @@ int VRBridge::Lua_Recenter(lua_State* L) {
     lua_createtable(L, 0, 1);
     lua_pushboolean(L, 1);
     lua_setfield(L, -2, "success");
+    return 1;
+}
+
+EyeProjection VRBridge::GetEyeProjection(uint32_t eyeIndex) {
+    if (m_openXrManager) {
+        return m_openXrManager->PollEyeProjection(eyeIndex);
+    }
+    return {};
+}
+
+void VRBridge::PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, uint32_t eyeIndex) {
+    lua_createtable(L, 0, 20);
+
+    lua_pushnumber(L, proj.fovY);
+    lua_setfield(L, -2, "fovY");
+
+    lua_pushnumber(L, proj.fovX);
+    lua_setfield(L, -2, "fovX");
+
+    lua_pushnumber(L, proj.xOffset);
+    lua_setfield(L, -2, "xOffset");
+
+    lua_pushnumber(L, proj.yOffset);
+    lua_setfield(L, -2, "yOffset");
+
+    lua_pushnumber(L, proj.xOffset);
+    lua_setfield(L, -2, "offsetX");
+
+    lua_pushnumber(L, proj.yOffset);
+    lua_setfield(L, -2, "offsetY");
+
+    lua_pushnumber(L, proj.xOffset);
+    lua_setfield(L, -2, "xOffsetTan");
+
+    lua_pushnumber(L, proj.yOffset);
+    lua_setfield(L, -2, "yOffsetTan");
+
+    lua_pushnumber(L, proj.xOffsetNorm);
+    lua_setfield(L, -2, "xOffsetNorm");
+
+    lua_pushnumber(L, proj.yOffsetNorm);
+    lua_setfield(L, -2, "yOffsetNorm");
+
+    lua_pushnumber(L, proj.tanLeft);
+    lua_setfield(L, -2, "tanLeft");
+
+    lua_pushnumber(L, proj.tanRight);
+    lua_setfield(L, -2, "tanRight");
+
+    lua_pushnumber(L, proj.tanUp);
+    lua_setfield(L, -2, "tanUp");
+
+    lua_pushnumber(L, proj.tanDown);
+    lua_setfield(L, -2, "tanDown");
+
+    lua_pushnumber(L, proj.angleLeft);
+    lua_setfield(L, -2, "angleLeft");
+
+    lua_pushnumber(L, proj.angleRight);
+    lua_setfield(L, -2, "angleRight");
+
+    lua_pushnumber(L, proj.angleUp);
+    lua_setfield(L, -2, "angleUp");
+
+    lua_pushnumber(L, proj.angleDown);
+    lua_setfield(L, -2, "angleDown");
+
+    lua_pushnumber(L, proj.aspectRatio);
+    lua_setfield(L, -2, "aspectRatio");
+
+    lua_pushboolean(L, proj.isValid ? 1 : 0);
+    lua_setfield(L, -2, "isValid");
+
+    lua_pushinteger(L, static_cast<int>(eyeIndex));
+    lua_setfield(L, -2, "eye");
+}
+
+int VRBridge::Lua_GetEyeProjection(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    uint32_t eyeIndex = 0;
+    if (lua_gettop(L) >= 1) {
+        if (lua_isnumber(L, 1)) {
+            int idx = lua_tointeger(L, 1);
+            eyeIndex = (idx == 1) ? 1 : 0;
+        } else if (lua_isstring(L, 1)) {
+            const char* str = lua_tostring(L, 1);
+            if (str && (_stricmp(str, "right") == 0 || _stricmp(str, "r") == 0)) {
+                eyeIndex = 1;
+            } else {
+                eyeIndex = 0;
+            }
+        }
+    }
+
+    EyeProjection proj = self->GetEyeProjection(eyeIndex);
+    PushEyeProjectionTable(L, proj, eyeIndex);
+    return 1;
+}
+
+int VRBridge::Lua_GetViews(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    EyeProjection leftProj = self->GetEyeProjection(0);
+    EyeProjection rightProj = self->GetEyeProjection(1);
+
+    lua_createtable(L, 2, 2);
+
+    PushEyeProjectionTable(L, leftProj, 0);
+    lua_pushvalue(L, -1);
+    lua_rawseti(L, -3, 1);
+    lua_setfield(L, -2, "left");
+
+    PushEyeProjectionTable(L, rightProj, 1);
+    lua_pushvalue(L, -1);
+    lua_rawseti(L, -3, 2);
+    lua_setfield(L, -2, "right");
+
     return 1;
 }
 

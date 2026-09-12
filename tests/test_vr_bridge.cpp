@@ -196,3 +196,70 @@ TEST_F(VrBridgeTest, RecenterViaLuauResetsTranslationalOffsets) {
     }
 }
 
+TEST_F(VrBridgeTest, ExposesEyeProjectionAndViewsToLuauScript) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
+
+    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    oxr->SetSimulatedProjection(1, fs25vr::OpenXrManager::ComputeProjectionFromFov(rightFov));
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string script = R"luau(
+        assert(type(VRBridge.getEyeProjection) == "function", "getEyeProjection must be a function")
+        assert(type(VRBridge.getViews) == "function", "getViews must be a function")
+        assert(type(VRBridge.getProjection) == "function", "getProjection alias must be a function")
+
+        -- Eye 0 (Left Eye)
+        local left = VRBridge.getEyeProjection(0)
+        assert(type(left) == "table", "getEyeProjection(0) must return table")
+        assert(left.isValid == true, "left projection must be valid")
+        assert(left.eye == 0, "left eye index must be 0")
+        assert(math.abs(left.xOffset - (-0.23052)) < 0.005, "left xOffset mismatch")
+        assert(math.abs(left.yOffset) < 0.005, "left yOffset mismatch")
+        assert(math.abs(left.fovY - 1.70) < 0.01, "left fovY mismatch")
+        assert(left.offsetX ~= nil and math.abs(left.offsetX - left.xOffset) < 0.0001, "offsetX alias mismatch")
+        assert(left.offsetY ~= nil and math.abs(left.offsetY - left.yOffset) < 0.0001, "offsetY alias mismatch")
+
+        -- Eye 1 (Right Eye)
+        local right = VRBridge.getEyeProjection(1)
+        assert(type(right) == "table", "getEyeProjection(1) must return table")
+        assert(right.isValid == true, "right projection must be valid")
+        assert(right.eye == 1, "right eye index must be 1")
+        assert(math.abs(right.xOffset - 0.23052) < 0.005, "right xOffset mismatch")
+        assert(math.abs(right.yOffset) < 0.005, "right yOffset mismatch")
+        assert(math.abs(right.fovY - 1.70) < 0.01, "right fovY mismatch")
+
+        -- Asymmetry verify
+        assert(left.xOffset < 0.0, "left xOffset must be negative (nasal/temporal)")
+        assert(right.xOffset > 0.0, "right xOffset must be positive")
+
+        -- Views array and table
+        local views = VRBridge.getViews()
+        assert(type(views) == "table", "getViews must return table")
+        assert(views[1] ~= nil and views[2] ~= nil, "views array entries [1] and [2] must exist")
+        assert(views.left ~= nil and views.right ~= nil, "views.left and views.right must exist")
+        assert(math.abs(views.left.xOffset - left.xOffset) < 0.0001, "views.left must match left")
+        assert(math.abs(views.right.xOffset - right.xOffset) < 0.0001, "views.right must match right")
+
+        -- Flexible indexing
+        local byStrL = VRBridge.getEyeProjection("left")
+        local byStrR = VRBridge.getEyeProjection("right")
+        assert(math.abs(byStrL.xOffset - left.xOffset) < 0.0001, "byStrL mismatch")
+        assert(math.abs(byStrR.xOffset - right.xOffset) < 0.0001, "byStrR mismatch")
+
+        -- Default call without argument
+        local def = VRBridge.getEyeProjection()
+        assert(def.isValid == true, "default projection must be valid")
+        assert(math.abs(def.xOffset - left.xOffset) < 0.0001, "default must be left eye")
+    )luau";
+
+    int status = RunLuauString(L, script);
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+}

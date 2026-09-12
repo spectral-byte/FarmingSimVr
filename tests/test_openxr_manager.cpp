@@ -192,6 +192,39 @@ public:
         }
         return XR_SUCCESS;
     }
+
+    XrResult locateViewsResult = XR_SUCCESS;
+    XrViewState mockViewState{
+        XR_TYPE_VIEW_STATE,
+        nullptr,
+        XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_TRACKED_BIT |
+        XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_POSITION_TRACKED_BIT
+    };
+    std::vector<XrView> mockViews;
+
+    XrResult LocateViews(
+        XrSession /*session*/,
+        const XrViewLocateInfo* /*viewLocateInfo*/,
+        XrViewState* viewState,
+        uint32_t viewCapacityInput,
+        uint32_t* viewCountOutput,
+        XrView* views) override {
+        if (locateViewsResult != XR_SUCCESS) return locateViewsResult;
+        if (viewState) {
+            *viewState = mockViewState;
+        }
+        if (viewCountOutput) {
+            *viewCountOutput = static_cast<uint32_t>(mockViews.size());
+        }
+        if (viewCapacityInput == 0) {
+            return XR_SUCCESS;
+        }
+        uint32_t count = (viewCapacityInput < mockViews.size()) ? viewCapacityInput : static_cast<uint32_t>(mockViews.size());
+        for (uint32_t i = 0; i < count; ++i) {
+            views[i] = mockViews[i];
+        }
+        return XR_SUCCESS;
+    }
 };
 
 TEST(OpenXrManagerTest, EntersPassThroughWhenRuntimeUnavailable) {
@@ -331,6 +364,67 @@ TEST(OpenXrManagerTest, RecenteringZeroesTranslationalAndYawOffsets) {
     mockDispatch->mockSpaceLocation.pose.position = { 0.6f, 1.25f, -0.42f };
     HeadPose moved = manager.PollHeadPose();
     EXPECT_NEAR(moved.y, 0.05f, 0.005f);
+}
+
+TEST(OpenXrManagerTest, LocatesViewsAndExtractsAsymmetricFovTangents) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    XrView leftView{ XR_TYPE_VIEW, nullptr };
+    leftView.fov = { -0.90f, 0.80f, 0.85f, -0.85f };
+    leftView.pose.position = { -0.032f, 0.0f, 0.0f }; // -IPD/2
+    leftView.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    XrView rightView{ XR_TYPE_VIEW, nullptr };
+    rightView.fov = { -0.80f, 0.90f, 0.85f, -0.85f };
+    rightView.pose.position = { 0.032f, 0.0f, 0.0f }; // +IPD/2
+    rightView.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    mockDispatch->mockViews = { leftView, rightView };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    EyeProjection leftProj = manager.PollEyeProjection(0);
+    EXPECT_TRUE(leftProj.isValid);
+    EXPECT_NEAR(leftProj.angleLeft, -0.90f, 0.001f);
+    EXPECT_NEAR(leftProj.angleRight, 0.80f, 0.001f);
+    EXPECT_NEAR(leftProj.tanLeft, -1.26016f, 0.005f);
+    EXPECT_NEAR(leftProj.tanRight, 1.02964f, 0.005f);
+    EXPECT_NEAR(leftProj.xOffset, -0.23052f, 0.005f);
+    EXPECT_NEAR(leftProj.yOffset, 0.0f, 0.005f);
+    EXPECT_NEAR(leftProj.fovY, 1.70f, 0.01f);
+
+    EyeProjection rightProj = manager.PollEyeProjection(1);
+    EXPECT_TRUE(rightProj.isValid);
+    EXPECT_NEAR(rightProj.angleLeft, -0.80f, 0.001f);
+    EXPECT_NEAR(rightProj.angleRight, 0.90f, 0.001f);
+    EXPECT_NEAR(rightProj.tanLeft, -1.02964f, 0.005f);
+    EXPECT_NEAR(rightProj.tanRight, 1.26016f, 0.005f);
+    EXPECT_NEAR(rightProj.xOffset, 0.23052f, 0.005f);
+    EXPECT_NEAR(rightProj.yOffset, 0.0f, 0.005f);
+    EXPECT_NEAR(rightProj.fovY, 1.70f, 0.01f);
+
+    // Asymmetry verify: opposite signs for nasal/temporal convergence
+    EXPECT_LT(leftProj.xOffset, 0.0f);
+    EXPECT_GT(rightProj.xOffset, 0.0f);
+    EXPECT_NEAR(leftProj.xOffset, -rightProj.xOffset, 0.001f);
+}
+
+TEST(OpenXrManagerTest, FallbackProjectionWhenPassThroughOrUninitialized) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = {}; // Force Pass-Through
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    EXPECT_TRUE(manager.IsPassThrough());
+
+    EyeProjection proj = manager.PollEyeProjection(0);
+    EXPECT_FALSE(proj.isValid);
+    EXPECT_EQ(proj.xOffset, 0.0f);
+    EXPECT_EQ(proj.yOffset, 0.0f);
 }
 
 } // namespace fs25vr

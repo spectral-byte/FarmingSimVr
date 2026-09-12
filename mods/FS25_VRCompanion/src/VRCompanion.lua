@@ -13,6 +13,7 @@ VRCompanion.lastReportedVerdict = nil
 VRCompanion.frameTicks = 0
 VRCompanion.vehicleCameraHooked = false
 VRCompanion.playerCameraHooked = false
+VRCompanion.origCamSettings = {}
 
 function VRCompanion:loadMap(name)
     print(string.format("[FS25_VR] Initializing Companion Mod on map '%s'...", tostring(name)))
@@ -144,13 +145,60 @@ function VRCompanion:hookPlayerCamera()
     end
 end
 
-function VRCompanion:onVehicleCameraUpdate(cam, dt)
-    if not VRBridge or type(VRBridge.getHeadPose) ~= "function" then
+function VRCompanion:applyCameraProjection(camNode, eyeIndex)
+    if camNode == nil or camNode == 0 then
         return
     end
 
-    -- Only apply 6DOF tracking to interior in-cab cameras
+    if not VRBridge or type(VRBridge.getEyeProjection) ~= "function" then
+        return
+    end
+
+    local proj = VRBridge.getEyeProjection(eyeIndex or 0)
+    if not proj or not proj.isValid then
+        return
+    end
+
+    -- Cache initial camera projection parameters for clean restoration on map unload
+    if self.origCamSettings == nil then
+        self.origCamSettings = {}
+    end
+    if self.origCamSettings[camNode] == nil then
+        local origFov = nil
+        if type(getFovY) == "function" then
+            origFov = getFovY(camNode)
+        end
+        local origX, origY = 0, 0
+        if type(getProjectionOffset) == "function" then
+            origX, origY = getProjectionOffset(camNode)
+        end
+        self.origCamSettings[camNode] = {
+            fovY = origFov,
+            offsetX = origX,
+            offsetY = origY
+        }
+    end
+
+    -- Update camera vertical Field of View to match VR headset display optics
+    if type(setFovY) == "function" and proj.fovY ~= nil and proj.fovY > 0 then
+        setFovY(camNode, proj.fovY)
+    end
+
+    -- Apply asymmetric oblique lens projection offsets (nasal vs. temporal / top vs. bottom)
+    if type(setProjectionOffset) == "function" and proj.xOffset ~= nil and proj.yOffset ~= nil then
+        setProjectionOffset(camNode, proj.xOffset, proj.yOffset)
+    end
+end
+
+function VRCompanion:onVehicleCameraUpdate(cam, dt)
+    -- Only apply 6DOF tracking and projection to interior in-cab cameras
     if not cam or not cam.isInside or cam.cameraNode == nil then
+        return
+    end
+
+    self:applyCameraProjection(cam.cameraNode)
+
+    if not VRBridge or type(VRBridge.getHeadPose) ~= "function" then
         return
     end
 
@@ -203,11 +251,13 @@ function VRCompanion:onPlayerCameraMakeCurrent(cam)
 end
 
 function VRCompanion:onPlayerCameraUpdate(cam, dt)
-    if not VRBridge or type(VRBridge.getHeadPose) ~= "function" then
+    if not cam or not cam.isFirstPerson or cam.firstPersonCamera == nil then
         return
     end
 
-    if not cam or not cam.isFirstPerson or cam.firstPersonCamera == nil then
+    self:applyCameraProjection(cam.firstPersonCamera)
+
+    if not VRBridge or type(VRBridge.getHeadPose) ~= "function" then
         return
     end
 
@@ -300,6 +350,19 @@ function VRCompanion:deleteMap()
     self.frameTicks = 0
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
+
+    -- Restore original camera FOVs and projection offsets
+    if self.origCamSettings ~= nil then
+        for camNode, orig in pairs(self.origCamSettings) do
+            if orig.fovY ~= nil and type(setFovY) == "function" then
+                setFovY(camNode, orig.fovY)
+            end
+            if type(setProjectionOffset) == "function" then
+                setProjectionOffset(camNode, orig.offsetX or 0, orig.offsetY or 0)
+            end
+        end
+        self.origCamSettings = {}
+    end
 end
 
 -- Register as an engine mod event listener if in-game environment

@@ -8,6 +8,17 @@
 
 namespace fs25vr {
 
+namespace {
+
+XrTime GetCurrentXrTime() {
+    LARGE_INTEGER qpc, freq;
+    QueryPerformanceCounter(&qpc);
+    QueryPerformanceFrequency(&freq);
+    return static_cast<XrTime>((qpc.QuadPart * 1000000000LL) / freq.QuadPart);
+}
+
+} // anonymous namespace
+
 OpenXrManager& OpenXrManager::Instance() {
     static OpenXrManager instance;
     return instance;
@@ -179,6 +190,9 @@ void OpenXrManager::Shutdown() {
     m_state = OpenXrState::Uninitialized;
     m_hasRecenter = false;
     m_useSimulatedPose = false;
+    m_useSimulatedProjections = false;
+    m_eyeProjections[0] = {};
+    m_eyeProjections[1] = {};
 }
 
 bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queue) {
@@ -262,10 +276,7 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
         }
 
         if (time == 0) {
-            LARGE_INTEGER qpc, freq;
-            QueryPerformanceCounter(&qpc);
-            QueryPerformanceFrequency(&freq);
-            time = static_cast<XrTime>((qpc.QuadPart * 1000000000LL) / freq.QuadPart);
+            time = GetCurrentXrTime();
         }
 
         XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
@@ -330,6 +341,92 @@ void OpenXrManager::SetSimulatedPose(const HeadPose& pose) {
     m_useSimulatedPose = true;
     m_rawPose = pose;
     m_lastPose = pose;
+}
+
+EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov) {
+    EyeProjection proj;
+    proj.angleLeft = fov.angleLeft;
+    proj.angleRight = fov.angleRight;
+    proj.angleUp = fov.angleUp;
+    proj.angleDown = fov.angleDown;
+
+    proj.tanLeft = std::tan(fov.angleLeft);
+    proj.tanRight = std::tan(fov.angleRight);
+    proj.tanUp = std::tan(fov.angleUp);
+    proj.tanDown = std::tan(fov.angleDown);
+
+    proj.xOffset = proj.tanRight + proj.tanLeft;
+    proj.yOffset = proj.tanUp + proj.tanDown;
+
+    float tanWidth = proj.tanRight - proj.tanLeft;
+    float tanHeight = proj.tanUp - proj.tanDown;
+
+    if (std::abs(tanWidth) > 1e-6f) {
+        proj.xOffsetNorm = proj.xOffset / tanWidth;
+    }
+    if (std::abs(tanHeight) > 1e-6f) {
+        proj.yOffsetNorm = proj.yOffset / tanHeight;
+    }
+
+    proj.fovY = 2.0f * std::atan(tanHeight * 0.5f);
+    proj.fovX = 2.0f * std::atan(tanWidth * 0.5f);
+
+    if (std::abs(tanHeight) > 1e-6f) {
+        proj.aspectRatio = tanWidth / tanHeight;
+    }
+
+    proj.isValid = true;
+    return proj;
+}
+
+EyeProjection OpenXrManager::PollEyeProjection(uint32_t eyeIndex, XrTime time) {
+    if (eyeIndex >= 2) {
+        eyeIndex = 0;
+    }
+
+    if (m_useSimulatedProjections) {
+        return m_simulatedProjections[eyeIndex];
+    }
+
+    if (m_state != OpenXrState::Active || m_session == XR_NULL_HANDLE) {
+        return m_eyeProjections[eyeIndex];
+    }
+
+    if (time == 0) {
+        time = GetCurrentXrTime();
+    }
+
+    XrViewLocateInfo locateInfo{XR_TYPE_VIEW_LOCATE_INFO};
+    locateInfo.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+    locateInfo.displayTime = time;
+    locateInfo.space = (m_localSpace != XR_NULL_HANDLE) ? m_localSpace : m_viewSpace;
+
+    XrViewState viewState{XR_TYPE_VIEW_STATE};
+    uint32_t viewCount = 0;
+    XrView views[2] = { {XR_TYPE_VIEW, nullptr}, {XR_TYPE_VIEW, nullptr} };
+
+    XrResult res = m_dispatch->LocateViews(m_session, &locateInfo, &viewState, 2, &viewCount, views);
+    if (res == XR_SUCCESS && viewCount >= 2) {
+        m_eyeProjections[0] = ComputeProjectionFromFov(views[0].fov);
+        m_eyeProjections[1] = ComputeProjectionFromFov(views[1].fov);
+    }
+
+    return m_eyeProjections[eyeIndex];
+}
+
+const EyeProjection& OpenXrManager::GetEyeProjection(uint32_t eyeIndex) const {
+    if (eyeIndex >= 2) eyeIndex = 0;
+    if (m_useSimulatedProjections) {
+        return m_simulatedProjections[eyeIndex];
+    }
+    return m_eyeProjections[eyeIndex];
+}
+
+void OpenXrManager::SetSimulatedProjection(uint32_t eyeIndex, const EyeProjection& proj) {
+    if (eyeIndex >= 2) eyeIndex = 0;
+    m_simulatedProjections[eyeIndex] = proj;
+    m_useSimulatedProjections = true;
+    m_eyeProjections[eyeIndex] = proj;
 }
 
 } // namespace fs25vr

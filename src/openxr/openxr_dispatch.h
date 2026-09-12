@@ -73,6 +73,14 @@ public:
         XrSpace baseSpace,
         XrTime time,
         XrSpaceLocation* location) = 0;
+
+    virtual XrResult LocateViews(
+        XrSession session,
+        const XrViewLocateInfo* viewLocateInfo,
+        XrViewState* viewState,
+        uint32_t viewCapacityInput,
+        uint32_t* viewCountOutput,
+        XrView* views) = 0;
 };
 
 class NativeOpenXrDispatch : public IOpenXrDispatch {
@@ -161,6 +169,16 @@ public:
         XrTime time,
         XrSpaceLocation* location) override {
         return xrLocateSpace(space, baseSpace, time, location);
+    }
+
+    XrResult LocateViews(
+        XrSession session,
+        const XrViewLocateInfo* viewLocateInfo,
+        XrViewState* viewState,
+        uint32_t viewCapacityInput,
+        uint32_t* viewCountOutput,
+        XrView* views) override {
+        return xrLocateViews(session, viewLocateInfo, viewState, viewCapacityInput, viewCountOutput, views);
     }
 };
 

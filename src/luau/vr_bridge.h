@@ -27,6 +27,7 @@ public:
 
     HeadPose GetHeadPose();
     void Recenter();
+    EyeProjection GetEyeProjection(uint32_t eyeIndex = 0);
 
     static int Lua_IsReady(lua_State* L);
     static int Lua_Handshake(lua_State* L);
@@ -34,6 +35,10 @@ public:
     static int Lua_IsStereoActive(lua_State* L);
     static int Lua_GetHeadPose(lua_State* L);
     static int Lua_Recenter(lua_State* L);
+    static int Lua_GetEyeProjection(lua_State* L);
+    static int Lua_GetViews(lua_State* L);
+
+    static void PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, uint32_t eyeIndex);
 
 private:
     std::shared_ptr<OpenXrManager> m_openXrManager;

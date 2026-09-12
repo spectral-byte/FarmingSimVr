@@ -51,6 +51,25 @@ struct HeadPose {
     bool orientationTracked = false;
 };
 
+struct EyeProjection {
+    float fovY = 0.0f;
+    float fovX = 0.0f;
+    float xOffset = 0.0f;
+    float yOffset = 0.0f;
+    float xOffsetNorm = 0.0f;
+    float yOffsetNorm = 0.0f;
+    float tanLeft = 0.0f;
+    float tanRight = 0.0f;
+    float tanUp = 0.0f;
+    float tanDown = 0.0f;
+    float angleLeft = 0.0f;
+    float angleRight = 0.0f;
+    float angleUp = 0.0f;
+    float angleDown = 0.0f;
+    float aspectRatio = 1.0f;
+    bool isValid = false;
+};
+
 class OpenXrManager {
 public:
     static OpenXrManager& Instance();
@@ -68,6 +87,11 @@ public:
     void SetSimulatedPose(const HeadPose& pose);
     const HeadPose& GetLastPose() const { return m_lastPose; }
     const HeadPose& GetRawPose() const { return m_rawPose; }
+
+    EyeProjection PollEyeProjection(uint32_t eyeIndex = 0, XrTime time = 0);
+    const EyeProjection& GetEyeProjection(uint32_t eyeIndex = 0) const;
+    void SetSimulatedProjection(uint32_t eyeIndex, const EyeProjection& proj);
+    static EyeProjection ComputeProjectionFromFov(const XrFovf& fov);
 
     OpenXrState GetState() const { return m_state; }
     bool IsPassThrough() const { return m_state == OpenXrState::PassThrough; }
@@ -107,6 +131,10 @@ private:
     bool m_hasRecenter = false;
     bool m_useSimulatedPose = false;
     HeadPose m_simulatedPose;
+
+    EyeProjection m_eyeProjections[2];
+    EyeProjection m_simulatedProjections[2];
+    bool m_useSimulatedProjections = false;
 
     bool CheckD3D12ExtensionSupport();
 };

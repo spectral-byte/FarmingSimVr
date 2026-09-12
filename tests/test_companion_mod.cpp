@@ -47,6 +47,27 @@ int RunLuauChunk(lua_State* L, const std::string& code, const char* chunkName) {
     return lua_pcall(L, 0, 0, 0);
 }
 
+void SetupCameraMockGlobals(lua_State* L) {
+    RunLuauChunk(L, R"luau(
+        _G.cameraFovY = {}
+        _G.cameraProjectionOffsets = {}
+        function setFovY(node, fov)
+            _G.cameraFovY[node] = fov
+        end
+        function getFovY(node)
+            return _G.cameraFovY[node] or 1.0472
+        end
+        function setProjectionOffset(node, x, y)
+            _G.cameraProjectionOffsets[node] = { x = x, y = y }
+        end
+        function getProjectionOffset(node)
+            local curr = _G.cameraProjectionOffsets[node]
+            if curr then return curr.x, curr.y end
+            return 0.0, 0.0
+        end
+    )luau", "=setupCameraMocks");
+}
+
 } // anonymous namespace
 
 class CompanionModTest : public ::testing::Test {
@@ -439,5 +460,130 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
         }
     }
     EXPECT_TRUE(foundRecenterLog);
+}
+
+TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCamera) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Setup engine camera mocks via shared helper
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.mockVehicleCam = {
+            isInside = true,
+            cameraNode = 301,
+            origTransX = 0, origTransY = 1.5, origTransZ = 0
+        }
+    )luau", "=setupVehicleCamMock"), 0);
+
+    // Run vehicle camera update
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCam"), 0);
+
+    // Verify FOV and oblique frustum offsets applied
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(_G.cameraFovY[301] ~= nil, "setFovY must be called on vehicle cameraNode")
+        assert(math.abs(_G.cameraFovY[301] - 1.70) < 0.02, "vehicle vertical fov must match VR headset FOV")
+
+        assert(_G.cameraProjectionOffsets[301] ~= nil, "setProjectionOffset must be called on vehicle cameraNode")
+        assert(math.abs(_G.cameraProjectionOffsets[301].x - (-0.23052)) < 0.01, "vehicle horizontal offset mismatch")
+        assert(math.abs(_G.cameraProjectionOffsets[301].y) < 0.01, "vehicle vertical offset mismatch")
+    )luau", "=verifyVehicleCamProjection"), 0);
+}
+
+TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamera) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Setup player camera mocks via shared helper
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.mockPlayerCam = {
+            isFirstPerson = true,
+            firstPersonCamera = 401
+        }
+    )luau", "=setupPlayerCamMock"), 0);
+
+    // Run player camera update
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCam"), 0);
+
+    // Verify FOV and oblique frustum offsets applied
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(_G.cameraFovY[401] ~= nil, "setFovY must be called on player firstPersonCamera")
+        assert(math.abs(_G.cameraFovY[401] - 1.70) < 0.02, "player vertical fov must match VR headset FOV")
+
+        assert(_G.cameraProjectionOffsets[401] ~= nil, "setProjectionOffset must be called on player firstPersonCamera")
+        assert(math.abs(_G.cameraProjectionOffsets[401].x - (-0.23052)) < 0.01, "player horizontal offset mismatch")
+        assert(math.abs(_G.cameraProjectionOffsets[401].y) < 0.01, "player vertical offset mismatch")
+    )luau", "=verifyPlayerCamProjection"), 0);
+}
+
+TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Setup camera mocks via shared helper
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.mockCam = {
+            isInside = true,
+            cameraNode = 505,
+            origTransX = 0, origTransY = 0, origTransZ = 0
+        }
+    )luau", "=setupRestoreMocks"), 0);
+
+    // Apply projection via update
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockCam, 16.6)", "=updateCam"), 0);
+
+    // Ensure modified
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(math.abs(_G.cameraFovY[505] - 1.70) < 0.02, "must be set to VR fov")
+        assert(math.abs(_G.cameraProjectionOffsets[505].x) > 0.05, "must be non-zero offset")
+    )luau", "=checkModified"), 0);
+
+    // Unload map
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMapCall"), 0);
+
+    // Verify restored
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(math.abs(_G.cameraFovY[505] - 1.0472) < 0.001, "original FOV must be restored")
+        assert(math.abs(_G.cameraProjectionOffsets[505].x) < 0.001, "offset x must be reset to 0")
+        assert(math.abs(_G.cameraProjectionOffsets[505].y) < 0.001, "offset y must be reset to 0")
+    )luau", "=checkRestored"), 0);
 }
 
