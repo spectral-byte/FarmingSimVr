@@ -263,3 +263,94 @@ TEST_F(VrBridgeTest, ExposesEyeProjectionAndViewsToLuauScript) {
         FAIL() << "Luau script error: " << (err ? err : "unknown error");
     }
 }
+
+TEST_F(VrBridgeTest, ExposesFrameParityAndFrameIndexAndIpdToLuau) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string script = R"luau(
+        assert(VRBridge ~= nil, "VRBridge global table must exist")
+
+        -- Initial frame parity and index
+        assert(VRBridge.frameParity == 0, "frameParity must initially be 0")
+        assert(type(VRBridge.getFrameParity) == "function", "getFrameParity must be function")
+        assert(VRBridge.getFrameParity() == 0, "getFrameParity() must initially return 0")
+
+        assert(VRBridge.frameIndex == 0, "frameIndex must initially be 0")
+        assert(type(VRBridge.getFrameIndex) == "function", "getFrameIndex must be function")
+        assert(VRBridge.getFrameIndex() == 0, "getFrameIndex() must initially return 0")
+
+        -- IPD property and function
+        assert(type(VRBridge.ipd) == "number", "ipd must be a number")
+        assert(math.abs(VRBridge.ipd - 0.064) < 0.001, "ipd default must be ~0.064")
+        assert(type(VRBridge.getIpd) == "function", "getIpd must be a function")
+        assert(math.abs(VRBridge.getIpd() - 0.064) < 0.001, "getIpd() default must be ~0.064")
+
+        -- Advance frame to frame 1 (parity 1 = Right eye)
+        assert(type(VRBridge.advanceFrame) == "function", "advanceFrame must be function")
+        local newParity = VRBridge.advanceFrame()
+        assert(newParity == 1, "advanceFrame must return 1")
+        assert(VRBridge.frameParity == 1, "VRBridge.frameParity must now be 1")
+        assert(VRBridge.getFrameParity() == 1, "VRBridge.getFrameParity() must now be 1")
+        assert(VRBridge.frameIndex == 1, "VRBridge.frameIndex must now be 1")
+
+        -- Advance frame to frame 2 (parity 0 = Left eye)
+        newParity = VRBridge.advanceFrame()
+        assert(newParity == 0, "advanceFrame must return 0")
+        assert(VRBridge.frameParity == 0, "VRBridge.frameParity must now be 0")
+        assert(VRBridge.frameIndex == 2, "VRBridge.frameIndex must now be 2")
+
+        -- Direct setFrameParity
+        assert(type(VRBridge.setFrameParity) == "function", "setFrameParity must be function")
+        VRBridge.setFrameParity(1)
+        assert(VRBridge.frameParity == 1, "VRBridge.frameParity must be 1 after setFrameParity(1)")
+    )luau";
+
+    int status = RunLuauString(L, script);
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+}
+
+TEST_F(VrBridgeTest, ExposesEyePoseWithInterpupillaryShiftToLuau) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.x = 0.0f;
+    simPose.y = 1.7f;
+    simPose.z = 0.0f;
+    simPose.yaw = 0.0f;
+    simPose.isValid = true;
+    oxr->SetSimulatedPose(simPose);
+    oxr->SetIpd(0.064f);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string script = R"luau(
+        assert(type(VRBridge.getEyePose) == "function", "getEyePose must be function")
+
+        local leftEye = VRBridge.getEyePose(0)
+        assert(type(leftEye) == "table", "leftEye must be table")
+        assert(leftEye.isValid == true, "leftEye must be valid")
+        assert(leftEye.eye == 0, "leftEye.eye must be 0")
+        -- Left eye shifted by -IPD/2 (-0.032m)
+        assert(math.abs(leftEye.x - (-0.032)) < 0.001, "left eye x offset mismatch")
+
+        local rightEye = VRBridge.getEyePose(1)
+        assert(type(rightEye) == "table", "rightEye must be table")
+        assert(rightEye.isValid == true, "rightEye must be valid")
+        assert(rightEye.eye == 1, "rightEye.eye must be 1")
+        -- Right eye shifted by +IPD/2 (+0.032m)
+        assert(math.abs(rightEye.x - 0.032) < 0.001, "right eye x offset mismatch")
+
+        -- Difference between eyes must be exact IPD (0.064m)
+        assert(math.abs((rightEye.x - leftEye.x) - 0.064) < 0.001, "IPD disparity mismatch")
+    )luau";
+
+    int status = RunLuauString(L, script);
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+}

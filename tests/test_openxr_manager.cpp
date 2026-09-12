@@ -225,6 +225,152 @@ public:
         }
         return XR_SUCCESS;
     }
+
+    XrResult enumerateSwapchainFormatsResult = XR_SUCCESS;
+    std::vector<int64_t> mockSwapchainFormats = { DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R8G8B8A8_UNORM };
+
+    XrResult createSwapchainResult = XR_SUCCESS;
+    XrResult destroySwapchainResult = XR_SUCCESS;
+    XrResult enumerateSwapchainImagesResult = XR_SUCCESS;
+    XrResult acquireSwapchainImageResult = XR_SUCCESS;
+    XrResult waitSwapchainImageResult = XR_SUCCESS;
+    XrResult releaseSwapchainImageResult = XR_SUCCESS;
+    XrResult waitFrameResult = XR_SUCCESS;
+    XrResult beginFrameResult = XR_SUCCESS;
+    XrResult endFrameResult = XR_SUCCESS;
+
+    uint32_t createSwapchainCalls = 0;
+    uint32_t destroySwapchainCalls = 0;
+    uint32_t acquireSwapchainImageCalls = 0;
+    uint32_t waitSwapchainImageCalls = 0;
+    uint32_t releaseSwapchainImageCalls = 0;
+    uint32_t waitFrameCalls = 0;
+    uint32_t beginFrameCalls = 0;
+    uint32_t endFrameCalls = 0;
+
+    std::vector<XrSwapchainCreateInfo> lastSwapchainCreateInfos;
+    XrFrameEndInfo lastFrameEndInfo{};
+    std::vector<XrCompositionLayerProjectionView> lastSubmittedProjectionViews;
+
+    XrResult EnumerateSwapchainFormats(
+        XrSession /*session*/,
+        uint32_t formatCapacityInput,
+        uint32_t* formatCountOutput,
+        int64_t* formats) override {
+        if (enumerateSwapchainFormatsResult != XR_SUCCESS) return enumerateSwapchainFormatsResult;
+        if (formatCountOutput) *formatCountOutput = static_cast<uint32_t>(mockSwapchainFormats.size());
+        if (formatCapacityInput == 0) return XR_SUCCESS;
+        uint32_t count = (formatCapacityInput < mockSwapchainFormats.size()) ? formatCapacityInput : static_cast<uint32_t>(mockSwapchainFormats.size());
+        for (uint32_t i = 0; i < count; ++i) {
+            formats[i] = mockSwapchainFormats[i];
+        }
+        return XR_SUCCESS;
+    }
+
+    XrResult CreateSwapchain(
+        XrSession /*session*/,
+        const XrSwapchainCreateInfo* createInfo,
+        XrSwapchain* swapchain) override {
+        createSwapchainCalls++;
+        if (createSwapchainResult != XR_SUCCESS) return createSwapchainResult;
+        if (createInfo) lastSwapchainCreateInfos.push_back(*createInfo);
+        static uintptr_t s_swapchainHandle = 0x5A00;
+        if (swapchain) *swapchain = reinterpret_cast<XrSwapchain>(s_swapchainHandle++);
+        return XR_SUCCESS;
+    }
+
+    XrResult DestroySwapchain(XrSwapchain /*swapchain*/) override {
+        destroySwapchainCalls++;
+        return destroySwapchainResult;
+    }
+
+    XrResult EnumerateSwapchainImages(
+        XrSwapchain /*swapchain*/,
+        uint32_t imageCapacityInput,
+        uint32_t* imageCountOutput,
+        XrSwapchainImageBaseHeader* images) override {
+        if (enumerateSwapchainImagesResult != XR_SUCCESS) return enumerateSwapchainImagesResult;
+        if (imageCountOutput) *imageCountOutput = 2;
+        if (imageCapacityInput == 0) return XR_SUCCESS;
+        uint32_t count = (imageCapacityInput < 2) ? imageCapacityInput : 2;
+        for (uint32_t i = 0; i < count; ++i) {
+            auto* d3d12Img = reinterpret_cast<XrSwapchainImageD3D12KHR*>(&images[i]);
+            d3d12Img->type = XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR;
+            d3d12Img->next = nullptr;
+            d3d12Img->texture = nullptr;
+        }
+        return XR_SUCCESS;
+    }
+
+    XrResult AcquireSwapchainImage(
+        XrSwapchain /*swapchain*/,
+        const XrSwapchainImageAcquireInfo* /*acquireInfo*/,
+        uint32_t* index) override {
+        acquireSwapchainImageCalls++;
+        if (acquireSwapchainImageResult != XR_SUCCESS) return acquireSwapchainImageResult;
+        if (index) *index = 0;
+        return XR_SUCCESS;
+    }
+
+    XrResult WaitSwapchainImage(
+        XrSwapchain /*swapchain*/,
+        const XrSwapchainImageWaitInfo* /*waitInfo*/) override {
+        waitSwapchainImageCalls++;
+        return waitSwapchainImageResult;
+    }
+
+    XrResult ReleaseSwapchainImage(
+        XrSwapchain /*swapchain*/,
+        const XrSwapchainImageReleaseInfo* /*releaseInfo*/) override {
+        releaseSwapchainImageCalls++;
+        return releaseSwapchainImageResult;
+    }
+
+    XrResult WaitFrame(
+        XrSession /*session*/,
+        const XrFrameWaitInfo* /*frameWaitInfo*/,
+        XrFrameState* frameState) override {
+        waitFrameCalls++;
+        if (waitFrameResult != XR_SUCCESS) return waitFrameResult;
+        if (frameState) {
+            frameState->type = XR_TYPE_FRAME_STATE;
+            frameState->next = nullptr;
+            frameState->predictedDisplayTime = 1000000;
+            frameState->predictedDisplayPeriod = 11111111;
+            frameState->shouldRender = XR_TRUE;
+        }
+        return XR_SUCCESS;
+    }
+
+    XrResult BeginFrame(
+        XrSession /*session*/,
+        const XrFrameBeginInfo* /*frameBeginInfo*/) override {
+        beginFrameCalls++;
+        return beginFrameResult;
+    }
+
+    XrResult EndFrame(
+        XrSession /*session*/,
+        const XrFrameEndInfo* frameEndInfo) override {
+        endFrameCalls++;
+        if (endFrameResult != XR_SUCCESS) return endFrameResult;
+        if (frameEndInfo) {
+            lastFrameEndInfo = *frameEndInfo;
+            lastSubmittedProjectionViews.clear();
+            if (frameEndInfo->layerCount > 0 && frameEndInfo->layers) {
+                const auto* baseHeader = frameEndInfo->layers[0];
+                if (baseHeader && baseHeader->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
+                    const auto* projLayer = reinterpret_cast<const XrCompositionLayerProjection*>(baseHeader);
+                    if (projLayer && projLayer->views && projLayer->viewCount > 0) {
+                        for (uint32_t v = 0; v < projLayer->viewCount; ++v) {
+                            lastSubmittedProjectionViews.push_back(projLayer->views[v]);
+                        }
+                    }
+                }
+            }
+        }
+        return XR_SUCCESS;
+    }
 };
 
 TEST(OpenXrManagerTest, EntersPassThroughWhenRuntimeUnavailable) {
@@ -425,6 +571,113 @@ TEST(OpenXrManagerTest, FallbackProjectionWhenPassThroughOrUninitialized) {
     EXPECT_FALSE(proj.isValid);
     EXPECT_EQ(proj.xOffset, 0.0f);
     EXPECT_EQ(proj.yOffset, 0.0f);
+}
+
+TEST(OpenXrManagerTest, CreatesEyeSwapchainsAndEnumeratesImages) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    EXPECT_FALSE(manager.HasEyeSwapchains());
+    EXPECT_TRUE(manager.CreateEyeSwapchains(2160, 2160, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB));
+    EXPECT_TRUE(manager.HasEyeSwapchains());
+    EXPECT_EQ(mockDispatch->createSwapchainCalls, 2u);
+
+    const auto& leftChain = manager.GetEyeSwapchain(0);
+    EXPECT_EQ(leftChain.width, 2160u);
+    EXPECT_EQ(leftChain.height, 2160u);
+    EXPECT_EQ(leftChain.format, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    EXPECT_EQ(leftChain.images.size(), 2u);
+
+    const auto& rightChain = manager.GetEyeSwapchain(1);
+    EXPECT_EQ(rightChain.width, 2160u);
+    EXPECT_EQ(rightChain.height, 2160u);
+    EXPECT_EQ(rightChain.format, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    EXPECT_EQ(rightChain.images.size(), 2u);
+
+    manager.DestroyEyeSwapchains();
+    EXPECT_FALSE(manager.HasEyeSwapchains());
+    EXPECT_EQ(mockDispatch->destroySwapchainCalls, 2u);
+}
+
+TEST(OpenXrManagerTest, CopiesBackBufferAndPerformsImageAcquireWaitRelease) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_EQ(mockDispatch->acquireSwapchainImageCalls, 1u);
+    EXPECT_EQ(mockDispatch->waitSwapchainImageCalls, 1u);
+    EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, 1u);
+    EXPECT_TRUE(manager.GetEyeSwapchain(0).hasCopiedFrame);
+
+    EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+    EXPECT_EQ(mockDispatch->acquireSwapchainImageCalls, 2u);
+    EXPECT_EQ(mockDispatch->waitSwapchainImageCalls, 2u);
+    EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, 2u);
+    EXPECT_TRUE(manager.GetEyeSwapchain(1).hasCopiedFrame);
+
+    // Invalid eye index rejected
+    EXPECT_FALSE(manager.CopyBackBufferToEye(2, nullptr));
+}
+
+TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
+    manager.SetSimulatedProjection(0, OpenXrManager::ComputeProjectionFromFov(leftFov));
+    manager.SetSimulatedProjection(1, OpenXrManager::ComputeProjectionFromFov(rightFov));
+
+    HeadPose simPose;
+    simPose.x = 0.0f;
+    simPose.y = 1.6f;
+    simPose.z = 0.0f;
+    simPose.qw = 1.0f;
+    simPose.isValid = true;
+    manager.SetSimulatedPose(simPose);
+    manager.SetIpd(0.064f);
+
+    EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+
+    EXPECT_EQ(manager.GetSubmittedFramePairCount(), 0u);
+    EXPECT_TRUE(manager.SubmitFramePair());
+    EXPECT_EQ(manager.GetSubmittedFramePairCount(), 1u);
+
+    EXPECT_EQ(mockDispatch->waitFrameCalls, 1u);
+    EXPECT_EQ(mockDispatch->beginFrameCalls, 1u);
+    EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
+    EXPECT_EQ(mockDispatch->lastFrameEndInfo.layerCount, 1u);
+    ASSERT_EQ(mockDispatch->lastSubmittedProjectionViews.size(), 2u);
+
+    // Verify paired left and right views
+    const auto& leftView = mockDispatch->lastSubmittedProjectionViews[0];
+    const auto& rightView = mockDispatch->lastSubmittedProjectionViews[1];
+
+    EXPECT_NEAR(leftView.fov.angleLeft, -0.90f, 0.001f);
+    EXPECT_NEAR(rightView.fov.angleLeft, -0.80f, 0.001f);
+
+    // Left eye shifted by -IPD/2, Right eye shifted by +IPD/2
+    EXPECT_NEAR(leftView.pose.position.x, -0.032f, 0.001f);
+    EXPECT_NEAR(rightView.pose.position.x, 0.032f, 0.001f);
+    EXPECT_NEAR(rightView.pose.position.x - leftView.pose.position.x, 0.064f, 0.001f);
 }
 
 } // namespace fs25vr

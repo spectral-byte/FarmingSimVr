@@ -87,6 +87,43 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushcclosure(L, &VRBridge::Lua_GetViews, "getViews", 1);
     lua_setfield(L, -2, "getViews");
 
+    // VRBridge.getFrameParity = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetFrameParity, "getFrameParity", 1);
+    lua_setfield(L, -2, "getFrameParity");
+
+    // VRBridge.getFrameIndex = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetFrameIndex, "getFrameIndex", 1);
+    lua_setfield(L, -2, "getFrameIndex");
+
+    // VRBridge.getIpd = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetIpd, "getIpd", 1);
+    lua_setfield(L, -2, "getIpd");
+
+    // VRBridge.getEyePose = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetEyePose, "getEyePose", 1);
+    lua_setfield(L, -2, "getEyePose");
+
+    // VRBridge.advanceFrame = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_AdvanceFrame, "advanceFrame", 1);
+    lua_setfield(L, -2, "advanceFrame");
+
+    // VRBridge.setFrameParity = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_SetFrameParity, "setFrameParity", 1);
+    lua_setfield(L, -2, "setFrameParity");
+
+    // Set metatable on VRBridge table for dynamic property access (__index)
+    lua_createtable(L, 0, 1);
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_Index, "__index", 1);
+    lua_setfield(L, -2, "__index");
+    lua_setmetatable(L, -2);
+
     // Set as global variable _G["VRBridge"]
     lua_setglobal(L, "VRBridge");
 
@@ -336,7 +373,7 @@ int VRBridge::Lua_GetEyeProjection(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
 
-    uint32_t eyeIndex = 0;
+    uint32_t eyeIndex = self->GetFrameParity();
     if (lua_gettop(L) >= 1) {
         if (lua_isnumber(L, 1)) {
             int idx = lua_tointeger(L, 1);
@@ -375,6 +412,139 @@ int VRBridge::Lua_GetViews(lua_State* L) {
     lua_rawseti(L, -3, 2);
     lua_setfield(L, -2, "right");
 
+    return 1;
+}
+
+void VRBridge::AdvanceFrame() {
+    m_frameIndex++;
+    m_frameParity = static_cast<uint32_t>(m_frameIndex % 2);
+}
+
+void VRBridge::SetFrameParity(uint32_t parity) {
+    m_frameParity = parity % 2;
+}
+
+float VRBridge::GetIpd() const {
+    if (m_hasCustomIpd) {
+        return m_simulatedIpd;
+    }
+    return m_openXrManager ? m_openXrManager->GetIpd() : 0.064f;
+}
+
+void VRBridge::SetIpd(float ipd) {
+    m_simulatedIpd = ipd;
+    m_hasCustomIpd = true;
+    if (m_openXrManager) {
+        m_openXrManager->SetIpd(ipd);
+    }
+}
+
+HeadPose VRBridge::GetEyePose(uint32_t eyeIndex) {
+    HeadPose pose = GetHeadPose();
+    if (!pose.isValid) return pose;
+    float eyeSign = (eyeIndex == 1) ? 1.0f : -1.0f;
+    float halfIpd = GetIpd() * 0.5f;
+    float cosY = std::cos(pose.yaw);
+    float sinY = std::sin(pose.yaw);
+    pose.x += eyeSign * halfIpd * cosY;
+    pose.z -= eyeSign * halfIpd * sinY;
+    return pose;
+}
+
+int VRBridge::Lua_GetFrameParity(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+    lua_pushinteger(L, self->GetFrameParity());
+    return 1;
+}
+
+int VRBridge::Lua_GetFrameIndex(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+    lua_pushinteger(L, static_cast<int>(self->GetFrameIndex()));
+    return 1;
+}
+
+int VRBridge::Lua_GetIpd(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+    lua_pushnumber(L, self->GetIpd());
+    return 1;
+}
+
+int VRBridge::Lua_GetEyePose(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    uint32_t eyeIndex = 0;
+    if (lua_gettop(L) >= 1) {
+        if (lua_isnumber(L, 1)) {
+            eyeIndex = (lua_tointeger(L, 1) == 1) ? 1 : 0;
+        } else if (lua_isstring(L, 1)) {
+            const char* s = lua_tostring(L, 1);
+            if (s && (_stricmp(s, "right") == 0 || _stricmp(s, "r") == 0)) {
+                eyeIndex = 1;
+            }
+        }
+    }
+
+    HeadPose pose = self->GetEyePose(eyeIndex);
+    lua_createtable(L, 0, 14);
+    lua_pushnumber(L, pose.x); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, pose.y); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, pose.z); lua_setfield(L, -2, "z");
+    lua_pushnumber(L, pose.pitch); lua_setfield(L, -2, "pitch");
+    lua_pushnumber(L, pose.yaw); lua_setfield(L, -2, "yaw");
+    lua_pushnumber(L, pose.roll); lua_setfield(L, -2, "roll");
+    lua_pushnumber(L, pose.qx); lua_setfield(L, -2, "qx");
+    lua_pushnumber(L, pose.qy); lua_setfield(L, -2, "qy");
+    lua_pushnumber(L, pose.qz); lua_setfield(L, -2, "qz");
+    lua_pushnumber(L, pose.qw); lua_setfield(L, -2, "qw");
+    lua_pushboolean(L, pose.isValid ? 1 : 0); lua_setfield(L, -2, "isValid");
+    lua_pushboolean(L, pose.positionTracked ? 1 : 0); lua_setfield(L, -2, "isPositionTracked");
+    lua_pushboolean(L, pose.orientationTracked ? 1 : 0); lua_setfield(L, -2, "isOrientationTracked");
+    lua_pushinteger(L, eyeIndex); lua_setfield(L, -2, "eye");
+    return 1;
+}
+
+int VRBridge::Lua_AdvanceFrame(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+    self->AdvanceFrame();
+    lua_pushinteger(L, self->GetFrameParity());
+    return 1;
+}
+
+int VRBridge::Lua_SetFrameParity(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+    if (lua_gettop(L) >= 1 && lua_isnumber(L, 1)) {
+        self->SetFrameParity(static_cast<uint32_t>(lua_tointeger(L, 1)));
+    }
+    lua_pushinteger(L, self->GetFrameParity());
+    return 1;
+}
+
+int VRBridge::Lua_Index(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    if (lua_isstring(L, 2)) {
+        const char* key = lua_tostring(L, 2);
+        if (strcmp(key, "frameParity") == 0) {
+            lua_pushinteger(L, self->GetFrameParity());
+            return 1;
+        }
+        if (strcmp(key, "frameIndex") == 0) {
+            lua_pushinteger(L, static_cast<int>(self->GetFrameIndex()));
+            return 1;
+        }
+        if (strcmp(key, "ipd") == 0) {
+            lua_pushnumber(L, self->GetIpd());
+            return 1;
+        }
+    }
+    lua_pushnil(L);
     return 1;
 }
 

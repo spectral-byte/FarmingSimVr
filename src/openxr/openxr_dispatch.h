@@ -81,6 +81,52 @@ public:
         uint32_t viewCapacityInput,
         uint32_t* viewCountOutput,
         XrView* views) = 0;
+
+    virtual XrResult EnumerateSwapchainFormats(
+        XrSession session,
+        uint32_t formatCapacityInput,
+        uint32_t* formatCountOutput,
+        int64_t* formats) = 0;
+
+    virtual XrResult CreateSwapchain(
+        XrSession session,
+        const XrSwapchainCreateInfo* createInfo,
+        XrSwapchain* swapchain) = 0;
+
+    virtual XrResult DestroySwapchain(
+        XrSwapchain swapchain) = 0;
+
+    virtual XrResult EnumerateSwapchainImages(
+        XrSwapchain swapchain,
+        uint32_t imageCapacityInput,
+        uint32_t* imageCountOutput,
+        XrSwapchainImageBaseHeader* images) = 0;
+
+    virtual XrResult AcquireSwapchainImage(
+        XrSwapchain swapchain,
+        const XrSwapchainImageAcquireInfo* acquireInfo,
+        uint32_t* index) = 0;
+
+    virtual XrResult WaitSwapchainImage(
+        XrSwapchain swapchain,
+        const XrSwapchainImageWaitInfo* waitInfo) = 0;
+
+    virtual XrResult ReleaseSwapchainImage(
+        XrSwapchain swapchain,
+        const XrSwapchainImageReleaseInfo* releaseInfo) = 0;
+
+    virtual XrResult WaitFrame(
+        XrSession session,
+        const XrFrameWaitInfo* frameWaitInfo,
+        XrFrameState* frameState) = 0;
+
+    virtual XrResult BeginFrame(
+        XrSession session,
+        const XrFrameBeginInfo* frameBeginInfo) = 0;
+
+    virtual XrResult EndFrame(
+        XrSession session,
+        const XrFrameEndInfo* frameEndInfo) = 0;
 };
 
 class NativeOpenXrDispatch : public IOpenXrDispatch {
@@ -179,6 +225,72 @@ public:
         uint32_t* viewCountOutput,
         XrView* views) override {
         return xrLocateViews(session, viewLocateInfo, viewState, viewCapacityInput, viewCountOutput, views);
+    }
+
+    XrResult EnumerateSwapchainFormats(
+        XrSession session,
+        uint32_t formatCapacityInput,
+        uint32_t* formatCountOutput,
+        int64_t* formats) override {
+        return xrEnumerateSwapchainFormats(session, formatCapacityInput, formatCountOutput, formats);
+    }
+
+    XrResult CreateSwapchain(
+        XrSession session,
+        const XrSwapchainCreateInfo* createInfo,
+        XrSwapchain* swapchain) override {
+        return xrCreateSwapchain(session, createInfo, swapchain);
+    }
+
+    XrResult DestroySwapchain(
+        XrSwapchain swapchain) override {
+        return xrDestroySwapchain(swapchain);
+    }
+
+    XrResult EnumerateSwapchainImages(
+        XrSwapchain swapchain,
+        uint32_t imageCapacityInput,
+        uint32_t* imageCountOutput,
+        XrSwapchainImageBaseHeader* images) override {
+        return xrEnumerateSwapchainImages(swapchain, imageCapacityInput, imageCountOutput, images);
+    }
+
+    XrResult AcquireSwapchainImage(
+        XrSwapchain swapchain,
+        const XrSwapchainImageAcquireInfo* acquireInfo,
+        uint32_t* index) override {
+        return xrAcquireSwapchainImage(swapchain, acquireInfo, index);
+    }
+
+    XrResult WaitSwapchainImage(
+        XrSwapchain swapchain,
+        const XrSwapchainImageWaitInfo* waitInfo) override {
+        return xrWaitSwapchainImage(swapchain, waitInfo);
+    }
+
+    XrResult ReleaseSwapchainImage(
+        XrSwapchain swapchain,
+        const XrSwapchainImageReleaseInfo* releaseInfo) override {
+        return xrReleaseSwapchainImage(swapchain, releaseInfo);
+    }
+
+    XrResult WaitFrame(
+        XrSession session,
+        const XrFrameWaitInfo* frameWaitInfo,
+        XrFrameState* frameState) override {
+        return xrWaitFrame(session, frameWaitInfo, frameState);
+    }
+
+    XrResult BeginFrame(
+        XrSession session,
+        const XrFrameBeginInfo* frameBeginInfo) override {
+        return xrBeginFrame(session, frameBeginInfo);
+    }
+
+    XrResult EndFrame(
+        XrSession session,
+        const XrFrameEndInfo* frameEndInfo) override {
+        return xrEndFrame(session, frameEndInfo);
     }
 };
 

@@ -301,6 +301,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
     oxr->SetSimulatedPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
+    bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
@@ -378,6 +379,7 @@ TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking
     oxr->SetSimulatedPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
+    bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
@@ -586,4 +588,150 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
         assert(math.abs(_G.cameraProjectionOffsets[505].y) < 0.001, "offset y must be reset to 0")
     )luau", "=checkRestored"), 0);
 }
+
+TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSequentialFramesInCab) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
+    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    oxr->SetSimulatedProjection(1, fs25vr::OpenXrManager::ComputeProjectionFromFov(rightFov));
+
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.x = 0.0f;
+    simPose.y = 0.0f;
+    simPose.z = 0.0f;
+    simPose.pitch = 0.0f;
+    simPose.yaw = 0.0f;
+    simPose.roll = 0.0f;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    bridge.SetIpd(0.064f); // 64mm IPD -> +/- 0.032m
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.cameraTranslations = {}
+        function setTranslation(node, x, y, z)
+            _G.cameraTranslations[node] = { x = x, y = y, z = z }
+        end
+        function setRotation(node, rx, ry, rz)
+        end
+
+        _G.mockVehicleCam = {
+            isInside = true,
+            cameraNode = 301,
+            origTransX = 0, origTransY = 1.5, origTransZ = 0
+        }
+    )luau", "=setupAFRVehicleMocks"), 0);
+
+    // Frame 0 (even, left eye, parity = 0)
+    ASSERT_EQ(bridge.GetFrameParity(), 0u);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCamFrame0"), 0);
+
+    // Check Frame 0: Left Eye projection (negative offset) and negative IPD offset (-0.032m)
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(_G.cameraProjectionOffsets[301] ~= nil, "projection offset must be set on vehicle camera")
+        assert(math.abs(_G.cameraProjectionOffsets[301].x - (-0.23052)) < 0.01, "frame 0 should have left eye projection offset")
+
+        assert(_G.cameraTranslations[301] ~= nil, "translation must be set on vehicle camera")
+        assert(math.abs(_G.cameraTranslations[301].x - (-0.032)) < 0.001, "frame 0 should have -IPD/2 translation")
+        assert(math.abs(_G.cameraTranslations[301].y - 1.5) < 0.001, "y translation should match base height")
+        assert(math.abs(_G.cameraTranslations[301].z) < 0.001, "z translation should be zero")
+    )luau", "=verifyFrame0InCab"), 0);
+
+    // Advance frame parity to 1 (odd, right eye)
+    bridge.AdvanceFrame();
+    ASSERT_EQ(bridge.GetFrameParity(), 1u);
+
+    // Frame 1 (odd, right eye, parity = 1)
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCamFrame1"), 0);
+
+    // Check Frame 1: Right Eye projection (positive offset) and positive IPD offset (+0.032m)
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(math.abs(_G.cameraProjectionOffsets[301].x - (0.23052)) < 0.01, "frame 1 should have right eye projection offset")
+        assert(math.abs(_G.cameraTranslations[301].x - (0.032)) < 0.001, "frame 1 should have +IPD/2 translation")
+        assert(math.abs(_G.cameraTranslations[301].y - 1.5) < 0.001, "y translation should match base height")
+        assert(math.abs(_G.cameraTranslations[301].z) < 0.001, "z translation should be zero")
+    )luau", "=verifyFrame1InCab"), 0);
+}
+
+TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSequentialFramesOnFoot) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
+    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    oxr->SetSimulatedProjection(1, fs25vr::OpenXrManager::ComputeProjectionFromFov(rightFov));
+
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.x = 0.0f;
+    simPose.y = 0.0f;
+    simPose.z = 0.0f;
+    simPose.pitch = 0.0f;
+    simPose.yaw = 0.0f;
+    simPose.roll = 0.0f;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    bridge.SetIpd(0.064f);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.cameraTranslations = {}
+        function getTranslation(node)
+            return 0.0, 1.8, 0.0
+        end
+        function setTranslation(node, x, y, z)
+            _G.cameraTranslations[node] = { x = x, y = y, z = z }
+        end
+        function setRotation(node, rx, ry, rz)
+        end
+
+        _G.mockPlayerCam = {
+            isFirstPerson = true,
+            firstPersonCamera = 401
+        }
+    )luau", "=setupAFRPlayerMocks"), 0);
+
+    // Frame 0 (even, left eye, parity = 0)
+    ASSERT_EQ(bridge.GetFrameParity(), 0u);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraMakeCurrent(_G.mockPlayerCam)", "=makeCurrentPlayer"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCamFrame0"), 0);
+
+    // Check Frame 0: Left Eye projection and negative IPD offset (-0.032m)
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(_G.cameraProjectionOffsets[401] ~= nil, "projection offset must be set on player camera")
+        assert(math.abs(_G.cameraProjectionOffsets[401].x - (-0.23052)) < 0.01, "frame 0 should have left eye projection offset")
+
+        assert(_G.cameraTranslations[401] ~= nil, "translation must be set on player camera")
+        assert(math.abs(_G.cameraTranslations[401].x - (-0.032)) < 0.001, "frame 0 should have -IPD/2 translation")
+        assert(math.abs(_G.cameraTranslations[401].y - 1.8) < 0.001, "y translation should match base head height")
+    )luau", "=verifyFrame0OnFoot"), 0);
+
+    // Advance frame parity to 1 (odd, right eye)
+    bridge.AdvanceFrame();
+    ASSERT_EQ(bridge.GetFrameParity(), 1u);
+
+    // Frame 1 (odd, right eye, parity = 1)
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCamFrame1"), 0);
+
+    // Check Frame 1: Right Eye projection and positive IPD offset (+0.032m)
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(math.abs(_G.cameraProjectionOffsets[401].x - (0.23052)) < 0.01, "frame 1 should have right eye projection offset")
+        assert(math.abs(_G.cameraTranslations[401].x - (0.032)) < 0.001, "frame 1 should have +IPD/2 translation")
+        assert(math.abs(_G.cameraTranslations[401].y - 1.8) < 0.001, "y translation should match base head height")
+    )luau", "=verifyFrame1OnFoot"), 0);
+}
+
 

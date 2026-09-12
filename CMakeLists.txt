@@ -130,4 +130,4 @@ target_compile_definitions(fs25_vr_tests PRIVATE
 )
 
 include(GoogleTest)
-gtest_discover_tests(fs25_vr_tests)
+gtest_discover_tests(fs25_vr_tests DISCOVERY_TIMEOUT 30)

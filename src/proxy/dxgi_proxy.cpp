@@ -6,6 +6,8 @@ namespace fs25vr {
 
 namespace {
 
+static DxgiProxy* s_activeProxy = nullptr;
+
 template <typename PFN, typename... Args>
 HRESULT ForwardFactoryCall(const char* funcName, PFN pfn, Args&&... args) {
     if (!pfn) {
@@ -26,12 +28,22 @@ DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
                      std::shared_ptr<OpenXrManager> openXrManager,
                      std::shared_ptr<LuauInterceptor> luauInterceptor,
                      std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe,
-                     std::shared_ptr<D3D12Interceptor> d3d12Interceptor)
+                     std::shared_ptr<D3D12Interceptor> d3d12Interceptor,
+                     std::shared_ptr<VRBridge> vrBridge)
     : m_systemDxgi(systemDxgi ? std::move(systemDxgi) : std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {})),
       m_openXrManager(openXrManager ? std::move(openXrManager) : std::shared_ptr<OpenXrManager>(&OpenXrManager::Instance(), [](auto*) {})),
       m_luauInterceptor(luauInterceptor ? std::move(luauInterceptor) : std::shared_ptr<LuauInterceptor>(&LuauInterceptor::Instance(), [](auto*) {})),
       m_telemetryProbe(telemetryProbe ? std::move(telemetryProbe) : std::shared_ptr<GraphicsTelemetryProbe>(&GraphicsTelemetryProbe::Instance(), [](auto*) {})),
-      m_d3d12Interceptor(d3d12Interceptor ? std::move(d3d12Interceptor) : std::shared_ptr<D3D12Interceptor>(&D3D12Interceptor::Instance(), [](auto*) {})) {
+      m_d3d12Interceptor(d3d12Interceptor ? std::move(d3d12Interceptor) : std::shared_ptr<D3D12Interceptor>(&D3D12Interceptor::Instance(), [](auto*) {})),
+      m_vrBridge(vrBridge ? std::move(vrBridge) : std::shared_ptr<VRBridge>(&VRBridge::Instance(), [](auto*) {})) {
+    s_activeProxy = this;
+}
+
+DxgiProxy::~DxgiProxy() {
+    DetachAll();
+    if (s_activeProxy == this) {
+        s_activeProxy = nullptr;
+    }
 }
 
 void DxgiProxy::EnsureVrInitialized() {
@@ -63,19 +75,299 @@ void DxgiProxy::OnPrePresent(IDXGISwapChain* /*swapChain*/) {
     }
 }
 
+void DxgiProxy::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue) {
+    m_d3d12Device = device;
+    m_d3d12Queue = queue;
+    if (m_openXrManager && device && queue) {
+        m_openXrManager->SetD3D12DeviceAndQueue(device, queue);
+    }
+    if (m_d3d12Interceptor && queue) {
+        m_d3d12Interceptor->AttachCommandQueue(queue);
+    }
+}
+
+bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
+    if (!m_openXrManager || !m_openXrManager->IsActive()) {
+        return false;
+    }
+    if (!swapChain) {
+        LogError("DxgiProxy::AttachSwapChain: Swap chain pointer is null.");
+        return false;
+    }
+    if (m_swapChainAttached) return true;
+
+    s_activeProxy = this;
+    void** vtable = *reinterpret_cast<void***>(swapChain);
+    if (!vtable) {
+        LogError("DxgiProxy::AttachSwapChain: VTable pointer is null.");
+        return false;
+    }
+
+    void* fnPresent = vtable[kPresentVTableSlot];
+    bool presentAttached = m_detourPresent.Install(
+        fnPresent, reinterpret_cast<void*>(&DxgiProxy::Intercept_Present));
+
+    Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain1;
+    if (SUCCEEDED(swapChain->QueryInterface(IID_PPV_ARGS(&swapChain1)))) {
+        void** vtable1 = *reinterpret_cast<void***>(swapChain1.Get());
+        if (vtable1) {
+            void* fnPresent1 = vtable1[kPresent1VTableSlot];
+            m_detourPresent1.Install(
+                fnPresent1, reinterpret_cast<void*>(&DxgiProxy::Intercept_Present1));
+        }
+    }
+
+    m_swapChainAttached = presentAttached;
+    if (!m_swapChainAttached) {
+        LogError("DxgiProxy::AttachSwapChain: Failed to install swap chain detours.");
+    } else {
+        LogInfo("DxgiProxy: Successfully attached swap chain presentation detours.");
+    }
+    return m_swapChainAttached;
+}
+
+bool DxgiProxy::AttachFactory(IDXGIFactory* factory) {
+    if (!m_openXrManager || !m_openXrManager->IsActive()) {
+        return false;
+    }
+    if (!factory) {
+        LogError("DxgiProxy::AttachFactory: Factory pointer is null.");
+        return false;
+    }
+    if (m_factoryAttached) return true;
+
+    s_activeProxy = this;
+    void** vtable = *reinterpret_cast<void***>(factory);
+    if (!vtable) {
+        LogError("DxgiProxy::AttachFactory: VTable pointer is null.");
+        return false;
+    }
+
+    void* fnCreateSwapChain = vtable[kCreateSwapChainVTableSlot];
+    bool createAttached = m_detourCreateSwapChain.Install(
+        fnCreateSwapChain, reinterpret_cast<void*>(&DxgiProxy::Intercept_CreateSwapChain));
+
+    Microsoft::WRL::ComPtr<IDXGIFactory2> factory2;
+    if (SUCCEEDED(factory->QueryInterface(IID_PPV_ARGS(&factory2)))) {
+        void** vtable2 = *reinterpret_cast<void***>(factory2.Get());
+        if (vtable2) {
+            void* fnCreateForHwnd = vtable2[kCreateSwapChainForHwndVTableSlot];
+            m_detourCreateSwapChainForHwnd.Install(
+                fnCreateForHwnd, reinterpret_cast<void*>(&DxgiProxy::Intercept_CreateSwapChainForHwnd));
+        }
+    }
+
+    m_factoryAttached = createAttached;
+    if (!m_factoryAttached) {
+        LogError("DxgiProxy::AttachFactory: Failed to install factory detours.");
+    } else {
+        LogInfo("DxgiProxy: Successfully attached factory swap chain creation detours.");
+    }
+    return m_factoryAttached;
+}
+
+void DxgiProxy::DetachAll() {
+    if (m_detourPresent.IsInstalled()) m_detourPresent.Uninstall();
+    if (m_detourPresent1.IsInstalled()) m_detourPresent1.Uninstall();
+    if (m_detourCreateSwapChain.IsInstalled()) m_detourCreateSwapChain.Uninstall();
+    if (m_detourCreateSwapChainForHwnd.IsInstalled()) m_detourCreateSwapChainForHwnd.Uninstall();
+    m_swapChainAttached = false;
+    m_factoryAttached = false;
+}
+
+void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT /*flags*/) {
+    OnPrePresent(swapChain);
+
+    if (!m_openXrManager || !m_openXrManager->IsActive()) {
+        return;
+    }
+
+    ID3D12Resource* pBackBuffer = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12Resource> backBuffer;
+
+    if (swapChain) {
+        // Ensure D3D12 device and command queue
+        if (!m_d3d12Queue) {
+            Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+            if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&queue)))) {
+                m_d3d12Queue = queue;
+            }
+        }
+        if (!m_d3d12Device) {
+            if (m_d3d12Queue) {
+                Microsoft::WRL::ComPtr<ID3D12Device> device;
+                if (SUCCEEDED(m_d3d12Queue->GetDevice(IID_PPV_ARGS(&device)))) {
+                    m_d3d12Device = device;
+                }
+            } else {
+                Microsoft::WRL::ComPtr<ID3D12Device> device;
+                if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&device)))) {
+                    m_d3d12Device = device;
+                }
+            }
+        }
+
+        if (m_d3d12Device && m_d3d12Queue) {
+            m_openXrManager->SetD3D12DeviceAndQueue(m_d3d12Device.Get(), m_d3d12Queue.Get());
+        }
+
+        // Ensure OpenXR eye swapchains exist
+        if (!m_openXrManager->HasEyeSwapchains()) {
+            DXGI_SWAP_CHAIN_DESC desc{};
+            if (SUCCEEDED(swapChain->GetDesc(&desc)) && desc.BufferDesc.Width > 0 && desc.BufferDesc.Height > 0) {
+                m_openXrManager->CreateEyeSwapchains(desc.BufferDesc.Width, desc.BufferDesc.Height, desc.BufferDesc.Format);
+            } else {
+                Microsoft::WRL::ComPtr<ID3D12Resource> testBuffer;
+                if (SUCCEEDED(swapChain->GetBuffer(0, IID_PPV_ARGS(&testBuffer)))) {
+                    D3D12_RESOURCE_DESC resDesc = testBuffer->GetDesc();
+                    m_openXrManager->CreateEyeSwapchains(
+                        static_cast<uint32_t>(resDesc.Width),
+                        static_cast<uint32_t>(resDesc.Height),
+                        resDesc.Format
+                    );
+                }
+            }
+        }
+
+        UINT bufferIndex = 0;
+        Microsoft::WRL::ComPtr<IDXGISwapChain3> swapChain3;
+        if (SUCCEEDED(swapChain->QueryInterface(IID_PPV_ARGS(&swapChain3)))) {
+            bufferIndex = swapChain3->GetCurrentBackBufferIndex();
+        }
+
+        if (SUCCEEDED(swapChain->GetBuffer(bufferIndex, IID_PPV_ARGS(&backBuffer)))) {
+            pBackBuffer = backBuffer.Get();
+        }
+    }
+
+    if (m_openXrManager->HasEyeSwapchains()) {
+        uint32_t parity = m_vrBridge ? m_vrBridge->GetFrameParity() : 0;
+        m_openXrManager->CopyBackBufferToEye(parity, pBackBuffer);
+
+        if (parity == 1) {
+            m_openXrManager->SubmitFramePair();
+        }
+
+        if (m_vrBridge) {
+            m_vrBridge->AdvanceFrame();
+        }
+    }
+}
+
+void DxgiProxy::OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* /*params*/) {
+    OnPresent(swapChain, syncInterval, flags);
+}
+
+HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UINT syncInterval, UINT flags) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    proxy->OnPresent(self, syncInterval, flags);
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(
+        proxy->m_detourPresent.GetOriginal()
+    );
+    if (orig) {
+        return orig(self, syncInterval, flags);
+    }
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    proxy->OnPresent1(self, syncInterval, flags, params);
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*)>(
+        proxy->m_detourPresent1.GetOriginal()
+    );
+    if (orig) {
+        return orig(self, syncInterval, flags, params);
+    }
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
+    IDXGIFactory* self, IUnknown* pDevice, DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    if (pDevice) {
+        Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+        Microsoft::WRL::ComPtr<ID3D12Device> device;
+        if (SUCCEEDED(pDevice->QueryInterface(IID_PPV_ARGS(&queue)))) {
+            queue->GetDevice(IID_PPV_ARGS(&device));
+        } else if (SUCCEEDED(pDevice->QueryInterface(IID_PPV_ARGS(&device)))) {
+            // direct device
+        }
+        if (device || queue) {
+            proxy->SetD3D12DeviceAndQueue(device.Get(), queue.Get());
+        }
+    }
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**)>(
+        proxy->m_detourCreateSwapChain.GetOriginal()
+    );
+    HRESULT hr = orig ? orig(self, pDevice, pDesc, ppSwapChain) : E_FAIL;
+    if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
+        proxy->AttachSwapChain(*ppSwapChain);
+    }
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
+    IDXGIFactory2* self, IUnknown* pDevice, HWND hWnd, const DXGI_SWAP_CHAIN_DESC1* pDesc,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc, IDXGIOutput* pRestrictToOutput,
+    IDXGISwapChain1** ppSwapChain) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    if (pDevice) {
+        Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+        Microsoft::WRL::ComPtr<ID3D12Device> device;
+        if (SUCCEEDED(pDevice->QueryInterface(IID_PPV_ARGS(&queue)))) {
+            queue->GetDevice(IID_PPV_ARGS(&device));
+        } else if (SUCCEEDED(pDevice->QueryInterface(IID_PPV_ARGS(&device)))) {
+            // direct device
+        }
+        if (device || queue) {
+            proxy->SetD3D12DeviceAndQueue(device.Get(), queue.Get());
+        }
+    }
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
+        proxy->m_detourCreateSwapChainForHwnd.GetOriginal()
+    );
+    HRESULT hr = orig ? orig(self, pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain) : E_FAIL;
+    if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
+        proxy->AttachSwapChain(*ppSwapChain);
+    }
+    return hr;
+}
+
 HRESULT DxgiProxy::CreateDXGIFactory(REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
-    return ForwardFactoryCall("CreateDXGIFactory", m_systemDxgi->GetCreateDXGIFactory(), riid, ppFactory);
+    HRESULT hr = ForwardFactoryCall("CreateDXGIFactory", m_systemDxgi->GetCreateDXGIFactory(), riid, ppFactory);
+    if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
+        Microsoft::WRL::ComPtr<IDXGIFactory> factory;
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
+            AttachFactory(factory.Get());
+        }
+    }
+    return hr;
 }
 
 HRESULT DxgiProxy::CreateDXGIFactory1(REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
-    return ForwardFactoryCall("CreateDXGIFactory1", m_systemDxgi->GetCreateDXGIFactory1(), riid, ppFactory);
+    HRESULT hr = ForwardFactoryCall("CreateDXGIFactory1", m_systemDxgi->GetCreateDXGIFactory1(), riid, ppFactory);
+    if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
+        Microsoft::WRL::ComPtr<IDXGIFactory> factory;
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
+            AttachFactory(factory.Get());
+        }
+    }
+    return hr;
 }
 
 HRESULT DxgiProxy::CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
-    return ForwardFactoryCall("CreateDXGIFactory2", m_systemDxgi->GetCreateDXGIFactory2(), Flags, riid, ppFactory);
+    HRESULT hr = ForwardFactoryCall("CreateDXGIFactory2", m_systemDxgi->GetCreateDXGIFactory2(), Flags, riid, ppFactory);
+    if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
+        Microsoft::WRL::ComPtr<IDXGIFactory> factory;
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
+            AttachFactory(factory.Get());
+        }
+    }
+    return hr;
 }
 
 HRESULT DxgiProxy::DXGIDeclareAdapterRemovalSupport() {

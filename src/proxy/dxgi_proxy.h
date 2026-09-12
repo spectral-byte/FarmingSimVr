@@ -3,11 +3,22 @@
 #include "system_dxgi.h"
 #include "openxr/openxr_manager.h"
 #include "luau/luau_interceptor.h"
+#include "luau/vr_bridge.h"
 #include "telemetry/graphics_telemetry_probe.h"
 #include "telemetry/d3d12_interceptor.h"
+#include "core/detour.h"
+#include <d3d12.h>
+#include <dxgi1_4.h>
+#include <wrl/client.h>
 #include <memory>
 
 namespace fs25vr {
+
+// Canonical DXGI vtable slot indices
+inline constexpr size_t kPresentVTableSlot = 8;
+inline constexpr size_t kPresent1VTableSlot = 22;
+inline constexpr size_t kCreateSwapChainVTableSlot = 10;
+inline constexpr size_t kCreateSwapChainForHwndVTableSlot = 15;
 
 class DxgiProxy {
 public:
@@ -17,20 +28,43 @@ public:
                        std::shared_ptr<OpenXrManager> openXrManager = nullptr,
                        std::shared_ptr<LuauInterceptor> luauInterceptor = nullptr,
                        std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe = nullptr,
-                       std::shared_ptr<D3D12Interceptor> d3d12Interceptor = nullptr);
+                       std::shared_ptr<D3D12Interceptor> d3d12Interceptor = nullptr,
+                       std::shared_ptr<VRBridge> vrBridge = nullptr);
+    ~DxgiProxy();
 
     HRESULT CreateDXGIFactory(REFIID riid, void** ppFactory);
     HRESULT CreateDXGIFactory1(REFIID riid, void** ppFactory);
     HRESULT CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory);
     HRESULT DXGIDeclareAdapterRemovalSupport();
     HRESULT DXGIGetDebugInterface1(UINT Flags, REFIID riid, void** pDebug);
+
+    bool AttachSwapChain(IDXGISwapChain* swapChain);
+    bool AttachFactory(IDXGIFactory* factory);
+    void DetachAll();
+
+    bool IsSwapChainAttached() const { return m_swapChainAttached; }
+    bool IsFactoryAttached() const { return m_factoryAttached; }
+
     void OnPrePresent(IDXGISwapChain* swapChain);
+    void OnPresent(IDXGISwapChain* swapChain, UINT syncInterval = 0, UINT flags = 0);
+    void OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval = 0, UINT flags = 0, const DXGI_PRESENT_PARAMETERS* params = nullptr);
+
+    void SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue);
+    ID3D12Device* GetD3D12Device() const { return m_d3d12Device.Get(); }
+    ID3D12CommandQueue* GetD3D12CommandQueue() const { return m_d3d12Queue.Get(); }
 
     OpenXrManager& GetOpenXrManager() { return *m_openXrManager; }
     ISystemDxgi& GetSystemDxgi() { return *m_systemDxgi; }
     LuauInterceptor& GetLuauInterceptor() { return *m_luauInterceptor; }
     GraphicsTelemetryProbe& GetTelemetryProbe() { return *m_telemetryProbe; }
     D3D12Interceptor& GetD3D12Interceptor() { return *m_d3d12Interceptor; }
+    VRBridge& GetVrBridge() { return *m_vrBridge; }
+
+    // Detour entry points
+    static HRESULT STDMETHODCALLTYPE Intercept_Present(IDXGISwapChain* self, UINT syncInterval, UINT flags);
+    static HRESULT STDMETHODCALLTYPE Intercept_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* params);
+    static HRESULT STDMETHODCALLTYPE Intercept_CreateSwapChain(IDXGIFactory* self, IUnknown* pDevice, DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain);
+    static HRESULT STDMETHODCALLTYPE Intercept_CreateSwapChainForHwnd(IDXGIFactory2* self, IUnknown* pDevice, HWND hWnd, const DXGI_SWAP_CHAIN_DESC1* pDesc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc, IDXGIOutput* pRestrictToOutput, IDXGISwapChain1** ppSwapChain);
 
 private:
     void EnsureVrInitialized();
@@ -40,7 +74,20 @@ private:
     std::shared_ptr<LuauInterceptor> m_luauInterceptor;
     std::shared_ptr<GraphicsTelemetryProbe> m_telemetryProbe;
     std::shared_ptr<D3D12Interceptor> m_d3d12Interceptor;
+    std::shared_ptr<VRBridge> m_vrBridge;
+
+    Microsoft::WRL::ComPtr<ID3D12Device> m_d3d12Device;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> m_d3d12Queue;
+
+    FunctionDetour m_detourPresent;
+    FunctionDetour m_detourPresent1;
+    FunctionDetour m_detourCreateSwapChain;
+    FunctionDetour m_detourCreateSwapChainForHwnd;
+
+    bool m_swapChainAttached = false;
+    bool m_factoryAttached = false;
     bool m_vrInitialized = false;
 };
 
 } // namespace fs25vr
+

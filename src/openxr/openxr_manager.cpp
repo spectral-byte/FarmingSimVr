@@ -170,6 +170,7 @@ bool OpenXrManager::Initialize() {
 }
 
 void OpenXrManager::Shutdown() {
+    DestroyEyeSwapchains();
     if (m_viewSpace != XR_NULL_HANDLE) {
         m_dispatch->DestroySpace(m_viewSpace);
         m_viewSpace = XR_NULL_HANDLE;
@@ -193,22 +194,27 @@ void OpenXrManager::Shutdown() {
     m_useSimulatedProjections = false;
     m_eyeProjections[0] = {};
     m_eyeProjections[1] = {};
+    m_device = nullptr;
+    m_queue = nullptr;
 }
 
 bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queue) {
     if (m_state != OpenXrState::Active || m_instance == XR_NULL_HANDLE) {
         return false;
     }
+    if (device) m_device = device;
+    if (queue) m_queue = queue;
+
     if (m_session != XR_NULL_HANDLE) {
         return true;
     }
 
     XrGraphicsBindingD3D12KHR d3d12Binding{XR_TYPE_GRAPHICS_BINDING_D3D12_KHR};
-    d3d12Binding.device = device;
-    d3d12Binding.queue = queue;
+    d3d12Binding.device = m_device;
+    d3d12Binding.queue = m_queue;
 
     XrSessionCreateInfo sessionInfo{XR_TYPE_SESSION_CREATE_INFO};
-    sessionInfo.next = (device != nullptr) ? &d3d12Binding : nullptr;
+    sessionInfo.next = (m_device != nullptr) ? &d3d12Binding : nullptr;
     sessionInfo.systemId = m_runtimeInfo.systemId;
 
     XrResult res = m_dispatch->CreateSession(m_instance, &sessionInfo, &m_session);
@@ -409,6 +415,10 @@ EyeProjection OpenXrManager::PollEyeProjection(uint32_t eyeIndex, XrTime time) {
     if (res == XR_SUCCESS && viewCount >= 2) {
         m_eyeProjections[0] = ComputeProjectionFromFov(views[0].fov);
         m_eyeProjections[1] = ComputeProjectionFromFov(views[1].fov);
+        float measuredIpd = std::abs(views[1].pose.position.x - views[0].pose.position.x);
+        if (measuredIpd > 0.01f && measuredIpd < 0.20f) {
+            m_ipd = measuredIpd;
+        }
     }
 
     return m_eyeProjections[eyeIndex];
@@ -427,6 +437,249 @@ void OpenXrManager::SetSimulatedProjection(uint32_t eyeIndex, const EyeProjectio
     m_simulatedProjections[eyeIndex] = proj;
     m_useSimulatedProjections = true;
     m_eyeProjections[eyeIndex] = proj;
+}
+
+void OpenXrManager::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue) {
+    if (device) m_device = device;
+    if (queue) m_queue = queue;
+    if (m_session == XR_NULL_HANDLE && m_state == OpenXrState::Active && m_device && m_queue) {
+        CreateSession(m_device, m_queue);
+        CreateTrackingSpaces();
+    }
+}
+
+bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FORMAT format) {
+    if (m_session == XR_NULL_HANDLE || m_state != OpenXrState::Active) {
+        return false;
+    }
+    if (m_hasEyeSwapchains) {
+        return true;
+    }
+
+    for (uint32_t i = 0; i < 2; ++i) {
+        XrSwapchainCreateInfo createInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+        createInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+        createInfo.format = format;
+        createInfo.sampleCount = 1;
+        createInfo.width = width;
+        createInfo.height = height;
+        createInfo.faceCount = 1;
+        createInfo.arraySize = 1;
+        createInfo.mipCount = 1;
+
+        XrResult res = m_dispatch->CreateSwapchain(m_session, &createInfo, &m_eyeSwapchains[i].handle);
+        if (res != XR_SUCCESS) {
+            LogError("OpenXrManager::CreateEyeSwapchains failed for eye " + std::to_string(i) + " (result " + std::to_string(res) + ")");
+            DestroyEyeSwapchains();
+            return false;
+        }
+
+        uint32_t imageCount = 0;
+        m_dispatch->EnumerateSwapchainImages(m_eyeSwapchains[i].handle, 0, &imageCount, nullptr);
+        if (imageCount > 0) {
+            m_eyeSwapchains[i].images.resize(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR});
+            m_dispatch->EnumerateSwapchainImages(
+                m_eyeSwapchains[i].handle,
+                imageCount,
+                &imageCount,
+                reinterpret_cast<XrSwapchainImageBaseHeader*>(m_eyeSwapchains[i].images.data()));
+        }
+
+        m_eyeSwapchains[i].width = width;
+        m_eyeSwapchains[i].height = height;
+        m_eyeSwapchains[i].format = format;
+        m_eyeSwapchains[i].lastCopiedIndex = 0;
+        m_eyeSwapchains[i].hasCopiedFrame = false;
+    }
+
+    m_hasEyeSwapchains = true;
+    LogInfo("OpenXrManager: Created stereoscopic eye swapchains (" + std::to_string(width) + "x" + std::to_string(height) + ").");
+    return true;
+}
+
+void OpenXrManager::DestroyEyeSwapchains() {
+    for (uint32_t i = 0; i < 2; ++i) {
+        if (m_eyeSwapchains[i].handle != XR_NULL_HANDLE) {
+            m_dispatch->DestroySwapchain(m_eyeSwapchains[i].handle);
+            m_eyeSwapchains[i].handle = XR_NULL_HANDLE;
+        }
+        m_eyeSwapchains[i].images.clear();
+        m_eyeSwapchains[i].hasCopiedFrame = false;
+    }
+    m_copyCommandList.Reset();
+    m_copyAllocator.Reset();
+    m_hasEyeSwapchains = false;
+}
+
+const EyeSwapchain& OpenXrManager::GetEyeSwapchain(uint32_t eyeIndex) const {
+    if (eyeIndex >= 2) eyeIndex = 0;
+    return m_eyeSwapchains[eyeIndex];
+}
+
+bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backBuffer) {
+    if (eyeIndex >= 2 || !m_hasEyeSwapchains) {
+        return false;
+    }
+
+    XrSwapchain swapchain = m_eyeSwapchains[eyeIndex].handle;
+    if (swapchain == XR_NULL_HANDLE) {
+        return false;
+    }
+
+    XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    uint32_t imageIndex = 0;
+    XrResult res = m_dispatch->AcquireSwapchainImage(swapchain, &acquireInfo, &imageIndex);
+    if (res != XR_SUCCESS) {
+        LogError("OpenXrManager::CopyBackBufferToEye: AcquireSwapchainImage failed (result " + std::to_string(res) + ")");
+        return false;
+    }
+
+    XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    waitInfo.timeout = XR_INFINITE_DURATION;
+    res = m_dispatch->WaitSwapchainImage(swapchain, &waitInfo);
+    if (res != XR_SUCCESS) {
+        LogError("OpenXrManager::CopyBackBufferToEye: WaitSwapchainImage failed (result " + std::to_string(res) + ")");
+        return false;
+    }
+
+    // If backBuffer, device, and queue are present, perform D3D12 command list recording & execution
+    if (backBuffer && m_device && m_queue) {
+        if (!m_copyAllocator) {
+            m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_copyAllocator));
+        }
+        if (!m_copyCommandList && m_copyAllocator) {
+            m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_copyAllocator.Get(), nullptr, IID_PPV_ARGS(&m_copyCommandList));
+        }
+
+        if (m_copyCommandList && m_copyAllocator) {
+            m_copyAllocator->Reset();
+            m_copyCommandList->Reset(m_copyAllocator.Get(), nullptr);
+
+            ID3D12Resource* destTexture = nullptr;
+            if (imageIndex < m_eyeSwapchains[eyeIndex].images.size()) {
+                destTexture = m_eyeSwapchains[eyeIndex].images[imageIndex].texture;
+            }
+
+            if (destTexture) {
+                D3D12_RESOURCE_BARRIER barriers[2]{};
+                barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barriers[0].Transition.pResource = backBuffer;
+                barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+                barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+                barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+                barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barriers[1].Transition.pResource = destTexture;
+                barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+                barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+                barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+                m_copyCommandList->ResourceBarrier(2, barriers);
+                m_copyCommandList->CopyResource(destTexture, backBuffer);
+
+                std::swap(barriers[0].Transition.StateBefore, barriers[0].Transition.StateAfter);
+                std::swap(barriers[1].Transition.StateBefore, barriers[1].Transition.StateAfter);
+                m_copyCommandList->ResourceBarrier(2, barriers);
+
+                m_copyCommandList->Close();
+                ID3D12CommandList* lists[] = { m_copyCommandList.Get() };
+                m_queue->ExecuteCommandLists(1, lists);
+            }
+        }
+    }
+
+    XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    res = m_dispatch->ReleaseSwapchainImage(swapchain, &releaseInfo);
+    if (res != XR_SUCCESS) {
+        LogError("OpenXrManager::CopyBackBufferToEye: ReleaseSwapchainImage failed (result " + std::to_string(res) + ")");
+        return false;
+    }
+
+    m_eyeSwapchains[eyeIndex].lastCopiedIndex = imageIndex;
+    m_eyeSwapchains[eyeIndex].hasCopiedFrame = true;
+    return true;
+}
+
+bool OpenXrManager::SubmitFramePair() {
+    if (!m_hasEyeSwapchains || m_session == XR_NULL_HANDLE) {
+        return false;
+    }
+
+    XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
+    XrFrameState frameState{XR_TYPE_FRAME_STATE};
+    frameState.shouldRender = XR_TRUE;
+    XrResult res = m_dispatch->WaitFrame(m_session, &waitInfo, &frameState);
+    if (res != XR_SUCCESS) {
+        LogError("OpenXrManager::SubmitFramePair: WaitFrame failed (result " + std::to_string(res) + ")");
+        return false;
+    }
+
+    XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
+    res = m_dispatch->BeginFrame(m_session, &beginInfo);
+    if (res != XR_SUCCESS) {
+        LogError("OpenXrManager::SubmitFramePair: BeginFrame failed (result " + std::to_string(res) + ")");
+        return false;
+    }
+
+    XrCompositionLayerProjectionView projViews[2]{};
+    for (uint32_t i = 0; i < 2; ++i) {
+        projViews[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
+        projViews[i].next = nullptr;
+
+        projViews[i].fov.angleLeft = m_eyeProjections[i].angleLeft;
+        projViews[i].fov.angleRight = m_eyeProjections[i].angleRight;
+        projViews[i].fov.angleUp = m_eyeProjections[i].angleUp;
+        projViews[i].fov.angleDown = m_eyeProjections[i].angleDown;
+
+        float eyeSign = (i == 1) ? 1.0f : -1.0f;
+        float halfIpd = m_ipd * 0.5f;
+        float cosY = std::cos(m_lastPose.yaw);
+        float sinY = std::sin(m_lastPose.yaw);
+
+        projViews[i].pose.position.x = m_lastPose.x + eyeSign * halfIpd * cosY;
+        projViews[i].pose.position.y = m_lastPose.y;
+        projViews[i].pose.position.z = m_lastPose.z - eyeSign * halfIpd * sinY;
+
+        projViews[i].pose.orientation.x = m_lastPose.qx;
+        projViews[i].pose.orientation.y = m_lastPose.qy;
+        projViews[i].pose.orientation.z = m_lastPose.qz;
+        projViews[i].pose.orientation.w = m_lastPose.qw;
+
+        projViews[i].subImage.swapchain = m_eyeSwapchains[i].handle;
+        projViews[i].subImage.imageRect.offset = { 0, 0 };
+        projViews[i].subImage.imageRect.extent = {
+            static_cast<int32_t>(m_eyeSwapchains[i].width),
+            static_cast<int32_t>(m_eyeSwapchains[i].height)
+        };
+        projViews[i].subImage.imageArrayIndex = 0;
+    }
+
+    XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+    layer.layerFlags = 0;
+    layer.space = (m_localSpace != XR_NULL_HANDLE) ? m_localSpace : m_viewSpace;
+    layer.viewCount = 2;
+    layer.views = projViews;
+
+    const XrCompositionLayerBaseHeader* layers[] = { reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer) };
+
+    XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
+    endInfo.displayTime = frameState.predictedDisplayTime;
+    endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    endInfo.layerCount = frameState.shouldRender ? 1 : 0;
+    endInfo.layers = frameState.shouldRender ? layers : nullptr;
+
+    res = m_dispatch->EndFrame(m_session, &endInfo);
+    if (res != XR_SUCCESS) {
+        LogError("OpenXrManager::SubmitFramePair: EndFrame failed (result " + std::to_string(res) + ")");
+        return false;
+    }
+
+    m_submittedFramePairCount++;
+    m_eyeSwapchains[0].hasCopiedFrame = false;
+    m_eyeSwapchains[1].hasCopiedFrame = false;
+    LogInfo("OpenXrManager: Synchronously submitted paired stereo projection layers (total pairs: " +
+            std::to_string(m_submittedFramePairCount) + ").");
+    return true;
 }
 
 } // namespace fs25vr

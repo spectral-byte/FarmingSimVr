@@ -241,6 +241,22 @@ bool FunctionDetour::Install(void* targetFunction, void* detourFunction) {
         return false;
     }
 
+    // Resolve through incremental link table (ILT) jmp thunks (0xE9 rel32)
+    while (*reinterpret_cast<const uint8_t*>(targetFunction) == 0xE9) {
+        const int32_t rel = *reinterpret_cast<const int32_t*>(reinterpret_cast<const uint8_t*>(targetFunction) + 1);
+        targetFunction = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(targetFunction) + 5 + rel);
+    }
+
+    // Resolve through 6-byte indirect import jump thunks (FF 25 disp32)
+    if (reinterpret_cast<const uint8_t*>(targetFunction)[0] == 0xFF &&
+        reinterpret_cast<const uint8_t*>(targetFunction)[1] == 0x25) {
+        const int32_t disp = *reinterpret_cast<const int32_t*>(reinterpret_cast<const uint8_t*>(targetFunction) + 2);
+        void** targetPtr = reinterpret_cast<void**>(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(targetFunction) + 6 + disp));
+        if (targetPtr && *targetPtr) {
+            targetFunction = *targetPtr;
+        }
+    }
+
     // Minimum hook size: 5 bytes for relative jump E9 rel32
     constexpr size_t kMinHookSize = 5;
     size_t copiedBytes = 0;

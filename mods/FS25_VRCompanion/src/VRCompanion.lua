@@ -190,13 +190,38 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex)
     end
 end
 
+function VRCompanion:getFrameParity()
+    if VRBridge ~= nil then
+        if VRBridge.frameParity ~= nil then
+            return VRBridge.frameParity
+        elseif type(VRBridge.getFrameParity) == "function" then
+            return VRBridge.getFrameParity()
+        end
+    end
+    return 0
+end
+
+function VRCompanion:getIpd()
+    if VRBridge ~= nil then
+        if type(VRBridge.getIpd) == "function" then
+            return VRBridge.getIpd() or 0.064
+        elseif VRBridge.ipd ~= nil then
+            return VRBridge.ipd
+        end
+    end
+    return 0.064
+end
+
 function VRCompanion:onVehicleCameraUpdate(cam, dt)
     -- Only apply 6DOF tracking and projection to interior in-cab cameras
     if not cam or not cam.isInside or cam.cameraNode == nil then
         return
     end
 
-    self:applyCameraProjection(cam.cameraNode)
+    local parity = self:getFrameParity()
+    local eyeIndex = (parity % 2 == 1) and 1 or 0
+
+    self:applyCameraProjection(cam.cameraNode, eyeIndex)
 
     if not VRBridge or type(VRBridge.getHeadPose) ~= "function" then
         return
@@ -210,17 +235,31 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     local tx, ty, tz = pose.x, pose.y, pose.z
     local pitch, yaw, roll = pose.pitch, pose.yaw, pose.roll
 
+    -- Interpupillary shift: Left Eye (-IPD/2), Right Eye (+IPD/2)
+    local ipd = self:getIpd()
+    local halfIpd = ipd * 0.5
+    local eyeOffsetX = (eyeIndex == 1) and halfIpd or -halfIpd
+
+    -- Rotate eye offset by head yaw around local vertical axis
+    local eyeRotX = eyeOffsetX * math.cos(yaw)
+    local eyeRotZ = -eyeOffsetX * math.sin(yaw)
+    local eyeRotY = 0
+
+    local eyeTx = tx + eyeRotX
+    local eyeTy = ty + eyeRotY
+    local eyeTz = tz + eyeRotZ
+
     local camParent = 0
     if type(getParent) == "function" then
         camParent = getParent(cam.cameraNode)
     end
 
-    local cabTransX, cabTransY, cabTransZ = tx, ty, tz
+    local cabTransX, cabTransY, cabTransZ = eyeTx, eyeTy, eyeTz
     local cabRotX, cabRotY, cabRotZ = pitch, yaw, roll
 
     if cam.headTrackingNode ~= nil and camParent ~= 0 then
         if type(localToLocal) == "function" then
-            cabTransX, cabTransY, cabTransZ = localToLocal(cam.headTrackingNode, camParent, tx, ty, tz)
+            cabTransX, cabTransY, cabTransZ = localToLocal(cam.headTrackingNode, camParent, eyeTx, eyeTy, eyeTz)
         end
         if type(localRotationToLocal) == "function" then
             cabRotX, cabRotY, cabRotZ = localRotationToLocal(cam.headTrackingNode, camParent, pitch, yaw, roll)
@@ -230,9 +269,9 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         local baseX = cam.origTransX or cam.transX or 0
         local baseY = cam.origTransY or cam.transY or 0
         local baseZ = cam.origTransZ or cam.transZ or 0
-        cabTransX = baseX + tx
-        cabTransY = baseY + ty
-        cabTransZ = baseZ + tz
+        cabTransX = baseX + eyeTx
+        cabTransY = baseY + eyeTy
+        cabTransZ = baseZ + eyeTz
     end
 
     if type(setTranslation) == "function" then
@@ -255,7 +294,10 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
         return
     end
 
-    self:applyCameraProjection(cam.firstPersonCamera)
+    local parity = self:getFrameParity()
+    local eyeIndex = (parity % 2 == 1) and 1 or 0
+
+    self:applyCameraProjection(cam.firstPersonCamera, eyeIndex)
 
     if not VRBridge or type(VRBridge.getHeadPose) ~= "function" then
         return
@@ -266,10 +308,18 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
         return
     end
 
+    local ipd = self:getIpd()
+    local halfIpd = ipd * 0.5
+    local eyeOffsetX = (eyeIndex == 1) and halfIpd or -halfIpd
+
+    local yaw = pose.yaw or 0
+    local eyeRotX = eyeOffsetX * math.cos(yaw)
+    local eyeRotZ = -eyeOffsetX * math.sin(yaw)
+
     local base = self:getPlayerBaseTranslation(cam)
-    local tx = (base.x or base[1]) + pose.x
+    local tx = (base.x or base[1]) + pose.x + eyeRotX
     local ty = (base.y or base[2]) + pose.y
-    local tz = (base.z or base[3]) + pose.z
+    local tz = (base.z or base[3]) + pose.z + eyeRotZ
 
     if type(setTranslation) == "function" then
         setTranslation(cam.firstPersonCamera, tx, ty, tz)

@@ -4,6 +4,9 @@
 #include <memory>
 #include <string>
 
+#include <wrl/client.h>
+#include <vector>
+
 namespace fs25vr {
 
 enum class OpenXrState {
@@ -70,6 +73,16 @@ struct EyeProjection {
     bool isValid = false;
 };
 
+struct EyeSwapchain {
+    XrSwapchain handle = XR_NULL_HANDLE;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    std::vector<XrSwapchainImageD3D12KHR> images;
+    uint32_t lastCopiedIndex = 0;
+    bool hasCopiedFrame = false;
+};
+
 class OpenXrManager {
 public:
     static OpenXrManager& Instance();
@@ -92,6 +105,24 @@ public:
     const EyeProjection& GetEyeProjection(uint32_t eyeIndex = 0) const;
     void SetSimulatedProjection(uint32_t eyeIndex, const EyeProjection& proj);
     static EyeProjection ComputeProjectionFromFov(const XrFovf& fov);
+
+    void SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue);
+    ID3D12Device* GetD3D12Device() const { return m_device; }
+    ID3D12CommandQueue* GetD3D12CommandQueue() const { return m_queue; }
+
+    bool CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    void DestroyEyeSwapchains();
+    bool HasEyeSwapchains() const { return m_hasEyeSwapchains; }
+    const EyeSwapchain& GetEyeSwapchain(uint32_t eyeIndex = 0) const;
+
+    bool CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backBuffer);
+    bool SubmitFramePair();
+
+    float GetIpd() const { return m_ipd; }
+    void SetIpd(float ipd) { m_ipd = ipd; }
+
+    uint64_t GetSubmittedFramePairCount() const { return m_submittedFramePairCount; }
+    void ResetSubmittedFramePairCount() { m_submittedFramePairCount = 0; }
 
     OpenXrState GetState() const { return m_state; }
     bool IsPassThrough() const { return m_state == OpenXrState::PassThrough; }
@@ -124,6 +155,16 @@ private:
     XrSession m_session = XR_NULL_HANDLE;
     XrSpace m_localSpace = XR_NULL_HANDLE;
     XrSpace m_viewSpace = XR_NULL_HANDLE;
+
+    ID3D12Device* m_device = nullptr;
+    ID3D12CommandQueue* m_queue = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_copyAllocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_copyCommandList;
+
+    EyeSwapchain m_eyeSwapchains[2];
+    bool m_hasEyeSwapchains = false;
+    float m_ipd = 0.064f;
+    uint64_t m_submittedFramePairCount = 0;
 
     HeadPose m_rawPose;
     HeadPose m_lastPose;
