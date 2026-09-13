@@ -244,9 +244,17 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex)
         setFovY(camNode, proj.fovY)
     end
 
-    -- Apply asymmetric oblique lens projection offsets (nasal vs. temporal / top vs. bottom)
-    if type(setProjectionOffset) == "function" and proj.xOffset ~= nil and proj.yOffset ~= nil then
-        setProjectionOffset(camNode, proj.xOffset, proj.yOffset)
+    -- In VR AFR mode: keep camera centered on optical axis (0, 0) to guarantee
+    -- parallel rays at infinity and natural binocular convergence without cross-eyed disparity shear.
+    -- If allowObliqueProjection is explicitly enabled, pass the asymmetric projection offsets.
+    if type(setProjectionOffset) == "function" then
+        local offsetX = 0
+        local offsetY = 0
+        if self.allowObliqueProjection and proj.xOffset ~= nil and proj.yOffset ~= nil then
+            offsetX = proj.xOffset * (self.projectionOffsetScale or 1.0)
+            offsetY = proj.yOffset * (self.projectionOffsetScale or 1.0)
+        end
+        setProjectionOffset(camNode, offsetX, offsetY)
     end
 end
 

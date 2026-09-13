@@ -507,9 +507,22 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
     if (res == XR_SUCCESS && viewCount >= 2) {
         m_eyeProjections[0] = ComputeProjectionFromFov(views[0].fov);
         m_eyeProjections[1] = ComputeProjectionFromFov(views[1].fov);
-        float measuredIpd = std::abs(views[1].pose.position.x - views[0].pose.position.x);
-        if (measuredIpd > 0.01f && measuredIpd < 0.20f) {
+        float dx = views[1].pose.position.x - views[0].pose.position.x;
+        float dy = views[1].pose.position.y - views[0].pose.position.y;
+        float dz = views[1].pose.position.z - views[0].pose.position.z;
+        float measuredIpd = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (measuredIpd > 0.04f && measuredIpd < 0.10f) {
             m_ipd = measuredIpd;
+        }
+
+        static float s_lastLoggedIpd = 0.0f;
+        if (std::abs(m_ipd - s_lastLoggedIpd) > 0.002f) {
+            s_lastLoggedIpd = m_ipd;
+            std::stringstream ss;
+            ss << "OpenXrManager: Calibrated hardware IPD = " << (m_ipd * 1000.0f) << " mm"
+               << " (View0 pos: " << views[0].pose.position.x << ", " << views[0].pose.position.y << ", " << views[0].pose.position.z << ")"
+               << " (View1 pos: " << views[1].pose.position.x << ", " << views[1].pose.position.y << ", " << views[1].pose.position.z << ")";
+            LogInfo(ss.str());
         }
         return true;
     }
@@ -960,19 +973,25 @@ bool OpenXrManager::SubmitFramePair() {
         projViews[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
         projViews[i].next = nullptr;
 
-        projViews[i].fov.angleLeft = m_eyeProjections[i].angleLeft;
-        projViews[i].fov.angleRight = m_eyeProjections[i].angleRight;
-        projViews[i].fov.angleUp = m_eyeProjections[i].angleUp;
-        projViews[i].fov.angleDown = m_eyeProjections[i].angleDown;
-
-        // Fallback for FOV: if angle span is near zero, fallback to default safe FOV angles (~90 deg)
-        if (std::abs(projViews[i].fov.angleRight - projViews[i].fov.angleLeft) < 1e-4f ||
-            std::abs(projViews[i].fov.angleUp - projViews[i].fov.angleDown) < 1e-4f) {
-            projViews[i].fov.angleLeft = -0.785398f;
-            projViews[i].fov.angleRight = 0.785398f;
-            projViews[i].fov.angleUp = 0.785398f;
-            projViews[i].fov.angleDown = -0.785398f;
+        // Compute aspect-ratio matched FOV for the eye swapchain:
+        // GIANTS Engine renders using vertical FOV (fovY) and scales horizontal FOV by backbuffer aspect ratio (W / H).
+        // To preserve exact 1:1 square pixel geometry and eliminate horizontal squashing and cross-eyed distortion:
+        float halfFovY = m_eyeProjections[i].fovY * 0.5f;
+        if (halfFovY <= 0.01f) {
+            halfFovY = 0.785398f; // safe ~90 deg fallback
         }
+        float tanHalfY = std::tan(halfFovY);
+        float aspect = (m_eyeSwapchains[i].height > 0)
+            ? static_cast<float>(m_eyeSwapchains[i].width) / static_cast<float>(m_eyeSwapchains[i].height)
+            : 1.0f;
+        float tanHalfX = aspect * tanHalfY;
+        float halfFovX = std::atan(tanHalfX);
+
+        // Aspect-ratio matched symmetric FOV prevents horizontal squashing and aligns optical centers
+        projViews[i].fov.angleLeft = -halfFovX;
+        projViews[i].fov.angleRight = halfFovX;
+        projViews[i].fov.angleUp = halfFovY;
+        projViews[i].fov.angleDown = -halfFovY;
 
         const HeadPose& eyePose = m_capturedEyePoses[i];
         Vector3 eyePos = ComputeEyePosition(eyePose, m_ipd, i);

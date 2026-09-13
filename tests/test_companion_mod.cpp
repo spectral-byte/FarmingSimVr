@@ -527,6 +527,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCame
     // Setup engine camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion.allowObliqueProjection = true
         _G.mockVehicleCam = {
             isInside = true,
             cameraNode = 301,
@@ -567,6 +568,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamer
     // Setup player camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion.allowObliqueProjection = true
         _G.mockPlayerCam = {
             isFirstPerson = true,
             firstPersonCamera = 401
@@ -585,6 +587,42 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamer
         assert(math.abs(_G.cameraProjectionOffsets[401].x - (-0.23052)) < 0.01, "player horizontal offset mismatch")
         assert(math.abs(_G.cameraProjectionOffsets[401].y) < 0.01, "player vertical offset mismatch")
     )luau", "=verifyPlayerCamProjection"), 0);
+}
+
+TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDisparity) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.mockVehicleCam = {
+            isInside = true,
+            cameraNode = 301,
+            origTransX = 0, origTransY = 1.5, origTransZ = 0
+        }
+    )luau", "=setupVehicleCamMock"), 0);
+
+    // Run vehicle camera update without allowObliqueProjection (default behavior)
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCam"), 0);
+
+    // Verify projection offset is explicitly 0, 0 to ensure zero disparity shear at infinity
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(_G.cameraProjectionOffsets[301] ~= nil, "setProjectionOffset must be called on vehicle cameraNode")
+        assert(math.abs(_G.cameraProjectionOffsets[301].x) < 0.0001, "vehicle horizontal offset must be zero by default")
+        assert(math.abs(_G.cameraProjectionOffsets[301].y) < 0.0001, "vehicle vertical offset must be zero by default")
+    )luau", "=verifyCenteredProjection"), 0);
 }
 
 TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
@@ -606,6 +644,7 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     // Setup camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion.allowObliqueProjection = true
         _G.mockCam = {
             isInside = true,
             cameraNode = 505,
@@ -668,6 +707,7 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
             cameraNode = 301,
             origTransX = 0, origTransY = 1.5, origTransZ = 0
         }
+        VRCompanion.allowObliqueProjection = true
     )luau", "=setupAFRVehicleMocks"), 0);
 
     // Frame 0 (even, left eye, parity = 0)
@@ -738,6 +778,7 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
             isFirstPerson = true,
             firstPersonCamera = 401
         }
+        VRCompanion.allowObliqueProjection = true
     )luau", "=setupAFRPlayerMocks"), 0);
 
     // Frame 0 (even, left eye, parity = 0)

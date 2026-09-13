@@ -770,8 +770,16 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     const auto& leftView = mockDispatch->lastSubmittedProjectionViews[0];
     const auto& rightView = mockDispatch->lastSubmittedProjectionViews[1];
 
-    EXPECT_NEAR(leftView.fov.angleLeft, -0.90f, 0.001f);
-    EXPECT_NEAR(rightView.fov.angleLeft, -0.80f, 0.001f);
+    // Verify aspect-ratio matched symmetric FOV (preserving 1:1 square pixel geometry for 1920x1080)
+    EXPECT_NEAR(leftView.fov.angleLeft, -1.112f, 0.01f);
+    EXPECT_NEAR(leftView.fov.angleRight, 1.112f, 0.01f);
+    EXPECT_NEAR(leftView.fov.angleUp, 0.85f, 0.001f);
+    EXPECT_NEAR(leftView.fov.angleDown, -0.85f, 0.001f);
+
+    EXPECT_NEAR(rightView.fov.angleLeft, -1.112f, 0.01f);
+    EXPECT_NEAR(rightView.fov.angleRight, 1.112f, 0.01f);
+    EXPECT_NEAR(rightView.fov.angleUp, 0.85f, 0.001f);
+    EXPECT_NEAR(rightView.fov.angleDown, -0.85f, 0.001f);
 
     // Left eye shifted by -IPD/2, Right eye shifted by +IPD/2
     EXPECT_NEAR(leftView.pose.position.x, -0.032f, 0.001f);
