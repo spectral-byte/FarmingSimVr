@@ -3,6 +3,10 @@
 #include <windows.h>
 #include <cstring>
 #include <string>
+#include <vector>
+#include <algorithm>
+#include <sstream>
+#include <iomanip>
 
 namespace fs25vr {
 
@@ -103,26 +107,63 @@ bool LuauInterceptor::AttachToEngine() {
         return false;
     }
 
-    // Find the string "isHeadTrackingAvailable\0" in .rdata
-    const char* needle = "isHeadTrackingAvailable";
-    size_t needleLen = std::strlen(needle) + 1;
-    const uint8_t* stringAddr = nullptr;
+    static const char* const targetSymbols[] = {
+        "isHeadTrackingAvailable",
+        "getHeadTrackingTranslation",
+        "getHeadTrackingRotation"
+    };
 
-    for (size_t i = 0; i + needleLen <= rdataSize; ++i) {
-        if (std::memcmp(rdataBase + i, needle, needleLen) == 0) {
-            stringAddr = rdataBase + i;
+    void* candidateQueryFunction = nullptr;
+    const char* matchedSymbol = nullptr;
+
+    for (const char* needle : targetSymbols) {
+        size_t needleLen = std::strlen(needle) + 1;
+        const uint8_t* stringAddr = nullptr;
+
+        for (size_t i = 0; i + needleLen <= rdataSize; ++i) {
+            if (std::memcmp(rdataBase + i, needle, needleLen) == 0) {
+                stringAddr = rdataBase + i;
+                break;
+            }
+        }
+
+        if (!stringAddr) {
+            continue;
+        }
+
+        LogInfo(std::string("LuauInterceptor: Found '") + needle + "' in .rdata. Scanning for function pointer...");
+        candidateQueryFunction = FindQueryFunctionInText(textBase, textSize, stringAddr);
+        if (candidateQueryFunction) {
+            matchedSymbol = needle;
             break;
         }
     }
 
-    if (!stringAddr) {
-        LogWarn("LuauInterceptor: 'isHeadTrackingAvailable' string symbol not found in .rdata; standing by.");
-        return false;
+    if (candidateQueryFunction && matchedSymbol) {
+        std::stringstream ss;
+        ss << "LuauInterceptor: Discovered '" << matchedSymbol << "' function at 0x"
+           << std::hex << reinterpret_cast<uintptr_t>(candidateQueryFunction)
+           << ". Installing detour...";
+        LogInfo(ss.str());
+        return Attach(candidateQueryFunction);
     }
 
-    LogInfo("LuauInterceptor: Found query symbol string in .rdata. Scanning for registration cross-references...");
+    LogInfo("LuauInterceptor: Query function scan complete. Interception channel armed.");
+    return false;
+}
 
-    void* candidateQueryFunction = nullptr;
+void* LuauInterceptor::FindQueryFunctionInText(const uint8_t* textBase, size_t textSize, const uint8_t* stringAddr) {
+    if (!textBase || textSize < 16 || !stringAddr) {
+        return nullptr;
+    }
+
+    struct Candidate {
+        void* funcPtr = nullptr;
+        size_t distance = static_cast<size_t>(-1);
+        size_t refOffset = 0;
+    };
+
+    std::vector<Candidate> candidates;
 
     for (size_t off = 0; off + 7 <= textSize; ++off) {
         const uint8_t* insn = textBase + off;
@@ -132,37 +173,64 @@ bool LuauInterceptor::AttachToEngine() {
                 int32_t disp = *reinterpret_cast<const int32_t*>(insn + 3);
                 const uint8_t* target = insn + 7 + disp;
                 if (target == stringAddr) {
-                    LogInfo("LuauInterceptor: Found registration reference in .text at offset +0x" + 
-                            std::to_string(off));
+                    std::stringstream ss;
+                    ss << "LuauInterceptor: Found registration reference in .text at offset +0x"
+                       << std::hex << off;
+                    LogInfo(ss.str());
 
-                    size_t scanStart = off > 64 ? off - 64 : 0;
-                    size_t scanEnd = (off + 64 + 7 <= textSize) ? off + 64 : textSize - 7;
+                    size_t scanStart = off > 128 ? off - 128 : 0;
+                    size_t scanEnd = (off + 128 + 7 <= textSize) ? off + 128 : textSize - 7;
 
                     for (size_t j = scanStart; j <= scanEnd; ++j) {
                         if (j == off) continue;
                         const uint8_t* subInsn = textBase + j;
-                        if (subInsn[0] == 0x48 && subInsn[1] == 0x8D && subInsn[2] == 0x15) {
-                            int32_t fdisp = *reinterpret_cast<const int32_t*>(subInsn + 3);
-                            const uint8_t* funcPtr = subInsn + 7 + fdisp;
-                            if (funcPtr >= textBase && funcPtr < textBase + textSize) {
-                                candidateQueryFunction = const_cast<uint8_t*>(funcPtr);
-                                break;
+                        const uint8_t* funcPtr = nullptr;
+
+                        // Case 1: 64-bit RIP-relative LEA (48 8D / 4C 8D with mod=00, rm=101)
+                        // Covers all 16 registers (rax, rcx, rdx, rbx, rbp, rsi, rdi, r8-r15)
+                        if ((subInsn[0] == 0x48 || subInsn[0] == 0x4C) && subInsn[1] == 0x8D) {
+                            uint8_t subModRm = subInsn[2];
+                            if (((subModRm >> 6) & 3) == 0 && (subModRm & 7) == 5) {
+                                int32_t fdisp = *reinterpret_cast<const int32_t*>(subInsn + 3);
+                                funcPtr = subInsn + 7 + fdisp;
                             }
                         }
+                        // Case 2: 64-bit immediate MOV (48 B8..BF or 49 B8..BF)
+                        else if (j + 10 <= textSize && (subInsn[0] == 0x48 || subInsn[0] == 0x49) &&
+                                 (subInsn[1] >= 0xB8 && subInsn[1] <= 0xBF)) {
+                            funcPtr = *reinterpret_cast<const uint8_t* const*>(subInsn + 2);
+                        }
+
+                        if (funcPtr && funcPtr >= textBase && funcPtr < textBase + textSize && funcPtr != stringAddr) {
+                            if (funcPtr >= subInsn && funcPtr < subInsn + 7) {
+                                continue;
+                            }
+                            if (funcPtr >= insn && funcPtr < insn + 7) {
+                                continue;
+                            }
+                            uint8_t firstByte = *funcPtr;
+                            if (firstByte == 0xCC || firstByte == 0xC3 || firstByte == 0x00 || firstByte == 0x90) {
+                                continue;
+                            }
+
+                            size_t dist = (j > off) ? (j - off) : (off - j);
+                            candidates.push_back({const_cast<uint8_t*>(funcPtr), dist, off});
+                        }
                     }
-                    if (candidateQueryFunction) break;
                 }
             }
         }
     }
 
-    if (candidateQueryFunction) {
-        LogInfo("LuauInterceptor: Discovered head-tracking query function in memory. Installing detour...");
-        return Attach(candidateQueryFunction);
+    if (candidates.empty()) {
+        return nullptr;
     }
 
-    LogInfo("LuauInterceptor: Query function scan complete. Interception channel armed.");
-    return false;
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        return a.distance < b.distance;
+    });
+
+    return candidates.front().funcPtr;
 }
 
 void LuauInterceptor::Detach() {

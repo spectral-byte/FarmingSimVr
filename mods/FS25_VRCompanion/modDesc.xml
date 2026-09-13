@@ -13,10 +13,15 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
 </en>
     </description>
     <multiplayer supported="true"/>
-    <iconFilename>icon_vr.dds</iconFilename>
     <extraSourceFiles>
         <sourceFile filename="src/VRCompanion.lua"/>
     </extraSourceFiles>
+    <l10n>
+        <text name="input_VR_RECENTER">
+            <en>Recenter VR View</en>
+            <de>VR-Ansicht zentrieren</de>
+        </text>
+    </l10n>
     <actions>
         <action name="VR_RECENTER" category="VEHICLE PLAYER"/>
     </actions>

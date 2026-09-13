@@ -13,9 +13,20 @@ VRCompanion.frameTicks = 0
 VRCompanion.vehicleCameraHooked = false
 VRCompanion.playerCameraHooked = false
 VRCompanion.origCamSettings = {}
+-- Proactively probe head tracking availability to trigger native LuauInterceptor detour
+if type(isHeadTrackingAvailable) == "function" then
+    pcall(isHeadTrackingAvailable)
+elseif type(getHeadTrackingTranslation) == "function" then
+    pcall(getHeadTrackingTranslation)
+end
 
 function VRCompanion:loadMap(name)
     print(string.format("[FS25_VR] Initializing Companion Mod on map '%s'...", tostring(name)))
+
+    -- Proactively trigger native detour in case loadMap executes before any camera update
+    if VRBridge == nil and type(isHeadTrackingAvailable) == "function" then
+        pcall(isHeadTrackingAvailable)
+    end
 
     -- 1. Perform native-to-Luau handshake via VRBridge
     if VRBridge ~= nil then

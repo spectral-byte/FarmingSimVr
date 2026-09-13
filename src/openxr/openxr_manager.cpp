@@ -82,7 +82,7 @@ bool OpenXrManager::Initialize() {
     createInfo.applicationInfo.applicationVersion = 1;
     strncpy_s(createInfo.applicationInfo.engineName, "GIANTS Engine 10", XR_MAX_ENGINE_NAME_SIZE - 1);
     createInfo.applicationInfo.engineVersion = 1;
-    createInfo.applicationInfo.apiVersion = XR_CURRENT_API_VERSION;
+    createInfo.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
     createInfo.enabledExtensionCount = 1;
     createInfo.enabledExtensionNames = enabledExtensions;
 

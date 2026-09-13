@@ -102,3 +102,78 @@ TEST_F(LuauInterceptorTest, SupportsIsolatedInstanceWithoutSingletonCoupling) {
 
     isolatedInterceptor.Detach();
 }
+
+TEST_F(LuauInterceptorTest, FindQueryFunctionInTextResolvesPairedFunctionAcrossRegisters) {
+    // Construct mock buffer (text + rdata)
+    std::vector<uint8_t> mockBuffer(1024, 0x90);
+    const size_t strOffset = 0x200;
+    const char strData[] = "isHeadTrackingAvailable";
+    std::memcpy(&mockBuffer[strOffset], strData, sizeof(strData));
+    const uint8_t* mockString = &mockBuffer[strOffset];
+
+    // 1. Mock function entry at offset 0x20
+    const size_t fnOffset = 0x20;
+    mockBuffer[fnOffset] = 0x48;     // sub rsp, 0x28
+    mockBuffer[fnOffset + 1] = 0x83;
+    mockBuffer[fnOffset + 2] = 0xEC;
+    mockBuffer[fnOffset + 3] = 0x28;
+
+    // 2. Mock registration call at offset 0x80:
+    // String loaded into R8: lea r8, [rip + dispString] (4C 8D 05 <disp>)
+    const size_t strInsnOff = 0x80;
+    mockBuffer[strInsnOff] = 0x4C;
+    mockBuffer[strInsnOff + 1] = 0x8D;
+    mockBuffer[strInsnOff + 2] = 0x05;
+    int32_t strDisp = static_cast<int32_t>(mockString - (&mockBuffer[strInsnOff] + 7));
+    std::memcpy(&mockBuffer[strInsnOff + 3], &strDisp, sizeof(int32_t));
+
+    // Function loaded into RDX: lea rdx, [rip + dispFn] (48 8D 15 <disp>)
+    const size_t fnInsnOff = 0x87;
+    mockBuffer[fnInsnOff] = 0x48;
+    mockBuffer[fnInsnOff + 1] = 0x8D;
+    mockBuffer[fnInsnOff + 2] = 0x15;
+    int32_t fnDisp = static_cast<int32_t>((&mockBuffer[fnOffset]) - (&mockBuffer[fnInsnOff] + 7));
+    std::memcpy(&mockBuffer[fnInsnOff + 3], &fnDisp, sizeof(int32_t));
+
+    void* resolved = fs25vr::LuauInterceptor::FindQueryFunctionInText(
+        mockBuffer.data(), 0x100, mockString
+    );
+    EXPECT_EQ(resolved, &mockBuffer[fnOffset]);
+}
+
+TEST_F(LuauInterceptorTest, FindQueryFunctionInTextResolvesFunctionWhenStringInRdxAndFuncInR8) {
+    // Construct mock buffer where string is in RDX and function is in R8
+    std::vector<uint8_t> mockBuffer(1024, 0x90);
+    const size_t strOffset = 0x200;
+    const char strData[] = "isHeadTrackingAvailable";
+    std::memcpy(&mockBuffer[strOffset], strData, sizeof(strData));
+    const uint8_t* mockString = &mockBuffer[strOffset];
+
+    const size_t fnOffset = 0x30;
+    mockBuffer[fnOffset] = 0x48;     // sub rsp, 0x28
+    mockBuffer[fnOffset + 1] = 0x83;
+    mockBuffer[fnOffset + 2] = 0xEC;
+    mockBuffer[fnOffset + 3] = 0x28;
+
+    // String loaded into RDX: lea rdx, [rip + dispString] (48 8D 15 <disp>)
+    const size_t strInsnOff = 0x90;
+    mockBuffer[strInsnOff] = 0x48;
+    mockBuffer[strInsnOff + 1] = 0x8D;
+    mockBuffer[strInsnOff + 2] = 0x15;
+    int32_t strDisp = static_cast<int32_t>(mockString - (&mockBuffer[strInsnOff] + 7));
+    std::memcpy(&mockBuffer[strInsnOff + 3], &strDisp, sizeof(int32_t));
+
+    // Function loaded into R8: lea r8, [rip + dispFn] (4C 8D 05 <disp>)
+    const size_t fnInsnOff = 0x97;
+    mockBuffer[fnInsnOff] = 0x4C;
+    mockBuffer[fnInsnOff + 1] = 0x8D;
+    mockBuffer[fnInsnOff + 2] = 0x05;
+    int32_t fnDisp = static_cast<int32_t>((&mockBuffer[fnOffset]) - (&mockBuffer[fnInsnOff] + 7));
+    std::memcpy(&mockBuffer[fnInsnOff + 3], &fnDisp, sizeof(int32_t));
+
+    void* resolved = fs25vr::LuauInterceptor::FindQueryFunctionInText(
+        mockBuffer.data(), 0x100, mockString
+    );
+    EXPECT_EQ(resolved, &mockBuffer[fnOffset]);
+}
+

@@ -23,6 +23,7 @@ public:
     int HandleQuery(lua_State* L);
 
     static int DetourEntryPoint(lua_State* L);
+    static void* FindQueryFunctionInText(const uint8_t* textBase, size_t textSize, const uint8_t* stringAddr);
 
     FunctionDetour& GetDetour() { return m_detour; }
 
