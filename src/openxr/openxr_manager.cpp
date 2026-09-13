@@ -526,6 +526,57 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
         return true;
     }
 
+    DXGI_FORMAT selectedFormat = format;
+
+    uint32_t formatCount = 0;
+    if (m_dispatch->EnumerateSwapchainFormats(m_session, 0, &formatCount, nullptr) == XR_SUCCESS && formatCount > 0) {
+        std::vector<int64_t> supportedFormats(formatCount);
+        if (m_dispatch->EnumerateSwapchainFormats(m_session, formatCount, &formatCount, supportedFormats.data()) == XR_SUCCESS) {
+            bool directlySupported = false;
+            for (int64_t sf : supportedFormats) {
+                if (sf == static_cast<int64_t>(format)) {
+                    directlySupported = true;
+                    break;
+                }
+            }
+
+            if (!directlySupported && !supportedFormats.empty()) {
+                bool foundVariant = false;
+                int64_t variant = 0;
+                if (format == DXGI_FORMAT_R8G8B8A8_UNORM) variant = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+                else if (format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) variant = DXGI_FORMAT_R8G8B8A8_UNORM;
+                else if (format == DXGI_FORMAT_B8G8R8A8_UNORM) variant = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+                else if (format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) variant = DXGI_FORMAT_B8G8R8A8_UNORM;
+
+                for (int64_t sf : supportedFormats) {
+                    if (variant != 0 && sf == variant) {
+                        selectedFormat = static_cast<DXGI_FORMAT>(sf);
+                        foundVariant = true;
+                        break;
+                    }
+                }
+
+                if (!foundVariant) {
+                    for (int64_t sf : supportedFormats) {
+                        if (sf == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || sf == DXGI_FORMAT_R8G8B8A8_UNORM ||
+                            sf == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || sf == DXGI_FORMAT_B8G8R8A8_UNORM ||
+                            sf == DXGI_FORMAT_R10G10B10A2_UNORM || sf == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+                            selectedFormat = static_cast<DXGI_FORMAT>(sf);
+                            foundVariant = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!foundVariant && !supportedFormats.empty()) {
+                    selectedFormat = static_cast<DXGI_FORMAT>(supportedFormats.front());
+                }
+
+                LogInfo("OpenXrManager: Format " + std::to_string(format) + " not directly supported. Negotiated swapchain format: " + std::to_string(selectedFormat));
+            }
+        }
+    }
+
     for (uint32_t i = 0; i < 2; ++i) {
         uint32_t eyeWidth = (width != 0) ? width : GetRecommendedEyeWidth(i);
         uint32_t eyeHeight = (height != 0) ? height : GetRecommendedEyeHeight(i);
@@ -534,7 +585,7 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
 
         XrSwapchainCreateInfo createInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
         createInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-        createInfo.format = format;
+        createInfo.format = selectedFormat;
         createInfo.sampleCount = 1;
         createInfo.width = eyeWidth;
         createInfo.height = eyeHeight;
@@ -562,7 +613,7 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
 
         m_eyeSwapchains[i].width = eyeWidth;
         m_eyeSwapchains[i].height = eyeHeight;
-        m_eyeSwapchains[i].format = format;
+        m_eyeSwapchains[i].format = selectedFormat;
         m_eyeSwapchains[i].lastCopiedIndex = 0;
         m_eyeSwapchains[i].hasCopiedFrame = false;
     }
