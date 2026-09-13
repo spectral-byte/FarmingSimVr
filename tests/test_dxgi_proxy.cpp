@@ -3,6 +3,7 @@
 #include "proxy/system_dxgi.h"
 #include "openxr/openxr_manager.h"
 #include <wrl/client.h>
+#include <unordered_set>
 
 using Microsoft::WRL::ComPtr;
 
@@ -261,21 +262,46 @@ public:
         }
         return XR_SUCCESS;
     }
-    XrResult AcquireSwapchainImage(XrSwapchain, const XrSwapchainImageAcquireInfo*, uint32_t* index) override {
+    bool enforceCallOrder = false;
+    bool isFrameWaiting = false;
+    bool isFrameBegun = false;
+    std::unordered_set<XrSwapchain> acquiredSwapchains;
+    uint32_t callOrderErrors = 0;
+
+    XrResult AcquireSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageAcquireInfo*, uint32_t* index) override {
         acquireSwapchainImageCalls++;
+        if (enforceCallOrder && (!isFrameBegun || acquiredSwapchains.count(swapchain) > 0)) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
+        if (enforceCallOrder) acquiredSwapchains.insert(swapchain);
         if (index) *index = 0;
         return XR_SUCCESS;
     }
-    XrResult WaitSwapchainImage(XrSwapchain, const XrSwapchainImageWaitInfo*) override {
+    XrResult WaitSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageWaitInfo*) override {
         waitSwapchainImageCalls++;
+        if (enforceCallOrder && (!isFrameBegun || acquiredSwapchains.count(swapchain) == 0)) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
         return XR_SUCCESS;
     }
-    XrResult ReleaseSwapchainImage(XrSwapchain, const XrSwapchainImageReleaseInfo*) override {
+    XrResult ReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo*) override {
         releaseSwapchainImageCalls++;
+        if (enforceCallOrder && (!isFrameBegun || acquiredSwapchains.count(swapchain) == 0)) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
+        if (enforceCallOrder) acquiredSwapchains.erase(swapchain);
         return XR_SUCCESS;
     }
     XrResult WaitFrame(XrSession, const XrFrameWaitInfo*, XrFrameState* frameState) override {
         waitFrameCalls++;
+        if (enforceCallOrder && isFrameBegun) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
+        if (enforceCallOrder) isFrameWaiting = true;
         if (frameState) {
             frameState->type = XR_TYPE_FRAME_STATE;
             frameState->predictedDisplayTime = 1000000;
@@ -286,10 +312,23 @@ public:
     }
     XrResult BeginFrame(XrSession, const XrFrameBeginInfo*) override {
         beginFrameCalls++;
+        if (enforceCallOrder && (!isFrameWaiting || isFrameBegun)) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
+        if (enforceCallOrder) {
+            isFrameWaiting = false;
+            isFrameBegun = true;
+        }
         return XR_SUCCESS;
     }
     XrResult EndFrame(XrSession, const XrFrameEndInfo*) override {
         endFrameCalls++;
+        if (enforceCallOrder && (!isFrameBegun || !acquiredSwapchains.empty())) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
+        if (enforceCallOrder) isFrameBegun = false;
         return XR_SUCCESS;
     }
 };
@@ -510,7 +549,7 @@ TEST(DxgiProxyTest, OnPresentGatesAfrPacingBehindTelemetryProbe) {
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto probe = std::make_shared<GraphicsTelemetryProbe>();
-    // Case 1: Native stereo detected -> probe->RequiresAfrFallback() is false
+    // Case 1: Native stereo detected -> probe->RequiresAfrFallback() is false, HasNativeStereoDetected() is true
     D3D12_VIEWPORT vps[2]{
         { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
         { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
@@ -529,10 +568,16 @@ TEST(DxgiProxyTest, OnPresentGatesAfrPacingBehindTelemetryProbe) {
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, probe);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, probe, nullptr, vrBridge);
 
-    // OnPresent should skip AFR copy and pacing
+    // In native stereo mode, OnPresent submits rendered stereo frames directly on every frame without suppression
     proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_FALSE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
-    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+    EXPECT_FALSE(openXrManager->GetEyeSwapchain(1).hasCopiedFrame);
+    EXPECT_EQ(vrBridge->GetFrameIndex(), 1u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 2u);
+    EXPECT_EQ(vrBridge->GetFrameIndex(), 2u);
 
     // Case 2: Monoscopic pipeline -> probe->RequiresAfrFallback() is true
     probe->Reset();
@@ -545,10 +590,103 @@ TEST(DxgiProxyTest, OnPresentGatesAfrPacingBehindTelemetryProbe) {
     }
     ASSERT_TRUE(probe->RequiresAfrFallback());
 
-    // OnPresent should now execute AFR copy and advance parity
+    openXrManager->ResetSubmittedFramePairCount();
+    vrBridge->SetFrameIndex(0);
+    vrBridge->SetFrameParity(0);
+
+    // First frame (parity 0): copies eye 0 and advances parity to 1
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_FALSE(openXrManager->GetEyeSwapchain(1).hasCopiedFrame);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+    EXPECT_EQ(vrBridge->GetFrameIndex(), 1u);
+
+    // Second frame (parity 1): copies eye 1, submits pair, advances parity to 0
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_FALSE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_FALSE(openXrManager->GetEyeSwapchain(1).hasCopiedFrame);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameIndex(), 2u);
+
+    // Case 3: Inconclusive / probing frames -> presentation remains active and uninterrupted via AFR pacing
+    probe->Reset();
+    openXrManager->ResetSubmittedFramePairCount();
+    vrBridge->SetFrameIndex(0);
+    vrBridge->SetFrameParity(0);
+    EXPECT_EQ(probe->GetStereoVerdict(), StereoVerdict::Inconclusive);
+
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+}
+
+TEST(DxgiProxyTest, EnforcesStrictOpenXrLifecycleAndContinuousPresentationAcrossTelemetryStates) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    mockDispatch->enforceCallOrder = true;
+
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto probe = std::make_shared<GraphicsTelemetryProbe>();
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, probe);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, probe, nullptr, vrBridge);
+
+    // 1. Inconclusive probing frames: verify AFR pairs submit without call order error
+    proxy.OnPresent(nullptr, 0, 0);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_FALSE(openXrManager->IsFrameBegun());
+
+    // 2. Monoscopic probe verdict (AFR fallback)
+    for (int i = 0; i < 5; ++i) {
+        D3D12_VIEWPORT monoVp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
+        D3D12_RECT monoScissor{ 0, 0, 1920, 1080 };
+        probe->RecordViewports(1, &monoVp);
+        probe->RecordScissorRects(1, &monoScissor);
+        probe->OnFrameBoundary();
+    }
+    ASSERT_TRUE(probe->RequiresAfrFallback());
+
+    proxy.OnPresent(nullptr, 0, 0);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 2u);
+    EXPECT_FALSE(openXrManager->IsFrameBegun());
+
+    // 3. Native stereo verdict
+    probe->Reset();
+    D3D12_VIEWPORT vps[2]{
+        { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
+        { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
+    };
+    D3D12_RECT scissors[2]{
+        { 0, 0, 1920, 1080 },
+        { 1920, 0, 3840, 1080 }
+    };
+    probe->RecordViewports(2, vps);
+    probe->RecordScissorRects(2, scissors);
+    probe->OnFrameBoundary();
+    ASSERT_TRUE(probe->HasNativeStereoDetected());
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 3u);
+    EXPECT_FALSE(openXrManager->IsFrameBegun());
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 4u);
+    EXPECT_FALSE(openXrManager->IsFrameBegun());
 }
 
 struct MockD3D12Environment {

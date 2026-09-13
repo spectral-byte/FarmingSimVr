@@ -162,6 +162,9 @@ public:
     const EyeSwapchain& GetEyeSwapchain(uint32_t eyeIndex = 0) const;
 
     bool CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backBuffer);
+    bool BeginFrame();
+    bool EndFrame();
+    bool IsFrameBegun() const { return m_frameBegun; }
     bool SubmitFramePair();
 
     float GetIpd() const { return m_ipd; }
@@ -218,6 +221,8 @@ private:
     bool m_hasEyeSwapchains = false;
     float m_ipd = 0.064f;
     uint64_t m_submittedFramePairCount = 0;
+    bool m_frameBegun = false;
+    XrFrameState m_frameState{XR_TYPE_FRAME_STATE};
 
     HeadPose m_rawPose;
     HeadPose m_lastPose;

@@ -595,6 +595,9 @@ void OpenXrManager::DestroyEyeSwapchains() {
         m_eyeSwapchains[i].images.clear();
         m_eyeSwapchains[i].hasCopiedFrame = false;
     }
+    if (m_frameBegun) {
+        EndFrame();
+    }
     m_copyCommandList.Reset();
     m_copyAllocator.Reset();
     m_hasEyeSwapchains = false;
@@ -605,9 +608,72 @@ const EyeSwapchain& OpenXrManager::GetEyeSwapchain(uint32_t eyeIndex) const {
     return m_eyeSwapchains[eyeIndex];
 }
 
+bool OpenXrManager::BeginFrame() {
+    if (m_session == XR_NULL_HANDLE) {
+        return false;
+    }
+    if (m_frameBegun) {
+        return true;
+    }
+
+    XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
+    m_frameState = {XR_TYPE_FRAME_STATE};
+    m_frameState.shouldRender = XR_TRUE;
+    XrResult res = m_dispatch->WaitFrame(m_session, &waitInfo, &m_frameState);
+    if (res != XR_SUCCESS) {
+        LogError("OpenXrManager::BeginFrame: WaitFrame failed (result " + std::to_string(res) + ")");
+        return false;
+    }
+
+    XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
+    res = m_dispatch->BeginFrame(m_session, &beginInfo);
+    if (res != XR_SUCCESS) {
+        LogError("OpenXrManager::BeginFrame: BeginFrame failed (result " + std::to_string(res) + ")");
+        return false;
+    }
+
+    m_frameBegun = true;
+    return true;
+}
+
+bool OpenXrManager::EndFrame() {
+    if (m_session == XR_NULL_HANDLE || !m_frameBegun) {
+        return false;
+    }
+
+    XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
+    endInfo.displayTime = m_frameState.predictedDisplayTime;
+    endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    endInfo.layerCount = 0;
+    endInfo.layers = nullptr;
+
+    XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
+    m_frameBegun = false;
+    if (res != XR_SUCCESS) {
+        LogError("OpenXrManager::EndFrame: EndFrame failed (result " + std::to_string(res) + ")");
+        return false;
+    }
+    return true;
+}
+
 bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backBuffer) {
     if (eyeIndex >= 2 || !m_hasEyeSwapchains) {
         return false;
+    }
+
+    // Enforce active frame lifecycle: swapchain image acquisition and release
+    // must occur strictly within active frame begin and frame end boundaries.
+    if (!m_frameBegun) {
+        if (!BeginFrame()) {
+            return false;
+        }
+    }
+
+    // OpenXR specification: suppress swapchain image acquisition and rendering passes
+    // when runtime indicates shouldRender is false.
+    if (!m_frameState.shouldRender) {
+        m_eyeSwapchains[eyeIndex].hasCopiedFrame = true;
+        return true;
     }
 
     // Cache the captured head pose at the moment this eye's frame is copied
@@ -631,6 +697,8 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
     res = m_dispatch->WaitSwapchainImage(swapchain, &waitInfo);
     if (res != XR_SUCCESS) {
         LogError("OpenXrManager::CopyBackBufferToEye: WaitSwapchainImage failed (result " + std::to_string(res) + ")");
+        XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+        m_dispatch->ReleaseSwapchainImage(swapchain, &releaseInfo);
         return false;
     }
 
@@ -724,19 +792,8 @@ bool OpenXrManager::SubmitFramePair() {
         return false;
     }
 
-    XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
-    XrFrameState frameState{XR_TYPE_FRAME_STATE};
-    frameState.shouldRender = XR_TRUE;
-    XrResult res = m_dispatch->WaitFrame(m_session, &waitInfo, &frameState);
-    if (res != XR_SUCCESS) {
-        LogError("OpenXrManager::SubmitFramePair: WaitFrame failed (result " + std::to_string(res) + ")");
-        return false;
-    }
-
-    XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
-    res = m_dispatch->BeginFrame(m_session, &beginInfo);
-    if (res != XR_SUCCESS) {
-        LogError("OpenXrManager::SubmitFramePair: BeginFrame failed (result " + std::to_string(res) + ")");
+    if (!m_frameBegun) {
+        LogError("OpenXrManager::SubmitFramePair: No frame currently begun.");
         return false;
     }
 
@@ -780,12 +837,13 @@ bool OpenXrManager::SubmitFramePair() {
     const XrCompositionLayerBaseHeader* layers[] = { reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer) };
 
     XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
-    endInfo.displayTime = frameState.predictedDisplayTime;
+    endInfo.displayTime = m_frameState.predictedDisplayTime;
     endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-    endInfo.layerCount = frameState.shouldRender ? 1 : 0;
-    endInfo.layers = frameState.shouldRender ? layers : nullptr;
+    endInfo.layerCount = m_frameState.shouldRender ? 1 : 0;
+    endInfo.layers = m_frameState.shouldRender ? layers : nullptr;
 
-    res = m_dispatch->EndFrame(m_session, &endInfo);
+    XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
+    m_frameBegun = false;
     if (res != XR_SUCCESS) {
         LogError("OpenXrManager::SubmitFramePair: EndFrame failed (result " + std::to_string(res) + ")");
         return false;

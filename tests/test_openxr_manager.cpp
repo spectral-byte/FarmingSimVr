@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "openxr/openxr_manager.h"
 #include <cstring>
+#include <unordered_set>
 
 namespace fs25vr {
 
@@ -279,6 +280,13 @@ public:
     uint32_t beginFrameCalls = 0;
     uint32_t endFrameCalls = 0;
 
+    bool enforceCallOrder = false;
+    bool isFrameWaiting = false;
+    bool isFrameBegun = false;
+    std::unordered_set<XrSwapchain> acquiredSwapchains;
+    uint32_t callOrderErrors = 0;
+    XrBool32 mockShouldRender = XR_TRUE;
+
     std::vector<XrSwapchainCreateInfo> lastSwapchainCreateInfos;
     XrFrameEndInfo lastFrameEndInfo{};
     std::vector<XrCompositionLayerProjectionView> lastSubmittedProjectionViews;
@@ -334,26 +342,40 @@ public:
     }
 
     XrResult AcquireSwapchainImage(
-        XrSwapchain /*swapchain*/,
+        XrSwapchain swapchain,
         const XrSwapchainImageAcquireInfo* /*acquireInfo*/,
         uint32_t* index) override {
         acquireSwapchainImageCalls++;
+        if (enforceCallOrder && (!isFrameBegun || acquiredSwapchains.count(swapchain) > 0)) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
         if (acquireSwapchainImageResult != XR_SUCCESS) return acquireSwapchainImageResult;
+        if (enforceCallOrder) acquiredSwapchains.insert(swapchain);
         if (index) *index = 0;
         return XR_SUCCESS;
     }
 
     XrResult WaitSwapchainImage(
-        XrSwapchain /*swapchain*/,
+        XrSwapchain swapchain,
         const XrSwapchainImageWaitInfo* /*waitInfo*/) override {
         waitSwapchainImageCalls++;
+        if (enforceCallOrder && (!isFrameBegun || acquiredSwapchains.count(swapchain) == 0)) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
         return waitSwapchainImageResult;
     }
 
     XrResult ReleaseSwapchainImage(
-        XrSwapchain /*swapchain*/,
+        XrSwapchain swapchain,
         const XrSwapchainImageReleaseInfo* /*releaseInfo*/) override {
         releaseSwapchainImageCalls++;
+        if (enforceCallOrder && (!isFrameBegun || acquiredSwapchains.count(swapchain) == 0)) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
+        if (enforceCallOrder) acquiredSwapchains.erase(swapchain);
         return releaseSwapchainImageResult;
     }
 
@@ -362,13 +384,18 @@ public:
         const XrFrameWaitInfo* /*frameWaitInfo*/,
         XrFrameState* frameState) override {
         waitFrameCalls++;
+        if (enforceCallOrder && isFrameBegun) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
         if (waitFrameResult != XR_SUCCESS) return waitFrameResult;
+        if (enforceCallOrder) isFrameWaiting = true;
         if (frameState) {
             frameState->type = XR_TYPE_FRAME_STATE;
             frameState->next = nullptr;
             frameState->predictedDisplayTime = 1000000;
             frameState->predictedDisplayPeriod = 11111111;
-            frameState->shouldRender = XR_TRUE;
+            frameState->shouldRender = mockShouldRender;
         }
         return XR_SUCCESS;
     }
@@ -377,14 +404,30 @@ public:
         XrSession /*session*/,
         const XrFrameBeginInfo* /*frameBeginInfo*/) override {
         beginFrameCalls++;
-        return beginFrameResult;
+        if (enforceCallOrder && (!isFrameWaiting || isFrameBegun)) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
+        if (beginFrameResult != XR_SUCCESS) return beginFrameResult;
+        if (enforceCallOrder) {
+            isFrameWaiting = false;
+            isFrameBegun = true;
+        }
+        return XR_SUCCESS;
     }
 
     XrResult EndFrame(
         XrSession /*session*/,
         const XrFrameEndInfo* frameEndInfo) override {
         endFrameCalls++;
+        if (enforceCallOrder && (!isFrameBegun || !acquiredSwapchains.empty())) {
+            callOrderErrors++;
+            return XR_ERROR_CALL_ORDER_INVALID;
+        }
         if (endFrameResult != XR_SUCCESS) return endFrameResult;
+        if (enforceCallOrder) {
+            isFrameBegun = false;
+        }
         if (frameEndInfo) {
             lastFrameEndInfo = *frameEndInfo;
             lastSubmittedProjectionViews.clear();
@@ -947,6 +990,148 @@ TEST(OpenXrManagerTest, CreatesEyeSwapchainsWithRecommendedDimensionsWhenDefault
     ASSERT_GE(mockDispatch->lastSwapchainCreateInfos.size(), 2u);
     EXPECT_EQ(mockDispatch->lastSwapchainCreateInfos[0].width, 2064u);
     EXPECT_EQ(mockDispatch->lastSwapchainCreateInfos[0].height, 2208u);
+}
+
+TEST(OpenXrManagerTest, EnforcesStrictOpenXrFrameLifecycleOrderingAcrossSwapchainAcquireAndRelease) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->enforceCallOrder = true;
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_EQ(mockDispatch->waitFrameCalls, 0u);
+    EXPECT_EQ(mockDispatch->beginFrameCalls, 0u);
+
+    // Copying eye 0 backbuffer automatically initiates frame lifecycle (WaitFrame + BeginFrame)
+    // before acquiring the swapchain image.
+    EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_TRUE(manager.IsFrameBegun());
+    EXPECT_EQ(mockDispatch->waitFrameCalls, 1u);
+    EXPECT_EQ(mockDispatch->beginFrameCalls, 1u);
+    EXPECT_EQ(mockDispatch->acquireSwapchainImageCalls, 1u);
+    EXPECT_EQ(mockDispatch->waitSwapchainImageCalls, 1u);
+    EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, 1u);
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
+
+    // Frame remains active across AFR temporal separation.
+    // Copying eye 1 backbuffer executes within the active frame lifecycle without redundantly calling BeginFrame.
+    EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+    EXPECT_TRUE(manager.IsFrameBegun());
+    EXPECT_EQ(mockDispatch->waitFrameCalls, 1u);
+    EXPECT_EQ(mockDispatch->beginFrameCalls, 1u);
+    EXPECT_EQ(mockDispatch->acquireSwapchainImageCalls, 2u);
+    EXPECT_EQ(mockDispatch->waitSwapchainImageCalls, 2u);
+    EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, 2u);
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
+
+    // SubmitFramePair closes the active frame lifecycle boundary via EndFrame.
+    EXPECT_TRUE(manager.SubmitFramePair());
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
+    EXPECT_EQ(manager.GetSubmittedFramePairCount(), 1u);
+}
+
+TEST(OpenXrManagerTest, LifecycleHandlesMultipleFramePairsWithoutCallOrderErrors) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->enforceCallOrder = true;
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    const uint32_t kPairCount = 5;
+    for (uint32_t pair = 0; pair < kPairCount; ++pair) {
+        EXPECT_FALSE(manager.IsFrameBegun());
+        EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+        EXPECT_TRUE(manager.IsFrameBegun());
+
+        EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+        EXPECT_TRUE(manager.IsFrameBegun());
+
+        EXPECT_TRUE(manager.SubmitFramePair());
+        EXPECT_FALSE(manager.IsFrameBegun());
+    }
+
+    EXPECT_EQ(manager.GetSubmittedFramePairCount(), kPairCount);
+    EXPECT_EQ(mockDispatch->waitFrameCalls, kPairCount);
+    EXPECT_EQ(mockDispatch->beginFrameCalls, kPairCount);
+    EXPECT_EQ(mockDispatch->endFrameCalls, kPairCount);
+    EXPECT_EQ(mockDispatch->acquireSwapchainImageCalls, kPairCount * 2);
+    EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, kPairCount * 2);
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
+}
+
+TEST(OpenXrManagerTest, ExplicitBeginFrameAndEndFrameControls) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->enforceCallOrder = true;
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    EXPECT_FALSE(manager.IsFrameBegun());
+    // SubmitFramePair when no frame has begun fails
+    EXPECT_FALSE(manager.SubmitFramePair());
+
+    // EndFrame when no frame has begun fails
+    EXPECT_FALSE(manager.EndFrame());
+
+    // Explicit BeginFrame
+    EXPECT_TRUE(manager.BeginFrame());
+    EXPECT_TRUE(manager.IsFrameBegun());
+
+    // Redundant BeginFrame is a safe no-op
+    EXPECT_TRUE(manager.BeginFrame());
+    EXPECT_EQ(mockDispatch->beginFrameCalls, 1u);
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
+
+    // EndFrame closes the frame
+    EXPECT_TRUE(manager.EndFrame());
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
+}
+
+TEST(OpenXrManagerTest, SuppressesSwapchainAcquisitionWhenShouldRenderIsFalse) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->enforceCallOrder = true;
+    mockDispatch->mockShouldRender = XR_FALSE;
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_TRUE(manager.IsFrameBegun());
+    // Swapchain image acquisition should be suppressed
+    EXPECT_EQ(mockDispatch->acquireSwapchainImageCalls, 0u);
+    EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, 0u);
+
+    EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+    EXPECT_EQ(mockDispatch->acquireSwapchainImageCalls, 0u);
+    EXPECT_EQ(mockDispatch->releaseSwapchainImageCalls, 0u);
+
+    // SubmitFramePair succeeds and submits with layerCount = 0 per OpenXR specification
+    EXPECT_TRUE(manager.SubmitFramePair());
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
+    EXPECT_EQ(mockDispatch->lastFrameEndInfo.layerCount, 0u);
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
 }
 
 } // namespace fs25vr
