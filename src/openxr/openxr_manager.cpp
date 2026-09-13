@@ -8,16 +8,24 @@
 
 namespace fs25vr {
 
-namespace {
+XrTime OpenXrManager::GetCurrentXrTime() const {
+    if (m_lastPredictedDisplayTime != 0) {
+        LARGE_INTEGER qpc, freq;
+        QueryPerformanceCounter(&qpc);
+        QueryPerformanceFrequency(&freq);
+        int64_t elapsedQpc = qpc.QuadPart - m_lastPredictedQpc;
+        if (elapsedQpc > 0 && freq.QuadPart > 0) {
+            XrTime deltaNs = static_cast<XrTime>((elapsedQpc * 1000000000LL) / freq.QuadPart);
+            return m_lastPredictedDisplayTime + deltaNs;
+        }
+        return m_lastPredictedDisplayTime;
+    }
 
-XrTime GetCurrentXrTime() {
     LARGE_INTEGER qpc, freq;
     QueryPerformanceCounter(&qpc);
     QueryPerformanceFrequency(&freq);
     return static_cast<XrTime>((qpc.QuadPart * 1000000000LL) / freq.QuadPart);
 }
-
-} // anonymous namespace
 
 OpenXrManager& OpenXrManager::Instance() {
     static OpenXrManager instance;
@@ -206,6 +214,11 @@ void OpenXrManager::Shutdown() {
         m_dispatch->DestroySpace(m_localSpace);
         m_localSpace = XR_NULL_HANDLE;
     }
+    if (m_sessionRunning && m_session != XR_NULL_HANDLE) {
+        LogInfo("Ending OpenXR session...");
+        m_dispatch->EndSession(m_session);
+        m_sessionRunning = false;
+    }
     if (m_session != XR_NULL_HANDLE) {
         m_dispatch->DestroySession(m_session);
         m_session = XR_NULL_HANDLE;
@@ -216,6 +229,7 @@ void OpenXrManager::Shutdown() {
         m_instance = XR_NULL_HANDLE;
     }
     m_state = OpenXrState::Uninitialized;
+    m_sessionRunning = false;
     m_hasRecenter = false;
     m_useSimulatedPose = false;
     m_useSimulatedProjections = false;
@@ -251,6 +265,18 @@ bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queu
         return false;
     }
     LogInfo("OpenXrManager: Session created successfully.");
+
+    XrSessionBeginInfo beginInfo{XR_TYPE_SESSION_BEGIN_INFO};
+    beginInfo.next = nullptr;
+    beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+    res = m_dispatch->BeginSession(m_session, &beginInfo);
+    if (res != XR_SUCCESS) {
+        LogError("OpenXrManager::CreateSession: BeginSession failed with result " + std::to_string(res));
+        m_sessionRunning = false;
+        return false;
+    }
+    m_sessionRunning = true;
+    LogInfo("OpenXrManager: Session begun successfully.");
     return true;
 }
 
@@ -347,12 +373,20 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
         }
 
         if (time == 0) {
-            time = GetCurrentXrTime();
+            if (m_frameState.predictedDisplayTime != 0) {
+                time = m_frameState.predictedDisplayTime;
+            } else {
+                time = GetCurrentXrTime();
+            }
         }
 
         XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
         XrResult res = m_dispatch->LocateSpace(m_viewSpace, m_localSpace, time, &location);
         if (res != XR_SUCCESS) {
+            static uint32_t s_locateFailCount = 0;
+            if (++s_locateFailCount % 300 == 1) {
+                LogWarn("OpenXrManager::PollHeadPose: LocateSpace failed (result " + std::to_string(res) + ")");
+            }
             return m_lastPose;
         }
 
@@ -441,21 +475,23 @@ EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov) {
     return proj;
 }
 
-EyeProjection OpenXrManager::PollEyeProjection(uint32_t eyeIndex, XrTime time) {
-    if (eyeIndex >= 2) {
-        eyeIndex = 0;
+bool OpenXrManager::LocateActiveViews(XrTime time) {
+    if (m_session == XR_NULL_HANDLE) {
+        return false;
     }
 
     if (m_useSimulatedProjections) {
-        return m_simulatedProjections[eyeIndex];
-    }
-
-    if (m_state != OpenXrState::Active || m_session == XR_NULL_HANDLE) {
-        return m_eyeProjections[eyeIndex];
+        m_eyeProjections[0] = m_simulatedProjections[0];
+        m_eyeProjections[1] = m_simulatedProjections[1];
+        return true;
     }
 
     if (time == 0) {
-        time = GetCurrentXrTime();
+        if (m_frameState.predictedDisplayTime != 0) {
+            time = m_frameState.predictedDisplayTime;
+        } else {
+            time = GetCurrentXrTime();
+        }
     }
 
     XrViewLocateInfo locateInfo{XR_TYPE_VIEW_LOCATE_INFO};
@@ -475,8 +511,25 @@ EyeProjection OpenXrManager::PollEyeProjection(uint32_t eyeIndex, XrTime time) {
         if (measuredIpd > 0.01f && measuredIpd < 0.20f) {
             m_ipd = measuredIpd;
         }
+        return true;
+    }
+    return false;
+}
+
+EyeProjection OpenXrManager::PollEyeProjection(uint32_t eyeIndex, XrTime time) {
+    if (eyeIndex >= 2) {
+        eyeIndex = 0;
     }
 
+    if (m_useSimulatedProjections) {
+        return m_simulatedProjections[eyeIndex];
+    }
+
+    if (m_state != OpenXrState::Active || m_session == XR_NULL_HANDLE) {
+        return m_eyeProjections[eyeIndex];
+    }
+
+    LocateActiveViews(time);
     return m_eyeProjections[eyeIndex];
 }
 
@@ -667,6 +720,20 @@ bool OpenXrManager::BeginFrame() {
         return true;
     }
 
+    if (!m_sessionRunning) {
+        XrSessionBeginInfo beginInfo{XR_TYPE_SESSION_BEGIN_INFO};
+        beginInfo.next = nullptr;
+        beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+        XrResult beginRes = m_dispatch->BeginSession(m_session, &beginInfo);
+        if (beginRes == XR_SUCCESS) {
+            m_sessionRunning = true;
+            LogInfo("OpenXrManager::BeginFrame: Session begun successfully.");
+        } else {
+            LogError("OpenXrManager::BeginFrame: BeginSession failed (result " + std::to_string(beginRes) + ")");
+            return false;
+        }
+    }
+
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
     m_frameState = {XR_TYPE_FRAME_STATE};
     m_frameState.shouldRender = XR_TRUE;
@@ -674,6 +741,13 @@ bool OpenXrManager::BeginFrame() {
     if (res != XR_SUCCESS) {
         LogError("OpenXrManager::BeginFrame: WaitFrame failed (result " + std::to_string(res) + ")");
         return false;
+    }
+
+    if (m_frameState.predictedDisplayTime != 0) {
+        m_lastPredictedDisplayTime = m_frameState.predictedDisplayTime;
+        LARGE_INTEGER qpc;
+        QueryPerformanceCounter(&qpc);
+        m_lastPredictedQpc = qpc.QuadPart;
     }
 
     XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
@@ -684,6 +758,14 @@ bool OpenXrManager::BeginFrame() {
     }
 
     m_frameBegun = true;
+
+    // OpenXR specification: actively locate views and update projections and head pose
+    // for predictedDisplayTime within the active frame lifecycle boundary.
+    if (m_frameState.shouldRender) {
+        LocateActiveViews(m_frameState.predictedDisplayTime);
+        PollHeadPose(m_frameState.predictedDisplayTime);
+    }
+
     return true;
 }
 
@@ -803,7 +885,32 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
                 barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
                 m_copyCommandList->ResourceBarrier(2, barriers);
-                m_copyCommandList->CopyResource(destTexture, backBuffer);
+
+                D3D12_RESOURCE_DESC srcDesc = backBuffer->GetDesc();
+                D3D12_RESOURCE_DESC dstDesc = destTexture->GetDesc();
+                if (srcDesc.Width == dstDesc.Width && srcDesc.Height == dstDesc.Height) {
+                    m_copyCommandList->CopyResource(destTexture, backBuffer);
+                } else {
+                    D3D12_TEXTURE_COPY_LOCATION dstLoc{};
+                    dstLoc.pResource = destTexture;
+                    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                    dstLoc.SubresourceIndex = 0;
+
+                    D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+                    srcLoc.pResource = backBuffer;
+                    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                    srcLoc.SubresourceIndex = 0;
+
+                    D3D12_BOX box{};
+                    box.left = 0;
+                    box.top = 0;
+                    box.front = 0;
+                    box.right = static_cast<UINT>(std::min(srcDesc.Width, static_cast<UINT64>(dstDesc.Width)));
+                    box.bottom = static_cast<UINT>(std::min(srcDesc.Height, dstDesc.Height));
+                    box.back = 1;
+
+                    m_copyCommandList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &box);
+                }
 
                 std::swap(barriers[0].Transition.StateBefore, barriers[0].Transition.StateAfter);
                 std::swap(barriers[1].Transition.StateBefore, barriers[1].Transition.StateAfter);
@@ -858,6 +965,15 @@ bool OpenXrManager::SubmitFramePair() {
         projViews[i].fov.angleUp = m_eyeProjections[i].angleUp;
         projViews[i].fov.angleDown = m_eyeProjections[i].angleDown;
 
+        // Fallback for FOV: if angle span is near zero, fallback to default safe FOV angles (~90 deg)
+        if (std::abs(projViews[i].fov.angleRight - projViews[i].fov.angleLeft) < 1e-4f ||
+            std::abs(projViews[i].fov.angleUp - projViews[i].fov.angleDown) < 1e-4f) {
+            projViews[i].fov.angleLeft = -0.785398f;
+            projViews[i].fov.angleRight = 0.785398f;
+            projViews[i].fov.angleUp = 0.785398f;
+            projViews[i].fov.angleDown = -0.785398f;
+        }
+
         const HeadPose& eyePose = m_capturedEyePoses[i];
         Vector3 eyePos = ComputeEyePosition(eyePose, m_ipd, i);
 
@@ -865,10 +981,23 @@ bool OpenXrManager::SubmitFramePair() {
         projViews[i].pose.position.y = eyePos.y;
         projViews[i].pose.position.z = eyePos.z;
 
-        projViews[i].pose.orientation.x = eyePose.orientation.x;
-        projViews[i].pose.orientation.y = eyePose.orientation.y;
-        projViews[i].pose.orientation.z = eyePose.orientation.z;
-        projViews[i].pose.orientation.w = eyePose.orientation.w;
+        // Orientation fallback: ensure quaternion is normalized and never degenerate (length 0)
+        float qMagSq = eyePose.orientation.x * eyePose.orientation.x +
+                       eyePose.orientation.y * eyePose.orientation.y +
+                       eyePose.orientation.z * eyePose.orientation.z +
+                       eyePose.orientation.w * eyePose.orientation.w;
+        if (qMagSq < 1e-4f) {
+            projViews[i].pose.orientation.x = 0.0f;
+            projViews[i].pose.orientation.y = 0.0f;
+            projViews[i].pose.orientation.z = 0.0f;
+            projViews[i].pose.orientation.w = 1.0f;
+        } else {
+            float invMag = 1.0f / std::sqrt(qMagSq);
+            projViews[i].pose.orientation.x = eyePose.orientation.x * invMag;
+            projViews[i].pose.orientation.y = eyePose.orientation.y * invMag;
+            projViews[i].pose.orientation.z = eyePose.orientation.z * invMag;
+            projViews[i].pose.orientation.w = eyePose.orientation.w * invMag;
+        }
 
         projViews[i].subImage.swapchain = m_eyeSwapchains[i].handle;
         projViews[i].subImage.imageRect.offset = { 0, 0 };
@@ -903,8 +1032,17 @@ bool OpenXrManager::SubmitFramePair() {
     m_submittedFramePairCount++;
     m_eyeSwapchains[0].hasCopiedFrame = false;
     m_eyeSwapchains[1].hasCopiedFrame = false;
-    LogInfo("OpenXrManager: Synchronously submitted paired stereo projection layers (total pairs: " +
-            std::to_string(m_submittedFramePairCount) + ").");
+
+    if (m_submittedFramePairCount == 1 || m_submittedFramePairCount % 300 == 0) {
+        std::stringstream ss;
+        ss << "OpenXrManager: Submitted stereo pair #" << m_submittedFramePairCount
+           << " - Eye0 FOV: [" << projViews[0].fov.angleLeft << ", " << projViews[0].fov.angleRight
+           << ", " << projViews[0].fov.angleUp << ", " << projViews[0].fov.angleDown << "]"
+           << " Eye0 Pose: (" << projViews[0].pose.position.x << ", " << projViews[0].pose.position.y << ", " << projViews[0].pose.position.z << ")"
+           << " Ori: (" << projViews[0].pose.orientation.x << ", " << projViews[0].pose.orientation.y
+           << ", " << projViews[0].pose.orientation.z << ", " << projViews[0].pose.orientation.w << ")";
+        LogInfo(ss.str());
+    }
     return true;
 }
 

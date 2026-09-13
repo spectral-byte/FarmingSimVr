@@ -169,13 +169,18 @@ public:
     }
 
     XrResult createSessionResult = XR_SUCCESS;
+    XrResult beginSessionResult = XR_SUCCESS;
+    XrResult endSessionResult = XR_SUCCESS;
     XrResult destroySessionResult = XR_SUCCESS;
     XrResult createReferenceSpaceResult = XR_SUCCESS;
     XrResult destroySpaceResult = XR_SUCCESS;
     XrResult locateSpaceResult = XR_SUCCESS;
 
     bool createSessionCalled = false;
+    bool beginSessionCalled = false;
+    bool endSessionCalled = false;
     bool destroySessionCalled = false;
+    XrSessionBeginInfo lastBeginSessionInfo{};
     XrSpaceLocation mockSpaceLocation{
         XR_TYPE_SPACE_LOCATION,
         nullptr,
@@ -192,6 +197,21 @@ public:
         if (createSessionResult != XR_SUCCESS) return createSessionResult;
         if (session) *session = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xCAFE0001));
         return XR_SUCCESS;
+    }
+
+    XrResult BeginSession(
+        XrSession /*session*/,
+        const XrSessionBeginInfo* beginInfo) override {
+        beginSessionCalled = true;
+        if (beginInfo) {
+            lastBeginSessionInfo = *beginInfo;
+        }
+        return beginSessionResult;
+    }
+
+    XrResult EndSession(XrSession /*session*/) override {
+        endSessionCalled = true;
+        return endSessionResult;
     }
 
     XrResult DestroySession(XrSession /*session*/) override {
@@ -1134,4 +1154,115 @@ TEST(OpenXrManagerTest, SuppressesSwapchainAcquisitionWhenShouldRenderIsFalse) {
     EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
 }
 
+TEST(OpenXrManagerTest, CreateSessionInvokesBeginSessionWithPrimaryStereo) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_FALSE(manager.IsSessionRunning());
+
+    ASSERT_TRUE(manager.CreateSession());
+    EXPECT_TRUE(manager.IsSessionRunning());
+    EXPECT_TRUE(mockDispatch->createSessionCalled);
+    EXPECT_TRUE(mockDispatch->beginSessionCalled);
+    EXPECT_EQ(mockDispatch->lastBeginSessionInfo.primaryViewConfigurationType, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO);
+
+    manager.Shutdown();
+    EXPECT_FALSE(manager.IsSessionRunning());
+    EXPECT_TRUE(mockDispatch->endSessionCalled);
+    EXPECT_TRUE(mockDispatch->destroySessionCalled);
+}
+
+TEST(OpenXrManagerTest, CreateSessionFailsWhenBeginSessionFails) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->beginSessionResult = XR_ERROR_SESSION_NOT_READY;
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+
+    EXPECT_FALSE(manager.CreateSession());
+    EXPECT_FALSE(manager.IsSessionRunning());
+    EXPECT_TRUE(mockDispatch->createSessionCalled);
+    EXPECT_TRUE(mockDispatch->beginSessionCalled);
+}
+
+TEST(OpenXrManagerTest, SubmitFramePairAppliesSafeFovAndNormalizedOrientationFallbacks) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    // Do NOT set simulated projection or simulated pose (leave uninitialized/zero)
+    EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+
+    EXPECT_TRUE(manager.SubmitFramePair());
+    ASSERT_EQ(mockDispatch->lastSubmittedProjectionViews.size(), 2u);
+
+    // Verify FOV angles are non-zero
+    for (int i = 0; i < 2; ++i) {
+        const auto& pv = mockDispatch->lastSubmittedProjectionViews[i];
+        EXPECT_LT(pv.fov.angleLeft, 0.0f);
+        EXPECT_GT(pv.fov.angleRight, 0.0f);
+        EXPECT_GT(pv.fov.angleUp, 0.0f);
+        EXPECT_LT(pv.fov.angleDown, 0.0f);
+
+        // Verify orientation quaternion is normalized (unit length)
+        float lenSq = pv.pose.orientation.x * pv.pose.orientation.x +
+                      pv.pose.orientation.y * pv.pose.orientation.y +
+                      pv.pose.orientation.z * pv.pose.orientation.z +
+                      pv.pose.orientation.w * pv.pose.orientation.w;
+        EXPECT_NEAR(lenSq, 1.0f, 0.001f);
+    }
+}
+
+TEST(OpenXrManagerTest, BeginFrameLocatesViewsAndRefreshesProjectionsAndPose) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    XrView leftView{ XR_TYPE_VIEW };
+    leftView.fov = { -0.85f, 0.82f, 0.78f, -0.75f };
+    leftView.pose.position = { -0.033f, 0.0f, 0.0f };
+    leftView.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    XrView rightView{ XR_TYPE_VIEW };
+    rightView.fov = { -0.82f, 0.85f, 0.78f, -0.75f };
+    rightView.pose.position = { 0.033f, 0.0f, 0.0f };
+    rightView.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    mockDispatch->mockViews = { leftView, rightView };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    EXPECT_TRUE(manager.BeginFrame());
+    EXPECT_TRUE(manager.IsFrameBegun());
+
+    const auto& leftProj = manager.GetEyeProjection(0);
+    EXPECT_TRUE(leftProj.isValid);
+    EXPECT_NEAR(leftProj.angleLeft, -0.85f, 0.001f);
+    EXPECT_NEAR(leftProj.angleRight, 0.82f, 0.001f);
+
+    const auto& rightProj = manager.GetEyeProjection(1);
+    EXPECT_TRUE(rightProj.isValid);
+    EXPECT_NEAR(rightProj.angleLeft, -0.82f, 0.001f);
+    EXPECT_NEAR(rightProj.angleRight, 0.85f, 0.001f);
+
+    EXPECT_NEAR(manager.GetIpd(), 0.066f, 0.001f);
+
+    // Verify head pose was refreshed during BeginFrame
+    const auto& pose = manager.GetLastPose();
+    EXPECT_TRUE(pose.isValid);
+}
+
 } // namespace fs25vr
+
+

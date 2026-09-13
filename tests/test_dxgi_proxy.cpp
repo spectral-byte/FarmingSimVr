@@ -24,6 +24,8 @@ public:
     XrResult EnumerateViewConfigurationViews(XrInstance, XrSystemId, XrViewConfigurationType, uint32_t, uint32_t*, XrViewConfigurationView*) override { return XR_ERROR_RUNTIME_UNAVAILABLE; }
     XrResult GetD3D12GraphicsRequirementsKHR(XrInstance, XrSystemId, XrGraphicsRequirementsD3D12KHR*) override { return XR_ERROR_RUNTIME_UNAVAILABLE; }
     XrResult CreateSession(XrInstance, const XrSessionCreateInfo*, XrSession*) override { return XR_ERROR_FUNCTION_UNSUPPORTED; }
+    XrResult BeginSession(XrSession, const XrSessionBeginInfo*) override { return XR_ERROR_FUNCTION_UNSUPPORTED; }
+    XrResult EndSession(XrSession) override { return XR_SUCCESS; }
     XrResult DestroySession(XrSession) override { return XR_SUCCESS; }
     XrResult CreateReferenceSpace(XrSession, const XrReferenceSpaceCreateInfo*, XrSpace*) override { return XR_ERROR_FUNCTION_UNSUPPORTED; }
     XrResult DestroySpace(XrSpace) override { return XR_SUCCESS; }
@@ -204,6 +206,8 @@ public:
         if (session) *session = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xCAFE0001));
         return XR_SUCCESS;
     }
+    XrResult BeginSession(XrSession, const XrSessionBeginInfo*) override { return XR_SUCCESS; }
+    XrResult EndSession(XrSession) override { return XR_SUCCESS; }
     XrResult DestroySession(XrSession) override { return XR_SUCCESS; }
     XrResult CreateReferenceSpace(XrSession, const XrReferenceSpaceCreateInfo*, XrSpace* space) override {
         static uintptr_t s_space = 0x50ACE001;
@@ -792,7 +796,16 @@ TEST(DxgiProxyTest, CreateSwapChainInterceptorsConsolidateDeviceAndQueueExtracti
     EXPECT_EQ(proxy.GetD3D12Device(), env.GetDevice());
 }
 
-TEST(DxgiProxyTest, ConfiguresRecommendedOpenXrEyeSwapchainDimensionsOnPresent) {
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockGetDescZeroDimensions(IDXGISwapChain*, DXGI_SWAP_CHAIN_DESC* pDesc) {
+    if (pDesc) {
+        pDesc->BufferDesc.Width = 0;
+        pDesc->BufferDesc.Height = 0;
+        pDesc->BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    }
+    return S_OK;
+}
+
+TEST(DxgiProxyTest, ConfiguresBackbufferMatchedOpenXrEyeSwapchainDimensionsOnPresent) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     mockDispatch->mockRecommendedViewWidth[0] = 2064;
     mockDispatch->mockRecommendedViewHeight[0] = 2208;
@@ -827,6 +840,46 @@ TEST(DxgiProxyTest, ConfiguresRecommendedOpenXrEyeSwapchainDimensionsOnPresent) 
 
     proxy.OnPresent(pSwapChain, 0, 0);
 
+    // Eye swapchains should match backbuffer dimensions (1920x1080) for 1:1 GPU copy
+    EXPECT_TRUE(openXrManager->HasEyeSwapchains());
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(0).width, 1920u);
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(0).height, 1080u);
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(1).width, 1920u);
+    EXPECT_EQ(openXrManager->GetEyeSwapchain(1).height, 1080u);
+}
+
+TEST(DxgiProxyTest, FallsBackToRecommendedDimensionsWhenBackbufferDimensionsUnavailable) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    mockDispatch->mockRecommendedViewWidth[0] = 2064;
+    mockDispatch->mockRecommendedViewHeight[0] = 2208;
+    mockDispatch->mockRecommendedViewWidth[1] = 2160;
+    mockDispatch->mockRecommendedViewHeight[1] = 2160;
+
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+
+    EXPECT_FALSE(openXrManager->HasEyeSwapchains());
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    std::vector<void*> scVTable(30, nullptr);
+    scVTable[0] = reinterpret_cast<void*>(&MockSwapChainQI);
+    scVTable[1] = reinterpret_cast<void*>(&MockAddRef);
+    scVTable[2] = reinterpret_cast<void*>(&MockRelease);
+    scVTable[7] = reinterpret_cast<void*>(&MockGetDevice);
+    scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
+    scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
+    scVTable[12] = reinterpret_cast<void*>(&MockGetDescZeroDimensions); // Returns 0x0
+    MockComObject mockSwapChain{ scVTable.data() };
+
+    auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
+
+    proxy.OnPresent(pSwapChain, 0, 0);
+
+    // When backbuffer dimensions are 0, fall back to OpenXR recommended dimensions
     EXPECT_TRUE(openXrManager->HasEyeSwapchains());
     EXPECT_EQ(openXrManager->GetEyeSwapchain(0).width, 2064u);
     EXPECT_EQ(openXrManager->GetEyeSwapchain(0).height, 2208u);
@@ -834,7 +887,7 @@ TEST(DxgiProxyTest, ConfiguresRecommendedOpenXrEyeSwapchainDimensionsOnPresent) 
     EXPECT_EQ(openXrManager->GetEyeSwapchain(1).height, 2160u);
 }
 
-TEST(DxgiProxyTest, FallsBackToBackbufferDimensionsWhenRecommendedDimensionsUnavailable) {
+TEST(DxgiProxyTest, FallsBackToDefaultDimensionsWhenBothBackbufferAndRecommendedUnavailable) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     mockDispatch->mockRecommendedViewWidth[0] = 0;
     mockDispatch->mockRecommendedViewHeight[0] = 0;
@@ -858,13 +911,14 @@ TEST(DxgiProxyTest, FallsBackToBackbufferDimensionsWhenRecommendedDimensionsUnav
     scVTable[7] = reinterpret_cast<void*>(&MockGetDevice);
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
-    scVTable[12] = reinterpret_cast<void*>(&MockGetDesc); // Returns 1920x1080
+    scVTable[12] = reinterpret_cast<void*>(&MockGetDescZeroDimensions); // Returns 0x0
     MockComObject mockSwapChain{ scVTable.data() };
 
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
 
     proxy.OnPresent(pSwapChain, 0, 0);
 
+    // Default fallback is 1920x1080
     EXPECT_TRUE(openXrManager->HasEyeSwapchains());
     EXPECT_EQ(openXrManager->GetEyeSwapchain(0).width, 1920u);
     EXPECT_EQ(openXrManager->GetEyeSwapchain(0).height, 1080u);

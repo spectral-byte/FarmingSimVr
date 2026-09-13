@@ -836,4 +836,120 @@ TEST_F(CompanionModTest, SkipsAfrAlternationWhenRequiresAfrFallbackIsFalse) {
     )luau", "=verifyNativeFrame1"), 0);
 }
 
+TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFTracking) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.position = fs25vr::Vector3(0.1f, 0.2f, 0.3f);
+    simPose.rotation = fs25vr::EulerAngles(0.05f, 0.10f, 0.02f);
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.cameraTranslations = {}
+        _G.cameraRotations = {}
+        function getTranslation(node)
+            return 0.0, 1.8, 0.0
+        end
+        function setTranslation(node, x, y, z)
+            _G.cameraTranslations[node] = { x = x, y = y, z = z }
+        end
+        function setRotation(node, rx, ry, rz)
+            _G.cameraRotations[node] = { x = rx, y = ry, z = rz }
+        end
+
+        _G.PlayerCamera = {
+            baseUpdatePositionCalled = false,
+            updatePosition = function(cam, dt)
+                cam.baseUpdatePositionCalled = true
+            end,
+            makeCurrent = function(cam)
+                cam.baseMakeCurrentCalled = true
+            end
+        }
+
+        _G.testPlayerCam = {
+            isFirstPerson = true,
+            firstPersonCamera = 777
+        }
+    )luau", "=setupPlayerCameraHookMocks"), 0);
+
+    // Hook PlayerCamera
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:hookPlayerCamera()", "=hookPlayerCam"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "assert(VRCompanion.playerCameraHooked == true)", "=assertHooked"), 0);
+
+    // Call makeCurrent then updatePosition via PlayerCamera class
+    ASSERT_EQ(RunLuauChunk(L, "PlayerCamera.makeCurrent(_G.testPlayerCam)", "=callMakeCurrent"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "PlayerCamera.updatePosition(_G.testPlayerCam, 16.6)", "=callUpdatePosition"), 0);
+
+    // Verify both original method and VR tracking were invoked
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(_G.testPlayerCam.baseMakeCurrentCalled == true, "original makeCurrent must be called")
+        assert(_G.testPlayerCam.baseUpdatePositionCalled == true, "original updatePosition must be called")
+        assert(_G.cameraTranslations[777] ~= nil, "setTranslation must be called on firstPersonCamera")
+        assert(math.abs(_G.cameraTranslations[777].y - (1.8 + 0.2)) < 0.01, "height must include base + pose.y")
+        assert(_G.cameraRotations[777] ~= nil, "setRotation must be called on firstPersonCamera")
+        assert(math.abs(_G.cameraRotations[777].x - 0.05) < 0.005, "pitch must be applied")
+        assert(math.abs(_G.cameraRotations[777].y - 0.10) < 0.005, "yaw must be applied")
+    )luau", "=verifyPlayerCameraHookDispatched"), 0);
+
+    // Test deleteMap restores original updatePosition
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMapTest"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "assert(VRCompanion.playerCameraHooked == false)", "=assertUnhooked"), 0);
+}
+
+TEST_F(CompanionModTest, FallsBackToEngineTrackIRWhenVRBridgePoseUnavailable) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.cameraTranslations = {}
+        _G.cameraRotations = {}
+        function getTranslation(node)
+            return 0.0, 1.75, 0.0
+        end
+        function setTranslation(node, x, y, z)
+            _G.cameraTranslations[node] = { x = x, y = y, z = z }
+        end
+        function setRotation(node, rx, ry, rz)
+            _G.cameraRotations[node] = { x = rx, y = ry, z = rz }
+        end
+
+        -- Mock native TrackIR engine functions
+        function isHeadTrackingAvailable()
+            return true
+        end
+        function getHeadTrackingTranslation()
+            return 0.05, 0.08, -0.02
+        end
+        function getHeadTrackingRotation()
+            return 0.12, 0.25, 0.01
+        end
+
+        _G.trackIrPlayerCam = {
+            isFirstPerson = true,
+            firstPersonCamera = 888
+        }
+    )luau", "=setupTrackIrMocks"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.trackIrPlayerCam, 16.6)", "=trackIrUpdate"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(_G.cameraTranslations[888] ~= nil, "translation must be set via TrackIR fallback")
+        assert(math.abs(_G.cameraTranslations[888].y - (1.75 + 0.08)) < 0.001, "TrackIR y translation applied")
+        assert(_G.cameraRotations[888] ~= nil, "rotation must be set via TrackIR fallback")
+        assert(math.abs(_G.cameraRotations[888].x - 0.12) < 0.001, "TrackIR pitch applied")
+        assert(math.abs(_G.cameraRotations[888].y - 0.25) < 0.001, "TrackIR yaw applied")
+    )luau", "=verifyTrackIrApplied"), 0);
+}
+
 

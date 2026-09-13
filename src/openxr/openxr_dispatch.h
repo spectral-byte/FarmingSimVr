@@ -65,6 +65,13 @@ public:
         const XrSessionCreateInfo* createInfo,
         XrSession* session) = 0;
 
+    virtual XrResult BeginSession(
+        XrSession session,
+        const XrSessionBeginInfo* beginInfo) = 0;
+
+    virtual XrResult EndSession(
+        XrSession session) = 0;
+
     virtual XrResult DestroySession(
         XrSession session) = 0;
 
@@ -209,6 +216,17 @@ public:
         const XrSessionCreateInfo* createInfo,
         XrSession* session) override {
         return xrCreateSession(instance, createInfo, session);
+    }
+
+    XrResult BeginSession(
+        XrSession session,
+        const XrSessionBeginInfo* beginInfo) override {
+        return xrBeginSession(session, beginInfo);
+    }
+
+    XrResult EndSession(
+        XrSession session) override {
+        return xrEndSession(session);
     }
 
     XrResult DestroySession(

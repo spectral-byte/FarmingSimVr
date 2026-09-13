@@ -76,6 +76,12 @@ function VRCompanion:loadMap(name)
             telemetry.maxViewports or 0))
     end
 
+    -- 3b. Ensure engine head tracking setting is enabled
+    if g_gameSettings ~= nil and type(g_gameSettings.setValue) == "function" and GameSettings ~= nil and GameSettings.SETTING ~= nil and GameSettings.SETTING.IS_HEAD_TRACKING_ENABLED ~= nil then
+        pcall(function() g_gameSettings:setValue(GameSettings.SETTING.IS_HEAD_TRACKING_ENABLED, true) end)
+        print("[FS25_VR] Confirmed game setting IS_HEAD_TRACKING_ENABLED is active.")
+    end
+
     -- 4. Hook camera systems for 6DOF tracking
     self:hookVehicleCamera()
     self:hookPlayerCamera()
@@ -109,11 +115,12 @@ function VRCompanion:getActiveVehicleCamera()
 end
 
 function VRCompanion:getPlayerBaseTranslation(cam)
-    if cam.vrBaseTranslation == nil and type(getTranslation) == "function" then
-        local lx, ly, lz = getTranslation(cam.firstPersonCamera)
+    local activeCam = (cam and cam.firstPersonCamera) or (cam and cam.cameraNode)
+    if cam and cam.vrBaseTranslation == nil and activeCam ~= nil and type(getTranslation) == "function" then
+        local lx, ly, lz = getTranslation(activeCam)
         cam.vrBaseTranslation = { x = lx, y = ly, z = lz, [1] = lx, [2] = ly, [3] = lz }
     end
-    return cam.vrBaseTranslation or { x = 0, y = 0, z = 0, [1] = 0, [2] = 0, [3] = 0 }
+    return (cam and cam.vrBaseTranslation) or { x = 0, y = 0, z = 0, [1] = 0, [2] = 0, [3] = 0 }
 end
 
 function VRCompanion:hookVehicleCamera()
@@ -128,6 +135,43 @@ function VRCompanion:hookVehicleCamera()
     end
 end
 
+function VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
+    if cam == nil then return end
+    if cam.getHasOverriddenTarget ~= nil and cam:getHasOverriddenTarget() then
+        if cam.updateRotationFromTarget ~= nil then
+            cam:updateRotationFromTarget()
+        end
+        return
+    end
+
+    local cameraSensitivity = 1.0
+    if g_gameSettings ~= nil and type(g_gameSettings.getValue) == "function" and GameSettings ~= nil and GameSettings.SETTING ~= nil then
+        cameraSensitivity = g_gameSettings:getValue(GameSettings.SETTING.CAMERA_SENSITIVITY) or 1.0
+    end
+
+    local rotationDeltaY = 0
+    if cam.player ~= nil and cam.player.inputComponent ~= nil then
+        rotationDeltaY = -(cam.player.inputComponent.cameraRotationY or 0) * cameraSensitivity
+    end
+
+    local _, cameraYaw, _ = 0, 0, 0
+    if type(cam.getRotation) == "function" then
+        _, cameraYaw, _ = cam:getRotation()
+    end
+
+    if MathUtil ~= nil and type(MathUtil.getValidLimit) == "function" then
+        cameraYaw = MathUtil.getValidLimit(cameraYaw + rotationDeltaY)
+    else
+        cameraYaw = (cameraYaw + rotationDeltaY) % (2 * math.pi)
+    end
+
+    -- In VR mode: keep neck level (pitch=0, roll=0); mouse/stick only turns body yaw.
+    -- Head pitch and roll are tracked by the HMD and applied during onPlayerCameraUpdate.
+    if type(cam.setRotation) == "function" then
+        cam:setRotation(0, cameraYaw, 0)
+    end
+end
+
 function VRCompanion:hookPlayerCamera()
     if PlayerCamera ~= nil and not self.playerCameraHooked then
         if PlayerCamera.makeCurrent ~= nil then
@@ -137,7 +181,19 @@ function VRCompanion:hookPlayerCamera()
                 VRCompanion:onPlayerCameraMakeCurrent(cam)
             end
         end
-        if PlayerCamera.update ~= nil then
+        if PlayerCamera.updateRotation ~= nil then
+            self.origPlayerCameraUpdateRotation = PlayerCamera.updateRotation
+            PlayerCamera.updateRotation = function(cam, dt)
+                VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
+            end
+        end
+        if PlayerCamera.updatePosition ~= nil then
+            self.origPlayerCameraUpdatePosition = PlayerCamera.updatePosition
+            PlayerCamera.updatePosition = function(cam, dt)
+                self.origPlayerCameraUpdatePosition(cam, dt)
+                VRCompanion:onPlayerCameraUpdate(cam, dt)
+            end
+        elseif PlayerCamera.update ~= nil then
             self.origPlayerCameraUpdate = PlayerCamera.update
             PlayerCamera.update = function(cam, dt)
                 self.origPlayerCameraUpdate(cam, dt)
@@ -253,6 +309,46 @@ function VRCompanion:computeEyeOffset(pose, eyeIndex, afrFallback)
     return rotateVectorByQuaternion(qx, qy, qz, qw, eyeOffsetX, 0, 0)
 end
 
+function VRCompanion:getResolvedHeadPose()
+    local pose = nil
+    if VRBridge ~= nil and type(VRBridge.getHeadPose) == "function" then
+        pose = VRBridge.getHeadPose()
+    end
+
+    -- Fallback to native engine TrackIR functions if VRBridge is not providing a valid pose
+    if (not pose or not pose.isValid) and type(isHeadTrackingAvailable) == "function" and isHeadTrackingAvailable() then
+        local tx, ty, tz = 0, 0, 0
+        if type(getHeadTrackingTranslation) == "function" then
+            tx, ty, tz = getHeadTrackingTranslation()
+        end
+        local pitch, yaw, roll = 0, 0, 0
+        if type(getHeadTrackingRotation) == "function" then
+            pitch, yaw, roll = getHeadTrackingRotation()
+        end
+        if pitch ~= nil then
+            pose = {
+                x = tx or 0,
+                y = ty or 0,
+                z = tz or 0,
+                pitch = pitch or 0,
+                yaw = yaw or 0,
+                roll = roll or 0,
+                isValid = true
+            }
+        end
+    end
+
+    if not pose or not pose.isValid then
+        self.invalidPoseTicks = (self.invalidPoseTicks or 0) + 1
+        if self.invalidPoseTicks == 1 or self.invalidPoseTicks % 300 == 0 then
+            print(string.format("[FS25_VR] [HeadPose] Pose invalid or tracking lost (VRBridge present: %s, ticks: %d)",
+                tostring(VRBridge ~= nil), self.invalidPoseTicks))
+        end
+    end
+
+    return pose
+end
+
 function VRCompanion:onVehicleCameraUpdate(cam, dt)
     -- Only apply 6DOF tracking and projection to interior in-cab cameras
     if not cam or not cam.isInside or cam.cameraNode == nil then
@@ -268,17 +364,13 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
 
     self:applyCameraProjection(cam.cameraNode, eyeIndex)
 
-    if not VRBridge or type(VRBridge.getHeadPose) ~= "function" then
-        return
-    end
-
-    local pose = VRBridge.getHeadPose()
+    local pose = self:getResolvedHeadPose()
     if not pose or not pose.isValid then
         return
     end
 
-    local tx, ty, tz = pose.x, pose.y, pose.z
-    local pitch, yaw, roll = pose.pitch, pose.yaw, pose.roll
+    local tx, ty, tz = pose.x or 0, pose.y or 0, pose.z or 0
+    local pitch, yaw, roll = pose.pitch or 0, pose.yaw or 0, pose.roll or 0
 
     local eyeRotX, eyeRotY, eyeRotZ = self:computeEyeOffset(pose, eyeIndex, afrFallback)
     local eyeTx = tx + eyeRotX
@@ -288,6 +380,37 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     local camParent = 0
     if type(getParent) == "function" then
         camParent = getParent(cam.cameraNode)
+    end
+
+    -- Auto-construct headTrackingNode matching VehicleCamera:loadFromXML if missing
+    if cam.headTrackingNode == nil and type(createTransformGroup) == "function" then
+        local posNode = cam.cameraPositionNode or cam.cameraNode
+        local pNode = (posNode and type(getParent) == "function") and getParent(posNode) or 0
+        if pNode ~= nil and pNode ~= 0 then
+            local dx, _, dz = 0, 0, 1
+            if type(localDirectionToLocal) == "function" then
+                dx, _, dz = localDirectionToLocal(posNode, pNode, 0, 0, 1)
+            end
+            local lx, ly, lz = 0, 0, 0
+            if type(localToLocal) == "function" then
+                lx, ly, lz = localToLocal(posNode, pNode, 0, 0, 0)
+            end
+            local tg = createTransformGroup("headTrackingNode")
+            if tg ~= nil and tg ~= 0 then
+                if type(link) == "function" then
+                    link(pNode, tg)
+                end
+                if type(setTranslation) == "function" then
+                    setTranslation(tg, lx, ly, lz)
+                end
+                if (math.abs(dx) + math.abs(dz) > 0.0001) and type(setDirection) == "function" then
+                    setDirection(tg, dx, 0, dz, 0, 1, 0)
+                elseif type(setRotation) == "function" then
+                    setRotation(tg, 0, 0, 0)
+                end
+                cam.headTrackingNode = tg
+            end
+        end
     end
 
     local cabTransX, cabTransY, cabTransZ = eyeTx, eyeTy, eyeTz
@@ -316,6 +439,12 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     if type(setRotation) == "function" then
         setRotation(cam.cameraNode, cabRotX, cabRotY, cabRotZ)
     end
+
+    self.vehCamTicks = (self.vehCamTicks or 0) + 1
+    if self.vehCamTicks == 1 or self.vehCamTicks % 300 == 0 then
+        print(string.format("[FS25_VR] [VehicleCamera] Pose: (%.3f, %.3f, %.3f) Rot: (%.2f, %.2f, %.2f) Eye: %d AFR: %s",
+            eyeTx, eyeTy, eyeTz, pitch, yaw, roll, eyeIndex, tostring(afrFallback)))
+    end
 end
 
 function VRCompanion:onPlayerCameraMakeCurrent(cam)
@@ -326,7 +455,8 @@ function VRCompanion:onPlayerCameraMakeCurrent(cam)
 end
 
 function VRCompanion:onPlayerCameraUpdate(cam, dt)
-    if not cam or not cam.isFirstPerson or cam.firstPersonCamera == nil then
+    local activeCamNode = (cam and cam.firstPersonCamera) or (cam and cam.cameraNode)
+    if not activeCamNode then
         return
     end
 
@@ -337,29 +467,77 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
         eyeIndex = (parity % 2 == 1) and 1 or 0
     end
 
-    self:applyCameraProjection(cam.firstPersonCamera, eyeIndex)
+    self:applyCameraProjection(activeCamNode, eyeIndex)
 
-    if not VRBridge or type(VRBridge.getHeadPose) ~= "function" then
-        return
-    end
-
-    local pose = VRBridge.getHeadPose()
+    local pose = self:getResolvedHeadPose()
     if not pose or not pose.isValid then
         return
     end
 
-    local eyeRotX, eyeRotY, eyeRotZ = self:computeEyeOffset(pose, eyeIndex, afrFallback)
+    local tx, ty, tz = pose.x or 0, pose.y or 0, pose.z or 0
+    local pitch, yaw, roll = pose.pitch or 0, pose.yaw or 0, pose.roll or 0
 
-    local base = self:getPlayerBaseTranslation(cam)
-    local tx = (base.x or base[1]) + pose.x + eyeRotX
-    local ty = (base.y or base[2]) + pose.y + eyeRotY
-    local tz = (base.z or base[3]) + pose.z + eyeRotZ
+    local eyeRotX, eyeRotY, eyeRotZ = self:computeEyeOffset(pose, eyeIndex, afrFallback)
+    local eyeTx = tx + eyeRotX
+    local eyeTy = ty + eyeRotY
+    local eyeTz = tz + eyeRotZ
+
+    local camParent = 0
+    if type(getParent) == "function" then
+        camParent = getParent(activeCamNode)
+    end
+
+    if cam.vrHeadTrackingNode == nil and type(createTransformGroup) == "function" then
+        local anchorNode = (cam.yawNode ~= nil and cam.yawNode ~= 0) and cam.yawNode or camParent
+        if anchorNode ~= nil and anchorNode ~= 0 then
+            local lx, ly, lz = 0, 0, 0
+            if anchorNode == camParent and type(getTranslation) == "function" then
+                lx, ly, lz = getTranslation(activeCamNode)
+            end
+            local tg = createTransformGroup("vrPlayerHeadTrackingNode")
+            if tg ~= nil and tg ~= 0 then
+                if type(link) == "function" then
+                    link(anchorNode, tg)
+                end
+                if type(setTranslation) == "function" then
+                    setTranslation(tg, lx, ly, lz)
+                end
+                if type(setRotation) == "function" then
+                    setRotation(tg, 0, 0, 0)
+                end
+                cam.vrHeadTrackingNode = tg
+            end
+        end
+    end
+
+    local finalTx, finalTy, finalTz = eyeTx, eyeTy, eyeTz
+    local finalRotX, finalRotY, finalRotZ = pitch, yaw, roll
+
+    if cam.vrHeadTrackingNode ~= nil and camParent ~= 0 then
+        if type(localToLocal) == "function" then
+            finalTx, finalTy, finalTz = localToLocal(cam.vrHeadTrackingNode, camParent, eyeTx, eyeTy, eyeTz)
+        end
+        if type(localRotationToLocal) == "function" then
+            finalRotX, finalRotY, finalRotZ = localRotationToLocal(cam.vrHeadTrackingNode, camParent, pitch, yaw, roll)
+        end
+    else
+        local base = self:getPlayerBaseTranslation(cam)
+        finalTx = (base.x or base[1] or 0) + eyeTx
+        finalTy = (base.y or base[2] or 0) + eyeTy
+        finalTz = (base.z or base[3] or 0) + eyeTz
+    end
 
     if type(setTranslation) == "function" then
-        setTranslation(cam.firstPersonCamera, tx, ty, tz)
+        setTranslation(activeCamNode, finalTx, finalTy, finalTz)
     end
     if type(setRotation) == "function" then
-        setRotation(cam.firstPersonCamera, pose.pitch, pose.yaw, pose.roll)
+        setRotation(activeCamNode, finalRotX, finalRotY, finalRotZ)
+    end
+
+    self.playerCamTicks = (self.playerCamTicks or 0) + 1
+    if self.playerCamTicks == 1 or self.playerCamTicks % 300 == 0 then
+        print(string.format("[FS25_VR] [PlayerCamera] Pose: (%.3f, %.3f, %.3f) Rot: (%.2f, %.2f, %.2f) Eye: %d AFR: %s",
+            eyeTx, eyeTy, eyeTz, pitch, yaw, roll, eyeIndex, tostring(afrFallback)))
     end
 end
 
@@ -398,20 +576,38 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
 end
 
 function VRCompanion:realignPlayerCameraToRoot(cam)
-    if not cam or not cam.firstPersonCamera then
+    local activeCamNode = (cam and cam.firstPersonCamera) or (cam and cam.cameraNode)
+    if not activeCamNode then
         return
     end
 
-    local base = self:getPlayerBaseTranslation(cam)
-    local tx = base.x or base[1] or 0
-    local ty = base.y or base[2] or 0
-    local tz = base.z or base[3] or 0
+    local camParent = 0
+    if type(getParent) == "function" then
+        camParent = getParent(activeCamNode)
+    end
+
+    local finalTx, finalTy, finalTz = 0, 0, 0
+    local finalRotX, finalRotY, finalRotZ = 0, 0, 0
+
+    if cam.vrHeadTrackingNode ~= nil and camParent ~= 0 then
+        if type(localToLocal) == "function" then
+            finalTx, finalTy, finalTz = localToLocal(cam.vrHeadTrackingNode, camParent, 0, 0, 0)
+        end
+        if type(localRotationToLocal) == "function" then
+            finalRotX, finalRotY, finalRotZ = localRotationToLocal(cam.vrHeadTrackingNode, camParent, 0, 0, 0)
+        end
+    else
+        local base = self:getPlayerBaseTranslation(cam)
+        finalTx = base.x or base[1] or 0
+        finalTy = base.y or base[2] or 0
+        finalTz = base.z or base[3] or 0
+    end
 
     if type(setTranslation) == "function" then
-        setTranslation(cam.firstPersonCamera, tx, ty, tz)
+        setTranslation(activeCamNode, finalTx, finalTy, finalTz)
     end
     if type(setRotation) == "function" then
-        setRotation(cam.firstPersonCamera, 0, 0, 0)
+        setRotation(activeCamNode, finalRotX, finalRotY, finalRotZ)
     end
 end
 
@@ -440,6 +636,13 @@ end
 
 function VRCompanion:update(dt)
     self.frameTicks = (self.frameTicks or 0) + 1
+
+    if not self.vehicleCameraHooked then
+        self:hookVehicleCamera()
+    end
+    if not self.playerCameraHooked then
+        self:hookPlayerCamera()
+    end
 
     if VRBridge ~= nil and type(VRBridge.getStereoTelemetry) == "function" then
         local telemetry = VRBridge.getStereoTelemetry()
@@ -477,6 +680,14 @@ function VRCompanion:deleteMap()
     if self.origPlayerCameraMakeCurrent ~= nil and PlayerCamera ~= nil then
         PlayerCamera.makeCurrent = self.origPlayerCameraMakeCurrent
         self.origPlayerCameraMakeCurrent = nil
+    end
+    if self.origPlayerCameraUpdatePosition ~= nil and PlayerCamera ~= nil then
+        PlayerCamera.updatePosition = self.origPlayerCameraUpdatePosition
+        self.origPlayerCameraUpdatePosition = nil
+    end
+    if self.origPlayerCameraUpdateRotation ~= nil and PlayerCamera ~= nil then
+        PlayerCamera.updateRotation = self.origPlayerCameraUpdateRotation
+        self.origPlayerCameraUpdateRotation = nil
     end
     if self.origPlayerCameraUpdate ~= nil and PlayerCamera ~= nil then
         PlayerCamera.update = self.origPlayerCameraUpdate

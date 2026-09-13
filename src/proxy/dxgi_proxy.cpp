@@ -251,27 +251,36 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
             ResolveD3D12DeviceAndQueue(swapChain);
         }
 
-        // Ensure OpenXR eye swapchains exist using runtime-recommended dimensions
+        // Ensure OpenXR eye swapchains exist matching the game backbuffer dimensions
         if (!m_openXrManager->HasEyeSwapchains()) {
             DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+            uint32_t bufferWidth = 0;
+            uint32_t bufferHeight = 0;
             DXGI_SWAP_CHAIN_DESC desc{};
             if (SUCCEEDED(swapChain->GetDesc(&desc))) {
                 if (desc.BufferDesc.Format != DXGI_FORMAT_UNKNOWN) {
                     format = desc.BufferDesc.Format;
                 }
-            } else {
-                Microsoft::WRL::ComPtr<ID3D12Resource> testBuffer;
-                if (SUCCEEDED(swapChain->GetBuffer(0, IID_PPV_ARGS(&testBuffer)))) {
-                    D3D12_RESOURCE_DESC resDesc = testBuffer->GetDesc();
-                    if (resDesc.Format != DXGI_FORMAT_UNKNOWN) {
-                        format = resDesc.Format;
-                    }
+                bufferWidth = desc.BufferDesc.Width;
+                bufferHeight = desc.BufferDesc.Height;
+            }
+
+            // Always verify against actual backbuffer resource description if available
+            Microsoft::WRL::ComPtr<ID3D12Resource> testBuffer;
+            if (SUCCEEDED(swapChain->GetBuffer(0, IID_PPV_ARGS(&testBuffer))) && testBuffer) {
+                D3D12_RESOURCE_DESC resDesc = testBuffer->GetDesc();
+                if (resDesc.Format != DXGI_FORMAT_UNKNOWN) {
+                    format = resDesc.Format;
+                }
+                if (resDesc.Width > 0 && resDesc.Height > 0) {
+                    bufferWidth = static_cast<uint32_t>(resDesc.Width);
+                    bufferHeight = resDesc.Height;
                 }
             }
 
-            // Passing 0, 0 instructs CreateEyeSwapchains to query each eye's runtime-recommended
-            // view configuration dimensions independently.
-            m_openXrManager->CreateEyeSwapchains(0, 0, format);
+            // Create eye swapchains matching the backbuffer resolution for direct zero-overhead D3D12 copy.
+            // If dimensions are unavailable (0), CreateEyeSwapchains will query runtime recommended views as fallback.
+            m_openXrManager->CreateEyeSwapchains(bufferWidth, bufferHeight, format);
         }
 
         UINT bufferIndex = 0;

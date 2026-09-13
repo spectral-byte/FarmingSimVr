@@ -144,6 +144,8 @@ public:
     const HeadPose& GetRawPose() const { return m_rawPose; }
 
     EyeProjection PollEyeProjection(uint32_t eyeIndex = 0, XrTime time = 0);
+    bool LocateActiveViews(XrTime time = 0);
+    XrTime GetCurrentXrTime() const;
     const EyeProjection& GetEyeProjection(uint32_t eyeIndex = 0) const;
     void SetSimulatedProjection(uint32_t eyeIndex, const EyeProjection& proj);
     static EyeProjection ComputeProjectionFromFov(const XrFovf& fov);
@@ -183,6 +185,7 @@ public:
     XrSpace GetLocalSpace() const { return m_localSpace; }
     XrSpace GetViewSpace() const { return m_viewSpace; }
     bool HasSession() const { return m_session != XR_NULL_HANDLE; }
+    bool IsSessionRunning() const { return m_sessionRunning; }
     bool HasTrackingSpaces() const { return m_localSpace != XR_NULL_HANDLE && m_viewSpace != XR_NULL_HANDLE; }
 
     static EulerAngles QuaternionToEuler(const Quaternion& q);
@@ -206,6 +209,7 @@ private:
     OpenXrRuntimeInfo m_runtimeInfo;
 
     XrSession m_session = XR_NULL_HANDLE;
+    bool m_sessionRunning = false;
     XrSpace m_localSpace = XR_NULL_HANDLE;
     XrSpace m_viewSpace = XR_NULL_HANDLE;
 
@@ -223,6 +227,8 @@ private:
     uint64_t m_submittedFramePairCount = 0;
     bool m_frameBegun = false;
     XrFrameState m_frameState{XR_TYPE_FRAME_STATE};
+    XrTime m_lastPredictedDisplayTime = 0;
+    int64_t m_lastPredictedQpc = 0;
 
     HeadPose m_rawPose;
     HeadPose m_lastPose;

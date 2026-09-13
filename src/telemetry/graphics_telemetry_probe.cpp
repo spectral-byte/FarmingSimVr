@@ -105,20 +105,23 @@ void GraphicsTelemetryProbe::OnFrameBoundary() {
         frame.hasMultiViewportStereo = true;
     }
 
-    // Check dual-pass stereo heuristic: at least 2 passes with distinct horizontal viewport layouts
-    // OR separate eye render target buffers rendered in sequential passes
+    // Check dual-pass stereo heuristic: at least 2 consecutive passes with side-by-side split viewport layout
+    // (e.g. Pass 1 at [0, 0, W, H] and Pass 2 at [W, 0, W, H] with active render targets and full-eye width)
     if (frame.passes.size() >= 2) {
         for (size_t i = 0; i < frame.passes.size() - 1; ++i) {
             const auto& p1 = frame.passes[i];
             const auto& p2 = frame.passes[i + 1];
             if (!p1.viewports.empty() && !p2.viewports.empty()) {
-                bool splitViewport = (p1.viewports[0].x != p2.viewports[0].x &&
-                                      p1.viewports[0].width == p2.viewports[0].width);
-                bool dualTargetBuffers = (!p1.rtvHandles.empty() && !p2.rtvHandles.empty() &&
-                                          p1.rtvHandles[0] != p2.rtvHandles[0] &&
-                                          p1.viewports[0].width == p2.viewports[0].width &&
-                                          p1.viewports[0].height == p2.viewports[0].height);
-                if (splitViewport || dualTargetBuffers) {
+                bool splitViewport = (p1.viewports[0].x == 0.0f &&
+                                      p2.viewports[0].x == p1.viewports[0].width &&
+                                      p1.viewports[0].y == 0.0f &&
+                                      p2.viewports[0].y == 0.0f &&
+                                      p1.viewports[0].width == p2.viewports[0].width &&
+                                      p1.viewports[0].height == p2.viewports[0].height &&
+                                      p1.viewports[0].width >= 640.0f &&
+                                      !p1.rtvHandles.empty() &&
+                                      !p2.rtvHandles.empty());
+                if (splitViewport) {
                     frame.hasDualPassStereo = true;
                     break;
                 }

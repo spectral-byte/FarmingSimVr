@@ -122,4 +122,52 @@ TEST_F(GraphicsTelemetryProbeTest, DiagnosticReportContainsPassDetailsAndVerdict
     EXPECT_NE(report.find("Verdict"), std::string::npos);
 }
 
+TEST_F(GraphicsTelemetryProbeTest, IgnoresShadowAtlasCascadesAndMaintainsAfrFallback) {
+    // Simulate GIANTS Engine 10 shadow map cascades in a texture atlas
+    for (int frame = 0; frame < 5; ++frame) {
+        // Main view monoscopic pass
+        D3D12_VIEWPORT mainVp{ 0.0f, 0.0f, 5120.0f, 1440.0f, 0.0f, 1.0f };
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv{ 0x1000 };
+        probe.RecordRenderTargets(1, &rtv, false, nullptr);
+        probe.RecordViewports(1, &mainVp);
+
+        // Shadow cascade 1 at offset 6144x0 in 2048x2048 atlas (depth only, no RTV)
+        D3D12_VIEWPORT shadowVp1{ 6144.0f, 0.0f, 2048.0f, 2048.0f, 0.0f, 1.0f };
+        D3D12_CPU_DESCRIPTOR_HANDLE dsv{ 0x2000 };
+        probe.RecordRenderTargets(0, nullptr, false, &dsv);
+        probe.RecordViewports(1, &shadowVp1);
+
+        // Shadow cascade 2 at offset 8192x0 in 2048x2048 atlas
+        D3D12_VIEWPORT shadowVp2{ 8192.0f, 0.0f, 2048.0f, 2048.0f, 0.0f, 1.0f };
+        probe.RecordRenderTargets(0, nullptr, false, &dsv);
+        probe.RecordViewports(1, &shadowVp2);
+
+        probe.OnFrameBoundary();
+    }
+
+    EXPECT_FALSE(probe.HasNativeStereoDetected());
+    EXPECT_TRUE(probe.RequiresAfrFallback());
+    EXPECT_EQ(probe.GetStereoVerdict(), StereoVerdict::AfrFallbackRequired);
+}
+
+TEST_F(GraphicsTelemetryProbeTest, DetectsDualPassStereoWhenConsecutiveSideBySidePassesWithRtvPresent) {
+    // Pass 1: Left eye rendered to [0, 0, 1920, 1080]
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv1{ 0x1000 };
+    D3D12_VIEWPORT vp1{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
+    probe.RecordRenderTargets(1, &rtv1, false, nullptr);
+    probe.RecordViewports(1, &vp1);
+
+    // Pass 2: Right eye rendered to [1920, 0, 1920, 1080]
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv2{ 0x1000 };
+    D3D12_VIEWPORT vp2{ 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
+    probe.RecordRenderTargets(1, &rtv2, false, nullptr);
+    probe.RecordViewports(1, &vp2);
+
+    probe.OnFrameBoundary();
+
+    EXPECT_TRUE(probe.HasNativeStereoDetected());
+    EXPECT_FALSE(probe.RequiresAfrFallback());
+    EXPECT_EQ(probe.GetStereoVerdict(), StereoVerdict::NativeStereoDetected);
+}
+
 } // namespace fs25vr
