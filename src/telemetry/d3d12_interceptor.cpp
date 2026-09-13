@@ -93,7 +93,7 @@ void D3D12Interceptor::DetachAll() {
 
 void STDMETHODCALLTYPE D3D12Interceptor::Intercept_RSSetViewports(ID3D12GraphicsCommandList* self,
                                                                   UINT NumViewports, const D3D12_VIEWPORT* pViewports) {
-    if (s_activeInterceptor && s_activeInterceptor->m_probe) {
+    if (s_activeInterceptor && s_activeInterceptor->m_probe && !s_activeInterceptor->m_probe->IsComplete()) {
         s_activeInterceptor->m_probe->RecordViewports(NumViewports, pViewports);
     }
     auto orig = reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, UINT, const D3D12_VIEWPORT*)>(
@@ -103,7 +103,7 @@ void STDMETHODCALLTYPE D3D12Interceptor::Intercept_RSSetViewports(ID3D12Graphics
 
 void STDMETHODCALLTYPE D3D12Interceptor::Intercept_RSSetScissorRects(ID3D12GraphicsCommandList* self,
                                                                     UINT NumRects, const D3D12_RECT* pRects) {
-    if (s_activeInterceptor && s_activeInterceptor->m_probe) {
+    if (s_activeInterceptor && s_activeInterceptor->m_probe && !s_activeInterceptor->m_probe->IsComplete()) {
         s_activeInterceptor->m_probe->RecordScissorRects(NumRects, pRects);
     }
     auto orig = reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, UINT, const D3D12_RECT*)>(
@@ -116,7 +116,7 @@ void STDMETHODCALLTYPE D3D12Interceptor::Intercept_OMSetRenderTargets(ID3D12Grap
                                                                      const D3D12_CPU_DESCRIPTOR_HANDLE* pRenderTargetDescriptors,
                                                                      BOOL RTsSingleHandleToDescriptorRange,
                                                                      const D3D12_CPU_DESCRIPTOR_HANDLE* pDepthStencilDescriptor) {
-    if (s_activeInterceptor && s_activeInterceptor->m_probe) {
+    if (s_activeInterceptor && s_activeInterceptor->m_probe && !s_activeInterceptor->m_probe->IsComplete()) {
         s_activeInterceptor->m_probe->RecordRenderTargets(NumRenderTargetDescriptors, pRenderTargetDescriptors, RTsSingleHandleToDescriptorRange, pDepthStencilDescriptor);
     }
     auto orig = reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, UINT, const D3D12_CPU_DESCRIPTOR_HANDLE*, BOOL, const D3D12_CPU_DESCRIPTOR_HANDLE*)>(
@@ -127,7 +127,7 @@ void STDMETHODCALLTYPE D3D12Interceptor::Intercept_OMSetRenderTargets(ID3D12Grap
 void STDMETHODCALLTYPE D3D12Interceptor::Intercept_ExecuteCommandLists(ID3D12CommandQueue* self,
                                                                       UINT NumCommandLists,
                                                                       ID3D12CommandList* const* ppCommandLists) {
-    if (s_activeInterceptor && s_activeInterceptor->m_probe) {
+    if (s_activeInterceptor && s_activeInterceptor->m_probe && !s_activeInterceptor->m_probe->IsComplete()) {
         s_activeInterceptor->m_probe->RecordExecuteCommandLists(NumCommandLists, ppCommandLists);
         // Automatically attach command list detours if any passed command list is a graphics command list
         if (ppCommandLists && NumCommandLists > 0 && !s_activeInterceptor->m_commandListAttached) {

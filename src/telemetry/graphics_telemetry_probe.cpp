@@ -15,6 +15,8 @@ GraphicsTelemetryProbe::GraphicsTelemetryProbe() = default;
 
 void GraphicsTelemetryProbe::RecordViewports(UINT count, const D3D12_VIEWPORT* pViewports) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (m_isComplete) return;
+
     if (m_passDirty && !m_currentPass.viewports.empty()) {
         m_pendingPasses.push_back(m_currentPass);
         m_currentPass = RenderPassInfo{};
@@ -39,6 +41,8 @@ void GraphicsTelemetryProbe::RecordViewports(UINT count, const D3D12_VIEWPORT* p
 
 void GraphicsTelemetryProbe::RecordScissorRects(UINT count, const D3D12_RECT* pRects) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (m_isComplete) return;
+
     m_currentPass.scissorRects.clear();
     if (pRects && count > 0) {
         m_currentPass.scissorRects.reserve(count);
@@ -57,6 +61,8 @@ void GraphicsTelemetryProbe::RecordScissorRects(UINT count, const D3D12_RECT* pR
 void GraphicsTelemetryProbe::RecordRenderTargets(UINT numRTVs, const D3D12_CPU_DESCRIPTOR_HANDLE* pRTVs,
                                                  bool /*singleHandleRange*/, const D3D12_CPU_DESCRIPTOR_HANDLE* pDSV) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (m_isComplete) return;
+
     if (m_passDirty && !m_currentPass.rtvHandles.empty()) {
         m_pendingPasses.push_back(m_currentPass);
         m_currentPass = RenderPassInfo{};
@@ -75,101 +81,143 @@ void GraphicsTelemetryProbe::RecordRenderTargets(UINT numRTVs, const D3D12_CPU_D
 
 void GraphicsTelemetryProbe::RecordExecuteCommandLists(UINT numLists, ID3D12CommandList* const* /*ppLists*/) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (m_isComplete) return;
     m_pendingCommandListCount += numLists;
 }
 
-void GraphicsTelemetryProbe::OnFrameBoundary() {
+bool GraphicsTelemetryProbe::IsComplete() const {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    return m_isComplete;
+}
 
-    if (m_passDirty) {
-        m_pendingPasses.push_back(m_currentPass);
-        m_currentPass = RenderPassInfo{};
-        m_passDirty = false;
-    }
+void GraphicsTelemetryProbe::SetMaxProbeFrames(uint32_t count) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    m_maxProbeFrames = (count > 0) ? count : 1;
+}
 
-    ++m_currentFrameIndex;
+uint32_t GraphicsTelemetryProbe::GetMaxProbeFrames() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    return m_maxProbeFrames;
+}
 
-    FrameTelemetry frame;
-    frame.frameIndex = m_currentFrameIndex;
-    frame.passes = std::move(m_pendingPasses);
-    frame.executedCommandListCount = m_pendingCommandListCount;
+void GraphicsTelemetryProbe::SetCompletionCallback(std::function<void()> callback) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    m_completionCallback = std::move(callback);
+}
 
-    for (const auto& pass : frame.passes) {
-        uint32_t vpCount = static_cast<uint32_t>(pass.viewports.size());
-        if (vpCount > frame.maxConcurrentViewports) {
-            frame.maxConcurrentViewports = vpCount;
+void GraphicsTelemetryProbe::OnFrameBoundary() {
+    std::function<void()> onCompleteCb;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+        if (m_isComplete) {
+            return;
         }
-    }
 
-    if (frame.maxConcurrentViewports >= 2) {
-        frame.hasMultiViewportStereo = true;
-    }
+        if (m_passDirty) {
+            m_pendingPasses.push_back(m_currentPass);
+            m_currentPass = RenderPassInfo{};
+            m_passDirty = false;
+        }
 
-    // Check dual-pass stereo heuristic: at least 2 consecutive passes with side-by-side split viewport layout
-    // (e.g. Pass 1 at [0, 0, W, H] and Pass 2 at [W, 0, W, H] with active render targets and full-eye width)
-    if (frame.passes.size() >= 2) {
-        for (size_t i = 0; i < frame.passes.size() - 1; ++i) {
-            const auto& p1 = frame.passes[i];
-            const auto& p2 = frame.passes[i + 1];
-            if (!p1.viewports.empty() && !p2.viewports.empty()) {
-                bool splitViewport = (p1.viewports[0].x == 0.0f &&
-                                      p2.viewports[0].x == p1.viewports[0].width &&
-                                      p1.viewports[0].y == 0.0f &&
-                                      p2.viewports[0].y == 0.0f &&
-                                      p1.viewports[0].width == p2.viewports[0].width &&
-                                      p1.viewports[0].height == p2.viewports[0].height &&
-                                      p1.viewports[0].width >= 640.0f &&
-                                      !p1.rtvHandles.empty() &&
-                                      !p2.rtvHandles.empty());
-                if (splitViewport) {
-                    frame.hasDualPassStereo = true;
-                    break;
+        ++m_currentFrameIndex;
+
+        FrameTelemetry frame;
+        frame.frameIndex = m_currentFrameIndex;
+        frame.passes = std::move(m_pendingPasses);
+        frame.executedCommandListCount = m_pendingCommandListCount;
+
+        for (const auto& pass : frame.passes) {
+            uint32_t vpCount = static_cast<uint32_t>(pass.viewports.size());
+            if (vpCount > frame.maxConcurrentViewports) {
+                frame.maxConcurrentViewports = vpCount;
+            }
+        }
+
+        if (frame.maxConcurrentViewports >= 2) {
+            frame.hasMultiViewportStereo = true;
+        }
+
+        // Check dual-pass stereo heuristic: at least 2 consecutive passes with side-by-side split viewport layout
+        // (e.g. Pass 1 at [0, 0, W, H] and Pass 2 at [W, 0, W, H] with active render targets and full-eye width)
+        if (frame.passes.size() >= 2) {
+            for (size_t i = 0; i < frame.passes.size() - 1; ++i) {
+                const auto& p1 = frame.passes[i];
+                const auto& p2 = frame.passes[i + 1];
+                if (!p1.viewports.empty() && !p2.viewports.empty()) {
+                    bool splitViewport = (p1.viewports[0].x == 0.0f &&
+                                          p2.viewports[0].x == p1.viewports[0].width &&
+                                          p1.viewports[0].y == 0.0f &&
+                                          p2.viewports[0].y == 0.0f &&
+                                          p1.viewports[0].width == p2.viewports[0].width &&
+                                          p1.viewports[0].height == p2.viewports[0].height &&
+                                          p1.viewports[0].width >= 640.0f &&
+                                          !p1.rtvHandles.empty() &&
+                                          !p2.rtvHandles.empty());
+                    if (splitViewport) {
+                        frame.hasDualPassStereo = true;
+                        break;
+                    }
                 }
             }
         }
+
+        m_maxConcurrentViewportsObserved = std::max(m_maxConcurrentViewportsObserved, frame.maxConcurrentViewports);
+        m_lastFrame = frame;
+        if (m_history.size() < m_maxProbeFrames) {
+            m_history.push_back(frame);
+        }
+
+        EvaluateVerdictLocked();
+
+        // Reset pending state
+        m_pendingPasses.clear();
+        m_pendingCommandListCount = 0;
+
+        // Output detailed telemetry diagnostics only during the initial probe window
+        if (m_currentFrameIndex <= m_maxProbeFrames) {
+            std::ostringstream ss;
+            ss << "[TelemetryProbe] Frame #" << frame.frameIndex << ": "
+               << frame.passes.size() << " passes, "
+               << frame.executedCommandListCount << " command lists, max viewports="
+               << frame.maxConcurrentViewports;
+            LogInfo(ss.str());
+
+            for (size_t pIdx = 0; pIdx < frame.passes.size(); ++pIdx) {
+                const auto& pass = frame.passes[pIdx];
+                std::ostringstream passStream;
+                passStream << "  Pass " << pIdx << ": Viewports=" << pass.viewports.size() << " (";
+                for (size_t vIdx = 0; vIdx < pass.viewports.size(); ++vIdx) {
+                    if (vIdx > 0) passStream << ", ";
+                    passStream << "[" << pass.viewports[vIdx].x << "," << pass.viewports[vIdx].y
+                               << " " << pass.viewports[vIdx].width << "x" << pass.viewports[vIdx].height << "]";
+                }
+                passStream << "), Scissors=" << pass.scissorRects.size() << " (";
+                for (size_t sIdx = 0; sIdx < pass.scissorRects.size(); ++sIdx) {
+                    if (sIdx > 0) passStream << ", ";
+                    passStream << "[" << pass.scissorRects[sIdx].left << "," << pass.scissorRects[sIdx].top
+                               << "," << pass.scissorRects[sIdx].right << "," << pass.scissorRects[sIdx].bottom << "]";
+                }
+                passStream << "), RTVs=" << pass.rtvCount << ", DSV=" << (pass.hasDsv ? "yes" : "no");
+                LogInfo(passStream.str());
+            }
+        }
+
+        // Check if probe has reached a definitive verdict or reached sampling limit
+        if (m_verdict != StereoVerdict::Inconclusive &&
+            (m_currentFrameIndex >= m_maxProbeFrames || m_verdict == StereoVerdict::NativeStereoDetected)) {
+            m_isComplete = true;
+            if (m_verdict == StereoVerdict::NativeStereoDetected) {
+                LogInfo("[TelemetryProbe] Final Verdict: Native stereo detected in GIANTS Engine 10. Probe complete, disarming telemetry hooks.");
+            } else if (m_verdict == StereoVerdict::AfrFallbackRequired) {
+                LogInfo("[TelemetryProbe] Final Verdict: GIANTS Engine 10 Direct3D 12 pipeline requires Alternate Frame Rendering (AFR). Probe complete, disarming telemetry hooks.");
+            }
+            onCompleteCb = m_completionCallback;
+        }
     }
 
-    m_maxConcurrentViewportsObserved = std::max(m_maxConcurrentViewportsObserved, frame.maxConcurrentViewports);
-    m_lastFrame = frame;
-    m_history.push_back(frame);
-
-    EvaluateVerdictLocked();
-
-    // Reset pending state
-    m_pendingPasses.clear();
-    m_pendingCommandListCount = 0;
-
-    // Output detailed telemetry diagnostics to the log
-    std::ostringstream ss;
-    ss << "[TelemetryProbe] Frame #" << frame.frameIndex << ": "
-       << frame.passes.size() << " passes, "
-       << frame.executedCommandListCount << " command lists, max viewports="
-       << frame.maxConcurrentViewports;
-    LogInfo(ss.str());
-
-    for (size_t pIdx = 0; pIdx < frame.passes.size(); ++pIdx) {
-        const auto& pass = frame.passes[pIdx];
-        std::ostringstream passStream;
-        passStream << "  Pass " << pIdx << ": Viewports=" << pass.viewports.size() << " (";
-        for (size_t vIdx = 0; vIdx < pass.viewports.size(); ++vIdx) {
-            if (vIdx > 0) passStream << ", ";
-            passStream << "[" << pass.viewports[vIdx].x << "," << pass.viewports[vIdx].y
-                       << " " << pass.viewports[vIdx].width << "x" << pass.viewports[vIdx].height << "]";
-        }
-        passStream << "), Scissors=" << pass.scissorRects.size() << " (";
-        for (size_t sIdx = 0; sIdx < pass.scissorRects.size(); ++sIdx) {
-            if (sIdx > 0) passStream << ", ";
-            passStream << "[" << pass.scissorRects[sIdx].left << "," << pass.scissorRects[sIdx].top
-                       << "," << pass.scissorRects[sIdx].right << "," << pass.scissorRects[sIdx].bottom << "]";
-        }
-        passStream << "), RTVs=" << pass.rtvCount << ", DSV=" << (pass.hasDsv ? "yes" : "no");
-        LogInfo(passStream.str());
-    }
-
-    if (m_verdict == StereoVerdict::NativeStereoDetected) {
-        LogInfo("[TelemetryProbe] Verdict: Native stereo detected in GIANTS Engine 10.");
-    } else if (m_verdict == StereoVerdict::AfrFallbackRequired) {
-        LogInfo("[TelemetryProbe] Verdict: GIANTS Engine 10 Direct3D 12 pipeline does not execute native stereo passes. Alternate Frame Rendering (AFR) fallback required.");
+    if (onCompleteCb) {
+        onCompleteCb();
     }
 }
 
@@ -269,7 +317,9 @@ ProbeSnapshot GraphicsTelemetryProbe::GetSnapshot() const {
     snap.nativeStereo = (m_verdict == StereoVerdict::NativeStereoDetected);
     snap.afrFallback = (m_verdict == StereoVerdict::AfrFallbackRequired);
     snap.verdict = m_verdict;
-    snap.summary = GenerateDiagnosticReportLocked();
+    const char* verdictName = (m_verdict == StereoVerdict::NativeStereoDetected) ? "NativeStereoDetected"
+        : (m_verdict == StereoVerdict::AfrFallbackRequired ? "AfrFallbackRequired" : "Inconclusive");
+    snap.summary = std::string("Verdict: ") + verdictName + " (" + std::to_string(m_history.size()) + " frames sampled)";
     return snap;
 }
 
@@ -284,6 +334,7 @@ void GraphicsTelemetryProbe::Reset() {
     m_history.clear();
     m_maxConcurrentViewportsObserved = 0;
     m_verdict = StereoVerdict::Inconclusive;
+    m_isComplete = false;
 }
 
 } // namespace fs25vr

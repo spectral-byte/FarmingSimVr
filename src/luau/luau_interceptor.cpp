@@ -246,9 +246,9 @@ void LuauInterceptor::Detach() {
 }
 
 int LuauInterceptor::HandleQuery(lua_State* L) {
-    if (L) {
+    if (L && m_bridge) {
         m_activeState = L;
-        if (!m_bridgeInjected && m_bridge) {
+        if (!m_bridge->IsInjected(L)) {
             m_bridge->Inject(L);
             m_bridgeInjected = true;
             LogInfo("LuauInterceptor: Intercepted active Luau state pointer and injected VRBridge table.");

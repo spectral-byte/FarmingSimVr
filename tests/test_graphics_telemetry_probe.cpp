@@ -170,4 +170,43 @@ TEST_F(GraphicsTelemetryProbeTest, DetectsDualPassStereoWhenConsecutiveSideBySid
     EXPECT_EQ(probe.GetStereoVerdict(), StereoVerdict::NativeStereoDetected);
 }
 
+TEST_F(GraphicsTelemetryProbeTest, CompletesAfterMaxProbeFramesAndInvokesCallback) {
+    int callbackInvocations = 0;
+    probe.SetCompletionCallback([&]() {
+        callbackInvocations++;
+    });
+
+    EXPECT_FALSE(probe.IsComplete());
+
+    D3D12_VIEWPORT vp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
+    for (int i = 0; i < 5; ++i) {
+        probe.RecordViewports(1, &vp);
+        probe.OnFrameBoundary();
+    }
+
+    EXPECT_TRUE(probe.IsComplete());
+    EXPECT_EQ(callbackInvocations, 1);
+    EXPECT_EQ(probe.GetStereoVerdict(), StereoVerdict::AfrFallbackRequired);
+
+    // Further recording should be bypassed once complete
+    probe.RecordViewports(1, &vp);
+    probe.OnFrameBoundary();
+    EXPECT_EQ(callbackInvocations, 1); // Callback not called again
+}
+
+TEST_F(GraphicsTelemetryProbeTest, CapsHistoryToMaxProbeFrames) {
+    D3D12_VIEWPORT vp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
+    for (int i = 0; i < 15; ++i) {
+        probe.RecordViewports(1, &vp);
+        probe.OnFrameBoundary();
+    }
+
+    std::string report = probe.GenerateDiagnosticReport();
+    EXPECT_NE(report.find("Total Frames Sampled: 5"), std::string::npos);
+
+    ProbeSnapshot snap = probe.GetSnapshot();
+    EXPECT_TRUE(snap.afrFallback);
+    EXPECT_NE(snap.summary.find("AfrFallbackRequired"), std::string::npos);
+}
+
 } // namespace fs25vr

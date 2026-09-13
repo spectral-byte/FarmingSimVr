@@ -652,7 +652,7 @@ function VRCompanion:update(dt)
         self:hookPlayerCamera()
     end
 
-    if VRBridge ~= nil and type(VRBridge.getStereoTelemetry) == "function" then
+    if (self.lastReportedVerdict == nil or self.lastReportedVerdict == "Inconclusive") and self.frameTicks < 300 and VRBridge ~= nil and type(VRBridge.getStereoTelemetry) == "function" then
         local telemetry = VRBridge.getStereoTelemetry()
         if telemetry then
             if telemetry.verdict ~= self.lastReportedVerdict then

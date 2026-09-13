@@ -690,16 +690,22 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
 }
 
 void OpenXrManager::DestroyEyeSwapchains() {
-    if (m_copyFence && m_queue && m_copyFenceValue > 0) {
-        if (m_copyFence->GetCompletedValue() < m_copyFenceValue) {
+    if (m_copyFence && m_queue && m_currentFenceValue > 0) {
+        if (m_copyFence->GetCompletedValue() < m_currentFenceValue) {
             if (m_copyFenceEvent) {
-                m_copyFence->SetEventOnCompletion(m_copyFenceValue, m_copyFenceEvent);
+                m_copyFence->SetEventOnCompletion(m_currentFenceValue, m_copyFenceEvent);
                 WaitForSingleObject(m_copyFenceEvent, INFINITE);
             }
         }
     }
     m_copyFence.Reset();
-    m_copyFenceValue = 0;
+    m_currentFenceValue = 0;
+    for (uint32_t r = 0; r < kCopyRingSize; ++r) {
+        m_copyFenceValues[r] = 0;
+        m_copyCommandLists[r].Reset();
+        m_copyAllocators[r].Reset();
+    }
+    m_copyRingIndex = 0;
     if (m_copyFenceEvent) {
         CloseHandle(m_copyFenceEvent);
         m_copyFenceEvent = nullptr;
@@ -715,8 +721,6 @@ void OpenXrManager::DestroyEyeSwapchains() {
     if (m_frameBegun) {
         EndFrame();
     }
-    m_copyCommandList.Reset();
-    m_copyAllocator.Reset();
     m_hasEyeSwapchains = false;
 }
 
@@ -850,33 +854,44 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
     // If backBuffer, device, and queue are present, perform D3D12 command list recording & execution
     if (backBuffer && m_device && m_queue) {
-        if (!m_copyAllocator) {
-            m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_copyAllocator));
-        }
-        if (!m_copyCommandList && m_copyAllocator) {
-            m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_copyAllocator.Get(), nullptr, IID_PPV_ARGS(&m_copyCommandList));
-        }
         if (!m_copyFence) {
             m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_copyFence));
-            m_copyFenceValue = 0;
+            m_currentFenceValue = 0;
+            for (uint32_t r = 0; r < kCopyRingSize; ++r) {
+                m_copyFenceValues[r] = 0;
+            }
             if (!m_copyFenceEvent) {
                 m_copyFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
             }
         }
 
-        if (m_copyCommandList && m_copyAllocator) {
-            // Synchronize with previous copy execution to prevent command allocator reuse while GPU is reading
-            if (m_copyFence && m_copyFenceValue > 0) {
-                if (m_copyFence->GetCompletedValue() < m_copyFenceValue) {
+        uint32_t ringSlot = m_copyRingIndex;
+        m_copyRingIndex = (m_copyRingIndex + 1) % kCopyRingSize;
+
+        if (!m_copyAllocators[ringSlot]) {
+            m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_copyAllocators[ringSlot]));
+        }
+        if (!m_copyCommandLists[ringSlot] && m_copyAllocators[ringSlot]) {
+            m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_copyAllocators[ringSlot].Get(), nullptr, IID_PPV_ARGS(&m_copyCommandLists[ringSlot]));
+        }
+
+        auto& curAllocator = m_copyAllocators[ringSlot];
+        auto& curCommandList = m_copyCommandLists[ringSlot];
+
+        if (curCommandList && curAllocator) {
+            // Synchronize with previous execution on this specific ring slot if GPU has not finished it
+            uint64_t waitVal = m_copyFenceValues[ringSlot];
+            if (m_copyFence && waitVal > 0) {
+                if (m_copyFence->GetCompletedValue() < waitVal) {
                     if (m_copyFenceEvent) {
-                        m_copyFence->SetEventOnCompletion(m_copyFenceValue, m_copyFenceEvent);
+                        m_copyFence->SetEventOnCompletion(waitVal, m_copyFenceEvent);
                         WaitForSingleObject(m_copyFenceEvent, INFINITE);
                     }
                 }
             }
 
-            m_copyAllocator->Reset();
-            m_copyCommandList->Reset(m_copyAllocator.Get(), nullptr);
+            curAllocator->Reset();
+            curCommandList->Reset(curAllocator.Get(), nullptr);
 
             ID3D12Resource* destTexture = nullptr;
             if (imageIndex < m_eyeSwapchains[eyeIndex].images.size()) {
@@ -897,12 +912,12 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
                 barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
                 barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
-                m_copyCommandList->ResourceBarrier(2, barriers);
+                curCommandList->ResourceBarrier(2, barriers);
 
                 D3D12_RESOURCE_DESC srcDesc = backBuffer->GetDesc();
                 D3D12_RESOURCE_DESC dstDesc = destTexture->GetDesc();
                 if (srcDesc.Width == dstDesc.Width && srcDesc.Height == dstDesc.Height) {
-                    m_copyCommandList->CopyResource(destTexture, backBuffer);
+                    curCommandList->CopyResource(destTexture, backBuffer);
                 } else {
                     D3D12_TEXTURE_COPY_LOCATION dstLoc{};
                     dstLoc.pResource = destTexture;
@@ -922,20 +937,21 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
                     box.bottom = static_cast<UINT>(std::min(srcDesc.Height, dstDesc.Height));
                     box.back = 1;
 
-                    m_copyCommandList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &box);
+                    curCommandList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &box);
                 }
 
                 std::swap(barriers[0].Transition.StateBefore, barriers[0].Transition.StateAfter);
                 std::swap(barriers[1].Transition.StateBefore, barriers[1].Transition.StateAfter);
-                m_copyCommandList->ResourceBarrier(2, barriers);
+                curCommandList->ResourceBarrier(2, barriers);
 
-                m_copyCommandList->Close();
-                ID3D12CommandList* lists[] = { m_copyCommandList.Get() };
+                curCommandList->Close();
+                ID3D12CommandList* lists[] = { curCommandList.Get() };
                 m_queue->ExecuteCommandLists(1, lists);
 
                 if (m_copyFence) {
-                    m_copyFenceValue++;
-                    m_queue->Signal(m_copyFence.Get(), m_copyFenceValue);
+                    m_currentFenceValue++;
+                    m_copyFenceValues[ringSlot] = m_currentFenceValue;
+                    m_queue->Signal(m_copyFence.Get(), m_currentFenceValue);
                 }
             }
         }

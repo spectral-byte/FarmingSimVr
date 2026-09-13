@@ -5,6 +5,7 @@
 #include <string>
 #include <mutex>
 #include <cstdint>
+#include <functional>
 
 namespace fs25vr {
 
@@ -70,6 +71,11 @@ public:
     void RecordExecuteCommandLists(UINT numLists, ID3D12CommandList* const* ppLists);
     void OnFrameBoundary();
 
+    bool IsComplete() const;
+    void SetMaxProbeFrames(uint32_t count);
+    uint32_t GetMaxProbeFrames() const;
+    void SetCompletionCallback(std::function<void()> callback);
+
     uint64_t GetCurrentFrameIndex() const;
     const FrameTelemetry& GetLastFrameTelemetry() const;
     const std::vector<FrameTelemetry>& GetFrameHistory() const;
@@ -96,6 +102,9 @@ private:
     std::vector<FrameTelemetry> m_history;
     uint32_t m_maxConcurrentViewportsObserved = 0;
     StereoVerdict m_verdict = StereoVerdict::Inconclusive;
+    bool m_isComplete = false;
+    uint32_t m_maxProbeFrames = 5;
+    std::function<void()> m_completionCallback;
 };
 
 } // namespace fs25vr

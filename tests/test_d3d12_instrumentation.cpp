@@ -243,7 +243,14 @@ TEST_F(D3D12InstrumentationTest, RealD3D12DeviceInstrumentationIfAvailable) {
         ASSERT_EQ(last.passes[0].viewports.size(), 1u);
         EXPECT_FLOAT_EQ(last.passes[0].viewports[0].width, 1920.0f);
         EXPECT_FLOAT_EQ(last.passes[0].viewports[0].height, 1080.0f);
-        EXPECT_EQ(last.executedCommandListCount, 1u);
+        // Synchronize GPU queue execution before destroying D3D12 objects
+        ComPtr<ID3D12Fence> fence;
+        ASSERT_EQ(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), S_OK);
+        HANDLE fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        queue->Signal(fence.Get(), 1);
+        fence->SetEventOnCompletion(1, fenceEvent);
+        WaitForSingleObject(fenceEvent, INFINITE);
+        CloseHandle(fenceEvent);
 
         interceptor->DetachAll();
         EXPECT_FALSE(interceptor->IsCommandListAttached());

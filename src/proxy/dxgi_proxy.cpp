@@ -71,6 +71,13 @@ void DxgiProxy::EnsureVrInitialized() {
         LogInfo("In-process Luau state interception channel armed.");
         if (m_d3d12Interceptor) {
             m_d3d12Interceptor->SetTelemetryProbe(m_telemetryProbe);
+            if (m_telemetryProbe) {
+                m_telemetryProbe->SetCompletionCallback([this]() {
+                    if (m_d3d12Interceptor) {
+                        m_d3d12Interceptor->DetachAll();
+                    }
+                });
+            }
         }
         LogInfo("Direct3D 12 stereo telemetry probe armed.");
     }
@@ -336,7 +343,8 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UIN
         proxy->m_detourPresent.GetOriginal()
     );
     if (orig) {
-        return orig(self, syncInterval, flags);
+        UINT effectiveSyncInterval = (proxy->m_openXrManager && proxy->m_openXrManager->IsActive()) ? 0 : syncInterval;
+        return orig(self, effectiveSyncInterval, flags);
     }
     return S_OK;
 }
@@ -348,7 +356,8 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
         proxy->m_detourPresent1.GetOriginal()
     );
     if (orig) {
-        return orig(self, syncInterval, flags, params);
+        UINT effectiveSyncInterval = (proxy->m_openXrManager && proxy->m_openXrManager->IsActive()) ? 0 : syncInterval;
+        return orig(self, effectiveSyncInterval, flags, params);
     }
     return S_OK;
 }

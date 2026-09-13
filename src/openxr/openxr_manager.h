@@ -215,10 +215,13 @@ private:
 
     ID3D12Device* m_device = nullptr;
     ID3D12CommandQueue* m_queue = nullptr;
-    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_copyAllocator;
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_copyCommandList;
+    static constexpr uint32_t kCopyRingSize = 2;
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_copyAllocators[kCopyRingSize];
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_copyCommandLists[kCopyRingSize];
     Microsoft::WRL::ComPtr<ID3D12Fence> m_copyFence;
-    uint64_t m_copyFenceValue = 0;
+    uint64_t m_copyFenceValues[kCopyRingSize] = {0, 0};
+    uint64_t m_currentFenceValue = 0;
+    uint32_t m_copyRingIndex = 0;
     HANDLE m_copyFenceEvent = nullptr;
 
     EyeSwapchain m_eyeSwapchains[2];
