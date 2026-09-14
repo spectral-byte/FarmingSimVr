@@ -439,3 +439,60 @@ TEST_F(VrBridgeTest, ExposesCompanionActiveStatusAndHandlesMapUnload) {
     EXPECT_FALSE(bridge.IsCompanionActive());
 }
 
+TEST_F(VrBridgeTest, ExposesMenuVisibilityAndSynchronizesStateBetweenLuauAndCpp) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    // Initially false in both C++ and Luau
+    EXPECT_FALSE(bridge.IsMenuVisible());
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(type(VRBridge.setMenuVisible) == "function", "setMenuVisible must be a function")
+        assert(type(VRBridge.getIsMenuVisible) == "function", "getIsMenuVisible must be a function")
+        assert(VRBridge.getIsMenuVisible() == false, "initial getIsMenuVisible must be false")
+        assert(VRBridge.isMenuVisible == false, "initial isMenuVisible property must be false")
+    )luau"), 0);
+
+    // Set menu visible from Luau
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        VRBridge.setMenuVisible(true)
+        assert(VRBridge.getIsMenuVisible() == true, "getIsMenuVisible must return true after setMenuVisible(true)")
+        assert(VRBridge.isMenuVisible == true, "isMenuVisible property must return true after setMenuVisible(true)")
+    )luau"), 0);
+
+    EXPECT_TRUE(bridge.IsMenuVisible());
+
+    // Frame parity reset test: setting parity to 1, then setMenuVisible should reset parity to 0
+    bridge.SetFrameParity(1);
+    EXPECT_EQ(bridge.GetFrameParity(), 1u);
+    bridge.SetMenuVisible(false);
+    EXPECT_FALSE(bridge.IsMenuVisible());
+    EXPECT_EQ(bridge.GetFrameParity(), 0u);
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getIsMenuVisible() == false, "getIsMenuVisible must reflect C++ SetMenuVisible(false)")
+    )luau"), 0);
+
+    // Dynamic property access via __index
+    bridge.SetMenuVisible(true);
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getIsMenuVisible() == true, "must be true")
+    )luau"), 0);
+}
+
+TEST_F(VrBridgeTest, MapUnloadResetsMenuVisibilityToFalse) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    bridge.SetMenuVisible(true);
+    EXPECT_TRUE(bridge.IsMenuVisible());
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getIsMenuVisible() == true, "menu should be visible before unload")
+        VRBridge.onMapUnload()
+        assert(VRBridge.getIsMenuVisible() == false, "menu visibility must be reset to false after onMapUnload")
+    )luau"), 0);
+
+    EXPECT_FALSE(bridge.IsMenuVisible());
+}
+

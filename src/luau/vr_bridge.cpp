@@ -43,7 +43,7 @@ bool VRBridge::Inject(lua_State* L) {
     int origTop = lua_gettop(L);
 
     // Create table for VRBridge
-    lua_createtable(L, 0, 15);
+    lua_createtable(L, 0, 20);
 
     // VRBridge.version = "1.0.0"
     lua_pushstring(L, m_version.c_str());
@@ -119,6 +119,16 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushcclosure(L, &VRBridge::Lua_GetEyePose, "getEyePose", 1);
     lua_setfield(L, -2, "getEyePose");
 
+    // VRBridge.setMenuVisible = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_SetMenuVisible, "setMenuVisible", 1);
+    lua_setfield(L, -2, "setMenuVisible");
+
+    // VRBridge.getIsMenuVisible = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetIsMenuVisible, "getIsMenuVisible", 1);
+    lua_setfield(L, -2, "getIsMenuVisible");
+
     // Set metatable on VRBridge table for dynamic property access (__index)
     lua_createtable(L, 0, 1);
     lua_pushlightuserdata(L, this);
@@ -189,7 +199,8 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
 
     self->SetCompanionActive(false);
     self->SetFrameParity(0);
-    LogInfo("[VRBridge] Companion mod map unloaded; reverted to Menu Quad layer mode.");
+    self->SetMenuVisible(false);
+    LogInfo("[VRBridge] Companion Mod map unloaded; reverted to Menu Quad layer mode.");
     return 0;
 }
 
@@ -402,6 +413,9 @@ void VRBridge::AdvanceFrame() {
 
 void VRBridge::SetFrameParity(uint32_t parity) {
     m_frameParity = parity % 2;
+    if (static_cast<uint32_t>(m_frameIndex % 2) != m_frameParity) {
+        m_frameIndex++;
+    }
 }
 
 float VRBridge::GetIpd() const {
@@ -487,6 +501,38 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
     return 1;
 }
 
+void VRBridge::SetMenuVisible(bool visible) {
+    if (m_menuVisible != visible) {
+        m_menuVisible = visible;
+        SetFrameParity(0);
+        if (visible) {
+            LogInfo("[VRBridge] In-game menu opened (isMenuVisible=true); switched to 6DOF Quad layer.");
+        } else {
+            LogInfo("[VRBridge] In-game menu closed (isMenuVisible=false); restored stereoscopic 3D projection.");
+        }
+    }
+}
+
+int VRBridge::Lua_SetMenuVisible(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    bool visible = false;
+    if (lua_gettop(L) >= 1) {
+        visible = (lua_toboolean(L, 1) != 0);
+    }
+    self->SetMenuVisible(visible);
+    return 0;
+}
+
+int VRBridge::Lua_GetIsMenuVisible(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    lua_pushboolean(L, self->IsMenuVisible() ? 1 : 0);
+    return 1;
+}
+
 int VRBridge::Lua_Index(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
@@ -511,6 +557,10 @@ int VRBridge::Lua_Index(lua_State* L) {
         }
         if (strcmp(key, "isCompanionActive") == 0) {
             lua_pushboolean(L, self->IsCompanionActive() ? 1 : 0);
+            return 1;
+        }
+        if (strcmp(key, "isMenuVisible") == 0) {
+            lua_pushboolean(L, self->IsMenuVisible() ? 1 : 0);
             return 1;
         }
     }

@@ -1445,6 +1445,29 @@ TEST(OpenXrManagerTest, CustomMenuQuadDistanceAndSize) {
     EXPECT_NEAR(defaultSize.height, 0.9f, 0.001f);
 }
 
+TEST(OpenXrManagerTest, SubmitMenuQuadResetsCopiedFlagsForBothSwapchains) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    // Copy to both eyes to simulate partial stereo state before menu opens
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+    EXPECT_TRUE(manager.GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_TRUE(manager.GetEyeSwapchain(1).hasCopiedFrame);
+
+    // Now submit a menu quad
+    ASSERT_TRUE(manager.SubmitMenuQuad());
+
+    // Both swapchains must have their copied flags reset to false
+    EXPECT_FALSE(manager.GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_FALSE(manager.GetEyeSwapchain(1).hasCopiedFrame);
+}
+
 } // namespace fs25vr
 
 

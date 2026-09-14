@@ -13,6 +13,8 @@ VRCompanion.frameTicks = 0
 VRCompanion.vehicleCameraHooked = false
 VRCompanion.playerCameraHooked = false
 VRCompanion.origCamSettings = {}
+VRCompanion.isMenuVisible = false
+VRCompanion.guiVisibilityInitialized = false
 -- Proactively probe head tracking availability to trigger native LuauInterceptor detour
 if type(isHeadTrackingAvailable) == "function" then
     pcall(isHeadTrackingAvailable)
@@ -95,6 +97,35 @@ function VRCompanion:loadMap(name)
         end
         print("[FS25_VR] Registered in-engine Recenter Action event (VR_RECENTER).")
     end
+
+    -- 6. Synchronize initial GUI menu visibility state
+    self.isMenuVisible = false
+    self.guiVisibilityInitialized = false
+    self:pollGuiVisibility()
+end
+
+function VRCompanion:pollGuiVisibility()
+    local isGuiVisible = false
+    if g_gui ~= nil and type(g_gui.getIsGuiVisible) == "function" then
+        local ok, visible = pcall(function() return g_gui:getIsGuiVisible() end)
+        if ok then
+            isGuiVisible = (visible == true)
+        end
+    end
+
+    if self.isMenuVisible ~= isGuiVisible or not self.guiVisibilityInitialized then
+        self.isMenuVisible = isGuiVisible
+        self.guiVisibilityInitialized = true
+        if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
+            VRBridge.setMenuVisible(isGuiVisible)
+        end
+        if isGuiVisible then
+            print("[FS25_VR] In-game GUI menu opened; switched presentation to 6DOF Quad layer.")
+        elseif self.frameTicks > 0 then
+            print("[FS25_VR] In-game GUI menu closed; restored stereoscopic 3D projection rendering.")
+        end
+    end
+    return isGuiVisible
 end
 
 function VRCompanion:getPlayerCamera()
@@ -304,7 +335,7 @@ function VRCompanion:requiresAfrFallback()
 end
 
 function VRCompanion:computeEyeOffset(pose, eyeIndex, afrFallback)
-    if not afrFallback then
+    if not afrFallback or self.isMenuVisible then
         return 0, 0, 0
     end
     local ipd = self:getIpd()
@@ -357,6 +388,14 @@ function VRCompanion:getResolvedHeadPose()
     return pose
 end
 
+function VRCompanion:getActiveEyeIndex(afrFallback)
+    if afrFallback and not self.isMenuVisible then
+        local parity = self:getFrameParity()
+        return (parity % 2 == 1) and 1 or 0
+    end
+    return 0
+end
+
 function VRCompanion:onVehicleCameraUpdate(cam, dt)
     -- Only apply 6DOF tracking and projection to interior in-cab cameras
     if not cam or not cam.isInside or cam.cameraNode == nil then
@@ -364,11 +403,7 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     end
 
     local afrFallback = self:requiresAfrFallback()
-    local eyeIndex = 0
-    if afrFallback then
-        local parity = self:getFrameParity()
-        eyeIndex = (parity % 2 == 1) and 1 or 0
-    end
+    local eyeIndex = self:getActiveEyeIndex(afrFallback)
 
     self:applyCameraProjection(cam.cameraNode, eyeIndex)
 
@@ -469,11 +504,7 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     end
 
     local afrFallback = self:requiresAfrFallback()
-    local eyeIndex = 0
-    if afrFallback then
-        local parity = self:getFrameParity()
-        eyeIndex = (parity % 2 == 1) and 1 or 0
-    end
+    local eyeIndex = self:getActiveEyeIndex(afrFallback)
 
     self:applyCameraProjection(activeCamNode, eyeIndex)
 
@@ -645,6 +676,9 @@ end
 function VRCompanion:update(dt)
     self.frameTicks = (self.frameTicks or 0) + 1
 
+    -- Poll in-game GUI visibility and synchronize with native VRBridge
+    self:pollGuiVisibility()
+
     if not self.vehicleCameraHooked then
         self:hookVehicleCamera()
     end
@@ -707,6 +741,12 @@ function VRCompanion:deleteMap()
     self.frameTicks = 0
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
+    self.isMenuVisible = false
+    self.guiVisibilityInitialized = false
+
+    if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
+        VRBridge.setMenuVisible(false)
+    end
 
     if VRBridge ~= nil and type(VRBridge.onMapUnload) == "function" then
         VRBridge.onMapUnload()

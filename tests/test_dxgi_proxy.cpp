@@ -1043,5 +1043,111 @@ TEST(DxgiProxyTest, SeamlesslyTransitionsBetweenQuadAndStereoOnCompanionHandshak
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
 }
 
+TEST(DxgiProxyTest, DynamicallySwitchesBetweenProjectionAndQuadWhenInGameMenuToggled) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // Active companion handshake
+    vrBridge->PerformHandshake();
+    ASSERT_TRUE(vrBridge->IsCompanionActive());
+    EXPECT_FALSE(vrBridge->IsMenuVisible());
+
+    // 1. Active gameplay: 2 frames -> 1 stereo pair
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // 2. Player opens in-game pause menu / shop
+    vrBridge->SetMenuVisible(true);
+    EXPECT_TRUE(vrBridge->IsMenuVisible());
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // Next 3 frames in menu should each submit a floating quad layer immediately
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 2u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+
+    // 3. Player closes in-game menu: return to active gameplay
+    vrBridge->SetMenuVisible(false);
+    EXPECT_FALSE(vrBridge->IsMenuVisible());
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // Frame 0 of resumed gameplay: left eye
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+
+    // Frame 1 of resumed gameplay: right eye and pair submit
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 2u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+}
+
+TEST(DxgiProxyTest, MidPairMenuTransitionDoesNotDeadlockSwapchainsOrLeakFrames) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    vrBridge->PerformHandshake();
+    ASSERT_TRUE(vrBridge->IsCompanionActive());
+
+    // Frame 0: render left eye in gameplay
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+
+    // Player opens menu before frame 1 renders right eye
+    vrBridge->SetMenuVisible(true);
+    EXPECT_TRUE(vrBridge->IsMenuVisible());
+
+    // Presentation must handle switching immediately to quad without deadlocking swapchain
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+
+    // And dismiss menu
+    vrBridge->SetMenuVisible(false);
+    EXPECT_FALSE(vrBridge->IsMenuVisible());
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // Resumed gameplay completes a clean pair
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+}
+
 } // namespace fs25vr
 

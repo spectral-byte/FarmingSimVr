@@ -1022,5 +1022,148 @@ TEST_F(CompanionModTest, UnloadMapNotifiesVRBridgeAndRevertsCompanionActiveState
     )luau", "=verifyInactive"), 0);
 }
 
+TEST_F(CompanionModTest, PollsGuiVisibilityDuringUpdateAndNotifiesVRBridge) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Mock g_gui with getIsGuiVisible method
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_gui = {
+            _visible = false,
+            getIsGuiVisible = function(self)
+                return self._visible
+            end
+        }
+    )luau", "=setupGuiMock"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
+    EXPECT_FALSE(bridge.IsMenuVisible());
+
+    // Update with menu closed
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall1"), 0);
+    EXPECT_FALSE(bridge.IsMenuVisible());
+
+    // Open menu
+    ASSERT_EQ(RunLuauChunk(L, "_G.g_gui._visible = true", "=openMenu"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall2"), 0);
+
+    EXPECT_TRUE(bridge.IsMenuVisible());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.isMenuVisible == true, "VRCompanion.isMenuVisible must be true")
+        assert(VRBridge.getIsMenuVisible() == true, "VRBridge.getIsMenuVisible() must be true")
+    )luau", "=verifyMenuOpen"), 0);
+
+    bool foundOpenLog = false;
+    for (const auto& msg : s_capturedLogs) {
+        if (msg.find("In-game GUI menu opened") != std::string::npos) {
+            foundOpenLog = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundOpenLog);
+
+    // Close menu
+    ASSERT_EQ(RunLuauChunk(L, "_G.g_gui._visible = false", "=closeMenu"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall3"), 0);
+
+    EXPECT_FALSE(bridge.IsMenuVisible());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.isMenuVisible == false, "VRCompanion.isMenuVisible must be false")
+        assert(VRBridge.getIsMenuVisible() == false, "VRBridge.getIsMenuVisible() must be false")
+    )luau", "=verifyMenuClosed"), 0);
+
+    bool foundCloseLog = false;
+    for (const auto& msg : s_capturedLogs) {
+        if (msg.find("In-game GUI menu closed") != std::string::npos) {
+            foundCloseLog = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundCloseLog);
+}
+
+TEST_F(CompanionModTest, SuppressesAfrEyeOffsetAndAlternationWhenMenuVisible) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_gui = {
+            _visible = true,
+            getIsGuiVisible = function(self) return self._visible end
+        }
+    )luau", "=setupGuiMockOpen"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
+
+    EXPECT_TRUE(bridge.IsMenuVisible());
+
+    // When menu is visible, computeEyeOffset should return 0, 0, 0 regardless of eye index
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local ox, oy, oz = VRCompanion:computeEyeOffset({ qx = 0, qy = 0, qz = 0, qw = 1 }, 1, true)
+        assert(ox == 0 and oy == 0 and oz == 0, "computeEyeOffset must return 0, 0, 0 when menu is visible")
+    )luau", "=verifyZeroEyeOffset"), 0);
+}
+
+TEST_F(CompanionModTest, HandlesMissingOrFailingGuiGracefullyWithoutError) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // 1. g_gui is nil
+    ASSERT_EQ(RunLuauChunk(L, "_G.g_gui = nil", "=nilGui"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCallNil"), 0);
+    EXPECT_FALSE(bridge.IsMenuVisible());
+
+    // 2. g_gui:getIsGuiVisible throws an error
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_gui = {
+            getIsGuiVisible = function() error("Simulated GUI exception") end
+        }
+    )luau", "=failingGui"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCallFailing"), 0);
+    EXPECT_FALSE(bridge.IsMenuVisible());
+}
+
+TEST_F(CompanionModTest, UnloadMapResetsMenuVisibilityState) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_gui = {
+            _visible = true,
+            getIsGuiVisible = function(self) return self._visible end
+        }
+    )luau", "=setupGuiMockOpen"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
+    EXPECT_TRUE(bridge.IsMenuVisible());
+
+    // Unload map
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMapCall"), 0);
+    EXPECT_FALSE(bridge.IsMenuVisible());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.isMenuVisible == false, "VRCompanion.isMenuVisible must be false after deleteMap")
+        assert(VRBridge.getIsMenuVisible() == false, "VRBridge.getIsMenuVisible() must be false after deleteMap")
+    )luau", "=verifyResetAfterUnload"), 0);
+}
+
 
 

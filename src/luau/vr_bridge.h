@@ -42,6 +42,9 @@ public:
     void SetIpd(float ipd);
     HeadPose GetEyePose(uint32_t eyeIndex);
 
+    bool IsMenuVisible() const { return m_menuVisible; }
+    void SetMenuVisible(bool visible);
+
     static int Lua_IsReady(lua_State* L);
     static int Lua_Handshake(lua_State* L);
     static int Lua_IsCompanionActive(lua_State* L);
@@ -52,6 +55,8 @@ public:
     static int Lua_GetHeadPose(lua_State* L);
     static int Lua_Recenter(lua_State* L);
     static int Lua_GetEyeProjection(lua_State* L);
+    static int Lua_SetMenuVisible(lua_State* L);
+    static int Lua_GetIsMenuVisible(lua_State* L);
 
     static int Lua_GetFrameParity(lua_State* L);
     static int Lua_GetFrameIndex(lua_State* L);
@@ -66,6 +71,7 @@ private:
     std::shared_ptr<GraphicsTelemetryProbe> m_telemetryProbe;
     std::string m_version = "1.0.0";
     bool m_handshakeCompleted = false;
+    bool m_menuVisible = false;
 
     uint32_t m_frameParity = 0; // 0 = Left (2k), 1 = Right (2k+1)
     uint64_t m_frameIndex = 0;

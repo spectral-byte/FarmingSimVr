@@ -1182,6 +1182,7 @@ bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df*
 
     m_submittedQuadFrameCount++;
     m_eyeSwapchains[0].hasCopiedFrame = false;
+    m_eyeSwapchains[1].hasCopiedFrame = false;
 
     if (m_submittedQuadFrameCount == 1 || m_submittedQuadFrameCount % 300 == 0) {
         std::stringstream ss;

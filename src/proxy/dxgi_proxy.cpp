@@ -303,10 +303,12 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
 
     if (m_openXrManager->HasEyeSwapchains()) {
         bool isCompanionActive = m_vrBridge && m_vrBridge->IsCompanionActive();
-        if (!isCompanionActive) {
-            // Pre-game / Main Menu floating quad layer mode:
+        bool isMenuVisible = m_vrBridge && m_vrBridge->IsMenuVisible();
+        if (!isCompanionActive || isMenuVisible) {
+            // Floating quad layer mode:
             // Backbuffer is presented on an OpenXR Quad layer positioned in 3D tracking space
             // rather than warping across an immersive projection layer.
+            // Active during pre-game / Main Menu AND in-game GUI menus (ESC pause menu, shop, etc.).
             m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
             m_openXrManager->SubmitMenuQuad();
         } else {
