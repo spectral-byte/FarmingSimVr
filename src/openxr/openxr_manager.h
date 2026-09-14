@@ -125,6 +125,14 @@ struct EyeSwapchain {
     bool hasCopiedFrame = false;
 };
 
+struct MenuCursorState {
+    static constexpr float kDefaultCursorSize = 0.035f;
+    bool visible = false;
+    float normX = 0.0f;
+    float normY = 0.0f;
+    float size = kDefaultCursorSize;
+};
+
 class OpenXrManager {
 public:
     static OpenXrManager& Instance();
@@ -185,6 +193,22 @@ public:
     void ResetSubmittedQuadFrameCount() { m_submittedQuadFrameCount = 0; }
     const XrCompositionLayerQuad& GetLastSubmittedQuadLayer() const { return m_lastSubmittedQuadLayer; }
 
+    bool CreateCursorSwapchain(uint32_t width = 64, uint32_t height = 64, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    void DestroyCursorSwapchain();
+    bool HasCursorSwapchain() const { return m_hasCursorSwapchain; }
+    const EyeSwapchain& GetCursorSwapchain() const { return m_cursorSwapchain; }
+
+    void SetMenuCursorState(const MenuCursorState& cursorState) { m_menuCursorState = cursorState; }
+    const MenuCursorState& GetMenuCursorState() const { return m_menuCursorState; }
+
+    static XrPosef ComputeCursorQuadPose(const XrPosef& menuQuadPose, const XrExtent2Df& menuQuadSize,
+                                         const MenuCursorState& cursorState, float cursorWidth, float cursorHeight);
+    static XrPosef ComputeCursorQuadPose(const XrPosef& menuQuadPose, const XrExtent2Df& menuQuadSize,
+                                         float normX, float normY, float cursorWidth, float cursorHeight);
+
+    const XrCompositionLayerQuad& GetLastSubmittedCursorQuadLayer() const { return m_lastSubmittedCursorQuadLayer; }
+    bool HasLastSubmittedCursorQuadLayer() const { return m_hasLastSubmittedCursorQuadLayer; }
+
     float GetIpd() const { return m_ipd; }
     void SetIpd(float ipd) { m_ipd = ipd; }
 
@@ -242,6 +266,12 @@ private:
 
     EyeSwapchain m_eyeSwapchains[2];
     bool m_hasEyeSwapchains = false;
+    EyeSwapchain m_cursorSwapchain;
+    bool m_hasCursorSwapchain = false;
+    bool m_cursorTextureUploaded = false;
+    MenuCursorState m_menuCursorState;
+    XrCompositionLayerQuad m_lastSubmittedCursorQuadLayer{ XR_TYPE_COMPOSITION_LAYER_QUAD };
+    bool m_hasLastSubmittedCursorQuadLayer = false;
     float m_ipd = 0.064f;
     uint64_t m_submittedFramePairCount = 0;
     uint64_t m_submittedQuadFrameCount = 0;
@@ -271,6 +301,8 @@ private:
     std::vector<XrViewConfigurationView> m_viewConfigViews;
 
     bool CheckD3D12ExtensionSupport();
+    bool EnumerateSwapchainImagesHelper(EyeSwapchain& sc);
+    bool EnsureCursorTextureUploaded();
 };
 
 } // namespace fs25vr

@@ -11,6 +11,7 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 #include <memory>
+#include <optional>
 
 namespace fs25vr {
 
@@ -66,6 +67,11 @@ public:
     D3D12Interceptor& GetD3D12Interceptor() { return *m_d3d12Interceptor; }
     VRBridge& GetVrBridge() { return *m_vrBridge; }
 
+    HWND GetGameHwnd() const { return m_gameHwnd; }
+    void SetGameHwnd(HWND hWnd) { m_gameHwnd = hWnd; }
+    void UpdateMenuCursorState(IDXGISwapChain* swapChain);
+    static bool ScreenToNormalizedClient(HWND hWnd, POINT screenPt, float& outNormX, float& outNormY);
+
     // Detour entry points
     static HRESULT STDMETHODCALLTYPE Intercept_Present(IDXGISwapChain* self, UINT syncInterval, UINT flags);
     static HRESULT STDMETHODCALLTYPE Intercept_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* params);
@@ -74,6 +80,8 @@ public:
 
 private:
     void EnsureVrInitialized();
+
+    HWND m_gameHwnd = nullptr;
 
     std::shared_ptr<ISystemDxgi> m_systemDxgi;
     std::shared_ptr<OpenXrManager> m_openXrManager;

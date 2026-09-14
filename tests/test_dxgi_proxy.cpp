@@ -1177,5 +1177,94 @@ TEST(DxgiProxyTest, TransitionIntoMenuModeTriggersQuadAlignment) {
     EXPECT_NEAR(quadPose.position.z, -3.5f, 0.001f); // -2.0 - 1.5 = -3.5
 }
 
+TEST(DxgiProxyTest, OnPresentInitializesCursorSwapchainInMenuMode) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    EXPECT_FALSE(openXrManager->HasCursorSwapchain());
+
+    // Present in menu mode (pre-game menu)
+    proxy.OnPresent(nullptr, 0, 0);
+
+    EXPECT_TRUE(openXrManager->HasCursorSwapchain());
+    EXPECT_EQ(openXrManager->GetCursorSwapchain().width, 64u);
+    EXPECT_EQ(openXrManager->GetCursorSwapchain().height, 64u);
+}
+
+TEST(DxgiProxyTest, UpdateMenuCursorStateHandlesNullHwndSafely) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // Should not crash with null swapchain / null HWND
+    EXPECT_NO_THROW(proxy.UpdateMenuCursorState(nullptr));
+    EXPECT_FALSE(openXrManager->GetMenuCursorState().visible);
+}
+
+TEST(DxgiProxyTest, ScreenToNormalizedClientHandlesNullOrInvalidHwndSafely) {
+    float normX = 0.0f, normY = 0.0f;
+    POINT pt{ 100, 100 };
+    EXPECT_FALSE(DxgiProxy::ScreenToNormalizedClient(nullptr, pt, normX, normY));
+    EXPECT_FALSE(DxgiProxy::ScreenToNormalizedClient(reinterpret_cast<HWND>(static_cast<uintptr_t>(0xDEADBEEF)), pt, normX, normY));
+}
+
+TEST(DxgiProxyTest, ScreenToNormalizedClientNormalizesAndClipsBounds) {
+    HWND testWnd = CreateWindowA("STATIC", "TestWindow", WS_POPUP, 100, 100, 200, 200, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    float normX = -1.0f, normY = -1.0f;
+    // Point inside window (client center: screen x=200, y=200)
+    POINT centerPt{ 200, 200 };
+    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, centerPt, normX, normY));
+    EXPECT_NEAR(normX, 0.5f, 0.05f);
+    EXPECT_NEAR(normY, 0.5f, 0.05f);
+
+    // Point outside client bounds (screen x=50, y=50)
+    POINT outsidePt{ 50, 50 };
+    EXPECT_FALSE(DxgiProxy::ScreenToNormalizedClient(testWnd, outsidePt, normX, normY));
+
+    DestroyWindow(testWnd);
+}
+
+TEST(DxgiProxyTest, OnPresentSubmitsCursorQuadWhenCursorShowing) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // Initial frame creates cursor swapchain
+    proxy.OnPresent(nullptr, 0, 0);
+    ASSERT_TRUE(openXrManager->HasCursorSwapchain());
+
+    // Explicitly set simulated cursor active state on OpenXrManager
+    openXrManager->SetMenuCursorState({ true, 0.5f, 0.5f, MenuCursorState::kDefaultCursorSize });
+
+    // Next menu present should submit 2 quad layers
+    proxy.OnPresent(nullptr, 0, 0);
+    ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 2u);
+
+    const auto& cursorQuad = mockDispatch->lastSubmittedQuadLayers[1];
+    EXPECT_EQ(cursorQuad.layerFlags, XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT);
+    EXPECT_EQ(cursorQuad.subImage.swapchain, openXrManager->GetCursorSwapchain().handle);
+    EXPECT_FLOAT_EQ(cursorQuad.size.width, MenuCursorState::kDefaultCursorSize);
+}
+
 } // namespace fs25vr
+
 

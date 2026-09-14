@@ -1586,7 +1586,139 @@ TEST(OpenXrManagerTest, MenuQuadRemainsAnchoredInLocalSpaceAcrossHeadMotion) {
     EXPECT_NEAR(quad.pose.position.z, -1.5f, 0.001f);
 }
 
+TEST(OpenXrManagerTest, ComputeCursorQuadPoseProjectsNormalizedCoordinatesWithHotspotOffset) {
+    XrPosef menuPose{};
+    menuPose.position = { 0.0f, 1.5f, -1.5f };
+    menuPose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    XrExtent2Df menuSize{ 1.6f, 0.9f };
+    float cursorSize = 0.035f;
+
+    // Center of screen (normX = 0.5, normY = 0.5)
+    XrPosef centerCursor = OpenXrManager::ComputeCursorQuadPose(menuPose, menuSize, 0.5f, 0.5f, cursorSize, cursorSize);
+    EXPECT_NEAR(centerCursor.position.x, 0.0f + 0.5f * cursorSize, 0.001f);
+    EXPECT_NEAR(centerCursor.position.y, 1.5f - 0.5f * cursorSize, 0.001f);
+    EXPECT_NEAR(centerCursor.position.z, -1.5f + 0.002f, 0.001f);
+    EXPECT_FLOAT_EQ(centerCursor.orientation.w, 1.0f);
+
+    // Top-left corner (normX = 0.0, normY = 0.0) -> tip at (-0.8, 1.95)
+    XrPosef tlCursor = OpenXrManager::ComputeCursorQuadPose(menuPose, menuSize, 0.0f, 0.0f, cursorSize, cursorSize);
+    EXPECT_NEAR(tlCursor.position.x, -0.8f + 0.5f * cursorSize, 0.001f);
+    EXPECT_NEAR(tlCursor.position.y, 1.95f - 0.5f * cursorSize, 0.001f);
+    EXPECT_NEAR(tlCursor.position.z, -1.5f + 0.002f, 0.001f);
+
+    // Bottom-right corner (normX = 1.0, normY = 1.0) -> tip at (0.8, 1.05)
+    XrPosef brCursor = OpenXrManager::ComputeCursorQuadPose(menuPose, menuSize, 1.0f, 1.0f, cursorSize, cursorSize);
+    EXPECT_NEAR(brCursor.position.x, 0.8f + 0.5f * cursorSize, 0.001f);
+    EXPECT_NEAR(brCursor.position.y, 1.05f - 0.5f * cursorSize, 0.001f);
+    EXPECT_NEAR(brCursor.position.z, -1.5f + 0.002f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, ComputeCursorQuadPoseRotatesWithMenuQuadOrientation) {
+    XrPosef menuPose{};
+    menuPose.position = { -1.5f, 1.5f, 0.0f }; // Quad 1.5m to the left (-X)
+    float halfAngle = 3.14159265f / 4.0f;       // 90 deg yaw facing +X
+    menuPose.orientation = { 0.0f, std::sin(halfAngle), 0.0f, std::cos(halfAngle) };
+
+    XrExtent2Df menuSize{ 1.6f, 0.9f };
+    float cursorSize = 0.035f;
+
+    // Center of screen
+    XrPosef cursorPose = OpenXrManager::ComputeCursorQuadPose(menuPose, menuSize, 0.5f, 0.5f, cursorSize, cursorSize);
+    // Cursor orientation must strictly match menu quad orientation
+    EXPECT_NEAR(cursorPose.orientation.y, menuPose.orientation.y, 0.001f);
+    EXPECT_NEAR(cursorPose.orientation.w, menuPose.orientation.w, 0.001f);
+    // 2mm forward offset from quad facing +X should displace along +X (towards origin)
+    EXPECT_GT(cursorPose.position.x, menuPose.position.x);
+}
+
+TEST(OpenXrManagerTest, CreateCursorSwapchainInitializes64x64RgbaSwapchain) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+
+    EXPECT_FALSE(manager.HasCursorSwapchain());
+    ASSERT_TRUE(manager.CreateCursorSwapchain());
+    EXPECT_TRUE(manager.HasCursorSwapchain());
+
+    const auto& cursorSwapchain = manager.GetCursorSwapchain();
+    EXPECT_EQ(cursorSwapchain.width, 64u);
+    EXPECT_EQ(cursorSwapchain.height, 64u);
+    EXPECT_NE(cursorSwapchain.handle, XR_NULL_HANDLE);
+    EXPECT_EQ(cursorSwapchain.format, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+
+    manager.DestroyCursorSwapchain();
+    EXPECT_FALSE(manager.HasCursorSwapchain());
+}
+
+TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsTwoLayersWhenCursorVisible) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+    ASSERT_TRUE(manager.CreateCursorSwapchain());
+
+    // Enable cursor at normalized coordinates (0.25, 0.75)
+    MenuCursorState cursorState{ true, 0.25f, 0.75f, MenuCursorState::kDefaultCursorSize };
+    manager.SetMenuCursorState(cursorState);
+    EXPECT_TRUE(manager.GetMenuCursorState().visible);
+
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.SubmitMenuQuad());
+
+    ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 2u);
+
+    // Layer 0: Menu Quad
+    const auto& menuQuad = mockDispatch->lastSubmittedQuadLayers[0];
+    EXPECT_EQ(menuQuad.type, XR_TYPE_COMPOSITION_LAYER_QUAD);
+    EXPECT_EQ(menuQuad.subImage.swapchain, manager.GetEyeSwapchain(0).handle);
+    EXPECT_EQ(menuQuad.layerFlags, 0u);
+
+    // Layer 1: Cursor Quad
+    const auto& cursorQuad = mockDispatch->lastSubmittedQuadLayers[1];
+    EXPECT_EQ(cursorQuad.type, XR_TYPE_COMPOSITION_LAYER_QUAD);
+    EXPECT_EQ(cursorQuad.space, manager.GetLocalSpace());
+    EXPECT_EQ(cursorQuad.eyeVisibility, XR_EYE_VISIBILITY_BOTH);
+    EXPECT_EQ(cursorQuad.subImage.swapchain, manager.GetCursorSwapchain().handle);
+    EXPECT_EQ(cursorQuad.layerFlags, XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT);
+    EXPECT_FLOAT_EQ(cursorQuad.size.width, MenuCursorState::kDefaultCursorSize);
+    EXPECT_FLOAT_EQ(cursorQuad.size.height, MenuCursorState::kDefaultCursorSize);
+
+    // Verify cursor quad position matches ComputeCursorQuadPose (both overloads)
+    XrPosef expectedPose = OpenXrManager::ComputeCursorQuadPose(menuQuad.pose, menuQuad.size, cursorState, MenuCursorState::kDefaultCursorSize, MenuCursorState::kDefaultCursorSize);
+    EXPECT_NEAR(cursorQuad.pose.position.x, expectedPose.position.x, 0.001f);
+    EXPECT_NEAR(cursorQuad.pose.position.y, expectedPose.position.y, 0.001f);
+    EXPECT_NEAR(cursorQuad.pose.position.z, expectedPose.position.z, 0.001f);
+}
+
+TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsSingleLayerWhenCursorHidden) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+    ASSERT_TRUE(manager.CreateCursorSwapchain());
+
+    // Cursor visibility set to false
+    manager.SetMenuCursorState({ false, 0.5f, 0.5f, MenuCursorState::kDefaultCursorSize });
+
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.SubmitMenuQuad());
+
+    ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 1u);
+    const auto& menuQuad = mockDispatch->lastSubmittedQuadLayers[0];
+    EXPECT_EQ(menuQuad.subImage.swapchain, manager.GetEyeSwapchain(0).handle);
+}
+
 } // namespace fs25vr
+
 
 
 

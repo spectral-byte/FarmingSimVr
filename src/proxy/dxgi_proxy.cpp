@@ -311,6 +311,12 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
                 m_openXrManager->AlignMenuQuadToHeadPose();
             }
             m_wasInMenuMode = true;
+
+            if (!m_openXrManager->HasCursorSwapchain()) {
+                m_openXrManager->CreateCursorSwapchain();
+            }
+            UpdateMenuCursorState(swapChain);
+
             // Floating quad layer mode:
             // Backbuffer is presented on an OpenXR Quad layer positioned in 3D tracking space
             // rather than warping across an immersive projection layer.
@@ -318,6 +324,7 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
             m_openXrManager->SubmitMenuQuad();
         } else {
             m_wasInMenuMode = false;
+            m_openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
             bool isNativeStereo = m_telemetryProbe && m_telemetryProbe->HasNativeStereoDetected();
             if (isNativeStereo) {
                 // In native stereo mode, both eye views are rendered simultaneously in the current backbuffer pass.
@@ -379,11 +386,69 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
     return S_OK;
 }
 
+bool DxgiProxy::ScreenToNormalizedClient(HWND hWnd, POINT screenPt, float& outNormX, float& outNormY) {
+    if (!hWnd) return false;
+    POINT pt = screenPt;
+    if (!ScreenToClient(hWnd, &pt)) return false;
+    RECT clientRect{};
+    if (!GetClientRect(hWnd, &clientRect)) return false;
+    int clientWidth = clientRect.right - clientRect.left;
+    int clientHeight = clientRect.bottom - clientRect.top;
+    if (clientWidth <= 0 || clientHeight <= 0) return false;
+    if (pt.x < 0 || pt.x > clientWidth || pt.y < 0 || pt.y > clientHeight) return false;
+    outNormX = static_cast<float>(pt.x) / static_cast<float>(clientWidth);
+    outNormY = static_cast<float>(pt.y) / static_cast<float>(clientHeight);
+    return true;
+}
+
+void DxgiProxy::UpdateMenuCursorState(IDXGISwapChain* swapChain) {
+    if (!m_openXrManager) return;
+
+    HWND hWnd = m_gameHwnd;
+    if (!hWnd && swapChain) {
+        DXGI_SWAP_CHAIN_DESC desc{};
+        if (SUCCEEDED(swapChain->GetDesc(&desc)) && desc.OutputWindow) {
+            hWnd = desc.OutputWindow;
+            m_gameHwnd = hWnd;
+        }
+    }
+
+    // If there is no game window associated with this swapchain, do not guess or alter state
+    if (!hWnd) {
+        return;
+    }
+
+    // Suppress cursor if the game window does not have foreground focus
+    HWND fgWnd = GetForegroundWindow();
+    if (fgWnd != hWnd && !IsChild(hWnd, fgWnd)) {
+        m_openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
+        return;
+    }
+
+    CURSORINFO ci{ sizeof(CURSORINFO) };
+    bool cursorShowing = (GetCursorInfo(&ci) != FALSE) && ((ci.flags & CURSOR_SHOWING) != 0);
+
+    if (cursorShowing) {
+        POINT curPos{};
+        POINT screenPt = GetCursorPos(&curPos) ? curPos : ci.ptScreenPos;
+        float normX = 0.0f, normY = 0.0f;
+        if (ScreenToNormalizedClient(hWnd, screenPt, normX, normY)) {
+            m_openXrManager->SetMenuCursorState({ true, normX, normY, MenuCursorState::kDefaultCursorSize });
+            return;
+        }
+    }
+
+    m_openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
+}
+
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
     IDXGIFactory* self, IUnknown* pDevice, DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain) {
     DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
+    }
+    if (pDesc && pDesc->OutputWindow) {
+        proxy->SetGameHwnd(pDesc->OutputWindow);
     }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**)>(
         proxy->m_detourCreateSwapChain.GetOriginal()
@@ -402,6 +467,9 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
+    }
+    if (hWnd) {
+        proxy->SetGameHwnd(hWnd);
     }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
         proxy->m_detourCreateSwapChainForHwnd.GetOriginal()
