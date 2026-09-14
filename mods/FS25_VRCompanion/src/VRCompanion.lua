@@ -114,8 +114,12 @@ function VRCompanion:pollGuiVisibility()
     end
 
     if self.isMenuVisible ~= isGuiVisible or not self.guiVisibilityInitialized then
+        local wasMenuVisible = self.isMenuVisible
         self.isMenuVisible = isGuiVisible
         self.guiVisibilityInitialized = true
+        if wasMenuVisible and not isGuiVisible then
+            self:restoreMenuBackgroundCamera()
+        end
         if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
             VRBridge.setMenuVisible(isGuiVisible)
         end
@@ -650,10 +654,122 @@ function VRCompanion:realignPlayerCameraToRoot(cam)
     end
 end
 
+function VRCompanion:updateMenuBackgroundCamera(dt)
+    if not self.isMenuVisible then
+        return
+    end
+
+    local camNode = nil
+    if type(getCamera) == "function" then
+        local ok, node = pcall(getCamera)
+        if ok and node ~= nil and node ~= 0 then
+            camNode = node
+        end
+    end
+
+    if camNode == nil or camNode == 0 then
+        return
+    end
+
+    if self.menuCameraOffsets == nil then
+        self.menuCameraOffsets = {}
+    end
+
+    -- Retrieve head pose from VRBridge or TrackIR
+    local pose = self:getResolvedHeadPose()
+    if not pose or not pose.isValid then
+        return
+    end
+
+    local tx = pose.x or 0
+    local ty = pose.y or 0
+    local tz = pose.z or 0
+    local pitch = pose.pitch or 0
+    local yaw = pose.yaw or 0
+    local roll = pose.roll or 0
+
+    local lastOffset = self.menuCameraOffsets[camNode] or { tx = 0, ty = 0, tz = 0, rx = 0, ry = 0, rz = 0 }
+
+    local curX, curY, curZ = 0, 0, 0
+    if type(getTranslation) == "function" then
+        local ok, x, y, z = pcall(getTranslation, camNode)
+        if ok and x ~= nil then curX, curY, curZ = x, y, z end
+    end
+
+    local curRx, curRy, curRz = 0, 0, 0
+    if type(getRotation) == "function" then
+        local ok, rx, ry, rz = pcall(getRotation, camNode)
+        if ok and rx ~= nil then curRx, curRy, curRz = rx, ry, rz end
+    end
+
+    -- Subtract previous VR offset to recover underlying base transform (preserving mouse/controller orbit deltas)
+    local baseX = curX - lastOffset.tx
+    local baseY = curY - lastOffset.ty
+    local baseZ = curZ - lastOffset.tz
+    local baseRx = curRx - lastOffset.rx
+    local baseRy = curRy - lastOffset.ry
+    local baseRz = curRz - lastOffset.rz
+
+    local finalTx = baseX + tx
+    local finalTy = baseY + ty
+    local finalTz = baseZ + tz
+    local finalRotX = baseRx + pitch
+    local finalRotY = baseRy + yaw
+    local finalRotZ = baseRz + roll
+
+    self.menuCameraOffsets[camNode] = {
+        tx = tx, ty = ty, tz = tz,
+        rx = pitch, ry = yaw, rz = roll
+    }
+
+    if type(setTranslation) == "function" then
+        pcall(setTranslation, camNode, finalTx, finalTy, finalTz)
+    end
+    if type(setRotation) == "function" then
+        pcall(setRotation, camNode, finalRotX, finalRotY, finalRotZ)
+    end
+
+    self.menuCamTicks = (self.menuCamTicks or 0) + 1
+    if self.menuCamTicks == 1 or self.menuCamTicks % 300 == 0 then
+        print(string.format("[FS25_VR] [MenuCamera] Active camera 6DOF tracking: Node %s, Trans: (%.3f, %.3f, %.3f), Rot: (%.2f, %.2f, %.2f)",
+            tostring(camNode), finalTx, finalTy, finalTz, finalRotX, finalRotY, finalRotZ))
+    end
+end
+
+function VRCompanion:restoreMenuBackgroundCamera()
+    if self.menuCameraOffsets ~= nil then
+        for camNode, offset in pairs(self.menuCameraOffsets) do
+            if offset ~= nil then
+                local curX, curY, curZ = 0, 0, 0
+                if type(getTranslation) == "function" then
+                    local ok, x, y, z = pcall(getTranslation, camNode)
+                    if ok and x ~= nil then curX, curY, curZ = x, y, z end
+                end
+                local curRx, curRy, curRz = 0, 0, 0
+                if type(getRotation) == "function" then
+                    local ok, rx, ry, rz = pcall(getRotation, camNode)
+                    if ok and rx ~= nil then curRx, curRy, curRz = rx, ry, rz end
+                end
+                if type(setTranslation) == "function" then
+                    pcall(setTranslation, camNode, curX - offset.tx, curY - offset.ty, curZ - offset.tz)
+                end
+                if type(setRotation) == "function" then
+                    pcall(setRotation, camNode, curRx - offset.rx, curRy - offset.ry, curRz - offset.rz)
+                end
+            end
+        end
+        self.menuCameraOffsets = {}
+        self.menuCamTicks = 0
+    end
+end
+
 function VRCompanion:onRecenterAction()
     print("[FS25_VR] Recenter Action triggered.")
     if VRBridge ~= nil and type(VRBridge.recenter) == "function" then
         VRBridge.recenter()
+    end
+    if self.isMenuVisible then
+        print("[FS25_VR] Menu Quad layer realigned directly in front of head pose.")
     end
 
     -- Realign vehicle cockpit driver seat origin if seated in a vehicle
@@ -678,6 +794,10 @@ function VRCompanion:update(dt)
 
     -- Poll in-game GUI visibility and synchronize with native VRBridge
     self:pollGuiVisibility()
+
+    if self.isMenuVisible then
+        self:updateMenuBackgroundCamera(dt)
+    end
 
     if not self.vehicleCameraHooked then
         self:hookVehicleCamera()
@@ -743,6 +863,7 @@ function VRCompanion:deleteMap()
     self.playerCameraHooked = false
     self.isMenuVisible = false
     self.guiVisibilityInitialized = false
+    self:restoreMenuBackgroundCamera()
 
     if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
         VRBridge.setMenuVisible(false)

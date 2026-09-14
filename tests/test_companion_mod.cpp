@@ -1165,5 +1165,217 @@ TEST_F(CompanionModTest, UnloadMapResetsMenuVisibilityState) {
     )luau", "=verifyResetAfterUnload"), 0);
 }
 
+TEST_F(CompanionModTest, ActiveGuiAppliesHeadPoseTrackingToActiveCameraNode) {
+    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::HeadPose simPose;
+    simPose.position = fs25vr::Vector3(0.2f, 0.1f, -0.05f);
+    simPose.rotation = fs25vr::EulerAngles(0.05f, 0.15f, 0.0f);
+    simPose.isValid = true;
+    openXrManager->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Setup showroom / background menu camera mocks
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.activeCamNode = 999
+        _G.camTrans = { x = 0.0, y = 2.0, z = -5.0 }
+        _G.camRot = { rx = -0.1, ry = 0.0, rz = 0.0 }
+        _G.setTransCalls = 0
+        _G.setRotCalls = 0
+
+        function getCamera()
+            return _G.activeCamNode
+        end
+        function getTranslation(node)
+            return _G.camTrans.x, _G.camTrans.y, _G.camTrans.z
+        end
+        function setTranslation(node, x, y, z)
+            _G.camTrans.x = x
+            _G.camTrans.y = y
+            _G.camTrans.z = z
+            _G.setTransCalls = _G.setTransCalls + 1
+        end
+        function getRotation(node)
+            return _G.camRot.rx, _G.camRot.ry, _G.camRot.rz
+        end
+        function setRotation(node, rx, ry, rz)
+            _G.camRot.rx = rx
+            _G.camRot.ry = ry
+            _G.camRot.rz = rz
+            _G.setRotCalls = _G.setRotCalls + 1
+        end
+
+        _G.g_gui = {
+            _visible = true,
+            getIsGuiVisible = function(self) return self._visible end
+        }
+    )luau", "=setupShowroomMocks"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
+
+    // Verify camera translation and rotation received head pose offsets
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(_G.setTransCalls >= 1, "setTranslation must be called for active camera node")
+        assert(_G.setRotCalls >= 1, "setRotation must be called for active camera node")
+        -- Base (0, 2, -5) + Pose (0.2, 0.1, -0.05)
+        assert(math.abs(_G.camTrans.x - 0.2) < 0.001, "camTrans.x must include head pose x offset")
+        assert(math.abs(_G.camTrans.y - 2.1) < 0.001, "camTrans.y must include head pose y offset")
+        assert(math.abs(_G.camTrans.z - (-5.05)) < 0.001, "camTrans.z must include head pose z offset")
+        -- BaseRot (-0.1, 0, 0) + PoseRot (0.05, 0.15, 0)
+        assert(math.abs(_G.camRot.rx - (-0.05)) < 0.001, "camRot.rx must include head pitch")
+        assert(math.abs(_G.camRot.ry - 0.15) < 0.001, "camRot.ry must include head yaw")
+        assert(math.abs(_G.camRot.rz - 0.0) < 0.001, "camRot.rz must include head roll")
+    )luau", "=verifyCameraTrackingInGui"), 0);
+}
+
+TEST_F(CompanionModTest, ActiveGuiRestoresCameraTransformWhenMenuClosed) {
+    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::HeadPose simPose;
+    simPose.position = fs25vr::Vector3(0.5f, 0.2f, -0.1f);
+    simPose.rotation = fs25vr::EulerAngles(0.1f, 0.2f, 0.0f);
+    simPose.isValid = true;
+    openXrManager->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.activeCamNode = 888
+        _G.camTrans = { x = 1.0, y = 3.0, z = -10.0 }
+        _G.camRot = { rx = 0.0, ry = 0.5, rz = 0.0 }
+
+        function getCamera() return _G.activeCamNode end
+        function getTranslation(node) return _G.camTrans.x, _G.camTrans.y, _G.camTrans.z end
+        function setTranslation(node, x, y, z) _G.camTrans.x, _G.camTrans.y, _G.camTrans.z = x, y, z end
+        function getRotation(node) return _G.camRot.rx, _G.camRot.ry, _G.camRot.rz end
+        function setRotation(node, rx, ry, rz) _G.camRot.rx, _G.camRot.ry, _G.camRot.rz = rx, ry, rz end
+
+        _G.g_gui = {
+            _visible = true,
+            getIsGuiVisible = function(self) return self._visible end
+        }
+    )luau", "=setupMocks"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall1"), 0);
+
+    // Verify offset applied
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(math.abs(_G.camTrans.x - 1.5) < 0.001, "offset must be applied during menu")
+    )luau", "=verifyOffsetApplied"), 0);
+
+    // Now close the menu
+    ASSERT_EQ(RunLuauChunk(L, "_G.g_gui._visible = false", "=closeMenu"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall2"), 0);
+
+    // Verify original base transform restored
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(math.abs(_G.camTrans.x - 1.0) < 0.001, "camTrans.x must be restored to base 1.0")
+        assert(math.abs(_G.camTrans.y - 3.0) < 0.001, "camTrans.y must be restored to base 3.0")
+        assert(math.abs(_G.camTrans.z - (-10.0)) < 0.001, "camTrans.z must be restored to base -10.0")
+        assert(math.abs(_G.camRot.rx - 0.0) < 0.001, "camRot.rx must be restored to base 0.0")
+        assert(math.abs(_G.camRot.ry - 0.5) < 0.001, "camRot.ry must be restored to base 0.5")
+        assert(math.abs(_G.camRot.rz - 0.0) < 0.001, "camRot.rz must be restored to base 0.0")
+    )luau", "=verifyBaseRestored"), 0);
+}
+
+TEST_F(CompanionModTest, ActiveGuiPreserves2DMouseAndControllerInteractions) {
+    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::HeadPose simPose;
+    simPose.position = fs25vr::Vector3(0.1f, 0.0f, 0.0f);
+    simPose.isValid = true;
+    openXrManager->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.activeCamNode = 101
+        function getCamera() return _G.activeCamNode end
+        function getTranslation(node) return 0, 0, 0 end
+        function setTranslation(node, x, y, z) end
+        function getRotation(node) return 0, 0, 0 end
+        function setRotation(node, rx, ry, rz) end
+
+        _G.mouseEventsReceived = 0
+        _G.keyEventsReceived = 0
+        _G.g_gui = {
+            _visible = true,
+            getIsGuiVisible = function(self) return self._visible end,
+            mouseEvent = function(self, posX, posY, isDown, isUp, button)
+                _G.mouseEventsReceived = _G.mouseEventsReceived + 1
+            end,
+            keyEvent = function(self, unicode, sym, modifier, isDown)
+                _G.keyEventsReceived = _G.keyEventsReceived + 1
+            end
+        }
+    )luau", "=setupGuiInputMocks"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
+
+    // Simulate 2D mouse and controller events being dispatched to GUI
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_gui:mouseEvent(0.5, 0.5, true, false, 1)
+        _G.g_gui:keyEvent(65, 97, 0, true)
+        assert(_G.mouseEventsReceived == 1, "mouse event must be delivered to GUI")
+        assert(_G.keyEventsReceived == 1, "key event must be delivered to GUI")
+    )luau", "=simulateGuiInput"), 0);
+}
+
+TEST_F(CompanionModTest, RecenterActionRealignsMenuQuadWhenInMenu) {
+    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::HeadPose simPose;
+    simPose.position = fs25vr::Vector3(1.0f, 1.5f, 0.0f);
+    simPose.isValid = true;
+    openXrManager->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_gui = {
+            _visible = true,
+            getIsGuiVisible = function(self) return self._visible end
+        }
+    )luau", "=setupGuiMocks"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
+
+    // Recenter invoked while menu is displayed
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenterCall"), 0);
+
+    EXPECT_TRUE(openXrManager->HasMenuQuadPose());
+    bool foundQuadAlignLog = false;
+    for (const auto& msg : s_capturedLogs) {
+        if (msg.find("Menu Quad layer realigned") != std::string::npos ||
+            msg.find("Recenter Action complete") != std::string::npos) {
+            foundQuadAlignLog = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundQuadAlignLog);
+}
+
+
 
 

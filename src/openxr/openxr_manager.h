@@ -171,12 +171,15 @@ public:
     bool SubmitMenuQuad(const XrPosef* customPose = nullptr, const XrExtent2Df* customSize = nullptr);
 
     XrPosef ComputeMenuQuadPose() const;
+    static XrPosef ComputeMenuQuadPoseFromHeadPose(const HeadPose& headPose, float distance);
+    void AlignMenuQuadToHeadPose(const HeadPose* customPose = nullptr);
+    bool HasMenuQuadPose() const { return m_hasMenuQuadPose; }
     XrExtent2Df ComputeMenuQuadSize() const;
     void SetMenuQuadDistance(float distance) { m_menuQuadDistance = distance; }
     float GetMenuQuadDistance() const { return m_menuQuadDistance; }
     void SetMenuQuadSize(float width, float height) { m_customMenuQuadSize = { width, height }; m_hasCustomMenuQuadSize = true; }
     XrExtent2Df GetMenuQuadSize() const { return ComputeMenuQuadSize(); }
-    void ResetMenuQuadSettings() { m_menuQuadDistance = 1.5f; m_hasCustomMenuQuadSize = false; }
+    void ResetMenuQuadSettings() { m_menuQuadDistance = 1.5f; m_hasCustomMenuQuadSize = false; m_hasMenuQuadPose = false; }
 
     uint64_t GetSubmittedQuadFrameCount() const { return m_submittedQuadFrameCount; }
     void ResetSubmittedQuadFrameCount() { m_submittedQuadFrameCount = 0; }
@@ -246,6 +249,8 @@ private:
     XrExtent2Df m_customMenuQuadSize{ 1.6f, 0.9f };
     bool m_hasCustomMenuQuadSize = false;
     XrCompositionLayerQuad m_lastSubmittedQuadLayer{ XR_TYPE_COMPOSITION_LAYER_QUAD };
+    XrPosef m_menuQuadPose{};
+    bool m_hasMenuQuadPose = false;
     bool m_frameBegun = false;
     XrFrameState m_frameState{XR_TYPE_FRAME_STATE};
     XrTime m_lastPredictedDisplayTime = 0;

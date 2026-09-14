@@ -496,3 +496,49 @@ TEST_F(VrBridgeTest, MapUnloadResetsMenuVisibilityToFalse) {
     EXPECT_FALSE(bridge.IsMenuVisible());
 }
 
+TEST_F(VrBridgeTest, SetMenuVisibleTrueTriggersQuadAlignmentOnOpenXrManager) {
+    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::HeadPose simPose;
+    simPose.position = fs25vr::Vector3(2.0f, 1.8f, -1.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 1.5707963f, 0.0f);
+    simPose.isValid = true;
+    openXrManager->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_FALSE(openXrManager->HasMenuQuadPose());
+
+    // Setting menu visible must trigger quad alignment to the current head pose
+    bridge.SetMenuVisible(true);
+    EXPECT_TRUE(openXrManager->HasMenuQuadPose());
+
+    XrPosef quadPose = openXrManager->ComputeMenuQuadPose();
+    // Head was looking at yaw pi/2, so quad is placed along forward gaze
+    // x = 2.0 - 1.5 = 0.5, y = 1.8, z = -1.0
+    EXPECT_NEAR(quadPose.position.x, 0.5f, 0.01f);
+    EXPECT_NEAR(quadPose.position.y, 1.8f, 0.001f);
+    EXPECT_NEAR(quadPose.position.z, -1.0f, 0.01f);
+}
+
+TEST_F(VrBridgeTest, ExposesAlignMenuQuadToLuau) {
+    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::HeadPose simPose;
+    simPose.position = fs25vr::Vector3(0.0f, 1.5f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
+    simPose.isValid = true;
+    openXrManager->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(type(VRBridge.alignMenuQuad) == "function", "alignMenuQuad must be a function")
+        VRBridge.alignMenuQuad()
+    )luau"), 0);
+
+    EXPECT_TRUE(openXrManager->HasMenuQuadPose());
+    XrPosef quadPose = openXrManager->ComputeMenuQuadPose();
+    EXPECT_NEAR(quadPose.position.z, -1.5f, 0.001f);
+}
+

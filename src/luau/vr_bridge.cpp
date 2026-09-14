@@ -129,6 +129,11 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushcclosure(L, &VRBridge::Lua_GetIsMenuVisible, "getIsMenuVisible", 1);
     lua_setfield(L, -2, "getIsMenuVisible");
 
+    // VRBridge.alignMenuQuad = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_AlignMenuQuad, "alignMenuQuad", 1);
+    lua_setfield(L, -2, "alignMenuQuad");
+
     // Set metatable on VRBridge table for dynamic property access (__index)
     lua_createtable(L, 0, 1);
     lua_pushlightuserdata(L, this);
@@ -506,11 +511,28 @@ void VRBridge::SetMenuVisible(bool visible) {
         m_menuVisible = visible;
         SetFrameParity(0);
         if (visible) {
+            if (m_openXrManager) {
+                m_openXrManager->AlignMenuQuadToHeadPose();
+            }
             LogInfo("[VRBridge] In-game menu opened (isMenuVisible=true); switched to 6DOF Quad layer.");
         } else {
             LogInfo("[VRBridge] In-game menu closed (isMenuVisible=false); restored stereoscopic 3D projection.");
         }
     }
+}
+
+void VRBridge::AlignMenuQuad() {
+    if (m_openXrManager) {
+        m_openXrManager->AlignMenuQuadToHeadPose();
+    }
+}
+
+int VRBridge::Lua_AlignMenuQuad(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    self->AlignMenuQuad();
+    return 0;
 }
 
 int VRBridge::Lua_SetMenuVisible(lua_State* L) {

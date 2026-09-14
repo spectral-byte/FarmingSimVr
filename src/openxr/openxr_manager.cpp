@@ -433,6 +433,7 @@ void OpenXrManager::Recenter() {
     m_recenterOffset.position = m_rawPose.position;
     m_recenterOffset.yaw = m_rawPose.rotation.yaw;
     m_hasRecenter = true;
+    AlignMenuQuadToHeadPose();
     LogInfo("OpenXrManager: Head pose recentered.");
 }
 
@@ -1085,33 +1086,50 @@ bool OpenXrManager::SubmitFramePair() {
     return true;
 }
 
-XrPosef OpenXrManager::ComputeMenuQuadPose() const {
-    XrPosef pose{};
-    if (m_hasRecenter) {
-        float halfYaw = m_recenterOffset.yaw * 0.5f;
-        Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
-
-        Vector3 forwardOffset(0.0f, 0.0f, -m_menuQuadDistance);
-        Vector3 rotatedOffset = RotateVectorByQuaternion(qYaw, forwardOffset);
-
-        pose.position.x = m_recenterOffset.position.x + rotatedOffset.x;
-        pose.position.y = m_recenterOffset.position.y + rotatedOffset.y;
-        pose.position.z = m_recenterOffset.position.z + rotatedOffset.z;
-
-        pose.orientation.x = qYaw.x;
-        pose.orientation.y = qYaw.y;
-        pose.orientation.z = qYaw.z;
-        pose.orientation.w = qYaw.w;
-    } else {
-        pose.position.x = 0.0f;
-        pose.position.y = 0.0f;
-        pose.position.z = -m_menuQuadDistance;
-
-        pose.orientation.x = 0.0f;
-        pose.orientation.y = 0.0f;
-        pose.orientation.z = 0.0f;
-        pose.orientation.w = 1.0f;
+XrPosef OpenXrManager::ComputeMenuQuadPoseFromHeadPose(const HeadPose& headPose, float distance) {
+    float yaw = headPose.rotation.yaw;
+    // Fallback: if yaw Euler is 0 but orientation quaternion is non-identity, extract yaw from quaternion
+    if (std::abs(yaw) < 1e-6f && (std::abs(headPose.orientation.x) > 1e-6f ||
+                                 std::abs(headPose.orientation.y) > 1e-6f ||
+                                 std::abs(headPose.orientation.z) > 1e-6f ||
+                                 std::abs(headPose.orientation.w - 1.0f) > 1e-6f)) {
+        yaw = QuaternionToEuler(headPose.orientation).yaw;
     }
+
+    float halfYaw = yaw * 0.5f;
+    Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
+
+    Vector3 forwardOffset(0.0f, 0.0f, -distance);
+    Vector3 rotatedOffset = RotateVectorByQuaternion(qYaw, forwardOffset);
+
+    XrPosef pose{};
+    pose.position.x = headPose.position.x + rotatedOffset.x;
+    pose.position.y = headPose.position.y; // Decouple pitch/roll: virtual screen remains at eye level
+    pose.position.z = headPose.position.z + rotatedOffset.z;
+
+    pose.orientation.x = qYaw.x;
+    pose.orientation.y = qYaw.y;
+    pose.orientation.z = qYaw.z;
+    pose.orientation.w = qYaw.w;
+
+    return pose;
+}
+
+void OpenXrManager::AlignMenuQuadToHeadPose(const HeadPose* customPose) {
+    const HeadPose& pose = customPose ? *customPose : m_rawPose;
+    m_menuQuadPose = ComputeMenuQuadPoseFromHeadPose(pose, m_menuQuadDistance);
+    m_hasMenuQuadPose = true;
+}
+
+XrPosef OpenXrManager::ComputeMenuQuadPose() const {
+    if (m_hasMenuQuadPose) {
+        return m_menuQuadPose;
+    }
+    XrPosef pose{};
+    pose.position.x = 0.0f;
+    pose.position.y = 0.0f;
+    pose.position.z = -m_menuQuadDistance;
+    pose.orientation.w = 1.0f;
     return pose;
 }
 

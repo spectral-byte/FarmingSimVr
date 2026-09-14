@@ -976,7 +976,8 @@ TEST(DxgiProxyTest, OnPresentSubmitsFloatingQuadLayerWhenNoCompanionHandshake) {
     EXPECT_EQ(quad.eyeVisibility, XR_EYE_VISIBILITY_BOTH);
     EXPECT_EQ(quad.subImage.swapchain, openXrManager->GetEyeSwapchain(0).handle);
     EXPECT_FLOAT_EQ(quad.pose.position.x, 0.0f);
-    EXPECT_FLOAT_EQ(quad.pose.position.y, 0.0f);
+    // Dynamic quad auto-centering aligns the quad to the head eye level (1.5f in mock dispatch)
+    EXPECT_FLOAT_EQ(quad.pose.position.y, 1.5f);
     EXPECT_FLOAT_EQ(quad.pose.position.z, -1.5f);
     EXPECT_FLOAT_EQ(quad.pose.orientation.w, 1.0f);
     EXPECT_NEAR(quad.size.width, 1.6f, 0.001f);
@@ -1147,6 +1148,33 @@ TEST(DxgiProxyTest, MidPairMenuTransitionDoesNotDeadlockSwapchainsOrLeakFrames) 
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+}
+
+TEST(DxgiProxyTest, TransitionIntoMenuModeTriggersQuadAlignment) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // Set head pose with offset and yaw
+    HeadPose simPose;
+    simPose.position = Vector3(1.0f, 1.6f, -2.0f);
+    simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
+    simPose.isValid = true;
+    openXrManager->SetSimulatedPose(simPose);
+
+    // Initial frame in pre-game menu: should align menu quad to simPose
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_TRUE(openXrManager->HasMenuQuadPose());
+    XrPosef quadPose = openXrManager->GetLastSubmittedQuadLayer().pose;
+    EXPECT_NEAR(quadPose.position.x, 1.0f, 0.001f);
+    EXPECT_NEAR(quadPose.position.y, 1.6f, 0.001f);
+    EXPECT_NEAR(quadPose.position.z, -3.5f, 0.001f); // -2.0 - 1.5 = -3.5
 }
 
 } // namespace fs25vr

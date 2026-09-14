@@ -1468,6 +1468,125 @@ TEST(OpenXrManagerTest, SubmitMenuQuadResetsCopiedFlagsForBothSwapchains) {
     EXPECT_FALSE(manager.GetEyeSwapchain(1).hasCopiedFrame);
 }
 
+TEST(OpenXrManagerTest, ComputeMenuQuadPosePlacesQuadAtGazeVectorAndDecouplesPitchAndRoll) {
+    // 1. Gaze along +X (yaw = -pi/2, looking right): quad should be at (head.x + distance, head.y, head.z)
+    HeadPose headPoseYawRight;
+    headPoseYawRight.position = Vector3(2.0f, 1.7f, 3.0f);
+    // Non-zero pitch (+0.4) and roll (-0.3) to test decoupling
+    headPoseYawRight.rotation = EulerAngles(0.4f, -1.5707963f, -0.3f);
+    headPoseYawRight.isValid = true;
+
+    XrPosef quadPose = OpenXrManager::ComputeMenuQuadPoseFromHeadPose(headPoseYawRight, 1.5f);
+
+    // Quad position: rotated (0, 0, -1.5) by yaw -pi/2 gives (1.5, 0, 0)
+    EXPECT_NEAR(quadPose.position.x, 3.5f, 0.01f);
+    EXPECT_NEAR(quadPose.position.y, 1.7f, 0.001f); // Perfectly at eye level
+    EXPECT_NEAR(quadPose.position.z, 3.0f, 0.01f);
+
+    // Quad orientation: pure yaw -pi/2, pitch and roll decoupled (0, 0)
+    Quaternion qQuad(quadPose.orientation.x, quadPose.orientation.y, quadPose.orientation.z, quadPose.orientation.w);
+    EulerAngles angles = OpenXrManager::QuaternionToEuler(qQuad);
+    EXPECT_NEAR(angles.yaw, -1.5707963f, 0.01f);
+    EXPECT_NEAR(angles.pitch, 0.0f, 0.001f);
+    EXPECT_NEAR(angles.roll, 0.0f, 0.001f);
+
+    // 2. Gaze along -Z (yaw = 0): quad placed at (head.x, head.y, head.z - distance)
+    HeadPose headPoseForward;
+    headPoseForward.position = Vector3(-1.0f, 1.5f, 2.0f);
+    headPoseForward.rotation = EulerAngles(-0.5f, 0.0f, 0.2f);
+    headPoseForward.isValid = true;
+
+    XrPosef quadPoseFwd = OpenXrManager::ComputeMenuQuadPoseFromHeadPose(headPoseForward, 1.5f);
+    EXPECT_NEAR(quadPoseFwd.position.x, -1.0f, 0.001f);
+    EXPECT_NEAR(quadPoseFwd.position.y, 1.5f, 0.001f);
+    EXPECT_NEAR(quadPoseFwd.position.z, 0.5f, 0.001f); // 2.0 - 1.5 = 0.5
+    Quaternion qQuadFwd(quadPoseFwd.orientation.x, quadPoseFwd.orientation.y, quadPoseFwd.orientation.z, quadPoseFwd.orientation.w);
+    EulerAngles anglesFwd = OpenXrManager::QuaternionToEuler(qQuadFwd);
+    EXPECT_NEAR(anglesFwd.yaw, 0.0f, 0.001f);
+    EXPECT_NEAR(anglesFwd.pitch, 0.0f, 0.001f);
+    EXPECT_NEAR(anglesFwd.roll, 0.0f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, SubmitMenuQuadAlignsToHeadPoseOnRecenter) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    // Player seated at (3.0, 1.0, -1.0), looking at 45 degrees yaw (0.785398 rad) with pitch 0.2
+    HeadPose simPose;
+    simPose.position = Vector3(3.0f, 1.0f, -1.0f);
+    simPose.rotation = EulerAngles(0.2f, 0.785398f, 0.0f);
+    float halfYaw = 0.785398f * 0.5f;
+    simPose.orientation = Quaternion(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
+    simPose.isValid = true;
+    manager.SetSimulatedPose(simPose);
+
+    // Recenter view while in menu
+    manager.Recenter();
+
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.SubmitMenuQuad());
+
+    ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 1u);
+    const auto& quad = mockDispatch->lastSubmittedQuadLayers[0];
+
+    // Distance ~1.5m along 45 degrees gaze
+    // deltaX = -1.5 * sin(0.785398) = -1.06066
+    // deltaZ = -1.5 * cos(0.785398) = -1.06066
+    EXPECT_NEAR(quad.pose.position.x, 3.0f - 1.06066f, 0.02f);
+    EXPECT_NEAR(quad.pose.position.y, 1.0f, 0.001f);
+    EXPECT_NEAR(quad.pose.position.z, -1.0f - 1.06066f, 0.02f);
+
+    Quaternion qQuad(quad.pose.orientation.x, quad.pose.orientation.y, quad.pose.orientation.z, quad.pose.orientation.w);
+    EulerAngles angles = OpenXrManager::QuaternionToEuler(qQuad);
+    EXPECT_NEAR(angles.yaw, 0.785398f, 0.01f);
+    EXPECT_NEAR(angles.pitch, 0.0f, 0.001f);
+    EXPECT_NEAR(angles.roll, 0.0f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, MenuQuadRemainsAnchoredInLocalSpaceAcrossHeadMotion) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    HeadPose initialPose;
+    initialPose.position = Vector3(0.0f, 1.7f, 0.0f);
+    initialPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
+    initialPose.isValid = true;
+    manager.SetSimulatedPose(initialPose);
+
+    // Explicitly align quad to initial pose
+    manager.AlignMenuQuadToHeadPose();
+
+    // Player now moves head forward 0.5m and tilts head
+    HeadPose movedPose;
+    movedPose.position = Vector3(0.0f, 1.7f, -0.5f);
+    movedPose.rotation = EulerAngles(0.3f, 0.2f, 0.1f);
+    movedPose.isValid = true;
+    manager.SetSimulatedPose(movedPose);
+
+    // Submit quad again
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.SubmitMenuQuad());
+
+    ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 1u);
+    const auto& quad = mockDispatch->lastSubmittedQuadLayers[0];
+
+    // Quad position must still be anchored at (0, 1.7, -1.5) in local space, NOT moving with the head
+    EXPECT_NEAR(quad.pose.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(quad.pose.position.y, 1.7f, 0.001f);
+    EXPECT_NEAR(quad.pose.position.z, -1.5f, 0.001f);
+}
+
 } // namespace fs25vr
+
 
 

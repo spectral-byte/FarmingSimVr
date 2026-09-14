@@ -304,14 +304,20 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
     if (m_openXrManager->HasEyeSwapchains()) {
         bool isCompanionActive = m_vrBridge && m_vrBridge->IsCompanionActive();
         bool isMenuVisible = m_vrBridge && m_vrBridge->IsMenuVisible();
-        if (!isCompanionActive || isMenuVisible) {
+        bool inMenuMode = !isCompanionActive || isMenuVisible;
+        if (inMenuMode) {
+            m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
+            if (!m_wasInMenuMode) {
+                m_openXrManager->AlignMenuQuadToHeadPose();
+            }
+            m_wasInMenuMode = true;
             // Floating quad layer mode:
             // Backbuffer is presented on an OpenXR Quad layer positioned in 3D tracking space
             // rather than warping across an immersive projection layer.
             // Active during pre-game / Main Menu AND in-game GUI menus (ESC pause menu, shop, etc.).
-            m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
             m_openXrManager->SubmitMenuQuad();
         } else {
+            m_wasInMenuMode = false;
             bool isNativeStereo = m_telemetryProbe && m_telemetryProbe->HasNativeStereoDetected();
             if (isNativeStereo) {
                 // In native stereo mode, both eye views are rendered simultaneously in the current backbuffer pass.

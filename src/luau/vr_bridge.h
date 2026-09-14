@@ -44,6 +44,7 @@ public:
 
     bool IsMenuVisible() const { return m_menuVisible; }
     void SetMenuVisible(bool visible);
+    void AlignMenuQuad();
 
     static int Lua_IsReady(lua_State* L);
     static int Lua_Handshake(lua_State* L);
@@ -54,6 +55,7 @@ public:
     static int Lua_RequiresAfrFallback(lua_State* L);
     static int Lua_GetHeadPose(lua_State* L);
     static int Lua_Recenter(lua_State* L);
+    static int Lua_AlignMenuQuad(lua_State* L);
     static int Lua_GetEyeProjection(lua_State* L);
     static int Lua_SetMenuVisible(lua_State* L);
     static int Lua_GetIsMenuVisible(lua_State* L);
