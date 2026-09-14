@@ -993,4 +993,34 @@ TEST_F(CompanionModTest, FallsBackToEngineTrackIRWhenVRBridgePoseUnavailable) {
     )luau", "=verifyTrackIrApplied"), 0);
 }
 
+TEST_F(CompanionModTest, UnloadMapNotifiesVRBridgeAndRevertsCompanionActiveState) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    EXPECT_FALSE(bridge.IsCompanionActive());
+
+    // Load map: triggers handshake and marks active
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMapCall"), 0);
+    EXPECT_TRUE(bridge.IsCompanionActive());
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.handshakeComplete == true, "companion handshakeComplete must be true")
+        assert(VRBridge.isCompanionActive() == true, "VRBridge.isCompanionActive() must be true")
+    )luau", "=verifyActive"), 0);
+
+    // Unload map: triggers deleteMap and notifies VRBridge
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMapCall"), 0);
+    EXPECT_FALSE(bridge.IsCompanionActive());
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.handshakeComplete == false, "companion handshakeComplete must be false after deleteMap")
+        assert(VRBridge.isCompanionActive() == false, "VRBridge.isCompanionActive() must be false after deleteMap")
+    )luau", "=verifyInactive"), 0);
+}
+
+
 

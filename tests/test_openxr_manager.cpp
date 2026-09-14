@@ -310,6 +310,7 @@ public:
     std::vector<XrSwapchainCreateInfo> lastSwapchainCreateInfos;
     XrFrameEndInfo lastFrameEndInfo{};
     std::vector<XrCompositionLayerProjectionView> lastSubmittedProjectionViews;
+    std::vector<XrCompositionLayerQuad> lastSubmittedQuadLayers;
 
     XrResult EnumerateSwapchainFormats(
         XrSession /*session*/,
@@ -451,13 +452,23 @@ public:
         if (frameEndInfo) {
             lastFrameEndInfo = *frameEndInfo;
             lastSubmittedProjectionViews.clear();
+            lastSubmittedQuadLayers.clear();
             if (frameEndInfo->layerCount > 0 && frameEndInfo->layers) {
-                const auto* baseHeader = frameEndInfo->layers[0];
-                if (baseHeader && baseHeader->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
-                    const auto* projLayer = reinterpret_cast<const XrCompositionLayerProjection*>(baseHeader);
-                    if (projLayer && projLayer->views && projLayer->viewCount > 0) {
-                        for (uint32_t v = 0; v < projLayer->viewCount; ++v) {
-                            lastSubmittedProjectionViews.push_back(projLayer->views[v]);
+                for (uint32_t l = 0; l < frameEndInfo->layerCount; ++l) {
+                    const auto* baseHeader = frameEndInfo->layers[l];
+                    if (baseHeader) {
+                        if (baseHeader->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
+                            const auto* projLayer = reinterpret_cast<const XrCompositionLayerProjection*>(baseHeader);
+                            if (projLayer && projLayer->views && projLayer->viewCount > 0) {
+                                for (uint32_t v = 0; v < projLayer->viewCount; ++v) {
+                                    lastSubmittedProjectionViews.push_back(projLayer->views[v]);
+                                }
+                            }
+                        } else if (baseHeader->type == XR_TYPE_COMPOSITION_LAYER_QUAD) {
+                            const auto* quadLayer = reinterpret_cast<const XrCompositionLayerQuad*>(baseHeader);
+                            if (quadLayer) {
+                                lastSubmittedQuadLayers.push_back(*quadLayer);
+                            }
                         }
                     }
                 }
@@ -1269,6 +1280,169 @@ TEST(OpenXrManagerTest, BeginFrameLocatesViewsAndRefreshesProjectionsAndPose) {
     // Verify head pose was refreshed during BeginFrame
     const auto& pose = manager.GetLastPose();
     EXPECT_TRUE(pose.isValid);
+}
+
+TEST(OpenXrManagerTest, SubmitMenuQuadRejectsWhenNoEyeSwapchains) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    EXPECT_FALSE(manager.SubmitMenuQuad());
+}
+
+TEST(OpenXrManagerTest, SubmitMenuQuadRejectsWhenLocalSpaceMissing) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    // Intentionally omit CreateTrackingSpaces() so m_localSpace is XR_NULL_HANDLE
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_FALSE(manager.SubmitMenuQuad());
+}
+
+TEST(OpenXrManagerTest, SubmitMenuQuadRejectsWhenEye0NotCopied) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    EXPECT_TRUE(manager.BeginFrame());
+    // Eye 0 not copied yet
+    EXPECT_FALSE(manager.SubmitMenuQuad());
+}
+
+TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsValidXrCompositionLayerQuad) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    EXPECT_EQ(manager.GetSubmittedQuadFrameCount(), 0u);
+
+    // Frame 1
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_TRUE(manager.IsFrameBegun());
+    EXPECT_TRUE(manager.GetEyeSwapchain(0).hasCopiedFrame);
+
+    ASSERT_TRUE(manager.SubmitMenuQuad());
+    EXPECT_FALSE(manager.IsFrameBegun());
+    EXPECT_FALSE(manager.GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_EQ(manager.GetSubmittedQuadFrameCount(), 1u);
+    EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
+
+    ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 1u);
+    const auto& quad = mockDispatch->lastSubmittedQuadLayers[0];
+
+    EXPECT_EQ(quad.type, XR_TYPE_COMPOSITION_LAYER_QUAD);
+    EXPECT_EQ(quad.next, nullptr);
+    EXPECT_EQ(quad.layerFlags, 0u);
+    EXPECT_EQ(quad.space, manager.GetLocalSpace());
+    EXPECT_EQ(quad.eyeVisibility, XR_EYE_VISIBILITY_BOTH);
+
+    // Swapchain subimage
+    EXPECT_EQ(quad.subImage.swapchain, manager.GetEyeSwapchain(0).handle);
+    EXPECT_EQ(quad.subImage.imageRect.offset.x, 0);
+    EXPECT_EQ(quad.subImage.imageRect.offset.y, 0);
+    EXPECT_EQ(quad.subImage.imageRect.extent.width, 1920);
+    EXPECT_EQ(quad.subImage.imageRect.extent.height, 1080);
+    EXPECT_EQ(quad.subImage.imageArrayIndex, 0u);
+
+    // 1.5m eye-level position in local tracking space
+    EXPECT_FLOAT_EQ(quad.pose.position.x, 0.0f);
+    EXPECT_FLOAT_EQ(quad.pose.position.y, 0.0f);
+    EXPECT_FLOAT_EQ(quad.pose.position.z, -1.5f);
+    EXPECT_FLOAT_EQ(quad.pose.orientation.x, 0.0f);
+    EXPECT_FLOAT_EQ(quad.pose.orientation.y, 0.0f);
+    EXPECT_FLOAT_EQ(quad.pose.orientation.z, 0.0f);
+    EXPECT_FLOAT_EQ(quad.pose.orientation.w, 1.0f);
+
+    // 16:9 aspect ratio extents (1.6m x 0.9m)
+    EXPECT_NEAR(quad.size.width, 1.6f, 0.001f);
+    EXPECT_NEAR(quad.size.height, 0.9f, 0.001f);
+    EXPECT_NEAR(quad.size.width / quad.size.height, 16.0f / 9.0f, 0.001f);
+
+    // Frame 2
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.SubmitMenuQuad());
+    EXPECT_EQ(manager.GetSubmittedQuadFrameCount(), 2u);
+    EXPECT_EQ(mockDispatch->endFrameCalls, 2u);
+}
+
+TEST(OpenXrManagerTest, SubmitMenuQuadRespectsRecenterOffset) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    // Simulate head pose offset at position (1.0, 0.5, -2.0) and yaw = 0.0
+    HeadPose simPose;
+    simPose.position = Vector3(1.0f, 0.5f, -2.0f);
+    simPose.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
+    simPose.isValid = true;
+    manager.SetSimulatedPose(simPose);
+
+    manager.Recenter();
+
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.SubmitMenuQuad());
+
+    ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 1u);
+    const auto& quad = mockDispatch->lastSubmittedQuadLayers[0];
+
+    // Quad position should be offset 1.5m in front (-Z) from recenter origin (1.0, 0.5, -2.0 - 1.5 = -3.5)
+    EXPECT_NEAR(quad.pose.position.x, 1.0f, 0.001f);
+    EXPECT_NEAR(quad.pose.position.y, 0.5f, 0.001f);
+    EXPECT_NEAR(quad.pose.position.z, -3.5f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, CustomMenuQuadDistanceAndSize) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    manager.SetMenuQuadDistance(2.5f);
+    EXPECT_FLOAT_EQ(manager.GetMenuQuadDistance(), 2.5f);
+
+    manager.SetMenuQuadSize(2.4f, 1.35f);
+    auto size = manager.GetMenuQuadSize();
+    EXPECT_FLOAT_EQ(size.width, 2.4f);
+    EXPECT_FLOAT_EQ(size.height, 1.35f);
+
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.SubmitMenuQuad());
+
+    ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 1u);
+    const auto& quad = mockDispatch->lastSubmittedQuadLayers[0];
+
+    EXPECT_FLOAT_EQ(quad.pose.position.z, -2.5f);
+    EXPECT_FLOAT_EQ(quad.size.width, 2.4f);
+    EXPECT_FLOAT_EQ(quad.size.height, 1.35f);
+
+    manager.ResetMenuQuadSettings();
+    EXPECT_FLOAT_EQ(manager.GetMenuQuadDistance(), 1.5f);
+    auto defaultSize = manager.GetMenuQuadSize();
+    EXPECT_NEAR(defaultSize.width, 1.6f, 0.001f);
+    EXPECT_NEAR(defaultSize.height, 0.9f, 0.001f);
 }
 
 } // namespace fs25vr

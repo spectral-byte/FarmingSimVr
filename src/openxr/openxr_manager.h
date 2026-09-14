@@ -168,6 +168,19 @@ public:
     bool EndFrame();
     bool IsFrameBegun() const { return m_frameBegun; }
     bool SubmitFramePair();
+    bool SubmitMenuQuad(const XrPosef* customPose = nullptr, const XrExtent2Df* customSize = nullptr);
+
+    XrPosef ComputeMenuQuadPose() const;
+    XrExtent2Df ComputeMenuQuadSize() const;
+    void SetMenuQuadDistance(float distance) { m_menuQuadDistance = distance; }
+    float GetMenuQuadDistance() const { return m_menuQuadDistance; }
+    void SetMenuQuadSize(float width, float height) { m_customMenuQuadSize = { width, height }; m_hasCustomMenuQuadSize = true; }
+    XrExtent2Df GetMenuQuadSize() const { return ComputeMenuQuadSize(); }
+    void ResetMenuQuadSettings() { m_menuQuadDistance = 1.5f; m_hasCustomMenuQuadSize = false; }
+
+    uint64_t GetSubmittedQuadFrameCount() const { return m_submittedQuadFrameCount; }
+    void ResetSubmittedQuadFrameCount() { m_submittedQuadFrameCount = 0; }
+    const XrCompositionLayerQuad& GetLastSubmittedQuadLayer() const { return m_lastSubmittedQuadLayer; }
 
     float GetIpd() const { return m_ipd; }
     void SetIpd(float ipd) { m_ipd = ipd; }
@@ -228,6 +241,11 @@ private:
     bool m_hasEyeSwapchains = false;
     float m_ipd = 0.064f;
     uint64_t m_submittedFramePairCount = 0;
+    uint64_t m_submittedQuadFrameCount = 0;
+    float m_menuQuadDistance = 1.5f;
+    XrExtent2Df m_customMenuQuadSize{ 1.6f, 0.9f };
+    bool m_hasCustomMenuQuadSize = false;
+    XrCompositionLayerQuad m_lastSubmittedQuadLayer{ XR_TYPE_COMPOSITION_LAYER_QUAD };
     bool m_frameBegun = false;
     XrFrameState m_frameState{XR_TYPE_FRAME_STATE};
     XrTime m_lastPredictedDisplayTime = 0;

@@ -22,6 +22,8 @@ public:
     const std::string& GetVersion() const { return m_version; }
     bool IsReady() const;
     bool PerformHandshake();
+    bool IsCompanionActive() const { return m_handshakeCompleted; }
+    void SetCompanionActive(bool active) { m_handshakeCompleted = active; }
     std::shared_ptr<GraphicsTelemetryProbe> GetTelemetryProbe() const { return m_telemetryProbe; }
     std::shared_ptr<OpenXrManager> GetOpenXrManager() const { return m_openXrManager; }
 
@@ -42,6 +44,8 @@ public:
 
     static int Lua_IsReady(lua_State* L);
     static int Lua_Handshake(lua_State* L);
+    static int Lua_IsCompanionActive(lua_State* L);
+    static int Lua_OnMapUnload(lua_State* L);
     static int Lua_GetStereoTelemetry(lua_State* L);
     static int Lua_IsStereoActive(lua_State* L);
     static int Lua_RequiresAfrFallback(lua_State* L);

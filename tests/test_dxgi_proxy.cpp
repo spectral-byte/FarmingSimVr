@@ -326,13 +326,31 @@ public:
         }
         return XR_SUCCESS;
     }
-    XrResult EndFrame(XrSession, const XrFrameEndInfo*) override {
+    XrFrameEndInfo lastFrameEndInfo{};
+    std::vector<XrCompositionLayerQuad> lastSubmittedQuadLayers;
+
+    XrResult EndFrame(XrSession, const XrFrameEndInfo* frameEndInfo) override {
         endFrameCalls++;
         if (enforceCallOrder && (!isFrameBegun || !acquiredSwapchains.empty())) {
             callOrderErrors++;
             return XR_ERROR_CALL_ORDER_INVALID;
         }
         if (enforceCallOrder) isFrameBegun = false;
+        if (frameEndInfo) {
+            lastFrameEndInfo = *frameEndInfo;
+            lastSubmittedQuadLayers.clear();
+            if (frameEndInfo->layerCount > 0 && frameEndInfo->layers) {
+                for (uint32_t l = 0; l < frameEndInfo->layerCount; ++l) {
+                    const auto* baseHeader = frameEndInfo->layers[l];
+                    if (baseHeader && baseHeader->type == XR_TYPE_COMPOSITION_LAYER_QUAD) {
+                        const auto* quadLayer = reinterpret_cast<const XrCompositionLayerQuad*>(baseHeader);
+                        if (quadLayer) {
+                            lastSubmittedQuadLayers.push_back(*quadLayer);
+                        }
+                    }
+                }
+            }
+        }
         return XR_SUCCESS;
     }
 };
@@ -451,6 +469,7 @@ TEST(DxgiProxyTest, OnPresentCopiesLeftEyeOnFrame0AndRightEyeOnFrame1WithPairSub
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
     DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
 
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
@@ -482,6 +501,7 @@ TEST(DxgiProxyTest, AttachSwapChainHooksPresentAndInvokesOnPresent) {
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
     DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
 
     std::vector<void*> vtable(30, nullptr);
@@ -570,6 +590,7 @@ TEST(DxgiProxyTest, OnPresentGatesAfrPacingBehindTelemetryProbe) {
     ASSERT_FALSE(probe->RequiresAfrFallback());
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, probe);
+    vrBridge->PerformHandshake();
     DxgiProxy proxy(nullptr, openXrManager, nullptr, probe, nullptr, vrBridge);
 
     // In native stereo mode, OnPresent submits rendered stereo frames directly on every frame without suppression
@@ -642,6 +663,7 @@ TEST(DxgiProxyTest, EnforcesStrictOpenXrLifecycleAndContinuousPresentationAcross
 
     auto probe = std::make_shared<GraphicsTelemetryProbe>();
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, probe);
+    vrBridge->PerformHandshake();
     DxgiProxy proxy(nullptr, openXrManager, nullptr, probe, nullptr, vrBridge);
 
     // 1. Inconclusive probing frames: verify AFR pairs submit without call order error
@@ -924,6 +946,101 @@ TEST(DxgiProxyTest, FallsBackToDefaultDimensionsWhenBothBackbufferAndRecommended
     EXPECT_EQ(openXrManager->GetEyeSwapchain(0).height, 1080u);
     EXPECT_EQ(openXrManager->GetEyeSwapchain(1).width, 1920u);
     EXPECT_EQ(openXrManager->GetEyeSwapchain(1).height, 1080u);
+}
+
+TEST(DxgiProxyTest, OnPresentSubmitsFloatingQuadLayerWhenNoCompanionHandshake) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    EXPECT_FALSE(vrBridge->IsCompanionActive());
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
+    ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 1u);
+
+    const auto& quad = mockDispatch->lastSubmittedQuadLayers[0];
+    EXPECT_EQ(quad.type, XR_TYPE_COMPOSITION_LAYER_QUAD);
+    EXPECT_EQ(quad.space, openXrManager->GetLocalSpace());
+    EXPECT_EQ(quad.eyeVisibility, XR_EYE_VISIBILITY_BOTH);
+    EXPECT_EQ(quad.subImage.swapchain, openXrManager->GetEyeSwapchain(0).handle);
+    EXPECT_FLOAT_EQ(quad.pose.position.x, 0.0f);
+    EXPECT_FLOAT_EQ(quad.pose.position.y, 0.0f);
+    EXPECT_FLOAT_EQ(quad.pose.position.z, -1.5f);
+    EXPECT_FLOAT_EQ(quad.pose.orientation.w, 1.0f);
+    EXPECT_NEAR(quad.size.width, 1.6f, 0.001f);
+    EXPECT_NEAR(quad.size.height, 0.9f, 0.001f);
+}
+
+TEST(DxgiProxyTest, OnPresentSubmitsQuadContinuouslyWithoutAfrPacing) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // 4 frames in menu mode -> 4 quad submissions, frame parity never advances to 1
+    for (int i = 0; i < 4; ++i) {
+        proxy.OnPresent(nullptr, 0, 0);
+        EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), static_cast<uint64_t>(i + 1));
+        EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+    }
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+}
+
+TEST(DxgiProxyTest, SeamlesslyTransitionsBetweenQuadAndStereoOnCompanionHandshakeAndUnload) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // 1. Menu mode: 2 frames submit 2 quad layers
+    proxy.OnPresent(nullptr, 0, 0);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 2u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+
+    // 2. Player enters map: Companion mod handshakes
+    vrBridge->PerformHandshake();
+    EXPECT_TRUE(vrBridge->IsCompanionActive());
+
+    // In-game AFR: frame 0 copies left, frame 1 copies right and submits stereo pair
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 2u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // 3. Player exits back to menu: Map unloads
+    vrBridge->SetCompanionActive(false);
+    EXPECT_FALSE(vrBridge->IsCompanionActive());
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
 }
 
 } // namespace fs25vr

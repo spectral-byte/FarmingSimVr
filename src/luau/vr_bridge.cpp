@@ -43,7 +43,7 @@ bool VRBridge::Inject(lua_State* L) {
     int origTop = lua_gettop(L);
 
     // Create table for VRBridge
-    lua_createtable(L, 0, 11);
+    lua_createtable(L, 0, 15);
 
     // VRBridge.version = "1.0.0"
     lua_pushstring(L, m_version.c_str());
@@ -58,6 +58,16 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushlightuserdata(L, this);
     lua_pushcclosure(L, &VRBridge::Lua_Handshake, "handshake", 1);
     lua_setfield(L, -2, "handshake");
+
+    // VRBridge.isCompanionActive = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_IsCompanionActive, "isCompanionActive", 1);
+    lua_setfield(L, -2, "isCompanionActive");
+
+    // VRBridge.onMapUnload = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_OnMapUnload, "onMapUnload", 1);
+    lua_setfield(L, -2, "onMapUnload");
 
     // VRBridge.getStereoTelemetry = function() [bound with 'this' upvalue]
     lua_pushlightuserdata(L, this);
@@ -163,6 +173,24 @@ int VRBridge::Lua_Handshake(lua_State* L) {
     lua_setfield(L, -2, "mode");
 
     return 1;
+}
+
+int VRBridge::Lua_IsCompanionActive(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    lua_pushboolean(L, self->IsCompanionActive() ? 1 : 0);
+    return 1;
+}
+
+int VRBridge::Lua_OnMapUnload(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    self->SetCompanionActive(false);
+    self->SetFrameParity(0);
+    LogInfo("[VRBridge] Companion mod map unloaded; reverted to Menu Quad layer mode.");
+    return 0;
 }
 
 int VRBridge::Lua_GetStereoTelemetry(lua_State* L) {
@@ -479,6 +507,10 @@ int VRBridge::Lua_Index(lua_State* L) {
         }
         if (strcmp(key, "ipd") == 0) {
             lua_pushnumber(L, self->GetIpd());
+            return 1;
+        }
+        if (strcmp(key, "isCompanionActive") == 0) {
+            lua_pushboolean(L, self->IsCompanionActive() ? 1 : 0);
             return 1;
         }
     }

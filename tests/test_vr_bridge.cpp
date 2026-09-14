@@ -407,3 +407,35 @@ TEST_F(VrBridgeTest, RequiresAfrFallbackReflectsTelemetryProbeVerdict) {
         assert(VRBridge.getRequiresAfrFallback() == false, "must return false when native stereo detected")
     )luau"), 0);
 }
+
+TEST_F(VrBridgeTest, ExposesCompanionActiveStatusAndHandlesMapUnload) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_FALSE(bridge.IsCompanionActive());
+
+    // Initially inactive before handshake
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(type(VRBridge.isCompanionActive) == "function", "isCompanionActive must be a function")
+        assert(type(VRBridge.onMapUnload) == "function", "onMapUnload must be a function")
+        assert(VRBridge.isCompanionActive() == false, "must be false before handshake")
+    )luau"), 0);
+
+    // Perform handshake
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        local res = VRBridge.handshake()
+        assert(res.success == true, "handshake must succeed")
+        assert(VRBridge.isCompanionActive() == true, "must be true after handshake")
+    )luau"), 0);
+
+    EXPECT_TRUE(bridge.IsCompanionActive());
+
+    // Unload map
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        VRBridge.onMapUnload()
+        assert(VRBridge.isCompanionActive() == false, "must be false after map unload")
+    )luau"), 0);
+
+    EXPECT_FALSE(bridge.IsCompanionActive());
+}
+

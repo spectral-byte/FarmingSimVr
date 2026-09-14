@@ -302,31 +302,40 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
     }
 
     if (m_openXrManager->HasEyeSwapchains()) {
-        bool isNativeStereo = m_telemetryProbe && m_telemetryProbe->HasNativeStereoDetected();
-        if (isNativeStereo) {
-            // In native stereo mode, both eye views are rendered simultaneously in the current backbuffer pass.
-            // Submit both eyes directly to the OpenXR compositor without skipping or suppressing frames.
-            // If mid-pair transition occurred and eye 0 was already copied in the active frame, avoid redundant acquisition.
-            if (!m_openXrManager->GetEyeSwapchain(0).hasCopiedFrame) {
-                m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
-            }
-            m_openXrManager->CopyBackBufferToEye(1, pBackBuffer);
-            m_openXrManager->SubmitFramePair();
-
-            if (m_vrBridge) {
-                m_vrBridge->AdvanceFrame();
-            }
+        bool isCompanionActive = m_vrBridge && m_vrBridge->IsCompanionActive();
+        if (!isCompanionActive) {
+            // Pre-game / Main Menu floating quad layer mode:
+            // Backbuffer is presented on an OpenXR Quad layer positioned in 3D tracking space
+            // rather than warping across an immersive projection layer.
+            m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
+            m_openXrManager->SubmitMenuQuad();
         } else {
-            // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
-            uint32_t parity = m_vrBridge ? m_vrBridge->GetFrameParity() : 0;
-            m_openXrManager->CopyBackBufferToEye(parity, pBackBuffer);
-
-            if (parity == 1) {
+            bool isNativeStereo = m_telemetryProbe && m_telemetryProbe->HasNativeStereoDetected();
+            if (isNativeStereo) {
+                // In native stereo mode, both eye views are rendered simultaneously in the current backbuffer pass.
+                // Submit both eyes directly to the OpenXR compositor without skipping or suppressing frames.
+                // If mid-pair transition occurred and eye 0 was already copied in the active frame, avoid redundant acquisition.
+                if (!m_openXrManager->GetEyeSwapchain(0).hasCopiedFrame) {
+                    m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
+                }
+                m_openXrManager->CopyBackBufferToEye(1, pBackBuffer);
                 m_openXrManager->SubmitFramePair();
-            }
 
-            if (m_vrBridge) {
-                m_vrBridge->AdvanceFrame();
+                if (m_vrBridge) {
+                    m_vrBridge->AdvanceFrame();
+                }
+            } else {
+                // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
+                uint32_t parity = m_vrBridge ? m_vrBridge->GetFrameParity() : 0;
+                m_openXrManager->CopyBackBufferToEye(parity, pBackBuffer);
+
+                if (parity == 1) {
+                    m_openXrManager->SubmitFramePair();
+                }
+
+                if (m_vrBridge) {
+                    m_vrBridge->AdvanceFrame();
+                }
             }
         }
     }

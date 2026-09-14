@@ -236,6 +236,10 @@ void OpenXrManager::Shutdown() {
     m_eyeProjections[0] = {};
     m_eyeProjections[1] = {};
     m_viewConfigViews.clear();
+    m_submittedQuadFrameCount = 0;
+    m_hasCustomMenuQuadSize = false;
+    m_menuQuadDistance = 1.5f;
+    m_lastSubmittedQuadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
     m_device = nullptr;
     m_queue = nullptr;
 }
@@ -1076,6 +1080,116 @@ bool OpenXrManager::SubmitFramePair() {
            << " Eye0 Pose: (" << projViews[0].pose.position.x << ", " << projViews[0].pose.position.y << ", " << projViews[0].pose.position.z << ")"
            << " Ori: (" << projViews[0].pose.orientation.x << ", " << projViews[0].pose.orientation.y
            << ", " << projViews[0].pose.orientation.z << ", " << projViews[0].pose.orientation.w << ")";
+        LogInfo(ss.str());
+    }
+    return true;
+}
+
+XrPosef OpenXrManager::ComputeMenuQuadPose() const {
+    XrPosef pose{};
+    if (m_hasRecenter) {
+        float halfYaw = m_recenterOffset.yaw * 0.5f;
+        Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
+
+        Vector3 forwardOffset(0.0f, 0.0f, -m_menuQuadDistance);
+        Vector3 rotatedOffset = RotateVectorByQuaternion(qYaw, forwardOffset);
+
+        pose.position.x = m_recenterOffset.position.x + rotatedOffset.x;
+        pose.position.y = m_recenterOffset.position.y + rotatedOffset.y;
+        pose.position.z = m_recenterOffset.position.z + rotatedOffset.z;
+
+        pose.orientation.x = qYaw.x;
+        pose.orientation.y = qYaw.y;
+        pose.orientation.z = qYaw.z;
+        pose.orientation.w = qYaw.w;
+    } else {
+        pose.position.x = 0.0f;
+        pose.position.y = 0.0f;
+        pose.position.z = -m_menuQuadDistance;
+
+        pose.orientation.x = 0.0f;
+        pose.orientation.y = 0.0f;
+        pose.orientation.z = 0.0f;
+        pose.orientation.w = 1.0f;
+    }
+    return pose;
+}
+
+XrExtent2Df OpenXrManager::ComputeMenuQuadSize() const {
+    if (m_hasCustomMenuQuadSize) {
+        return m_customMenuQuadSize;
+    }
+    float height = 0.9f;
+    float aspect = 16.0f / 9.0f;
+    if (m_hasEyeSwapchains && m_eyeSwapchains[0].height > 0) {
+        aspect = static_cast<float>(m_eyeSwapchains[0].width) / static_cast<float>(m_eyeSwapchains[0].height);
+    }
+    return XrExtent2Df{ height * aspect, height };
+}
+
+bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df* customSize) {
+    if (!m_hasEyeSwapchains || m_session == XR_NULL_HANDLE) {
+        return false;
+    }
+
+    if (!m_eyeSwapchains[0].hasCopiedFrame) {
+        return false;
+    }
+
+    if (!m_frameBegun) {
+        LogError("OpenXrManager::SubmitMenuQuad: No frame currently begun.");
+        return false;
+    }
+
+    if (m_localSpace == XR_NULL_HANDLE) {
+        LogError("OpenXrManager::SubmitMenuQuad: Local reference space is not initialized.");
+        return false;
+    }
+
+    XrCompositionLayerQuad quadLayer{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    quadLayer.next = nullptr;
+    quadLayer.layerFlags = 0;
+    quadLayer.space = m_localSpace;
+    quadLayer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+
+    quadLayer.subImage.swapchain = m_eyeSwapchains[0].handle;
+    quadLayer.subImage.imageRect.offset = { 0, 0 };
+    quadLayer.subImage.imageRect.extent = {
+        static_cast<int32_t>(m_eyeSwapchains[0].width),
+        static_cast<int32_t>(m_eyeSwapchains[0].height)
+    };
+    quadLayer.subImage.imageArrayIndex = 0;
+
+    quadLayer.pose = customPose ? *customPose : ComputeMenuQuadPose();
+    quadLayer.size = customSize ? *customSize : ComputeMenuQuadSize();
+
+    m_lastSubmittedQuadLayer = quadLayer;
+
+    const XrCompositionLayerBaseHeader* layers[] = { reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quadLayer) };
+
+    XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
+    endInfo.displayTime = m_frameState.predictedDisplayTime;
+    endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    endInfo.layerCount = m_frameState.shouldRender ? 1 : 0;
+    endInfo.layers = m_frameState.shouldRender ? layers : nullptr;
+
+    XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
+    m_frameBegun = false;
+    if (res != XR_SUCCESS) {
+        LogError("OpenXrManager::SubmitMenuQuad: EndFrame failed (result " + std::to_string(res) + ")");
+        return false;
+    }
+
+    m_submittedQuadFrameCount++;
+    m_eyeSwapchains[0].hasCopiedFrame = false;
+
+    if (m_submittedQuadFrameCount == 1 || m_submittedQuadFrameCount % 300 == 0) {
+        std::stringstream ss;
+        ss << "OpenXrManager: Submitted floating menu quad #" << m_submittedQuadFrameCount
+           << " - Size: [" << quadLayer.size.width << "x" << quadLayer.size.height << "]"
+           << " Pose: (" << quadLayer.pose.position.x << ", " << quadLayer.pose.position.y << ", " << quadLayer.pose.position.z << ")"
+           << " Ori: (" << quadLayer.pose.orientation.x << ", " << quadLayer.pose.orientation.y
+           << ", " << quadLayer.pose.orientation.z << ", " << quadLayer.pose.orientation.w << ")";
         LogInfo(ss.str());
     }
     return true;

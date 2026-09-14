@@ -708,6 +708,10 @@ function VRCompanion:deleteMap()
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
 
+    if VRBridge ~= nil and type(VRBridge.onMapUnload) == "function" then
+        VRBridge.onMapUnload()
+    end
+
     -- Restore original camera FOVs and projection offsets
     if self.origCamSettings ~= nil then
         for camNode, orig in pairs(self.origCamSettings) do
