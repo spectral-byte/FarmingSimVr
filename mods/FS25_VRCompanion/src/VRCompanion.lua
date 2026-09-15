@@ -189,15 +189,19 @@ function VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
         rotationDeltaY = -(cam.player.inputComponent.cameraRotationY or 0) * cameraSensitivity
     end
 
-    local _, cameraYaw, _ = 0, 0, 0
-    if type(cam.getRotation) == "function" then
-        _, cameraYaw, _ = cam:getRotation()
+    local cameraYaw = 0
+    if cam.yawNode ~= nil and type(getRotation) == "function" then
+        local _, yRot, _ = getRotation(cam.yawNode)
+        cameraYaw = yRot or 0
+    elseif type(cam.getRotation) == "function" then
+        local _, yRot, _ = cam:getRotation()
+        cameraYaw = yRot or 0
     end
 
     if MathUtil ~= nil and type(MathUtil.getValidLimit) == "function" then
         cameraYaw = MathUtil.getValidLimit(cameraYaw + rotationDeltaY)
     else
-        cameraYaw = (cameraYaw + rotationDeltaY) % (2 * math.pi)
+        cameraYaw = (cameraYaw + rotationDeltaY + math.pi) % (2 * math.pi) - math.pi
     end
 
     -- In VR mode: keep neck level (pitch=0, roll=0); mouse/stick only turns body yaw.
@@ -546,7 +550,7 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
                     setTranslation(tg, lx, ly, lz)
                 end
                 if type(setRotation) == "function" then
-                    setRotation(tg, 0, 0, 0)
+                    setRotation(tg, 0, math.pi, 0)
                 end
                 cam.vrHeadTrackingNode = tg
             end
@@ -568,6 +572,9 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
         finalTx = (base.x or base[1] or 0) + eyeTx
         finalTy = (base.y or base[2] or 0) + eyeTy
         finalTz = (base.z or base[3] or 0) + eyeTz
+        finalRotX = pitch
+        finalRotY = yaw + math.pi
+        finalRotZ = roll
     end
 
     if type(setTranslation) == "function" then
@@ -644,6 +651,7 @@ function VRCompanion:realignPlayerCameraToRoot(cam)
         finalTx = base.x or base[1] or 0
         finalTy = base.y or base[2] or 0
         finalTz = base.z or base[3] or 0
+        finalRotY = math.pi
     end
 
     if type(setTranslation) == "function" then
@@ -739,7 +747,11 @@ end
 function VRCompanion:restoreMenuBackgroundCamera()
     if self.menuCameraOffsets ~= nil then
         for camNode, offset in pairs(self.menuCameraOffsets) do
-            if offset ~= nil then
+            local exists = true
+            if type(entityExists) == "function" then
+                exists = entityExists(camNode)
+            end
+            if exists and offset ~= nil then
                 local curX, curY, curZ = 0, 0, 0
                 if type(getTranslation) == "function" then
                     local ok, x, y, z = pcall(getTranslation, camNode)
@@ -876,11 +888,17 @@ function VRCompanion:deleteMap()
     -- Restore original camera FOVs and projection offsets
     if self.origCamSettings ~= nil then
         for camNode, orig in pairs(self.origCamSettings) do
-            if orig.fovY ~= nil and type(setFovY) == "function" then
-                setFovY(camNode, orig.fovY)
+            local exists = true
+            if type(entityExists) == "function" then
+                exists = entityExists(camNode)
             end
-            if type(setProjectionOffset) == "function" then
-                setProjectionOffset(camNode, orig.offsetX or 0, orig.offsetY or 0)
+            if exists then
+                if orig.fovY ~= nil and type(setFovY) == "function" then
+                    pcall(setFovY, camNode, orig.fovY)
+                end
+                if type(setProjectionOffset) == "function" then
+                    pcall(setProjectionOffset, camNode, orig.offsetX or 0, orig.offsetY or 0)
+                end
             end
         end
         self.origCamSettings = {}

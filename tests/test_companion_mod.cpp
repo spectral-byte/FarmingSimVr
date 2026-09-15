@@ -65,6 +65,13 @@ void SetupCameraMockGlobals(lua_State* L) {
             if curr then return curr.x, curr.y end
             return 0.0, 0.0
         end
+        MathUtil = {
+            getValidLimit = function(angle)
+                while angle > math.pi do angle = angle - 2 * math.pi end
+                while angle < -math.pi do angle = angle + 2 * math.pi end
+                return angle
+            end
+        }
     )luau", "=setupCameraMocks");
 }
 
@@ -412,7 +419,7 @@ TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking
 
         assert(_G.playerCamTransforms.rotation ~= nil, "player rotation must be set")
         assert(math.abs(_G.playerCamTransforms.rotation.rx - 0.12) < 0.001, "pitch mismatch")
-        assert(math.abs(_G.playerCamTransforms.rotation.ry - 0.18) < 0.001, "yaw mismatch")
+        assert(math.abs(_G.playerCamTransforms.rotation.ry - (0.18 + math.pi)) < 0.001, "yaw mismatch")
         assert(math.abs(_G.playerCamTransforms.rotation.rz - (-0.01)) < 0.001, "roll mismatch")
     )", "=verifyPlayerCam"), 0);
 }
@@ -938,7 +945,7 @@ TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFT
         assert(math.abs(_G.cameraTranslations[777].y - (1.8 + 0.2)) < 0.01, "height must include base + pose.y")
         assert(_G.cameraRotations[777] ~= nil, "setRotation must be called on firstPersonCamera")
         assert(math.abs(_G.cameraRotations[777].x - 0.05) < 0.005, "pitch must be applied")
-        assert(math.abs(_G.cameraRotations[777].y - 0.10) < 0.005, "yaw must be applied")
+        assert(math.abs(_G.cameraRotations[777].y - (0.10 + math.pi)) < 0.005, "yaw must be applied")
     )luau", "=verifyPlayerCameraHookDispatched"), 0);
 
     // Test deleteMap restores original updatePosition
@@ -989,7 +996,7 @@ TEST_F(CompanionModTest, FallsBackToEngineTrackIRWhenVRBridgePoseUnavailable) {
         assert(math.abs(_G.cameraTranslations[888].y - (1.75 + 0.08)) < 0.001, "TrackIR y translation applied")
         assert(_G.cameraRotations[888] ~= nil, "rotation must be set via TrackIR fallback")
         assert(math.abs(_G.cameraRotations[888].x - 0.12) < 0.001, "TrackIR pitch applied")
-        assert(math.abs(_G.cameraRotations[888].y - 0.25) < 0.001, "TrackIR yaw applied")
+        assert(math.abs(_G.cameraRotations[888].y - (0.25 + math.pi)) < 0.001, "TrackIR yaw applied")
     )luau", "=verifyTrackIrApplied"), 0);
 }
 
@@ -1375,6 +1382,198 @@ TEST_F(CompanionModTest, RecenterActionRealignsMenuQuadWhenInMenu) {
     }
     EXPECT_TRUE(foundQuadAlignLog);
 }
+
+TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        -- Mock full GIANTS Engine hierarchy:
+        -- yawNode (10) -> pitchNode (20) -> cameraRootNode (30) -> firstPersonCamera (40)
+        local nodes = {
+            [10] = { name = "yawNode", parent = 0, trans = {0, 0, 0}, rot = {0, 0, 0} },
+            [20] = { name = "pitchNode", parent = 10, trans = {0, 0, 0}, rot = {0, 0, 0} },
+            [30] = { name = "cameraRootNode", parent = 20, trans = {0, 0, 0}, rot = {0, math.pi, 0} },
+            [40] = { name = "firstPersonCamera", parent = 30, trans = {0, 0, 0}, rot = {0, 0, 0} },
+        }
+        local nextNodeId = 100
+
+        function createTransformGroup(name)
+            nextNodeId = nextNodeId + 1
+            nodes[nextNodeId] = { name = name, parent = 0, trans = {0, 0, 0}, rot = {0, 0, 0} }
+            return nextNodeId
+        end
+
+        function link(parent, child)
+            if nodes[child] then
+                nodes[child].parent = parent
+            end
+        end
+
+        function getParent(node)
+            return nodes[node] and nodes[node].parent or 0
+        end
+
+        function setTranslation(node, x, y, z)
+            if nodes[node] then
+                nodes[node].trans = { x, y, z }
+            end
+        end
+
+        function getTranslation(node)
+            local t = nodes[node] and nodes[node].trans or {0, 0, 0}
+            return t[1], t[2], t[3]
+        end
+
+        function setRotation(node, rx, ry, rz)
+            if nodes[node] then
+                nodes[node].rot = { rx, ry, rz }
+            end
+        end
+
+        function getRotation(node)
+            local r = nodes[node] and nodes[node].rot or {0, 0, 0}
+            return r[1], r[2], r[3]
+        end
+
+        -- Transform vector from local space of node to world space (using Y rotation only for 2D walk/yaw)
+        function localDirectionToWorld(node, x, y, z)
+            local cur = node
+            local totalY = 0
+            while cur ~= 0 and nodes[cur] do
+                totalY = totalY + (nodes[cur].rot[2] or 0)
+                cur = nodes[cur].parent
+            end
+            local cosY = math.cos(totalY)
+            local sinY = math.sin(totalY)
+            local wx = x * cosY + z * sinY
+            local wz = -x * sinY + z * cosY
+            return wx, y, wz
+        end
+
+        function localRotationToLocal(srcNode, dstNode, rx, ry, rz)
+            local srcY = 0
+            local cur = srcNode
+            while cur ~= 0 and nodes[cur] do
+                srcY = srcY + (nodes[cur].rot[2] or 0)
+                cur = nodes[cur].parent
+            end
+            local dstY = 0
+            cur = dstNode
+            while cur ~= 0 and nodes[cur] do
+                dstY = dstY + (nodes[cur].rot[2] or 0)
+                cur = nodes[cur].parent
+            end
+            local diffY = srcY - dstY
+            return rx, ry + diffY, rz
+        end
+
+        function localToLocal(srcNode, dstNode, x, y, z)
+            return x, y, z
+        end
+
+        _G.mockPlayerCam = {
+            isFirstPerson = true,
+            firstPersonCamera = 40,
+            cameraRootNode = 30,
+            pitchNode = 20,
+            yawNode = 10,
+            setRotation = function(self, pitch, yaw, roll)
+                setRotation(self.pitchNode, pitch or 0, 0, 0)
+                setRotation(self.yawNode, 0, yaw or 0, 0)
+                setRotation(self.cameraRootNode, 0, math.pi, roll or 0)
+            end,
+            getRotation = function(self)
+                local cameraLookX, cameraLookY, cameraLookZ = localDirectionToWorld(self.cameraRootNode, 0, 0, -1)
+                local yaw = math.atan2(cameraLookX, cameraLookZ)
+                return 0, yaw, 0
+            end
+        }
+
+        -- PlayerInputComponent movement logic from vanilla FS25
+        _G.mockInput = {
+            player = { camera = _G.mockPlayerCam },
+            cameraRotationY = 0,
+            calculateNormalisedMovementDirection = function(self, moveRight, moveForward)
+                if moveRight ~= 0 or moveForward ~= 0 then
+                    local len = math.sqrt(moveRight * moveRight + moveForward * moveForward)
+                    return moveRight / len, moveForward / len
+                end
+                return 0, 0
+            end,
+            calculateNormalisedWorldMovementDirection = function(self, moveRight, moveForward)
+                local localDirectionX, localDirectionZ = self:calculateNormalisedMovementDirection(moveRight, moveForward)
+                if localDirectionX ~= 0 or localDirectionZ ~= 0 then
+                    local wx, _, wz = localDirectionToWorld(self.player.camera.yawNode, -localDirectionX, 0, localDirectionZ)
+                    return wx, wz
+                end
+                return 0, 0
+            end
+        }
+        _G.mockPlayerCam.player = { inputComponent = _G.mockInput }
+    )luau", "=setupPlayerHierachyMocks"), 0);
+
+    // Initial pose: head forward (pitch=0, yaw=0, roll=0)
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=callPlayerCamUpdate"), 0);
+
+    // Verify camera look vector points along world forward (+Z) and matches W walk vector
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        -- GIANTS Engine camera looks down its local -Z axis
+        local camLookX, _, camLookZ = localDirectionToWorld(_G.mockPlayerCam.firstPersonCamera, 0, 0, -1)
+
+        -- Pressing W: moveForward = 1, moveRight = 0
+        local walkWX, walkWZ = _G.mockInput:calculateNormalisedWorldMovementDirection(0, 1)
+
+        -- Pressing S: moveForward = -1, moveRight = 0
+        local walkSX, walkSZ = _G.mockInput:calculateNormalisedWorldMovementDirection(0, -1)
+
+        -- Pressing D: moveForward = 0, moveRight = 1
+        local walkDX, walkDZ = _G.mockInput:calculateNormalisedWorldMovementDirection(1, 0)
+
+        -- Pressing A: moveForward = 0, moveRight = -1
+        local walkAX, walkAZ = _G.mockInput:calculateNormalisedWorldMovementDirection(-1, 0)
+
+        -- Dot product of camera look and W walk direction must be +1.0 (collinear, forward)
+        local dotW = camLookX * walkWX + camLookZ * walkWZ
+        assert(math.abs(dotW - 1.0) < 0.001, "W must walk in the exact forward gaze direction! dotW=" .. tostring(dotW))
+
+        -- S must walk backward (dot = -1.0)
+        local dotS = camLookX * walkSX + camLookZ * walkSZ
+        assert(math.abs(dotS - (-1.0)) < 0.001, "S must walk in the exact backward direction! dotS=" .. tostring(dotS))
+
+        -- In GIANTS Engine, localDirectionToWorld maps -X to Right and +X to Left.
+        -- Camera right vector is (+1, 0, 0) in camera local space.
+        local camRightX, _, camRightZ = localDirectionToWorld(_G.mockPlayerCam.firstPersonCamera, 1, 0, 0)
+        local dotD = camRightX * walkDX + camRightZ * walkDZ
+        assert(math.abs(dotD - 1.0) < 0.001, "D must strafe in the exact camera right direction! dotD=" .. tostring(dotD))
+
+        -- Camera left vector is (-1, 0, 0) in camera local space.
+        local camLeftX, _, camLeftZ = localDirectionToWorld(_G.mockPlayerCam.firstPersonCamera, -1, 0, 0)
+        local dotA = camLeftX * walkAX + camLeftZ * walkAZ
+        assert(math.abs(dotA - 1.0) < 0.001, "A must strafe in the exact camera left direction! dotA=" .. tostring(dotA))
+    )luau", "=verifyCollinearMovement"), 0);
+
+    // Now test mouse turning via onPlayerCameraUpdateRotation
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.mockInput.cameraRotationY = 0.5 -- mouse turn right
+        VRCompanion:onPlayerCameraUpdateRotation(_G.mockPlayerCam, 16.6)
+        local _, yawNodeY, _ = getRotation(_G.mockPlayerCam.yawNode)
+        assert(math.abs(yawNodeY - (-0.5)) < 0.001, "yawNode must turn right with mouse input")
+    )luau", "=testMouseTurn"), 0);
+}
+
 
 
 
