@@ -97,6 +97,20 @@ protected:
             L = nullptr;
         }
     }
+
+    void RegisterTestSetFrameParity(fs25vr::VRBridge& bridge) {
+        lua_getglobal(L, "VRBridge");
+        lua_pushlightuserdata(L, &bridge);
+        lua_pushcclosure(L, [](lua_State* state) -> int {
+            auto* b = static_cast<fs25vr::VRBridge*>(lua_touserdata(state, lua_upvalueindex(1)));
+            if (b) {
+                b->SetFrameParity(static_cast<uint32_t>(luaL_checkinteger(state, 1)));
+            }
+            return 0;
+        }, "setFrameParity", 1);
+        lua_setfield(L, -2, "setFrameParity");
+        lua_pop(L, 1);
+    }
 };
 
 TEST_F(CompanionModTest, MetadataDescriptorIsValid) {
@@ -292,6 +306,8 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresRecenterActionAndInputBinding
     EXPECT_NE(modDescContent.find("<action name=\"VR_RECENTER\""), std::string::npos);
     EXPECT_NE(modDescContent.find("<actionBinding action=\"VR_RECENTER\""), std::string::npos);
     EXPECT_NE(modDescContent.find("KEY_numPad5"), std::string::npos);
+    EXPECT_NE(modDescContent.find("<recenterVrTrackingSpace>true</recenterVrTrackingSpace>"), std::string::npos);
+    EXPECT_NE(modDescContent.find("setting_recenterVrTrackingSpace"), std::string::npos);
 }
 
 TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBinding) {
@@ -2158,6 +2174,7 @@ TEST_F(CompanionModTest, AlternatesPositiveDisparityOnLeftParityAndNegativeOnRig
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
+    RegisterTestSetFrameParity(bridge);
 
     std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
     ASSERT_FALSE(scriptContent.empty());
@@ -2196,6 +2213,7 @@ TEST_F(CompanionModTest, UpdatesConvergenceEveryFrameWithoutCoordinateDriftAcros
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
+    RegisterTestSetFrameParity(bridge);
 
     std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
     ASSERT_FALSE(scriptContent.empty());
@@ -2229,6 +2247,7 @@ TEST_F(CompanionModTest, RevertsConvergenceOffsetSmoothlyToZeroInPassThroughOrDi
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
+    RegisterTestSetFrameParity(bridge);
 
     std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
     ASSERT_FALSE(scriptContent.empty());
@@ -2284,6 +2303,253 @@ TEST_F(CompanionModTest, RevertsConvergenceOffsetSmoothlyToZeroInPassThroughOrDi
         assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.0) < 0.0001, "Disparity smoothly reaches 0 when tracking disabled")
         assert(math.abs(VRCompanion.currentConvergenceOffset - 0.0) < 0.0001, "Offset reaches 0 when tracking disabled")
     )luau", "=verifySmoothReversion"), 0);
+}
+
+TEST_F(CompanionModTest, RecenterModeDefaultsToBothWithVrTrackingSpaceEnabled) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE == true, "Default recenterVrTrackingSpace constant must be true")
+        assert(VRCompanion.recenterVrTrackingSpace == true, "VRCompanion.recenterVrTrackingSpace must default to true")
+        assert(VRCompanion:getRecenterMode() == "Both", "Default getRecenterMode must return Both")
+    )luau", "=verifyRecenterModeDefaults"), 0);
+}
+
+TEST_F(CompanionModTest, RecenterActionInBothModeZeroesCameraYawAndCallsBridgeRecenter) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.position = fs25vr::Vector3(0.4f, 0.1f, -0.2f);
+    simPose.isValid = true;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local mockInsideCam = {
+            isInside = true,
+            cameraNode = 100,
+            origRotY = 0.0,
+            rotY = 1.25,
+            origRotX = 0.0,
+            rotX = 0.1,
+            origRotZ = 0.0,
+            rotZ = 0.0
+        }
+        _G.g_currentMission = {
+            controlledVehicle = {
+                getActiveCamera = function(self) return mockInsideCam end
+            }
+        }
+        _G.testMockCam = mockInsideCam
+
+        VRCompanion.recenterVrTrackingSpace = true
+        VRCompanion:onRecenterAction()
+
+        -- Vehicle camera look yaw must be reset to origRotY
+        assert(math.abs(_G.testMockCam.rotY - 0.0) < 0.0001, "rotY must be reset to origRotY in Both mode")
+
+        -- VRBridge tracking space must be recentered (head pose zeroed)
+        local pose = VRBridge.getHeadPose()
+        assert(math.abs(pose.x) < 0.001, "tracking x must be zeroed by bridge.recenter() in Both mode")
+    )luau", "=verifyBothRecenter"), 0);
+}
+
+TEST_F(CompanionModTest, RecenterActionInVehicleOnlyModeZeroesCameraYawAndBypassesBridgeRecenter) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.position = fs25vr::Vector3(0.4f, 0.1f, -0.2f);
+    simPose.isValid = true;
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local mockInsideCam = {
+            isInside = true,
+            cameraNode = 100,
+            origRotY = 0.0,
+            rotY = 1.25,
+            origRotX = 0.0,
+            rotX = 0.1,
+            origRotZ = 0.0,
+            rotZ = 0.0
+        }
+        _G.g_currentMission = {
+            controlledVehicle = {
+                getActiveCamera = function(self) return mockInsideCam end
+            }
+        }
+        _G.testMockCam = mockInsideCam
+
+        -- Set mode to VehicleOnly
+        VRCompanion.recenterVrTrackingSpace = false
+        VRCompanion:onRecenterAction()
+
+        -- Vehicle camera look yaw must be reset to origRotY
+        assert(math.abs(_G.testMockCam.rotY - 0.0) < 0.0001, "rotY must be reset to origRotY in VehicleOnly mode")
+
+        -- VRBridge tracking space must NOT be recentered (pose.x remains at simPose 0.4)
+        local pose = VRBridge.getHeadPose()
+        assert(math.abs(pose.x - 0.4) < 0.001, "tracking x must remain untouched (0.4) when bridge.recenter() is bypassed")
+    )luau", "=verifyVehicleOnlyRecenter"), 0);
+}
+
+TEST_F(CompanionModTest, LoadsRecenterVrTrackingSpaceFromXml) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local mockXmlStore = {
+            ["vrSettings.recenterVrTrackingSpace"] = false
+        }
+        _G.loadXMLFile = function(schema, path)
+            return 1234
+        end
+        _G.getXMLFloat = function(xml, key)
+            return nil
+        end
+        _G.getXMLBool = function(xml, key)
+            return mockXmlStore[key]
+        end
+        _G.getXMLString = function(xml, key)
+            if mockXmlStore[key] ~= nil then
+                return tostring(mockXmlStore[key])
+            end
+            return nil
+        end
+        _G.delete = function(xml) end
+
+        -- Load XML with false
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion.recenterVrTrackingSpace == false, "Must load recenterVrTrackingSpace = false")
+        assert(VRCompanion:getRecenterMode() == "VehicleOnly", "Mode must be VehicleOnly")
+
+        -- Load XML with true
+        mockXmlStore["vrSettings.recenterVrTrackingSpace"] = true
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion.recenterVrTrackingSpace == true, "Must load recenterVrTrackingSpace = true")
+        assert(VRCompanion:getRecenterMode() == "Both", "Mode must be Both")
+    )luau", "=verifyXmlLoad"), 0);
+}
+
+TEST_F(CompanionModTest, SavesRecenterVrTrackingSpaceToXml) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local savedBools = {}
+        _G.createXMLFile = function(schema, path, root)
+            return 5678
+        end
+        _G.setXMLFloat = function(xml, key, val) end
+        _G.setXMLBool = function(xml, key, val)
+            savedBools[key] = val
+        end
+        _G.saveXMLFile = function(xml) return true end
+        _G.delete = function(xml) end
+
+        -- Save VehicleOnly
+        VRCompanion.recenterVrTrackingSpace = false
+        VRCompanion:saveConfiguration("dummy.xml")
+        assert(savedBools["vrSettings.recenterVrTrackingSpace"] == false, "Must save recenterVrTrackingSpace = false")
+
+        -- Save Both
+        VRCompanion.recenterVrTrackingSpace = true
+        VRCompanion:saveConfiguration("dummy.xml")
+        assert(savedBools["vrSettings.recenterVrTrackingSpace"] == true, "Must save recenterVrTrackingSpace = true")
+    )luau", "=verifyXmlSave"), 0);
+}
+
+TEST_F(CompanionModTest, ConsoleCommandRecenterModeInspectsTogglesAndPersistsMode) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local savedXml = false
+        VRCompanion.saveConfiguration = function(self)
+            savedXml = true
+            return true
+        end
+
+        -- 1. Inspect without args
+        local msg = VRCompanion:consoleCommandSetRecenterMode()
+        assert(string.find(msg, "Both") ~= nil, "Inspect should report Both by default")
+
+        -- 2. Switch to VehicleOnly
+        savedXml = false
+        local msgVeh = VRCompanion:consoleCommandSetRecenterMode("vehicle")
+        assert(string.find(msgVeh, "VehicleOnly") ~= nil, "Should report VehicleOnly")
+        assert(VRCompanion.recenterVrTrackingSpace == false, "Property should be false")
+        assert(VRCompanion:getRecenterMode() == "VehicleOnly", "Mode should be VehicleOnly")
+        assert(savedXml == true, "Should trigger saveConfiguration")
+
+        -- 3. Toggle back to Both
+        savedXml = false
+        local msgTog1 = VRCompanion:consoleCommandSetRecenterMode("toggle")
+        assert(string.find(msgTog1, "Both") ~= nil, "Toggle should switch to Both")
+        assert(VRCompanion.recenterVrTrackingSpace == true, "Property should be true")
+        assert(VRCompanion:getRecenterMode() == "Both", "Mode should be Both")
+        assert(savedXml == true, "Should trigger saveConfiguration")
+
+        -- 4. Toggle back to VehicleOnly
+        local msgTog2 = VRCompanion:consoleCommandSetRecenterMode("toggle")
+        assert(string.find(msgTog2, "VehicleOnly") ~= nil, "Toggle should switch to VehicleOnly")
+        assert(VRCompanion.recenterVrTrackingSpace == false, "Property should be false")
+
+        -- 5. Explicitly set to Both
+        local msgBoth = VRCompanion:consoleCommandSetRecenterMode("both")
+        assert(string.find(msgBoth, "Both") ~= nil, "Should report Both")
+        assert(VRCompanion.recenterVrTrackingSpace == true, "Property should be true")
+
+        -- 6. Invalid arg displays usage
+        local msgErr = VRCompanion:consoleCommandSetRecenterMode("invalidArg")
+        assert(string.find(msgErr, "Usage") ~= nil, "Invalid arg should return Usage instructions")
+    )luau", "=verifyConsoleCommands"), 0);
+}
+
+TEST_F(CompanionModTest, RegistersAndUnregistersRecenterModeConsoleCommands) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        local unregisteredCommands = {}
+
+        _G.addConsoleCommand = function(cmd, desc, fnName, target)
+            registeredCommands[cmd] = { desc = desc, fnName = fnName, target = target }
+        end
+        _G.removeConsoleCommand = function(cmd)
+            unregisteredCommands[cmd] = true
+        end
+
+        VRCompanion:loadMap("mapUS")
+
+        assert(registeredCommands["vrRecenterMode"] ~= nil, "vrRecenterMode must be registered")
+        assert(registeredCommands["vrRecenterMode"].fnName == "consoleCommandSetRecenterMode", "vrRecenterMode handler mismatch")
+        assert(registeredCommands["vrRecenterTracking"] ~= nil, "vrRecenterTracking must be registered")
+        assert(registeredCommands["vrRecenterTracking"].fnName == "consoleCommandSetRecenterMode", "vrRecenterTracking handler mismatch")
+
+        VRCompanion:deleteMap()
+
+        assert(unregisteredCommands["vrRecenterMode"] == true, "vrRecenterMode must be unregistered on deleteMap")
+        assert(unregisteredCommands["vrRecenterTracking"] == true, "vrRecenterTracking must be unregistered on deleteMap")
+    )luau", "=verifyCommandRegistration"), 0);
 }
 
 

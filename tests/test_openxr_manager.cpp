@@ -2,6 +2,7 @@
 #include "openxr/openxr_manager.h"
 #include <cstring>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace fs25vr {
 
@@ -219,28 +220,69 @@ public:
         return destroySessionResult;
     }
 
+    struct MockSpaceInfo {
+        XrReferenceSpaceType type;
+        XrPosef poseInReferenceSpace;
+    };
+    std::unordered_map<XrSpace, MockSpaceInfo> mockReferenceSpaces;
+    std::vector<XrReferenceSpaceCreateInfo> createdReferenceSpaces;
+    uint32_t destroySpaceCalls = 0;
+    std::vector<XrSpace> destroyedSpaces;
+
     XrResult CreateReferenceSpace(
         XrSession /*session*/,
-        const XrReferenceSpaceCreateInfo* /*createInfo*/,
+        const XrReferenceSpaceCreateInfo* createInfo,
         XrSpace* space) override {
         if (createReferenceSpaceResult != XR_SUCCESS) return createReferenceSpaceResult;
         static uintptr_t s_spaceHandle = 0x50ACE001;
-        if (space) *space = reinterpret_cast<XrSpace>(s_spaceHandle++);
+        XrSpace handle = reinterpret_cast<XrSpace>(s_spaceHandle++);
+        if (space) *space = handle;
+        if (createInfo) {
+            createdReferenceSpaces.push_back(*createInfo);
+            mockReferenceSpaces[handle] = { createInfo->referenceSpaceType, createInfo->poseInReferenceSpace };
+        }
         return XR_SUCCESS;
     }
 
-    XrResult DestroySpace(XrSpace /*space*/) override {
+    XrResult DestroySpace(XrSpace space) override {
+        destroySpaceCalls++;
+        destroyedSpaces.push_back(space);
+        mockReferenceSpaces.erase(space);
         return destroySpaceResult;
     }
 
     XrResult LocateSpace(
         XrSpace /*space*/,
-        XrSpace /*baseSpace*/,
+        XrSpace baseSpace,
         XrTime /*time*/,
         XrSpaceLocation* location) override {
         if (locateSpaceResult != XR_SUCCESS) return locateSpaceResult;
-        if (location) {
-            *location = mockSpaceLocation;
+        if (!location) return XR_SUCCESS;
+
+        *location = mockSpaceLocation;
+
+        auto it = mockReferenceSpaces.find(baseSpace);
+        if (it != mockReferenceSpaces.end() && it->second.type == XR_REFERENCE_SPACE_TYPE_LOCAL) {
+            const XrPosef& refPose = it->second.poseInReferenceSpace;
+            float dx = mockSpaceLocation.pose.position.x - refPose.position.x;
+            float dy = mockSpaceLocation.pose.position.y - refPose.position.y;
+            float dz = mockSpaceLocation.pose.position.z - refPose.position.z;
+
+            Quaternion qRefInv(-refPose.orientation.x, -refPose.orientation.y, -refPose.orientation.z, refPose.orientation.w);
+            Vector3 relPos = OpenXrManager::RotateVectorByQuaternion(qRefInv, Vector3(dx, dy, dz));
+
+            Quaternion qMock(mockSpaceLocation.pose.orientation.x, mockSpaceLocation.pose.orientation.y,
+                             mockSpaceLocation.pose.orientation.z, mockSpaceLocation.pose.orientation.w);
+            Quaternion relOri = qRefInv * qMock;
+
+            location->pose.position.x = relPos.x;
+            location->pose.position.y = relPos.y;
+            location->pose.position.z = relPos.z;
+
+            location->pose.orientation.x = relOri.x;
+            location->pose.orientation.y = relOri.y;
+            location->pose.orientation.z = relOri.z;
+            location->pose.orientation.w = relOri.w;
         }
         return XR_SUCCESS;
     }
@@ -561,6 +603,34 @@ TEST(OpenXrManagerTest, InitializesActiveWhenHmdPresent) {
     EXPECT_EQ(manager.GetState(), OpenXrState::Uninitialized);
 }
 
+TEST(OpenXrManagerTest, CreateTrackingSpacesCreatesBothBaseAndLocalSpaces) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    EXPECT_NE(manager.GetBaseLocalSpace(), XR_NULL_HANDLE);
+    EXPECT_NE(manager.GetLocalSpace(), XR_NULL_HANDLE);
+    EXPECT_NE(manager.GetBaseLocalSpace(), manager.GetLocalSpace());
+    EXPECT_TRUE(manager.HasTrackingSpaces());
+
+    // Verify both spaces were created with XR_REFERENCE_SPACE_TYPE_LOCAL and identity pose
+    ASSERT_GE(mockDispatch->createdReferenceSpaces.size(), 2u);
+    EXPECT_EQ(mockDispatch->createdReferenceSpaces[0].referenceSpaceType, XR_REFERENCE_SPACE_TYPE_LOCAL);
+    EXPECT_EQ(mockDispatch->createdReferenceSpaces[0].poseInReferenceSpace.position.x, 0.0f);
+    EXPECT_EQ(mockDispatch->createdReferenceSpaces[0].poseInReferenceSpace.position.y, 0.0f);
+    EXPECT_EQ(mockDispatch->createdReferenceSpaces[0].poseInReferenceSpace.position.z, 0.0f);
+    EXPECT_EQ(mockDispatch->createdReferenceSpaces[0].poseInReferenceSpace.orientation.w, 1.0f);
+
+    EXPECT_EQ(mockDispatch->createdReferenceSpaces[1].referenceSpaceType, XR_REFERENCE_SPACE_TYPE_LOCAL);
+    EXPECT_EQ(mockDispatch->createdReferenceSpaces[1].poseInReferenceSpace.position.x, 0.0f);
+    EXPECT_EQ(mockDispatch->createdReferenceSpaces[1].poseInReferenceSpace.position.y, 0.0f);
+    EXPECT_EQ(mockDispatch->createdReferenceSpaces[1].poseInReferenceSpace.position.z, 0.0f);
+    EXPECT_EQ(mockDispatch->createdReferenceSpaces[1].poseInReferenceSpace.orientation.w, 1.0f);
+}
+
 TEST(OpenXrManagerTest, PollsHeadPoseFromOpenXrSpaceAndCalculatesEulerAngles) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
@@ -619,6 +689,162 @@ TEST(OpenXrManagerTest, RecenteringZeroesTranslationalAndYawOffsets) {
     mockDispatch->mockSpaceLocation.pose.position = { 0.6f, 1.25f, -0.42f };
     HeadPose moved = manager.PollHeadPose();
     EXPECT_NEAR(moved.position.y, 0.05f, 0.005f);
+}
+
+TEST(OpenXrManagerTest, RecenterRecreatesLocalSpaceWithPoseInReferenceSpaceAndPreservesBaseSpace) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    XrSpace baseSpace = manager.GetBaseLocalSpace();
+    XrSpace initialLocalSpace = manager.GetLocalSpace();
+    ASSERT_NE(baseSpace, XR_NULL_HANDLE);
+    ASSERT_NE(initialLocalSpace, XR_NULL_HANDLE);
+    ASSERT_NE(baseSpace, initialLocalSpace);
+
+    float yaw = 0.5f;
+    float halfYaw = yaw * 0.5f;
+    Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
+    float pitch = 0.2f;
+    float halfPitch = pitch * 0.5f;
+    Quaternion qPitch(std::sin(halfPitch), 0.0f, 0.0f, std::cos(halfPitch));
+    Quaternion qCombined = qYaw * qPitch;
+
+    mockDispatch->mockSpaceLocation.pose.position = { 1.5f, 0.8f, -2.0f };
+    mockDispatch->mockSpaceLocation.pose.orientation = { qCombined.x, qCombined.y, qCombined.z, qCombined.w };
+
+    uint32_t destroyCallsBefore = mockDispatch->destroySpaceCalls;
+    size_t createdSpacesBefore = mockDispatch->createdReferenceSpaces.size();
+
+    manager.Recenter();
+
+    EXPECT_EQ(mockDispatch->destroySpaceCalls, destroyCallsBefore + 1);
+    ASSERT_FALSE(mockDispatch->destroyedSpaces.empty());
+    EXPECT_EQ(mockDispatch->destroyedSpaces.back(), initialLocalSpace);
+    EXPECT_EQ(manager.GetBaseLocalSpace(), baseSpace);
+
+    XrSpace newLocalSpace = manager.GetLocalSpace();
+    EXPECT_NE(newLocalSpace, XR_NULL_HANDLE);
+    EXPECT_NE(newLocalSpace, initialLocalSpace);
+    EXPECT_NE(newLocalSpace, baseSpace);
+
+    ASSERT_EQ(mockDispatch->createdReferenceSpaces.size(), createdSpacesBefore + 1);
+    const auto& newSpaceInfo = mockDispatch->createdReferenceSpaces.back();
+    EXPECT_EQ(newSpaceInfo.referenceSpaceType, XR_REFERENCE_SPACE_TYPE_LOCAL);
+    EXPECT_NEAR(newSpaceInfo.poseInReferenceSpace.position.x, 1.5f, 0.001f);
+    EXPECT_NEAR(newSpaceInfo.poseInReferenceSpace.position.y, 0.8f, 0.001f);
+    EXPECT_NEAR(newSpaceInfo.poseInReferenceSpace.position.z, -2.0f, 0.001f);
+
+    EXPECT_NEAR(newSpaceInfo.poseInReferenceSpace.orientation.x, 0.0f, 0.001f);
+    EXPECT_NEAR(newSpaceInfo.poseInReferenceSpace.orientation.y, std::sin(halfYaw), 0.005f);
+    EXPECT_NEAR(newSpaceInfo.poseInReferenceSpace.orientation.z, 0.0f, 0.001f);
+    EXPECT_NEAR(newSpaceInfo.poseInReferenceSpace.orientation.w, std::cos(halfYaw), 0.005f);
+}
+
+TEST(OpenXrManagerTest, PollHeadPoseNativelyReflectsRecenteredReferenceFrameAndPreservesRawPose) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    float yaw = 0.6f;
+    float halfYaw = yaw * 0.5f;
+    Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
+    float pitch = 0.15f;
+    float halfPitch = pitch * 0.5f;
+    Quaternion qPitch(std::sin(halfPitch), 0.0f, 0.0f, std::cos(halfPitch));
+    Quaternion qHead = qYaw * qPitch;
+
+    mockDispatch->mockSpaceLocation.pose.position = { 2.0f, 1.2f, -1.0f };
+    mockDispatch->mockSpaceLocation.pose.orientation = { qHead.x, qHead.y, qHead.z, qHead.w };
+
+    manager.Recenter();
+
+    HeadPose polled = manager.PollHeadPose();
+
+    EXPECT_NEAR(polled.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(polled.position.y, 0.0f, 0.001f);
+    EXPECT_NEAR(polled.position.z, 0.0f, 0.001f);
+    EXPECT_NEAR(polled.rotation.yaw, 0.0f, 0.005f);
+    EXPECT_NEAR(polled.rotation.pitch, pitch, 0.01f);
+
+    HeadPose raw = manager.GetRawPose();
+    EXPECT_NEAR(raw.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(raw.position.y, 1.2f, 0.001f);
+    EXPECT_NEAR(raw.position.z, -1.0f, 0.001f);
+    EXPECT_NEAR(raw.rotation.yaw, yaw, 0.01f);
+    EXPECT_NEAR(raw.rotation.pitch, pitch, 0.01f);
+}
+
+TEST(OpenXrManagerTest, RecenterSimulatedPoseCompatibility) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    HeadPose simPose;
+    simPose.position = Vector3(1.0f, 2.0f, 3.0f);
+    simPose.rotation = EulerAngles(0.0f, 0.4f, 0.0f);
+    simPose.isValid = true;
+    manager.SetSimulatedPose(simPose);
+
+    manager.Recenter();
+
+    HeadPose polled = manager.PollHeadPose();
+    EXPECT_NEAR(polled.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(polled.position.y, 0.0f, 0.001f);
+    EXPECT_NEAR(polled.position.z, 0.0f, 0.001f);
+    EXPECT_NEAR(polled.rotation.yaw, 0.0f, 0.005f);
+
+    HeadPose movedPose;
+    movedPose.position = Vector3(1.0f, 2.5f, 3.0f);
+    movedPose.rotation = EulerAngles(0.0f, 0.4f, 0.0f);
+    movedPose.isValid = true;
+    manager.SetSimulatedPose(movedPose);
+
+    HeadPose movedPolled = manager.PollHeadPose();
+    EXPECT_NEAR(movedPolled.position.y, 0.5f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, ShutdownDestroysBaseLocalSpaceAndLocalSpace) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    XrSpace base = manager.GetBaseLocalSpace();
+    XrSpace local = manager.GetLocalSpace();
+    XrSpace view = manager.GetViewSpace();
+    ASSERT_NE(base, XR_NULL_HANDLE);
+    ASSERT_NE(local, XR_NULL_HANDLE);
+    ASSERT_NE(view, XR_NULL_HANDLE);
+
+    manager.Shutdown();
+
+    EXPECT_EQ(manager.GetBaseLocalSpace(), XR_NULL_HANDLE);
+    EXPECT_EQ(manager.GetLocalSpace(), XR_NULL_HANDLE);
+    EXPECT_EQ(manager.GetViewSpace(), XR_NULL_HANDLE);
+    EXPECT_FALSE(manager.HasTrackingSpaces());
+
+    EXPECT_GE(mockDispatch->destroySpaceCalls, 3u);
+    bool destroyedBase = false, destroyedLocal = false, destroyedView = false;
+    for (XrSpace s : mockDispatch->destroyedSpaces) {
+        if (s == base) destroyedBase = true;
+        if (s == local) destroyedLocal = true;
+        if (s == view) destroyedView = true;
+    }
+    EXPECT_TRUE(destroyedBase);
+    EXPECT_TRUE(destroyedLocal);
+    EXPECT_TRUE(destroyedView);
 }
 
 TEST(OpenXrManagerTest, LocatesViewsAndExtractsAsymmetricFovTangents) {

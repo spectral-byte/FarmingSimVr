@@ -58,6 +58,10 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
             <en>Show VR HUD Map Load Alert</en>
             <de>VR-HUD Kartenladehinweis anzeigen</de>
         </text>
+        <text name="setting_recenterVrTrackingSpace">
+            <en>Recenter VR Tracking Space upon Recenter</en>
+            <de>VR-Trackingraum bei Ansichtszentrierung zurücksetzen</de>
+        </text>
     </l10n>
     <vrSettings>
         <hudInsetHorizontal>0.30</hudInsetHorizontal>
@@ -68,6 +72,7 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         <fillLevelUnderVehicle>true</fillLevelUnderVehicle>
         <hudFillLevelGap>0.004</hudFillLevelGap>
         <showHudLoadNotification>false</showHudLoadNotification>
+        <recenterVrTrackingSpace>true</recenterVrTrackingSpace>
     </vrSettings>
     <actions>
         <action name="VR_RECENTER" category="ONFOOT VEHICLE"/>

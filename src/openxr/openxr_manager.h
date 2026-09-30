@@ -223,10 +223,15 @@ public:
     XrInstance GetInstance() const { return m_instance; }
     XrSession GetSession() const { return m_session; }
     XrSpace GetLocalSpace() const { return m_localSpace; }
+    XrSpace GetBaseLocalSpace() const { return m_baseLocalSpace; }
     XrSpace GetViewSpace() const { return m_viewSpace; }
     bool HasSession() const { return m_session != XR_NULL_HANDLE; }
     bool IsSessionRunning() const { return m_sessionRunning; }
-    bool HasTrackingSpaces() const { return m_localSpace != XR_NULL_HANDLE && m_viewSpace != XR_NULL_HANDLE; }
+    bool HasTrackingSpaces() const {
+        return m_localSpace != XR_NULL_HANDLE &&
+               m_baseLocalSpace != XR_NULL_HANDLE &&
+               m_viewSpace != XR_NULL_HANDLE;
+    }
 
     static EulerAngles QuaternionToEuler(const Quaternion& q);
     static Vector3 RotateVectorByQuaternion(const Quaternion& q, const Vector3& v);
@@ -250,6 +255,7 @@ private:
 
     XrSession m_session = XR_NULL_HANDLE;
     bool m_sessionRunning = false;
+    XrSpace m_baseLocalSpace = XR_NULL_HANDLE;
     XrSpace m_localSpace = XR_NULL_HANDLE;
     XrSpace m_viewSpace = XR_NULL_HANDLE;
 

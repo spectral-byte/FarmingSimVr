@@ -253,6 +253,10 @@ void OpenXrManager::Shutdown() {
         m_dispatch->DestroySpace(m_localSpace);
         m_localSpace = XR_NULL_HANDLE;
     }
+    if (m_baseLocalSpace != XR_NULL_HANDLE) {
+        m_dispatch->DestroySpace(m_baseLocalSpace);
+        m_baseLocalSpace = XR_NULL_HANDLE;
+    }
     if (m_sessionRunning && m_session != XR_NULL_HANDLE) {
         LogInfo("Ending OpenXR session...");
         m_dispatch->EndSession(m_session);
@@ -328,6 +332,19 @@ bool OpenXrManager::CreateTrackingSpaces() {
         return false;
     }
 
+    if (m_baseLocalSpace == XR_NULL_HANDLE) {
+        XrReferenceSpaceCreateInfo baseSpaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+        baseSpaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+        baseSpaceInfo.poseInReferenceSpace.orientation = {0.0f, 0.0f, 0.0f, 1.0f};
+        baseSpaceInfo.poseInReferenceSpace.position = {0.0f, 0.0f, 0.0f};
+
+        XrResult res = m_dispatch->CreateReferenceSpace(m_session, &baseSpaceInfo, &m_baseLocalSpace);
+        if (res != XR_SUCCESS) {
+            LogError("OpenXrManager: Failed to create base local reference space (result " + std::to_string(res) + ")");
+            return false;
+        }
+    }
+
     if (m_localSpace == XR_NULL_HANDLE) {
         XrReferenceSpaceCreateInfo localSpaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
         localSpaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
@@ -354,7 +371,7 @@ bool OpenXrManager::CreateTrackingSpaces() {
         }
     }
 
-    LogInfo("OpenXrManager: Local and View tracking reference spaces established.");
+    LogInfo("OpenXrManager: BaseLocal, Local, and View tracking reference spaces established.");
     return true;
 }
 
@@ -423,6 +440,23 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
             }
         }
 
+        if (m_baseLocalSpace != XR_NULL_HANDLE) {
+            XrSpaceLocation baseLocation{XR_TYPE_SPACE_LOCATION};
+            XrResult resBase = m_dispatch->LocateSpace(m_viewSpace, m_baseLocalSpace, time, &baseLocation);
+            if (resBase == XR_SUCCESS) {
+                bool posValid = (baseLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+                bool oriValid = (baseLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
+
+                m_rawPose.position = Vector3(baseLocation.pose.position.x, baseLocation.pose.position.y, baseLocation.pose.position.z);
+                m_rawPose.orientation = Quaternion(baseLocation.pose.orientation.x, baseLocation.pose.orientation.y, baseLocation.pose.orientation.z, baseLocation.pose.orientation.w);
+                m_rawPose.rotation = QuaternionToEuler(m_rawPose.orientation);
+
+                m_rawPose.positionTracked = (baseLocation.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
+                m_rawPose.orientationTracked = (baseLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
+                m_rawPose.isValid = posValid && oriValid;
+            }
+        }
+
         XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
         XrResult res = m_dispatch->LocateSpace(m_viewSpace, m_localSpace, time, &location);
         if (res != XR_SUCCESS) {
@@ -436,13 +470,19 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
         bool posValid = (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
         bool oriValid = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
 
-        m_rawPose.position = Vector3(location.pose.position.x, location.pose.position.y, location.pose.position.z);
-        m_rawPose.orientation = Quaternion(location.pose.orientation.x, location.pose.orientation.y, location.pose.orientation.z, location.pose.orientation.w);
-        m_rawPose.rotation = QuaternionToEuler(m_rawPose.orientation);
+        m_lastPose.position = Vector3(location.pose.position.x, location.pose.position.y, location.pose.position.z);
+        m_lastPose.orientation = Quaternion(location.pose.orientation.x, location.pose.orientation.y, location.pose.orientation.z, location.pose.orientation.w);
+        m_lastPose.rotation = QuaternionToEuler(m_lastPose.orientation);
 
-        m_rawPose.positionTracked = (location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
-        m_rawPose.orientationTracked = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
-        m_rawPose.isValid = posValid && oriValid;
+        m_lastPose.positionTracked = (location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
+        m_lastPose.orientationTracked = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
+        m_lastPose.isValid = posValid && oriValid;
+
+        if (m_baseLocalSpace == XR_NULL_HANDLE) {
+            m_rawPose = m_lastPose;
+        }
+
+        return m_lastPose;
     }
 
     HeadPose recentered = m_rawPose;
@@ -469,8 +509,56 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
 }
 
 void OpenXrManager::Recenter() {
-    m_recenterOffset.position = m_rawPose.position;
-    m_recenterOffset.yaw = m_rawPose.rotation.yaw;
+    Vector3 recenterPos = m_rawPose.position;
+    float recenterYaw = m_rawPose.rotation.yaw;
+    if (std::abs(recenterYaw) < 1e-6f && (std::abs(m_rawPose.orientation.x) > 1e-6f ||
+                                         std::abs(m_rawPose.orientation.y) > 1e-6f ||
+                                         std::abs(m_rawPose.orientation.z) > 1e-6f ||
+                                         std::abs(m_rawPose.orientation.w - 1.0f) > 1e-6f)) {
+        recenterYaw = QuaternionToEuler(m_rawPose.orientation).yaw;
+    }
+
+    if (!m_useSimulatedPose && m_session != XR_NULL_HANDLE && m_baseLocalSpace != XR_NULL_HANDLE && m_viewSpace != XR_NULL_HANDLE) {
+        XrTime time = (m_frameState.predictedDisplayTime != 0) ? m_frameState.predictedDisplayTime : GetCurrentXrTime();
+        XrSpaceLocation baseLoc{XR_TYPE_SPACE_LOCATION};
+        XrResult res = m_dispatch->LocateSpace(m_viewSpace, m_baseLocalSpace, time, &baseLoc);
+        if (res == XR_SUCCESS &&
+            (baseLoc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) &&
+            (baseLoc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) {
+            recenterPos = Vector3(baseLoc.pose.position.x, baseLoc.pose.position.y, baseLoc.pose.position.z);
+            Quaternion q(baseLoc.pose.orientation.x, baseLoc.pose.orientation.y, baseLoc.pose.orientation.z, baseLoc.pose.orientation.w);
+            EulerAngles euler = QuaternionToEuler(q);
+            recenterYaw = euler.yaw;
+
+            m_rawPose.position = recenterPos;
+            m_rawPose.orientation = q;
+            m_rawPose.rotation = euler;
+            m_rawPose.positionTracked = (baseLoc.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
+            m_rawPose.orientationTracked = (baseLoc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
+            m_rawPose.isValid = true;
+        }
+    }
+
+    if (m_session != XR_NULL_HANDLE) {
+        if (m_localSpace != XR_NULL_HANDLE) {
+            m_dispatch->DestroySpace(m_localSpace);
+            m_localSpace = XR_NULL_HANDLE;
+        }
+
+        XrReferenceSpaceCreateInfo localSpaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+        localSpaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+        float halfYaw = recenterYaw * 0.5f;
+        localSpaceInfo.poseInReferenceSpace.orientation = {0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw)};
+        localSpaceInfo.poseInReferenceSpace.position = {recenterPos.x, recenterPos.y, recenterPos.z};
+
+        XrResult res = m_dispatch->CreateReferenceSpace(m_session, &localSpaceInfo, &m_localSpace);
+        if (res != XR_SUCCESS) {
+            LogError("OpenXrManager::Recenter: Failed to recreate local reference space (result " + std::to_string(res) + ")");
+        }
+    }
+
+    m_recenterOffset.position = recenterPos;
+    m_recenterOffset.yaw = recenterYaw;
     m_hasRecenter = true;
     AlignMenuQuadToHeadPose();
     LogInfo("OpenXrManager: Head pose recentered.");
@@ -480,6 +568,25 @@ void OpenXrManager::SetSimulatedPose(const HeadPose& pose) {
     m_simulatedPose = pose;
     m_useSimulatedPose = true;
     m_rawPose = m_simulatedPose;
+
+    bool hasRotation = (m_rawPose.rotation.pitch != 0.0f || m_rawPose.rotation.yaw != 0.0f || m_rawPose.rotation.roll != 0.0f);
+    bool hasNonIdentityOrientation = (m_rawPose.orientation.x != 0.0f || m_rawPose.orientation.y != 0.0f ||
+                                      m_rawPose.orientation.z != 0.0f || m_rawPose.orientation.w != 1.0f);
+
+    if (hasNonIdentityOrientation && !hasRotation) {
+        m_rawPose.rotation = QuaternionToEuler(m_rawPose.orientation);
+        m_simulatedPose.rotation = m_rawPose.rotation;
+    } else if (hasRotation && !hasNonIdentityOrientation) {
+        float halfYaw = m_rawPose.rotation.yaw * 0.5f;
+        float halfPitch = m_rawPose.rotation.pitch * 0.5f;
+        float halfRoll = m_rawPose.rotation.roll * 0.5f;
+        Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
+        Quaternion qPitch(std::sin(halfPitch), 0.0f, 0.0f, std::cos(halfPitch));
+        Quaternion qRoll(0.0f, 0.0f, std::sin(halfRoll), std::cos(halfRoll));
+        m_rawPose.orientation = qYaw * qPitch * qRoll;
+        m_simulatedPose.orientation = m_rawPose.orientation;
+    }
+
     m_lastPose = m_simulatedPose;
 }
 

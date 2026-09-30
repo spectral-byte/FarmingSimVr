@@ -80,6 +80,50 @@ VRCompanion.activeFillLevelsDisplay = nil
 VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION = false
 VRCompanion.showHudLoadNotification = false
 
+-- Recenter VR Tracking Space Configuration (Issue #33)
+VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE = true
+VRCompanion.recenterVrTrackingSpace = true
+
+VRCompanion.RECENTER_MODES = {
+    BOTH = "Both",
+    VEHICLE_ONLY = "VehicleOnly"
+}
+
+function VRCompanion:getRecenterMode()
+    if self.recenterVrTrackingSpace == false then
+        return "VehicleOnly"
+    end
+    return "Both"
+end
+
+function VRCompanion:setRecenterMode(modeOrBool)
+    if modeOrBool == nil or modeOrBool == "" or (type(modeOrBool) == "string" and string.lower(modeOrBool) == "status") then
+        return self:getRecenterMode()
+    end
+
+    local newTracking = nil
+    if type(modeOrBool) == "boolean" then
+        newTracking = modeOrBool
+    elseif type(modeOrBool) == "string" then
+        local lower = string.lower(modeOrBool)
+        if lower == "toggle" then
+            newTracking = not (self.recenterVrTrackingSpace ~= false)
+        elseif lower == "vehicle" or lower == "vehicleonly" or lower == "false" or lower == "0" then
+            newTracking = false
+        elseif lower == "both" or lower == "tracking" or lower == "true" or lower == "1" then
+            newTracking = true
+        else
+            return nil, string.format("Usage: vrRecenterMode <Both | VehicleOnly | toggle> (current: %s)", self:getRecenterMode())
+        end
+    end
+
+    if newTracking ~= nil then
+        self.recenterVrTrackingSpace = newTracking
+        self:saveConfiguration()
+    end
+    return self:getRecenterMode()
+end
+
 -- Configured VR HUD state
 VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
 VRCompanion.hudInsetX = VRCompanion.DEFAULT_HUD_INSET_X
@@ -796,6 +840,7 @@ function VRCompanion:saveConfiguration(xmlPath)
         if type(setXmlBoolFn) == "function" then
             setXmlBoolFn(xmlFile, "vrSettings.fillLevelUnderVehicle", self.fillLevelUnderVehicle == true)
             setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
+            setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
         end
         setXmlFloatFn(xmlFile, "vrSettings.hudFillLevelGap", self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP)
 
@@ -886,6 +931,15 @@ function VRCompanion:loadConfiguration(xmlPath)
                     self.showHudLoadNotification = loadedShowNotification
                 end
 
+                local loadedRecenterTracking = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
+                    "vrSettings.recenterVrTrackingSpace", "vrSettings.recenterVrTrackingSpace#value",
+                    "vrSettings.recenterTracking", "vrSettings.recenterTracking#value",
+                    "modDesc.vrSettings.recenterVrTrackingSpace", "modDesc.vrSettings.recenterVrTrackingSpace#value",
+                    "modDesc.vrSettings.recenterTracking", "modDesc.vrSettings.recenterTracking#value")
+                if loadedRecenterTracking ~= nil then
+                    self.recenterVrTrackingSpace = loadedRecenterTracking
+                end
+
                 if type(deleteXmlFn) == "function" then
                     pcall(deleteXmlFn, xmlFile)
                 end
@@ -925,6 +979,9 @@ function VRCompanion:loadConfiguration(xmlPath)
     end
     if self.showHudLoadNotification == nil then
         self.showHudLoadNotification = self.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
+    end
+    if self.recenterVrTrackingSpace == nil then
+        self.recenterVrTrackingSpace = self.DEFAULT_RECENTER_VR_TRACKING_SPACE
     end
 
     self:configureHudInsets(insetX, insetY, scale, insetTop)
@@ -1199,16 +1256,32 @@ function VRCompanion:hookHud()
         end
     end
 
-    -- 2. Hook HUD class
+    -- 2. Hook HUD class or active instance
     local hudCls = getGlobalClass("HUD")
-    if hudCls ~= nil then
-        if hudCls.draw ~= nil and type(hudCls.draw) == "function" then
-            local origHudDraw = hudCls.draw
-            hookMethod(hudCls, "draw", function(hudSelf, ...)
+    local mission = g_currentMission or (_G and _G.g_currentMission)
+    local hudInstance = (mission ~= nil) and mission.hud or nil
+    local hudTargets = {}
+    if hudCls ~= nil then table.insert(hudTargets, hudCls) end
+    if hudInstance ~= nil and hudInstance ~= hudCls then table.insert(hudTargets, hudInstance) end
+
+    for _, target in ipairs(hudTargets) do
+        if target.draw ~= nil and type(target.draw) == "function" then
+            local origHudDraw = target.draw
+            hookMethod(target, "draw", function(hudSelf, ...)
                 if self:getHudState() == self.HUD_STATE_HIDDEN then
                     return
                 end
                 return origHudDraw(hudSelf, ...)
+            end)
+        end
+
+        if target.setIsVisible ~= nil and type(target.setIsVisible) == "function" then
+            local origSetIsVisible = target.setIsVisible
+            hookMethod(target, "setIsVisible", function(hudSelf, isVisible, ...)
+                if self:getHudState() == self.HUD_STATE_HIDDEN then
+                    return origSetIsVisible(hudSelf, false, ...)
+                end
+                return origSetIsVisible(hudSelf, isVisible, ...)
             end)
         end
 
@@ -1220,9 +1293,9 @@ function VRCompanion:hookHud()
         for _, setter in ipairs(hudSetterHooks) do
             local mName = setter.methodName
             local dName = setter.displayName
-            if hudCls[mName] ~= nil and type(hudCls[mName]) == "function" then
-                local origSetter = hudCls[mName]
-                hookMethod(hudCls, mName, function(hudSelf, isVisible, ...)
+            if target[mName] ~= nil and type(target[mName]) == "function" then
+                local origSetter = target[mName]
+                hookMethod(target, mName, function(hudSelf, isVisible, ...)
                     if not self:isDisplayVisible(dName) then
                         return origSetter(hudSelf, false, ...)
                     end
@@ -1246,6 +1319,13 @@ function VRCompanion:unhookHud()
             end
         end
         self.origHudHooks = nil
+    end
+    local mission = g_currentMission or (_G and _G.g_currentMission)
+    if mission ~= nil and mission.hud ~= nil then
+        if type(mission.hud.setIsVisible) == "function" then
+            pcall(function() mission.hud:setIsVisible(true) end)
+        end
+        mission.hud.isVisible = true
     end
     self.hudHooked = false
     print("[FS25_VR] Unhooked native engine HUD display interfaces.")
@@ -1431,6 +1511,8 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrHudFillLevelGap", "Set gap between speedometer and fill level: vrHudFillLevelGap <gap>", "consoleCommandSetHudFillGap", self)
         addConsoleCommand("vrHudLoadNotification", "Toggle HUD alert on map load: vrHudLoadNotification <true|false>", "consoleCommandSetHudLoadNotification", self)
         addConsoleCommand("vrHudLoadAlert", "Toggle HUD alert on map load: vrHudLoadAlert <true|false>", "consoleCommandSetHudLoadNotification", self)
+        addConsoleCommand("vrRecenterMode", "Set VR Recenter Action mode: vrRecenterMode [Both | VehicleOnly | toggle]", "consoleCommandSetRecenterMode", self)
+        addConsoleCommand("vrRecenterTracking", "Set VR Recenter Action mode: vrRecenterTracking [Both | VehicleOnly | toggle]", "consoleCommandSetRecenterMode", self)
     end
 
     if self.showHudLoadNotification == true then
@@ -2557,32 +2639,51 @@ end
 
 function VRCompanion:onRecenterAction()
     print("[FS25_VR] Recenter Action triggered.")
+    local recenterTracking = (self.recenterVrTrackingSpace ~= false)
     local bridge = VRBridge or (_G and _G.VRBridge)
-    if bridge ~= nil and type(bridge.recenter) == "function" then
-        bridge.recenter()
-    end
-    if bridge ~= nil and type(bridge.resetTemporalHistory) == "function" then
-        bridge.resetTemporalHistory()
-    end
-    if self.isMenuVisible then
-        print("[FS25_VR] Menu Quad layer realigned directly in front of head pose.")
+    if recenterTracking then
+        if bridge ~= nil and type(bridge.recenter) == "function" then
+            bridge.recenter()
+        end
+        if bridge ~= nil and type(bridge.resetTemporalHistory) == "function" then
+            bridge.resetTemporalHistory()
+        end
+        if self.isMenuVisible then
+            print("[FS25_VR] Menu Quad layer realigned directly in front of head pose.")
+        end
+    else
+        print("[FS25_VR] VehicleOnly mode: OpenXR tracking space recenter bypassed.")
     end
 
     -- Realign vehicle cockpit driver seat origin if seated in a vehicle
     local vehCam = self:getActiveVehicleCamera()
     if vehCam and vehCam.isInside then
-        self:realignVehicleCameraToSeat(vehCam)
-        print("[FS25_VR] Cockpit head pose realigned to driver seat reference origin.")
+        if recenterTracking then
+            self:realignVehicleCameraToSeat(vehCam)
+            print("[FS25_VR] Cockpit head pose realigned to driver seat reference origin.")
+        else
+            -- In VehicleOnly mode, reset only in-cab mouse/controller look yaw (cam.rotY = cam.origRotY)
+            if vehCam.origRotY ~= nil then
+                vehCam.rotY = vehCam.origRotY
+            end
+            local curVehicle = self:getControlledVehicle()
+            if curVehicle ~= nil and self.vehicleRotationStates ~= nil and self.vehicleRotationStates[curVehicle] ~= nil then
+                self.vehicleRotationStates[curVehicle].rotY = vehCam.rotY
+            end
+            print("[FS25_VR] VehicleOnly mode: Cockpit vehicle camera look yaw reset to origRotY.")
+        end
     end
 
     -- Realign on-foot player camera relative to character root
-    local playerCam = self:getPlayerCamera()
-    if playerCam and playerCam.firstPersonCamera ~= nil then
-        self:realignPlayerCameraToRoot(playerCam)
-        print("[FS25_VR] On-foot head pose realigned to character root reference origin.")
+    if recenterTracking then
+        local playerCam = self:getPlayerCamera()
+        if playerCam and playerCam.firstPersonCamera ~= nil then
+            self:realignPlayerCameraToRoot(playerCam)
+            print("[FS25_VR] On-foot head pose realigned to character root reference origin.")
+        end
     end
 
-    print("[FS25_VR] Recenter Action complete: reference space origin realigned.")
+    print(string.format("[FS25_VR] Recenter Action complete (%s mode).", recenterTracking and "Both" or "VehicleOnly"))
 end
 
 function VRCompanion:update(dt)
@@ -2746,6 +2847,8 @@ function VRCompanion:deleteMap()
         removeConsoleCommand("vrHudInsets")
         removeConsoleCommand("vrHudState")
         removeConsoleCommand("vrHudFillUnderVehicle")
+        removeConsoleCommand("vrRecenterMode")
+        removeConsoleCommand("vrRecenterTracking")
     end
 end
 
@@ -2932,6 +3035,24 @@ function VRCompanion:consoleCommandSetHudLoadNotification(enabledStr)
         end)
     end
     return string.format("VR HUD load notification set to: %s", tostring(enabled))
+end
+
+function VRCompanion:consoleCommandSetRecenterMode(modeStr)
+    local curMode = self:getRecenterMode()
+    if modeStr == nil or modeStr == "" or string.lower(tostring(modeStr)) == "status" then
+        return string.format("Current VR recenter mode: %s (%s). Usage: vrRecenterMode <Both | VehicleOnly | toggle>",
+            curMode,
+            (curMode == "Both") and "resets vehicle camera & VR tracking space" or "resets vehicle camera only")
+    end
+
+    local newMode, err = self:setRecenterMode(modeStr)
+    if not newMode then
+        return err
+    end
+
+    local modeDesc = (newMode == "Both") and "resets vehicle camera & VR tracking space" or "resets vehicle camera only"
+    print(string.format("[FS25_VR] VR recenter mode set to: %s (%s)", newMode, modeDesc))
+    return string.format("VR recenter mode set to: %s (%s)", newMode, modeDesc)
 end
 
 -- Register as an engine mod event listener if in-game environment
