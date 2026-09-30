@@ -22,14 +22,61 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
             <en>Recenter VR View</en>
             <de>VR-Ansicht zentrieren</de>
         </text>
+        <text name="input_VR_HUD_TOGGLE">
+            <en>Toggle VR HUD Mode</en>
+            <de>VR-HUD-Modus umschalten</de>
+        </text>
+        <text name="setting_vrHudInsetHorizontal">
+            <en>VR HUD Horizontal Inset</en>
+            <de>VR-HUD horizontaler Einzug</de>
+        </text>
+        <text name="setting_vrHudInsetVertical">
+            <en>VR HUD Vertical Inset</en>
+            <de>VR-HUD vertikaler Einzug</de>
+        </text>
+        <text name="setting_vrHudUiScale">
+            <en>VR HUD UI Scale</en>
+            <de>VR-HUD Skalierung</de>
+        </text>
+        <text name="setting_vrHudConvergenceDepth">
+            <en>VR HUD Convergence Depth (Meters)</en>
+            <de>VR-HUD Konvergenztiefe (Meter)</de>
+        </text>
+        <text name="setting_vrHudFillLevelGap">
+            <en>VR HUD Fill Level Gap</en>
+            <de>VR-HUD Füllstands-Abstand</de>
+        </text>
+        <text name="setting_vrHudInsetTop">
+            <en>VR HUD Top Inset</en>
+            <de>VR-HUD oberer Einzug</de>
+        </text>
+        <text name="setting_vrShowHudLoadNotification">
+            <en>Show VR HUD Map Load Alert</en>
+            <de>VR-HUD Kartenladehinweis anzeigen</de>
+        </text>
     </l10n>
+    <vrSettings>
+        <hudInsetHorizontal>0.30</hudInsetHorizontal>
+        <hudInsetVertical>0.22</hudInsetVertical>
+        <hudInsetTop>0.22</hudInsetTop>
+        <hudUiScale>0.82</hudUiScale>
+        <hudConvergenceDepth>1.8</hudConvergenceDepth>
+        <fillLevelUnderVehicle>true</fillLevelUnderVehicle>
+        <hudFillLevelGap>0.004</hudFillLevelGap>
+        <showHudLoadNotification>false</showHudLoadNotification>
+    </vrSettings>
     <actions>
-        <action name="VR_RECENTER" category="VEHICLE PLAYER"/>
+        <action name="VR_RECENTER" category="ONFOOT VEHICLE"/>
+        <action name="VR_HUD_TOGGLE" category="ONFOOT VEHICLE"/>
     </actions>
     <inputBinding>
         <actionBinding action="VR_RECENTER">
             <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad5"/>
             <binding device="GAMEPAD_DEFAULT" input="BUTTON_11"/>
+        </actionBinding>
+        <actionBinding action="VR_HUD_TOGGLE">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_rctrl KEY_h"/>
+            <binding device="GAMEPAD_DEFAULT" input="BUTTON_10"/>
         </actionBinding>
     </inputBinding>
 </modDesc>

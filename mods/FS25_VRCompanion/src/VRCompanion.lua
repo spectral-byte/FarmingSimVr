@@ -5,6 +5,7 @@
 
 VRCompanion = {}
 VRCompanion.name = g_currentModName or "FS25_VRCompanion"
+VRCompanion.modDirectory = g_currentModDirectory or ""
 VRCompanion.version = "1.0.0.0"
 VRCompanion.handshakeComplete = false
 VRCompanion.stereoToggled = false
@@ -12,14 +13,1323 @@ VRCompanion.lastReportedVerdict = nil
 VRCompanion.frameTicks = 0
 VRCompanion.vehicleCameraHooked = false
 VRCompanion.playerCameraHooked = false
+VRCompanion.enterableHooked = false
+VRCompanion.hudHooked = false
+VRCompanion.origHudHooks = nil
+VRCompanion.lastControlledVehicle = nil
 VRCompanion.origCamSettings = {}
 VRCompanion.isMenuVisible = false
 VRCompanion.guiVisibilityInitialized = false
+
+-- VR HUD Inset and UI Scale Constants
+VRCompanion.DEFAULT_HUD_INSET_X = 0.20
+VRCompanion.DEFAULT_HUD_INSET_Y = 0.16
+VRCompanion.DEFAULT_HUD_INSET_TOP = nil -- when nil, defaults to hudInsetY
+VRCompanion.DEFAULT_HUD_UI_SCALE = 0.88
+
+VRCompanion.MIN_HUD_INSET_X = 0.0
+VRCompanion.MAX_HUD_INSET_X = 0.40
+VRCompanion.MIN_HUD_INSET_Y = 0.0
+VRCompanion.MAX_HUD_INSET_Y = 0.35
+VRCompanion.MIN_HUD_INSET_TOP = 0.0
+VRCompanion.MAX_HUD_INSET_TOP = 0.50
+VRCompanion.MIN_HUD_UI_SCALE = 0.50
+VRCompanion.MAX_HUD_UI_SCALE = 1.50
+
+-- VR HUD Three-Stage State Machine Constants (Issue #25)
+VRCompanion.HUD_STATE_HIDDEN = 0
+VRCompanion.HUD_STATE_STREAMLINED = 1
+VRCompanion.HUD_STATE_FULL = 2
+
+VRCompanion.HUD_STATES = {
+    HIDDEN = 0,
+    STREAMLINED = 1,
+    FULL = 2
+}
+
+VRCompanion.HUD_STATE_NAMES = {
+    [0] = "Hidden",
+    [1] = "Streamlined",
+    [2] = "Full"
+}
+
+-- VR HUD Convergence Parity Constants (Issue #27)
+VRCompanion.DEFAULT_CONVERGENCE_DEPTH = 1.8
+VRCompanion.DEFAULT_CONVERGENCE_DISPARITY = 0.012
+VRCompanion.DEFAULT_IPD = 0.064
+VRCompanion.MIN_IPD = 0.040
+VRCompanion.MAX_IPD = 0.085
+VRCompanion.MIN_CONVERGENCE_DEPTH = 0.5
+VRCompanion.MAX_CONVERGENCE_DEPTH = 5.0
+VRCompanion.MIN_CONVERGENCE_DISPARITY = 0.0
+VRCompanion.MAX_CONVERGENCE_DISPARITY = 0.040
+-- Parallax scaling constant mapping physical IPD/depth to normalized screen displacement:
+-- (0.012 disparity * 1.8m depth) / 0.064m nominal IPD = 0.3375
+VRCompanion.CONVERGENCE_PARALLAX_FACTOR = 0.3375
+VRCompanion.CONVERGENCE_SMOOTH_SPEED = 12.0
+
+-- VR Fill Level Element Positioning
+VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE = true
+VRCompanion.fillLevelUnderVehicle = true
+VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP = 0.004
+VRCompanion.hudFillLevelGap = VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP
+VRCompanion.activeFillLevelsDisplay = nil
+
+-- VR HUD Notifications
+VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION = false
+VRCompanion.showHudLoadNotification = false
+
+-- Configured VR HUD state
+VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+VRCompanion.hudInsetX = VRCompanion.DEFAULT_HUD_INSET_X
+VRCompanion.hudInsetY = VRCompanion.DEFAULT_HUD_INSET_Y
+VRCompanion.hudInsetTop = nil
+VRCompanion.hudUiScaleMultiplier = VRCompanion.DEFAULT_HUD_UI_SCALE
+VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+VRCompanion.hudAnchorLeftBase = 0.20
+VRCompanion.hudAnchorRightBase = 0.80
+VRCompanion.hudAnchorBottomBase = 0.16
+VRCompanion.hudAnchorTopBase = 0.84
+VRCompanion.hudAnchorLeft = 0.20
+VRCompanion.hudAnchorRight = 0.80
+VRCompanion.hudAnchorBottom = 0.16
+VRCompanion.hudAnchorTop = 0.84
+VRCompanion.effectiveUiScale = 0.88
+VRCompanion.currentConvergenceDisparity = nil
+VRCompanion.currentConvergenceOffset = 0.0
+VRCompanion.passThroughMode = nil
+VRCompanion.headTrackingEnabled = true
+VRCompanion.origHudAnchors = nil
+VRCompanion.origUiScale = nil
+
+function VRCompanion:computeConvergenceDisparity(ipd, depth)
+    local targetDepth = depth or self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH
+    if targetDepth == nil or targetDepth <= 0.001 then
+        targetDepth = self.DEFAULT_CONVERGENCE_DEPTH
+    end
+    targetDepth = self:clamp(targetDepth, self.MIN_CONVERGENCE_DEPTH, self.MAX_CONVERGENCE_DEPTH)
+
+    local targetIpd = ipd
+    if targetIpd == nil then
+        local bridge = VRBridge or (_G and _G.VRBridge)
+        if bridge ~= nil then
+            if type(bridge.getIpd) == "function" then
+                targetIpd = bridge.getIpd()
+            elseif bridge.ipd ~= nil then
+                targetIpd = bridge.ipd
+            end
+        end
+    end
+
+    -- If IPD is still nil or non-positive, use safe fallback to 0.012
+    if targetIpd == nil or targetIpd <= 0.001 then
+        return self.DEFAULT_CONVERGENCE_DISPARITY
+    end
+
+    local clampedIpd = self:clamp(targetIpd, self.MIN_IPD, self.MAX_IPD)
+    local disparity = (clampedIpd / targetDepth) * self.CONVERGENCE_PARALLAX_FACTOR
+
+    return self:clamp(disparity, self.MIN_CONVERGENCE_DISPARITY, self.MAX_CONVERGENCE_DISPARITY)
+end
+
+function VRCompanion:getConvergenceDisparity()
+    if self.currentConvergenceDisparity ~= nil then
+        return self.currentConvergenceDisparity
+    end
+    return self:computeConvergenceDisparity()
+end
+
+function VRCompanion:getConvergenceOffset(parity, disparity)
+    local targetParity = parity
+    if targetParity == nil then
+        targetParity = self:getFrameParity()
+    end
+
+    local targetDisparity = disparity
+    if targetDisparity == nil then
+        targetDisparity = self:getConvergenceDisparity()
+    end
+
+    -- Parity 0 (even, Left eye): positive offset (+Delta x)
+    -- Parity 1 (odd, Right eye): negative offset (-Delta x)
+    local sign = (targetParity % 2 == 1) and -1.0 or 1.0
+    return sign * targetDisparity
+end
+
+function VRCompanion:isPassThroughMode()
+    if self.passThroughMode ~= nil then
+        return self.passThroughMode == true
+    end
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge == nil then
+        return true
+    end
+    if type(bridge.isReady) == "function" then
+        local ok, ready = pcall(function() return bridge.isReady() end)
+        if ok and not ready then
+            return true
+        end
+    end
+    if self.handshakeComplete == false and not (bridge and bridge.isCompanionActive) then
+        return true
+    end
+    return false
+end
+
+function VRCompanion:setPassThroughMode(enabled)
+    self.passThroughMode = (enabled == true)
+end
+
+function VRCompanion:isHeadTrackingActive()
+    if self.headTrackingEnabled ~= nil and not self.headTrackingEnabled then
+        return false
+    end
+    local gs = g_gameSettings or _G.g_gameSettings
+    local gsClass = GameSettings or _G.GameSettings
+    if gs ~= nil and type(gs.getValue) == "function" and gsClass ~= nil and gsClass.SETTING ~= nil and gsClass.SETTING.IS_HEAD_TRACKING_ENABLED ~= nil then
+        local ok, enabled = pcall(function() return gs:getValue(gsClass.SETTING.IS_HEAD_TRACKING_ENABLED) end)
+        if ok and enabled == false then
+            return false
+        end
+    end
+    if type(isHeadTrackingAvailable) == "function" then
+        local ok, avail = pcall(isHeadTrackingAvailable)
+        if ok and avail == false then
+            return false
+        end
+    end
+    return true
+end
+
+function VRCompanion:setHeadTrackingEnabled(enabled)
+    self.headTrackingEnabled = (enabled == true)
+end
+
+function VRCompanion:getFillLevelsDisplay(hud)
+    if self.activeFillLevelsDisplay ~= nil then
+        return self.activeFillLevelsDisplay
+    end
+    local targetHud = hud
+    if targetHud == nil then
+        local mission = g_currentMission or _G.g_currentMission
+        targetHud = (mission ~= nil) and mission.hud or nil
+    end
+    if targetHud ~= nil then
+        if targetHud.fillLevels ~= nil then
+            return targetHud.fillLevels
+        end
+        if targetHud.fillLevelsDisplay ~= nil then
+            return targetHud.fillLevelsDisplay
+        end
+        if targetHud.speedMeter ~= nil then
+            if targetHud.speedMeter.fillLevels ~= nil then
+                return targetHud.speedMeter.fillLevels
+            end
+            if targetHud.speedMeter.fillLevelsDisplay ~= nil then
+                return targetHud.speedMeter.fillLevelsDisplay
+            end
+        end
+        if targetHud.speedMeterDisplay ~= nil then
+            if targetHud.speedMeterDisplay.fillLevels ~= nil then
+                return targetHud.speedMeterDisplay.fillLevels
+            end
+            if targetHud.speedMeterDisplay.fillLevelsDisplay ~= nil then
+                return targetHud.speedMeterDisplay.fillLevelsDisplay
+            end
+        end
+    end
+    local gFill = _G.g_fillLevelsDisplay or (FillLevelsDisplay and FillLevelsDisplay.instance)
+    if gFill ~= nil then
+        return gFill
+    end
+    return nil
+end
+
+function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
+    if display == nil then return end
+
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    local sm = nil
+    if hud ~= nil then
+        sm = hud.speedMeter or hud.speedMeterDisplay
+    end
+
+    local currentOffset = offset or self.currentConvergenceOffset or 0.0
+    local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_INSET_X)
+    local shiftedRight = self:clamp(baseRight + currentOffset, 0.0, 1.0)
+    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
+    local uiScale = self.effectiveUiScale or 0.88
+
+    -- Determine single fill level row height
+    local flHeight = nil
+    if type(display.getHeight) == "function" then
+        local ok, h = pcall(function() return display:getHeight() end)
+        if ok and type(h) == "number" and h > 0 then flHeight = h end
+    end
+    if flHeight == nil and display.height ~= nil and type(display.height) == "number" and display.height > 0 then
+        flHeight = display.height
+    end
+    if flHeight == nil and display.bgLeft ~= nil and display.bgLeft.height ~= nil and display.bgLeft.height > 0 then
+        flHeight = display.bgLeft.height
+    end
+    if flHeight == nil and display.bgScale ~= nil and display.bgScale.height ~= nil and display.bgScale.height > 0 then
+        flHeight = display.bgScale.height
+    end
+    if flHeight == nil then
+        flHeight = 0.045 * uiScale
+    end
+
+    -- Determine total fill level display width
+    local flWidth = nil
+    if type(display.getWidth) == "function" then
+        local ok, w = pcall(function() return display:getWidth() end)
+        if ok and type(w) == "number" and w > 0 then flWidth = w end
+    end
+    if flWidth == nil and display.width ~= nil and type(display.width) == "number" and display.width > 0 then
+        flWidth = display.width
+    end
+    if flWidth == nil and display.bgScale ~= nil and display.bgLeft ~= nil and display.bgRight ~= nil then
+        local totalW = (display.bgLeft.width or 0) + (display.bgScale.width or 0) + (display.bgRight.width or 0)
+        if totalW > 0 then flWidth = totalW end
+    end
+    if flWidth == nil then
+        flWidth = 0.12 * uiScale
+    end
+
+    -- Count active fill level units (e.g. multi-tank vehicles, trailers) to scale total height
+    local numLevels = 1
+    if display.fillLevelData ~= nil and type(display.fillLevelData) == "table" and #display.fillLevelData > 0 then
+        numLevels = #display.fillLevelData
+    elseif display.vehicle ~= nil and type(display.vehicle.getFillUnits) == "function" then
+        local ok, units = pcall(function() return display.vehicle:getFillUnits() end)
+        if ok and type(units) == "table" and #units > 0 then
+            numLevels = math.max(1, #units)
+        end
+    end
+    local rowGap = 0.004 * uiScale
+    local totalFlHeight = numLevels * flHeight + math.max(0, numLevels - 1) * rowGap
+
+    -- Lowest point of SpeedMeterDisplay is baseBottom (all inner gauges/dials sit above baseBottom)
+    local smLowestY = baseBottom
+    local gapMultiplier = self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP
+    local gap = gapMultiplier * uiScale
+
+    local fillTop = smLowestY - gap
+    local fillBottom = fillTop - totalFlHeight
+    local targetSmBottom = baseBottom
+    local minMarginY = 0.015
+
+    if fillBottom < minMarginY then
+        fillBottom = minMarginY
+        smLowestY = fillBottom + totalFlHeight + gap
+        targetSmBottom = smLowestY
+    end
+
+    -- Align fill level element so its right boundary stays within shiftedRight, completely in view
+    local flPosX = shiftedRight - flWidth
+    if self.hudAnchorLeft ~= nil and flPosX < self.hudAnchorLeft then
+        flPosX = self.hudAnchorLeft
+    end
+
+    display.anchorX = flPosX
+    display.anchorY = fillBottom
+    display.anchorLeft = self.hudAnchorLeft
+    display.anchorRight = self.hudAnchorRight
+    display.anchorBottom = self.hudAnchorBottom
+    display.anchorTop = self.hudAnchorTop
+    display.origX = flPosX
+    display.origY = fillBottom
+    display.x = flPosX
+    display.y = fillBottom
+    display.offsetX = 0
+    display.offsetY = 0
+
+    if display.vrUiScale ~= uiScale then
+        display.vrUiScale = uiScale
+        if type(display.setScale) == "function" then
+            pcall(function() display:setScale(uiScale) end)
+        end
+    end
+
+    if type(display.setPosition) == "function" then
+        pcall(function() display:setPosition(flPosX, fillBottom) end)
+    end
+    if type(display.storeOriginalPosition) == "function" then
+        pcall(function() display:storeOriginalPosition() end)
+    end
+    if type(display.reposition) == "function" then
+        pcall(function() display:reposition() end)
+    end
+    if type(display.updatePosition) == "function" then
+        pcall(function() display:updatePosition() end)
+    end
+
+    -- Explicitly position background parts and progress bar so they are placed at (flPosX, fillBottom)
+    if display.bgLeft ~= nil and type(display.bgLeft.setPosition) == "function" then
+        pcall(function() display.bgLeft:setPosition(flPosX, fillBottom) end)
+    end
+    local bgScaleX = flPosX + (display.bgLeft and display.bgLeft.width or 0)
+    if display.bgScale ~= nil and type(display.bgScale.setPosition) == "function" then
+        pcall(function() display.bgScale:setPosition(bgScaleX, fillBottom) end)
+    end
+    local bgRightX = bgScaleX + (display.bgScale and display.bgScale.width or 0)
+    if display.bgRight ~= nil and type(display.bgRight.setPosition) == "function" then
+        pcall(function() display.bgRight:setPosition(bgRightX, fillBottom) end)
+    end
+    if display.bar ~= nil and type(display.bar.setPosition) == "function" then
+        local barX = flPosX + (display.barOffsetX or (display.bgLeft and display.bgLeft.width or 0))
+        local barY = fillBottom + (display.barOffsetY or 0)
+        pcall(function() display.bar:setPosition(barX, barY) end)
+    end
+    if display.maxWeightIcon ~= nil and type(display.maxWeightIcon.setPosition) == "function" then
+        local mwX = flPosX + (display.maxWeightIconOffsetX or 0)
+        local mwY = fillBottom + (display.maxWeightIconOffsetY or 0)
+        pcall(function() display.maxWeightIcon:setPosition(mwX, mwY) end)
+    end
+    if type(display.fillTypeIcons) == "table" then
+        for _, icon in pairs(display.fillTypeIcons) do
+            if icon ~= nil and type(icon.setPosition) == "function" then
+                local icX = flPosX + (display.fillTypeIconOffsetX or 0)
+                local icY = fillBottom + (display.fillTypeIconOffsetY or 0)
+                pcall(function() icon:setPosition(icX, icY) end)
+            end
+        end
+    end
+
+    -- If sm was lifted to accommodate fill levels at small insets, ensure sm is at targetSmBottom
+    if sm ~= nil and targetSmBottom ~= baseBottom and type(sm.setPosition) == "function" then
+        pcall(function() sm:setPosition(shiftedRight, targetSmBottom) end)
+    end
+
+    return flPosX, fillBottom, targetSmBottom
+end
+
+function VRCompanion:updateHudConvergence(dt)
+    local isPassThrough = self:isPassThroughMode()
+    local isTrackingActive = self:isHeadTrackingActive()
+
+    local targetDisparity = 0.0
+    if not isPassThrough and isTrackingActive and not self.isMenuVisible then
+        local rawIpd = self:getIpd()
+        targetDisparity = self:computeConvergenceDisparity(rawIpd, self.hudConvergenceDepth)
+    end
+
+    -- Smooth convergence transition (especially when reverting to zero)
+    if self.currentConvergenceDisparity == nil or dt == nil then
+        self.currentConvergenceDisparity = targetDisparity
+    else
+        local dtSec = 0.0166
+        if dt > 0 then
+            dtSec = (dt > 1.0) and (dt * 0.001) or dt
+        end
+        local smoothSpeed = self.CONVERGENCE_SMOOTH_SPEED or 12.0
+        local step = math.min(1.0, dtSec * smoothSpeed)
+        self.currentConvergenceDisparity = self.currentConvergenceDisparity + (targetDisparity - self.currentConvergenceDisparity) * step
+        if math.abs(self.currentConvergenceDisparity - targetDisparity) < 0.0001 then
+            self.currentConvergenceDisparity = targetDisparity
+        end
+    end
+
+    -- Active AFR frame parity:
+    -- 0: Left eye (positive offset +Delta x)
+    -- 1: Right eye (negative offset -Delta x)
+    local parity = self:getFrameParity()
+    local offset = self:getConvergenceOffset(parity, self.currentConvergenceDisparity)
+
+    self.currentConvergenceOffset = offset
+
+    -- Calculate base anchors (immutable anchor references to prevent drift)
+    local baseLeft = self.hudAnchorLeftBase or self.DEFAULT_HUD_INSET_X
+    local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_INSET_X)
+    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
+    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_Y)
+
+    -- Apply convergence offset to horizontal anchors without cumulative drift
+    local shiftedLeft = self:clamp(baseLeft + offset, 0.0, 1.0)
+    local shiftedRight = self:clamp(baseRight + offset, 0.0, 1.0)
+
+    self.hudAnchorLeft = shiftedLeft
+    self.hudAnchorRight = shiftedRight
+    self.hudAnchorBottom = baseBottom
+    self.hudAnchorTop = baseTop
+
+    _G.g_hudAnchorLeft = shiftedLeft
+    _G.g_hudAnchorRight = shiftedRight
+    _G.g_hudAnchorBottom = baseBottom
+    _G.g_hudAnchorTop = baseTop
+
+    -- Fast per-frame convergence position update without storeScaledValues/rebuild
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    if hud ~= nil then
+        local sm = hud.speedMeter or hud.speedMeterDisplay
+        local fl = self:getFillLevelsDisplay(hud)
+        local targetSmBottom = baseBottom
+
+        if fl ~= nil and self.fillLevelUnderVehicle then
+            local _, fillBottom, liftedSmBottom = self:positionFillLevelsUnderVehicle(fl, offset)
+            if liftedSmBottom ~= nil then
+                targetSmBottom = liftedSmBottom
+            end
+        end
+
+        if sm ~= nil and type(sm.setPosition) == "function" then
+            pcall(function() sm:setPosition(shiftedRight, targetSmBottom) end)
+        end
+        local ih = hud.inputHelp or hud.inputHelpDisplay
+        if ih ~= nil and type(ih.setPosition) == "function" then
+            pcall(function() ih:setPosition(shiftedLeft, baseTop) end)
+        end
+        local gi = hud.gameInfo or hud.gameInfoDisplay
+        if gi ~= nil and type(gi.setPosition) == "function" then
+            pcall(function() gi:setPosition(shiftedRight, baseTop) end)
+        end
+        local ca = hud.contextAction or hud.contextActionDisplay
+        if ca ~= nil and type(ca.setPosition) == "function" then
+            pcall(function() ca:setPosition(0.5 + offset, baseBottom) end)
+        end
+        local im = hud.ingameMap or hud.ingameMapDisplay
+        if im ~= nil and type(im.setPosition) == "function" then
+            pcall(function() im:setPosition(shiftedLeft, baseBottom) end)
+        end
+    end
+
+    return shiftedLeft, shiftedRight, offset
+end
+
+function VRCompanion:getHudState()
+    return self.hudState or self.HUD_STATE_HIDDEN
+end
+
+local STREAMLINED_ALLOWED_DISPLAYS = {
+    SpeedMeterDisplay = true,
+    speedMeter = true,
+    speedMeterDisplay = true,
+    ContextActionDisplay = true,
+    contextAction = true,
+    contextActionDisplay = true,
+    FillLevelsDisplay = true,
+    fillLevels = true,
+    fillLevelsDisplay = true
+}
+
+function VRCompanion:isDisplayVisible(displayName, state)
+    if displayName == nil then return false end
+    state = state or self:getHudState()
+    if state == self.HUD_STATE_HIDDEN then
+        return false
+    elseif state == self.HUD_STATE_STREAMLINED then
+        return STREAMLINED_ALLOWED_DISPLAYS[displayName] == true
+    elseif state == self.HUD_STATE_FULL then
+        return true
+    end
+    return false
+end
+
+local function setDisplayVisible(display, isVisible)
+    if display == nil then return end
+    display.isVisible = isVisible
+    if type(display.setIsVisible) == "function" then
+        pcall(function() display:setIsVisible(isVisible) end)
+    elseif type(display.setVisible) == "function" then
+        pcall(function() display:setVisible(isVisible) end)
+    end
+end
+
+function VRCompanion:applyHudState(state)
+    state = state or self.hudState or self.HUD_STATE_HIDDEN
+
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    if hud == nil then
+        return
+    end
+
+    local fillLevels = self:getFillLevelsDisplay(hud)
+
+    local isHudVisible = (state ~= self.HUD_STATE_HIDDEN)
+    if type(hud.setIsVisible) == "function" then
+        pcall(function() hud:setIsVisible(isHudVisible) end)
+    end
+    hud.isVisible = isHudVisible
+
+    -- Update individual displays using the single-source-of-truth isDisplayVisible helper
+    local displays = {
+        { display = hud.speedMeter or hud.speedMeterDisplay, name = "SpeedMeterDisplay" },
+        { display = fillLevels, name = "FillLevelsDisplay" },
+        { display = hud.contextAction or hud.contextActionDisplay, name = "ContextActionDisplay" },
+        { display = hud.inputHelp or hud.inputHelpDisplay, name = "InputHelpDisplay" },
+        { display = hud.ingameMap or hud.ingameMapDisplay, name = "IngameMap" },
+        { display = hud.gameInfo or hud.gameInfoDisplay, name = "GameInfoDisplay" }
+    }
+    for _, entry in ipairs(displays) do
+        local vis = self:isDisplayVisible(entry.name, state)
+        setDisplayVisible(entry.display, vis)
+    end
+
+    -- Propagate visibility to individual vehicle telemetry subcomponents if present
+    local sm = hud.speedMeter or hud.speedMeterDisplay
+    if sm ~= nil then
+        local smVis = self:isDisplayVisible("SpeedMeterDisplay", state)
+        local smSubMetrics = {
+            sm.vehicleDamage or sm.damage,
+            sm.fuelLevel or sm.fuel,
+            sm.gear,
+            sm.rpm,
+            sm.fillLevelsDisplay or sm.fillLevels
+        }
+        for _, subMetric in ipairs(smSubMetrics) do
+            if subMetric ~= nil then
+                setDisplayVisible(subMetric, smVis)
+            end
+        end
+    end
+
+    -- Update engine HUD display toggle setters
+    local inputHelpVis = self:isDisplayVisible("InputHelpDisplay", state)
+    local ingameMapVis = self:isDisplayVisible("IngameMap", state)
+    local gameInfoVis = self:isDisplayVisible("GameInfoDisplay", state)
+
+    if type(hud.setInputHelpVisible) == "function" then
+        pcall(function() hud:setInputHelpVisible(inputHelpVis) end)
+    end
+    if type(hud.setIngameMapVisible) == "function" then
+        pcall(function() hud:setIngameMapVisible(ingameMapVis) end)
+    end
+    if type(hud.setGameInfoVisible) == "function" then
+        pcall(function() hud:setGameInfoVisible(gameInfoVis) end)
+    end
+end
+
+function VRCompanion:setHudState(newState)
+    local state = self:clamp(newState or self.HUD_STATE_HIDDEN, self.HUD_STATE_HIDDEN, self.HUD_STATE_FULL)
+    self.hudState = state
+    self:applyHudState(state)
+    return self.hudState
+end
+
+function VRCompanion:cycleHudState()
+    local curTime = g_time
+    if curTime ~= nil and self.lastHudToggleTime ~= nil and (curTime - self.lastHudToggleTime) < 300 then
+        return self:getHudState()
+    end
+    self.lastHudToggleTime = curTime
+
+    local curState = self:getHudState()
+    local nextState = (curState + 1) % 3
+    self:setHudState(nextState)
+    local stateName = (self.HUD_STATE_NAMES and self.HUD_STATE_NAMES[nextState]) or tostring(nextState)
+    print(string.format("[FS25_VR] HUD state changed: %s (%d)", stateName, nextState))
+
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        local desc = "All Off"
+        if nextState == self.HUD_STATE_STREAMLINED then
+            desc = "Vehicle Telemetry Only"
+        elseif nextState == self.HUD_STATE_FULL then
+            desc = "All Elements On"
+        end
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR HUD: %s (%s)", stateName, desc), 2500)
+        end)
+    end
+
+    return nextState
+end
+
+function VRCompanion:onHudToggleAction(...)
+    return self:cycleHudState()
+end
+
+
+function VRCompanion:clamp(val, minVal, maxVal)
+    if val == nil then return minVal end
+    if val < minVal then return minVal end
+    if val > maxVal then return maxVal end
+    return val
+end
+
+function VRCompanion:calculateHudAnchors(insetX, insetY, scaleMultiplier, insetTop)
+    local clampedInsetX = self:clamp(insetX or self.DEFAULT_HUD_INSET_X, self.MIN_HUD_INSET_X, self.MAX_HUD_INSET_X)
+    local clampedInsetY = self:clamp(insetY or self.DEFAULT_HUD_INSET_Y, self.MIN_HUD_INSET_Y, self.MAX_HUD_INSET_Y)
+    local rawInsetTop = insetTop or clampedInsetY
+    local clampedInsetTop = self:clamp(rawInsetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
+    local clampedScale = self:clamp(scaleMultiplier or self.DEFAULT_HUD_UI_SCALE, self.MIN_HUD_UI_SCALE, self.MAX_HUD_UI_SCALE)
+
+    local left = clampedInsetX
+    local right = 1.0 - clampedInsetX
+    local bottom = clampedInsetY
+    local top = 1.0 - clampedInsetTop
+
+    return left, right, bottom, top, clampedScale
+end
+
+function VRCompanion:configureHudInsets(insetX, insetY, scaleMultiplier, insetTop)
+    local left, right, bottom, top, scale = self:calculateHudAnchors(insetX, insetY, scaleMultiplier, insetTop)
+    self.hudInsetX = self:clamp(insetX or self.DEFAULT_HUD_INSET_X, self.MIN_HUD_INSET_X, self.MAX_HUD_INSET_X)
+    self.hudInsetY = self:clamp(insetY or self.DEFAULT_HUD_INSET_Y, self.MIN_HUD_INSET_Y, self.MAX_HUD_INSET_Y)
+    if insetTop ~= nil then
+        self.hudInsetTop = self:clamp(insetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
+    else
+        self.hudInsetTop = nil
+    end
+    self.hudUiScaleMultiplier = scale
+    self.hudAnchorLeftBase = left
+    self.hudAnchorRightBase = right
+    self.hudAnchorBottomBase = bottom
+    self.hudAnchorTopBase = top
+    self.hudAnchorLeft = left
+    self.hudAnchorRight = right
+    self.hudAnchorBottom = bottom
+    self.hudAnchorTop = top
+    self.effectiveUiScale = scale
+    self.currentConvergenceOffset = 0.0
+end
+
+function VRCompanion:getHudInsets()
+    return {
+        left = self.hudAnchorLeft or self.DEFAULT_HUD_INSET_X,
+        right = self.hudAnchorRight or (1.0 - self.DEFAULT_HUD_INSET_X),
+        bottom = self.hudAnchorBottom or self.DEFAULT_HUD_INSET_Y,
+        top = self.hudAnchorTop or (1.0 - self.DEFAULT_HUD_INSET_Y),
+        baseLeft = self.hudAnchorLeftBase or self.hudAnchorLeft or self.DEFAULT_HUD_INSET_X,
+        baseRight = self.hudAnchorRightBase or self.hudAnchorRight or (1.0 - self.DEFAULT_HUD_INSET_X),
+        insetX = self.hudInsetX or self.DEFAULT_HUD_INSET_X,
+        insetY = self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
+        insetTop = self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
+        scaleMultiplier = self.hudUiScaleMultiplier or self.DEFAULT_HUD_UI_SCALE,
+        effectiveScale = self.effectiveUiScale or self.DEFAULT_HUD_UI_SCALE,
+        convergenceOffset = self.currentConvergenceOffset or 0.0,
+        convergenceDisparity = self.currentConvergenceDisparity or 0.0,
+        convergenceDepth = self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH,
+        fillLevelUnderVehicle = (self.fillLevelUnderVehicle == true),
+        fillLevelGap = self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP,
+        showHudLoadNotification = (self.showHudLoadNotification == true)
+    }
+end
+
+local HUD_DISPLAY_ANCHORS = {
+    SpeedMeterDisplay = { alignX = "right", alignY = "bottom" },
+    InputHelpDisplay = { alignX = "left", alignY = "top" },
+    GameInfoDisplay = { alignX = "right", alignY = "top" },
+    ContextActionDisplay = { alignX = "left", alignY = "bottom" },
+    IngameMap = { alignX = "left", alignY = "bottom" },
+    FillLevelsDisplay = { alignX = "right", alignY = "bottom" }
+}
+
+local function readXmlFloat(getXmlFloatFn, xmlFile, ...)
+    local keys = {...}
+    for _, k in ipairs(keys) do
+        local val = getXmlFloatFn(xmlFile, k)
+        if val ~= nil then
+            return val
+        end
+    end
+    return nil
+end
+
+local function readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile, ...)
+    local keys = {...}
+    for _, k in ipairs(keys) do
+        if type(getXmlBoolFn) == "function" then
+            local val = getXmlBoolFn(xmlFile, k)
+            if val ~= nil then
+                return val
+            end
+        end
+        if type(getXmlStringFn) == "function" then
+            local str = getXmlStringFn(xmlFile, k)
+            if str ~= nil then
+                local lower = string.lower(tostring(str))
+                if lower == "true" or lower == "1" then return true
+                elseif lower == "false" or lower == "0" then return false end
+            end
+        end
+    end
+    return nil
+end
+
+function VRCompanion:getUserSettingsPath()
+    local getAppPathFn = getUserProfileAppPath or _G.getUserProfileAppPath
+    if type(getAppPathFn) == "function" then
+        local appPath = getAppPathFn()
+        if appPath ~= nil and appPath ~= "" then
+            return appPath .. "modSettings/FS25_VRCompanion/settings.xml"
+        end
+    end
+    return nil
+end
+
+function VRCompanion:saveConfiguration(xmlPath)
+    local path = xmlPath or self:getUserSettingsPath()
+    if path == nil then return false end
+
+    local createFolderFn = createFolder or _G.createFolder
+    local createXmlFn = createXMLFile or _G.createXMLFile
+    local setXmlFloatFn = setXMLFloat or _G.setXMLFloat
+    local setXmlBoolFn = setXMLBool or _G.setXMLBool
+    local saveXmlFn = saveXMLFile or _G.saveXMLFile
+    local deleteXmlFn = delete or _G.delete
+
+    if type(createXmlFn) ~= "function" or type(setXmlFloatFn) ~= "function" or type(saveXmlFn) ~= "function" then
+        return false
+    end
+
+    local getAppPathFn = getUserProfileAppPath or _G.getUserProfileAppPath
+    if type(createFolderFn) == "function" and type(getAppPathFn) == "function" then
+        local appPath = getAppPathFn()
+        if appPath ~= nil and appPath ~= "" then
+            pcall(createFolderFn, appPath .. "modSettings")
+            pcall(createFolderFn, appPath .. "modSettings/FS25_VRCompanion")
+        end
+    end
+
+    local ok, xmlFile = pcall(createXmlFn, "VRCompanionConfig", path, "vrSettings")
+    if ok and xmlFile ~= 0 and xmlFile ~= nil then
+        setXmlFloatFn(xmlFile, "vrSettings.hudInsetHorizontal", self.hudInsetX or self.DEFAULT_HUD_INSET_X)
+        setXmlFloatFn(xmlFile, "vrSettings.hudInsetVertical", self.hudInsetY or self.DEFAULT_HUD_INSET_Y)
+        setXmlFloatFn(xmlFile, "vrSettings.hudInsetTop", self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y)
+        setXmlFloatFn(xmlFile, "vrSettings.hudUiScale", self.hudUiScaleMultiplier or self.DEFAULT_HUD_UI_SCALE)
+        setXmlFloatFn(xmlFile, "vrSettings.hudConvergenceDepth", self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH)
+        if type(setXmlBoolFn) == "function" then
+            setXmlBoolFn(xmlFile, "vrSettings.fillLevelUnderVehicle", self.fillLevelUnderVehicle == true)
+            setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
+        end
+        setXmlFloatFn(xmlFile, "vrSettings.hudFillLevelGap", self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP)
+
+        pcall(saveXmlFn, xmlFile)
+        if type(deleteXmlFn) == "function" then
+            pcall(deleteXmlFn, xmlFile)
+        end
+        print(string.format("[FS25_VR] Saved VR HUD configuration to: %s", tostring(path)))
+        return true
+    end
+    return false
+end
+
+function VRCompanion:loadConfiguration(xmlPath)
+    local insetX = self.DEFAULT_HUD_INSET_X
+    local insetY = self.DEFAULT_HUD_INSET_Y
+    local scale = self.DEFAULT_HUD_UI_SCALE
+    local insetTop = nil
+
+    local loadXmlFn = loadXMLFile or _G.loadXMLFile
+    local getXmlFloatFn = getXMLFloat or _G.getXMLFloat
+    local getXmlBoolFn = getXMLBool or _G.getXMLBool
+    local getXmlStringFn = getXMLString or _G.getXMLString
+    local deleteXmlFn = delete or _G.delete
+
+    local function readSettingsFromXml(filePath)
+        if filePath ~= nil and type(loadXmlFn) == "function" and type(getXmlFloatFn) == "function" then
+            local ok, xmlFile = pcall(loadXmlFn, "VRCompanionConfig", filePath)
+            if ok and xmlFile ~= 0 and xmlFile ~= nil then
+                local loadedX = readXmlFloat(getXmlFloatFn, xmlFile,
+                    "vrSettings.hudInsetHorizontal", "vrSettings.hudInsetHorizontal#value",
+                    "modDesc.vrSettings.hudInsetHorizontal", "modDesc.vrSettings.hudInsetHorizontal#value")
+                if loadedX ~= nil then insetX = loadedX end
+
+                local loadedY = readXmlFloat(getXmlFloatFn, xmlFile,
+                    "vrSettings.hudInsetVertical", "vrSettings.hudInsetVertical#value",
+                    "modDesc.vrSettings.hudInsetVertical", "modDesc.vrSettings.hudInsetVertical#value")
+                if loadedY ~= nil then insetY = loadedY end
+
+                local loadedInsetTop = readXmlFloat(getXmlFloatFn, xmlFile,
+                    "vrSettings.hudInsetTop", "vrSettings.hudInsetTop#value",
+                    "vrSettings.hudTopInset", "vrSettings.hudTopInset#value",
+                    "vrSettings.hudInsetVerticalTop", "vrSettings.hudInsetVerticalTop#value",
+                    "modDesc.vrSettings.hudInsetTop", "modDesc.vrSettings.hudInsetTop#value",
+                    "modDesc.vrSettings.hudTopInset", "modDesc.vrSettings.hudTopInset#value",
+                    "modDesc.vrSettings.hudInsetVerticalTop", "modDesc.vrSettings.hudInsetVerticalTop#value")
+                if loadedInsetTop ~= nil then
+                    insetTop = self:clamp(loadedInsetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
+                end
+
+                local loadedScale = readXmlFloat(getXmlFloatFn, xmlFile,
+                    "vrSettings.hudUiScale", "vrSettings.hudUiScale#value",
+                    "modDesc.vrSettings.hudUiScale", "modDesc.vrSettings.hudUiScale#value")
+                if loadedScale ~= nil then scale = loadedScale end
+
+                local loadedDepth = readXmlFloat(getXmlFloatFn, xmlFile,
+                    "vrSettings.hudConvergenceDepth", "vrSettings.hudConvergenceDepth#value",
+                    "modDesc.vrSettings.hudConvergenceDepth", "modDesc.vrSettings.hudConvergenceDepth#value")
+                if loadedDepth ~= nil then
+                    self.hudConvergenceDepth = loadedDepth
+                else
+                    self.hudConvergenceDepth = self.DEFAULT_CONVERGENCE_DEPTH
+                end
+
+                local loadedFillUnder = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
+                    "vrSettings.fillLevelUnderVehicle", "vrSettings.fillLevelUnderVehicle#value",
+                    "modDesc.vrSettings.fillLevelUnderVehicle", "modDesc.vrSettings.fillLevelUnderVehicle#value")
+                if loadedFillUnder ~= nil then
+                    self.fillLevelUnderVehicle = loadedFillUnder
+                end
+
+                local loadedGap = readXmlFloat(getXmlFloatFn, xmlFile,
+                    "vrSettings.hudFillLevelGap", "vrSettings.hudFillLevelGap#value",
+                    "modDesc.vrSettings.hudFillLevelGap", "modDesc.vrSettings.hudFillLevelGap#value")
+                if loadedGap ~= nil then
+                    self.hudFillLevelGap = self:clamp(loadedGap, 0.0, 0.05)
+                else
+                    self.hudFillLevelGap = self.DEFAULT_HUD_FILL_LEVEL_GAP
+                end
+
+                local loadedShowNotification = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
+                    "vrSettings.showHudLoadNotification", "vrSettings.showHudLoadNotification#value",
+                    "vrSettings.showHudLoadAlert", "vrSettings.showHudLoadAlert#value",
+                    "vrSettings.showLoadNotification", "vrSettings.showLoadNotification#value",
+                    "modDesc.vrSettings.showHudLoadNotification", "modDesc.vrSettings.showHudLoadNotification#value",
+                    "modDesc.vrSettings.showHudLoadAlert", "modDesc.vrSettings.showHudLoadAlert#value")
+                if loadedShowNotification ~= nil then
+                    self.showHudLoadNotification = loadedShowNotification
+                end
+
+                if type(deleteXmlFn) == "function" then
+                    pcall(deleteXmlFn, xmlFile)
+                end
+                return true
+            end
+        end
+        return false
+    end
+
+    if xmlPath ~= nil then
+        readSettingsFromXml(xmlPath)
+    else
+        -- 1. Read base defaults from modDesc.xml
+        local modDir = self.modDirectory or _G.g_currentModDirectory or ""
+        if modDir ~= "" then
+            readSettingsFromXml(modDir .. "modDesc.xml")
+        end
+
+        -- 2. Read user override from modSettings/FS25_VRCompanion/settings.xml if present
+        local userPath = self:getUserSettingsPath()
+        local loadedUser = false
+        if userPath ~= nil then
+            loadedUser = readSettingsFromXml(userPath)
+            if loadedUser then
+                print(string.format("[FS25_VR] Loaded user settings from: %s", tostring(userPath)))
+            end
+        end
+
+        -- 3. If user settings file doesn't exist, create it with current values
+        if not loadedUser and userPath ~= nil then
+            self:saveConfiguration(userPath)
+        end
+    end
+
+    if self.fillLevelUnderVehicle == nil then
+        self.fillLevelUnderVehicle = self.DEFAULT_FILL_LEVEL_UNDER_VEHICLE
+    end
+    if self.showHudLoadNotification == nil then
+        self.showHudLoadNotification = self.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
+    end
+
+    self:configureHudInsets(insetX, insetY, scale, insetTop)
+    return self:getHudInsets()
+end
+
+function VRCompanion:positionHudDisplay(display, displayName)
+    if display == nil then return end
+
+    if displayName == "FillLevelsDisplay" and self.fillLevelUnderVehicle then
+        if type(display.setScale) == "function" then
+            pcall(function() display:setScale(self.effectiveUiScale) end)
+        end
+        self:positionFillLevelsUnderVehicle(display)
+        return
+    end
+
+    local anchorConfig = HUD_DISPLAY_ANCHORS[displayName] or { alignX = "left", alignY = "bottom" }
+    local w = (type(display.getWidth) == "function" and display:getWidth()) or display.width or 0
+    local h = (type(display.getHeight) == "function" and display:getHeight()) or display.height or 0
+
+    local anchorX = (anchorConfig.alignX == "right") and (self.hudAnchorRight - w) or self.hudAnchorLeft
+    local anchorY = (anchorConfig.alignY == "top") and (self.hudAnchorTop - h) or self.hudAnchorBottom
+
+    display.anchorX = anchorX
+    display.anchorY = anchorY
+    display.anchorLeft = self.hudAnchorLeft
+    display.anchorRight = self.hudAnchorRight
+    display.anchorBottom = self.hudAnchorBottom
+    display.anchorTop = self.hudAnchorTop
+    display.vrUiScale = self.effectiveUiScale
+
+    if type(display.setPosition) == "function" then
+        pcall(function() display:setPosition(anchorX, anchorY) end)
+    end
+    if type(display.setScale) == "function" then
+        pcall(function() display:setScale(self.effectiveUiScale) end)
+    end
+    if type(display.storeScaledValues) == "function" then
+        pcall(function() display:storeScaledValues() end)
+    end
+    if type(display.reposition) == "function" then
+        pcall(function() display:reposition() end)
+    end
+    if type(display.updatePosition) == "function" then
+        pcall(function() display:updatePosition() end)
+    end
+end
+
+function VRCompanion:repositionAllHudDisplays(hud)
+    local targetHud = hud
+    if targetHud == nil then
+        local mission = g_currentMission or _G.g_currentMission
+        targetHud = (mission ~= nil) and mission.hud or nil
+    end
+    if targetHud == nil then return end
+
+    local d1 = targetHud.speedMeter or targetHud.speedMeterDisplay
+    if d1 ~= nil then self:positionHudDisplay(d1, "SpeedMeterDisplay") end
+
+    local d2 = targetHud.inputHelp or targetHud.inputHelpDisplay
+    if d2 ~= nil then self:positionHudDisplay(d2, "InputHelpDisplay") end
+
+    local d3 = targetHud.gameInfo or targetHud.gameInfoDisplay
+    if d3 ~= nil then self:positionHudDisplay(d3, "GameInfoDisplay") end
+
+    local d4 = targetHud.contextAction or targetHud.contextActionDisplay
+    if d4 ~= nil then self:positionHudDisplay(d4, "ContextActionDisplay") end
+
+    local d5 = targetHud.ingameMap or targetHud.ingameMapDisplay
+    if d5 ~= nil then self:positionHudDisplay(d5, "IngameMap") end
+
+    local d6 = self:getFillLevelsDisplay(targetHud)
+    if d6 ~= nil then self:positionHudDisplay(d6, "FillLevelsDisplay") end
+
+    if type(targetHud.storeScaledValues) == "function" then
+        pcall(function() targetHud:storeScaledValues() end)
+    end
+    if type(targetHud.updateDimensions) == "function" then
+        pcall(function() targetHud:updateDimensions() end)
+    end
+end
+
+function VRCompanion:applyHudInsets()
+    -- 1. Backup original engine anchors if not previously saved
+    if self.origHudAnchors == nil then
+        self.origHudAnchors = {
+            left = _G.g_hudAnchorLeft or 0.0,
+            right = _G.g_hudAnchorRight or 1.0,
+            bottom = _G.g_hudAnchorBottom or 0.0,
+            top = _G.g_hudAnchorTop or 1.0
+        }
+    end
+
+    -- 2. Update global engine HUD anchors
+    _G.g_hudAnchorLeft = self.hudAnchorLeft
+    _G.g_hudAnchorRight = self.hudAnchorRight
+    _G.g_hudAnchorBottom = self.hudAnchorBottom
+    _G.g_hudAnchorTop = self.hudAnchorTop
+
+    -- 3. Calculate effective UI scale from base setting and VR multiplier
+    local baseScale = 1.0
+    local gs = g_gameSettings or _G.g_gameSettings
+    local gsClass = GameSettings or _G.GameSettings
+    if gs ~= nil and type(gs.getValue) == "function" and gsClass ~= nil and gsClass.SETTING ~= nil and gsClass.SETTING.UI_SCALE ~= nil then
+        baseScale = gs:getValue(gsClass.SETTING.UI_SCALE) or 1.0
+    end
+    if self.origUiScale == nil then
+        self.origUiScale = baseScale
+    end
+    self.effectiveUiScale = baseScale * self.hudUiScaleMultiplier
+
+    -- 4. Reposition all standard HUD displays
+    self:repositionAllHudDisplays(hud)
+
+    print(string.format("[FS25_VR] Applied VR HUD Insets: Left=%.2f, Right=%.2f, Bottom=%.2f, Top=%.2f (UI Scale: %.2fx)",
+        self.hudAnchorLeft, self.hudAnchorRight, self.hudAnchorBottom, self.hudAnchorTop, self.effectiveUiScale))
+end
+
+function VRCompanion:restoreHudInsets()
+    local left = 0.0
+    local right = 1.0
+    local bottom = 0.0
+    local top = 1.0
+
+    if self.origHudAnchors ~= nil then
+        left = self.origHudAnchors.left or 0.0
+        right = self.origHudAnchors.right or 1.0
+        bottom = self.origHudAnchors.bottom or 0.0
+        top = self.origHudAnchors.top or 1.0
+        self.origHudAnchors = nil
+    end
+
+    _G.g_hudAnchorLeft = left
+    _G.g_hudAnchorRight = right
+    _G.g_hudAnchorBottom = bottom
+    _G.g_hudAnchorTop = top
+
+    local baseLeft = self.hudAnchorLeftBase or self.DEFAULT_HUD_INSET_X
+    local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_INSET_X)
+    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
+    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_Y)
+
+    self.hudAnchorLeft = baseLeft
+    self.hudAnchorRight = baseRight
+    self.hudAnchorBottom = baseBottom
+    self.hudAnchorTop = baseTop
+    self.currentConvergenceOffset = 0.0
+    self.currentConvergenceDisparity = 0.0
+
+    local restoredScale = self.origUiScale or 1.0
+    self.origUiScale = nil
+
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    if hud ~= nil then
+        local standardDisplays = {
+            hud.speedMeter or hud.speedMeterDisplay,
+            hud.inputHelp or hud.inputHelpDisplay,
+            hud.gameInfo or hud.gameInfoDisplay,
+            hud.contextAction or hud.contextActionDisplay,
+            hud.ingameMap or hud.ingameMapDisplay
+        }
+        for _, display in ipairs(standardDisplays) do
+            if display ~= nil then
+                if type(display.storeScaledValues) == "function" then
+                    pcall(function() display:storeScaledValues() end)
+                end
+                if type(display.setScale) == "function" then
+                    pcall(function() display:setScale(restoredScale) end)
+                end
+                if type(display.reposition) == "function" then
+                    pcall(function() display:reposition() end)
+                end
+            end
+        end
+        if type(hud.storeScaledValues) == "function" then
+            pcall(function() hud:storeScaledValues() end)
+        end
+    end
+    print("[FS25_VR] Restored standard 2D HUD corner anchors.")
+end
+
+local HUD_HOOKED_CLASSES = {
+    { className = "SpeedMeterDisplay", displayName = "SpeedMeterDisplay" },
+    { className = "ContextActionDisplay", displayName = "ContextActionDisplay" },
+    { className = "FillLevelsDisplay", displayName = "FillLevelsDisplay" },
+    { className = "IngameMap", displayName = "IngameMap" },
+    { className = "InputHelpDisplay", displayName = "InputHelpDisplay" },
+    { className = "GameInfoDisplay", displayName = "GameInfoDisplay" }
+}
+
+local function getGlobalClass(className)
+    if className == "SpeedMeterDisplay" then return SpeedMeterDisplay or (_G and _G.SpeedMeterDisplay)
+    elseif className == "ContextActionDisplay" then return ContextActionDisplay or (_G and _G.ContextActionDisplay)
+    elseif className == "FillLevelsDisplay" then return FillLevelsDisplay or (_G and _G.FillLevelsDisplay)
+    elseif className == "IngameMap" then return IngameMap or (_G and _G.IngameMap)
+    elseif className == "InputHelpDisplay" then return InputHelpDisplay or (_G and _G.InputHelpDisplay)
+    elseif className == "GameInfoDisplay" then return GameInfoDisplay or (_G and _G.GameInfoDisplay)
+    elseif className == "HUD" then return HUD or (_G and _G.HUD)
+    end
+    return _G and _G[className]
+end
+
+function VRCompanion:hookHud()
+    if self.hudHooked then
+        self:unhookHud()
+    end
+
+    self.origHudHooks = {}
+
+    local function hookMethod(tbl, methodName, hookFn)
+        if tbl ~= nil and tbl[methodName] ~= nil and type(tbl[methodName]) == "function" then
+            table.insert(self.origHudHooks, {
+                tbl = tbl,
+                methodName = methodName,
+                orig = tbl[methodName]
+            })
+            tbl[methodName] = hookFn
+        end
+    end
+
+    -- 1. Hook display classes (draw, getIsVisible)
+    for _, info in ipairs(HUD_HOOKED_CLASSES) do
+        local cls = getGlobalClass(info.className)
+        if cls ~= nil then
+            local displayName = info.displayName
+
+            -- Hook draw
+            if cls.draw ~= nil and type(cls.draw) == "function" then
+                local origDraw = cls.draw
+                hookMethod(cls, "draw", function(displaySelf, ...)
+                    if displayName == "FillLevelsDisplay" then
+                        self.activeFillLevelsDisplay = displaySelf
+                        if self.fillLevelUnderVehicle then
+                            self:positionFillLevelsUnderVehicle(displaySelf)
+                        end
+                        if not self.hasLoggedFillLevelsDisplayInfo then
+                            self.hasLoggedFillLevelsDisplayInfo = true
+                            local bgLeftX = (displaySelf.bgLeft and displaySelf.bgLeft.x) or "nil"
+                            local bgLeftY = (displaySelf.bgLeft and displaySelf.bgLeft.y) or "nil"
+                            local bgRightX = (displaySelf.bgRight and displaySelf.bgRight.x) or "nil"
+                            local bgRightY = (displaySelf.bgRight and displaySelf.bgRight.y) or "nil"
+                            local countData = (type(displaySelf.fillLevelData) == "table" and #displaySelf.fillLevelData) or 0
+                            print(string.format("[FS25_VR] [FillLevelsDisplay Diagnostics] x=%.3f, y=%.3f, bgLeft=(%s, %s), bgRight=(%s, %s), numLevels=%s",
+                                displaySelf.x or -1, displaySelf.y or -1,
+                                tostring(bgLeftX), tostring(bgLeftY),
+                                tostring(bgRightX), tostring(bgRightY),
+                                tostring(countData)))
+                        end
+                    end
+                    if not self:isDisplayVisible(displayName) then
+                        return
+                    end
+                    return origDraw(displaySelf, ...)
+                end)
+            end
+
+            -- Hook getIsVisible
+            if cls.getIsVisible ~= nil and type(cls.getIsVisible) == "function" then
+                local origGetIsVisible = cls.getIsVisible
+                hookMethod(cls, "getIsVisible", function(displaySelf, ...)
+                    if displayName == "FillLevelsDisplay" then
+                        self.activeFillLevelsDisplay = displaySelf
+                    end
+                    if not self:isDisplayVisible(displayName) then
+                        return false
+                    end
+                    return origGetIsVisible(displaySelf, ...)
+                end)
+            end
+        end
+    end
+
+    -- 2. Hook HUD class
+    local hudCls = getGlobalClass("HUD")
+    if hudCls ~= nil then
+        if hudCls.draw ~= nil and type(hudCls.draw) == "function" then
+            local origHudDraw = hudCls.draw
+            hookMethod(hudCls, "draw", function(hudSelf, ...)
+                if self:getHudState() == self.HUD_STATE_HIDDEN then
+                    return
+                end
+                return origHudDraw(hudSelf, ...)
+            end)
+        end
+
+        local hudSetterHooks = {
+            { methodName = "setInputHelpVisible", displayName = "InputHelpDisplay" },
+            { methodName = "setIngameMapVisible", displayName = "IngameMap" },
+            { methodName = "setGameInfoVisible", displayName = "GameInfoDisplay" }
+        }
+        for _, setter in ipairs(hudSetterHooks) do
+            local mName = setter.methodName
+            local dName = setter.displayName
+            if hudCls[mName] ~= nil and type(hudCls[mName]) == "function" then
+                local origSetter = hudCls[mName]
+                hookMethod(hudCls, mName, function(hudSelf, isVisible, ...)
+                    if not self:isDisplayVisible(dName) then
+                        return origSetter(hudSelf, false, ...)
+                    end
+                    return origSetter(hudSelf, isVisible, ...)
+                end)
+            end
+        end
+    end
+
+    if #self.origHudHooks > 0 then
+        self.hudHooked = true
+        print("[FS25_VR] Hooked native engine HUD display interfaces.")
+    end
+end
+
+function VRCompanion:unhookHud()
+    if self.origHudHooks ~= nil then
+        for _, entry in ipairs(self.origHudHooks) do
+            if entry.tbl ~= nil and entry.methodName ~= nil then
+                entry.tbl[entry.methodName] = entry.orig
+            end
+        end
+        self.origHudHooks = nil
+    end
+    self.hudHooked = false
+    print("[FS25_VR] Unhooked native engine HUD display interfaces.")
+end
+
+
 -- Proactively probe head tracking availability to trigger native LuauInterceptor detour
 if type(isHeadTrackingAvailable) == "function" then
     pcall(isHeadTrackingAvailable)
 elseif type(getHeadTrackingTranslation) == "function" then
     pcall(getHeadTrackingTranslation)
+end
+
+function VRCompanion:registerActionEvents(force)
+    local inputBinding = g_inputBinding or _G.g_inputBinding
+    if inputBinding == nil or type(inputBinding.registerActionEvent) ~= "function" then
+        return
+    end
+
+    local actionEvents = inputBinding.actionEvents or (inputBinding.events and inputBinding.events)
+    local isHudEventActive = false
+    local isRecenterEventActive = false
+
+    if not force and actionEvents ~= nil then
+        if self.hudToggleActionEventId ~= nil and actionEvents[self.hudToggleActionEventId] ~= nil then
+            isHudEventActive = true
+        end
+        if self.recenterActionEventId ~= nil and actionEvents[self.recenterActionEventId] ~= nil then
+            isRecenterEventActive = true
+        end
+    end
+
+    if force or not isHudEventActive then
+        local actionId = (InputAction and InputAction.VR_HUD_TOGGLE) or (_G.InputAction and _G.InputAction.VR_HUD_TOGGLE) or "VR_HUD_TOGGLE"
+        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onHudToggleAction, false, true, false, true)
+        if success and eventId then
+            self.hudToggleActionEventId = eventId
+            if type(inputBinding.setActionEventTextPriority) == "function" then
+                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
+            end
+            if type(inputBinding.setActionEventActive) == "function" then
+                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventTextVisibility) == "function" then
+                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventText) == "function" then
+                pcall(function()
+                    local txt = (g_i18n and g_i18n:getText("input_VR_HUD_TOGGLE")) or "Toggle VR HUD Mode"
+                    inputBinding:setActionEventText(eventId, txt)
+                end)
+            end
+            if not self.hudToggleLoggedOnce then
+                print("[FS25_VR] Registered in-engine VR_HUD_TOGGLE event.")
+                self.hudToggleLoggedOnce = true
+            end
+        end
+    end
+
+    if force or not isRecenterEventActive then
+        local actionId = (InputAction and InputAction.VR_RECENTER) or (_G.InputAction and _G.InputAction.VR_RECENTER) or "VR_RECENTER"
+        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onRecenterAction, false, true, false, true)
+        if success and eventId then
+            self.recenterActionEventId = eventId
+            if type(inputBinding.setActionEventTextPriority) == "function" then
+                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
+            end
+            if type(inputBinding.setActionEventActive) == "function" then
+                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventTextVisibility) == "function" then
+                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventText) == "function" then
+                pcall(function()
+                    local txt = (g_i18n and g_i18n:getText("input_VR_RECENTER")) or "Recenter VR View"
+                    inputBinding:setActionEventText(eventId, txt)
+                end)
+            end
+            if not self.recenterLoggedOnce then
+                print("[FS25_VR] Registered in-engine VR_RECENTER event.")
+                self.recenterLoggedOnce = true
+            end
+        end
+    end
 end
 
 function VRCompanion:loadMap(name)
@@ -84,30 +1394,55 @@ function VRCompanion:loadMap(name)
         print("[FS25_VR] Confirmed game setting IS_HEAD_TRACKING_ENABLED is active.")
     end
 
-    -- 4. Hook camera systems for 6DOF tracking
+    -- 4. Hook camera and HUD systems for 6DOF tracking and selective telemetry filtering
     self:hookVehicleCamera()
     self:hookPlayerCamera()
+    self:hookEnterable()
+    self:hookHud()
 
-    -- 5. Register in-engine Recenter Action
-    if g_inputBinding ~= nil and type(g_inputBinding.registerActionEvent) == "function" then
-        local actionId = (InputAction and InputAction.VR_RECENTER) or "VR_RECENTER"
-        local _, eventId = g_inputBinding:registerActionEvent(actionId, self, self.onRecenterAction, false, true, false, true)
-        if eventId and type(g_inputBinding.setActionEventTextPriority) == "function" then
-            g_inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or 1))
-        end
-        print("[FS25_VR] Registered in-engine Recenter Action event (VR_RECENTER).")
-    end
+    -- 5. Register in-engine actions (Recenter and HUD Toggle)
+    self:registerActionEvents(true)
 
     -- 6. Synchronize initial GUI menu visibility state
     self.isMenuVisible = false
     self.guiVisibilityInitialized = false
     self:pollGuiVisibility()
+
+    -- 7. Apply VR HUD Inset anchoring and UI scale foundation
+    self:loadConfiguration()
+    self:applyHudInsets()
+
+    -- 8. Initialize HUD state to Hidden for full VR immersion (Issue #25)
+    self:setHudState(self.HUD_STATE_HIDDEN)
+
+    -- 9. Register developer and tuning console commands
+    if addConsoleCommand ~= nil then
+        addConsoleCommand("vrHudInsets", "Set VR HUD insets: vrHudInsets <insetX> <insetY> [scale] [topInset]", "consoleCommandSetHudInsets", self)
+        addConsoleCommand("vrHudTopInset", "Set VR HUD top inset: vrHudTopInset <topInset>", "consoleCommandSetHudTopInset", self)
+        addConsoleCommand("vrHudInsetTop", "Set VR HUD top inset: vrHudInsetTop <topInset>", "consoleCommandSetHudTopInset", self)
+        addConsoleCommand("vrHudState", "Set VR HUD state: vrHudState <0=Hidden | 1=Streamlined | 2=Full>", "consoleCommandSetHudState", self)
+        addConsoleCommand("vrHudFillUnderVehicle", "Position fill level HUD under vehicle: vrHudFillUnderVehicle <true|false>", "consoleCommandSetHudFillUnderVehicle", self)
+        addConsoleCommand("vrHudFillGap", "Set gap between speedometer and fill level: vrHudFillGap <gap>", "consoleCommandSetHudFillGap", self)
+        addConsoleCommand("vrHudFillLevelGap", "Set gap between speedometer and fill level: vrHudFillLevelGap <gap>", "consoleCommandSetHudFillGap", self)
+        addConsoleCommand("vrHudLoadNotification", "Toggle HUD alert on map load: vrHudLoadNotification <true|false>", "consoleCommandSetHudLoadNotification", self)
+        addConsoleCommand("vrHudLoadAlert", "Toggle HUD alert on map load: vrHudLoadAlert <true|false>", "consoleCommandSetHudLoadNotification", self)
+    end
+
+    if self.showHudLoadNotification == true then
+        local mission = g_currentMission or _G.g_currentMission
+        if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+            pcall(function()
+                mission:showBlinkingWarning("VR HUD: Hidden (Press RCtrl+H to cycle)", 4000)
+            end)
+        end
+    end
 end
 
 function VRCompanion:pollGuiVisibility()
     local isGuiVisible = false
-    if g_gui ~= nil and type(g_gui.getIsGuiVisible) == "function" then
-        local ok, visible = pcall(function() return g_gui:getIsGuiVisible() end)
+    local gui = g_gui or _G.g_gui
+    if gui ~= nil and type(gui.getIsGuiVisible) == "function" then
+        local ok, visible = pcall(function() return gui:getIsGuiVisible() end)
         if ok then
             isGuiVisible = (visible == true)
         end
@@ -119,9 +1454,13 @@ function VRCompanion:pollGuiVisibility()
         self.guiVisibilityInitialized = true
         if wasMenuVisible and not isGuiVisible then
             self:restoreMenuBackgroundCamera()
+            self:applyHudState()
         end
         if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
             VRBridge.setMenuVisible(isGuiVisible)
+        end
+        if VRBridge ~= nil and type(VRBridge.resetTemporalHistory) == "function" then
+            VRBridge.resetTemporalHistory()
         end
         if isGuiVisible then
             print("[FS25_VR] In-game GUI menu opened; switched presentation to 6DOF Quad layer.")
@@ -167,6 +1506,34 @@ function VRCompanion:hookVehicleCamera()
         end
         self.vehicleCameraHooked = true
         print("[FS25_VR] Hooked VehicleCamera.update for 6DOF VR head tracking.")
+    end
+end
+
+function VRCompanion:hookEnterable()
+    if Enterable ~= nil and not self.enterableHooked then
+        if Enterable.onEnterVehicle ~= nil then
+            self.origEnterableOnEnterVehicle = Enterable.onEnterVehicle
+            Enterable.onEnterVehicle = function(veh, isControlling, player)
+                self.origEnterableOnEnterVehicle(veh, isControlling, player)
+                if VRBridge ~= nil and type(VRBridge.resetTemporalHistory) == "function" then
+                    VRBridge.resetTemporalHistory()
+                end
+                self:registerActionEvents(true)
+                self:applyHudState()
+            end
+        end
+        if Enterable.onLeaveVehicle ~= nil then
+            self.origEnterableOnLeaveVehicle = Enterable.onLeaveVehicle
+            Enterable.onLeaveVehicle = function(veh)
+                self.origEnterableOnLeaveVehicle(veh)
+                if VRBridge ~= nil and type(VRBridge.resetTemporalHistory) == "function" then
+                    VRBridge.resetTemporalHistory()
+                end
+                self:registerActionEvents(true)
+                self:applyHudState()
+            end
+        end
+        self.enterableHooked = true
     end
 end
 
@@ -298,25 +1665,27 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex)
 end
 
 function VRCompanion:getFrameParity()
-    if VRBridge ~= nil then
-        if VRBridge.frameParity ~= nil then
-            return VRBridge.frameParity
-        elseif type(VRBridge.getFrameParity) == "function" then
-            return VRBridge.getFrameParity()
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil then
+        if type(bridge.getFrameParity) == "function" then
+            return bridge.getFrameParity()
+        elseif bridge.frameParity ~= nil then
+            return bridge.frameParity
         end
     end
     return 0
 end
 
 function VRCompanion:getIpd()
-    if VRBridge ~= nil then
-        if type(VRBridge.getIpd) == "function" then
-            return VRBridge.getIpd() or 0.064
-        elseif VRBridge.ipd ~= nil then
-            return VRBridge.ipd
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil then
+        if type(bridge.getIpd) == "function" then
+            return bridge.getIpd() or self.DEFAULT_IPD or 0.064
+        elseif bridge.ipd ~= nil then
+            return bridge.ipd
         end
     end
-    return 0.064
+    return self.DEFAULT_IPD or 0.064
 end
 
 local function rotateVectorByQuaternion(qx, qy, qz, qw, vx, vy, vz)
@@ -780,6 +2149,9 @@ function VRCompanion:onRecenterAction()
     if VRBridge ~= nil and type(VRBridge.recenter) == "function" then
         VRBridge.recenter()
     end
+    if VRBridge ~= nil and type(VRBridge.resetTemporalHistory) == "function" then
+        VRBridge.resetTemporalHistory()
+    end
     if self.isMenuVisible then
         print("[FS25_VR] Menu Quad layer realigned directly in front of head pose.")
     end
@@ -816,6 +2188,29 @@ function VRCompanion:update(dt)
     end
     if not self.playerCameraHooked then
         self:hookPlayerCamera()
+    end
+    if not self.enterableHooked then
+        self:hookEnterable()
+    end
+    if not self.hudHooked then
+        self:hookHud()
+    end
+
+    -- Update physical IPD-scaled HUD convergence parity across alternating AFR frames
+    self:updateHudConvergence(dt)
+
+    -- Keep in-engine action events active across context transitions
+    if (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) then
+        self:registerActionEvents(false)
+    end
+
+    -- Check for vehicle transitions (entering/exiting/switching vehicle)
+    local curVehicle = (g_currentMission ~= nil) and g_currentMission.controlledVehicle or nil
+    if self.lastControlledVehicle ~= curVehicle then
+        self.lastControlledVehicle = curVehicle
+        if VRBridge ~= nil and type(VRBridge.resetTemporalHistory) == "function" then
+            VRBridge.resetTemporalHistory()
+        end
     end
 
     if (self.lastReportedVerdict == nil or self.lastReportedVerdict == "Inconclusive") and self.frameTicks < 300 and VRBridge ~= nil and type(VRBridge.getStereoTelemetry) == "function" then
@@ -867,12 +2262,25 @@ function VRCompanion:deleteMap()
         PlayerCamera.update = self.origPlayerCameraUpdate
         self.origPlayerCameraUpdate = nil
     end
+    if self.origEnterableOnEnterVehicle ~= nil and Enterable ~= nil then
+        Enterable.onEnterVehicle = self.origEnterableOnEnterVehicle
+        self.origEnterableOnEnterVehicle = nil
+    end
+    if self.origEnterableOnLeaveVehicle ~= nil and Enterable ~= nil then
+        Enterable.onLeaveVehicle = self.origEnterableOnLeaveVehicle
+        self.origEnterableOnLeaveVehicle = nil
+    end
+
+    -- Unhook HUD display hooks cleanly
+    self:unhookHud()
 
     self.handshakeComplete = false
     self.lastReportedVerdict = nil
     self.frameTicks = 0
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
+    self.enterableHooked = false
+    self.lastControlledVehicle = nil
     self.isMenuVisible = false
     self.guiVisibilityInitialized = false
     self:restoreMenuBackgroundCamera()
@@ -884,6 +2292,19 @@ function VRCompanion:deleteMap()
     if VRBridge ~= nil and type(VRBridge.onMapUnload) == "function" then
         VRBridge.onMapUnload()
     end
+
+    -- Restore HUD state and visibility to standard 2D Full (Issue #25)
+    self:setHudState(self.HUD_STATE_FULL)
+
+    -- Restore HUD insets to 2D defaults
+    self:restoreHudInsets()
+
+    self.currentConvergenceOffset = 0.0
+    self.currentConvergenceDisparity = 0.0
+    self.hudConvergenceDepth = self.DEFAULT_CONVERGENCE_DEPTH
+    self.activeFillLevelsDisplay = nil
+    self.passThroughMode = nil
+    self.headTrackingEnabled = true
 
     -- Restore original camera FOVs and projection offsets
     if self.origCamSettings ~= nil then
@@ -903,6 +2324,198 @@ function VRCompanion:deleteMap()
         end
         self.origCamSettings = {}
     end
+
+    -- Remove console commands
+    if removeConsoleCommand ~= nil then
+        removeConsoleCommand("vrHudInsets")
+        removeConsoleCommand("vrHudState")
+        removeConsoleCommand("vrHudFillUnderVehicle")
+    end
+end
+
+function VRCompanion:keyEvent(unicode, sym, modifier, isDown)
+    if not isDown then return end
+
+    -- Direct hardware shortcut for VR_HUD_TOGGLE (Ctrl + H)
+    local isH = false
+    if Input ~= nil and Input.KEY_h ~= nil then
+        isH = (sym == Input.KEY_h)
+    else
+        isH = (sym == 104 or unicode == 104 or unicode == 72)
+    end
+
+    if isH then
+        local ctrlHeld = false
+        if Input ~= nil and type(Input.isKeyPressed) == "function" then
+            ctrlHeld = (Input.KEY_rctrl ~= nil and Input.isKeyPressed(Input.KEY_rctrl))
+                    or (Input.KEY_lctrl ~= nil and Input.isKeyPressed(Input.KEY_lctrl))
+        end
+        if not ctrlHeld and modifier ~= nil and modifier > 0 then
+            local band = (bit32 and bit32.band) or (bit and bit.band) or function(a, b) return 0 end
+            local ctrlMask = (Input and (Input.MOD_RCTRL or Input.MOD_LCTRL or Input.MOD_CTRL)) or 0
+            if ctrlMask > 0 and band(modifier, ctrlMask) > 0 then
+                ctrlHeld = true
+            elseif modifier == 4 or modifier == 32 or modifier == 64 or modifier == 96 then
+                ctrlHeld = true
+            end
+        end
+        if ctrlHeld then
+            local curTime = g_time
+            if curTime == nil or self.lastHudToggleTime == nil or (curTime - self.lastHudToggleTime) >= 300 then
+                print("[FS25_VR] Hardware keyEvent: Ctrl + H detected -> cycling HUD state.")
+                self:onHudToggleAction()
+            end
+            return
+        end
+    end
+
+    -- Direct hardware shortcut for VR_RECENTER (Numpad 5)
+    local isRecenter = false
+    if Input ~= nil and (Input.KEY_kp_5 ~= nil or Input.KEY_numPad5 ~= nil) then
+        isRecenter = (sym == Input.KEY_kp_5 or sym == Input.KEY_numPad5)
+    else
+        isRecenter = (sym == 261 or unicode == 53)
+    end
+    if isRecenter then
+        print("[FS25_VR] Hardware keyEvent: Numpad 5 detected -> recentering VR view.")
+        self:onRecenterAction()
+        return
+    end
+end
+
+function VRCompanion:consoleCommandSetHudInsets(insetXStr, insetYStr, scaleStr, topInsetStr)
+    local ix = tonumber(insetXStr)
+    local iy = tonumber(insetYStr)
+    local sc = tonumber(scaleStr)
+    local it = tonumber(topInsetStr)
+    if ix == nil or iy == nil then
+        return string.format("Usage: vrHudInsets <insetX> <insetY> [scale] [topInset] (current: insetX=%.2f, insetY=%.2f, topInset=%.2f, scale=%.2f)",
+            self.hudInsetX or self.DEFAULT_HUD_INSET_X,
+            self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
+            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
+            self.hudUiScaleMultiplier or self.DEFAULT_HUD_UI_SCALE)
+    end
+    self:configureHudInsets(ix, iy, sc or self.hudUiScaleMultiplier, it or self.hudInsetTop or iy)
+    self:applyHudInsets()
+    self:saveConfiguration()
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR HUD Insets: X=%.2f, Y=%.2f, Top=%.2f, Scale=%.2fx (Saved)",
+                self.hudInsetX, self.hudInsetY, self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y, self.effectiveUiScale), 2500)
+        end)
+    end
+    return string.format("VR HUD insets updated and saved: Left=%.2f, Right=%.2f, Bottom=%.2f, Top=%.2f, Scale=%.2fx",
+        self.hudAnchorLeft, self.hudAnchorRight, self.hudAnchorBottom, self.hudAnchorTop, self.effectiveUiScale)
+end
+
+function VRCompanion:consoleCommandSetHudTopInset(topInsetStr)
+    local topVal = tonumber(topInsetStr)
+    if topVal == nil then
+        return string.format("Usage: vrHudTopInset <topInset> (0.0 to 0.50, current: %.2f, topAnchor: %.2f)",
+            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
+            self.hudAnchorTop or (1.0 - (self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y)))
+    end
+    local clampedTop = self:clamp(topVal, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
+    self.hudInsetTop = clampedTop
+    self:configureHudInsets(self.hudInsetX, self.hudInsetY, self.hudUiScaleMultiplier, clampedTop)
+    self:applyHudInsets()
+    self:saveConfiguration()
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR HUD Top Inset: %.2f (Top Anchor: %.2f, Saved)",
+                clampedTop, self.hudAnchorTop), 2500)
+        end)
+    end
+    return string.format("VR HUD top inset set to: %.2f (top anchor: %.2f)", clampedTop, self.hudAnchorTop)
+end
+
+function VRCompanion:consoleCommandSetHudState(stateStr)
+    local st = tonumber(stateStr)
+    if st == nil or st < 0 or st > 2 then
+        return "Usage: vrHudState <0=Hidden | 1=Streamlined | 2=Full>"
+    end
+    self:setHudState(st)
+    local stateName = self.HUD_STATE_NAMES[st] or tostring(st)
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR HUD: %s (%d)", stateName, st), 2500)
+        end)
+    end
+    return string.format("VR HUD state set to: %s (%d)", stateName, st)
+end
+
+function VRCompanion:consoleCommandSetHudFillUnderVehicle(enableStr)
+    local enable = nil
+    if enableStr ~= nil then
+        local lower = string.lower(tostring(enableStr))
+        if lower == "true" or lower == "1" or lower == "on" then
+            enable = true
+        elseif lower == "false" or lower == "0" or lower == "off" then
+            enable = false
+        end
+    end
+    if enable == nil then
+        return string.format("Usage: vrHudFillUnderVehicle <true|false> (current: %s)",
+            tostring(self.fillLevelUnderVehicle))
+    end
+    self.fillLevelUnderVehicle = enable
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    local fl = self:getFillLevelsDisplay(hud)
+    if fl ~= nil then
+        self:positionHudDisplay(fl, "FillLevelsDisplay")
+    end
+    self:saveConfiguration()
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR HUD: Fill Level Under Vehicle: %s (Saved)",
+                enable and "Enabled" or "Disabled"), 2500)
+        end)
+    end
+    return string.format("VR HUD fill level under vehicle set to: %s", tostring(enable))
+end
+
+function VRCompanion:consoleCommandSetHudFillGap(gapStr)
+    local gapVal = tonumber(gapStr)
+    if gapVal == nil then
+        return string.format("Usage: vrHudFillGap <gap> (0.0 to 0.05, current: %.4f)",
+            self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP)
+    end
+    self.hudFillLevelGap = self:clamp(gapVal, 0.0, 0.05)
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    local fl = self:getFillLevelsDisplay(hud)
+    if fl ~= nil then
+        self:positionHudDisplay(fl, "FillLevelsDisplay")
+    end
+    self:saveConfiguration()
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR HUD: Fill Level Gap: %.4f (Saved)", self.hudFillLevelGap), 2500)
+        end)
+    end
+    return string.format("VR HUD fill level gap set to: %.4f", self.hudFillLevelGap)
+end
+
+function VRCompanion:consoleCommandSetHudLoadNotification(enabledStr)
+    if enabledStr == nil or enabledStr == "" then
+        return string.format("Usage: vrHudLoadNotification <true|false> (current: %s)", tostring(self.showHudLoadNotification == true))
+    end
+    local lower = string.lower(tostring(enabledStr))
+    local enabled = (lower == "true" or lower == "1" or lower == "on")
+    self.showHudLoadNotification = enabled
+    self:saveConfiguration()
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR HUD: Load Notification: %s (Saved)",
+                enabled and "Enabled" or "Disabled"), 2500)
+        end)
+    end
+    return string.format("VR HUD load notification set to: %s", tostring(enabled))
 end
 
 -- Register as an engine mod event listener if in-game environment

@@ -1574,6 +1574,722 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear)
     )luau", "=testMouseTurn"), 0);
 }
 
+TEST_F(CompanionModTest, DefinesAndCalculatesDefaultAndCustomVRHudInsets) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.20, "DEFAULT_HUD_INSET_X must be 0.20")
+        assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.16, "DEFAULT_HUD_INSET_Y must be 0.16")
+        assert(VRCompanion.DEFAULT_HUD_UI_SCALE == 0.88, "DEFAULT_HUD_UI_SCALE must be 0.88")
+
+        local left, right, bottom, top, scale = VRCompanion:calculateHudAnchors()
+        assert(math.abs(left - 0.20) < 0.0001, "left anchor default must be 0.20")
+        assert(math.abs(right - 0.80) < 0.0001, "right anchor default must be 0.80")
+        assert(math.abs(bottom - 0.16) < 0.0001, "bottom anchor default must be 0.16")
+        assert(math.abs(top - 0.84) < 0.0001, "top anchor default must be 0.84")
+        assert(math.abs(scale - 0.88) < 0.0001, "scale multiplier default must be 0.88")
+
+        local cLeft, cRight, cBottom, cTop, cScale = VRCompanion:calculateHudAnchors(0.12, 0.08, 0.95)
+        assert(math.abs(cLeft - 0.12) < 0.0001, "custom left anchor must be 0.12")
+        assert(math.abs(cRight - 0.88) < 0.0001, "custom right anchor must be 0.88")
+        assert(math.abs(cBottom - 0.08) < 0.0001, "custom bottom anchor must be 0.08")
+        assert(math.abs(cTop - 0.92) < 0.0001, "custom top anchor must be 0.92")
+        assert(math.abs(cScale - 0.95) < 0.0001, "custom scale must be 0.95")
+    )luau", "=verifyCalculations"), 0);
+}
+
+TEST_F(CompanionModTest, ClampsVRHudInsetsAndScaleWithinSafeBoundaries) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local minL, minR, minB, minT, minS = VRCompanion:calculateHudAnchors(-0.5, -0.5, 0.1)
+        assert(math.abs(minL - 0.0) < 0.0001, "negative insetX clamped to 0.0")
+        assert(math.abs(minR - 1.0) < 0.0001, "right anchor clamped to 1.0")
+        assert(math.abs(minB - 0.0) < 0.0001, "negative insetY clamped to 0.0")
+        assert(math.abs(minT - 1.0) < 0.0001, "top anchor clamped to 1.0")
+        assert(math.abs(minS - 0.50) < 0.0001, "scale clamped to min 0.50")
+
+        local maxL, maxR, maxB, maxT, maxS = VRCompanion:calculateHudAnchors(0.9, 0.9, 3.0)
+        assert(math.abs(maxL - 0.40) < 0.0001, "excessive insetX clamped to 0.40")
+        assert(math.abs(maxR - 0.60) < 0.0001, "right anchor clamped to 0.60")
+        assert(math.abs(maxB - 0.35) < 0.0001, "excessive insetY clamped to 0.35")
+        assert(math.abs(maxT - 0.65) < 0.0001, "top anchor clamped to 0.65")
+        assert(math.abs(maxS - 1.50) < 0.0001, "scale clamped to max 1.50")
+    )luau", "=verifyClamping"), 0);
+}
+
+TEST_F(CompanionModTest, ExposesConfigurationWithGracefulFallbackToDefaults) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:configureHudInsets(0.22, 0.14, 0.92)
+        local insets = VRCompanion:getHudInsets()
+        assert(math.abs(insets.left - 0.22) < 0.0001, "insets.left must match")
+        assert(math.abs(insets.right - 0.78) < 0.0001, "insets.right must match")
+        assert(math.abs(insets.bottom - 0.14) < 0.0001, "insets.bottom must match")
+        assert(math.abs(insets.top - 0.86) < 0.0001, "insets.top must match")
+        assert(math.abs(insets.scaleMultiplier - 0.92) < 0.0001, "insets.scaleMultiplier must match")
+
+        -- Graceful fallback on missing/unspecified XML config
+        VRCompanion.hudInsetX = nil
+        VRCompanion.hudInsetY = nil
+        VRCompanion.hudUiScaleMultiplier = nil
+        local fb = VRCompanion:loadConfiguration("missing_file.xml")
+        assert(math.abs(fb.left - 0.20) < 0.0001, "fallback left must be default 0.20")
+        assert(math.abs(fb.right - 0.80) < 0.0001, "fallback right must be default 0.80")
+        assert(math.abs(fb.bottom - 0.16) < 0.0001, "fallback bottom must be default 0.16")
+        assert(math.abs(fb.top - 0.84) < 0.0001, "fallback top must be default 0.84")
+        assert(math.abs(fb.scaleMultiplier - 0.88) < 0.0001, "fallback scale must be default 0.88")
+    )luau", "=verifyConfigApi"), 0);
+}
+
+TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_hudAnchorLeft = 0.0
+        _G.g_hudAnchorRight = 1.0
+        _G.g_hudAnchorBottom = 0.0
+        _G.g_hudAnchorTop = 1.0
+
+        local displays = {
+            speedMeter = { storeScaledValuesCalled = false, setScaleCalled = false, position = nil,
+                storeScaledValues = function(self) self.storeScaledValuesCalled = true end,
+                setScale = function(self, s) self.setScaleCalled = true self.scale = s end,
+                setPosition = function(self, x, y) self.position = { x = x, y = y } end
+            },
+            inputHelp = { storeScaledValuesCalled = false, position = nil,
+                storeScaledValues = function(self) self.storeScaledValuesCalled = true end,
+                setPosition = function(self, x, y) self.position = { x = x, y = y } end
+            },
+            gameInfo = { storeScaledValuesCalled = false, position = nil,
+                storeScaledValues = function(self) self.storeScaledValuesCalled = true end,
+                setPosition = function(self, x, y) self.position = { x = x, y = y } end
+            },
+            contextAction = { storeScaledValuesCalled = false, position = nil,
+                storeScaledValues = function(self) self.storeScaledValuesCalled = true end,
+                setPosition = function(self, x, y) self.position = { x = x, y = y } end
+            },
+            ingameMap = { storeScaledValuesCalled = false, position = nil,
+                storeScaledValues = function(self) self.storeScaledValuesCalled = true end,
+                setPosition = function(self, x, y) self.position = { x = x, y = y } end
+            }
+        }
+        _G.g_currentMission = { hud = displays }
+
+        VRCompanion:configureHudInsets()
+        VRCompanion:loadMap('testMap')
+
+        -- Global anchors contracted
+        assert(math.abs(_G.g_hudAnchorLeft - 0.20) < 0.0001, "g_hudAnchorLeft must be 0.20")
+        assert(math.abs(_G.g_hudAnchorRight - 0.80) < 0.0001, "g_hudAnchorRight must be 0.80")
+        assert(math.abs(_G.g_hudAnchorBottom - 0.16) < 0.0001, "g_hudAnchorBottom must be 0.16")
+        assert(math.abs(_G.g_hudAnchorTop - 0.84) < 0.0001, "g_hudAnchorTop must be 0.84")
+
+        -- UI scale multiplier applied (0.88x)
+        assert(math.abs(VRCompanion.effectiveUiScale - 0.88) < 0.0001, "effectiveUiScale must be 0.88")
+        assert(displays.speedMeter.setScaleCalled == true, "SpeedMeterDisplay.setScale must be called")
+        assert(displays.speedMeter.scale == 0.88, "SpeedMeterDisplay scale must be 0.88")
+
+        -- All standard displays repositioned
+        assert(displays.speedMeter.storeScaledValuesCalled == true, "speedMeter storeScaledValues called")
+        assert(displays.inputHelp.storeScaledValuesCalled == true, "inputHelp storeScaledValues called")
+        assert(displays.gameInfo.storeScaledValuesCalled == true, "gameInfo storeScaledValues called")
+        assert(displays.contextAction.storeScaledValuesCalled == true, "contextAction storeScaledValues called")
+        assert(displays.ingameMap.storeScaledValuesCalled == true, "ingameMap storeScaledValues called")
+
+        -- Display positioning coordinates
+        assert(displays.speedMeter.position.x == 0.80 and displays.speedMeter.position.y == 0.16, "speedMeter bottom-right")
+        assert(displays.inputHelp.position.x == 0.20 and displays.inputHelp.position.y == 0.84, "inputHelp top-left")
+        assert(displays.gameInfo.position.x == 0.80 and displays.gameInfo.position.y == 0.84, "gameInfo top-right")
+        assert(displays.contextAction.position.x == 0.20 and displays.contextAction.position.y == 0.16, "contextAction bottom-left")
+        assert(displays.ingameMap.position.x == 0.20 and displays.ingameMap.position.y == 0.16, "ingameMap bottom-left")
+    )luau", "=verifyDisplaysUponMapLoad"), 0);
+}
+
+TEST_F(CompanionModTest, RestoresStandard2DHudCornerAnchorsOnMapUnload) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_hudAnchorLeft = 0.0
+        _G.g_hudAnchorRight = 1.0
+        _G.g_hudAnchorBottom = 0.0
+        _G.g_hudAnchorTop = 1.0
+        _G.g_currentMission = { hud = {} }
+
+        VRCompanion:loadMap('testMap')
+        assert(math.abs(_G.g_hudAnchorLeft - 0.20) < 0.0001, "g_hudAnchorLeft must be 0.20 when loaded")
+
+        VRCompanion:deleteMap()
+        assert(math.abs(_G.g_hudAnchorLeft - 0.0) < 0.0001, "g_hudAnchorLeft restored to 0.0")
+        assert(math.abs(_G.g_hudAnchorRight - 1.0) < 0.0001, "g_hudAnchorRight restored to 1.0")
+        assert(math.abs(_G.g_hudAnchorBottom - 0.0) < 0.0001, "g_hudAnchorBottom restored to 0.0")
+        assert(math.abs(_G.g_hudAnchorTop - 1.0) < 0.0001, "g_hudAnchorTop restored to 1.0")
+    )luau", "=verifyRestoreOnDeleteMap"), 0);
+}
+
+TEST_F(CompanionModTest, MetadataDescriptorDeclaresHudToggleActionAndBindings) {
+    std::string modDescContent = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
+    ASSERT_FALSE(modDescContent.empty());
+
+    EXPECT_NE(modDescContent.find("<action name=\"VR_HUD_TOGGLE\""), std::string::npos);
+    EXPECT_NE(modDescContent.find("<actionBinding action=\"VR_HUD_TOGGLE\""), std::string::npos);
+    EXPECT_NE(modDescContent.find("<text name=\"input_VR_HUD_TOGGLE\">"), std::string::npos);
+}
+
+TEST_F(CompanionModTest, HudStateMachineDefinesThreeStageStatesAndCyclesCyclically) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.HUD_STATE_HIDDEN == 0, "HUD_STATE_HIDDEN must be 0")
+        assert(VRCompanion.HUD_STATE_STREAMLINED == 1, "HUD_STATE_STREAMLINED must be 1")
+        assert(VRCompanion.HUD_STATE_FULL == 2, "HUD_STATE_FULL must be 2")
+
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+        assert(VRCompanion:getHudState() == 0, "Initial state must be 0")
+
+        -- 0 -> 1
+        local s1 = VRCompanion:cycleHudState()
+        assert(s1 == 1, "0 -> 1")
+        assert(VRCompanion:getHudState() == 1, "State is 1")
+
+        -- 1 -> 2
+        local s2 = VRCompanion:cycleHudState()
+        assert(s2 == 2, "1 -> 2")
+        assert(VRCompanion:getHudState() == 2, "State is 2")
+
+        -- 2 -> 0
+        local s3 = VRCompanion:cycleHudState()
+        assert(s3 == 0, "2 -> 0")
+        assert(VRCompanion:getHudState() == 0, "State is 0")
+
+        -- Clamp check
+        VRCompanion:setHudState(-10)
+        assert(VRCompanion:getHudState() == 0, "Negative clamped to 0")
+        VRCompanion:setHudState(10)
+        assert(VRCompanion:getHudState() == 2, "Overflow clamped to 2")
+
+        -- onHudToggleAction
+        VRCompanion:setHudState(0)
+        assert(VRCompanion:onHudToggleAction("VR_HUD_TOGGLE", 1) == 1, "Action advances to 1")
+    )luau", "=verifyHudStateMachine"), 0);
+}
+
+TEST_F(CompanionModTest, AppliesHudStatesCorrectlyAcrossDisplays) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local hud = {
+            isVisible = true,
+            setIsVisible = function(self, vis) self.isVisible = vis end,
+            speedMeter = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            inputHelp = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            gameInfo = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            contextAction = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            ingameMap = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end }
+        }
+        _G.g_currentMission = { hud = hud }
+
+        -- Hidden (0)
+        VRCompanion:applyHudState(VRCompanion.HUD_STATE_HIDDEN)
+        assert(hud.isVisible == false, "HUD must be hidden in state 0")
+        assert(hud.speedMeter.isVisible == false, "speedMeter must be hidden")
+        assert(hud.gameInfo.isVisible == false, "gameInfo must be hidden")
+
+        -- Streamlined (1)
+        VRCompanion:applyHudState(VRCompanion.HUD_STATE_STREAMLINED)
+        assert(hud.isVisible == true, "HUD must be visible in state 1")
+        assert(hud.speedMeter.isVisible == true, "speedMeter must be visible")
+        assert(hud.contextAction.isVisible == true, "contextAction must be visible")
+        assert(hud.inputHelp.isVisible == false, "inputHelp must be hidden in Streamlined")
+        assert(hud.ingameMap.isVisible == false, "ingameMap must be hidden in Streamlined")
+        assert(hud.gameInfo.isVisible == false, "gameInfo must be hidden in Streamlined")
+
+        -- Full (2)
+        VRCompanion:applyHudState(VRCompanion.HUD_STATE_FULL)
+        assert(hud.isVisible == true, "HUD must be visible in state 2")
+        assert(hud.speedMeter.isVisible == true, "speedMeter visible in Full")
+        assert(hud.inputHelp.isVisible == true, "inputHelp visible in Full")
+        assert(hud.gameInfo.isVisible == true, "gameInfo visible in Full")
+        assert(hud.ingameMap.isVisible == true, "ingameMap visible in Full")
+    )luau", "=verifyApplyHudStates"), 0);
+}
+
+TEST_F(CompanionModTest, IsDisplayVisibleFiltersComponentsAcrossAllThreeStates) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local displays = {
+            "SpeedMeterDisplay",
+            "ContextActionDisplay",
+            "FillLevelsDisplay",
+            "IngameMap",
+            "InputHelpDisplay",
+            "GameInfoDisplay"
+        }
+
+        -- 1. Hidden (0)
+        for _, d in ipairs(displays) do
+            assert(VRCompanion:isDisplayVisible(d, VRCompanion.HUD_STATE_HIDDEN) == false,
+                d .. " must be false in Hidden")
+        end
+
+        -- 2. Streamlined (1)
+        assert(VRCompanion:isDisplayVisible("SpeedMeterDisplay", VRCompanion.HUD_STATE_STREAMLINED) == true, "SpeedMeterDisplay visible")
+        assert(VRCompanion:isDisplayVisible("ContextActionDisplay", VRCompanion.HUD_STATE_STREAMLINED) == true, "ContextActionDisplay visible")
+        assert(VRCompanion:isDisplayVisible("FillLevelsDisplay", VRCompanion.HUD_STATE_STREAMLINED) == true, "FillLevelsDisplay visible")
+
+        assert(VRCompanion:isDisplayVisible("IngameMap", VRCompanion.HUD_STATE_STREAMLINED) == false, "IngameMap suppressed")
+        assert(VRCompanion:isDisplayVisible("InputHelpDisplay", VRCompanion.HUD_STATE_STREAMLINED) == false, "InputHelpDisplay suppressed")
+        assert(VRCompanion:isDisplayVisible("GameInfoDisplay", VRCompanion.HUD_STATE_STREAMLINED) == false, "GameInfoDisplay suppressed")
+
+        -- 3. Full (2)
+        for _, d in ipairs(displays) do
+            assert(VRCompanion:isDisplayVisible(d, VRCompanion.HUD_STATE_FULL) == true,
+                d .. " must be true in Full")
+        end
+
+        -- 4. Omitted state defaults to active state
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
+        assert(VRCompanion:isDisplayVisible("SpeedMeterDisplay") == true)
+        assert(VRCompanion:isDisplayVisible("IngameMap") == false)
+
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+        assert(VRCompanion:isDisplayVisible("SpeedMeterDisplay") == false)
+    )luau", "=verifyIsDisplayVisible"), 0);
+}
+
+TEST_F(CompanionModTest, HooksNativeEngineHudDisplaysAndSuppressesFilteredComponentsOnDraw) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local draws = {
+            HUD = 0,
+            SpeedMeterDisplay = 0,
+            ContextActionDisplay = 0,
+            FillLevelsDisplay = 0,
+            IngameMap = 0,
+            InputHelpDisplay = 0,
+            GameInfoDisplay = 0
+        }
+
+        _G.HUD = {
+            draw = function(self) draws.HUD = draws.HUD + 1 end,
+            setInputHelpVisible = function(self, vis) self.inputHelpVisible = vis end,
+            setIngameMapVisible = function(self, vis) self.ingameMapVisible = vis end
+        }
+        _G.SpeedMeterDisplay = {
+            draw = function(self) draws.SpeedMeterDisplay = draws.SpeedMeterDisplay + 1 end,
+            getIsVisible = function(self) return true end
+        }
+        _G.ContextActionDisplay = {
+            draw = function(self) draws.ContextActionDisplay = draws.ContextActionDisplay + 1 end,
+            getIsVisible = function(self) return true end
+        }
+        _G.FillLevelsDisplay = {
+            draw = function(self) draws.FillLevelsDisplay = draws.FillLevelsDisplay + 1 end,
+            getIsVisible = function(self) return true end
+        }
+        _G.IngameMap = {
+            draw = function(self) draws.IngameMap = draws.IngameMap + 1 end,
+            getIsVisible = function(self) return true end
+        }
+        _G.InputHelpDisplay = {
+            draw = function(self) draws.InputHelpDisplay = draws.InputHelpDisplay + 1 end,
+            getIsVisible = function(self) return true end
+        }
+        _G.GameInfoDisplay = {
+            draw = function(self) draws.GameInfoDisplay = draws.GameInfoDisplay + 1 end,
+            getIsVisible = function(self) return true end
+        }
+
+        VRCompanion:hookHud()
+        assert(VRCompanion.hudHooked == true, "hudHooked must be true")
+
+        -- Streamlined (1)
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
+        draws = { HUD = 0, SpeedMeterDisplay = 0, ContextActionDisplay = 0, FillLevelsDisplay = 0, IngameMap = 0, InputHelpDisplay = 0, GameInfoDisplay = 0 }
+
+        _G.SpeedMeterDisplay:draw()
+        _G.ContextActionDisplay:draw()
+        _G.FillLevelsDisplay:draw()
+        _G.InputHelpDisplay:draw()
+        _G.IngameMap:draw()
+        _G.GameInfoDisplay:draw()
+        _G.HUD:draw()
+
+        assert(draws.SpeedMeterDisplay == 1, "SpeedMeterDisplay:draw must run")
+        assert(draws.ContextActionDisplay == 1, "ContextActionDisplay:draw must run")
+        assert(draws.FillLevelsDisplay == 1, "FillLevelsDisplay:draw must run")
+        assert(draws.InputHelpDisplay == 0, "InputHelpDisplay:draw suppressed")
+        assert(draws.IngameMap == 0, "IngameMap:draw suppressed")
+        assert(draws.GameInfoDisplay == 0, "GameInfoDisplay:draw suppressed")
+        assert(draws.HUD == 1, "HUD:draw runs")
+
+        assert(_G.SpeedMeterDisplay:getIsVisible() == true)
+        assert(_G.InputHelpDisplay:getIsVisible() == false)
+        assert(_G.IngameMap:getIsVisible() == false)
+        assert(_G.GameInfoDisplay:getIsVisible() == false)
+
+        -- Hidden (0)
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+        draws = { HUD = 0, SpeedMeterDisplay = 0, ContextActionDisplay = 0, FillLevelsDisplay = 0, IngameMap = 0, InputHelpDisplay = 0, GameInfoDisplay = 0 }
+
+        _G.SpeedMeterDisplay:draw()
+        _G.ContextActionDisplay:draw()
+        _G.FillLevelsDisplay:draw()
+        _G.InputHelpDisplay:draw()
+        _G.IngameMap:draw()
+        _G.GameInfoDisplay:draw()
+        _G.HUD:draw()
+
+        assert(draws.SpeedMeterDisplay == 0, "SpeedMeter suppressed in Hidden")
+        assert(draws.ContextActionDisplay == 0, "ContextAction suppressed in Hidden")
+        assert(draws.InputHelpDisplay == 0, "InputHelp suppressed in Hidden")
+        assert(draws.IngameMap == 0, "IngameMap suppressed in Hidden")
+        assert(draws.GameInfoDisplay == 0, "GameInfo suppressed in Hidden")
+        assert(draws.HUD == 0, "HUD suppressed in Hidden")
+
+        -- Full (2)
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+        draws = { HUD = 0, SpeedMeterDisplay = 0, ContextActionDisplay = 0, FillLevelsDisplay = 0, IngameMap = 0, InputHelpDisplay = 0, GameInfoDisplay = 0 }
+
+        _G.SpeedMeterDisplay:draw()
+        _G.ContextActionDisplay:draw()
+        _G.FillLevelsDisplay:draw()
+        _G.InputHelpDisplay:draw()
+        _G.IngameMap:draw()
+        _G.GameInfoDisplay:draw()
+        _G.HUD:draw()
+
+        assert(draws.SpeedMeterDisplay == 1, "SpeedMeter draws in Full")
+        assert(draws.InputHelpDisplay == 1, "InputHelp draws in Full")
+        assert(draws.IngameMap == 1, "IngameMap draws in Full")
+        assert(draws.GameInfoDisplay == 1, "GameInfo draws in Full")
+        assert(draws.HUD == 1, "HUD draws in Full")
+
+        VRCompanion:unhookHud()
+        assert(VRCompanion.hudHooked == false)
+    )luau", "=verifyHookHudDisplays"), 0);
+}
+
+TEST_F(CompanionModTest, UnhookHudRestoresOriginalFunctionsCleanly) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local origCalled = false
+        local orig = function(self) origCalled = true end
+        _G.InputHelpDisplay = { draw = orig }
+
+        VRCompanion:hookHud()
+        assert(VRCompanion.hudHooked == true)
+        assert(_G.InputHelpDisplay.draw ~= orig)
+
+        VRCompanion:unhookHud()
+        assert(VRCompanion.hudHooked == false)
+        assert(_G.InputHelpDisplay.draw == orig)
+
+        _G.InputHelpDisplay:draw()
+        assert(origCalled == true)
+    )luau", "=verifyUnhookHud"), 0);
+}
+
+TEST_F(CompanionModTest, LoadMapDefaultsToHiddenAndRegistersHudToggleAction) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredActions = {}
+        _G.g_inputBinding = {
+            registerActionEvent = function(self, actionName, target, callback, triggerUp, triggerDown, triggerAlways, startActive)
+                table.insert(registeredActions, {
+                    actionName = actionName,
+                    target = target,
+                    callback = callback
+                })
+                return true, #registeredActions
+            end,
+            setActionEventTextPriority = function(self, eventId, priority) end
+        }
+
+        local mockHud = {
+            isVisible = true,
+            setIsVisible = function(self, vis) self.isVisible = vis end,
+            speedMeter = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            inputHelp = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            gameInfo = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            contextAction = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            ingameMap = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end }
+        }
+        _G.g_currentMission = { hud = mockHud }
+
+        VRCompanion:loadMap('mapUS')
+        assert(VRCompanion:getHudState() == 0, "Defaults to Hidden (0) on loadMap")
+        assert(mockHud.isVisible == false, "mockHud.isVisible must be false on loadMap")
+        assert(VRCompanion.hudHooked == true, "hudHooked must be true on loadMap")
+
+        local foundToggleAction = false
+        for _, reg in ipairs(registeredActions) do
+            if reg.actionName == "VR_HUD_TOGGLE" then
+                foundToggleAction = true
+            end
+        end
+        assert(foundToggleAction, "VR_HUD_TOGGLE action registered")
+
+        VRCompanion:deleteMap()
+        assert(mockHud.isVisible == true, "mockHud.isVisible restored on deleteMap")
+        assert(VRCompanion.hudHooked == false, "hudHooked restored to false on deleteMap")
+    )luau", "=verifyLoadMapAndLifecycle"), 0);
+}
+
+TEST_F(CompanionModTest, GuiMenuTransitionsPreserveUserSelectedHudState) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local mockHud = {
+            isVisible = true,
+            setIsVisible = function(self, vis) self.isVisible = vis end,
+            speedMeter = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            inputHelp = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            gameInfo = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            contextAction = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end },
+            ingameMap = { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end }
+        }
+        _G.g_currentMission = { hud = mockHud }
+
+        local guiVisible = false
+        _G.g_gui = {
+            getIsGuiVisible = function() return guiVisible end
+        }
+
+        VRCompanion:loadMap('mapUS')
+
+        -- User chooses Streamlined (1)
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
+        assert(mockHud.inputHelp.isVisible == false, "inputHelp hidden")
+
+        -- Enter menu
+        guiVisible = true
+        VRCompanion:update(16)
+        assert(VRCompanion.isMenuVisible == true, "In menu")
+        assert(VRCompanion:getHudState() == 1, "hudState preserved as 1")
+
+        -- Engine GUI pollutes HUD
+        mockHud.inputHelp.isVisible = true
+
+        -- Exit menu
+        guiVisible = false
+        VRCompanion:update(16)
+        assert(VRCompanion.isMenuVisible == false, "Exited menu")
+        assert(VRCompanion:getHudState() == 1, "hudState still 1")
+        assert(mockHud.inputHelp.isVisible == false, "inputHelp re-suppressed by applyHudState")
+
+        VRCompanion:deleteMap()
+    )luau", "=verifyGuiPreservation"), 0);
+}
+
+TEST_F(CompanionModTest, ComputesPhysicalIpdScaledDisparityAtTargetConvergenceDepth) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        -- 1. Default IPD (0.064m) at target depth (~1.8m) yields 0.012 disparity
+        local dNominal = VRCompanion:computeConvergenceDisparity(0.064, 1.8)
+        assert(math.abs(dNominal - 0.012) < 0.0001, "0.064 IPD at 1.8m must yield 0.012")
+
+        -- 2. Safe fallback when IPD is nil, 0, or negative
+        local dNil = VRCompanion:computeConvergenceDisparity(nil, 1.8)
+        assert(math.abs(dNil - 0.012) < 0.0001, "Nil IPD must fall back to 0.012")
+
+        local dZero = VRCompanion:computeConvergenceDisparity(0.0, 1.8)
+        assert(math.abs(dZero - 0.012) < 0.0001, "Zero IPD must fall back to 0.012")
+
+        -- 3. Linear scaling with IPD
+        local d70 = VRCompanion:computeConvergenceDisparity(0.070, 1.8)
+        assert(math.abs(d70 - (0.012 * (0.070 / 0.064))) < 0.0001, "70mm IPD scales linearly")
+
+        local d58 = VRCompanion:computeConvergenceDisparity(0.058, 1.8)
+        assert(math.abs(d58 - (0.012 * (0.058 / 0.064))) < 0.0001, "58mm IPD scales linearly")
+
+        -- 4. Inverse scaling with virtual depth
+        local dNear = VRCompanion:computeConvergenceDisparity(0.064, 0.9)
+        assert(math.abs(dNear - 0.024) < 0.0001, "0.9m depth doubles disparity")
+
+        local dFar = VRCompanion:computeConvergenceDisparity(0.064, 3.6)
+        assert(math.abs(dFar - 0.006) < 0.0001, "3.6m depth halves disparity")
+
+        -- 5. Safe boundary clamping
+        local dClampedMin = VRCompanion:computeConvergenceDisparity(0.010, 1.8)
+        assert(math.abs(dClampedMin - (0.012 * (0.040 / 0.064))) < 0.0001, "Clamped to MIN_IPD 0.040")
+
+        local dClampedMax = VRCompanion:computeConvergenceDisparity(0.150, 1.8)
+        assert(math.abs(dClampedMax - (0.012 * (0.085 / 0.064))) < 0.0001, "Clamped to MAX_IPD 0.085")
+
+        local dClampedNear = VRCompanion:computeConvergenceDisparity(0.085, 0.1)
+        assert(dClampedNear <= VRCompanion.MAX_CONVERGENCE_DISPARITY, "Clamped to MAX_CONVERGENCE_DISPARITY 0.040")
+    )luau", "=verifyIpdConvergenceMath"), 0);
+}
+
+TEST_F(CompanionModTest, AlternatesPositiveDisparityOnLeftParityAndNegativeOnRightParity) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Set simulated IPD on native OpenXR manager: 64mm
+    oxr->SetIpd(0.064f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+        VRCompanion.handshakeComplete = true
+        VRCompanion.passThroughMode = false
+        VRCompanion.headTrackingEnabled = true
+
+        -- Parity 0: Left eye -> positive offset (+0.012)
+        VRBridge.setFrameParity(0)
+        local left0, right0, off0 = VRCompanion:updateHudConvergence()
+        assert(math.abs(off0 - 0.012) < 0.0001, "Parity 0 offset must be +0.012")
+        assert(math.abs(left0 - 0.212) < 0.0001, "Left anchor must be 0.20 + 0.012 = 0.212")
+        assert(math.abs(right0 - 0.812) < 0.0001, "Right anchor must be 0.80 + 0.012 = 0.812")
+        assert(math.abs(_G.g_hudAnchorLeft - 0.212) < 0.0001, "g_hudAnchorLeft must be 0.212")
+        assert(math.abs(_G.g_hudAnchorRight - 0.812) < 0.0001, "g_hudAnchorRight must be 0.812")
+
+        -- Parity 1: Right eye -> negative offset (-0.012)
+        VRBridge.setFrameParity(1)
+        local left1, right1, off1 = VRCompanion:updateHudConvergence()
+        assert(math.abs(off1 - (-0.012)) < 0.0001, "Parity 1 offset must be -0.012")
+        assert(math.abs(left1 - 0.188) < 0.0001, "Left anchor must be 0.20 - 0.012 = 0.188")
+        assert(math.abs(right1 - 0.788) < 0.0001, "Right anchor must be 0.80 - 0.012 = 0.788")
+        assert(math.abs(_G.g_hudAnchorLeft - 0.188) < 0.0001, "g_hudAnchorLeft must be 0.188")
+        assert(math.abs(_G.g_hudAnchorRight - 0.788) < 0.0001, "g_hudAnchorRight must be 0.788")
+    )luau", "=verifyParityDirectionality"), 0);
+}
+
+TEST_F(CompanionModTest, UpdatesConvergenceEveryFrameWithoutCoordinateDriftAcrossTenThousandCycles) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    oxr->SetIpd(0.064f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+        VRCompanion.handshakeComplete = true
+        VRCompanion.passThroughMode = false
+        VRCompanion.headTrackingEnabled = true
+
+        -- Run 10,000 frames toggling parity
+        for f = 1, 10000 do
+            VRBridge.setFrameParity(f % 2)
+            VRCompanion:update(16)
+        end
+
+        -- Verify base anchors have zero drift (< 1e-7)
+        assert(math.abs(VRCompanion.hudAnchorLeftBase - 0.20) < 0.0000001, "Zero drift on left base anchor")
+        assert(math.abs(VRCompanion.hudAnchorRightBase - 0.80) < 0.0000001, "Zero drift on right base anchor")
+
+        -- Final frame parity was 10000 % 2 == 0 (parity 0)
+        assert(math.abs(VRCompanion.hudAnchorLeft - 0.212) < 0.0000001, "Left anchor matches exact mathematical disparity")
+        assert(math.abs(VRCompanion.hudAnchorRight - 0.812) < 0.0000001, "Right anchor matches exact mathematical disparity")
+    )luau", "=verifyTenThousandCyclesZeroDrift"), 0);
+}
+
+TEST_F(CompanionModTest, RevertsConvergenceOffsetSmoothlyToZeroInPassThroughOrDisabledTracking) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    oxr->SetIpd(0.064f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+        VRCompanion.handshakeComplete = true
+        VRCompanion.passThroughMode = false
+        VRCompanion.headTrackingEnabled = true
+
+        -- 1. Initialize active disparity
+        VRBridge.setFrameParity(0)
+        VRCompanion:updateHudConvergence()
+        assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.012) < 0.0001)
+
+        -- 2. Activate Pass-Through mode -> smooth reversion to zero
+        VRCompanion:setPassThroughMode(true)
+        assert(VRCompanion:isPassThroughMode() == true)
+
+        -- Frame 1: decay starts smoothly
+        VRBridge.setFrameParity(1)
+        VRCompanion:update(16)
+        local d1 = VRCompanion.currentConvergenceDisparity
+        assert(d1 < 0.012 and d1 > 0.0, "Smooth decay on frame 1")
+
+        -- Complete decay to zero
+        for f = 1, 35 do
+            VRBridge.setFrameParity(f % 2)
+            VRCompanion:update(16)
+        end
+        assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.0) < 0.0001, "Disparity smoothly reaches 0 in Pass-Through")
+        assert(math.abs(VRCompanion.currentConvergenceOffset - 0.0) < 0.0001, "Offset reaches 0 in Pass-Through")
+        assert(math.abs(VRCompanion.hudAnchorLeft - 0.20) < 0.0001, "Left anchor at base 0.20 in Pass-Through")
+
+        -- 3. Deactivate Pass-Through mode -> smooth recovery
+        VRCompanion:setPassThroughMode(false)
+        for f = 1, 35 do
+            VRBridge.setFrameParity(f % 2)
+            VRCompanion:update(16)
+        end
+        assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.012) < 0.0001, "Disparity smoothly recovers to 0.012")
+
+        -- 4. Disable head tracking -> smooth reversion to zero
+        VRCompanion:setHeadTrackingEnabled(false)
+        assert(VRCompanion:isHeadTrackingActive() == false)
+        for f = 1, 35 do
+            VRBridge.setFrameParity(f % 2)
+            VRCompanion:update(16)
+        end
+        assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.0) < 0.0001, "Disparity smoothly reaches 0 when tracking disabled")
+        assert(math.abs(VRCompanion.currentConvergenceOffset - 0.0) < 0.0001, "Offset reaches 0 when tracking disabled")
+    )luau", "=verifySmoothReversion"), 0);
+}
+
+
+
+
+
 
 
 

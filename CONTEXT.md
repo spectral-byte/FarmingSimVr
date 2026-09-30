@@ -31,3 +31,20 @@ _Avoid_: Bypass mode, fallback state
 **Recenter Action**:
 The bindable in-engine input action that zeroes the player's 6DOF offset and resets the OpenXR reference space origin relative to the vehicle cockpit or player camera.
 _Avoid_: Reset view, camera zeroing
+
+**VR HUD Inset**:
+The normalized viewport margin applied to engine HUD anchors (`g_hudAnchor*`) that contracts 2D interface elements inward from screen edges into the optical sweet spot of the VR headset.
+_Avoid_: UI padding, screen margin, HUD border
+
+**HUD Convergence Offset**:
+The alternating horizontal screen-space displacement applied across Alternate Frame Rendering (AFR) frames to render 2D interface elements at a comfortable stereoscopic depth.
+_Avoid_: 3D HUD shift, eye disparity offset, stereo HUD hack
+
+**HUD Toggle Action**:
+The bindable in-engine input action that toggles or pulses the visibility of the in-game HUD between hidden and visible states.
+_Avoid_: Show HUD button, HUD keybind, UI switch
+
+**Streamlined HUD**:
+The decluttered VR presentation mode that preserves essential driving and machine telemetry while suppressing bulky secondary panels (such as the minimap and input help).
+_Avoid_: Mini HUD, compact UI, lite HUD
+
