@@ -283,6 +283,8 @@ void OpenXrManager::Shutdown() {
     m_hasCustomMenuQuadSize = false;
     m_menuQuadDistance = 1.5f;
     m_lastSubmittedQuadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
+    m_lastPolledTime = 0;
+    m_lastLocatedViewsTime = 0;
     m_device = nullptr;
     m_queue = nullptr;
 }
@@ -440,6 +442,10 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
             }
         }
 
+        if (time != 0 && time == m_lastPolledTime && m_lastPose.isValid) {
+            return m_lastPose;
+        }
+
         if (m_baseLocalSpace != XR_NULL_HANDLE) {
             XrSpaceLocation baseLocation{XR_TYPE_SPACE_LOCATION};
             XrResult resBase = m_dispatch->LocateSpace(m_viewSpace, m_baseLocalSpace, time, &baseLocation);
@@ -482,6 +488,7 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
             m_rawPose = m_lastPose;
         }
 
+        m_lastPolledTime = time;
         return m_lastPose;
     }
 
@@ -560,6 +567,7 @@ void OpenXrManager::Recenter() {
     m_recenterOffset.position = recenterPos;
     m_recenterOffset.yaw = recenterYaw;
     m_hasRecenter = true;
+    m_lastPolledTime = 0;
     AlignMenuQuadToHeadPose();
     LogInfo("OpenXrManager: Head pose recentered.");
 }
@@ -645,6 +653,10 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
         }
     }
 
+    if (time != 0 && time == m_lastLocatedViewsTime && m_eyeProjections[0].isValid) {
+        return true;
+    }
+
     XrViewLocateInfo locateInfo{XR_TYPE_VIEW_LOCATE_INFO};
     locateInfo.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
     locateInfo.displayTime = time;
@@ -675,6 +687,7 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
                << " (View1 pos: " << views[1].pose.position.x << ", " << views[1].pose.position.y << ", " << views[1].pose.position.z << ")";
             LogInfo(ss.str());
         }
+        m_lastLocatedViewsTime = time;
         return true;
     }
     return false;

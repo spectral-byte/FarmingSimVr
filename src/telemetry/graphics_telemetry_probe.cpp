@@ -106,11 +106,15 @@ void GraphicsTelemetryProbe::SetCompletionCallback(std::function<void()> callbac
 }
 
 void GraphicsTelemetryProbe::OnFrameBoundary() {
+    if (m_isComplete.load(std::memory_order_acquire)) {
+        return;
+    }
+
     std::function<void()> onCompleteCb;
     {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
 
-        if (m_isComplete) {
+        if (m_isComplete.load(std::memory_order_relaxed)) {
             return;
         }
 

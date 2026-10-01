@@ -6,6 +6,7 @@
 #include <mutex>
 #include <cstdint>
 #include <functional>
+#include <atomic>
 
 namespace fs25vr {
 
@@ -102,7 +103,7 @@ private:
     std::vector<FrameTelemetry> m_history;
     uint32_t m_maxConcurrentViewportsObserved = 0;
     StereoVerdict m_verdict = StereoVerdict::Inconclusive;
-    bool m_isComplete = false;
+    std::atomic<bool> m_isComplete{false};
     uint32_t m_maxProbeFrames = 5;
     std::function<void()> m_completionCallback;
 };

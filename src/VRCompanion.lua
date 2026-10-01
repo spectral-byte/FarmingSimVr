@@ -504,7 +504,7 @@ function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
     -- Determine single fill level row height
     local flHeight = nil
     if type(display.getHeight) == "function" then
-        local ok, h = pcall(function() return display:getHeight() end)
+        local ok, h = pcall(display.getHeight, display)
         if ok and type(h) == "number" and h > 0 then flHeight = h end
     end
     if flHeight == nil and display.height ~= nil and type(display.height) == "number" and display.height > 0 then
@@ -523,7 +523,7 @@ function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
     -- Determine total fill level display width
     local flWidth = nil
     if type(display.getWidth) == "function" then
-        local ok, w = pcall(function() return display:getWidth() end)
+        local ok, w = pcall(display.getWidth, display)
         if ok and type(w) == "number" and w > 0 then flWidth = w end
     end
     if flWidth == nil and display.width ~= nil and type(display.width) == "number" and display.width > 0 then
@@ -542,7 +542,7 @@ function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
     if display.fillLevelData ~= nil and type(display.fillLevelData) == "table" and #display.fillLevelData > 0 then
         numLevels = #display.fillLevelData
     elseif display.vehicle ~= nil and type(display.vehicle.getFillUnits) == "function" then
-        local ok, units = pcall(function() return display.vehicle:getFillUnits() end)
+        local ok, units = pcall(display.vehicle.getFillUnits, display.vehicle)
         if ok and type(units) == "table" and #units > 0 then
             numLevels = math.max(1, #units)
         end
@@ -588,58 +588,58 @@ function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
     if display.vrUiScale ~= uiScale then
         display.vrUiScale = uiScale
         if type(display.setScale) == "function" then
-            pcall(function() display:setScale(uiScale) end)
+            pcall(display.setScale, display, uiScale)
         end
     end
 
     if type(display.setPosition) == "function" then
-        pcall(function() display:setPosition(flPosX, fillBottom) end)
+        pcall(display.setPosition, display, flPosX, fillBottom)
     end
     if type(display.storeOriginalPosition) == "function" then
-        pcall(function() display:storeOriginalPosition() end)
+        pcall(display.storeOriginalPosition, display)
     end
     if type(display.reposition) == "function" then
-        pcall(function() display:reposition() end)
+        pcall(display.reposition, display)
     end
     if type(display.updatePosition) == "function" then
-        pcall(function() display:updatePosition() end)
+        pcall(display.updatePosition, display)
     end
 
     -- Explicitly position background parts and progress bar so they are placed at (flPosX, fillBottom)
     if display.bgLeft ~= nil and type(display.bgLeft.setPosition) == "function" then
-        pcall(function() display.bgLeft:setPosition(flPosX, fillBottom) end)
+        pcall(display.bgLeft.setPosition, display.bgLeft, flPosX, fillBottom)
     end
     local bgScaleX = flPosX + (display.bgLeft and display.bgLeft.width or 0)
     if display.bgScale ~= nil and type(display.bgScale.setPosition) == "function" then
-        pcall(function() display.bgScale:setPosition(bgScaleX, fillBottom) end)
+        pcall(display.bgScale.setPosition, display.bgScale, bgScaleX, fillBottom)
     end
     local bgRightX = bgScaleX + (display.bgScale and display.bgScale.width or 0)
     if display.bgRight ~= nil and type(display.bgRight.setPosition) == "function" then
-        pcall(function() display.bgRight:setPosition(bgRightX, fillBottom) end)
+        pcall(display.bgRight.setPosition, display.bgRight, bgRightX, fillBottom)
     end
     if display.bar ~= nil and type(display.bar.setPosition) == "function" then
         local barX = flPosX + (display.barOffsetX or (display.bgLeft and display.bgLeft.width or 0))
         local barY = fillBottom + (display.barOffsetY or 0)
-        pcall(function() display.bar:setPosition(barX, barY) end)
+        pcall(display.bar.setPosition, display.bar, barX, barY)
     end
     if display.maxWeightIcon ~= nil and type(display.maxWeightIcon.setPosition) == "function" then
         local mwX = flPosX + (display.maxWeightIconOffsetX or 0)
         local mwY = fillBottom + (display.maxWeightIconOffsetY or 0)
-        pcall(function() display.maxWeightIcon:setPosition(mwX, mwY) end)
+        pcall(display.maxWeightIcon.setPosition, display.maxWeightIcon, mwX, mwY)
     end
     if type(display.fillTypeIcons) == "table" then
         for _, icon in pairs(display.fillTypeIcons) do
             if icon ~= nil and type(icon.setPosition) == "function" then
                 local icX = flPosX + (display.fillTypeIconOffsetX or 0)
                 local icY = fillBottom + (display.fillTypeIconOffsetY or 0)
-                pcall(function() icon:setPosition(icX, icY) end)
+                pcall(icon.setPosition, icon, icX, icY)
             end
         end
     end
 
     -- If sm was lifted to accommodate fill levels at small insets, ensure sm is at targetSmBottom
     if sm ~= nil and targetSmBottom ~= baseBottom and type(sm.setPosition) == "function" then
-        pcall(function() sm:setPosition(shiftedRight, targetSmBottom) end)
+        pcall(sm.setPosition, sm, shiftedRight, targetSmBottom)
     end
 
     return flPosX, fillBottom, targetSmBottom
@@ -731,23 +731,23 @@ function VRCompanion:updateHudConvergence(dt)
         end
 
         if sm ~= nil and type(sm.setPosition) == "function" then
-            pcall(function() sm:setPosition(shiftedRight, targetSmBottom) end)
+            pcall(sm.setPosition, sm, shiftedRight, targetSmBottom)
         end
         local ih = hud.inputHelp or hud.inputHelpDisplay
         if ih ~= nil and type(ih.setPosition) == "function" then
-            pcall(function() ih:setPosition(shiftedLeft, baseTop) end)
+            pcall(ih.setPosition, ih, shiftedLeft, baseTop)
         end
         local gi = hud.gameInfo or hud.gameInfoDisplay
         if gi ~= nil and type(gi.setPosition) == "function" then
-            pcall(function() gi:setPosition(shiftedRight, baseTop) end)
+            pcall(gi.setPosition, gi, shiftedRight, baseTop)
         end
         local ca = hud.contextAction or hud.contextActionDisplay
         if ca ~= nil and type(ca.setPosition) == "function" then
-            pcall(function() ca:setPosition(0.5 + offset, baseBottom) end)
+            pcall(ca.setPosition, ca, 0.5 + offset, baseBottom)
         end
         local im = hud.ingameMap or hud.ingameMapDisplay
         if im ~= nil and type(im.setPosition) == "function" then
-            pcall(function() im:setPosition(shiftedLeft, baseBottom) end)
+            pcall(im.setPosition, im, shiftedLeft, baseBottom)
         end
     end
 
@@ -1867,7 +1867,7 @@ function VRCompanion:pollGuiVisibility()
     local isGuiVisible = false
     local gui = g_gui or _G.g_gui
     if gui ~= nil and type(gui.getIsGuiVisible) == "function" then
-        local ok, visible = pcall(function() return gui:getIsGuiVisible() end)
+        local ok, visible = pcall(gui.getIsGuiVisible, gui)
         if ok then
             isGuiVisible = (visible == true)
         end

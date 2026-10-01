@@ -291,6 +291,8 @@ private:
     XrFrameState m_frameState{XR_TYPE_FRAME_STATE};
     XrTime m_lastPredictedDisplayTime = 0;
     int64_t m_lastPredictedQpc = 0;
+    XrTime m_lastPolledTime = 0;
+    XrTime m_lastLocatedViewsTime = 0;
 
     HeadPose m_rawPose;
     HeadPose m_lastPose;

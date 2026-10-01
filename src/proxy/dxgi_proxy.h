@@ -139,11 +139,15 @@ private:
     bool m_wasInQuadMode = false;
     bool m_windowSubclassed = false;
     bool m_inSizeMove = false;
+    bool m_windowClampDirty = true;
     int m_lastEnforcedWidth = 0;
     int m_lastEnforcedHeight = 0;
     HMONITOR m_lastMonitor = nullptr;
     uint32_t m_targetRenderWidth = 0;
     uint32_t m_targetRenderHeight = 0;
+
+    IDXGISwapChain* m_cachedSwapChain = nullptr;
+    Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;
 };
 
 } // namespace fs25vr

@@ -305,11 +305,14 @@ void DxgiProxy::DetachAll() {
     m_swapChainAttached = false;
     m_factoryAttached = false;
     m_inSizeMove = false;
+    m_windowClampDirty = true;
     m_lastEnforcedWidth = 0;
     m_lastEnforcedHeight = 0;
     m_lastMonitor = nullptr;
     m_targetRenderWidth = 0;
     m_targetRenderHeight = 0;
+    m_cachedSwapChain = nullptr;
+    m_cachedSwapChain3.Reset();
 }
 
 void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT /*flags*/) {
@@ -325,7 +328,7 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
             SetGameHwnd(desc.OutputWindow);
         }
     }
-    if (m_gameHwnd) {
+    if (m_gameHwnd && m_windowClampDirty) {
         EnforceClampedMirrorWindowDimensions(m_gameHwnd);
     }
 
@@ -371,9 +374,13 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
         }
 
         UINT bufferIndex = 0;
-        Microsoft::WRL::ComPtr<IDXGISwapChain3> swapChain3;
-        if (SUCCEEDED(swapChain->QueryInterface(IID_PPV_ARGS(&swapChain3)))) {
-            bufferIndex = swapChain3->GetCurrentBackBufferIndex();
+        if (!m_cachedSwapChain3 || m_cachedSwapChain != swapChain) {
+            m_cachedSwapChain = swapChain;
+            m_cachedSwapChain3.Reset();
+            swapChain->QueryInterface(IID_PPV_ARGS(&m_cachedSwapChain3));
+        }
+        if (m_cachedSwapChain3) {
+            bufferIndex = m_cachedSwapChain3->GetCurrentBackBufferIndex();
         }
 
         if (SUCCEEDED(swapChain->GetBuffer(bufferIndex, IID_PPV_ARGS(&backBuffer)))) {
@@ -412,7 +419,9 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
                 }
             }
             m_wasInQuadMode = false;
-            m_openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
+            if (m_openXrManager->GetMenuCursorState().visible) {
+                m_openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
+            }
             bool isNativeStereo = m_telemetryProbe && m_telemetryProbe->HasNativeStereoDetected();
             if (isNativeStereo) {
                 // In native stereo mode, both eye views are rendered simultaneously in the current backbuffer pass.
@@ -477,6 +486,11 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers(
     IDXGISwapChain* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags) {
     DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    if (proxy) {
+        proxy->m_cachedSwapChain = nullptr;
+        proxy->m_cachedSwapChain3.Reset();
+        proxy->m_windowClampDirty = true;
+    }
     UINT effectiveWidth = Width;
     UINT effectiveHeight = Height;
     if (proxy && proxy->IsActive() && proxy->m_targetRenderWidth > 0 && proxy->m_targetRenderHeight > 0) {
@@ -499,6 +513,11 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers1(
     IDXGISwapChain3* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags,
     const UINT* pCreationNodeMask, IUnknown* const* ppPresentQueue) {
     DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    if (proxy) {
+        proxy->m_cachedSwapChain = nullptr;
+        proxy->m_cachedSwapChain3.Reset();
+        proxy->m_windowClampDirty = true;
+    }
     UINT effectiveWidth = Width;
     UINT effectiveHeight = Height;
     if (proxy && proxy->IsActive() && proxy->m_targetRenderWidth > 0 && proxy->m_targetRenderHeight > 0) {
@@ -794,6 +813,7 @@ bool DxgiProxy::ApplyInitialWindowClamp(HWND hWnd) {
 
 void DxgiProxy::EnforceClampedMirrorWindowDimensions(HWND hWnd) {
     if (!IsActive() || m_inSizeMove) return;
+    m_windowClampDirty = false;
 
     hWnd = GetRootWindow(hWnd);
     if (!hWnd) return;
@@ -852,6 +872,7 @@ LRESULT CALLBACK DxgiProxy::MirrorWindowSubclassProc(
         case WM_EXITSIZEMOVE: {
             if (proxy) {
                 proxy->m_inSizeMove = false;
+                proxy->m_windowClampDirty = true;
             }
             break;
         }
@@ -910,7 +931,16 @@ LRESULT CALLBACK DxgiProxy::MirrorWindowSubclassProc(
             }
             return DefSubclassProc(hWnd, uMsg, wParam, lParam);
         }
+        case WM_DISPLAYCHANGE: {
+            if (proxy) {
+                proxy->m_windowClampDirty = true;
+            }
+            return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        }
         case WM_WINDOWPOSCHANGED: {
+            if (proxy) {
+                proxy->m_windowClampDirty = true;
+            }
             LRESULT lres = DefSubclassProc(hWnd, uMsg, wParam, lParam);
             if (proxy && proxy->IsActive() && proxy->m_targetRenderWidth > 0 && proxy->m_targetRenderHeight > 0) {
                 auto* wp = reinterpret_cast<WINDOWPOS*>(lParam);
