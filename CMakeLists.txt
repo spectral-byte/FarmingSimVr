@@ -90,6 +90,7 @@ target_link_libraries(dxgi PRIVATE
     openxr_loader
     Luau.VM
     d3d12.lib
+    comctl32.lib
 )
 
 target_compile_definitions(dxgi PRIVATE
@@ -120,6 +121,7 @@ target_link_libraries(fs25_vr_tests PRIVATE
     Luau.Compiler
     dxgi.lib
     d3d12.lib
+    comctl32.lib
 )
 
 target_compile_definitions(fs25_vr_tests PRIVATE

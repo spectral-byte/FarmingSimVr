@@ -60,4 +60,13 @@ _Avoid_: 2D toggle, screen switch, VR off button, flat toggle
 The presentation state where in-engine 3D gameplay is rendered monoscopically to the backbuffer and presented on a 6DOF floating quad layer in front of the player.
 _Avoid_: Theater mode, flat mode, cinema view, 2D mode
 
+**Desktop Mirror Window**:
+The Win32 desktop window displaying a scaled presentation of the game backbuffer while the player is in VR.
+_Avoid_: Companion window, flat window, monitor mirror, game screen
+
+**Resolution Decoupling**:
+The operational state where the in-engine Direct3D 12 swapchain rendering resolution is decoupled from the physical Win32 Desktop Mirror Window dimensions.
+_Avoid_: Resolution override, window scaling hack, virtual resolution
+
+
 

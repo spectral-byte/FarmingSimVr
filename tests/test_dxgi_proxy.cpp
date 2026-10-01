@@ -1448,6 +1448,1012 @@ TEST(DxgiProxyTest, OnPresentSubmitsCursorQuadWhenCursorShowing) {
     EXPECT_FLOAT_EQ(cursorQuad.size.width, MenuCursorState::kDefaultCursorSize);
 }
 
+TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_Standard16x9Displays) {
+    // 1080p borderless
+    RECT work1080{ 0, 0, 1920, 1080 };
+    RECT res1080 = DxgiProxy::ComputeClampedMirrorWindowRect(work1080, WS_POPUP, 0, false);
+    EXPECT_EQ(res1080.left, 0);
+    EXPECT_EQ(res1080.top, 0);
+    EXPECT_EQ(res1080.right, 1920);
+    EXPECT_EQ(res1080.bottom, 1080);
+
+    // 1440p borderless
+    RECT work1440{ 0, 0, 2560, 1440 };
+    RECT res1440 = DxgiProxy::ComputeClampedMirrorWindowRect(work1440, WS_POPUP, 0, false);
+    EXPECT_EQ(res1440.left, 0);
+    EXPECT_EQ(res1440.top, 0);
+    EXPECT_EQ(res1440.right, 2560);
+    EXPECT_EQ(res1440.bottom, 1440);
+
+    // 4K borderless
+    RECT work4k{ 0, 0, 3840, 2160 };
+    RECT res4k = DxgiProxy::ComputeClampedMirrorWindowRect(work4k, WS_POPUP, 0, false);
+    EXPECT_EQ(res4k.left, 0);
+    EXPECT_EQ(res4k.top, 0);
+    EXPECT_EQ(res4k.right, 3840);
+    EXPECT_EQ(res4k.bottom, 2160);
+
+    // 720p borderless
+    RECT work720{ 0, 0, 1280, 720 };
+    RECT res720 = DxgiProxy::ComputeClampedMirrorWindowRect(work720, WS_POPUP, 0, false);
+    EXPECT_EQ(res720.left, 0);
+    EXPECT_EQ(res720.top, 0);
+    EXPECT_EQ(res720.right, 1280);
+    EXPECT_EQ(res720.bottom, 720);
+}
+
+TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_WindowedStylesPreserveBordersAndFitWorkArea) {
+    RECT frameRect{ 0, 0, 0, 0 };
+    AdjustWindowRectEx(&frameRect, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    int frameW = frameRect.right - frameRect.left;
+    int frameH = frameRect.bottom - frameRect.top;
+
+    std::vector<RECT> workAreas = {
+        { 0, 0, 1920, 1040 }, // 1080p display with 40px taskbar
+        { 0, 0, 2560, 1400 }, // 1440p display with 40px taskbar
+        { 0, 0, 3840, 2100 }  // 4K display with 60px taskbar
+    };
+
+    for (const auto& workArea : workAreas) {
+        RECT res = DxgiProxy::ComputeClampedMirrorWindowRect(workArea, WS_OVERLAPPEDWINDOW, 0, false);
+        int workW = workArea.right - workArea.left;
+        int workH = workArea.bottom - workArea.top;
+        int outerW = res.right - res.left;
+        int outerH = res.bottom - res.top;
+
+        // Outer window must fit strictly within monitor work area
+        EXPECT_GE(res.left, workArea.left);
+        EXPECT_GE(res.top, workArea.top);
+        EXPECT_LE(res.right, workArea.right);
+        EXPECT_LE(res.bottom, workArea.bottom);
+        EXPECT_LE(outerW, workW);
+        EXPECT_LE(outerH, workH);
+
+        // Window must be centered within workArea
+        EXPECT_EQ(res.left, workArea.left + (workW - outerW) / 2);
+        EXPECT_EQ(res.top, workArea.top + (workH - outerH) / 2);
+
+        // Client area must strictly maintain 16:9 aspect ratio
+        int clientW = outerW - frameW;
+        int clientH = outerH - frameH;
+        EXPECT_GT(clientW, 0);
+        EXPECT_GT(clientH, 0);
+        EXPECT_LE(std::abs(clientW - (clientH * 16) / 9), 1);
+    }
+}
+
+TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_UltrawideAndSuperUltrawideDisplays) {
+    // 21:9 2560x1080 borderless
+    RECT work2560x1080{ 0, 0, 2560, 1080 };
+    RECT res2560 = DxgiProxy::ComputeClampedMirrorWindowRect(work2560x1080, WS_POPUP, 0, false);
+    EXPECT_EQ(res2560.left, 320);
+    EXPECT_EQ(res2560.top, 0);
+    EXPECT_EQ(res2560.right, 2240);
+    EXPECT_EQ(res2560.bottom, 1080);
+    EXPECT_EQ(res2560.right - res2560.left, 1920);
+    EXPECT_EQ(res2560.bottom - res2560.top, 1080);
+
+    // 21:9 3440x1440 borderless
+    RECT work3440x1440{ 0, 0, 3440, 1440 };
+    RECT res3440 = DxgiProxy::ComputeClampedMirrorWindowRect(work3440x1440, WS_POPUP, 0, false);
+    EXPECT_EQ(res3440.left, 440);
+    EXPECT_EQ(res3440.top, 0);
+    EXPECT_EQ(res3440.right, 3000);
+    EXPECT_EQ(res3440.bottom, 1440);
+    EXPECT_EQ(res3440.right - res3440.left, 2560);
+    EXPECT_EQ(res3440.bottom - res3440.top, 1440);
+
+    // 32:9 5120x1440 super-ultrawide borderless
+    RECT work5120x1440{ 0, 0, 5120, 1440 };
+    RECT res5120 = DxgiProxy::ComputeClampedMirrorWindowRect(work5120x1440, WS_POPUP, 0, false);
+    EXPECT_EQ(res5120.left, 1280);
+    EXPECT_EQ(res5120.top, 0);
+    EXPECT_EQ(res5120.right, 3840);
+    EXPECT_EQ(res5120.bottom, 1440);
+    EXPECT_EQ(res5120.right - res5120.left, 2560);
+    EXPECT_EQ(res5120.bottom - res5120.top, 1440);
+}
+
+TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_PortraitAndTallDisplays) {
+    // 9:16 1080x1920 borderless
+    RECT work1080x1920{ 0, 0, 1080, 1920 };
+    RECT res1080 = DxgiProxy::ComputeClampedMirrorWindowRect(work1080x1920, WS_POPUP, 0, false);
+    EXPECT_EQ(res1080.left, 0);
+    EXPECT_EQ(res1080.right, 1080);
+    int expectedH1080 = (1080 * 9) / 16; // 607
+    EXPECT_EQ(res1080.bottom - res1080.top, expectedH1080);
+    EXPECT_EQ(res1080.top, (1920 - expectedH1080) / 2);
+    EXPECT_EQ(res1080.bottom, res1080.top + expectedH1080);
+
+    // 9:16 1440x2560 borderless
+    RECT work1440x2560{ 0, 0, 1440, 2560 };
+    RECT res1440 = DxgiProxy::ComputeClampedMirrorWindowRect(work1440x2560, WS_POPUP, 0, false);
+    EXPECT_EQ(res1440.left, 0);
+    EXPECT_EQ(res1440.right, 1440);
+    int expectedH1440 = (1440 * 9) / 16; // 810
+    EXPECT_EQ(res1440.bottom - res1440.top, expectedH1440);
+    EXPECT_EQ(res1440.top, (2560 - expectedH1440) / 2);
+    EXPECT_EQ(res1440.bottom, res1440.top + expectedH1440);
+
+    // Windowed portrait display with borders
+    RECT frameRect{ 0, 0, 0, 0 };
+    AdjustWindowRectEx(&frameRect, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    int frameW = frameRect.right - frameRect.left;
+    int frameH = frameRect.bottom - frameRect.top;
+
+    RECT workPortraitWindowed{ 0, 0, 1080, 1880 };
+    RECT resWindowed = DxgiProxy::ComputeClampedMirrorWindowRect(workPortraitWindowed, WS_OVERLAPPEDWINDOW, 0, false);
+    int outerW = resWindowed.right - resWindowed.left;
+    int outerH = resWindowed.bottom - resWindowed.top;
+
+    EXPECT_GE(resWindowed.left, 0);
+    EXPECT_GE(resWindowed.top, 0);
+    EXPECT_LE(resWindowed.right, 1080);
+    EXPECT_LE(resWindowed.bottom, 1880);
+
+    EXPECT_EQ(resWindowed.left, (1080 - outerW) / 2);
+    EXPECT_EQ(resWindowed.top, (1880 - outerH) / 2);
+
+    int clientW = outerW - frameW;
+    int clientH = outerH - frameH;
+    EXPECT_EQ(clientW, 1080 - frameW);
+    EXPECT_LE(std::abs(clientH - (clientW * 9) / 16), 1);
+}
+
+TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_MultiMonitorOffsetOrigins) {
+    // Secondary 1080p monitor positioned to the right of primary
+    RECT workRight{ 1920, 0, 3840, 1080 };
+    RECT resRight = DxgiProxy::ComputeClampedMirrorWindowRect(workRight, WS_POPUP, 0, false);
+    EXPECT_EQ(resRight.left, 1920);
+    EXPECT_EQ(resRight.top, 0);
+    EXPECT_EQ(resRight.right, 3840);
+    EXPECT_EQ(resRight.bottom, 1080);
+
+    // Secondary 1440p monitor positioned to the left and shifted down
+    RECT workLeft{ -2560, 100, 0, 1540 };
+    RECT resLeft = DxgiProxy::ComputeClampedMirrorWindowRect(workLeft, WS_POPUP, 0, false);
+    EXPECT_EQ(resLeft.left, -2560);
+    EXPECT_EQ(resLeft.top, 100);
+    EXPECT_EQ(resLeft.right, 0);
+    EXPECT_EQ(resLeft.bottom, 1540);
+
+    // Secondary ultrawide 21:9 monitor on negative coordinates
+    RECT workLeftUltrawide{ -3440, 0, 0, 1440 };
+    RECT resLeftUW = DxgiProxy::ComputeClampedMirrorWindowRect(workLeftUltrawide, WS_POPUP, 0, false);
+    EXPECT_EQ(resLeftUW.left, -3000);
+    EXPECT_EQ(resLeftUW.right, -440);
+    EXPECT_EQ(resLeftUW.top, 0);
+    EXPECT_EQ(resLeftUW.bottom, 1440);
+    EXPECT_EQ(resLeftUW.right - resLeftUW.left, 2560);
+    EXPECT_EQ(resLeftUW.bottom - resLeftUW.top, 1440);
+}
+
+TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_DegenerateAndHwndOverload) {
+    // Zero or inverted work area
+    RECT zeroWork{ 100, 100, 100, 100 };
+    RECT resZero = DxgiProxy::ComputeClampedMirrorWindowRect(zeroWork, WS_POPUP, 0, false);
+    EXPECT_EQ(resZero.left, 100);
+    EXPECT_EQ(resZero.right, 100);
+
+    RECT invertedWork{ 200, 200, 100, 100 };
+    RECT resInverted = DxgiProxy::ComputeClampedMirrorWindowRect(invertedWork, WS_POPUP, 0, false);
+    EXPECT_EQ(resInverted.left, 200);
+    EXPECT_EQ(resInverted.right, 100);
+
+    // Work area smaller than non-client frame borders
+    RECT tinyWork{ 0, 0, 10, 10 };
+    RECT resTiny = DxgiProxy::ComputeClampedMirrorWindowRect(tinyWork, WS_OVERLAPPEDWINDOW, 0, false);
+    EXPECT_EQ(resTiny.left, 0);
+    EXPECT_EQ(resTiny.top, 0);
+    EXPECT_EQ(resTiny.right, 10);
+    EXPECT_EQ(resTiny.bottom, 10);
+
+    // HWND overload: null and invalid handles return zero RECT
+    RECT nullRes = DxgiProxy::ComputeClampedMirrorWindowRect(static_cast<HWND>(nullptr));
+    EXPECT_EQ(nullRes.left, 0);
+    EXPECT_EQ(nullRes.top, 0);
+    EXPECT_EQ(nullRes.right, 0);
+    EXPECT_EQ(nullRes.bottom, 0);
+
+    HWND invalidHwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(0xDEADBEEF));
+    RECT invalidRes = DxgiProxy::ComputeClampedMirrorWindowRect(invalidHwnd);
+    EXPECT_EQ(invalidRes.left, 0);
+    EXPECT_EQ(invalidRes.top, 0);
+    EXPECT_EQ(invalidRes.right, 0);
+    EXPECT_EQ(invalidRes.bottom, 0);
+
+    // HWND overload: real window
+    HWND testWnd = CreateWindowA("STATIC", "ClampedMirrorTest", WS_OVERLAPPEDWINDOW, 50, 50, 4000, 3000, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    HMONITOR hMon = MonitorFromWindow(testWnd, MONITOR_DEFAULTTONEAREST);
+    ASSERT_TRUE(hMon != nullptr);
+    MONITORINFO mi{ sizeof(MONITORINFO) };
+    ASSERT_TRUE(GetMonitorInfo(hMon, &mi));
+
+    RECT hwndRes = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+    int outerW = hwndRes.right - hwndRes.left;
+    int outerH = hwndRes.bottom - hwndRes.top;
+    int workW = mi.rcWork.right - mi.rcWork.left;
+    int workH = mi.rcWork.bottom - mi.rcWork.top;
+
+    EXPECT_LE(outerW, workW);
+    EXPECT_LE(outerH, workH);
+    EXPECT_GE(hwndRes.left, mi.rcWork.left);
+    EXPECT_GE(hwndRes.top, mi.rcWork.top);
+    EXPECT_LE(hwndRes.right, mi.rcWork.right);
+    EXPECT_LE(hwndRes.bottom, mi.rcWork.bottom);
+
+    DestroyWindow(testWnd);
+}
+
+TEST(DxgiProxyTest, WindowSubclassAttachesInActiveVrModeAndRemainsInertInPassThrough) {
+    HWND testWnd = CreateWindowA("STATIC", "SubclassTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 4000, 3000, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    // 1. Pass-Through Mode: must remain completely inert
+    {
+        auto mockFailingDispatch = std::make_shared<MockFailingOpenXrDispatch>();
+        auto ptOpenXrManager = std::make_shared<OpenXrManager>(mockFailingDispatch);
+        ASSERT_TRUE(ptOpenXrManager->Initialize());
+        EXPECT_TRUE(ptOpenXrManager->IsPassThrough());
+        EXPECT_FALSE(ptOpenXrManager->IsActive());
+
+        DxgiProxy ptProxy(nullptr, ptOpenXrManager);
+        ptProxy.SetGameHwnd(testWnd);
+
+        EXPECT_FALSE(ptProxy.IsWindowSubclassed());
+        EXPECT_FALSE(ptProxy.AttachWindowSubclass(testWnd));
+    }
+
+    // 2. Active VR Mode: attaches subclass cleanly
+    {
+        auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+        auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+        ASSERT_TRUE(activeOpenXrManager->Initialize());
+        ASSERT_TRUE(activeOpenXrManager->CreateSession());
+        EXPECT_TRUE(activeOpenXrManager->IsActive());
+
+        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+        activeProxy.SetGameHwnd(testWnd);
+
+        EXPECT_TRUE(activeProxy.IsWindowSubclassed());
+        EXPECT_EQ(activeProxy.GetGameHwnd(), testWnd);
+
+        activeProxy.DetachAll();
+        EXPECT_FALSE(activeProxy.IsWindowSubclassed());
+    }
+
+    DestroyWindow(testWnd);
+}
+
+TEST(DxgiProxyTest, SubclassInterceptsWindowPosChangingAndClampsDimensions) {
+    HWND testWnd = CreateWindowA("STATIC", "PosChangingTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 4000, 3000, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(activeOpenXrManager->Initialize());
+    ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+    activeProxy.SetGameHwnd(testWnd);
+    ASSERT_TRUE(activeProxy.IsWindowSubclassed());
+
+    RECT expectedClamped = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+    int maxW = expectedClamped.right - expectedClamped.left;
+    int maxH = expectedClamped.bottom - expectedClamped.top;
+    ASSERT_GT(maxW, 0);
+    ASSERT_GT(maxH, 0);
+
+    // 1. Requested dimensions exceed calculated bounds (e.g. 5000x4000 or 4K on 1440p)
+    WINDOWPOS wpOversized{};
+    wpOversized.hwnd = testWnd;
+    wpOversized.x = 250;
+    wpOversized.y = 350;
+    wpOversized.cx = 5000;
+    wpOversized.cy = 4000;
+    wpOversized.flags = 0;
+    SendMessage(testWnd, WM_WINDOWPOSCHANGING, 0, reinterpret_cast<LPARAM>(&wpOversized));
+
+    EXPECT_EQ(wpOversized.cx, maxW);
+    EXPECT_EQ(wpOversized.cy, maxH);
+    EXPECT_EQ(wpOversized.x, 250); // Preserves user movement coordinates
+    EXPECT_EQ(wpOversized.y, 350);
+
+    // 2. Requested dimensions smaller than bounds are preserved
+    WINDOWPOS wpSmall{};
+    wpSmall.hwnd = testWnd;
+    wpSmall.cx = maxW / 2;
+    wpSmall.cy = maxH / 2;
+    wpSmall.flags = 0;
+    SendMessage(testWnd, WM_WINDOWPOSCHANGING, 0, reinterpret_cast<LPARAM>(&wpSmall));
+
+    EXPECT_EQ(wpSmall.cx, maxW / 2);
+    EXPECT_EQ(wpSmall.cy, maxH / 2);
+
+    // 3. Messages with SWP_NOSIZE do not alter cx or cy
+    WINDOWPOS wpNoSize{};
+    wpNoSize.hwnd = testWnd;
+    wpNoSize.cx = 9999;
+    wpNoSize.cy = 9999;
+    wpNoSize.flags = SWP_NOSIZE;
+    SendMessage(testWnd, WM_WINDOWPOSCHANGING, 0, reinterpret_cast<LPARAM>(&wpNoSize));
+
+    EXPECT_EQ(wpNoSize.cx, 9999);
+    EXPECT_EQ(wpNoSize.cy, 9999);
+
+    DestroyWindow(testWnd);
+}
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndAppliesInitialPrePresentationClamp) {
+    HWND testWnd = CreateWindowA("STATIC", "InitialClampTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 4000, 3000, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    // 1. Active VR Mode: applies pre-presentation clamp immediately
+    {
+        auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+        auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+        ASSERT_TRUE(activeOpenXrManager->Initialize());
+        ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+
+        RECT expectedClamped = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+        int expectedW = expectedClamped.right - expectedClamped.left;
+        int expectedH = expectedClamped.bottom - expectedClamped.top;
+
+        DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, testWnd, nullptr, nullptr, nullptr, nullptr);
+
+        EXPECT_TRUE(activeProxy.IsWindowSubclassed());
+        EXPECT_EQ(activeProxy.GetGameHwnd(), testWnd);
+
+        RECT currentRect{};
+        GetWindowRect(testWnd, &currentRect);
+        EXPECT_EQ(currentRect.right - currentRect.left, expectedW);
+        EXPECT_EQ(currentRect.bottom - currentRect.top, expectedH);
+        EXPECT_EQ(currentRect.left, expectedClamped.left);
+        EXPECT_EQ(currentRect.top, expectedClamped.top);
+    }
+    DestroyWindow(testWnd);
+
+    // 2. Pass-Through Mode: remains inert, leaving window at initial size
+    HWND ptWnd = CreateWindowA("STATIC", "PassThroughClampTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 800, 600, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(ptWnd != nullptr);
+    {
+        RECT origRect{};
+        GetWindowRect(ptWnd, &origRect);
+
+        auto mockFailingDispatch = std::make_shared<MockFailingOpenXrDispatch>();
+        auto ptOpenXrManager = std::make_shared<OpenXrManager>(mockFailingDispatch);
+        ASSERT_TRUE(ptOpenXrManager->Initialize());
+        EXPECT_TRUE(ptOpenXrManager->IsPassThrough());
+
+        DxgiProxy ptProxy(nullptr, ptOpenXrManager);
+
+        DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, ptWnd, nullptr, nullptr, nullptr, nullptr);
+
+        EXPECT_FALSE(ptProxy.IsWindowSubclassed());
+
+        RECT ptRect{};
+        GetWindowRect(ptWnd, &ptRect);
+        EXPECT_EQ(ptRect.right - ptRect.left, origRect.right - origRect.left);
+        EXPECT_EQ(ptRect.bottom - ptRect.top, origRect.bottom - origRect.top);
+        EXPECT_EQ(ptRect.left, origRect.left);
+        EXPECT_EQ(ptRect.top, origRect.top);
+    }
+    DestroyWindow(ptWnd);
+}
+
+TEST(DxgiProxyTest, SubclassLifecycleTeardownOnNcDestroyAndDetachAll) {
+    // 1. WM_NCDESTROY automatically detaches subclass
+    HWND testWnd1 = CreateWindowA("STATIC", "NcDestroyTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 1000, 800, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd1 != nullptr);
+    {
+        auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+        auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+        ASSERT_TRUE(activeOpenXrManager->Initialize());
+        ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+        activeProxy.SetGameHwnd(testWnd1);
+        EXPECT_TRUE(activeProxy.IsWindowSubclassed());
+
+        DestroyWindow(testWnd1);
+        EXPECT_FALSE(activeProxy.IsWindowSubclassed());
+        EXPECT_EQ(activeProxy.GetGameHwnd(), nullptr);
+    }
+
+    // 2. DetachAll cleanly unhooks subclass before window destruction
+    HWND testWnd2 = CreateWindowA("STATIC", "DetachAllTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 1000, 800, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd2 != nullptr);
+    {
+        auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+        auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+        ASSERT_TRUE(activeOpenXrManager->Initialize());
+        ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+        activeProxy.SetGameHwnd(testWnd2);
+        EXPECT_TRUE(activeProxy.IsWindowSubclassed());
+
+        activeProxy.DetachAll();
+        EXPECT_FALSE(activeProxy.IsWindowSubclassed());
+
+        DestroyWindow(testWnd2);
+    }
+}
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiveVrMode) {
+    // 1. Active VR Mode: mutates pDesc->Scaling to DXGI_SCALING_STRETCH
+    {
+        auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+        auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+        ASSERT_TRUE(activeOpenXrManager->Initialize());
+        ASSERT_TRUE(activeOpenXrManager->CreateSession());
+        EXPECT_TRUE(activeOpenXrManager->IsActive());
+
+        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+
+        DXGI_SWAP_CHAIN_DESC1 desc{};
+        desc.Width = 3840;
+        desc.Height = 2160;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.Scaling = DXGI_SCALING_NONE;
+
+        DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
+        fullscreenDesc.Windowed = FALSE;
+
+        DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, &desc, &fullscreenDesc, nullptr, nullptr);
+
+        EXPECT_EQ(desc.Scaling, DXGI_SCALING_STRETCH);
+        EXPECT_TRUE(fullscreenDesc.Windowed == TRUE);
+    }
+
+    // 2. Pass-Through Mode: leaves pDesc->Scaling unchanged
+    {
+        auto mockFailingDispatch = std::make_shared<MockFailingOpenXrDispatch>();
+        auto ptOpenXrManager = std::make_shared<OpenXrManager>(mockFailingDispatch);
+        ASSERT_TRUE(ptOpenXrManager->Initialize());
+        EXPECT_TRUE(ptOpenXrManager->IsPassThrough());
+        EXPECT_FALSE(ptOpenXrManager->IsActive());
+
+        DxgiProxy ptProxy(nullptr, ptOpenXrManager);
+
+        DXGI_SWAP_CHAIN_DESC1 desc{};
+        desc.Width = 1920;
+        desc.Height = 1080;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.Scaling = DXGI_SCALING_NONE;
+
+        DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, &desc, nullptr, nullptr, nullptr);
+
+        EXPECT_EQ(desc.Scaling, DXGI_SCALING_NONE);
+    }
+
+    // 3. Null pDesc handled gracefully
+    {
+        auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+        auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+        ASSERT_TRUE(activeOpenXrManager->Initialize());
+        ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+        EXPECT_NO_THROW(DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr));
+    }
+}
+
+TEST(DxgiProxyTest, ClampedWindowRestoresFullNormalizedMouseRangeAcrossEdges) {
+    HWND testWnd = CreateWindowA("STATIC", "ClampedMouseTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 3840, 2160, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(activeOpenXrManager->Initialize());
+    ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+
+    // Initial clamp applies and subclasses the window to fit the monitor work area
+    EXPECT_TRUE(activeProxy.ApplyInitialWindowClamp(testWnd));
+    activeProxy.SetGameHwnd(testWnd);
+    EXPECT_TRUE(activeProxy.IsWindowSubclassed());
+
+    RECT clientRect{};
+    ASSERT_TRUE(GetClientRect(testWnd, &clientRect));
+    int clientWidth = clientRect.right - clientRect.left;
+    int clientHeight = clientRect.bottom - clientRect.top;
+    ASSERT_GT(clientWidth, 0);
+    ASSERT_GT(clientHeight, 0);
+
+    // Convert client corner points to screen coordinates
+    POINT topLeft{ 0, 0 };
+    POINT topRight{ clientWidth, 0 };
+    POINT bottomLeft{ 0, clientHeight };
+    POINT bottomRight{ clientWidth, clientHeight };
+    POINT centerPoint{ clientWidth / 2, clientHeight / 2 };
+
+    ASSERT_TRUE(ClientToScreen(testWnd, &topLeft));
+    ASSERT_TRUE(ClientToScreen(testWnd, &topRight));
+    ASSERT_TRUE(ClientToScreen(testWnd, &bottomLeft));
+    ASSERT_TRUE(ClientToScreen(testWnd, &bottomRight));
+    ASSERT_TRUE(ClientToScreen(testWnd, &centerPoint));
+
+    // Verify that the clamped Desktop Mirror Window client corners lie within the active monitor work area
+    HMONITOR hMonitor = MonitorFromWindow(testWnd, MONITOR_DEFAULTTONEAREST);
+    ASSERT_TRUE(hMonitor != nullptr);
+    MONITORINFO monitorInfo{ sizeof(MONITORINFO) };
+    ASSERT_TRUE(GetMonitorInfo(hMonitor, &monitorInfo));
+    EXPECT_GE(topLeft.x, monitorInfo.rcWork.left);
+    EXPECT_GE(topLeft.y, monitorInfo.rcWork.top);
+    EXPECT_LE(bottomRight.x, monitorInfo.rcWork.right);
+    EXPECT_LE(bottomRight.y, monitorInfo.rcWork.bottom);
+
+    // Map screen points to normalized client coordinates
+    float normX = 0.0f, normY = 0.0f;
+
+    // Top-Left corner maps to (0.0, 0.0)
+    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, topLeft, normX, normY));
+    EXPECT_FLOAT_EQ(normX, 0.0f);
+    EXPECT_FLOAT_EQ(normY, 0.0f);
+
+    // Top-Right corner maps to (1.0, 0.0)
+    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, topRight, normX, normY));
+    EXPECT_FLOAT_EQ(normX, 1.0f);
+    EXPECT_FLOAT_EQ(normY, 0.0f);
+
+    // Bottom-Left corner maps to (0.0, 1.0)
+    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, bottomLeft, normX, normY));
+    EXPECT_FLOAT_EQ(normX, 0.0f);
+    EXPECT_FLOAT_EQ(normY, 1.0f);
+
+    // Bottom-Right corner maps to (1.0, 1.0)
+    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, bottomRight, normX, normY));
+    EXPECT_FLOAT_EQ(normX, 1.0f);
+    EXPECT_FLOAT_EQ(normY, 1.0f);
+
+    // Center maps to (0.5, 0.5)
+    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, centerPoint, normX, normY));
+    EXPECT_NEAR(normX, 0.5f, 0.005f);
+    EXPECT_NEAR(normY, 0.5f, 0.005f);
+
+    // Contrast with the 66% clipping issue on an unclamped window:
+    // If the window were unclamped at 3840x2160 on a 2560x1440 display,
+    // the OS clamps GetCursorPos to monitor boundaries (max screen X = 2560, max screen Y = 1440).
+    int unclampedW = 3840;
+    int unclampedH = 2160;
+    float unclampedMaxNormX = 2560.0f / static_cast<float>(unclampedW);
+    float unclampedMaxNormY = 1440.0f / static_cast<float>(unclampedH);
+    EXPECT_NEAR(unclampedMaxNormX, 0.6667f, 0.001f);
+    EXPECT_NEAR(unclampedMaxNormY, 0.6667f, 0.001f);
+    // With resolution decoupling and Desktop Mirror Window clamping, the full [0.0, 1.0] range is restored.
+
+    DestroyWindow(testWnd);
+}
+
+TEST(DxgiProxyTest, NormalizedMouseCoordinatesReachAbsoluteMenuQuadBoundariesInVr) {
+    // Menu quad centered in front of user
+    XrPosef menuQuadPose{};
+    menuQuadPose.position = { 0.0f, 0.0f, -1.2f };
+    menuQuadPose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    XrExtent2Df menuQuadSize{ 1.6f, 0.9f }; // 16:9 aspect ratio
+    float cursorSize = 0.04f;
+
+    // 1. Clamped Desktop Mirror Window provides full [0.0, 1.0] normalized coordinate range
+    float minNormX = 0.0f, maxNormX = 1.0f;
+    float minNormY = 0.0f, maxNormY = 1.0f;
+
+    // Top-Left corner: (0.0, 0.0) -> absolute top-left quad boundary
+    XrPosef poseTopLeft = OpenXrManager::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, minNormX, minNormY, cursorSize, cursorSize);
+    float tipTopLeftX = poseTopLeft.position.x - 0.5f * cursorSize;
+    float tipTopLeftY = poseTopLeft.position.y + 0.5f * cursorSize;
+    EXPECT_NEAR(tipTopLeftX, -menuQuadSize.width / 2.0f, 1e-4f);
+    EXPECT_NEAR(tipTopLeftY, menuQuadSize.height / 2.0f, 1e-4f);
+
+    // Top-Right corner: (1.0, 0.0) -> absolute top-right quad boundary
+    XrPosef poseTopRight = OpenXrManager::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, maxNormX, minNormY, cursorSize, cursorSize);
+    float tipTopRightX = poseTopRight.position.x - 0.5f * cursorSize;
+    float tipTopRightY = poseTopRight.position.y + 0.5f * cursorSize;
+    EXPECT_NEAR(tipTopRightX, menuQuadSize.width / 2.0f, 1e-4f);
+    EXPECT_NEAR(tipTopRightY, menuQuadSize.height / 2.0f, 1e-4f);
+
+    // Bottom-Left corner: (0.0, 1.0) -> absolute bottom-left quad boundary
+    XrPosef poseBottomLeft = OpenXrManager::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, minNormX, maxNormY, cursorSize, cursorSize);
+    float tipBottomLeftX = poseBottomLeft.position.x - 0.5f * cursorSize;
+    float tipBottomLeftY = poseBottomLeft.position.y + 0.5f * cursorSize;
+    EXPECT_NEAR(tipBottomLeftX, -menuQuadSize.width / 2.0f, 1e-4f);
+    EXPECT_NEAR(tipBottomLeftY, -menuQuadSize.height / 2.0f, 1e-4f);
+
+    // Bottom-Right corner: (1.0, 1.0) -> absolute bottom-right quad boundary
+    XrPosef poseBottomRight = OpenXrManager::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, maxNormX, maxNormY, cursorSize, cursorSize);
+    float tipBottomRightX = poseBottomRight.position.x - 0.5f * cursorSize;
+    float tipBottomRightY = poseBottomRight.position.y + 0.5f * cursorSize;
+    EXPECT_NEAR(tipBottomRightX, menuQuadSize.width / 2.0f, 1e-4f);
+    EXPECT_NEAR(tipBottomRightY, -menuQuadSize.height / 2.0f, 1e-4f);
+
+    // Total span reaches 100% of menu quad dimensions
+    EXPECT_NEAR(tipTopRightX - tipTopLeftX, menuQuadSize.width, 1e-4f);
+    EXPECT_NEAR(tipTopLeftY - tipBottomLeftY, menuQuadSize.height, 1e-4f);
+
+    // 2. Contrast with the 66% clipping issue before resolution decoupling:
+    // Without resolution decoupling, normalized cursor coords were clipped at ~0.6667
+    float clippedNormX = 2560.0f / 3840.0f; // ~0.6667
+    float clippedNormY = 1440.0f / 2160.0f; // ~0.6667
+    XrPosef poseClipped = OpenXrManager::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, clippedNormX, clippedNormY, cursorSize, cursorSize);
+    float tipClippedX = poseClipped.position.x - 0.5f * cursorSize;
+    float tipClippedY = poseClipped.position.y + 0.5f * cursorSize;
+
+    // Rightmost reach was only ~0.267m instead of 0.800m (width/2)
+    EXPECT_LT(tipClippedX, menuQuadSize.width / 4.0f);
+    // Bottommost reach was only ~-0.150m instead of -0.450m (-height/2)
+    EXPECT_GT(tipClippedY, -menuQuadSize.height / 4.0f);
+}
+
+TEST(DxgiProxyTest, OnPresentEnforcesClampedMirrorWindowDimensionsWhenOversized) {
+    HWND testWnd = CreateWindowA("STATIC", "OnPresentClampWnd", WS_OVERLAPPEDWINDOW, 50, 50, 5000, 4000, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(activeOpenXrManager->Initialize());
+    ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+    activeProxy.SetGameHwnd(testWnd);
+
+    // Initial state: window was deliberately set oversized (e.g. 5000x4000) at (80, 90)
+    SetWindowPos(testWnd, nullptr, 80, 90, 5000, 4000, SWP_NOZORDER | SWP_NOACTIVATE);
+
+    RECT expectedClamped = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+    int maxW = expectedClamped.right - expectedClamped.left;
+    int maxH = expectedClamped.bottom - expectedClamped.top;
+
+    // Simulate frame present
+    activeProxy.OnPresent(nullptr, 0, 0);
+
+    RECT curRect{};
+    GetWindowRect(testWnd, &curRect);
+    EXPECT_EQ(curRect.right - curRect.left, maxW);
+    EXPECT_EQ(curRect.bottom - curRect.top, maxH);
+    // SWP_NOMOVE ensures window placement is preserved so user can drag/move freely
+    EXPECT_EQ(curRect.left, 80);
+    EXPECT_EQ(curRect.top, 90);
+
+    // User moves the window to (200, 250); subsequent frames must preserve new position
+    SetWindowPos(testWnd, nullptr, 200, 250, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    activeProxy.OnPresent(nullptr, 0, 0);
+
+    GetWindowRect(testWnd, &curRect);
+    EXPECT_EQ(curRect.left, 200);
+    EXPECT_EQ(curRect.top, 250);
+    EXPECT_EQ(curRect.right - curRect.left, maxW);
+    EXPECT_EQ(curRect.bottom - curRect.top, maxH);
+
+    activeProxy.DetachAll();
+    DestroyWindow(testWnd);
+}
+
+TEST(DxgiProxyTest, SubclassHandlesGetMinMaxInfoAndCapsDimensions) {
+    HWND testWnd = CreateWindowA("STATIC", "MinMaxInfoWnd", WS_OVERLAPPEDWINDOW, 50, 50, 1000, 800, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(activeOpenXrManager->Initialize());
+    ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+    activeProxy.AttachWindowSubclass(testWnd);
+
+    RECT expectedClamped = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+    int maxW = expectedClamped.right - expectedClamped.left;
+    int maxH = expectedClamped.bottom - expectedClamped.top;
+
+    MINMAXINFO mmi{};
+    mmi.ptMinTrackSize = { 4000, 3000 };
+    mmi.ptMaxTrackSize = { 10000, 10000 };
+    mmi.ptMaxSize = { 10000, 10000 };
+
+    SendMessageA(testWnd, WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM>(&mmi));
+
+    EXPECT_EQ(mmi.ptMinTrackSize.x, maxW);
+    EXPECT_EQ(mmi.ptMinTrackSize.y, maxH);
+    EXPECT_EQ(mmi.ptMaxTrackSize.x, maxW);
+    EXPECT_EQ(mmi.ptMaxTrackSize.y, maxH);
+    EXPECT_EQ(mmi.ptMaxSize.x, maxW);
+    EXPECT_EQ(mmi.ptMaxSize.y, maxH);
+
+    activeProxy.DetachAll();
+    DestroyWindow(testWnd);
+}
+
+TEST(DxgiProxyTest, SubclassSuppressesEnforcementDuringModalMoveAndSize) {
+    HWND testWnd = CreateWindowA("STATIC", "SizeMoveWnd", WS_OVERLAPPEDWINDOW, 50, 50, 5000, 4000, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(activeOpenXrManager->Initialize());
+    ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+    activeProxy.SetGameHwnd(testWnd);
+
+    // Initial state: not in size/move
+    EXPECT_FALSE(activeProxy.IsInSizeMove());
+
+    // Initial clamp
+    activeProxy.OnPresent(nullptr, 0, 0);
+
+    // User starts dragging/moving window (WM_ENTERSIZEMOVE)
+    SendMessageA(testWnd, WM_ENTERSIZEMOVE, 0, 0);
+    EXPECT_TRUE(activeProxy.IsInSizeMove());
+
+    // OnPresent returns immediately during modal move/size and does not alter window
+    activeProxy.OnPresent(nullptr, 0, 0);
+    EXPECT_TRUE(activeProxy.IsInSizeMove());
+
+    // User finishes dragging/moving window (WM_EXITSIZEMOVE)
+    SendMessageA(testWnd, WM_EXITSIZEMOVE, 0, 0);
+    EXPECT_FALSE(activeProxy.IsInSizeMove());
+
+    // Next frame present enforces clamping cleanly
+    activeProxy.OnPresent(nullptr, 0, 0);
+    RECT postDragRect{};
+    GetWindowRect(testWnd, &postDragRect);
+    RECT expectedClamped = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+    int maxW = expectedClamped.right - expectedClamped.left;
+    int maxH = expectedClamped.bottom - expectedClamped.top;
+    EXPECT_EQ(postDragRect.right - postDragRect.left, maxW);
+    EXPECT_EQ(postDragRect.bottom - postDragRect.top, maxH);
+
+    activeProxy.DetachAll();
+    EXPECT_FALSE(activeProxy.IsInSizeMove());
+    DestroyWindow(testWnd);
+}
+
+namespace {
+
+struct TestSubclassObserverState {
+    int lastWidth = 0;
+    int lastHeight = 0;
+    int lastMouseX = 0;
+    int lastMouseY = 0;
+    int wmSizeCount = 0;
+};
+
+LRESULT CALLBACK TestSubclassObserverProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR dwRefData) {
+    auto* obs = reinterpret_cast<TestSubclassObserverState*>(dwRefData);
+    if (obs) {
+        if (uMsg == WM_SIZE) {
+            obs->lastWidth = LOWORD(lParam);
+            obs->lastHeight = HIWORD(lParam);
+            obs->wmSizeCount++;
+        } else if (uMsg == WM_MOUSEMOVE || uMsg == WM_LBUTTONDOWN) {
+            obs->lastMouseX = static_cast<short>(LOWORD(lParam));
+            obs->lastMouseY = static_cast<short>(HIWORD(lParam));
+        }
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+static UINT s_lastResizeBuffersWidth = 0;
+static UINT s_lastResizeBuffersHeight = 0;
+
+HRESULT STDMETHODCALLTYPE MockResizeBuffersImpl(IDXGISwapChain*, UINT, UINT Width, UINT Height, DXGI_FORMAT, UINT) {
+    s_lastResizeBuffersWidth = Width;
+    s_lastResizeBuffersHeight = Height;
+    return S_OK;
+}
+
+} // anonymous namespace
+
+TEST(DxgiProxyTest, SubclassPreservesTargetRenderResolutionOnWmSizeAndWindowPosChanged) {
+    HWND testWnd = CreateWindowA("STATIC", "ResDecoupleSizeWnd", WS_OVERLAPPEDWINDOW, 50, 50, 1000, 800, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    TestSubclassObserverState observer{};
+    ASSERT_TRUE(SetWindowSubclass(testWnd, TestSubclassObserverProc, 0x9999, reinterpret_cast<DWORD_PTR>(&observer)));
+
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(activeOpenXrManager->Initialize());
+    ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+    activeProxy.SetTargetRenderResolution(3840, 2160);
+    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+
+    // Send a WM_SIZE with smaller physical dimensions (e.g. 1920x1080)
+    SendMessageA(testWnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(1920, 1080));
+
+    // The subclass must intercept WM_SIZE and deliver the target render resolution (3840x2160)
+    EXPECT_EQ(observer.lastWidth, 3840);
+    EXPECT_EQ(observer.lastHeight, 2160);
+    EXPECT_EQ(observer.wmSizeCount, 1);
+
+    // Send WM_WINDOWPOSCHANGED; it must forward WM_SIZE with the target render resolution
+    WINDOWPOS wp{};
+    wp.hwnd = testWnd;
+    wp.cx = 1920;
+    wp.cy = 1080;
+    wp.flags = 0;
+    SendMessageA(testWnd, WM_WINDOWPOSCHANGED, 0, reinterpret_cast<LPARAM>(&wp));
+
+    EXPECT_EQ(observer.lastWidth, 3840);
+    EXPECT_EQ(observer.lastHeight, 2160);
+    EXPECT_GE(observer.wmSizeCount, 2);
+
+    activeProxy.DetachAll();
+    RemoveWindowSubclass(testWnd, TestSubclassObserverProc, 0x9999);
+    DestroyWindow(testWnd);
+}
+
+TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionInActiveVrMode) {
+    HWND testWnd = CreateWindowA("STATIC", "ResDecoupleDetourWnd", WS_OVERLAPPEDWINDOW, 50, 50, 1000, 800, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(activeOpenXrManager->Initialize());
+    ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+    activeProxy.SetTargetRenderResolution(3840, 2160);
+    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+    EXPECT_TRUE(activeProxy.IsDetourGetClientRectInstalled());
+    EXPECT_TRUE(activeProxy.IsDetourScreenToClientInstalled());
+
+    // When the game queries GetClientRect in active VR, it must see 3840x2160
+    RECT clientRc{};
+    EXPECT_TRUE(GetClientRect(testWnd, &clientRc));
+    EXPECT_EQ(clientRc.left, 0);
+    EXPECT_EQ(clientRc.top, 0);
+    EXPECT_EQ(clientRc.right, 3840);
+    EXPECT_EQ(clientRc.bottom, 2160);
+
+    // Physical window client width/height
+    RECT unSubclassedRc{};
+    {
+        // When queried outside active VR or on another window, original dimensions are returned
+        HWND otherWnd = CreateWindowA("STATIC", "OtherWnd", WS_OVERLAPPEDWINDOW, 0, 0, 400, 300, nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(otherWnd != nullptr);
+        RECT otherRc{};
+        EXPECT_TRUE(GetClientRect(otherWnd, &otherRc));
+        EXPECT_NE(otherRc.right, 3840);
+        DestroyWindow(otherWnd);
+    }
+
+    // ScreenToClient maps bottom-right of the physical window to target render extent (3840, 2160)
+    RECT realPhysRc{};
+    // Detach temporarily to inspect physical size
+    activeProxy.DetachWindowSubclass();
+    EXPECT_TRUE(GetClientRect(testWnd, &realPhysRc));
+    int physW = realPhysRc.right - realPhysRc.left;
+    int physH = realPhysRc.bottom - realPhysRc.top;
+    ASSERT_GT(physW, 0);
+    ASSERT_GT(physH, 0);
+
+    // Reattach subclass and detours
+    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+
+    POINT ptBottomRight{ physW, physH };
+    EXPECT_TRUE(ClientToScreen(testWnd, &ptBottomRight));
+    EXPECT_TRUE(ScreenToClient(testWnd, &ptBottomRight));
+    EXPECT_EQ(ptBottomRight.x, 3840);
+    EXPECT_EQ(ptBottomRight.y, 2160);
+
+    // ScreenToNormalizedClient still produces normalized [0.0, 1.0] coordinates
+    POINT screenPt{ physW, physH };
+    EXPECT_TRUE(ClientToScreen(testWnd, &screenPt));
+    float normX = 0.0f, normY = 0.0f;
+    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, screenPt, normX, normY));
+    EXPECT_FLOAT_EQ(normX, 1.0f);
+    EXPECT_FLOAT_EQ(normY, 1.0f);
+
+    activeProxy.DetachAll();
+    EXPECT_FALSE(activeProxy.IsDetourGetClientRectInstalled());
+    EXPECT_FALSE(activeProxy.IsDetourScreenToClientInstalled());
+
+    // After detach, GetClientRect returns physical dimensions again
+    RECT restoredRc{};
+    EXPECT_TRUE(GetClientRect(testWnd, &restoredRc));
+    EXPECT_EQ(restoredRc.right, physW);
+    EXPECT_EQ(restoredRc.bottom, physH);
+
+    DestroyWindow(testWnd);
+}
+
+TEST(DxgiProxyTest, SubclassScalesMouseMessagesAcrossFullTargetResolution) {
+    HWND testWnd = CreateWindowA("STATIC", "ResDecoupleMouseWnd", WS_OVERLAPPEDWINDOW, 50, 50, 1000, 800, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    TestSubclassObserverState observer{};
+    ASSERT_TRUE(SetWindowSubclass(testWnd, TestSubclassObserverProc, 0x8888, reinterpret_cast<DWORD_PTR>(&observer)));
+
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(activeOpenXrManager->Initialize());
+    ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+    activeProxy.SetTargetRenderResolution(3840, 2160);
+    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+
+    // Get physical dimensions
+    activeProxy.DetachWindowSubclass();
+    RECT physRc{};
+    GetClientRect(testWnd, &physRc);
+    int physW = physRc.right - physRc.left;
+    int physH = physRc.bottom - physRc.top;
+    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+
+    // Send mouse move at (physW, physH) (bottom-right of physical window)
+    SendMessageA(testWnd, WM_MOUSEMOVE, 0, MAKELPARAM(static_cast<WORD>(physW), static_cast<WORD>(physH)));
+    EXPECT_EQ(observer.lastMouseX, 3840);
+    EXPECT_EQ(observer.lastMouseY, 2160);
+
+    // Send mouse button down at center (physW / 2, physH / 2)
+    SendMessageA(testWnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(static_cast<WORD>(physW / 2), static_cast<WORD>(physH / 2)));
+    EXPECT_NEAR(observer.lastMouseX, 1920, 2);
+    EXPECT_NEAR(observer.lastMouseY, 1080, 2);
+
+    // Send mouse move at (0, 0)
+    SendMessageA(testWnd, WM_MOUSEMOVE, 0, MAKELPARAM(0, 0));
+    EXPECT_EQ(observer.lastMouseX, 0);
+    EXPECT_EQ(observer.lastMouseY, 0);
+
+    activeProxy.DetachAll();
+    RemoveWindowSubclass(testWnd, TestSubclassObserverProc, 0x8888);
+    DestroyWindow(testWnd);
+}
+
+TEST(DxgiProxyTest, AttachSwapChainDetoursResizeBuffersAndOverridesTargetResolution) {
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(activeOpenXrManager->Initialize());
+    ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+    activeProxy.SetTargetRenderResolution(3840, 2160);
+
+    std::vector<void*> scVTable(50, nullptr);
+    scVTable[0] = reinterpret_cast<void*>(&MockSwapChainQI);
+    scVTable[1] = reinterpret_cast<void*>(&MockAddRef);
+    scVTable[2] = reinterpret_cast<void*>(&MockRelease);
+    scVTable[7] = reinterpret_cast<void*>(&MockGetDevice);
+    scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
+    scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
+    scVTable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    scVTable[kResizeBuffersVTableSlot] = reinterpret_cast<void*>(&MockResizeBuffersImpl);
+    MockComObject mockSwapChain{ scVTable.data() };
+
+    auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
+
+    EXPECT_TRUE(activeProxy.AttachSwapChain(pSwapChain));
+    EXPECT_TRUE(activeProxy.IsDetourResizeBuffersInstalled());
+
+    // When the game attempts to downsize buffers to 1920x1080, our detour enforces 3840x2160
+    s_lastResizeBuffersWidth = 0;
+    s_lastResizeBuffersHeight = 0;
+    pSwapChain->ResizeBuffers(2, 1920, 1080, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
+
+    EXPECT_EQ(s_lastResizeBuffersWidth, 3840u);
+    EXPECT_EQ(s_lastResizeBuffersHeight, 2160u);
+
+    // When the game passes 0x0 (which DXGI normally derives from window client rect)
+    s_lastResizeBuffersWidth = 0;
+    s_lastResizeBuffersHeight = 0;
+    pSwapChain->ResizeBuffers(2, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
+
+    EXPECT_EQ(s_lastResizeBuffersWidth, 3840u);
+    EXPECT_EQ(s_lastResizeBuffersHeight, 2160u);
+
+    activeProxy.DetachAll();
+    EXPECT_FALSE(activeProxy.IsDetourResizeBuffersInstalled());
+}
+
 } // namespace fs25vr
 
 

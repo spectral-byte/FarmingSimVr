@@ -1285,6 +1285,13 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
                 if (srcDesc.Width == dstDesc.Width && srcDesc.Height == dstDesc.Height) {
                     curCommandList->CopyResource(destTexture, backBuffer);
                 } else {
+                    static bool loggedMismatch = false;
+                    if (!loggedMismatch) {
+                        LogWarn("OpenXrManager::CopyBackBufferToEye: Dimension mismatch! BackBuffer: " +
+                                std::to_string(srcDesc.Width) + "x" + std::to_string(srcDesc.Height) +
+                                ", OpenXR swapchain: " + std::to_string(dstDesc.Width) + "x" + std::to_string(dstDesc.Height));
+                        loggedMismatch = true;
+                    }
                     D3D12_TEXTURE_COPY_LOCATION dstLoc{};
                     dstLoc.pResource = destTexture;
                     dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;

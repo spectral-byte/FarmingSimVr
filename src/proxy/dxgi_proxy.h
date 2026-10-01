@@ -9,6 +9,7 @@
 #include "core/detour.h"
 #include <d3d12.h>
 #include <dxgi1_4.h>
+#include <commctrl.h>
 #include <wrl/client.h>
 #include <memory>
 #include <optional>
@@ -17,9 +18,13 @@ namespace fs25vr {
 
 // Canonical DXGI vtable slot indices
 inline constexpr size_t kPresentVTableSlot = 8;
-inline constexpr size_t kPresent1VTableSlot = 22;
+inline constexpr size_t kResizeBuffersVTableSlot = 13;
 inline constexpr size_t kCreateSwapChainVTableSlot = 10;
 inline constexpr size_t kCreateSwapChainForHwndVTableSlot = 15;
+inline constexpr size_t kPresent1VTableSlot = 22;
+inline constexpr size_t kResizeBuffers1VTableSlot = 39;
+
+inline constexpr UINT_PTR kMirrorWindowSubclassId = 0x56524653; // 'FSVR'
 
 class DxgiProxy {
 public:
@@ -68,15 +73,41 @@ public:
     VRBridge& GetVrBridge() { return *m_vrBridge; }
 
     HWND GetGameHwnd() const { return m_gameHwnd; }
-    void SetGameHwnd(HWND hWnd) { m_gameHwnd = hWnd; }
+    void SetGameHwnd(HWND hWnd);
     void UpdateMenuCursorState(IDXGISwapChain* swapChain);
     static bool ScreenToNormalizedClient(HWND hWnd, POINT screenPt, float& outNormX, float& outNormY);
+    static RECT ComputeClampedMirrorWindowRect(const RECT& workArea, DWORD dwStyle, DWORD dwExStyle, bool hasMenu = false);
+    static RECT ComputeClampedMirrorWindowRect(HWND hWnd);
+
+    bool AttachWindowSubclass(HWND hWnd);
+    bool DetachWindowSubclass();
+    bool IsWindowSubclassed() const { return m_windowSubclassed; }
+    bool IsInSizeMove() const { return m_inSizeMove; }
+    bool IsActive() const { return m_openXrManager && m_openXrManager->IsActive(); }
+    uint32_t GetTargetRenderWidth() const { return m_targetRenderWidth; }
+    uint32_t GetTargetRenderHeight() const { return m_targetRenderHeight; }
+    void SetTargetRenderResolution(uint32_t width, uint32_t height) {
+        m_targetRenderWidth = width;
+        m_targetRenderHeight = height;
+    }
+    bool ApplyInitialWindowClamp(HWND hWnd);
+    void EnforceClampedMirrorWindowDimensions(HWND hWnd);
+    static LRESULT CALLBACK MirrorWindowSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
 
     // Detour entry points
     static HRESULT STDMETHODCALLTYPE Intercept_Present(IDXGISwapChain* self, UINT syncInterval, UINT flags);
     static HRESULT STDMETHODCALLTYPE Intercept_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* params);
+    static HRESULT STDMETHODCALLTYPE Intercept_ResizeBuffers(IDXGISwapChain* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags);
+    static HRESULT STDMETHODCALLTYPE Intercept_ResizeBuffers1(IDXGISwapChain3* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags, const UINT* pCreationNodeMask, IUnknown* const* ppPresentQueue);
     static HRESULT STDMETHODCALLTYPE Intercept_CreateSwapChain(IDXGIFactory* self, IUnknown* pDevice, DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain);
     static HRESULT STDMETHODCALLTYPE Intercept_CreateSwapChainForHwnd(IDXGIFactory2* self, IUnknown* pDevice, HWND hWnd, const DXGI_SWAP_CHAIN_DESC1* pDesc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc, IDXGIOutput* pRestrictToOutput, IDXGISwapChain1** ppSwapChain);
+    static BOOL WINAPI Intercept_GetClientRect(HWND hWnd, LPRECT lpRect);
+    static BOOL WINAPI Intercept_ScreenToClient(HWND hWnd, LPPOINT lpPoint);
+
+    bool IsDetourGetClientRectInstalled() const { return m_detourGetClientRect.IsInstalled(); }
+    bool IsDetourScreenToClientInstalled() const { return m_detourScreenToClient.IsInstalled(); }
+    bool IsDetourResizeBuffersInstalled() const { return m_detourResizeBuffers.IsInstalled(); }
+    bool IsDetourResizeBuffers1Installed() const { return m_detourResizeBuffers1.IsInstalled(); }
 
 private:
     void EnsureVrInitialized();
@@ -95,13 +126,24 @@ private:
 
     FunctionDetour m_detourPresent;
     FunctionDetour m_detourPresent1;
+    FunctionDetour m_detourResizeBuffers;
+    FunctionDetour m_detourResizeBuffers1;
     FunctionDetour m_detourCreateSwapChain;
     FunctionDetour m_detourCreateSwapChainForHwnd;
+    FunctionDetour m_detourGetClientRect;
+    FunctionDetour m_detourScreenToClient;
 
     bool m_swapChainAttached = false;
     bool m_factoryAttached = false;
     bool m_vrInitialized = false;
     bool m_wasInQuadMode = false;
+    bool m_windowSubclassed = false;
+    bool m_inSizeMove = false;
+    int m_lastEnforcedWidth = 0;
+    int m_lastEnforcedHeight = 0;
+    HMONITOR m_lastMonitor = nullptr;
+    uint32_t m_targetRenderWidth = 0;
+    uint32_t m_targetRenderHeight = 0;
 };
 
 } // namespace fs25vr

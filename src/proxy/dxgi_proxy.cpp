@@ -1,12 +1,24 @@
 #include "dxgi_proxy.h"
 #include "core/logger.h"
 #include <utility>
+#include <windowsx.h>
+#include <algorithm>
+#include <cmath>
+
+#pragma comment(lib, "comctl32.lib")
 
 namespace fs25vr {
 
 namespace {
 
 static DxgiProxy* s_activeProxy = nullptr;
+
+thread_local bool t_isInternalWindowQuery = false;
+
+struct InternalWindowQueryScope {
+    InternalWindowQueryScope() { t_isInternalWindowQuery = true; }
+    ~InternalWindowQueryScope() { t_isInternalWindowQuery = false; }
+};
 
 template <typename PFN, typename... Args>
 HRESULT ForwardFactoryCall(const char* funcName, PFN pfn, Args&&... args) {
@@ -15,6 +27,12 @@ HRESULT ForwardFactoryCall(const char* funcName, PFN pfn, Args&&... args) {
         return E_FAIL;
     }
     return pfn(std::forward<Args>(args)...);
+}
+
+HWND GetRootWindow(HWND hWnd) {
+    if (!hWnd || !IsWindow(hWnd)) return nullptr;
+    HWND root = GetAncestor(hWnd, GA_ROOT);
+    return root ? root : hWnd;
 }
 
 } // anonymous namespace
@@ -161,6 +179,14 @@ bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
         LogError("DxgiProxy::AttachSwapChain: Swap chain pointer is null.");
         return false;
     }
+    if (!m_gameHwnd) {
+        DXGI_SWAP_CHAIN_DESC desc{};
+        if (SUCCEEDED(swapChain->GetDesc(&desc)) && desc.OutputWindow) {
+            SetGameHwnd(desc.OutputWindow);
+        }
+    } else if (m_gameHwnd && !m_windowSubclassed && m_openXrManager && m_openXrManager->IsActive()) {
+        AttachWindowSubclass(m_gameHwnd);
+    }
     if (m_swapChainAttached) return true;
 
     s_activeProxy = this;
@@ -174,6 +200,10 @@ bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
     bool presentAttached = m_detourPresent.Install(
         fnPresent, reinterpret_cast<void*>(&DxgiProxy::Intercept_Present));
 
+    void* fnResizeBuffers = vtable[kResizeBuffersVTableSlot];
+    m_detourResizeBuffers.Install(
+        fnResizeBuffers, reinterpret_cast<void*>(&DxgiProxy::Intercept_ResizeBuffers));
+
     Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain1;
     if (SUCCEEDED(swapChain->QueryInterface(IID_PPV_ARGS(&swapChain1)))) {
         void** vtable1 = *reinterpret_cast<void***>(swapChain1.Get());
@@ -184,11 +214,42 @@ bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
         }
     }
 
+    Microsoft::WRL::ComPtr<IDXGISwapChain3> swapChain3;
+    if (SUCCEEDED(swapChain->QueryInterface(IID_PPV_ARGS(&swapChain3)))) {
+        void** vtable3 = *reinterpret_cast<void***>(swapChain3.Get());
+        if (vtable3) {
+            void* fnResizeBuffers1 = vtable3[kResizeBuffers1VTableSlot];
+            m_detourResizeBuffers1.Install(
+                fnResizeBuffers1, reinterpret_cast<void*>(&DxgiProxy::Intercept_ResizeBuffers1));
+        }
+    }
+
+    if (m_targetRenderWidth == 0 || m_targetRenderHeight == 0) {
+        DXGI_SWAP_CHAIN_DESC scDesc{};
+        if (SUCCEEDED(swapChain->GetDesc(&scDesc))) {
+            if (scDesc.BufferDesc.Width > 0 && scDesc.BufferDesc.Height > 0) {
+                m_targetRenderWidth = scDesc.BufferDesc.Width;
+                m_targetRenderHeight = scDesc.BufferDesc.Height;
+            }
+        }
+    }
+    if (m_targetRenderWidth == 0 || m_targetRenderHeight == 0) {
+        Microsoft::WRL::ComPtr<ID3D12Resource> testBuffer;
+        if (SUCCEEDED(swapChain->GetBuffer(0, IID_PPV_ARGS(&testBuffer))) && testBuffer) {
+            D3D12_RESOURCE_DESC resDesc = testBuffer->GetDesc();
+            if (resDesc.Width > 0 && resDesc.Height > 0) {
+                m_targetRenderWidth = static_cast<uint32_t>(resDesc.Width);
+                m_targetRenderHeight = resDesc.Height;
+            }
+        }
+    }
+
     m_swapChainAttached = presentAttached;
     if (!m_swapChainAttached) {
         LogError("DxgiProxy::AttachSwapChain: Failed to install swap chain detours.");
     } else {
-        LogInfo("DxgiProxy: Successfully attached swap chain presentation detours.");
+        LogInfo("DxgiProxy: Successfully attached swap chain presentation and buffer detours (Target: " +
+                std::to_string(m_targetRenderWidth) + "x" + std::to_string(m_targetRenderHeight) + ").");
     }
     return m_swapChainAttached;
 }
@@ -234,12 +295,21 @@ bool DxgiProxy::AttachFactory(IDXGIFactory* factory) {
 }
 
 void DxgiProxy::DetachAll() {
+    DetachWindowSubclass();
     if (m_detourPresent.IsInstalled()) m_detourPresent.Uninstall();
     if (m_detourPresent1.IsInstalled()) m_detourPresent1.Uninstall();
+    if (m_detourResizeBuffers.IsInstalled()) m_detourResizeBuffers.Uninstall();
+    if (m_detourResizeBuffers1.IsInstalled()) m_detourResizeBuffers1.Uninstall();
     if (m_detourCreateSwapChain.IsInstalled()) m_detourCreateSwapChain.Uninstall();
     if (m_detourCreateSwapChainForHwnd.IsInstalled()) m_detourCreateSwapChainForHwnd.Uninstall();
     m_swapChainAttached = false;
     m_factoryAttached = false;
+    m_inSizeMove = false;
+    m_lastEnforcedWidth = 0;
+    m_lastEnforcedHeight = 0;
+    m_lastMonitor = nullptr;
+    m_targetRenderWidth = 0;
+    m_targetRenderHeight = 0;
 }
 
 void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT /*flags*/) {
@@ -247,6 +317,16 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
 
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
         return;
+    }
+
+    if (!m_gameHwnd && swapChain) {
+        DXGI_SWAP_CHAIN_DESC desc{};
+        if (SUCCEEDED(swapChain->GetDesc(&desc)) && desc.OutputWindow) {
+            SetGameHwnd(desc.OutputWindow);
+        }
+    }
+    if (m_gameHwnd) {
+        EnforceClampedMirrorWindowDimensions(m_gameHwnd);
     }
 
     ID3D12Resource* pBackBuffer = nullptr;
@@ -394,9 +474,112 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
     return S_OK;
 }
 
+HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers(
+    IDXGISwapChain* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    UINT effectiveWidth = Width;
+    UINT effectiveHeight = Height;
+    if (proxy && proxy->IsActive() && proxy->m_targetRenderWidth > 0 && proxy->m_targetRenderHeight > 0) {
+        effectiveWidth = proxy->m_targetRenderWidth;
+        effectiveHeight = proxy->m_targetRenderHeight;
+        LogInfo("DxgiProxy::Intercept_ResizeBuffers: Overriding dimensions from (" +
+                std::to_string(Width) + "x" + std::to_string(Height) + ") to target render resolution (" +
+                std::to_string(effectiveWidth) + "x" + std::to_string(effectiveHeight) + ")");
+    }
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT)>(
+        proxy ? proxy->m_detourResizeBuffers.GetOriginal() : nullptr
+    );
+    if (orig) {
+        return orig(self, BufferCount, effectiveWidth, effectiveHeight, NewFormat, SwapChainFlags);
+    }
+    return E_FAIL;
+}
+
+HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers1(
+    IDXGISwapChain3* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags,
+    const UINT* pCreationNodeMask, IUnknown* const* ppPresentQueue) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    UINT effectiveWidth = Width;
+    UINT effectiveHeight = Height;
+    if (proxy && proxy->IsActive() && proxy->m_targetRenderWidth > 0 && proxy->m_targetRenderHeight > 0) {
+        effectiveWidth = proxy->m_targetRenderWidth;
+        effectiveHeight = proxy->m_targetRenderHeight;
+        LogInfo("DxgiProxy::Intercept_ResizeBuffers1: Overriding dimensions from (" +
+                std::to_string(Width) + "x" + std::to_string(Height) + ") to target render resolution (" +
+                std::to_string(effectiveWidth) + "x" + std::to_string(effectiveHeight) + ")");
+    }
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*)>(
+        proxy ? proxy->m_detourResizeBuffers1.GetOriginal() : nullptr
+    );
+    if (orig) {
+        return orig(self, BufferCount, effectiveWidth, effectiveHeight, NewFormat, SwapChainFlags, pCreationNodeMask, ppPresentQueue);
+    }
+    return E_FAIL;
+}
+
+BOOL WINAPI DxgiProxy::Intercept_GetClientRect(HWND hWnd, LPRECT lpRect) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    if (t_isInternalWindowQuery) {
+        auto orig = reinterpret_cast<BOOL(WINAPI*)(HWND, LPRECT)>(
+            proxy ? proxy->m_detourGetClientRect.GetOriginal() : nullptr
+        );
+        return orig ? orig(hWnd, lpRect) : FALSE;
+    }
+    if (proxy && proxy->IsActive() && proxy->m_gameHwnd && lpRect) {
+        if (hWnd == proxy->m_gameHwnd || GetRootWindow(hWnd) == proxy->m_gameHwnd) {
+            if (proxy->m_targetRenderWidth > 0 && proxy->m_targetRenderHeight > 0) {
+                lpRect->left = 0;
+                lpRect->top = 0;
+                lpRect->right = static_cast<LONG>(proxy->m_targetRenderWidth);
+                lpRect->bottom = static_cast<LONG>(proxy->m_targetRenderHeight);
+                return TRUE;
+            }
+        }
+    }
+    auto orig = reinterpret_cast<BOOL(WINAPI*)(HWND, LPRECT)>(
+        proxy ? proxy->m_detourGetClientRect.GetOriginal() : nullptr
+    );
+    return orig ? orig(hWnd, lpRect) : FALSE;
+}
+
+BOOL WINAPI DxgiProxy::Intercept_ScreenToClient(HWND hWnd, LPPOINT lpPoint) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    auto orig = reinterpret_cast<BOOL(WINAPI*)(HWND, LPPOINT)>(
+        proxy ? proxy->m_detourScreenToClient.GetOriginal() : nullptr
+    );
+    if (!orig) return FALSE;
+    if (t_isInternalWindowQuery) {
+        return orig(hWnd, lpPoint);
+    }
+    if (!orig(hWnd, lpPoint)) {
+        return FALSE;
+    }
+    if (proxy && proxy->IsActive() && proxy->m_gameHwnd && lpPoint) {
+        if (hWnd == proxy->m_gameHwnd || GetRootWindow(hWnd) == proxy->m_gameHwnd) {
+            if (proxy->m_targetRenderWidth > 0 && proxy->m_targetRenderHeight > 0) {
+                RECT physRect{};
+                BOOL gotRect = FALSE;
+                {
+                    InternalWindowQueryScope scope;
+                    auto origGCR = reinterpret_cast<BOOL(WINAPI*)(HWND, LPRECT)>(proxy->m_detourGetClientRect.GetOriginal());
+                    gotRect = origGCR ? origGCR(hWnd, &physRect) : FALSE;
+                }
+                int physW = physRect.right - physRect.left;
+                int physH = physRect.bottom - physRect.top;
+                if (gotRect && physW > 0 && physH > 0) {
+                    lpPoint->x = static_cast<LONG>(std::round((static_cast<double>(lpPoint->x) * proxy->m_targetRenderWidth) / physW));
+                    lpPoint->y = static_cast<LONG>(std::round((static_cast<double>(lpPoint->y) * proxy->m_targetRenderHeight) / physH));
+                }
+            }
+        }
+    }
+    return TRUE;
+}
+
 bool DxgiProxy::ScreenToNormalizedClient(HWND hWnd, POINT screenPt, float& outNormX, float& outNormY) {
     if (!hWnd) return false;
     POINT pt = screenPt;
+    InternalWindowQueryScope scope;
     if (!ScreenToClient(hWnd, &pt)) return false;
     RECT clientRect{};
     if (!GetClientRect(hWnd, &clientRect)) return false;
@@ -409,6 +592,391 @@ bool DxgiProxy::ScreenToNormalizedClient(HWND hWnd, POINT screenPt, float& outNo
     return true;
 }
 
+RECT DxgiProxy::ComputeClampedMirrorWindowRect(const RECT& workArea, DWORD dwStyle, DWORD dwExStyle, bool hasMenu) {
+    int workWidth = workArea.right - workArea.left;
+    int workHeight = workArea.bottom - workArea.top;
+    if (workWidth <= 0 || workHeight <= 0) {
+        return workArea;
+    }
+
+    // Determine non-client frame margins (title bar, borders, menu) via AdjustWindowRectEx
+    RECT frameRect{ 0, 0, 0, 0 };
+    AdjustWindowRectEx(&frameRect, dwStyle, hasMenu ? TRUE : FALSE, dwExStyle);
+    int frameWidth = frameRect.right - frameRect.left;
+    int frameHeight = frameRect.bottom - frameRect.top;
+    if (frameWidth < 0) frameWidth = 0;
+    if (frameHeight < 0) frameHeight = 0;
+
+    int maxClientWidth = workWidth - frameWidth;
+    int maxClientHeight = workHeight - frameHeight;
+    if (maxClientWidth <= 0 || maxClientHeight <= 0) {
+        return workArea;
+    }
+
+    // Determine the maximum 16:9 client rectangle fitting within maxClientWidth x maxClientHeight
+    constexpr int64_t kAspectWidth = 16;
+    constexpr int64_t kAspectHeight = 9;
+
+    int clientWidth = 0;
+    int clientHeight = 0;
+    if (static_cast<int64_t>(maxClientWidth) * kAspectHeight < static_cast<int64_t>(maxClientHeight) * kAspectWidth) {
+        // Width-constrained
+        clientWidth = maxClientWidth;
+        clientHeight = static_cast<int>((static_cast<int64_t>(clientWidth) * kAspectHeight) / kAspectWidth);
+    } else {
+        // Height-constrained
+        clientHeight = maxClientHeight;
+        clientWidth = static_cast<int>((static_cast<int64_t>(clientHeight) * kAspectWidth) / kAspectHeight);
+    }
+
+    int outerWidth = clientWidth + frameWidth;
+    int outerHeight = clientHeight + frameHeight;
+
+    // Center within the monitor work area
+    int outerX = workArea.left + (workWidth - outerWidth) / 2;
+    int outerY = workArea.top + (workHeight - outerHeight) / 2;
+
+    return RECT{ outerX, outerY, outerX + outerWidth, outerY + outerHeight };
+}
+
+RECT DxgiProxy::ComputeClampedMirrorWindowRect(HWND hWnd) {
+    hWnd = GetRootWindow(hWnd);
+    if (!hWnd) {
+        return RECT{ 0, 0, 0, 0 };
+    }
+
+    HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+    if (!hMon) {
+        return RECT{ 0, 0, 0, 0 };
+    }
+    MONITORINFO mi{ sizeof(MONITORINFO) };
+    if (!GetMonitorInfo(hMon, &mi)) {
+        return RECT{ 0, 0, 0, 0 };
+    }
+    DWORD dwStyle = static_cast<DWORD>(GetWindowLongPtr(hWnd, GWL_STYLE)) & ~(WS_MAXIMIZE | WS_MINIMIZE);
+    DWORD dwExStyle = static_cast<DWORD>(GetWindowLongPtr(hWnd, GWL_EXSTYLE));
+    bool hasMenu = (GetMenu(hWnd) != nullptr);
+    return ComputeClampedMirrorWindowRect(mi.rcWork, dwStyle, dwExStyle, hasMenu);
+}
+
+void DxgiProxy::SetGameHwnd(HWND hWnd) {
+    hWnd = GetRootWindow(hWnd);
+    if (!hWnd) return;
+
+    if (m_gameHwnd != hWnd) {
+        if (m_gameHwnd && m_windowSubclassed) {
+            DetachWindowSubclass();
+        }
+        m_gameHwnd = hWnd;
+    }
+    if (m_gameHwnd && !m_windowSubclassed && IsActive()) {
+        AttachWindowSubclass(m_gameHwnd);
+    }
+}
+
+bool DxgiProxy::AttachWindowSubclass(HWND hWnd) {
+    if (!IsActive()) {
+        return false;
+    }
+    hWnd = GetRootWindow(hWnd);
+    if (!hWnd) {
+        return false;
+    }
+
+    if (m_windowSubclassed && m_gameHwnd == hWnd) {
+        return true;
+    }
+    if (m_windowSubclassed && m_gameHwnd != hWnd) {
+        DetachWindowSubclass();
+    }
+    m_gameHwnd = hWnd;
+    BOOL res = SetWindowSubclass(hWnd, &DxgiProxy::MirrorWindowSubclassProc, kMirrorWindowSubclassId, reinterpret_cast<DWORD_PTR>(this));
+    m_windowSubclassed = (res != FALSE);
+    if (m_windowSubclassed) {
+        LogInfo("DxgiProxy: Subclassed Desktop Mirror Window HWND=" + std::to_string(reinterpret_cast<uintptr_t>(hWnd)) + " for resolution decoupling.");
+        HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+        if (hUser32) {
+            if (!m_detourGetClientRect.IsInstalled()) {
+                void* pfnGetClientRect = reinterpret_cast<void*>(GetProcAddress(hUser32, "GetClientRect"));
+                if (pfnGetClientRect) {
+                    if (m_detourGetClientRect.Install(pfnGetClientRect, reinterpret_cast<void*>(&DxgiProxy::Intercept_GetClientRect))) {
+                        LogInfo("DxgiProxy: Successfully installed GetClientRect detour for resolution decoupling.");
+                    } else {
+                        LogWarn("DxgiProxy: Failed to install GetClientRect detour.");
+                    }
+                }
+            }
+            if (!m_detourScreenToClient.IsInstalled()) {
+                void* pfnScreenToClient = reinterpret_cast<void*>(GetProcAddress(hUser32, "ScreenToClient"));
+                if (pfnScreenToClient) {
+                    if (m_detourScreenToClient.Install(pfnScreenToClient, reinterpret_cast<void*>(&DxgiProxy::Intercept_ScreenToClient))) {
+                        LogInfo("DxgiProxy: Successfully installed ScreenToClient detour for resolution decoupling.");
+                    } else {
+                        LogWarn("DxgiProxy: Failed to install ScreenToClient detour.");
+                    }
+                }
+            }
+        }
+    } else {
+        LogError("DxgiProxy: Failed to subclass Desktop Mirror Window HWND=" + std::to_string(reinterpret_cast<uintptr_t>(hWnd)));
+    }
+    return m_windowSubclassed;
+}
+
+bool DxgiProxy::DetachWindowSubclass() {
+    if (!m_windowSubclassed) {
+        return false;
+    }
+    bool removed = false;
+    if (m_gameHwnd && IsWindow(m_gameHwnd)) {
+        removed = (RemoveWindowSubclass(m_gameHwnd, &DxgiProxy::MirrorWindowSubclassProc, kMirrorWindowSubclassId) != FALSE);
+        if (removed) {
+            LogInfo("DxgiProxy: Removed Desktop Mirror Window subclass from HWND=" + std::to_string(reinterpret_cast<uintptr_t>(m_gameHwnd)));
+        }
+    }
+    if (m_detourGetClientRect.IsInstalled()) {
+        m_detourGetClientRect.Uninstall();
+        LogInfo("DxgiProxy: Uninstalled GetClientRect detour.");
+    }
+    if (m_detourScreenToClient.IsInstalled()) {
+        m_detourScreenToClient.Uninstall();
+        LogInfo("DxgiProxy: Uninstalled ScreenToClient detour.");
+    }
+    m_windowSubclassed = false;
+    m_inSizeMove = false;
+    m_lastEnforcedWidth = 0;
+    m_lastEnforcedHeight = 0;
+    m_lastMonitor = nullptr;
+    return removed;
+}
+
+bool DxgiProxy::ApplyInitialWindowClamp(HWND hWnd) {
+    if (!IsActive()) {
+        return false;
+    }
+    hWnd = GetRootWindow(hWnd);
+    if (!hWnd) {
+        return false;
+    }
+
+    if (IsZoomed(hWnd)) {
+        ShowWindow(hWnd, SW_RESTORE);
+    }
+
+    RECT curRect{};
+    if (!GetWindowRect(hWnd, &curRect)) return false;
+    int curW = curRect.right - curRect.left;
+    int curH = curRect.bottom - curRect.top;
+
+    RECT clamped = ComputeClampedMirrorWindowRect(hWnd);
+    int maxW = clamped.right - clamped.left;
+    int maxH = clamped.bottom - clamped.top;
+    if (maxW > 0 && maxH > 0 && (curW > maxW || curH > maxH)) {
+        BOOL res = SetWindowPos(hWnd, nullptr, clamped.left, clamped.top, maxW, maxH,
+                                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        if (res) {
+            m_lastEnforcedWidth = maxW;
+            m_lastEnforcedHeight = maxH;
+            m_lastMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+            LogInfo("DxgiProxy: Applied initial clamped Desktop Mirror Window dimensions [" +
+                    std::to_string(maxW) + "x" + std::to_string(maxH) + " at (" +
+                    std::to_string(clamped.left) + "," + std::to_string(clamped.top) + ")]");
+            return true;
+        }
+    } else {
+        m_lastEnforcedWidth = curW;
+        m_lastEnforcedHeight = curH;
+        m_lastMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+        return true;
+    }
+    return false;
+}
+
+void DxgiProxy::EnforceClampedMirrorWindowDimensions(HWND hWnd) {
+    if (!IsActive() || m_inSizeMove) return;
+
+    hWnd = GetRootWindow(hWnd);
+    if (!hWnd) return;
+
+    if (IsZoomed(hWnd)) {
+        ShowWindow(hWnd, SW_RESTORE);
+    }
+
+    RECT curRect{};
+    if (!GetWindowRect(hWnd, &curRect)) return;
+    int curW = curRect.right - curRect.left;
+    int curH = curRect.bottom - curRect.top;
+
+    HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+
+    // Fast-path: if dimensions match our last enforced dimensions on the same monitor, skip
+    if (hMon == m_lastMonitor && curW == m_lastEnforcedWidth && curH == m_lastEnforcedHeight) {
+        return;
+    }
+
+    RECT clamped = ComputeClampedMirrorWindowRect(hWnd);
+    int maxW = clamped.right - clamped.left;
+    int maxH = clamped.bottom - clamped.top;
+
+    if (maxW > 0 && maxH > 0 && (curW > maxW || curH > maxH)) {
+        BOOL res = SetWindowPos(hWnd, nullptr, 0, 0, maxW, maxH,
+                                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        if (res) {
+            m_lastEnforcedWidth = maxW;
+            m_lastEnforcedHeight = maxH;
+            m_lastMonitor = hMon;
+            LogInfo("DxgiProxy: Enforced clamped Desktop Mirror Window dimensions [" +
+                    std::to_string(maxW) + "x" + std::to_string(maxH) + "]");
+        }
+    } else {
+        m_lastEnforcedWidth = curW;
+        m_lastEnforcedHeight = curH;
+        m_lastMonitor = hMon;
+    }
+}
+
+LRESULT CALLBACK DxgiProxy::MirrorWindowSubclassProc(
+    HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    auto* proxy = reinterpret_cast<DxgiProxy*>(dwRefData);
+    if (!proxy) {
+        proxy = s_activeProxy;
+    }
+
+    switch (uMsg) {
+        case WM_ENTERSIZEMOVE: {
+            if (proxy) {
+                proxy->m_inSizeMove = true;
+            }
+            break;
+        }
+        case WM_EXITSIZEMOVE: {
+            if (proxy) {
+                proxy->m_inSizeMove = false;
+            }
+            break;
+        }
+        case WM_GETMINMAXINFO: {
+            // First let the underlying window proc process the message
+            LRESULT lres = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+            if (mmi && proxy && proxy->IsActive()) {
+                RECT clamped = ComputeClampedMirrorWindowRect(hWnd);
+                int maxW = clamped.right - clamped.left;
+                int maxH = clamped.bottom - clamped.top;
+                if (maxW > 0 && maxH > 0) {
+                    // Lower ptMinTrackSize if it exceeds maxW/maxH so Windows allows shrinking
+                    if (mmi->ptMinTrackSize.x > maxW) {
+                        mmi->ptMinTrackSize.x = maxW;
+                    }
+                    if (mmi->ptMinTrackSize.y > maxH) {
+                        mmi->ptMinTrackSize.y = maxH;
+                    }
+                    // Cap ptMaxTrackSize and ptMaxSize so the window cannot expand past clamped bounds
+                    mmi->ptMaxTrackSize.x = (std::min)(mmi->ptMaxTrackSize.x, static_cast<LONG>(maxW));
+                    mmi->ptMaxTrackSize.y = (std::min)(mmi->ptMaxTrackSize.y, static_cast<LONG>(maxH));
+                    mmi->ptMaxSize.x = (std::min)(mmi->ptMaxSize.x, static_cast<LONG>(maxW));
+                    mmi->ptMaxSize.y = (std::min)(mmi->ptMaxSize.y, static_cast<LONG>(maxH));
+                }
+            }
+            return lres;
+        }
+        case WM_WINDOWPOSCHANGING: {
+            // First let the underlying window proc process the message
+            LRESULT lres = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            auto* wp = reinterpret_cast<WINDOWPOS*>(lParam);
+            if (wp && proxy && proxy->IsActive() && !(wp->flags & SWP_NOSIZE)) {
+                RECT clamped = ComputeClampedMirrorWindowRect(hWnd);
+                int maxW = clamped.right - clamped.left;
+                int maxH = clamped.bottom - clamped.top;
+                if (maxW > 0 && wp->cx > maxW) {
+                    wp->cx = maxW;
+                }
+                if (maxH > 0 && wp->cy > maxH) {
+                    wp->cy = maxH;
+                }
+                // NOTE: We deliberately do NOT modify wp->x or wp->y so the user can freely move/drag the window.
+            }
+            return lres;
+        }
+        case WM_SIZE: {
+            if (proxy && proxy->IsActive() && proxy->m_targetRenderWidth > 0 && proxy->m_targetRenderHeight > 0) {
+                if (wParam != SIZE_MINIMIZED) {
+                    LPARAM targetLParam = MAKELPARAM(
+                        static_cast<WORD>(proxy->m_targetRenderWidth),
+                        static_cast<WORD>(proxy->m_targetRenderHeight)
+                    );
+                    return DefSubclassProc(hWnd, uMsg, wParam, targetLParam);
+                }
+            }
+            return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        }
+        case WM_WINDOWPOSCHANGED: {
+            LRESULT lres = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            if (proxy && proxy->IsActive() && proxy->m_targetRenderWidth > 0 && proxy->m_targetRenderHeight > 0) {
+                auto* wp = reinterpret_cast<WINDOWPOS*>(lParam);
+                if (wp && !(wp->flags & SWP_NOSIZE)) {
+                    LPARAM targetLParam = MAKELPARAM(
+                        static_cast<WORD>(proxy->m_targetRenderWidth),
+                        static_cast<WORD>(proxy->m_targetRenderHeight)
+                    );
+                    DefSubclassProc(hWnd, WM_SIZE, SIZE_RESTORED, targetLParam);
+                }
+            }
+            return lres;
+        }
+        case WM_MOUSEMOVE:
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONUP:
+        case WM_LBUTTONDBLCLK:
+        case WM_RBUTTONDOWN:
+        case WM_RBUTTONUP:
+        case WM_RBUTTONDBLCLK:
+        case WM_MBUTTONDOWN:
+        case WM_MBUTTONUP:
+        case WM_MBUTTONDBLCLK:
+        case WM_XBUTTONDOWN:
+        case WM_XBUTTONUP:
+        case WM_XBUTTONDBLCLK: {
+            if (proxy && proxy->IsActive() && proxy->m_targetRenderWidth > 0 && proxy->m_targetRenderHeight > 0) {
+                RECT physRect{};
+                BOOL gotRect = FALSE;
+                {
+                    InternalWindowQueryScope scope;
+                    gotRect = GetClientRect(hWnd, &physRect);
+                }
+                int physW = physRect.right - physRect.left;
+                int physH = physRect.bottom - physRect.top;
+                if (gotRect && physW > 0 && physH > 0) {
+                    int clientX = static_cast<short>(LOWORD(lParam));
+                    int clientY = static_cast<short>(HIWORD(lParam));
+                    int scaledX = static_cast<int>(std::round((static_cast<double>(clientX) * proxy->m_targetRenderWidth) / physW));
+                    int scaledY = static_cast<int>(std::round((static_cast<double>(clientY) * proxy->m_targetRenderHeight) / physH));
+                    scaledX = (std::max)(0, (std::min)(scaledX, static_cast<int>(proxy->m_targetRenderWidth)));
+                    scaledY = (std::max)(0, (std::min)(scaledY, static_cast<int>(proxy->m_targetRenderHeight)));
+                    LPARAM scaledLParam = MAKELPARAM(static_cast<WORD>(scaledX), static_cast<WORD>(scaledY));
+                    return DefSubclassProc(hWnd, uMsg, wParam, scaledLParam);
+                }
+            }
+            break;
+        }
+        case WM_NCDESTROY: {
+            RemoveWindowSubclass(hWnd, &DxgiProxy::MirrorWindowSubclassProc, uIdSubclass);
+            if (proxy) {
+                proxy->m_windowSubclassed = false;
+                proxy->m_inSizeMove = false;
+                if (proxy->m_gameHwnd == hWnd) {
+                    proxy->m_gameHwnd = nullptr;
+                }
+            }
+            break;
+        }
+        default:
+            break;
+    }
+
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
 void DxgiProxy::UpdateMenuCursorState(IDXGISwapChain* swapChain) {
     if (!m_openXrManager) return;
 
@@ -416,8 +984,8 @@ void DxgiProxy::UpdateMenuCursorState(IDXGISwapChain* swapChain) {
     if (!hWnd && swapChain) {
         DXGI_SWAP_CHAIN_DESC desc{};
         if (SUCCEEDED(swapChain->GetDesc(&desc)) && desc.OutputWindow) {
-            hWnd = desc.OutputWindow;
-            m_gameHwnd = hWnd;
+            SetGameHwnd(desc.OutputWindow);
+            hWnd = m_gameHwnd;
         }
     }
 
@@ -455,6 +1023,13 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
+    if (pDesc && proxy->IsActive()) {
+        if (pDesc->BufferDesc.Width > 0 && pDesc->BufferDesc.Height > 0) {
+            proxy->m_targetRenderWidth = pDesc->BufferDesc.Width;
+            proxy->m_targetRenderHeight = pDesc->BufferDesc.Height;
+        }
+        pDesc->Windowed = TRUE;
+    }
     if (pDesc && pDesc->OutputWindow) {
         proxy->SetGameHwnd(pDesc->OutputWindow);
     }
@@ -462,8 +1037,13 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
         proxy->m_detourCreateSwapChain.GetOriginal()
     );
     HRESULT hr = orig ? orig(self, pDevice, pDesc, ppSwapChain) : E_FAIL;
-    if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
-        proxy->AttachSwapChain(*ppSwapChain);
+    if (SUCCEEDED(hr)) {
+        if (pDesc && pDesc->OutputWindow && proxy->IsActive()) {
+            proxy->ApplyInitialWindowClamp(pDesc->OutputWindow);
+        }
+        if (ppSwapChain && *ppSwapChain) {
+            proxy->AttachSwapChain(*ppSwapChain);
+        }
     }
     return hr;
 }
@@ -476,15 +1056,47 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
+    if (pDesc && proxy->IsActive()) {
+        if (pDesc->Width > 0 && pDesc->Height > 0) {
+            proxy->m_targetRenderWidth = pDesc->Width;
+            proxy->m_targetRenderHeight = pDesc->Height;
+        }
+    }
     if (hWnd) {
         proxy->SetGameHwnd(hWnd);
     }
+
+    DXGI_SWAP_CHAIN_DESC1 localDesc{};
+    const DXGI_SWAP_CHAIN_DESC1* pEffectiveDesc = pDesc;
+    if (pDesc && proxy->IsActive()) {
+        localDesc = *pDesc;
+        localDesc.Scaling = DXGI_SCALING_STRETCH;
+        pEffectiveDesc = &localDesc;
+        const_cast<DXGI_SWAP_CHAIN_DESC1*>(pDesc)->Scaling = DXGI_SCALING_STRETCH;
+        LogInfo("DxgiProxy: Enforced DXGI_SCALING_STRETCH on swapchain descriptor for resolution decoupling.");
+    }
+
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC localFullscreenDesc{};
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pEffectiveFullscreenDesc = pFullscreenDesc;
+    if (pFullscreenDesc && proxy->IsActive()) {
+        localFullscreenDesc = *pFullscreenDesc;
+        localFullscreenDesc.Windowed = TRUE;
+        pEffectiveFullscreenDesc = &localFullscreenDesc;
+        const_cast<DXGI_SWAP_CHAIN_FULLSCREEN_DESC*>(pFullscreenDesc)->Windowed = TRUE;
+        LogInfo("DxgiProxy: Enforced Windowed = TRUE on swapchain descriptor for resolution decoupling.");
+    }
+
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
         proxy->m_detourCreateSwapChainForHwnd.GetOriginal()
     );
-    HRESULT hr = orig ? orig(self, pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain) : E_FAIL;
-    if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
-        proxy->AttachSwapChain(*ppSwapChain);
+    HRESULT hr = orig ? orig(self, pDevice, hWnd, pEffectiveDesc, pEffectiveFullscreenDesc, pRestrictToOutput, ppSwapChain) : S_OK;
+    if (SUCCEEDED(hr)) {
+        if (hWnd && proxy->IsActive()) {
+            proxy->ApplyInitialWindowClamp(hWnd);
+        }
+        if (ppSwapChain && *ppSwapChain) {
+            proxy->AttachSwapChain(*ppSwapChain);
+        }
     }
     return hr;
 }
