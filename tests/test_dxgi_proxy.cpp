@@ -1150,6 +1150,189 @@ TEST(DxgiProxyTest, MidPairMenuTransitionDoesNotDeadlockSwapchainsOrLeakFrames) 
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
 }
 
+TEST(DxgiProxyTest, TwoDViewModeSwitchesPresentationBetweenFramePairsAndQuadLayers) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // Active companion handshake
+    vrBridge->PerformHandshake();
+    ASSERT_TRUE(vrBridge->IsCompanionActive());
+    EXPECT_FALSE(vrBridge->IsMenuVisible());
+    EXPECT_FALSE(vrBridge->Is2DViewActive());
+
+    // 1. Active 3D gameplay: 2 frames -> 1 stereo pair
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // 2. Player toggles 2D Floating Window View mode on
+    vrBridge->Set2DViewActive(true);
+    EXPECT_TRUE(vrBridge->Is2DViewActive());
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // Next 3 frames in 2D Floating Window Mode should each submit a floating quad layer immediately
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 2u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+
+    // 3. Player toggles 2D Floating Window View mode off: return to active 3D gameplay
+    vrBridge->Set2DViewActive(false);
+    EXPECT_FALSE(vrBridge->Is2DViewActive());
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // Frame 0 of resumed 3D gameplay: left eye
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+
+    // Frame 1 of resumed 3D gameplay: right eye and pair submit
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 2u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+}
+
+TEST(DxgiProxyTest, MidPair2DViewTransitionDoesNotDeadlockSwapchainsOrLeakFrames) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    vrBridge->PerformHandshake();
+    ASSERT_TRUE(vrBridge->IsCompanionActive());
+
+    // Frame 0: render left eye in gameplay
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+
+    // Player switches to 2D Floating Window Mode before frame 1 renders right eye
+    vrBridge->Set2DViewActive(true);
+    EXPECT_TRUE(vrBridge->Is2DViewActive());
+
+    // Presentation must handle switching immediately to quad without deadlocking swapchain
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+
+    // And toggle back to 3D VR mode
+    vrBridge->Set2DViewActive(false);
+    EXPECT_FALSE(vrBridge->Is2DViewActive());
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // Resumed gameplay completes a clean pair
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+}
+
+TEST(DxgiProxyTest, TransitionInto2DFloatingWindowModeTriggersQuadAlignment) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    vrBridge->PerformHandshake();
+    ASSERT_TRUE(vrBridge->IsCompanionActive());
+
+    // Complete 1 frame pair in 3D VR
+    proxy.OnPresent(nullptr, 0, 0);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+
+    // Set head pose with offset
+    HeadPose simPose;
+    simPose.position = Vector3(2.0f, 1.7f, 3.0f);
+    simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
+    simPose.isValid = true;
+    openXrManager->SetSimulatedPose(simPose);
+
+    // Trigger VR View Toggle Action to activate 2D Floating Window Mode
+    vrBridge->Set2DViewActive(true);
+    proxy.OnPresent(nullptr, 0, 0);
+
+    EXPECT_TRUE(openXrManager->HasMenuQuadPose());
+    XrPosef quadPose = openXrManager->GetLastSubmittedQuadLayer().pose;
+    EXPECT_NEAR(quadPose.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(quadPose.position.y, 1.7f, 0.001f);
+    EXPECT_NEAR(quadPose.position.z, 1.5f, 0.001f); // 3.0 - 1.5 = 1.5
+}
+
+TEST(DxgiProxyTest, TwoDViewModePersistentAcrossInGameMenuTransitions) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    vrBridge->PerformHandshake();
+    ASSERT_TRUE(vrBridge->IsCompanionActive());
+
+    // Activate 2D Floating Window Mode
+    vrBridge->Set2DViewActive(true);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+
+    // Open in-game menu while in 2D Floating Window Mode
+    vrBridge->SetMenuVisible(true);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 2u);
+
+    // Close in-game menu: 2D Floating Window Mode remains sticky/active
+    vrBridge->SetMenuVisible(false);
+    EXPECT_TRUE(vrBridge->Is2DViewActive());
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+
+    // Only when 2D Floating Window Mode is explicitly disabled does it return to 3D VR
+    vrBridge->Set2DViewActive(false);
+    proxy.OnPresent(nullptr, 0, 0); // Eye 0
+    proxy.OnPresent(nullptr, 0, 0); // Eye 1
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+}
+
 TEST(DxgiProxyTest, TransitionIntoMenuModeTriggersQuadAlignment) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);

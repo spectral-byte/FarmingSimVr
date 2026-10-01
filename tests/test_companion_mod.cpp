@@ -44,7 +44,12 @@ int RunLuauChunk(lua_State* L, const std::string& code, const char* chunkName) {
     int loadResult = luau_load(L, chunkName, bytecode, bytecodeSize, 0);
     free(bytecode);
     if (loadResult != 0) return loadResult;
-    return lua_pcall(L, 0, 0, 0);
+    int status = lua_pcall(L, 0, 0, 0);
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        if (err) fprintf(stderr, "\n[Luau Error in %s]: %s\n", chunkName, err);
+    }
+    return status;
 }
 
 void SetupCameraMockGlobals(lua_State* L) {
@@ -3103,6 +3108,571 @@ TEST_F(CompanionModTest, SnapTurnConsoleCommand) {
         assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(30.0)) < 0.0001, "Angle must be 30 deg in radians")
     )luau", "=verifySnapTurnConsoleCommand"), 0);
 }
+
+TEST_F(CompanionModTest, Is2DViewActiveDefaultsToFalseAndSynchronizesWithVRBridge) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.is2DViewActive == false, "is2DViewActive must default to false")
+        assert(VRCompanion:getIs2DViewActive() == false, "getIs2DViewActive must return false by default")
+        assert(VRBridge.getIs2DViewActive() == false, "VRBridge.getIs2DViewActive must return false by default")
+
+        -- Toggle to true
+        VRCompanion:set2DViewActive(true)
+        assert(VRCompanion.is2DViewActive == true, "is2DViewActive must be true after set2DViewActive(true)")
+        assert(VRCompanion:getIs2DViewActive() == true, "getIs2DViewActive must return true")
+        assert(VRBridge.getIs2DViewActive() == true, "VRBridge must reflect true state")
+
+        -- Toggle to false
+        VRCompanion:set2DViewActive(false)
+        assert(VRCompanion.is2DViewActive == false, "is2DViewActive must be false after set2DViewActive(false)")
+        assert(VRBridge.getIs2DViewActive() == false, "VRBridge must reflect false state")
+
+        -- External bridge synchronization during update
+        VRBridge.set2DViewActive(true)
+        assert(VRBridge.getIs2DViewActive() == true)
+        assert(VRCompanion.is2DViewActive == false) -- not yet updated
+        VRCompanion:update(16.6)
+        assert(VRCompanion.is2DViewActive == true, "VRCompanion must sync with external VRBridge state on update")
+    )luau", "=test2DViewSync"), 0);
+}
+
+TEST_F(CompanionModTest, InCabVehicleCameraBypasses6DOFTrackingIn2DMode) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.position = fs25vr::Vector3(0.15f, 0.05f, -0.10f);
+    simPose.rotation = fs25vr::EulerAngles(0.12f, 0.25f, 0.0f);
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local mockVehCam = {
+            isInside = true,
+            cameraNode = 10,
+            origRotY = 3.14159,
+            rotY = 3.14159,
+            rotX = 0.0,
+            rotZ = 0.0,
+            transX = 0.5,
+            transY = 2.0,
+            transZ = 1.0,
+            origTransX = 0.5,
+            origTransY = 2.0,
+            origTransZ = 1.0,
+        }
+        _G.mockCamNodeTrans = { 0.5, 2.0, 1.0 }
+        _G.mockCamNodeRot = { 0.0, 3.14159, 0.0 }
+
+        function setTranslation(node, x, y, z)
+            _G.mockCamNodeTrans = { x, y, z }
+        end
+        function getTranslation(node)
+            return _G.mockCamNodeTrans[1], _G.mockCamNodeTrans[2], _G.mockCamNodeTrans[3]
+        end
+        function setRotation(node, rx, ry, rz)
+            _G.mockCamNodeRot = { rx, ry, rz }
+        end
+        function getRotation(node)
+            return _G.mockCamNodeRot[1], _G.mockCamNodeRot[2], _G.mockCamNodeRot[3]
+        end
+
+        -- 1. In 3D VR Mode (is2DViewActive == false), onVehicleCameraUpdate applies 6DOF head pose
+        VRCompanion:set2DViewActive(false)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 16.6)
+        assert(math.abs(_G.mockCamNodeRot[1] - 0.12) < 0.001, "3D VR mode must apply HMD pitch to camera")
+
+        -- 2. Switch to 2D Floating Window Mode (is2DViewActive == true)
+        VRCompanion:set2DViewActive(true)
+
+        -- Simulate standard 2D mouse rotation and translation in-cab
+        mockVehCam.rotX = 0.35
+        mockVehCam.rotY = 2.50
+        _G.mockCamNodeRot = { 0.35, 2.50, 0.0 }
+        _G.mockCamNodeTrans = { 0.5, 2.0, 1.0 }
+
+        -- Call onVehicleCameraUpdate in 2D mode
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 16.6)
+
+        -- 6DOF head tracking updates must be bypassed! 2D mouse rotation is preserved untouched
+        assert(math.abs(_G.mockCamNodeRot[1] - 0.35) < 0.001, "2D mode must preserve mouse pitch and bypass HMD pitch")
+        assert(math.abs(_G.mockCamNodeRot[2] - 2.50) < 0.001, "2D mode must preserve mouse yaw and bypass HMD yaw")
+        assert(math.abs(_G.mockCamNodeTrans[1] - 0.5) < 0.001, "2D mode must preserve vehicle camera translation")
+    )luau", "=testVehicleCameraBypass"), 0);
+}
+
+TEST_F(CompanionModTest, OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMouseLook) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.position = fs25vr::Vector3(0.1f, 0.0f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.2f, 0.0f, 0.0f);
+    oxr->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local mockInput = { cameraRotationX = 0.15, cameraRotationY = -0.25 }
+        local curCamRot = { 0.0, 0.0, 0.0 }
+        local curCamTrans = { 0.0, 1.8, 0.0 }
+
+        local mockPlayerCam = {
+            cameraNode = 20,
+            firstPersonCamera = 20,
+            player = { inputComponent = mockInput },
+            setRotation = function(self, rx, ry, rz)
+                curCamRot = { rx, ry, rz }
+            end,
+            getRotation = function(self)
+                return curCamRot[1], curCamRot[2], curCamRot[3]
+            end
+        }
+        function setTranslation(node, x, y, z) curCamTrans = { x, y, z } end
+        function getTranslation(node) return curCamTrans[1], curCamTrans[2], curCamTrans[3] end
+        function setRotation(node, rx, ry, rz) curCamRot = { rx, ry, rz } end
+        function getRotation(node) return curCamRot[1], curCamRot[2], curCamRot[3] end
+
+        -- 1. In 3D VR mode: mouse rotation keeps pitch = 0 (horizon locked level)
+        VRCompanion:set2DViewActive(false)
+        VRCompanion:onPlayerCameraUpdateRotation(mockPlayerCam, 16.6)
+        assert(curCamRot[1] == 0.0, "3D VR mode must zero neck pitch")
+
+        -- onPlayerCameraUpdate applies HMD pose
+        VRCompanion:onPlayerCameraUpdate(mockPlayerCam, 16.6)
+        assert(math.abs(curCamRot[1] - 0.2) < 0.001, "3D VR mode applies HMD pitch in onPlayerCameraUpdate")
+
+        -- 2. In 2D Floating Window Mode: mouse drives both pitch and yaw
+        VRCompanion:set2DViewActive(true)
+        curCamRot = { 0.0, 0.0, 0.0 }
+        curCamTrans = { 0.0, 1.8, 0.0 }
+
+        VRCompanion:onPlayerCameraUpdateRotation(mockPlayerCam, 16.6)
+        assert(math.abs(curCamRot[1] - 0.15) < 0.001, "2D mode must update pitch from mouse Y input")
+        assert(math.abs(curCamRot[2] - 0.25) < 0.001, "2D mode must update yaw from mouse X input")
+
+        -- onPlayerCameraUpdate bypasses 6DOF updates completely
+        VRCompanion:onPlayerCameraUpdate(mockPlayerCam, 16.6)
+        assert(math.abs(curCamRot[1] - 0.15) < 0.001, "2D mode must not overwrite pitch with HMD pose")
+        assert(math.abs(curCamTrans[1] - 0.0) < 0.001, "2D mode must not apply HMD eye translation")
+    )luau", "=testPlayerCameraBypass"), 0);
+}
+
+TEST_F(CompanionModTest, CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMode) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local camNode = 50
+        setFovY(camNode, 1.0472) -- standard 60 deg FS25 camera FOV
+        setProjectionOffset(camNode, 0.0, 0.0)
+
+        -- 1. Apply VR projection in 3D mode (is2DViewActive == false)
+        VRCompanion:set2DViewActive(false)
+        VRCompanion:applyCameraProjection(camNode, 0)
+        local vrFov = getFovY(camNode)
+        assert(math.abs(vrFov - 1.70) < 0.02, "3D VR mode must apply VR headset FOV")
+
+        -- 2. Switch to 2D mode (is2DViewActive == true)
+        VRCompanion:set2DViewActive(true)
+        VRCompanion:applyCameraProjection(camNode, 0)
+        local restoredFov = getFovY(camNode)
+        local offX, offY = getProjectionOffset(camNode)
+        assert(math.abs(restoredFov - 1.0472) < 0.0001, "2D mode must restore original FOV")
+        assert(offX == 0.0 and offY == 0.0, "2D mode must enforce zero projection offsets")
+
+        -- 3. Switch back to 3D VR mode
+        VRCompanion:set2DViewActive(false)
+        VRCompanion:applyCameraProjection(camNode, 0)
+        assert(math.abs(getFovY(camNode) - vrFov) < 0.0001, "Returning to 3D VR mode restores VR FOV")
+    )luau", "=testCameraProjectionRestoration"), 0);
+}
+
+TEST_F(CompanionModTest, HudConvergenceDisparityZeroedAndFullFrameAnchorsAppliedIn2DMode) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    bridge.SetIpd(0.064f);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion.handshakeComplete = true
+        VRCompanion.passThroughMode = false
+        VRCompanion.headTrackingEnabled = true
+
+        _G.g_hudAnchorLeft = 0.20
+        _G.g_hudAnchorRight = 0.80
+        _G.g_hudAnchorBottom = 0.16
+        _G.g_hudAnchorTop = 0.84
+
+        -- 1. In 3D VR mode: convergence disparity is computed from IPD and non-zero
+        VRCompanion:set2DViewActive(false)
+        VRCompanion:updateHudConvergence(16.6)
+        assert(VRCompanion.currentConvergenceDisparity > 0.0, "3D VR mode must have non-zero disparity")
+
+        -- 2. In 2D Floating Window Mode: disparity and offset are zeroed out and full-frame anchors applied
+        VRCompanion:set2DViewActive(true)
+        VRCompanion:updateHudConvergence(16.6)
+        assert(VRCompanion.currentConvergenceDisparity == 0.0, "2D mode must zero convergence disparity")
+        assert(VRCompanion.currentConvergenceOffset == 0.0, "2D mode must zero convergence offset")
+        assert(_G.g_hudAnchorLeft == 0.0, "2D mode must apply full-frame left anchor (0.0)")
+        assert(_G.g_hudAnchorRight == 1.0, "2D mode must apply full-frame right anchor (1.0)")
+        assert(_G.g_hudAnchorBottom == 0.0, "2D mode must apply full-frame bottom anchor (0.0)")
+        assert(_G.g_hudAnchorTop == 1.0, "2D mode must apply full-frame top anchor (1.0)")
+
+        -- Check across alternating frame parities (AFR left vs right)
+        VRBridge.frameParity = 1
+        VRCompanion:updateHudConvergence(16.6)
+        assert(VRCompanion.currentConvergenceOffset == 0.0, "Parity 1 must also have 0.0 convergence offset in 2D mode")
+        assert(_G.g_hudAnchorLeft == 0.0)
+        assert(_G.g_hudAnchorRight == 1.0)
+
+        -- 3. Returning to 3D VR mode restores VR insets and disparity
+        VRCompanion:set2DViewActive(false)
+        VRCompanion:updateHudConvergence(16.6)
+        assert(VRCompanion.currentConvergenceDisparity > 0.0, "Returning to 3D VR mode restores disparity")
+    )luau", "=testHudZeroingIn2DMode"), 0);
+}
+
+TEST_F(CompanionModTest, ModeIsStickyAcrossInGameGuiMenus) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local menuVisible = false
+        _G.g_gui = {
+            getIsGuiVisible = function()
+                return menuVisible
+            end
+        }
+
+        -- Start in 2D mode
+        VRCompanion:set2DViewActive(true)
+        assert(VRCompanion.is2DViewActive == true)
+
+        -- 1. Open in-game GUI menu (e.g. ESC pause or shop)
+        menuVisible = true
+        VRCompanion:update(16.6)
+        assert(VRCompanion.isMenuVisible == true, "Menu must be visible")
+        assert(VRCompanion.is2DViewActive == true, "2D mode must remain active while in menu")
+        assert(VRBridge.getIs2DViewActive() == true, "VRBridge must remain in 2D mode")
+
+        -- 2. Close in-game GUI menu
+        menuVisible = false
+        VRCompanion:update(16.6)
+        assert(VRCompanion.isMenuVisible == false, "Menu must be closed")
+        assert(VRCompanion.is2DViewActive == true, "2D mode must be sticky and remain active after menu closes")
+        assert(VRBridge.getIs2DViewActive() == true, "VRBridge must remain in 2D mode after menu closes")
+    )luau", "=testMenuStickiness"), 0);
+}
+
+TEST_F(CompanionModTest, FreshMapLoadAlwaysInitializesIn3DVrMode) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        -- Force 2D mode before map load
+        VRCompanion:set2DViewActive(true)
+        assert(VRCompanion.is2DViewActive == true)
+        assert(VRBridge.getIs2DViewActive() == true)
+
+        -- Fresh map load
+        VRCompanion:loadMap("mapUS")
+
+        -- Must cleanly initialize in 3D VR mode (false)
+        assert(VRCompanion.is2DViewActive == false, "Fresh map load must always reset is2DViewActive to false")
+        assert(VRCompanion:getIs2DViewActive() == false, "getIs2DViewActive must return false")
+        assert(VRBridge.getIs2DViewActive() == false, "VRBridge must be synchronized to false on map load")
+    )luau", "=testFreshMapLoad"), 0);
+}
+
+TEST_F(CompanionModTest, SnapTurnSuppressedWhen2DViewActive) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local mockVehCam = {
+            isInside = true,
+            rotY = 0.0,
+            origRotY = 0.0
+        }
+        local mockVeh = {
+            getActiveCamera = function() return mockVehCam end
+        }
+        VRCompanion.getActiveVehicleCamera = function() return mockVehCam end
+        VRCompanion.getControlledVehicle = function() return mockVeh end
+
+        -- In 3D VR mode: snap turn succeeds
+        VRCompanion:set2DViewActive(false)
+        local ok3D = VRCompanion:snapTurn(1)
+        assert(ok3D == true, "Snap turn must succeed in 3D VR mode")
+
+        -- In 2D Floating Window Mode: snap turn is suppressed
+        VRCompanion:set2DViewActive(true)
+        VRCompanion.lastSnapTurnTime = 0
+        local ok2D, reason = VRCompanion:snapTurn(1)
+        assert(ok2D == false, "Snap turn must be suppressed in 2D Floating Window Mode")
+        assert(reason == "2d_view_active", "Reason must indicate 2d_view_active")
+    )luau", "=testSnapTurnSuppression"), 0);
+}
+
+TEST_F(CompanionModTest, ConsoleCommandsManage2DViewMode) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:set2DViewActive(false)
+
+        -- Query status
+        local status = VRCompanion:consoleCommandSet2DView("status")
+        assert(string.find(status, "false") ~= nil, "Status must report false")
+
+        -- Set true
+        VRCompanion:consoleCommandSet2DView("true")
+        assert(VRCompanion.is2DViewActive == true, "Command set2DView true must enable 2D mode")
+
+        -- Toggle
+        VRCompanion:consoleCommandToggleView()
+        assert(VRCompanion.is2DViewActive == false, "Command toggleView must toggle to false")
+
+        VRCompanion:consoleCommandToggleView()
+        assert(VRCompanion.is2DViewActive == true, "Command toggleView must toggle to true")
+    )luau", "=testConsoleCommands"), 0);
+}
+
+TEST_F(CompanionModTest, MetadataDescriptorDeclaresToggleViewActionAndBindings) {
+    std::string modDescContent = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
+    ASSERT_FALSE(modDescContent.empty());
+
+    EXPECT_NE(modDescContent.find("<action name=\"VR_TOGGLE_VIEW\" category=\"ONFOOT VEHICLE\"/>"), std::string::npos);
+    EXPECT_NE(modDescContent.find("<actionBinding action=\"VR_TOGGLE_VIEW\">"), std::string::npos);
+    EXPECT_NE(modDescContent.find("KEY_rctrl KEY_v"), std::string::npos);
+    EXPECT_NE(modDescContent.find("KEY_numPad0"), std::string::npos);
+    EXPECT_NE(modDescContent.find("<binding device=\"GAMEPAD_DEFAULT\""), std::string::npos);
+    EXPECT_NE(modDescContent.find("BUTTON_9"), std::string::npos);
+    EXPECT_NE(modDescContent.find("<text name=\"input_VR_TOGGLE_VIEW\">"), std::string::npos);
+}
+
+TEST_F(CompanionModTest, ToggleViewInEngineActionEventsRegistration) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredEvents = {}
+        _G.g_inputBinding = {
+            actionEvents = {},
+            registerActionEvent = function(self, actionName, target, callback, triggerUp, triggerDown, triggerAlways, startActive)
+                local id = #self.actionEvents + 1
+                local ev = { id = id, actionName = actionName, target = target, callback = callback }
+                self.actionEvents[id] = ev
+                registeredEvents[actionName] = ev
+                return true, id
+            end,
+            setActionEventTextPriority = function() end,
+            setActionEventActive = function() end,
+            setActionEventTextVisibility = function() end,
+            setActionEventText = function() end
+        }
+
+        VRCompanion:registerActionEvents(true)
+        assert(registeredEvents["VR_TOGGLE_VIEW"] ~= nil, "VR_TOGGLE_VIEW must be registered")
+        assert(registeredEvents["VR_TOGGLE_VIEW"].callback == VRCompanion.onToggleVrViewAction, "Callback must be onToggleVrViewAction")
+        assert(VRCompanion.toggleViewActionEventId ~= nil, "toggleViewActionEventId must be set")
+
+        -- deleteMap cleans up action event ID
+        VRCompanion:deleteMap()
+        assert(VRCompanion.toggleViewActionEventId == nil, "toggleViewActionEventId must be nil after deleteMap")
+    )luau", "=verifyToggleViewActionRegistration"), 0);
+}
+
+TEST_F(CompanionModTest, ToggleViewActionTogglesModeWithDebounceAndSilentExecution) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local warningCalls = 0
+        _G.g_currentMission = {
+            showBlinkingWarning = function(self, msg, duration)
+                warningCalls = warningCalls + 1
+            end
+        }
+
+        VRCompanion:set2DViewActive(false)
+        VRCompanion:resetToggleViewDebounce()
+        assert(VRCompanion.is2DViewActive == false)
+
+        -- 1. Initial toggle action at t = 1000 toggles to 2D mode (silent)
+        local ok, res = VRCompanion:onToggleVrViewAction("VR_TOGGLE_VIEW", 1, 1000)
+        assert(ok == true, "First toggle action must succeed")
+        assert(VRCompanion.is2DViewActive == true, "Must switch to 2D Floating Window Mode")
+        assert(warningCalls == 0, "Toggle action must execute silently without blinking warnings")
+
+        -- 2. Immediate second press at t = 1100 (within 250ms debounce) is rejected
+        local ok2, reason = VRCompanion:onToggleVrViewAction("VR_TOGGLE_VIEW", 1, 1100)
+        assert(ok2 == false, "Rapid consecutive press must be debounced")
+        assert(reason == "debounced", "Failure reason must be 'debounced'")
+        assert(VRCompanion.is2DViewActive == true, "View mode must remain 2D")
+        assert(warningCalls == 0, "Debounced press must not trigger warnings")
+
+        -- 3. Third press at t = 1300 (> 250ms debounce) succeeds, toggling back to 3D VR mode
+        local ok3, res3 = VRCompanion:onToggleVrViewAction("VR_TOGGLE_VIEW", 1, 1300)
+        assert(ok3 == false, "Toggling back returns new active state (false)")
+        assert(VRCompanion.is2DViewActive == false, "Must return to 3D VR mode")
+        assert(warningCalls == 0, "Exit from 2D mode must also execute silently without warnings")
+    )luau", "=testToggleViewDebounceAndSilence"), 0);
+}
+
+TEST_F(CompanionModTest, RecenterIn2DModeRealignsFloatingQuadWithoutResettingVehicleOrientation) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local alignMenuQuadCalls = 0
+        local recenterCalls = 0
+        _G.VRBridge.alignMenuQuad = function()
+            alignMenuQuadCalls = alignMenuQuadCalls + 1
+        end
+        _G.VRBridge.recenter = function()
+            recenterCalls = recenterCalls + 1
+        end
+
+        local mockVehCam = {
+            isInside = true,
+            rotY = 1.25,
+            origRotY = 0.0,
+            cameraNode = 101
+        }
+        VRCompanion.getActiveVehicleCamera = function() return mockVehCam end
+        VRCompanion.getControlledVehicle = function() return {} end
+
+        -- Set 2D view mode active
+        VRCompanion:set2DViewActive(true)
+
+        -- Trigger Recenter Action while in 2D mode
+        VRCompanion:onRecenterAction()
+
+        -- Verify alignMenuQuad was called to realign 6DOF floating quad
+        assert(alignMenuQuadCalls == 1, "alignMenuQuad must be called when recentering in 2D mode")
+        -- Verify OpenXR tracking space recenter was NOT called
+        assert(recenterCalls == 0, "VRBridge.recenter must NOT be called when in 2D mode")
+        -- Verify vehicle camera orientation (rotY) was NOT reset
+        assert(mockVehCam.rotY == 1.25, "Vehicle camera rotY must remain untouched in 2D mode recenter")
+
+        -- Now switch back to 3D VR mode
+        VRCompanion:set2DViewActive(false)
+        VRCompanion:onRecenterAction()
+
+        -- In 3D mode, standard recenter should be invoked and camera reset
+        assert(recenterCalls == 1, "VRBridge.recenter must be called when in 3D VR mode")
+        assert(alignMenuQuadCalls == 1, "alignMenuQuad must NOT be called in 3D mode")
+    )luau", "=testRecenterIn2DMode"), 0);
+}
+
+TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerToggleViewAndDebounceHeldRepeat) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:set2DViewActive(false)
+        VRCompanion:resetToggleViewDebounce()
+        _G.g_time = 1000
+
+        _G.Input = {
+            KEY_numPad0 = 256,
+            KEY_v = 118,
+            KEY_rctrl = 305,
+            isKeyPressed = function(key)
+                return key == 305 -- Simulate Ctrl held
+            end
+        }
+
+        -- 1. Hardware shortcut: Numpad 0 (sym 256) key down -> toggles to 2D
+        VRCompanion:keyEvent(48, 256, 0, true)
+        assert(VRCompanion.is2DViewActive == true, "Numpad 0 keyEvent must toggle to 2D mode")
+
+        -- 2. Held repeat for Numpad 0 while key is still held down is ignored
+        _G.g_time = 1500 -- time advanced past debounce
+        VRCompanion:keyEvent(48, 256, 0, true)
+        assert(VRCompanion.is2DViewActive == true, "Repeated Numpad 0 key down without release must be ignored")
+
+        -- 3. Release Numpad 0
+        VRCompanion:keyEvent(48, 256, 0, false)
+        assert(VRCompanion.isToggleViewKeyDown == false, "Key release must clear isToggleViewKeyDown")
+
+        -- 4. Hardware shortcut: Ctrl + V (sym 118 with RCtrl held) -> toggles back to 3D
+        _G.g_time = 2000
+        VRCompanion:keyEvent(118, 118, 0, true)
+        assert(VRCompanion.is2DViewActive == false, "Ctrl + V keyEvent must toggle back to 3D mode")
+
+        -- 5. Held repeat for Ctrl + V is ignored
+        _G.g_time = 2500
+        VRCompanion:keyEvent(118, 118, 0, true)
+        assert(VRCompanion.is2DViewActive == false, "Repeated Ctrl + V key down without release must be ignored")
+
+        -- 6. Release Ctrl + V
+        VRCompanion:keyEvent(118, 118, 0, false)
+        assert(VRCompanion.isToggleViewKeyDown == false, "Key release must clear isToggleViewKeyDown")
+    )luau", "=testKeyEventShortcuts"), 0);
+}
+
 
 
 

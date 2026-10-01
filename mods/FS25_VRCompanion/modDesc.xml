@@ -38,6 +38,10 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
             <en>VR Snap Turn Right</en>
             <de>VR-Blickdrehung rechts</de>
         </text>
+        <text name="input_VR_TOGGLE_VIEW">
+            <en>Toggle VR View Mode</en>
+            <de>VR-Ansichtsmodus umschalten</de>
+        </text>
         <text name="setting_vrHudInsetHorizontal">
             <en>VR HUD Horizontal Inset</en>
             <de>VR-HUD horizontaler Einzug</de>
@@ -93,6 +97,7 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         <action name="VR_HUD_TOGGLE" category="ONFOOT VEHICLE"/>
         <action name="VR_SNAP_TURN_LEFT" category="ONFOOT VEHICLE"/>
         <action name="VR_SNAP_TURN_RIGHT" category="ONFOOT VEHICLE"/>
+        <action name="VR_TOGGLE_VIEW" category="ONFOOT VEHICLE"/>
     </actions>
     <inputBinding>
         <actionBinding action="VR_RECENTER">
@@ -114,6 +119,11 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         <actionBinding action="VR_SNAP_TURN_RIGHT">
             <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad6"/>
             <binding device="GAMEPAD_DEFAULT" input="BUTTON_6"/>
+        </actionBinding>
+        <actionBinding action="VR_TOGGLE_VIEW">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_rctrl KEY_v"/>
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad0"/>
+            <binding device="GAMEPAD_DEFAULT" input="BUTTON_9"/>
         </actionBinding>
     </inputBinding>
 </modDesc>

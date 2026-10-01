@@ -304,13 +304,14 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
     if (m_openXrManager->HasEyeSwapchains()) {
         bool isCompanionActive = m_vrBridge && m_vrBridge->IsCompanionActive();
         bool isMenuVisible = m_vrBridge && m_vrBridge->IsMenuVisible();
-        bool inMenuMode = !isCompanionActive || isMenuVisible;
-        if (inMenuMode) {
+        bool is2DViewActive = m_vrBridge && m_vrBridge->Is2DViewActive();
+        bool inQuadMode = !isCompanionActive || isMenuVisible || is2DViewActive;
+        if (inQuadMode) {
             m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
-            if (!m_wasInMenuMode) {
+            if (!m_wasInQuadMode) {
                 m_openXrManager->AlignMenuQuadToHeadPose();
             }
-            m_wasInMenuMode = true;
+            m_wasInQuadMode = true;
 
             if (!m_openXrManager->HasCursorSwapchain()) {
                 m_openXrManager->CreateCursorSwapchain();
@@ -320,10 +321,17 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
             // Floating quad layer mode:
             // Backbuffer is presented on an OpenXR Quad layer positioned in 3D tracking space
             // rather than warping across an immersive projection layer.
-            // Active during pre-game / Main Menu AND in-game GUI menus (ESC pause menu, shop, etc.).
+            // Active during pre-game / Main Menu, in-game GUI menus (ESC pause menu, shop, etc.),
+            // or in 2D Floating Window Mode.
             m_openXrManager->SubmitMenuQuad();
         } else {
-            m_wasInMenuMode = false;
+            if (m_wasInQuadMode) {
+                // Seamlessly returning to 3D VR mode: reset AFR frame parity
+                if (m_vrBridge) {
+                    m_vrBridge->SetFrameParity(0);
+                }
+            }
+            m_wasInQuadMode = false;
             m_openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
             bool isNativeStereo = m_telemetryProbe && m_telemetryProbe->HasNativeStereoDetected();
             if (isNativeStereo) {

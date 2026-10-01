@@ -46,6 +46,9 @@ public:
     void SetMenuVisible(bool visible);
     void AlignMenuQuad();
 
+    bool Is2DViewActive() const { return m_2dViewActive; }
+    void Set2DViewActive(bool active);
+
     static int Lua_IsReady(lua_State* L);
     static int Lua_Handshake(lua_State* L);
     static int Lua_IsCompanionActive(lua_State* L);
@@ -59,6 +62,8 @@ public:
     static int Lua_GetEyeProjection(lua_State* L);
     static int Lua_SetMenuVisible(lua_State* L);
     static int Lua_GetIsMenuVisible(lua_State* L);
+    static int Lua_Set2DViewActive(lua_State* L);
+    static int Lua_GetIs2DViewActive(lua_State* L);
 
     static int Lua_GetFrameParity(lua_State* L);
     static int Lua_GetFrameIndex(lua_State* L);
@@ -74,6 +79,7 @@ private:
     std::string m_version = "1.0.0";
     bool m_handshakeCompleted = false;
     bool m_menuVisible = false;
+    bool m_2dViewActive = false;
 
     uint32_t m_frameParity = 0; // 0 = Left (2k), 1 = Right (2k+1)
     uint64_t m_frameIndex = 0;

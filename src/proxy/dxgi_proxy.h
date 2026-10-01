@@ -101,7 +101,7 @@ private:
     bool m_swapChainAttached = false;
     bool m_factoryAttached = false;
     bool m_vrInitialized = false;
-    bool m_wasInMenuMode = false;
+    bool m_wasInQuadMode = false;
 };
 
 } // namespace fs25vr

@@ -20,15 +20,18 @@ VRCompanion.lastControlledVehicle = nil
 VRCompanion.origCamSettings = {}
 VRCompanion.vehicleRotationStates = {}
 VRCompanion.isMenuVisible = false
+VRCompanion.is2DViewActive = false
 VRCompanion.guiVisibilityInitialized = false
 VRCompanion.hudToggleActionEventId = nil
 VRCompanion.recenterActionEventId = nil
 VRCompanion.snapLeftActionEventId = nil
 VRCompanion.snapRightActionEventId = nil
+VRCompanion.toggleViewActionEventId = nil
 VRCompanion.hudToggleLoggedOnce = false
 VRCompanion.recenterLoggedOnce = false
 VRCompanion.snapLeftLoggedOnce = false
 VRCompanion.snapRightLoggedOnce = false
+VRCompanion.toggleViewLoggedOnce = false
 
 -- VR HUD Inset and UI Scale Constants
 VRCompanion.DEFAULT_HUD_INSET_X = 0.20
@@ -96,6 +99,117 @@ VRCompanion.RECENTER_MODES = {
     BOTH = "Both",
     VEHICLE_ONLY = "VehicleOnly"
 }
+
+function VRCompanion:getIs2DViewActive()
+    return self.is2DViewActive == true
+end
+
+function VRCompanion:set2DViewActive(active)
+    local wasActive = (self.is2DViewActive == true)
+    local newActive = (active == true)
+    self.is2DViewActive = newActive
+
+    if VRBridge ~= nil and type(VRBridge.set2DViewActive) == "function" then
+        VRBridge.set2DViewActive(newActive)
+    end
+
+    if wasActive ~= newActive then
+        if newActive then
+            print("[FS25_VR] Entered 2D Floating Window Mode.")
+            self:restoreCameraProjectionsFor2D()
+            if self.activePlayerCamera ~= nil then
+                self:realignPlayerCameraToRoot(self.activePlayerCamera)
+            end
+            self:restoreHudInsets(true)
+        else
+            print("[FS25_VR] Exited 2D Floating Window Mode; returning to 3D VR mode.")
+            self:applyHudInsets()
+            self:applyHudState()
+        end
+    end
+end
+
+function VRCompanion:toggle2DView()
+    self:set2DViewActive(not self.is2DViewActive)
+    return self.is2DViewActive
+end
+
+-- VR View Mode Toggle Configuration (Issue #41)
+VRCompanion.DEFAULT_TOGGLE_VIEW_DEBOUNCE_MS = 250
+VRCompanion.toggleViewDebounceMs = VRCompanion.DEFAULT_TOGGLE_VIEW_DEBOUNCE_MS
+VRCompanion.lastToggleViewTime = nil
+VRCompanion.isToggleViewKeyDown = false
+
+function VRCompanion:isToggleViewDebounced(curTime)
+    local t = curTime or self:getCurrentTimeMs()
+    if t == nil then
+        return false
+    end
+    if self.lastToggleViewTime ~= nil then
+        local cooldown = self.toggleViewDebounceMs or self.DEFAULT_TOGGLE_VIEW_DEBOUNCE_MS or 250
+        local elapsed = t - self.lastToggleViewTime
+        if elapsed >= 0 and elapsed < cooldown then
+            return true
+        end
+    end
+    return false
+end
+
+function VRCompanion:resetToggleViewDebounce()
+    self.lastToggleViewTime = nil
+    self.isToggleViewKeyDown = false
+end
+
+function VRCompanion:onToggleVrViewAction(actionName, keyStatus, curTime)
+    local t = nil
+    if type(curTime) == "number" then
+        t = curTime
+    elseif type(keyStatus) == "number" and keyStatus > 1 then
+        t = keyStatus
+    elseif type(actionName) == "number" then
+        t = actionName
+    end
+    t = t or self:getCurrentTimeMs()
+
+    if self:isToggleViewDebounced(t) then
+        return false, "debounced"
+    end
+
+    self.lastToggleViewTime = t
+    return self:toggle2DView()
+end
+
+function VRCompanion:restoreCameraProjectionsFor2D()
+    if self.origCamSettings ~= nil then
+        for camNode, orig in pairs(self.origCamSettings) do
+            local exists = true
+            if type(entityExists) == "function" then
+                exists = entityExists(camNode)
+            end
+            if exists then
+                if orig.fovY ~= nil and type(setFovY) == "function" then
+                    pcall(setFovY, camNode, orig.fovY)
+                end
+                if type(setProjectionOffset) == "function" then
+                    pcall(setProjectionOffset, camNode, 0, 0)
+                end
+            end
+        end
+    end
+    local veh = self:getControlledVehicle()
+    if veh ~= nil then
+        local cam = self:getVehicleActiveCamera(veh)
+        if cam ~= nil and cam.cameraNode ~= nil then
+            self:applyCameraProjection(cam.cameraNode, 0)
+        end
+    end
+    if self.activePlayerCamera ~= nil then
+        local camNode = self.activePlayerCamera.firstPersonCamera or self.activePlayerCamera.cameraNode
+        if camNode ~= nil then
+            self:applyCameraProjection(camNode, 0)
+        end
+    end
+end
 
 function VRCompanion:getRecenterMode()
     if self.recenterVrTrackingSpace == false then
@@ -532,11 +646,27 @@ function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
 end
 
 function VRCompanion:updateHudConvergence(dt)
+    if self.is2DViewActive then
+        self.currentConvergenceOffset = 0.0
+        self.currentConvergenceDisparity = 0.0
+
+        self.hudAnchorLeft = 0.0
+        self.hudAnchorRight = 1.0
+        self.hudAnchorBottom = 0.0
+        self.hudAnchorTop = 1.0
+
+        _G.g_hudAnchorLeft = 0.0
+        _G.g_hudAnchorRight = 1.0
+        _G.g_hudAnchorBottom = 0.0
+        _G.g_hudAnchorTop = 1.0
+        return
+    end
+
     local isPassThrough = self:isPassThroughMode()
     local isTrackingActive = self:isHeadTrackingActive()
 
     local targetDisparity = 0.0
-    if not isPassThrough and isTrackingActive and not self.isMenuVisible then
+    if not isPassThrough and isTrackingActive and not self.isMenuVisible and not self.is2DViewActive then
         local rawIpd = self:getIpd()
         targetDisparity = self:computeConvergenceDisparity(rawIpd, self.hudConvergenceDepth)
     end
@@ -1193,7 +1323,7 @@ function VRCompanion:applyHudInsets()
         self.hudAnchorLeft, self.hudAnchorRight, self.hudAnchorBottom, self.hudAnchorTop, self.effectiveUiScale))
 end
 
-function VRCompanion:restoreHudInsets()
+function VRCompanion:restoreHudInsets(preserveOrigAnchors)
     local left = 0.0
     local right = 1.0
     local bottom = 0.0
@@ -1204,7 +1334,22 @@ function VRCompanion:restoreHudInsets()
         right = self.origHudAnchors.right or 1.0
         bottom = self.origHudAnchors.bottom or 0.0
         top = self.origHudAnchors.top or 1.0
-        self.origHudAnchors = nil
+        if not preserveOrigAnchors then
+            self.origHudAnchors = nil
+        end
+    else
+        left = 0.0
+        right = 1.0
+        bottom = 0.0
+        top = 1.0
+        if preserveOrigAnchors then
+            self.origHudAnchors = {
+                left = 0.0,
+                right = 1.0,
+                bottom = 0.0,
+                top = 1.0
+            }
+        end
     end
 
     _G.g_hudAnchorLeft = left
@@ -1217,15 +1362,17 @@ function VRCompanion:restoreHudInsets()
     local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
     local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_Y)
 
-    self.hudAnchorLeft = baseLeft
-    self.hudAnchorRight = baseRight
-    self.hudAnchorBottom = baseBottom
-    self.hudAnchorTop = baseTop
+    self.hudAnchorLeft = left
+    self.hudAnchorRight = right
+    self.hudAnchorBottom = bottom
+    self.hudAnchorTop = top
     self.currentConvergenceOffset = 0.0
     self.currentConvergenceDisparity = 0.0
 
     local restoredScale = self.origUiScale or 1.0
-    self.origUiScale = nil
+    if not preserveOrigAnchors then
+        self.origUiScale = nil
+    end
 
     local mission = g_currentMission or _G.g_currentMission
     local hud = (mission ~= nil) and mission.hud or nil
@@ -1442,6 +1589,7 @@ function VRCompanion:registerActionEvents(force)
     local isRecenterEventActive = false
     local isSnapLeftEventActive = false
     local isSnapRightEventActive = false
+    local isToggleViewEventActive = false
     if not force and actionEvents ~= nil then
         if self.hudToggleActionEventId ~= nil and actionEvents[self.hudToggleActionEventId] ~= nil then
             isHudEventActive = true
@@ -1454,6 +1602,9 @@ function VRCompanion:registerActionEvents(force)
         end
         if self.snapRightActionEventId ~= nil and actionEvents[self.snapRightActionEventId] ~= nil then
             isSnapRightEventActive = true
+        end
+        if self.toggleViewActionEventId ~= nil and actionEvents[self.toggleViewActionEventId] ~= nil then
+            isToggleViewEventActive = true
         end
     end
 
@@ -1568,6 +1719,33 @@ function VRCompanion:registerActionEvents(force)
             end
         end
     end
+
+    if force or not isToggleViewEventActive then
+        local actionId = (InputAction and InputAction.VR_TOGGLE_VIEW) or (_G.InputAction and _G.InputAction.VR_TOGGLE_VIEW) or "VR_TOGGLE_VIEW"
+        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onToggleVrViewAction, false, true, false, true)
+        if success and eventId then
+            self.toggleViewActionEventId = eventId
+            if type(inputBinding.setActionEventTextPriority) == "function" then
+                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
+            end
+            if type(inputBinding.setActionEventActive) == "function" then
+                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventTextVisibility) == "function" then
+                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventText) == "function" then
+                pcall(function()
+                    local txt = (g_i18n and g_i18n:getText("input_VR_TOGGLE_VIEW")) or "Toggle VR / 2D View"
+                    inputBinding:setActionEventText(eventId, txt)
+                end)
+            end
+            if not self.toggleViewLoggedOnce then
+                print("[FS25_VR] Registered in-engine VR_TOGGLE_VIEW event.")
+                self.toggleViewLoggedOnce = true
+            end
+        end
+    end
 end
 
 function VRCompanion:loadMap(name)
@@ -1577,6 +1755,10 @@ function VRCompanion:loadMap(name)
     if VRBridge == nil and type(isHeadTrackingAvailable) == "function" then
         pcall(isHeadTrackingAvailable)
     end
+
+    -- 0. Cleanly initialize 2D Floating Window Mode state to 3D VR mode (is2DViewActive = false)
+    self:set2DViewActive(false)
+    self:resetToggleViewDebounce()
 
     -- 1. Perform native-to-Luau handshake via VRBridge
     if VRBridge ~= nil then
@@ -1667,6 +1849,8 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrRecenterMode", "Set VR Recenter Action mode: vrRecenterMode [Both | VehicleOnly | toggle]", "consoleCommandSetRecenterMode", self)
         addConsoleCommand("vrRecenterTracking", "Set VR Recenter Action mode: vrRecenterTracking [Both | VehicleOnly | toggle]", "consoleCommandSetRecenterMode", self)
         addConsoleCommand("vrSnapTurnAngle", "Set or query VR snap turn angle in degrees: vrSnapTurnAngle [degrees]", "consoleCommandSetSnapTurnAngle", self)
+        addConsoleCommand("vr2DView", "Set or query 2D Floating Window Mode: vr2DView [true|false|toggle]", "consoleCommandSet2DView", self)
+        addConsoleCommand("vrToggleView", "Toggle 2D Floating Window Mode: vrToggleView", "consoleCommandToggleView", self)
     end
 
     if self.showHudLoadNotification == true then
@@ -1695,7 +1879,11 @@ function VRCompanion:pollGuiVisibility()
         self.guiVisibilityInitialized = true
         if wasMenuVisible and not isGuiVisible then
             self:restoreMenuBackgroundCamera()
-            self:applyHudState()
+            if self.is2DViewActive then
+                self:restoreHudInsets(true)
+            else
+                self:applyHudState()
+            end
         end
         if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
             VRBridge.setMenuVisible(isGuiVisible)
@@ -1706,7 +1894,11 @@ function VRCompanion:pollGuiVisibility()
         if isGuiVisible then
             print("[FS25_VR] In-game GUI menu opened; switched presentation to 6DOF Quad layer.")
         elseif self.frameTicks > 0 then
-            print("[FS25_VR] In-game GUI menu closed; restored stereoscopic 3D projection rendering.")
+            if self.is2DViewActive then
+                print("[FS25_VR] In-game GUI menu closed; remaining in 2D Floating Window Mode.")
+            else
+                print("[FS25_VR] In-game GUI menu closed; restored stereoscopic 3D projection rendering.")
+            end
         end
     end
     return isGuiVisible
@@ -1747,7 +1939,7 @@ function VRCompanion:getActiveVehicleCamera()
 end
 
 function VRCompanion:getVehicleActiveCamera(veh)
-    if veh == nil then return nil end
+    if veh == nil or type(veh) ~= "table" then return nil end
     if type(veh.getActiveCamera) == "function" then
         local ok, cam = pcall(veh.getActiveCamera, veh)
         if ok and cam ~= nil then return cam end
@@ -1902,6 +2094,7 @@ function VRCompanion:onEnterVehicle(veh, isControlling, player)
     self.lastControlledVehicle = veh
     self:restoreVehicleRotationState(veh)
     self:resetSnapTurnDebounce()
+    self:resetToggleViewDebounce()
 
     self:registerActionEvents(true)
     self:applyHudState()
@@ -1921,6 +2114,7 @@ function VRCompanion:onLeaveVehicle(veh)
 
     self.lastControlledVehicle = nil
     self:resetSnapTurnDebounce()
+    self:resetToggleViewDebounce()
     self:registerActionEvents(true)
     self:applyHudState()
 end
@@ -1942,6 +2136,7 @@ function VRCompanion:onVehicleTransition(oldVeh, newVeh)
 
     self.lastControlledVehicle = newVeh
     self:resetSnapTurnDebounce()
+    self:resetToggleViewDebounce()
     self:registerActionEvents(true)
     self:applyHudState()
 end
@@ -2030,14 +2225,21 @@ function VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
         return
     end
 
+    if self.is2DViewActive and self.origPlayerCameraUpdateRotation ~= nil then
+        self.origPlayerCameraUpdateRotation(cam, dt)
+        return
+    end
+
     local cameraSensitivity = 1.0
     if g_gameSettings ~= nil and type(g_gameSettings.getValue) == "function" and GameSettings ~= nil and GameSettings.SETTING ~= nil then
         cameraSensitivity = g_gameSettings:getValue(GameSettings.SETTING.CAMERA_SENSITIVITY) or 1.0
     end
 
     local rotationDeltaY = 0
+    local rotationDeltaX = 0
     if cam.player ~= nil and cam.player.inputComponent ~= nil then
         rotationDeltaY = -(cam.player.inputComponent.cameraRotationY or 0) * cameraSensitivity
+        rotationDeltaX = (cam.player.inputComponent.cameraRotationX or 0) * cameraSensitivity
     end
 
     local cameraYaw = self:getPlayerCameraYaw(cam)
@@ -2048,10 +2250,32 @@ function VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
         cameraYaw = (cameraYaw + rotationDeltaY + math.pi) % (2 * math.pi) - math.pi
     end
 
-    -- In VR mode: keep neck level (pitch=0, roll=0); mouse/stick only turns body yaw.
-    -- Head pitch and roll are tracked by the HMD and applied during onPlayerCameraUpdate.
-    if type(cam.setRotation) == "function" then
-        cam:setRotation(0, cameraYaw, 0)
+    if self.is2DViewActive then
+        -- In 2D Floating Window Mode: 2D mouse/thumbstick controls both pitch and yaw.
+        local curPitch = 0
+        if cam.pitchNode ~= nil and type(getRotation) == "function" then
+            curPitch, _, _ = getRotation(cam.pitchNode)
+        elseif type(cam.getRotation) == "function" then
+            curPitch, _, _ = cam:getRotation()
+        end
+        local newPitch = (curPitch or 0) + rotationDeltaX
+        if cam.pitchMin ~= nil and cam.pitchMax ~= nil then
+            newPitch = math.max(cam.pitchMin, math.min(cam.pitchMax, newPitch))
+        end
+        if cam.pitchNode ~= nil and type(setRotation) == "function" then
+            setRotation(cam.pitchNode, newPitch, 0, 0)
+        end
+        if type(cam.setRotation) == "function" then
+            cam:setRotation(newPitch, cameraYaw, 0)
+        elseif cam.yawNode ~= nil and type(setRotation) == "function" then
+            setRotation(cam.yawNode, 0, cameraYaw, 0)
+        end
+    else
+        -- In VR mode: keep neck level (pitch=0, roll=0); mouse/stick only turns body yaw.
+        -- Head pitch and roll are tracked by the HMD and applied during onPlayerCameraUpdate.
+        if type(cam.setRotation) == "function" then
+            cam:setRotation(0, cameraYaw, 0)
+        end
     end
 end
 
@@ -2067,6 +2291,10 @@ function VRCompanion:hookPlayerCamera()
         if PlayerCamera.updateRotation ~= nil then
             self.origPlayerCameraUpdateRotation = PlayerCamera.updateRotation
             PlayerCamera.updateRotation = function(cam, dt)
+                if VRCompanion.is2DViewActive and VRCompanion.origPlayerCameraUpdateRotation ~= nil then
+                    VRCompanion.origPlayerCameraUpdateRotation(cam, dt)
+                    return
+                end
                 VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
             end
         end
@@ -2093,16 +2321,7 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex)
         return
     end
 
-    if not VRBridge or type(VRBridge.getEyeProjection) ~= "function" then
-        return
-    end
-
-    local proj = VRBridge.getEyeProjection(eyeIndex or 0)
-    if not proj or not proj.isValid then
-        return
-    end
-
-    -- Cache initial camera projection parameters for clean restoration on map unload
+    -- Cache initial camera projection parameters for clean restoration on map unload or 2D mode
     if self.origCamSettings == nil then
         self.origCamSettings = {}
     end
@@ -2120,6 +2339,28 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex)
             offsetX = origX,
             offsetY = origY
         }
+    end
+
+    if self.is2DViewActive then
+        local orig = self.origCamSettings[camNode]
+        if orig ~= nil then
+            if orig.fovY ~= nil and type(setFovY) == "function" then
+                pcall(setFovY, camNode, orig.fovY)
+            end
+            if type(setProjectionOffset) == "function" then
+                pcall(setProjectionOffset, camNode, 0, 0)
+            end
+        end
+        return
+    end
+
+    if not VRBridge or type(VRBridge.getEyeProjection) ~= "function" then
+        return
+    end
+
+    local proj = VRBridge.getEyeProjection(eyeIndex or 0)
+    if not proj or not proj.isValid then
+        return
     end
 
     -- Update camera vertical Field of View to match VR headset display optics
@@ -2273,8 +2514,8 @@ function VRCompanion:updateVehicleCameraTrackingNode(cam)
 end
 
 function VRCompanion:snapTurn(direction, angleOverride, curTime)
-    if self.isMenuVisible then
-        return false, "menu_visible"
+    if self.isMenuVisible or self.is2DViewActive then
+        return false, (self.isMenuVisible and "menu_visible" or "2d_view_active")
     end
 
     local t = curTime or self:getCurrentTimeMs()
@@ -2387,7 +2628,7 @@ function VRCompanion:getResolvedHeadPose()
 end
 
 function VRCompanion:getActiveEyeIndex(afrFallback)
-    if afrFallback and not self.isMenuVisible then
+    if afrFallback and not self.isMenuVisible and not self.is2DViewActive then
         local parity = self:getFrameParity()
         return (parity % 2 == 1) and 1 or 0
     end
@@ -2404,6 +2645,30 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     local eyeIndex = self:getActiveEyeIndex(afrFallback)
 
     self:applyCameraProjection(cam.cameraNode, eyeIndex)
+
+    if cam.origRotY == nil then
+        cam.origRotY = cam.rotY or 0
+    end
+    if cam.origRotX == nil then
+        cam.origRotX = cam.rotX or 0
+    end
+    if cam.origRotZ == nil then
+        cam.origRotZ = cam.rotZ or 0
+    end
+
+    local curVeh = self:getControlledVehicle()
+    if curVeh ~= nil and self.vehicleRotationStates ~= nil and self.vehicleRotationStates[curVeh] ~= nil then
+        local activeCam = self:getVehicleActiveCamera(curVeh)
+        if activeCam == cam or (activeCam and cam and activeCam.cameraNode == cam.cameraNode) then
+            self.vehicleRotationStates[curVeh].rotY = cam.rotY
+        end
+    end
+
+    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely.
+    -- VehicleCamera.update handles standard 2D mouse and thumbstick camera rotation.
+    if self.is2DViewActive then
+        return
+    end
 
     local pose = self:getResolvedHeadPose()
     if not pose or not pose.isValid then
@@ -2435,26 +2700,8 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         camParent = getParentFn(cam.cameraNode)
     end
 
-    if cam.origRotY == nil then
-        cam.origRotY = cam.rotY or 0
-    end
-    if cam.origRotX == nil then
-        cam.origRotX = cam.rotX or 0
-    end
-    if cam.origRotZ == nil then
-        cam.origRotZ = cam.rotZ or 0
-    end
-
     -- Look yaw offset relative to neutral forward orientation (cam.rotY - cam.origRotY)
     local lookYaw = self:getVehicleLookYaw(cam)
-
-    local curVeh = self:getControlledVehicle()
-    if curVeh ~= nil and self.vehicleRotationStates ~= nil and self.vehicleRotationStates[curVeh] ~= nil then
-        local activeCam = self:getVehicleActiveCamera(curVeh)
-        if activeCam == cam or (activeCam and cam and activeCam.cameraNode == cam.cameraNode) then
-            self.vehicleRotationStates[curVeh].rotY = cam.rotY
-        end
-    end
 
     -- Auto-construct headTrackingNode matching VehicleCamera:loadFromXML if missing
     if cam.headTrackingNode == nil and type(createTransformGroupFn) == "function" then
@@ -2581,6 +2828,12 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     local eyeIndex = self:getActiveEyeIndex(afrFallback)
 
     self:applyCameraProjection(activeCamNode, eyeIndex)
+
+    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely.
+    -- Standard on-foot camera rotation is driven via mouse/thumbstick.
+    if self.is2DViewActive then
+        return
+    end
 
     local pose = self:getResolvedHeadPose()
     if not pose or not pose.isValid then
@@ -2793,7 +3046,7 @@ function VRCompanion:realignPlayerCameraToRoot(cam)
 end
 
 function VRCompanion:updateMenuBackgroundCamera(dt)
-    if not self.isMenuVisible then
+    if not self.isMenuVisible or self.is2DViewActive then
         return
     end
 
@@ -2907,6 +3160,14 @@ end
 
 function VRCompanion:onRecenterAction()
     print("[FS25_VR] Recenter Action triggered.")
+    if self.is2DViewActive then
+        local bridge = VRBridge or (_G and _G.VRBridge)
+        if bridge ~= nil and type(bridge.alignMenuQuad) == "function" then
+            bridge.alignMenuQuad()
+        end
+        print("[FS25_VR] 2D Floating Window Mode: Realigned 6DOF floating quad in front of head gaze.")
+        return
+    end
     local recenterTracking = (self.recenterVrTrackingSpace ~= false)
     local bridge = VRBridge or (_G and _G.VRBridge)
     if recenterTracking then
@@ -2967,6 +3228,14 @@ end
 function VRCompanion:update(dt)
     self.frameTicks = (self.frameTicks or 0) + 1
 
+    -- Synchronize 2D view active state with native VRBridge if changed externally
+    if VRBridge ~= nil and type(VRBridge.getIs2DViewActive) == "function" then
+        local bridge2D = VRBridge.getIs2DViewActive()
+        if bridge2D ~= nil and bridge2D ~= self.is2DViewActive then
+            self:set2DViewActive(bridge2D)
+        end
+    end
+
     -- Poll in-game GUI visibility and synchronize with native VRBridge
     self:pollGuiVisibility()
 
@@ -2991,7 +3260,7 @@ function VRCompanion:update(dt)
     self:updateHudConvergence(dt)
 
     -- Keep in-engine action events active across context transitions
-    if (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) then
+    if (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) then
         self:registerActionEvents(false)
     end
 
@@ -3105,10 +3374,13 @@ function VRCompanion:deleteMap()
     self.recenterActionEventId = nil
     self.snapLeftActionEventId = nil
     self.snapRightActionEventId = nil
+    self.toggleViewActionEventId = nil
     self.hudToggleLoggedOnce = false
     self.recenterLoggedOnce = false
     self.snapLeftLoggedOnce = false
     self.snapRightLoggedOnce = false
+    self.toggleViewLoggedOnce = false
+    self:resetToggleViewDebounce()
 
     -- Restore original camera FOVs and projection offsets
     if self.origCamSettings ~= nil then
@@ -3129,6 +3401,8 @@ function VRCompanion:deleteMap()
         self.origCamSettings = {}
     end
 
+    self:set2DViewActive(false)
+
     -- Remove console commands
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrHudInsets")
@@ -3136,64 +3410,118 @@ function VRCompanion:deleteMap()
         removeConsoleCommand("vrHudFillUnderVehicle")
         removeConsoleCommand("vrRecenterMode")
         removeConsoleCommand("vrRecenterTracking")
+        removeConsoleCommand("vrSnapTurnAngle")
+        removeConsoleCommand("vr2DView")
+        removeConsoleCommand("vrToggleView")
     end
 end
 
 function VRCompanion:isKeySnapLeft(sym, unicode)
-    if Input ~= nil and (Input.KEY_kp_4 ~= nil or Input.KEY_numPad4 ~= nil) then
-        return (sym == Input.KEY_kp_4 or sym == Input.KEY_numPad4)
+    local input = Input or (_G and _G.Input)
+    if input ~= nil and (input.KEY_kp_4 ~= nil or input.KEY_numPad4 ~= nil) then
+        return (sym == input.KEY_kp_4 or sym == input.KEY_numPad4)
     end
     return (sym == 260 or unicode == 52)
 end
 
 function VRCompanion:isKeySnapRight(sym, unicode)
-    if Input ~= nil and (Input.KEY_kp_6 ~= nil or Input.KEY_numPad6 ~= nil) then
-        return (sym == Input.KEY_kp_6 or sym == Input.KEY_numPad6)
+    local input = Input or (_G and _G.Input)
+    if input ~= nil and (input.KEY_kp_6 ~= nil or input.KEY_numPad6 ~= nil) then
+        return (sym == input.KEY_kp_6 or sym == input.KEY_numPad6)
     end
     return (sym == 262 or unicode == 54)
 end
 
+function VRCompanion:isKeyNumPad0(sym, unicode)
+    local input = Input or (_G and _G.Input)
+    if input ~= nil and (input.KEY_kp_0 ~= nil or input.KEY_numPad0 ~= nil) then
+        return (sym == input.KEY_kp_0 or sym == input.KEY_numPad0)
+    end
+    return (sym == 256 or unicode == 48)
+end
+
+function VRCompanion:isKeyV(sym, unicode)
+    local input = Input or (_G and _G.Input)
+    if input ~= nil and input.KEY_v ~= nil then
+        return (sym == input.KEY_v)
+    end
+    return (sym == 118 or unicode == 118 or unicode == 86)
+end
+
+function VRCompanion:isCtrlHeld(input, modifier)
+    if input ~= nil and type(input.isKeyPressed) == "function" then
+        if (input.KEY_rctrl ~= nil and input.isKeyPressed(input.KEY_rctrl))
+                or (input.KEY_lctrl ~= nil and input.isKeyPressed(input.KEY_lctrl)) then
+            return true
+        end
+    end
+    if modifier ~= nil and modifier > 0 then
+        local band = (bit32 and bit32.band) or (bit and bit.band) or function(a, b) return 0 end
+        local ctrlMask = (input and (input.MOD_RCTRL or input.MOD_LCTRL or input.MOD_CTRL)) or 0
+        if ctrlMask > 0 and band(modifier, ctrlMask) > 0 then
+            return true
+        elseif modifier == 4 or modifier == 32 or modifier == 64 or modifier == 96 then
+            return true
+        end
+    end
+    return false
+end
+
 function VRCompanion:keyEvent(unicode, sym, modifier, isDown)
+    local input = Input or (_G and _G.Input)
     if not isDown then
         if self:isKeySnapLeft(sym, unicode) then
             self.isSnapLeftKeyDown = false
         elseif self:isKeySnapRight(sym, unicode) then
             self.isSnapRightKeyDown = false
         end
+        if self:isKeyNumPad0(sym, unicode) or self:isKeyV(sym, unicode) then
+            self.isToggleViewKeyDown = false
+        end
         return
     end
 
     -- Direct hardware shortcut for VR_HUD_TOGGLE (Ctrl + H)
     local isH = false
-    if Input ~= nil and Input.KEY_h ~= nil then
-        isH = (sym == Input.KEY_h)
+    if input ~= nil and input.KEY_h ~= nil then
+        isH = (sym == input.KEY_h)
     else
         isH = (sym == 104 or unicode == 104 or unicode == 72)
     end
 
     if isH then
-        local ctrlHeld = false
-        if Input ~= nil and type(Input.isKeyPressed) == "function" then
-            ctrlHeld = (Input.KEY_rctrl ~= nil and Input.isKeyPressed(Input.KEY_rctrl))
-                    or (Input.KEY_lctrl ~= nil and Input.isKeyPressed(Input.KEY_lctrl))
-        end
-        if not ctrlHeld and modifier ~= nil and modifier > 0 then
-            local band = (bit32 and bit32.band) or (bit and bit.band) or function(a, b) return 0 end
-            local ctrlMask = (Input and (Input.MOD_RCTRL or Input.MOD_LCTRL or Input.MOD_CTRL)) or 0
-            if ctrlMask > 0 and band(modifier, ctrlMask) > 0 then
-                ctrlHeld = true
-            elseif modifier == 4 or modifier == 32 or modifier == 64 or modifier == 96 then
-                ctrlHeld = true
-            end
-        end
-        if ctrlHeld then
-            local curTime = g_time
+        if self:isCtrlHeld(input, modifier) then
+            local curTime = g_time or (_G and _G.g_time)
             if curTime == nil or self.lastHudToggleTime == nil or (curTime - self.lastHudToggleTime) >= 300 then
                 print("[FS25_VR] Hardware keyEvent: Ctrl + H detected -> cycling HUD state.")
                 self:onHudToggleAction()
             end
             return
         end
+    end
+
+    -- Direct hardware shortcut for VR_TOGGLE_VIEW (Ctrl + V)
+    if self:isKeyV(sym, unicode) then
+        if self:isCtrlHeld(input, modifier) then
+            if self.isToggleViewKeyDown then
+                return
+            end
+            self.isToggleViewKeyDown = true
+            print("[FS25_VR] Hardware keyEvent: Ctrl + V detected -> toggling VR view mode.")
+            self:onToggleVrViewAction()
+            return
+        end
+    end
+
+    -- Direct hardware shortcut for VR_TOGGLE_VIEW (Numpad 0)
+    if self:isKeyNumPad0(sym, unicode) then
+        if self.isToggleViewKeyDown then
+            return
+        end
+        self.isToggleViewKeyDown = true
+        print("[FS25_VR] Hardware keyEvent: Numpad 0 detected -> toggling VR view mode.")
+        self:onToggleVrViewAction()
+        return
     end
 
     -- Direct hardware shortcut for VR_SNAP_TURN_LEFT (Numpad 4)
@@ -3209,8 +3537,8 @@ function VRCompanion:keyEvent(unicode, sym, modifier, isDown)
 
     -- Direct hardware shortcut for VR_RECENTER (Numpad 5)
     local isRecenter = false
-    if Input ~= nil and (Input.KEY_kp_5 ~= nil or Input.KEY_numPad5 ~= nil) then
-        isRecenter = (sym == Input.KEY_kp_5 or sym == Input.KEY_numPad5)
+    if input ~= nil and (input.KEY_kp_5 ~= nil or input.KEY_numPad5 ~= nil) then
+        isRecenter = (sym == input.KEY_kp_5 or sym == input.KEY_numPad5)
     else
         isRecenter = (sym == 261 or unicode == 53)
     end
@@ -3407,6 +3735,33 @@ function VRCompanion:consoleCommandSetSnapTurnAngle(angleStr)
 
     print(string.format("[FS25_VR] Snap turn angle set to: %.1f deg (%.4f rad)", deg, self:getSnapTurnAngle()))
     return string.format("VR snap turn angle set to: %.1f deg (Saved)", deg)
+end
+
+function VRCompanion:consoleCommandSet2DView(activeStr)
+    local cur = self.is2DViewActive
+    if activeStr == nil or activeStr == "" or string.lower(tostring(activeStr)) == "status" then
+        return string.format("Current 2D Floating Window Mode: %s. Usage: vr2DView <true|false|toggle>", tostring(cur))
+    end
+
+    local low = string.lower(tostring(activeStr))
+    if low == "toggle" then
+        self:toggle2DView()
+    elseif low == "true" or low == "1" or low == "on" then
+        self:set2DViewActive(true)
+    elseif low == "false" or low == "0" or low == "off" then
+        self:set2DViewActive(false)
+    else
+        return "Usage: vr2DView <true|false|toggle>"
+    end
+
+    print(string.format("[FS25_VR] 2D Floating Window Mode is now: %s", tostring(self.is2DViewActive)))
+    return string.format("2D Floating Window Mode set to: %s", tostring(self.is2DViewActive))
+end
+
+function VRCompanion:consoleCommandToggleView()
+    self:toggle2DView()
+    print(string.format("[FS25_VR] 2D Floating Window Mode toggled to: %s", tostring(self.is2DViewActive)))
+    return string.format("2D Floating Window Mode toggled to: %s", tostring(self.is2DViewActive))
 end
 
 -- Register as an engine mod event listener if in-game environment

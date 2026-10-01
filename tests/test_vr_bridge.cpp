@@ -542,3 +542,86 @@ TEST_F(VrBridgeTest, ExposesAlignMenuQuadToLuau) {
     EXPECT_NEAR(quadPose.position.z, -1.5f, 0.001f);
 }
 
+TEST_F(VrBridgeTest, Exposes2DViewActiveMethodsAndPropertyToLuauScript) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    // Initially false in both C++ and Luau
+    EXPECT_FALSE(bridge.Is2DViewActive());
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(type(VRBridge.set2DViewActive) == "function", "set2DViewActive must be a function")
+        assert(type(VRBridge.getIs2DViewActive) == "function", "getIs2DViewActive must be a function")
+        assert(VRBridge.getIs2DViewActive() == false, "initial getIs2DViewActive must be false")
+        assert(VRBridge.is2DViewActive == false, "initial is2DViewActive property must be false")
+    )luau"), 0);
+
+    // Set 2D view active from Luau
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        VRBridge.set2DViewActive(true)
+        assert(VRBridge.getIs2DViewActive() == true, "getIs2DViewActive must return true after set2DViewActive(true)")
+        assert(VRBridge.is2DViewActive == true, "is2DViewActive property must return true after set2DViewActive(true)")
+    )luau"), 0);
+
+    EXPECT_TRUE(bridge.Is2DViewActive());
+
+    // Frame parity reset test: setting parity to 1, then Set2DViewActive(false) should reset parity to 0
+    bridge.SetFrameParity(1);
+    EXPECT_EQ(bridge.GetFrameParity(), 1u);
+    bridge.Set2DViewActive(false);
+    EXPECT_FALSE(bridge.Is2DViewActive());
+    EXPECT_EQ(bridge.GetFrameParity(), 0u);
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getIs2DViewActive() == false, "getIs2DViewActive must reflect C++ Set2DViewActive(false)")
+    )luau"), 0);
+
+    // Dynamic property access via __index
+    bridge.Set2DViewActive(true);
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getIs2DViewActive() == true, "must be true")
+        assert(VRBridge.is2DViewActive == true, "property must be true")
+    )luau"), 0);
+}
+
+TEST_F(VrBridgeTest, MapUnloadResets2DViewActiveToFalse) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    bridge.Set2DViewActive(true);
+    EXPECT_TRUE(bridge.Is2DViewActive());
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getIs2DViewActive() == true, "2D view should be active before unload")
+        VRBridge.onMapUnload()
+        assert(VRBridge.getIs2DViewActive() == false, "2D view active must be reset to false after onMapUnload")
+    )luau"), 0);
+
+    EXPECT_FALSE(bridge.Is2DViewActive());
+}
+
+TEST_F(VrBridgeTest, Set2DViewActiveTrueTriggersQuadAlignmentOnOpenXrManager) {
+    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::HeadPose simPose;
+    simPose.position = fs25vr::Vector3(1.0f, 1.7f, 2.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
+    simPose.isValid = true;
+    openXrManager->SetSimulatedPose(simPose);
+
+    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_FALSE(openXrManager->HasMenuQuadPose());
+
+    // Setting 2D view active must trigger quad alignment to the current head pose
+    bridge.Set2DViewActive(true);
+    EXPECT_TRUE(openXrManager->HasMenuQuadPose());
+
+    XrPosef quadPose = openXrManager->ComputeMenuQuadPose();
+    // Quad is positioned 1.5m in front along forward gaze (0 yaw -> -Z)
+    // x = 1.0, y = 1.7, z = 2.0 - 1.5 = 0.5
+    EXPECT_NEAR(quadPose.position.x, 1.0f, 0.001f);
+    EXPECT_NEAR(quadPose.position.y, 1.7f, 0.001f);
+    EXPECT_NEAR(quadPose.position.z, 0.5f, 0.001f);
+}
+

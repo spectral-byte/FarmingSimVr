@@ -52,3 +52,12 @@ _Avoid_: Mini HUD, compact UI, lite HUD
 An instantaneous rotational increment applied to the player's body or in-cab gaze angle to reorient view direction without vestibular motion sickness.
 _Avoid_: Quick turn, instant rotation, snap rotate, flick turn
 
+**VR View Toggle Action**:
+The bindable in-engine input action that toggles presentation between immersive stereoscopic 3D VR view and 2D Floating Window Mode.
+_Avoid_: 2D toggle, screen switch, VR off button, flat toggle
+
+**2D Floating Window Mode**:
+The presentation state where in-engine 3D gameplay is rendered monoscopically to the backbuffer and presented on a 6DOF floating quad layer in front of the player.
+_Avoid_: Theater mode, flat mode, cinema view, 2D mode
+
+

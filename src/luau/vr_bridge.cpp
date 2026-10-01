@@ -43,7 +43,7 @@ bool VRBridge::Inject(lua_State* L) {
     int origTop = lua_gettop(L);
 
     // Create table for VRBridge
-    lua_createtable(L, 0, 20);
+    lua_createtable(L, 0, 25);
 
     // VRBridge.version = "1.0.0"
     lua_pushstring(L, m_version.c_str());
@@ -134,6 +134,16 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushcclosure(L, &VRBridge::Lua_AlignMenuQuad, "alignMenuQuad", 1);
     lua_setfield(L, -2, "alignMenuQuad");
 
+    // VRBridge.set2DViewActive = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_Set2DViewActive, "set2DViewActive", 1);
+    lua_setfield(L, -2, "set2DViewActive");
+
+    // VRBridge.getIs2DViewActive = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetIs2DViewActive, "getIs2DViewActive", 1);
+    lua_setfield(L, -2, "getIs2DViewActive");
+
     // Set metatable on VRBridge table for dynamic property access (__index)
     lua_createtable(L, 0, 1);
     lua_pushlightuserdata(L, this);
@@ -205,6 +215,7 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
     self->SetCompanionActive(false);
     self->SetFrameParity(0);
     self->SetMenuVisible(false);
+    self->Set2DViewActive(false);
     LogInfo("[VRBridge] Companion Mod map unloaded; reverted to Menu Quad layer mode.");
     return 0;
 }
@@ -555,6 +566,41 @@ int VRBridge::Lua_GetIsMenuVisible(lua_State* L) {
     return 1;
 }
 
+void VRBridge::Set2DViewActive(bool active) {
+    if (m_2dViewActive != active) {
+        m_2dViewActive = active;
+        SetFrameParity(0);
+        if (active) {
+            if (m_openXrManager) {
+                m_openXrManager->AlignMenuQuadToHeadPose();
+            }
+            LogInfo("[VRBridge] 2D Floating Window View enabled (is2DViewActive=true); switched to 6DOF Quad layer.");
+        } else {
+            LogInfo("[VRBridge] 2D Floating Window View disabled (is2DViewActive=false); restored stereoscopic 3D projection.");
+        }
+    }
+}
+
+int VRBridge::Lua_Set2DViewActive(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    bool active = false;
+    if (lua_gettop(L) >= 1) {
+        active = (lua_toboolean(L, 1) != 0);
+    }
+    self->Set2DViewActive(active);
+    return 0;
+}
+
+int VRBridge::Lua_GetIs2DViewActive(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    lua_pushboolean(L, self->Is2DViewActive() ? 1 : 0);
+    return 1;
+}
+
 int VRBridge::Lua_Index(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
@@ -583,6 +629,10 @@ int VRBridge::Lua_Index(lua_State* L) {
         }
         if (strcmp(key, "isMenuVisible") == 0) {
             lua_pushboolean(L, self->IsMenuVisible() ? 1 : 0);
+            return 1;
+        }
+        if (strcmp(key, "is2DViewActive") == 0) {
+            lua_pushboolean(L, self->Is2DViewActive() ? 1 : 0);
             return 1;
         }
     }
