@@ -2552,6 +2552,561 @@ TEST_F(CompanionModTest, RegistersAndUnregistersRecenterModeConsoleCommands) {
     )luau", "=verifyCommandRegistration"), 0);
 }
 
+TEST_F(CompanionModTest, SnapTurnDefaultsAndConfigurableTurnAngle) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.DEFAULT_SNAP_TURN_ANGLE ~= nil, "DEFAULT_SNAP_TURN_ANGLE must be defined")
+        assert(math.abs(VRCompanion.DEFAULT_SNAP_TURN_ANGLE - (math.pi * 0.5)) < 0.0001, "Default angle must be pi/2 rad")
+        assert(math.abs(VRCompanion:getSnapTurnAngle() - (math.pi * 0.5)) < 0.0001, "getSnapTurnAngle must return pi/2")
+        assert(VRCompanion.DEFAULT_SNAP_TURN_DEBOUNCE_MS >= 250, "Debounce cooldown must be at least 250ms")
+
+        VRCompanion:setSnapTurnAngle(math.pi * 0.25)
+        assert(math.abs(VRCompanion:getSnapTurnAngle() - (math.pi * 0.25)) < 0.0001, "Configured angle to pi/4")
+
+        VRCompanion:setSnapTurnAngle(90)
+        assert(math.abs(VRCompanion:getSnapTurnAngle() - (math.pi * 0.5)) < 0.0001, "Setting 90 degrees must convert to pi/2")
+    )luau", "=verifySnapTurnDefaults"), 0);
+}
+
+TEST_F(CompanionModTest, SnapTurnDebounceCooldownEnforcesMinimum250ms) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:resetSnapTurnDebounce()
+
+        local mockCam = {
+            isInside = true,
+            cameraNode = 101,
+            origRotY = 0.0,
+            rotY = 0.0
+        }
+        _G.g_currentMission = {
+            controlledVehicle = {
+                getActiveCamera = function() return mockCam end
+            }
+        }
+
+        -- First snap turn succeeds
+        local ok1 = VRCompanion:snapTurnRight(nil, 1000)
+        assert(ok1 == true, "First snap turn at t=1000 must succeed")
+        assert(math.abs(mockCam.rotY - (-math.pi * 0.5)) < 0.0001, "Camera rotY must be -pi/2")
+
+        -- Snap turn 100ms later (< 250ms) is debounced
+        local ok2, err2 = VRCompanion:snapTurnRight(nil, 1100)
+        assert(ok2 == false, "Snap turn 100ms later must be debounced")
+        assert(err2 == "debounced", "Error reason must be debounced")
+        assert(math.abs(mockCam.rotY - (-math.pi * 0.5)) < 0.0001, "Camera angle must not change")
+
+        -- Snap turn 250ms later (t=1250) succeeds
+        local ok3 = VRCompanion:snapTurnRight(nil, 1250)
+        assert(ok3 == true, "Snap turn at t=1250 must succeed")
+        assert(math.abs(math.abs(mockCam.rotY) - math.pi) < 0.0001, "Camera rotY must advance to pi")
+    )luau", "=verifySnapTurnDebounce"), 0);
+}
+
+TEST_F(CompanionModTest, InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNode) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:resetSnapTurnDebounce()
+
+        local nodeRotations = {}
+        _G.setRotation = function(node, rx, ry, rz)
+            nodeRotations[node] = { rx = rx, ry = ry, rz = rz }
+        end
+        _G.getRotation = function(node)
+            local r = nodeRotations[node]
+            if r then return r.rx, r.ry, r.rz end
+            return 0, 0, 0
+        end
+
+        local testCam = {
+            isInside = true,
+            cameraNode = 301,
+            headTrackingNode = 302,
+            origHeadTrackingRotX = 0,
+            origHeadTrackingRotY = math.pi,
+            origHeadTrackingRotZ = 0,
+            origRotY = math.pi,
+            rotY = math.pi
+        }
+        nodeRotations[302] = { rx = 0, ry = math.pi, rz = 0 }
+
+        local veh = {
+            getActiveCamera = function() return testCam end
+        }
+        _G.g_currentMission = { controlledVehicle = veh }
+        VRCompanion:onEnterVehicle(veh, true, nil)
+
+        -- Snap turn right (-pi/2)
+        local okR = VRCompanion:snapTurnRight(nil, 1000)
+        assert(okR == true, "snapTurnRight must succeed")
+        assert(math.abs(testCam.rotY - (math.pi * 0.5)) < 0.0001, "cam.rotY must be +pi/2")
+        assert(math.abs(nodeRotations[302].ry - (math.pi * 0.5)) < 0.0001, "headTrackingNode yaw must be +pi/2")
+
+        -- Snap turn left (+pi/2) after 300ms
+        local okL = VRCompanion:snapTurnLeft(nil, 1300)
+        assert(okL == true, "snapTurnLeft must succeed")
+        assert(math.abs(math.abs(testCam.rotY) - math.pi) < 0.0001, "cam.rotY must be pi")
+        assert(math.abs(math.abs(nodeRotations[302].ry) - math.pi) < 0.0001, "headTrackingNode yaw must be pi")
+    )luau", "=verifyInCabSnapTurn"), 0);
+}
+
+TEST_F(CompanionModTest, RecenterResetsSnappedCameraRotYToNeutralForwardWindshield) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:resetSnapTurnDebounce()
+
+        local nodeRotations = {}
+        _G.setRotation = function(node, rx, ry, rz)
+            nodeRotations[node] = { rx = rx, ry = ry, rz = rz }
+        end
+        _G.getRotation = function(node)
+            local r = nodeRotations[node]
+            if r then return r.rx, r.ry, r.rz end
+            return 0, 0, 0
+        end
+
+        local testCam = {
+            isInside = true,
+            cameraNode = 401,
+            headTrackingNode = 402,
+            origHeadTrackingRotX = 0,
+            origHeadTrackingRotY = math.pi,
+            origHeadTrackingRotZ = 0,
+            origRotY = math.pi,
+            rotY = math.pi
+        }
+        nodeRotations[402] = { rx = 0, ry = math.pi, rz = 0 }
+
+        _G.g_currentMission = {
+            controlledVehicle = {
+                getActiveCamera = function() return testCam end
+            }
+        }
+
+        -- Snap turn right twice -> facing backward (rotY = 0)
+        VRCompanion:snapTurnRight(nil, 1000)
+        VRCompanion:snapTurnRight(nil, 1300)
+        assert(math.abs(testCam.rotY - 0.0) < 0.0001, "cam.rotY is 0.0")
+
+        -- Trigger Recenter
+        VRCompanion:onRecenterAction()
+
+        -- cam.rotY must be reset to origRotY (math.pi)
+        assert(math.abs(testCam.rotY - math.pi) < 0.0001, "cam.rotY reset to origRotY")
+        assert(math.abs(nodeRotations[402].ry - math.pi) < 0.001, "headTrackingNode reset to origHeadTrackingRotY")
+    )luau", "=verifyRecenterReset"), 0);
+}
+
+TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerSnapTurnsAndRejectsHeldKeyRepeat) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:resetSnapTurnDebounce()
+
+        local mockCam = {
+            isInside = true,
+            cameraNode = 501,
+            origRotY = 0.0,
+            rotY = 0.0
+        }
+        _G.g_currentMission = {
+            controlledVehicle = {
+                getActiveCamera = function() return mockCam end
+            }
+        }
+        _G.g_time = 1000
+
+        -- Numpad 4 (Left, sym 260 / unicode 52)
+        VRCompanion:keyEvent(52, 260, 0, true)
+        assert(math.abs(mockCam.rotY - (math.pi * 0.5)) < 0.0001, "Numpad 4 snaps left")
+
+        -- Held key repeat at t = 1350 is rejected
+        _G.g_time = 1350
+        VRCompanion:keyEvent(52, 260, 0, true)
+        assert(math.abs(mockCam.rotY - (math.pi * 0.5)) < 0.0001, "Held repeat rejected")
+
+        -- Release key
+        VRCompanion:keyEvent(52, 260, 0, false)
+
+        -- Press Numpad 6 (Right, sym 262 / unicode 54) at t = 1400
+        _G.g_time = 1400
+        VRCompanion:keyEvent(54, 262, 0, true)
+        assert(math.abs(mockCam.rotY - 0.0) < 0.0001, "Numpad 6 snaps right back to 0")
+        VRCompanion:keyEvent(54, 262, 0, false)
+
+        -- Press Numpad 5 (Recenter, sym 261 / unicode 53)
+        mockCam.rotY = 1.25
+        _G.g_time = 1700
+        VRCompanion:keyEvent(53, 261, 0, true)
+        assert(math.abs(mockCam.rotY - mockCam.origRotY) < 0.0001, "Numpad 5 resets to origRotY")
+    )luau", "=verifyKeyEventShortcuts"), 0);
+}
+
+TEST_F(CompanionModTest, OnFootSnapTurnAdjustsPlayerCharacterYawNode) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:resetSnapTurnDebounce()
+
+        local nodeRotations = {}
+        _G.setRotation = function(node, rx, ry, rz)
+            nodeRotations[node] = { rx = rx, ry = ry, rz = rz }
+        end
+        _G.getRotation = function(node)
+            local r = nodeRotations[node]
+            if r then return r.rx, r.ry, r.rz end
+            return 0, 0, 0
+        end
+
+        local mockPlayerCam = {
+            isFirstPerson = true,
+            firstPersonCamera = 40,
+            cameraRootNode = 30,
+            pitchNode = 20,
+            yawNode = 10,
+            setRotation = function(self, pitch, yaw, roll)
+                _G.setRotation(self.pitchNode, pitch or 0, 0, 0)
+                _G.setRotation(self.yawNode, 0, yaw or 0, 0)
+                _G.setRotation(self.cameraRootNode, 0, math.pi, roll or 0)
+            end,
+            getRotation = function(self)
+                local r = nodeRotations[self.yawNode] or { rx = 0, ry = 0, rz = 0 }
+                return 0, r.ry, 0
+            end
+        }
+        nodeRotations[10] = { rx = 0, ry = 0, rz = 0 }
+
+        _G.g_currentMission = {
+            controlledVehicle = nil,
+            player = {
+                camera = mockPlayerCam
+            }
+        }
+
+        -- 1. Trigger snap turn right (+90 deg -> -pi/2 yawNode)
+        local okR, newYawR = VRCompanion:snapTurnRight(nil, 1000)
+        assert(okR == true, "On-foot snapTurnRight must succeed")
+        assert(math.abs(newYawR - (-math.pi * 0.5)) < 0.0001, "Expected newYawR = -pi/2")
+        assert(math.abs(nodeRotations[10].ry - (-math.pi * 0.5)) < 0.0001, "yawNode rotation must equal -pi/2")
+
+        -- 2. Trigger snap turn left (-90 deg -> back to 0.0 yawNode) after 300ms cooldown
+        local okL, newYawL = VRCompanion:snapTurnLeft(nil, 1300)
+        assert(okL == true, "On-foot snapTurnLeft must succeed after cooldown")
+        assert(math.abs(newYawL - 0.0) < 0.0001, "Expected newYawL = 0.0")
+        assert(math.abs(nodeRotations[10].ry - 0.0) < 0.0001, "yawNode rotation must equal 0.0")
+
+        VRCompanion:resetSnapTurnDebounce()
+    )luau", "=verifyOnFootSnapTurnYawNode"), 0);
+}
+
+TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookRemainCollinearAfterSnapTurnWithoutDrift) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:resetSnapTurnDebounce()
+
+        local nodes = {
+            [10] = { name = "yawNode", parent = 0, trans = {0, 0, 0}, rot = {0, 0, 0} },
+            [20] = { name = "pitchNode", parent = 10, trans = {0, 0, 0}, rot = {0, 0, 0} },
+            [30] = { name = "cameraRootNode", parent = 20, trans = {0, 0, 0}, rot = {0, math.pi, 0} },
+            [40] = { name = "firstPersonCamera", parent = 30, trans = {0, 0, 0}, rot = {0, 0, 0} },
+        }
+
+        _G.setRotation = function(node, rx, ry, rz)
+            if nodes[node] then
+                nodes[node].rot = { rx, ry, rz }
+            end
+        end
+
+        _G.getRotation = function(node)
+            local r = nodes[node] and nodes[node].rot or {0, 0, 0}
+            return r[1], r[2], r[3]
+        end
+
+        _G.localDirectionToWorld = function(node, x, y, z)
+            local cur = node
+            local totalY = 0
+            while cur ~= 0 and nodes[cur] do
+                totalY = totalY + (nodes[cur].rot[2] or 0)
+                cur = nodes[cur].parent
+            end
+            local cosY = math.cos(totalY)
+            local sinY = math.sin(totalY)
+            local wx = x * cosY + z * sinY
+            local wz = -x * sinY + z * cosY
+            return wx, y, wz
+        end
+
+        local mockPlayerCam = {
+            isFirstPerson = true,
+            firstPersonCamera = 40,
+            cameraRootNode = 30,
+            pitchNode = 20,
+            yawNode = 10,
+            setRotation = function(self, pitch, yaw, roll)
+                _G.setRotation(self.pitchNode, pitch or 0, 0, 0)
+                _G.setRotation(self.yawNode, 0, yaw or 0, 0)
+                _G.setRotation(self.cameraRootNode, 0, math.pi, roll or 0)
+            end,
+            getRotation = function(self)
+                local r = nodes[self.yawNode] and nodes[self.yawNode].rot or {0, 0, 0}
+                return 0, r[2] or 0, 0
+            end
+        }
+
+        local mockInput = {
+            player = { camera = mockPlayerCam },
+            cameraRotationY = 0,
+            calculateNormalisedMovementDirection = function(self, moveRight, moveForward)
+                if moveRight ~= 0 or moveForward ~= 0 then
+                    local len = math.sqrt(moveRight * moveRight + moveForward * moveForward)
+                    return moveRight / len, moveForward / len
+                end
+                return 0, 0
+            end,
+            calculateNormalisedWorldMovementDirection = function(self, moveRight, moveForward)
+                local localDirectionX, localDirectionZ = self:calculateNormalisedMovementDirection(moveRight, moveForward)
+                if localDirectionX ~= 0 or localDirectionZ ~= 0 then
+                    local wx, _, wz = _G.localDirectionToWorld(self.player.camera.yawNode, -localDirectionX, 0, localDirectionZ)
+                    return wx, wz
+                end
+                return 0, 0
+            end
+        }
+        mockPlayerCam.player = { inputComponent = mockInput }
+
+        _G.g_currentMission = {
+            controlledVehicle = nil,
+            player = {
+                camera = mockPlayerCam
+            }
+        }
+
+        -- Step 1: Initial state -> facing +Z forward
+        local camLookX, _, camLookZ = _G.localDirectionToWorld(mockPlayerCam.firstPersonCamera, 0, 0, -1)
+        local walkWX, walkWZ = mockInput:calculateNormalisedWorldMovementDirection(0, 1)
+        local dotInitial = camLookX * walkWX + camLookZ * walkWZ
+        assert(math.abs(dotInitial - 1.0) < 0.001, "Initial gaze and walk collinear forward")
+
+        -- Step 2: Trigger snap turn right (+90 deg -> yawNode = -pi/2)
+        local okR, newYawR = VRCompanion:snapTurnRight(nil, 1000)
+        assert(okR == true, "snapTurnRight must succeed")
+        assert(math.abs(newYawR - (-math.pi * 0.5)) < 0.0001, "newYawR must be -pi/2")
+        assert(math.abs(nodes[10].rot[2] - (-math.pi * 0.5)) < 0.0001, "yawNode rot must be -pi/2")
+
+        -- Step 3: Verify walking forward (W) immediately aligns with snapped heading
+        local snappedLookX, _, snappedLookZ = _G.localDirectionToWorld(mockPlayerCam.firstPersonCamera, 0, 0, -1)
+        local snappedWalkWX, snappedWalkWZ = mockInput:calculateNormalisedWorldMovementDirection(0, 1)
+        local dotW = snappedLookX * snappedWalkWX + snappedLookZ * snappedWalkWZ
+        assert(math.abs(dotW - 1.0) < 0.001, "Snapped gaze and W walk must be collinear")
+        assert(math.abs(snappedLookX - (-1.0)) < 0.001, "Snapped gaze must face -X (right)")
+        assert(math.abs(snappedWalkWX - (-1.0)) < 0.001, "Snapped W walk must face -X (right)")
+
+        -- Step 4: Verify strafing (A/D) aligns with snapped orientation
+        local snappedWalkDX, snappedWalkDZ = mockInput:calculateNormalisedWorldMovementDirection(1, 0)
+        local snappedWalkAX, snappedWalkAZ = mockInput:calculateNormalisedWorldMovementDirection(-1, 0)
+        local camRightX, _, camRightZ = _G.localDirectionToWorld(mockPlayerCam.firstPersonCamera, 1, 0, 0)
+        local camLeftX, _, camLeftZ = _G.localDirectionToWorld(mockPlayerCam.firstPersonCamera, -1, 0, 0)
+
+        local dotD = camRightX * snappedWalkDX + camRightZ * snappedWalkDZ
+        assert(math.abs(dotD - 1.0) < 0.001, "D strafe must match camera right after snap turn")
+
+        local dotA = camLeftX * snappedWalkAX + camLeftZ * snappedWalkAZ
+        assert(math.abs(dotA - 1.0) < 0.001, "A strafe must match camera left after snap turn")
+
+        -- Step 5: Verify zero rotational drift across subsequent camera rotation update
+        mockInput.cameraRotationY = 0
+        VRCompanion:onPlayerCameraUpdateRotation(mockPlayerCam, 16.6)
+        local _, updatedYaw, _ = _G.getRotation(mockPlayerCam.yawNode)
+        assert(math.abs(updatedYaw - (-math.pi * 0.5)) < 0.001, "yawNode must maintain -pi/2 without drift")
+
+        -- Step 6: Subsequent snap turn left (-90 deg) restores neutral forward heading
+        local okL, newYawL = VRCompanion:snapTurnLeft(nil, 1300)
+        assert(okL == true, "snapTurnLeft must succeed")
+        assert(math.abs(newYawL - 0.0) < 0.0001, "newYawL must be 0.0")
+
+        local restoredLookX, _, restoredLookZ = _G.localDirectionToWorld(mockPlayerCam.firstPersonCamera, 0, 0, -1)
+        local restoredWalkWX, restoredWalkWZ = mockInput:calculateNormalisedWorldMovementDirection(0, 1)
+        local dotRestored = restoredLookX * restoredWalkWX + restoredLookZ * restoredWalkWZ
+        assert(math.abs(dotRestored - 1.0) < 0.001, "Restored forward gaze and walk must be collinear")
+        assert(math.abs(restoredLookZ - 1.0) < 0.001, "Restored gaze must face +Z forward")
+
+        VRCompanion:resetSnapTurnDebounce()
+    )luau", "=verifyCollinearSnapTurn"), 0);
+}
+
+TEST_F(CompanionModTest, OnFootSnapTurnSuppressedWhenGuiMenuVisible) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:resetSnapTurnDebounce()
+
+        local nodeRotations = {}
+        _G.setRotation = function(node, rx, ry, rz)
+            nodeRotations[node] = { rx = rx, ry = ry, rz = rz }
+        end
+        _G.getRotation = function(node)
+            local r = nodeRotations[node]
+            if r then return r.rx, r.ry, r.rz end
+            return 0, 0, 0
+        end
+
+        local mockPlayerCam = {
+            isFirstPerson = true,
+            firstPersonCamera = 40,
+            cameraRootNode = 30,
+            pitchNode = 20,
+            yawNode = 10,
+            setRotation = function(self, pitch, yaw, roll)
+                _G.setRotation(self.pitchNode, pitch or 0, 0, 0)
+                _G.setRotation(self.yawNode, 0, yaw or 0, 0)
+                _G.setRotation(self.cameraRootNode, 0, math.pi, roll or 0)
+            end,
+            getRotation = function(self)
+                local r = nodeRotations[self.yawNode] or { rx = 0, ry = 0, rz = 0 }
+                return 0, r.ry, 0
+            end
+        }
+        nodeRotations[10] = { rx = 0, ry = 0, rz = 0 }
+
+        _G.g_currentMission = {
+            controlledVehicle = nil,
+            player = {
+                camera = mockPlayerCam
+            }
+        }
+
+        -- Set menu visible
+        VRCompanion.isMenuVisible = true
+
+        -- Snap turn right must be rejected
+        local okR, errR = VRCompanion:snapTurnRight(nil, 1000)
+        assert(okR == false, "On-foot snap turn right must be rejected when menu is visible")
+        assert(errR == "menu_visible", "Error reason must be menu_visible")
+        assert(math.abs(nodeRotations[10].ry - 0.0) < 0.0001, "yawNode must not change while menu is open")
+
+        -- Snap turn left must be rejected
+        local okL, errL = VRCompanion:snapTurnLeft(nil, 1100)
+        assert(okL == false, "On-foot snap turn left must be rejected when menu is visible")
+        assert(errL == "menu_visible", "Error reason must be menu_visible")
+        assert(math.abs(nodeRotations[10].ry - 0.0) < 0.0001, "yawNode must not change while menu is open")
+
+        -- Close menu -> snap turn succeeds
+        VRCompanion.isMenuVisible = false
+        local okAfter, newYawAfter = VRCompanion:snapTurnRight(nil, 1300)
+        assert(okAfter == true, "On-foot snap turn must succeed after menu is closed")
+        assert(math.abs(newYawAfter - (-math.pi * 0.5)) < 0.0001, "yawNode must step to -pi/2")
+        assert(math.abs(nodeRotations[10].ry - (-math.pi * 0.5)) < 0.0001, "yawNode rotation must equal -pi/2")
+
+        VRCompanion:resetSnapTurnDebounce()
+    )luau", "=verifyOnFootMenuGuard"), 0);
+}
+
+TEST_F(CompanionModTest, SnapTurnInEngineActionEventsRegistration) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredEvents = {}
+        _G.g_inputBinding = {
+            actionEvents = {},
+            registerActionEvent = function(self, actionName, target, callback, triggerUp, triggerDown, triggerAlways, startActive)
+                local id = #self.actionEvents + 1
+                local ev = { id = id, actionName = actionName, target = target, callback = callback }
+                self.actionEvents[id] = ev
+                registeredEvents[actionName] = ev
+                return true, id
+            end,
+            setActionEventTextPriority = function() end,
+            setActionEventActive = function() end,
+            setActionEventTextVisibility = function() end,
+            setActionEventText = function() end
+        }
+
+        VRCompanion:registerActionEvents(true)
+        assert(registeredEvents["VR_SNAP_TURN_LEFT"] ~= nil, "VR_SNAP_TURN_LEFT must be registered")
+        assert(registeredEvents["VR_SNAP_TURN_RIGHT"] ~= nil, "VR_SNAP_TURN_RIGHT must be registered")
+        assert(VRCompanion.snapLeftActionEventId ~= nil, "snapLeftActionEventId must be set")
+        assert(VRCompanion.snapRightActionEventId ~= nil, "snapRightActionEventId must be set")
+    )luau", "=verifySnapTurnActionRegistration"), 0);
+}
+
+TEST_F(CompanionModTest, SnapTurnXmlConfigurationLoadingAndSaving) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local savedValues = {}
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function(xml, key, val) savedValues[key] = val end
+        _G.setXMLBool = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+
+        -- Save
+        VRCompanion:setSnapTurnAngle(math.rad(45.0))
+        VRCompanion:saveConfiguration()
+        assert(savedValues["vrSettings.snapTurnAngle"] == 45.0, "Must save 45.0 degrees to XML")
+
+        -- Load
+        _G.loadXMLFile = function() return 2 end
+        _G.getXMLFloat = function(xml, key)
+            if key == "vrSettings.snapTurnAngle" then return 90.0 end
+            return nil
+        end
+        _G.getXMLBool = function() return nil end
+
+        VRCompanion:loadConfiguration("mockSettings.xml")
+        assert(math.abs(VRCompanion:getSnapTurnAngle() - (math.pi * 0.5)) < 0.0001, "Must load 90.0 degrees (pi/2 rad)")
+    )luau", "=verifySnapTurnXmlConfig"), 0);
+}
+
+TEST_F(CompanionModTest, SnapTurnConsoleCommand) {
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion.snapTurnAngle = math.pi * 0.5
+
+        -- Query
+        local query = VRCompanion:consoleCommandSetSnapTurnAngle()
+        assert(string.find(query, "90") ~= nil, "Query must return 90 deg")
+
+        -- Set
+        local res = VRCompanion:consoleCommandSetSnapTurnAngle("30")
+        assert(string.find(res, "30") ~= nil, "Must confirm 30 deg")
+        assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(30.0)) < 0.0001, "Angle must be 30 deg in radians")
+    )luau", "=verifySnapTurnConsoleCommand"), 0);
+}
+
+
+
+
 
 
 

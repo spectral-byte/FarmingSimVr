@@ -30,6 +30,14 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
             <en>Toggle VR HUD Mode</en>
             <de>VR-HUD-Modus umschalten</de>
         </text>
+        <text name="input_VR_SNAP_TURN_LEFT">
+            <en>VR Snap Turn Left</en>
+            <de>VR-Blickdrehung links</de>
+        </text>
+        <text name="input_VR_SNAP_TURN_RIGHT">
+            <en>VR Snap Turn Right</en>
+            <de>VR-Blickdrehung rechts</de>
+        </text>
         <text name="setting_vrHudInsetHorizontal">
             <en>VR HUD Horizontal Inset</en>
             <de>VR-HUD horizontaler Einzug</de>
@@ -62,6 +70,10 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
             <en>Recenter VR Tracking Space upon Recenter</en>
             <de>VR-Trackingraum bei Ansichtszentrierung zurücksetzen</de>
         </text>
+        <text name="setting_vrSnapTurnAngle">
+            <en>VR Snap Turn Angle (Degrees)</en>
+            <de>VR-Blickdrehungswinkel (Grad)</de>
+        </text>
     </l10n>
     <vrSettings>
         <hudInsetHorizontal>0.30</hudInsetHorizontal>
@@ -73,11 +85,14 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         <hudFillLevelGap>0.004</hudFillLevelGap>
         <showHudLoadNotification>false</showHudLoadNotification>
         <recenterVrTrackingSpace>true</recenterVrTrackingSpace>
+        <snapTurnAngle>90</snapTurnAngle>
     </vrSettings>
     <actions>
         <action name="VR_RECENTER" category="ONFOOT VEHICLE"/>
         <action name="VR_RECENTER_VIEW" category="ONFOOT VEHICLE"/>
         <action name="VR_HUD_TOGGLE" category="ONFOOT VEHICLE"/>
+        <action name="VR_SNAP_TURN_LEFT" category="ONFOOT VEHICLE"/>
+        <action name="VR_SNAP_TURN_RIGHT" category="ONFOOT VEHICLE"/>
     </actions>
     <inputBinding>
         <actionBinding action="VR_RECENTER">
@@ -91,6 +106,14 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         <actionBinding action="VR_HUD_TOGGLE">
             <binding device="KB_MOUSE_DEFAULT" input="KEY_rctrl KEY_h"/>
             <binding device="GAMEPAD_DEFAULT" input="BUTTON_10"/>
+        </actionBinding>
+        <actionBinding action="VR_SNAP_TURN_LEFT">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad4"/>
+            <binding device="GAMEPAD_DEFAULT" input="BUTTON_5"/>
+        </actionBinding>
+        <actionBinding action="VR_SNAP_TURN_RIGHT">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad6"/>
+            <binding device="GAMEPAD_DEFAULT" input="BUTTON_6"/>
         </actionBinding>
     </inputBinding>
 </modDesc>

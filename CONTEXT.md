@@ -48,3 +48,7 @@ _Avoid_: Show HUD button, HUD keybind, UI switch
 The decluttered VR presentation mode that preserves essential driving and machine telemetry while suppressing bulky secondary panels (such as the minimap and input help).
 _Avoid_: Mini HUD, compact UI, lite HUD
 
+**Snap Turn**:
+An instantaneous rotational increment applied to the player's body or in-cab gaze angle to reorient view direction without vestibular motion sickness.
+_Avoid_: Quick turn, instant rotation, snap rotate, flick turn
+

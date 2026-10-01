@@ -21,6 +21,14 @@ VRCompanion.origCamSettings = {}
 VRCompanion.vehicleRotationStates = {}
 VRCompanion.isMenuVisible = false
 VRCompanion.guiVisibilityInitialized = false
+VRCompanion.hudToggleActionEventId = nil
+VRCompanion.recenterActionEventId = nil
+VRCompanion.snapLeftActionEventId = nil
+VRCompanion.snapRightActionEventId = nil
+VRCompanion.hudToggleLoggedOnce = false
+VRCompanion.recenterLoggedOnce = false
+VRCompanion.snapLeftLoggedOnce = false
+VRCompanion.snapRightLoggedOnce = false
 
 -- VR HUD Inset and UI Scale Constants
 VRCompanion.DEFAULT_HUD_INSET_X = 0.20
@@ -123,6 +131,79 @@ function VRCompanion:setRecenterMode(modeOrBool)
     end
     return self:getRecenterMode()
 end
+
+-- VR Snap Turn Locomotion Configuration (Issue #35)
+VRCompanion.DEFAULT_SNAP_TURN_ANGLE = math.pi * 0.5 -- 90 degrees (pi/2 radians)
+VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
+VRCompanion.DEFAULT_SNAP_TURN_DEBOUNCE_MS = 250 -- Minimum 250ms debounce cooldown
+VRCompanion.snapTurnDebounceMs = VRCompanion.DEFAULT_SNAP_TURN_DEBOUNCE_MS
+VRCompanion.lastSnapTurnTime = nil
+VRCompanion.isSnapLeftKeyDown = false
+VRCompanion.isSnapRightKeyDown = false
+
+function VRCompanion:getSnapTurnAngle()
+    return self.snapTurnAngle or self.DEFAULT_SNAP_TURN_ANGLE
+end
+
+function VRCompanion:setSnapTurnAngle(angle, inDegrees, saveConfig)
+    if type(angle) == "number" and angle > 0 then
+        if inDegrees == true then
+            self.snapTurnAngle = math.rad(angle)
+        elseif inDegrees == false then
+            self.snapTurnAngle = angle
+        else
+            if angle > math.pi * 2 then
+                self.snapTurnAngle = math.rad(angle)
+            else
+                self.snapTurnAngle = angle
+            end
+        end
+        if saveConfig == true then
+            self:saveConfiguration()
+        end
+    end
+    return self:getSnapTurnAngle()
+end
+
+function VRCompanion:getSnapTurnAngleDegrees()
+    local rad = self:getSnapTurnAngle()
+    local deg = math.deg(rad)
+    if math.abs(deg - math.floor(deg + 0.5)) < 0.001 then
+        return math.floor(deg + 0.5)
+    end
+    return math.floor(deg * 10 + 0.5) / 10
+end
+
+function VRCompanion:getCurrentTimeMs()
+    local t = g_time or (_G and _G.g_time)
+    if t ~= nil then return t end
+    if type(os) == "table" and type(os.clock) == "function" then
+        return os.clock() * 1000
+    end
+    return nil
+end
+
+function VRCompanion:isSnapTurnDebounced(curTime)
+    local t = curTime or self:getCurrentTimeMs()
+    if t == nil then
+        return false
+    end
+    if self.lastSnapTurnTime ~= nil then
+        local cooldown = self.snapTurnDebounceMs or self.DEFAULT_SNAP_TURN_DEBOUNCE_MS or 250
+        local elapsed = t - self.lastSnapTurnTime
+        if elapsed >= 0 and elapsed < cooldown then
+            return true
+        end
+    end
+    return false
+end
+
+function VRCompanion:resetSnapTurnDebounce()
+    self.lastSnapTurnTime = nil
+    self.isSnapLeftKeyDown = false
+    self.isSnapRightKeyDown = false
+end
+
 
 -- Configured VR HUD state
 VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
@@ -843,6 +924,7 @@ function VRCompanion:saveConfiguration(xmlPath)
             setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
         end
         setXmlFloatFn(xmlFile, "vrSettings.hudFillLevelGap", self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP)
+        setXmlFloatFn(xmlFile, "vrSettings.snapTurnAngle", self:getSnapTurnAngleDegrees())
 
         pcall(saveXmlFn, xmlFile)
         if type(deleteXmlFn) == "function" then
@@ -940,6 +1022,13 @@ function VRCompanion:loadConfiguration(xmlPath)
                     self.recenterVrTrackingSpace = loadedRecenterTracking
                 end
 
+                local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
+                    "vrSettings.snapTurnAngle", "vrSettings.snapTurnAngle#value",
+                    "modDesc.vrSettings.snapTurnAngle", "modDesc.vrSettings.snapTurnAngle#value")
+                if loadedSnapAngle ~= nil and loadedSnapAngle > 0 then
+                    self.snapTurnAngle = math.rad(loadedSnapAngle)
+                end
+
                 if type(deleteXmlFn) == "function" then
                     pcall(deleteXmlFn, xmlFile)
                 end
@@ -982,6 +1071,9 @@ function VRCompanion:loadConfiguration(xmlPath)
     end
     if self.recenterVrTrackingSpace == nil then
         self.recenterVrTrackingSpace = self.DEFAULT_RECENTER_VR_TRACKING_SPACE
+    end
+    if self.snapTurnAngle == nil then
+        self.snapTurnAngle = self.DEFAULT_SNAP_TURN_ANGLE
     end
 
     self:configureHudInsets(insetX, insetY, scale, insetTop)
@@ -1348,13 +1440,20 @@ function VRCompanion:registerActionEvents(force)
     local actionEvents = inputBinding.actionEvents or (inputBinding.events and inputBinding.events)
     local isHudEventActive = false
     local isRecenterEventActive = false
-
+    local isSnapLeftEventActive = false
+    local isSnapRightEventActive = false
     if not force and actionEvents ~= nil then
         if self.hudToggleActionEventId ~= nil and actionEvents[self.hudToggleActionEventId] ~= nil then
             isHudEventActive = true
         end
         if self.recenterActionEventId ~= nil and actionEvents[self.recenterActionEventId] ~= nil then
             isRecenterEventActive = true
+        end
+        if self.snapLeftActionEventId ~= nil and actionEvents[self.snapLeftActionEventId] ~= nil then
+            isSnapLeftEventActive = true
+        end
+        if self.snapRightActionEventId ~= nil and actionEvents[self.snapRightActionEventId] ~= nil then
+            isSnapRightEventActive = true
         end
     end
 
@@ -1412,6 +1511,60 @@ function VRCompanion:registerActionEvents(force)
             if not self.recenterLoggedOnce then
                 print("[FS25_VR] Registered in-engine VR_RECENTER event.")
                 self.recenterLoggedOnce = true
+            end
+        end
+    end
+
+    if force or not isSnapLeftEventActive then
+        local actionId = (InputAction and InputAction.VR_SNAP_TURN_LEFT) or (_G.InputAction and _G.InputAction.VR_SNAP_TURN_LEFT) or "VR_SNAP_TURN_LEFT"
+        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onSnapTurnLeftAction, false, true, false, true)
+        if success and eventId then
+            self.snapLeftActionEventId = eventId
+            if type(inputBinding.setActionEventTextPriority) == "function" then
+                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
+            end
+            if type(inputBinding.setActionEventActive) == "function" then
+                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventTextVisibility) == "function" then
+                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventText) == "function" then
+                pcall(function()
+                    local txt = (g_i18n and g_i18n:getText("input_VR_SNAP_TURN_LEFT")) or "VR Snap Turn Left"
+                    inputBinding:setActionEventText(eventId, txt)
+                end)
+            end
+            if not self.snapLeftLoggedOnce then
+                print("[FS25_VR] Registered in-engine VR_SNAP_TURN_LEFT event.")
+                self.snapLeftLoggedOnce = true
+            end
+        end
+    end
+
+    if force or not isSnapRightEventActive then
+        local actionId = (InputAction and InputAction.VR_SNAP_TURN_RIGHT) or (_G.InputAction and _G.InputAction.VR_SNAP_TURN_RIGHT) or "VR_SNAP_TURN_RIGHT"
+        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onSnapTurnRightAction, false, true, false, true)
+        if success and eventId then
+            self.snapRightActionEventId = eventId
+            if type(inputBinding.setActionEventTextPriority) == "function" then
+                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
+            end
+            if type(inputBinding.setActionEventActive) == "function" then
+                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventTextVisibility) == "function" then
+                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventText) == "function" then
+                pcall(function()
+                    local txt = (g_i18n and g_i18n:getText("input_VR_SNAP_TURN_RIGHT")) or "VR Snap Turn Right"
+                    inputBinding:setActionEventText(eventId, txt)
+                end)
+            end
+            if not self.snapRightLoggedOnce then
+                print("[FS25_VR] Registered in-engine VR_SNAP_TURN_RIGHT event.")
+                self.snapRightLoggedOnce = true
             end
         end
     end
@@ -1513,6 +1666,7 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrHudLoadAlert", "Toggle HUD alert on map load: vrHudLoadAlert <true|false>", "consoleCommandSetHudLoadNotification", self)
         addConsoleCommand("vrRecenterMode", "Set VR Recenter Action mode: vrRecenterMode [Both | VehicleOnly | toggle]", "consoleCommandSetRecenterMode", self)
         addConsoleCommand("vrRecenterTracking", "Set VR Recenter Action mode: vrRecenterTracking [Both | VehicleOnly | toggle]", "consoleCommandSetRecenterMode", self)
+        addConsoleCommand("vrSnapTurnAngle", "Set or query VR snap turn angle in degrees: vrSnapTurnAngle [degrees]", "consoleCommandSetSnapTurnAngle", self)
     end
 
     if self.showHudLoadNotification == true then
@@ -1559,9 +1713,15 @@ function VRCompanion:pollGuiVisibility()
 end
 
 function VRCompanion:getPlayerCamera()
+    if self.activePlayerCamera ~= nil then
+        return self.activePlayerCamera
+    end
     local mission = g_currentMission or (_G and _G.g_currentMission)
-    if mission ~= nil and mission.player ~= nil then
+    if mission ~= nil and mission.player ~= nil and mission.player.camera ~= nil then
         return mission.player.camera
+    end
+    if g_localPlayer ~= nil and g_localPlayer.camera ~= nil then
+        return g_localPlayer.camera
     end
     return nil
 end
@@ -1741,6 +1901,7 @@ function VRCompanion:onEnterVehicle(veh, isControlling, player)
 
     self.lastControlledVehicle = veh
     self:restoreVehicleRotationState(veh)
+    self:resetSnapTurnDebounce()
 
     self:registerActionEvents(true)
     self:applyHudState()
@@ -1759,6 +1920,7 @@ function VRCompanion:onLeaveVehicle(veh)
     end
 
     self.lastControlledVehicle = nil
+    self:resetSnapTurnDebounce()
     self:registerActionEvents(true)
     self:applyHudState()
 end
@@ -1778,6 +1940,8 @@ function VRCompanion:onVehicleTransition(oldVeh, newVeh)
         self:restoreVehicleRotationState(newVeh)
     end
 
+    self.lastControlledVehicle = newVeh
+    self:resetSnapTurnDebounce()
     self:registerActionEvents(true)
     self:applyHudState()
 end
@@ -1844,6 +2008,19 @@ function VRCompanion:hookEnterable()
     end
 end
 
+function VRCompanion:getPlayerCameraYaw(cam)
+    if not cam then return 0 end
+    local getRotationFn = getRotation or (_G and _G.getRotation)
+    if cam.yawNode ~= nil and type(getRotationFn) == "function" then
+        local _, yRot, _ = getRotationFn(cam.yawNode)
+        return yRot or 0
+    elseif type(cam.getRotation) == "function" then
+        local _, yRot, _ = cam:getRotation()
+        return yRot or 0
+    end
+    return 0
+end
+
 function VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
     if cam == nil then return end
     if cam.getHasOverriddenTarget ~= nil and cam:getHasOverriddenTarget() then
@@ -1863,14 +2040,7 @@ function VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
         rotationDeltaY = -(cam.player.inputComponent.cameraRotationY or 0) * cameraSensitivity
     end
 
-    local cameraYaw = 0
-    if cam.yawNode ~= nil and type(getRotation) == "function" then
-        local _, yRot, _ = getRotation(cam.yawNode)
-        cameraYaw = yRot or 0
-    elseif type(cam.getRotation) == "function" then
-        local _, yRot, _ = cam:getRotation()
-        cameraYaw = yRot or 0
-    end
+    local cameraYaw = self:getPlayerCameraYaw(cam)
 
     if MathUtil ~= nil and type(MathUtil.getValidLimit) == "function" then
         cameraYaw = MathUtil.getValidLimit(cameraYaw + rotationDeltaY)
@@ -2067,6 +2237,114 @@ function VRCompanion:rotateVectorByYaw(x, y, z, yaw)
     return rx, ry, rz
 end
 
+function VRCompanion:updateVehicleCameraTrackingNode(cam)
+    if not cam then return end
+    local setRotationFn = setRotation or (_G and _G.setRotation)
+    local getRotationFn = getRotation or (_G and _G.getRotation)
+    local lookYaw = self:getVehicleLookYaw(cam)
+
+    if cam.headTrackingNode ~= nil and cam.headTrackingNode ~= 0 then
+        if cam.origHeadTrackingRotY == nil or math.abs(cam.origHeadTrackingRotY) < 0.0001 then
+            local baseRy = cam.origRotY or math.pi
+            if type(getRotationFn) == "function" then
+                local ok, rx, ry, rz = pcall(getRotationFn, cam.headTrackingNode)
+                if ok and ry ~= nil and math.abs(ry) > 0.0001 then
+                    baseRy = ry
+                end
+            end
+            cam.origHeadTrackingRotX = 0
+            cam.origHeadTrackingRotY = baseRy
+            cam.origHeadTrackingRotZ = 0
+        end
+
+        local targetHeadRotY = self:normalizeAngle((cam.origHeadTrackingRotY or cam.origRotY or math.pi) + lookYaw)
+
+        if type(setRotationFn) == "function" then
+            pcall(setRotationFn, cam.headTrackingNode, 0, targetHeadRotY, 0)
+        end
+        return targetHeadRotY
+    elseif cam.cameraNode ~= nil and type(setRotationFn) == "function" then
+        -- Fallback vehicle camera without tracking node
+        local combYaw = self:normalizeAngle((cam.origRotY or math.pi) + lookYaw)
+        pcall(setRotationFn, cam.cameraNode, 0, combYaw, 0)
+        return combYaw
+    end
+    return nil
+end
+
+function VRCompanion:snapTurn(direction, angleOverride, curTime)
+    if self.isMenuVisible then
+        return false, "menu_visible"
+    end
+
+    local t = curTime or self:getCurrentTimeMs()
+    if self:isSnapTurnDebounced(t) then
+        return false, "debounced"
+    end
+
+    local vehCam = self:getActiveVehicleCamera()
+    if vehCam and vehCam.isInside then
+        local angle = angleOverride or self:getSnapTurnAngle()
+        local delta = -direction * angle
+
+        if vehCam.origRotY == nil then
+            vehCam.origRotY = vehCam.rotY or 0
+        end
+
+        local currentRotY = vehCam.rotY or vehCam.origRotY or 0
+        vehCam.rotY = self:normalizeAngle(currentRotY + delta)
+
+        local curVehicle = self:getControlledVehicle()
+        if curVehicle ~= nil and self.vehicleRotationStates ~= nil and self.vehicleRotationStates[curVehicle] ~= nil then
+            self.vehicleRotationStates[curVehicle].rotY = vehCam.rotY
+        end
+
+        self:updateVehicleCameraTrackingNode(vehCam)
+        self.lastSnapTurnTime = t
+        print(string.format("[FS25_VR] In-cab snap turn %s (%.1f deg): rotY = %.3f",
+            direction < 0 and "left" or "right", math.deg(angle), vehCam.rotY))
+        return true, vehCam.rotY
+    elseif self:getControlledVehicle() == nil then
+        local playerCam = self:getPlayerCamera()
+        if playerCam ~= nil then
+            local angle = angleOverride or self:getSnapTurnAngle()
+            local delta = -direction * angle
+            local currentYaw = self:getPlayerCameraYaw(playerCam)
+            local newYaw = self:normalizeAngle(currentYaw + delta)
+
+            local setRotationFn = setRotation or (_G and _G.setRotation)
+            local getRotationFn = getRotation or (_G and _G.getRotation)
+
+            if playerCam.yawNode ~= nil and type(setRotationFn) == "function" then
+                local rx, _, rz = 0, 0, 0
+                if type(getRotationFn) == "function" then
+                    rx, _, rz = getRotationFn(playerCam.yawNode)
+                end
+                setRotationFn(playerCam.yawNode, rx or 0, newYaw, rz or 0)
+            end
+
+            if type(playerCam.setRotation) == "function" then
+                pcall(playerCam.setRotation, playerCam, 0, newYaw, 0)
+            end
+
+            self.lastSnapTurnTime = t
+            print(string.format("[FS25_VR] On-foot snap turn %s (%.1f deg): yawNode = %.3f",
+                direction < 0 and "left" or "right", math.deg(angle), newYaw))
+            return true, newYaw
+        end
+    end
+
+    return false, "no_active_camera"
+end
+
+function VRCompanion:snapTurnLeft(angleOverride, curTime)
+    return self:snapTurn(-1, angleOverride, curTime)
+end
+
+function VRCompanion:snapTurnRight(angleOverride, curTime)
+    return self:snapTurn(1, angleOverride, curTime)
+end
+
 function VRCompanion:getResolvedHeadPose()
     local pose = nil
     local bridge = VRBridge or (_G and _G.VRBridge)
@@ -2214,23 +2492,9 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     -- Vertical pitch remains locked level with the physical horizon (rx = 0.0) to eliminate vestibular conflict.
     local targetHeadRotY = self:normalizeAngle((cam.origRotY or math.pi) + lookYaw)
     if cam.headTrackingNode ~= nil and cam.headTrackingNode ~= 0 then
-        if cam.origHeadTrackingRotY == nil or math.abs(cam.origHeadTrackingRotY) < 0.0001 then
-            local baseRy = cam.origRotY or math.pi
-            if type(getRotationFn) == "function" then
-                local ok, rx, ry, rz = pcall(getRotationFn, cam.headTrackingNode)
-                if ok and ry ~= nil and math.abs(ry) > 0.0001 then
-                    baseRy = ry
-                end
-            end
-            cam.origHeadTrackingRotX = 0
-            cam.origHeadTrackingRotY = baseRy
-            cam.origHeadTrackingRotZ = 0
-        end
-
-        targetHeadRotY = self:normalizeAngle((cam.origHeadTrackingRotY or cam.origRotY or math.pi) + lookYaw)
-
-        if type(setRotationFn) == "function" then
-            pcall(setRotationFn, cam.headTrackingNode, 0, targetHeadRotY, 0)
+        local nodeRotY = self:updateVehicleCameraTrackingNode(cam)
+        if nodeRotY ~= nil then
+            targetHeadRotY = nodeRotY
         end
     end
 
@@ -2300,10 +2564,14 @@ function VRCompanion:onPlayerCameraMakeCurrent(cam)
     if not cam or cam.firstPersonCamera == nil then
         return
     end
+    self.activePlayerCamera = cam
     self:getPlayerBaseTranslation(cam)
 end
 
 function VRCompanion:onPlayerCameraUpdate(cam, dt)
+    if cam ~= nil then
+        self.activePlayerCamera = cam
+    end
     local activeCamNode = (cam and cam.firstPersonCamera) or (cam and cam.cameraNode)
     if not activeCamNode then
         return
@@ -2670,6 +2938,7 @@ function VRCompanion:onRecenterAction()
             if curVehicle ~= nil and self.vehicleRotationStates ~= nil and self.vehicleRotationStates[curVehicle] ~= nil then
                 self.vehicleRotationStates[curVehicle].rotY = vehCam.rotY
             end
+            self:updateVehicleCameraTrackingNode(vehCam)
             print("[FS25_VR] VehicleOnly mode: Cockpit vehicle camera look yaw reset to origRotY.")
         end
     end
@@ -2685,6 +2954,15 @@ function VRCompanion:onRecenterAction()
 
     print(string.format("[FS25_VR] Recenter Action complete (%s mode).", recenterTracking and "Both" or "VehicleOnly"))
 end
+
+function VRCompanion:onSnapTurnLeftAction()
+    self:snapTurnLeft()
+end
+
+function VRCompanion:onSnapTurnRightAction()
+    self:snapTurnRight()
+end
+
 
 function VRCompanion:update(dt)
     self.frameTicks = (self.frameTicks or 0) + 1
@@ -2713,7 +2991,7 @@ function VRCompanion:update(dt)
     self:updateHudConvergence(dt)
 
     -- Keep in-engine action events active across context transitions
-    if (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) then
+    if (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) then
         self:registerActionEvents(false)
     end
 
@@ -2795,6 +3073,7 @@ function VRCompanion:deleteMap()
     self.frameTicks = 0
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
+    self.activePlayerCamera = nil
     self.enterableHooked = false
     self.lastControlledVehicle = nil
     self.vehicleRotationStates = {}
@@ -2822,6 +3101,14 @@ function VRCompanion:deleteMap()
     self.activeFillLevelsDisplay = nil
     self.passThroughMode = nil
     self.headTrackingEnabled = true
+    self.hudToggleActionEventId = nil
+    self.recenterActionEventId = nil
+    self.snapLeftActionEventId = nil
+    self.snapRightActionEventId = nil
+    self.hudToggleLoggedOnce = false
+    self.recenterLoggedOnce = false
+    self.snapLeftLoggedOnce = false
+    self.snapRightLoggedOnce = false
 
     -- Restore original camera FOVs and projection offsets
     if self.origCamSettings ~= nil then
@@ -2852,8 +3139,29 @@ function VRCompanion:deleteMap()
     end
 end
 
+function VRCompanion:isKeySnapLeft(sym, unicode)
+    if Input ~= nil and (Input.KEY_kp_4 ~= nil or Input.KEY_numPad4 ~= nil) then
+        return (sym == Input.KEY_kp_4 or sym == Input.KEY_numPad4)
+    end
+    return (sym == 260 or unicode == 52)
+end
+
+function VRCompanion:isKeySnapRight(sym, unicode)
+    if Input ~= nil and (Input.KEY_kp_6 ~= nil or Input.KEY_numPad6 ~= nil) then
+        return (sym == Input.KEY_kp_6 or sym == Input.KEY_numPad6)
+    end
+    return (sym == 262 or unicode == 54)
+end
+
 function VRCompanion:keyEvent(unicode, sym, modifier, isDown)
-    if not isDown then return end
+    if not isDown then
+        if self:isKeySnapLeft(sym, unicode) then
+            self.isSnapLeftKeyDown = false
+        elseif self:isKeySnapRight(sym, unicode) then
+            self.isSnapRightKeyDown = false
+        end
+        return
+    end
 
     -- Direct hardware shortcut for VR_HUD_TOGGLE (Ctrl + H)
     local isH = false
@@ -2888,6 +3196,17 @@ function VRCompanion:keyEvent(unicode, sym, modifier, isDown)
         end
     end
 
+    -- Direct hardware shortcut for VR_SNAP_TURN_LEFT (Numpad 4)
+    if self:isKeySnapLeft(sym, unicode) then
+        if self.isSnapLeftKeyDown then
+            return
+        end
+        self.isSnapLeftKeyDown = true
+        print("[FS25_VR] Hardware keyEvent: Numpad 4 detected -> snap turn left.")
+        self:snapTurnLeft()
+        return
+    end
+
     -- Direct hardware shortcut for VR_RECENTER (Numpad 5)
     local isRecenter = false
     if Input ~= nil and (Input.KEY_kp_5 ~= nil or Input.KEY_numPad5 ~= nil) then
@@ -2898,6 +3217,17 @@ function VRCompanion:keyEvent(unicode, sym, modifier, isDown)
     if isRecenter then
         print("[FS25_VR] Hardware keyEvent: Numpad 5 detected -> recentering VR view.")
         self:onRecenterAction()
+        return
+    end
+
+    -- Direct hardware shortcut for VR_SNAP_TURN_RIGHT (Numpad 6)
+    if self:isKeySnapRight(sym, unicode) then
+        if self.isSnapRightKeyDown then
+            return
+        end
+        self.isSnapRightKeyDown = true
+        print("[FS25_VR] Hardware keyEvent: Numpad 6 detected -> snap turn right.")
+        self:snapTurnRight()
         return
     end
 end
@@ -3053,6 +3383,30 @@ function VRCompanion:consoleCommandSetRecenterMode(modeStr)
     local modeDesc = (newMode == "Both") and "resets vehicle camera & VR tracking space" or "resets vehicle camera only"
     print(string.format("[FS25_VR] VR recenter mode set to: %s (%s)", newMode, modeDesc))
     return string.format("VR recenter mode set to: %s (%s)", newMode, modeDesc)
+end
+
+function VRCompanion:consoleCommandSetSnapTurnAngle(angleStr)
+    local curDeg = self:getSnapTurnAngleDegrees()
+    if angleStr == nil or angleStr == "" or string.lower(tostring(angleStr)) == "status" then
+        return string.format("Current VR snap turn angle: %.1f deg. Usage: vrSnapTurnAngle <degrees> (e.g. 30, 45, 90, 180)", curDeg)
+    end
+
+    local deg = tonumber(angleStr)
+    if deg == nil or deg <= 0 or deg > 360 then
+        return string.format("Usage: vrSnapTurnAngle <degrees> (valid: 1 to 360, e.g. 30, 45, 90, 180, current: %.1f deg)", curDeg)
+    end
+
+    self:setSnapTurnAngle(deg, true, true)
+
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR Snap Turn Angle: %.1f deg (Saved)", deg), 2500)
+        end)
+    end
+
+    print(string.format("[FS25_VR] Snap turn angle set to: %.1f deg (%.4f rad)", deg, self:getSnapTurnAngle()))
+    return string.format("VR snap turn angle set to: %.1f deg (Saved)", deg)
 end
 
 -- Register as an engine mod event listener if in-game environment
