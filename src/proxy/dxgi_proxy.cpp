@@ -302,6 +302,8 @@ void DxgiProxy::DetachAll() {
     if (m_detourResizeBuffers1.IsInstalled()) m_detourResizeBuffers1.Uninstall();
     if (m_detourCreateSwapChain.IsInstalled()) m_detourCreateSwapChain.Uninstall();
     if (m_detourCreateSwapChainForHwnd.IsInstalled()) m_detourCreateSwapChainForHwnd.Uninstall();
+    if (m_detourSetCursorPos.IsInstalled()) m_detourSetCursorPos.Uninstall();
+    if (m_detourClipCursor.IsInstalled()) m_detourClipCursor.Uninstall();
     m_swapChainAttached = false;
     m_factoryAttached = false;
     m_inSizeMove = false;
@@ -595,6 +597,124 @@ BOOL WINAPI DxgiProxy::Intercept_ScreenToClient(HWND hWnd, LPPOINT lpPoint) {
     return TRUE;
 }
 
+bool DxgiProxy::ScaleVirtualCursorToPhysical(HWND hWnd, int screenX, int screenY, int& outPhysScreenX, int& outPhysScreenY) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    if (!proxy || !proxy->IsActive() || !hWnd) return false;
+    if (proxy->m_targetRenderWidth == 0 || proxy->m_targetRenderHeight == 0) return false;
+
+    RECT physRect{};
+    POINT clientOrigin{ 0, 0 };
+    {
+        InternalWindowQueryScope scope;
+        auto origGCR = reinterpret_cast<BOOL(WINAPI*)(HWND, LPRECT)>(
+            proxy->m_detourGetClientRect.GetOriginal()
+        );
+        if (origGCR) {
+            origGCR(hWnd, &physRect);
+        } else {
+            GetClientRect(hWnd, &physRect);
+        }
+        ClientToScreen(hWnd, &clientOrigin);
+    }
+
+    int physW = physRect.right - physRect.left;
+    int physH = physRect.bottom - physRect.top;
+    if (physW <= 0 || physH <= 0) return false;
+
+    int virtX = screenX - clientOrigin.x;
+    int virtY = screenY - clientOrigin.y;
+
+    if (virtX >= 0 && virtX <= static_cast<int>(proxy->m_targetRenderWidth) &&
+        virtY >= 0 && virtY <= static_cast<int>(proxy->m_targetRenderHeight)) {
+        int scaledPhysX = static_cast<int>(std::round(
+            (static_cast<double>(virtX) * physW) / proxy->m_targetRenderWidth
+        ));
+        int scaledPhysY = static_cast<int>(std::round(
+            (static_cast<double>(virtY) * physH) / proxy->m_targetRenderHeight
+        ));
+        outPhysScreenX = clientOrigin.x + scaledPhysX;
+        outPhysScreenY = clientOrigin.y + scaledPhysY;
+        return true;
+    }
+
+    return false;
+}
+
+bool DxgiProxy::ConstrainVirtualClipRectToPhysical(HWND hWnd, const RECT* lpRect, RECT& outPhysClipRect) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    if (!proxy || !proxy->IsActive() || !hWnd || !lpRect) return false;
+    if (proxy->m_targetRenderWidth == 0 || proxy->m_targetRenderHeight == 0) return false;
+
+    RECT physRect{};
+    POINT clientOrigin{ 0, 0 };
+    {
+        InternalWindowQueryScope scope;
+        auto origGCR = reinterpret_cast<BOOL(WINAPI*)(HWND, LPRECT)>(
+            proxy->m_detourGetClientRect.GetOriginal()
+        );
+        if (origGCR) {
+            origGCR(hWnd, &physRect);
+        } else {
+            GetClientRect(hWnd, &physRect);
+        }
+        ClientToScreen(hWnd, &clientOrigin);
+    }
+
+    int physW = physRect.right - physRect.left;
+    int physH = physRect.bottom - physRect.top;
+    if (physW <= 0 || physH <= 0) return false;
+
+    outPhysClipRect.left = clientOrigin.x;
+    outPhysClipRect.top = clientOrigin.y;
+    outPhysClipRect.right = clientOrigin.x + physW;
+    outPhysClipRect.bottom = clientOrigin.y + physH;
+    return true;
+}
+
+BOOL WINAPI DxgiProxy::Intercept_SetCursorPos(int X, int Y) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    auto orig = reinterpret_cast<BOOL(WINAPI*)(int, int)>(
+        proxy ? proxy->m_detourSetCursorPos.GetOriginal() : nullptr
+    );
+    if (!orig) return FALSE;
+    if (t_isInternalWindowQuery) {
+        return orig(X, Y);
+    }
+
+    if (proxy && proxy->IsActive() && proxy->m_gameHwnd) {
+        int physX = X;
+        int physY = Y;
+        if (ScaleVirtualCursorToPhysical(proxy->m_gameHwnd, X, Y, physX, physY)) {
+            return orig(physX, physY);
+        }
+    }
+
+    return orig(X, Y);
+}
+
+BOOL WINAPI DxgiProxy::Intercept_ClipCursor(const RECT* lpRect) {
+    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    auto orig = reinterpret_cast<BOOL(WINAPI*)(const RECT*)>(
+        proxy ? proxy->m_detourClipCursor.GetOriginal() : nullptr
+    );
+    if (!orig) return FALSE;
+    if (t_isInternalWindowQuery) {
+        return orig(lpRect);
+    }
+    if (!lpRect) {
+        return orig(nullptr);
+    }
+
+    if (proxy && proxy->IsActive() && proxy->m_gameHwnd) {
+        RECT physClip{};
+        if (ConstrainVirtualClipRectToPhysical(proxy->m_gameHwnd, lpRect, physClip)) {
+            return orig(&physClip);
+        }
+    }
+
+    return orig(lpRect);
+}
+
 bool DxgiProxy::ScreenToNormalizedClient(HWND hWnd, POINT screenPt, float& outNormX, float& outNormY) {
     if (!hWnd) return false;
     POINT pt = screenPt;
@@ -735,6 +855,26 @@ bool DxgiProxy::AttachWindowSubclass(HWND hWnd) {
                     }
                 }
             }
+            if (!m_detourSetCursorPos.IsInstalled()) {
+                void* pfnSetCursorPos = reinterpret_cast<void*>(GetProcAddress(hUser32, "SetCursorPos"));
+                if (pfnSetCursorPos) {
+                    if (m_detourSetCursorPos.Install(pfnSetCursorPos, reinterpret_cast<void*>(&DxgiProxy::Intercept_SetCursorPos))) {
+                        LogInfo("DxgiProxy: Successfully installed SetCursorPos detour for relative mouse centering.");
+                    } else {
+                        LogWarn("DxgiProxy: Failed to install SetCursorPos detour.");
+                    }
+                }
+            }
+            if (!m_detourClipCursor.IsInstalled()) {
+                void* pfnClipCursor = reinterpret_cast<void*>(GetProcAddress(hUser32, "ClipCursor"));
+                if (pfnClipCursor) {
+                    if (m_detourClipCursor.Install(pfnClipCursor, reinterpret_cast<void*>(&DxgiProxy::Intercept_ClipCursor))) {
+                        LogInfo("DxgiProxy: Successfully installed ClipCursor detour for desktop window bounds.");
+                    } else {
+                        LogWarn("DxgiProxy: Failed to install ClipCursor detour.");
+                    }
+                }
+            }
         }
     } else {
         LogError("DxgiProxy: Failed to subclass Desktop Mirror Window HWND=" + std::to_string(reinterpret_cast<uintptr_t>(hWnd)));
@@ -760,6 +900,14 @@ bool DxgiProxy::DetachWindowSubclass() {
     if (m_detourScreenToClient.IsInstalled()) {
         m_detourScreenToClient.Uninstall();
         LogInfo("DxgiProxy: Uninstalled ScreenToClient detour.");
+    }
+    if (m_detourSetCursorPos.IsInstalled()) {
+        m_detourSetCursorPos.Uninstall();
+        LogInfo("DxgiProxy: Uninstalled SetCursorPos detour.");
+    }
+    if (m_detourClipCursor.IsInstalled()) {
+        m_detourClipCursor.Uninstall();
+        LogInfo("DxgiProxy: Uninstalled ClipCursor detour.");
     }
     m_windowSubclassed = false;
     m_inSizeMove = false;

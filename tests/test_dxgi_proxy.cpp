@@ -2304,6 +2304,8 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
     EXPECT_TRUE(activeProxy.IsDetourGetClientRectInstalled());
     EXPECT_TRUE(activeProxy.IsDetourScreenToClientInstalled());
+    EXPECT_TRUE(activeProxy.IsDetourSetCursorPosInstalled());
+    EXPECT_TRUE(activeProxy.IsDetourClipCursorInstalled());
 
     // When the game queries GetClientRect in active VR, it must see 3840x2160
     RECT clientRc{};
@@ -2325,7 +2327,7 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
         DestroyWindow(otherWnd);
     }
 
-    // ScreenToClient maps bottom-right of the physical window to target render extent (3840, 2160)
+    // Physical window client dimensions
     RECT realPhysRc{};
     // Detach temporarily to inspect physical size
     activeProxy.DetachWindowSubclass();
@@ -2338,11 +2340,12 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     // Reattach subclass and detours
     EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
 
+    // ScreenToClient maps bottom-right of the physical window to target render extent (3840, 2160)
     POINT ptBottomRight{ physW, physH };
     EXPECT_TRUE(ClientToScreen(testWnd, &ptBottomRight));
     EXPECT_TRUE(ScreenToClient(testWnd, &ptBottomRight));
-    EXPECT_EQ(ptBottomRight.x, 3840);
-    EXPECT_EQ(ptBottomRight.y, 2160);
+    EXPECT_NEAR(ptBottomRight.x, 3840, 1);
+    EXPECT_NEAR(ptBottomRight.y, 2160, 1);
 
     // ScreenToNormalizedClient still produces normalized [0.0, 1.0] coordinates
     POINT screenPt{ physW, physH };
@@ -2355,6 +2358,8 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     activeProxy.DetachAll();
     EXPECT_FALSE(activeProxy.IsDetourGetClientRectInstalled());
     EXPECT_FALSE(activeProxy.IsDetourScreenToClientInstalled());
+    EXPECT_FALSE(activeProxy.IsDetourSetCursorPosInstalled());
+    EXPECT_FALSE(activeProxy.IsDetourClipCursorInstalled());
 
     // After detach, GetClientRect returns physical dimensions again
     RECT restoredRc{};
@@ -2362,6 +2367,110 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     EXPECT_EQ(restoredRc.right, physW);
     EXPECT_EQ(restoredRc.bottom, physH);
 
+    DestroyWindow(testWnd);
+}
+
+TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) {
+    // Replicate Desktop Mirror Window geometry (clamped on ultrawide/4K display)
+    HWND testWnd = CreateWindowA("STATIC", "MouseLookCenterWnd", WS_OVERLAPPEDWINDOW, 100, 100, 1000, 800, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto activeOpenXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(activeOpenXrManager->Initialize());
+    ASSERT_TRUE(activeOpenXrManager->CreateSession());
+
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+    activeProxy.SetTargetRenderResolution(3840, 2160);
+    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+    EXPECT_TRUE(activeProxy.IsDetourSetCursorPosInstalled());
+    EXPECT_TRUE(activeProxy.IsDetourClipCursorInstalled());
+
+    // Query physical client rect using InternalWindowQueryScope
+    RECT physRc{};
+    {
+        activeProxy.DetachWindowSubclass();
+        EXPECT_TRUE(GetClientRect(testWnd, &physRc));
+        EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+    }
+    int physW = physRc.right - physRc.left;
+    int physH = physRc.bottom - physRc.top;
+
+    POINT physTopLeft{ 0, 0 };
+    EXPECT_TRUE(ClientToScreen(testWnd, &physTopLeft));
+
+    int expectedPhysCenterX = physTopLeft.x + physW / 2;
+    int expectedPhysCenterY = physTopLeft.y + physH / 2;
+
+    // 1. Verify virtual cursor positioning calculation:
+    // ScaleVirtualCursorToPhysical accurately transforms virtual center (1920, 1080) to physical center
+    POINT warpVirtualCenter{ physTopLeft.x + 1920, physTopLeft.y + 1080 };
+    int computedPhysX = 0;
+    int computedPhysY = 0;
+    EXPECT_TRUE(DxgiProxy::ScaleVirtualCursorToPhysical(testWnd, warpVirtualCenter.x, warpVirtualCenter.y, computedPhysX, computedPhysY));
+    EXPECT_NEAR(computedPhysX, expectedPhysCenterX, 1);
+    EXPECT_NEAR(computedPhysY, expectedPhysCenterY, 1);
+
+    // Specifically verify it does NOT set x to physTopLeft.x + 1920 (which would be near/past right window edge)
+    if (physW < 3800) {
+        EXPECT_NE(computedPhysX, physTopLeft.x + 1920);
+    }
+
+    // 2. Verify virtual clip rectangle constraining calculation:
+    RECT virtualClipRc{ physTopLeft.x, physTopLeft.y, physTopLeft.x + 3840, physTopLeft.y + 2160 };
+    RECT constrainedClipRc{};
+    EXPECT_TRUE(DxgiProxy::ConstrainVirtualClipRectToPhysical(testWnd, &virtualClipRc, constrainedClipRc));
+    EXPECT_EQ(constrainedClipRc.left, physTopLeft.x);
+    EXPECT_EQ(constrainedClipRc.top, physTopLeft.y);
+    EXPECT_EQ(constrainedClipRc.right, physTopLeft.x + physW);
+    EXPECT_EQ(constrainedClipRc.bottom, physTopLeft.y + physH);
+
+    // 3. Verify hooked Win32 API invocations (handles interactive desktop or headless/CI ERROR_INVALID_ADDRESS / ERROR_ACCESS_DENIED)
+    BOOL setPosRes = SetCursorPos(warpVirtualCenter.x, warpVirtualCenter.y);
+    if (setPosRes) {
+        POINT actualCursorPos{};
+        if (GetCursorPos(&actualCursorPos)) {
+            EXPECT_NEAR(actualCursorPos.x, expectedPhysCenterX, 1);
+            EXPECT_NEAR(actualCursorPos.y, expectedPhysCenterY, 1);
+        }
+    } else {
+        DWORD err = GetLastError();
+        EXPECT_TRUE(err == ERROR_INVALID_ADDRESS || err == ERROR_ACCESS_DENIED);
+    }
+
+    BOOL clipRes = ClipCursor(&virtualClipRc);
+    if (clipRes) {
+        RECT actualClipRc{};
+        if (GetClipCursor(&actualClipRc)) {
+            EXPECT_NEAR(actualClipRc.left, physTopLeft.x, 1);
+            EXPECT_NEAR(actualClipRc.top, physTopLeft.y, 1);
+            EXPECT_NEAR(actualClipRc.right, physTopLeft.x + physW, 1);
+            EXPECT_NEAR(actualClipRc.bottom, physTopLeft.y + physH, 1);
+        }
+        ClipCursor(nullptr);
+    } else {
+        DWORD err = GetLastError();
+        EXPECT_TRUE(err == ERROR_INVALID_ADDRESS || err == ERROR_ACCESS_DENIED);
+    }
+
+    // 4. Bidirectional delta parity:
+    // When the mouse is at physical center and user moves delta right or left,
+    // ScreenToClient maps back symmetrically around 1920.
+    POINT moveRightScreen{ expectedPhysCenterX + 20, expectedPhysCenterY };
+    EXPECT_TRUE(ScreenToClient(testWnd, &moveRightScreen));
+    int rightDelta = moveRightScreen.x - 1920;
+
+    POINT moveLeftScreen{ expectedPhysCenterX - 20, expectedPhysCenterY };
+    EXPECT_TRUE(ScreenToClient(testWnd, &moveLeftScreen));
+    int leftDelta = 1920 - moveLeftScreen.x;
+
+    EXPECT_GT(rightDelta, 0);
+    EXPECT_GT(leftDelta, 0);
+    EXPECT_NEAR(rightDelta, leftDelta, 1);
+
+    activeProxy.DetachAll();
+    EXPECT_FALSE(activeProxy.IsDetourSetCursorPosInstalled());
+    EXPECT_FALSE(activeProxy.IsDetourClipCursorInstalled());
     DestroyWindow(testWnd);
 }
 

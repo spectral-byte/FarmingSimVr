@@ -76,6 +76,8 @@ public:
     void SetGameHwnd(HWND hWnd);
     void UpdateMenuCursorState(IDXGISwapChain* swapChain);
     static bool ScreenToNormalizedClient(HWND hWnd, POINT screenPt, float& outNormX, float& outNormY);
+    static bool ScaleVirtualCursorToPhysical(HWND hWnd, int screenX, int screenY, int& outPhysScreenX, int& outPhysScreenY);
+    static bool ConstrainVirtualClipRectToPhysical(HWND hWnd, const RECT* lpRect, RECT& outPhysClipRect);
     static RECT ComputeClampedMirrorWindowRect(const RECT& workArea, DWORD dwStyle, DWORD dwExStyle, bool hasMenu = false);
     static RECT ComputeClampedMirrorWindowRect(HWND hWnd);
 
@@ -103,9 +105,13 @@ public:
     static HRESULT STDMETHODCALLTYPE Intercept_CreateSwapChainForHwnd(IDXGIFactory2* self, IUnknown* pDevice, HWND hWnd, const DXGI_SWAP_CHAIN_DESC1* pDesc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc, IDXGIOutput* pRestrictToOutput, IDXGISwapChain1** ppSwapChain);
     static BOOL WINAPI Intercept_GetClientRect(HWND hWnd, LPRECT lpRect);
     static BOOL WINAPI Intercept_ScreenToClient(HWND hWnd, LPPOINT lpPoint);
+    static BOOL WINAPI Intercept_SetCursorPos(int X, int Y);
+    static BOOL WINAPI Intercept_ClipCursor(const RECT* lpRect);
 
     bool IsDetourGetClientRectInstalled() const { return m_detourGetClientRect.IsInstalled(); }
     bool IsDetourScreenToClientInstalled() const { return m_detourScreenToClient.IsInstalled(); }
+    bool IsDetourSetCursorPosInstalled() const { return m_detourSetCursorPos.IsInstalled(); }
+    bool IsDetourClipCursorInstalled() const { return m_detourClipCursor.IsInstalled(); }
     bool IsDetourResizeBuffersInstalled() const { return m_detourResizeBuffers.IsInstalled(); }
     bool IsDetourResizeBuffers1Installed() const { return m_detourResizeBuffers1.IsInstalled(); }
 
@@ -132,6 +138,8 @@ private:
     FunctionDetour m_detourCreateSwapChainForHwnd;
     FunctionDetour m_detourGetClientRect;
     FunctionDetour m_detourScreenToClient;
+    FunctionDetour m_detourSetCursorPos;
+    FunctionDetour m_detourClipCursor;
 
     bool m_swapChainAttached = false;
     bool m_factoryAttached = false;
