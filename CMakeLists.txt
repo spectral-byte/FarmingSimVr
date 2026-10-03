@@ -48,14 +48,6 @@ FetchContent_MakeAvailable(luau)
 
 enable_testing()
 
-include_directories(
-    src
-    ${openxr_SOURCE_DIR}/include
-    ${luau_SOURCE_DIR}/VM/include
-    ${luau_SOURCE_DIR}/Compiler/include
-    ${luau_SOURCE_DIR}/Common/include
-)
-
 # Core source files
 set(CORE_SOURCES
     src/core/logger.cpp
@@ -88,29 +80,36 @@ set(CORE_SOURCES
     src/ngx/ngx_interceptor.cpp
 )
 
-# DXGI Proxy DLL target
-add_library(dxgi SHARED
-    ${CORE_SOURCES}
-    src/dllmain.cpp
-    src/proxy/dxgi_exports.def
+# Core static library: compiled once, shared by the Injector DLL and the tests
+add_library(fs25_vr_core STATIC ${CORE_SOURCES})
+
+target_include_directories(fs25_vr_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(dxgi PRIVATE
+target_link_libraries(fs25_vr_core PUBLIC
     openxr_loader
     Luau.VM
     d3d12.lib
     comctl32.lib
 )
 
-target_compile_definitions(dxgi PRIVATE
+target_compile_definitions(fs25_vr_core PUBLIC
     XR_USE_GRAPHICS_API_D3D12
     NOMINMAX
     WIN32_LEAN_AND_MEAN
 )
 
+# DXGI Proxy DLL target
+add_library(dxgi SHARED
+    src/dllmain.cpp
+    src/proxy/dxgi_exports.def
+)
+
+target_link_libraries(dxgi PRIVATE fs25_vr_core)
+
 # Test executable target
 add_executable(fs25_vr_tests
-    ${CORE_SOURCES}
     tests/test_main.cpp
     tests/test_math_utils.cpp
     tests/test_logger.cpp
@@ -132,19 +131,16 @@ add_executable(fs25_vr_tests
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
-    GTest::gtest_main
-    openxr_loader
-    Luau.VM
+    fs25_vr_core
+    GTest::gtest
     Luau.Compiler
     dxgi.lib
-    d3d12.lib
-    comctl32.lib
 )
 
+# The binary-load test loads the freshly built dxgi.dll next to the test executable
+add_dependencies(fs25_vr_tests dxgi)
+
 target_compile_definitions(fs25_vr_tests PRIVATE
-    XR_USE_GRAPHICS_API_D3D12
-    NOMINMAX
-    WIN32_LEAN_AND_MEAN
     PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
