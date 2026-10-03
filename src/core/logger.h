@@ -29,7 +29,7 @@ private:
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
 
-    std::string LogLevelToString(LogLevel level);
+    const char* LogLevelToString(LogLevel level);
 
     std::ofstream m_fileStream;
     std::mutex m_mutex;

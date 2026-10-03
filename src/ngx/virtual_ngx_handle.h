@@ -3,6 +3,7 @@
 #include "ngx_defs.h"
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -10,6 +11,20 @@ namespace fs25vr {
 
 // Magic identifier to safely identify virtual NGX handles: 'VNGX'
 inline constexpr uint32_t VIRTUAL_NGX_HANDLE_MAGIC = 0x564E4758;
+
+struct TransparentStringHash {
+    using is_transparent = void;
+    size_t operator()(std::string_view sv) const noexcept {
+        return std::hash<std::string_view>{}(sv);
+    }
+};
+
+struct TransparentStringEqual {
+    using is_transparent = void;
+    bool operator()(std::string_view a, std::string_view b) const noexcept {
+        return a == b;
+    }
+};
 
 enum class NgxParamType {
     Ull,
@@ -44,72 +59,64 @@ public:
     virtual ~NgxParameterImpl() = default;
 
     void Set(const char* InName, unsigned long long InValue) override {
-        if (!InName) return;
         NgxParamValue val;
         val.type = NgxParamType::Ull;
         val.ullVal = InValue;
-        m_params[InName] = val;
+        SetValue(InName, val);
     }
 
     void Set(const char* InName, float InValue) override {
-        if (!InName) return;
         NgxParamValue val;
         val.type = NgxParamType::Float;
         val.floatVal = InValue;
-        m_params[InName] = val;
+        SetValue(InName, val);
     }
 
     void Set(const char* InName, double InValue) override {
-        if (!InName) return;
         NgxParamValue val;
         val.type = NgxParamType::Double;
         val.doubleVal = InValue;
-        m_params[InName] = val;
+        SetValue(InName, val);
     }
 
     void Set(const char* InName, unsigned int InValue) override {
-        if (!InName) return;
         NgxParamValue val;
         val.type = NgxParamType::Uint;
         val.uintVal = InValue;
-        m_params[InName] = val;
+        SetValue(InName, val);
     }
 
     void Set(const char* InName, int InValue) override {
-        if (!InName) return;
         NgxParamValue val;
         val.type = NgxParamType::Int;
         val.intVal = InValue;
-        m_params[InName] = val;
+        SetValue(InName, val);
     }
 
     void Set(const char* InName, ID3D11Resource* InValue) override {
-        if (!InName) return;
         NgxParamValue val;
         val.type = NgxParamType::D3D11Resource;
         val.d3d11Val = InValue;
-        m_params[InName] = val;
+        SetValue(InName, val);
     }
 
     void Set(const char* InName, ID3D12Resource* InValue) override {
-        if (!InName) return;
         NgxParamValue val;
         val.type = NgxParamType::D3D12Resource;
         val.d3d12Val = InValue;
-        m_params[InName] = val;
+        SetValue(InName, val);
     }
 
     void Set(const char* InName, void* InValue) override {
-        if (!InName) return;
         NgxParamValue val;
         val.type = NgxParamType::VoidPtr;
         val.voidPtrVal = InValue;
-        m_params[InName] = val;
+        SetValue(InName, val);
     }
 
     NVSDK_NGX_Result Get(const char* InName, unsigned long long* OutValue) const override {
         if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
-        auto it = m_params.find(InName);
+        auto it = m_params.find(std::string_view(InName));
         if (it == m_params.end()) return NVSDK_NGX_Result_FAIL_FeatureNotFound;
         const auto& val = it->second;
         switch (val.type) {
@@ -122,7 +129,7 @@ public:
 
     NVSDK_NGX_Result Get(const char* InName, float* OutValue) const override {
         if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
-        auto it = m_params.find(InName);
+        auto it = m_params.find(std::string_view(InName));
         if (it == m_params.end()) return NVSDK_NGX_Result_FAIL_FeatureNotFound;
         const auto& val = it->second;
         switch (val.type) {
@@ -134,7 +141,7 @@ public:
 
     NVSDK_NGX_Result Get(const char* InName, double* OutValue) const override {
         if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
-        auto it = m_params.find(InName);
+        auto it = m_params.find(std::string_view(InName));
         if (it == m_params.end()) return NVSDK_NGX_Result_FAIL_FeatureNotFound;
         const auto& val = it->second;
         switch (val.type) {
@@ -146,7 +153,7 @@ public:
 
     NVSDK_NGX_Result Get(const char* InName, unsigned int* OutValue) const override {
         if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
-        auto it = m_params.find(InName);
+        auto it = m_params.find(std::string_view(InName));
         if (it == m_params.end()) return NVSDK_NGX_Result_FAIL_FeatureNotFound;
         const auto& val = it->second;
         switch (val.type) {
@@ -159,7 +166,7 @@ public:
 
     NVSDK_NGX_Result Get(const char* InName, int* OutValue) const override {
         if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
-        auto it = m_params.find(InName);
+        auto it = m_params.find(std::string_view(InName));
         if (it == m_params.end()) return NVSDK_NGX_Result_FAIL_FeatureNotFound;
         const auto& val = it->second;
         switch (val.type) {
@@ -172,7 +179,7 @@ public:
 
     NVSDK_NGX_Result Get(const char* InName, ID3D11Resource** OutValue) const override {
         if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
-        auto it = m_params.find(InName);
+        auto it = m_params.find(std::string_view(InName));
         if (it == m_params.end()) return NVSDK_NGX_Result_FAIL_FeatureNotFound;
         const auto& val = it->second;
         switch (val.type) {
@@ -184,7 +191,7 @@ public:
 
     NVSDK_NGX_Result Get(const char* InName, ID3D12Resource** OutValue) const override {
         if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
-        auto it = m_params.find(InName);
+        auto it = m_params.find(std::string_view(InName));
         if (it == m_params.end()) return NVSDK_NGX_Result_FAIL_FeatureNotFound;
         const auto& val = it->second;
         switch (val.type) {
@@ -196,7 +203,7 @@ public:
 
     NVSDK_NGX_Result Get(const char* InName, void** OutValue) const override {
         if (!InName || !OutValue) return NVSDK_NGX_Result_FAIL_InvalidParameter;
-        auto it = m_params.find(InName);
+        auto it = m_params.find(std::string_view(InName));
         if (it == m_params.end()) return NVSDK_NGX_Result_FAIL_FeatureNotFound;
         const auto& val = it->second;
         switch (val.type) {
@@ -356,11 +363,22 @@ public:
     size_t GetParamCount() const { return m_params.size(); }
     bool HasParam(const char* name) const {
         if (!name) return false;
-        return m_params.find(name) != m_params.end();
+        return m_params.find(std::string_view(name)) != m_params.end();
     }
 
 private:
-    std::unordered_map<std::string, NgxParamValue> m_params;
+    void SetValue(const char* InName, const NgxParamValue& val) {
+        if (!InName) return;
+        std::string_view sv(InName);
+        auto it = m_params.find(sv);
+        if (it != m_params.end()) {
+            it->second = val;
+        } else {
+            m_params.emplace(std::string(sv), val);
+        }
+    }
+
+    std::unordered_map<std::string, NgxParamValue, TransparentStringHash, TransparentStringEqual> m_params;
 };
 
 // Opaque Virtual NGX Handle wrapping left and right runtime feature handles

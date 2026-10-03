@@ -319,6 +319,7 @@ void DxgiProxy::DetachAll() {
     m_targetRenderHeight = 0;
     m_cachedSwapChain = nullptr;
     m_cachedSwapChain3.Reset();
+    m_cachedBackBuffers.clear();
     m_lastPresentSuppressed = false;
     m_pendingRenderingMode.reset();
 }
@@ -398,14 +399,23 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
         if (!m_cachedSwapChain3 || m_cachedSwapChain != swapChain) {
             m_cachedSwapChain = swapChain;
             m_cachedSwapChain3.Reset();
+            m_cachedBackBuffers.clear();
             swapChain->QueryInterface(IID_PPV_ARGS(&m_cachedSwapChain3));
         }
         if (m_cachedSwapChain3) {
             bufferIndex = m_cachedSwapChain3->GetCurrentBackBufferIndex();
         }
 
-        if (SUCCEEDED(swapChain->GetBuffer(bufferIndex, IID_PPV_ARGS(&backBuffer)))) {
-            pBackBuffer = backBuffer.Get();
+        if (bufferIndex < m_cachedBackBuffers.size() && m_cachedBackBuffers[bufferIndex]) {
+            pBackBuffer = m_cachedBackBuffers[bufferIndex].Get();
+        } else {
+            if (SUCCEEDED(swapChain->GetBuffer(bufferIndex, IID_PPV_ARGS(&backBuffer)))) {
+                pBackBuffer = backBuffer.Get();
+                if (bufferIndex >= m_cachedBackBuffers.size()) {
+                    m_cachedBackBuffers.resize(bufferIndex + 1);
+                }
+                m_cachedBackBuffers[bufferIndex] = backBuffer;
+            }
         }
     }
 
@@ -554,6 +564,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers(
     if (proxy) {
         proxy->m_cachedSwapChain = nullptr;
         proxy->m_cachedSwapChain3.Reset();
+        proxy->m_cachedBackBuffers.clear();
         proxy->m_windowClampDirty = true;
     }
     UINT effectiveWidth = Width;
@@ -581,6 +592,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers1(
     if (proxy) {
         proxy->m_cachedSwapChain = nullptr;
         proxy->m_cachedSwapChain3.Reset();
+        proxy->m_cachedBackBuffers.clear();
         proxy->m_windowClampDirty = true;
     }
     UINT effectiveWidth = Width;

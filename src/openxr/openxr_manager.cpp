@@ -435,7 +435,7 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
         }
 
         if (time == 0) {
-            if (m_frameState.predictedDisplayTime != 0) {
+            if (m_frameBegun && m_frameState.predictedDisplayTime != 0) {
                 time = m_frameState.predictedDisplayTime;
             } else {
                 time = GetCurrentXrTime();
@@ -1178,6 +1178,8 @@ bool OpenXrManager::EndFrame() {
 
     XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
     m_frameBegun = false;
+    m_lastPolledTime = 0;
+    m_lastLocatedViewsTime = 0;
     if (res != XR_SUCCESS) {
         LogError("OpenXrManager::EndFrame: EndFrame failed (result " + std::to_string(res) + ")");
         return false;
@@ -1293,11 +1295,14 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
                 curCommandList->ResourceBarrier(2, barriers);
 
+                uint32_t scWidth = m_eyeSwapchains[eyeIndex].width;
+                uint32_t scHeight = m_eyeSwapchains[eyeIndex].height;
+
                 D3D12_RESOURCE_DESC srcDesc = backBuffer->GetDesc();
-                D3D12_RESOURCE_DESC dstDesc = destTexture->GetDesc();
-                if (srcDesc.Width == dstDesc.Width && srcDesc.Height == dstDesc.Height) {
+                if (srcDesc.Width == scWidth && srcDesc.Height == scHeight) {
                     curCommandList->CopyResource(destTexture, backBuffer);
                 } else {
+                    D3D12_RESOURCE_DESC dstDesc = destTexture->GetDesc();
                     static bool loggedMismatch = false;
                     if (!loggedMismatch) {
                         LogWarn("OpenXrManager::CopyBackBufferToEye: Dimension mismatch! BackBuffer: " +
@@ -1445,6 +1450,8 @@ bool OpenXrManager::SubmitFramePair() {
 
     XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
     m_frameBegun = false;
+    m_lastPolledTime = 0;
+    m_lastLocatedViewsTime = 0;
     if (res != XR_SUCCESS) {
         LogError("OpenXrManager::SubmitFramePair: EndFrame failed (result " + std::to_string(res) + ")");
         return false;
@@ -1606,6 +1613,8 @@ bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df*
 
     XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
     m_frameBegun = false;
+    m_lastPolledTime = 0;
+    m_lastLocatedViewsTime = 0;
     if (res != XR_SUCCESS) {
         LogError("OpenXrManager::SubmitMenuQuad: EndFrame failed (result " + std::to_string(res) + ")");
         return false;

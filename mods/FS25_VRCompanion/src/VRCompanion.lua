@@ -2091,6 +2091,9 @@ function VRCompanion:registerActionEvents(force)
         if self.toggleViewActionEventId ~= nil and actionEvents[self.toggleViewActionEventId] ~= nil then
             isToggleViewEventActive = true
         end
+        if isHudEventActive and isRecenterEventActive and isSnapLeftEventActive and isSnapRightEventActive and isToggleViewEventActive then
+            return
+        end
     end
 
     if force or not isHudEventActive then

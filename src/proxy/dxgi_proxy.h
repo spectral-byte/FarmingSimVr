@@ -166,6 +166,7 @@ private:
 
     IDXGISwapChain* m_cachedSwapChain = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_cachedBackBuffers;
 };
 
 } // namespace fs25vr
