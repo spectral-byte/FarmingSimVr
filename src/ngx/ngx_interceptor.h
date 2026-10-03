@@ -133,6 +133,11 @@ public:
     PFN_NVSDK_NGX_D3D12_DestroyParameters GetOriginalDestroyParameters() const { return m_origDestroyParameters; }
 
     // DLSS tuning overrides & motion vector scaling
+    static constexpr int kDefaultDlssPresetOverride = NVSDK_NGX_DLSS_Hint_Render_Preset_K;
+    static constexpr float kDefaultSharpnessOverride = 0.50f;
+    static constexpr bool kDefaultForceSharpnessOverride = true;
+    static constexpr float kDefaultMvScaleMultiplier = 0.0f;
+
     int GetDlssPresetOverride() const { return m_dlssPresetOverride; }
     void SetDlssPresetOverride(int preset) { m_dlssPresetOverride = preset; }
     float GetSharpnessOverride() const { return m_sharpnessOverride; }
@@ -166,11 +171,11 @@ private:
     class DxgiProxy* m_dxgiProxy = nullptr;
     class OpenXrManager* m_openXrManager = nullptr;
 
-    int m_dlssPresetOverride = NVSDK_NGX_DLSS_Hint_Render_Preset_K;
-    float m_sharpnessOverride = 0.50f;
-    bool m_forceSharpnessOverride = true;
-    float m_mvScaleMultiplierX = 0.0f;
-    float m_mvScaleMultiplierY = 0.0f;
+    int m_dlssPresetOverride = kDefaultDlssPresetOverride;
+    float m_sharpnessOverride = kDefaultSharpnessOverride;
+    bool m_forceSharpnessOverride = kDefaultForceSharpnessOverride;
+    float m_mvScaleMultiplierX = kDefaultMvScaleMultiplier;
+    float m_mvScaleMultiplierY = kDefaultMvScaleMultiplier;
     std::atomic<uint64_t> m_evalCount{0};
 
     std::atomic<int> m_lastRenderingMode{-1};

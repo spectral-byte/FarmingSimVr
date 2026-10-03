@@ -407,6 +407,11 @@ void NgxInterceptor::DetachAll() {
     m_vrBridge = nullptr;
     m_dxgiProxy = nullptr;
     m_openXrManager = nullptr;
+    m_dlssPresetOverride = kDefaultDlssPresetOverride;
+    m_sharpnessOverride = kDefaultSharpnessOverride;
+    m_forceSharpnessOverride = kDefaultForceSharpnessOverride;
+    m_mvScaleMultiplierX = kDefaultMvScaleMultiplier;
+    m_mvScaleMultiplierY = kDefaultMvScaleMultiplier;
     m_lastRenderingMode.store(-1);
     m_internalDiscontinuityPendingLeft.store(false);
     m_internalDiscontinuityPendingRight.store(false);

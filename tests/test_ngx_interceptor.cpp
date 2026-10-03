@@ -305,6 +305,21 @@ TEST_F(NgxInterceptorTest, ModeTransitionLatchesResetForOneFrameAcrossBothHandle
     MockRelease(virtualHandle);
 }
 
+TEST_F(NgxInterceptorTest, DetachAllResetsDlssTuningOverridesToDefaults) {
+    auto& interceptor = NgxInterceptor::Instance();
+    interceptor.SetDlssPresetOverride(NVSDK_NGX_DLSS_Hint_Render_Preset_K + 1);
+    interceptor.SetSharpnessOverride(0.65f, false);
+    interceptor.SetMvScaleMultiplier(0.5f, 0.75f);
+
+    interceptor.DetachAll();
+
+    EXPECT_EQ(interceptor.GetDlssPresetOverride(), NVSDK_NGX_DLSS_Hint_Render_Preset_K);
+    EXPECT_FLOAT_EQ(interceptor.GetSharpnessOverride(), 0.50f);
+    EXPECT_TRUE(interceptor.IsForceSharpnessOverride());
+    EXPECT_FLOAT_EQ(interceptor.GetMvScaleMultiplierX(), NgxInterceptor::kDefaultMvScaleMultiplier);
+    EXPECT_FLOAT_EQ(interceptor.GetMvScaleMultiplierY(), NgxInterceptor::kDefaultMvScaleMultiplier);
+}
+
 TEST_F(NgxInterceptorTest, SharpnessAndPresetOverridesAppliedToBothContextsInDualPass) {
     auto& interceptor = NgxInterceptor::Instance();
     interceptor.AttachDirect(&MockCreate, &MockRelease, &MockEvaluate);
