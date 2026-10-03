@@ -1,6 +1,9 @@
 #pragma once
 
 #include "openxr_dispatch.h"
+#include "openxr_cursor_overlay.h"
+#include "core/math_utils.h"
+#include "core/raii_utils.h"
 #include <memory>
 #include <string>
 
@@ -37,49 +40,6 @@ struct OpenXrRuntimeInfo {
     LUID adapterLuid{};
 };
 
-struct Vector3 {
-    float x = 0.0f;
-    float y = 0.0f;
-    float z = 0.0f;
-
-    constexpr Vector3() = default;
-    constexpr Vector3(float x_, float y_, float z_) : x(x_), y(y_), z(z_) {}
-
-    bool operator==(const Vector3& other) const = default;
-};
-
-struct Quaternion {
-    float x = 0.0f;
-    float y = 0.0f;
-    float z = 0.0f;
-    float w = 1.0f;
-
-    constexpr Quaternion() = default;
-    constexpr Quaternion(float x_, float y_, float z_, float w_) : x(x_), y(y_), z(z_), w(w_) {}
-
-    bool operator==(const Quaternion& other) const = default;
-
-    constexpr Quaternion operator*(const Quaternion& o) const {
-        return Quaternion(
-            w * o.x + x * o.w + y * o.z - z * o.y,
-            w * o.y - x * o.z + y * o.w + z * o.x,
-            w * o.z + x * o.y - y * o.x + z * o.w,
-            w * o.w - x * o.x - y * o.y - z * o.z
-        );
-    }
-};
-
-struct EulerAngles {
-    float pitch = 0.0f; // radians (X-axis)
-    float yaw = 0.0f;   // radians (Y-axis)
-    float roll = 0.0f;  // radians (Z-axis)
-
-    constexpr EulerAngles() = default;
-    constexpr EulerAngles(float pitch_, float yaw_, float roll_) : pitch(pitch_), yaw(yaw_), roll(roll_) {}
-
-    bool operator==(const EulerAngles& other) const = default;
-};
-
 struct HeadPose {
     Vector3 position{ 0.0f, 0.0f, 0.0f };
     Quaternion orientation{ 0.0f, 0.0f, 0.0f, 1.0f };
@@ -113,24 +73,6 @@ struct EyeProjection {
     float angleDown = 0.0f;
     float aspectRatio = 1.0f;
     bool isValid = false;
-};
-
-struct EyeSwapchain {
-    XrSwapchain handle = XR_NULL_HANDLE;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-    std::vector<XrSwapchainImageD3D12KHR> images;
-    uint32_t lastCopiedIndex = 0;
-    bool hasCopiedFrame = false;
-};
-
-struct MenuCursorState {
-    static constexpr float kDefaultCursorSize = 0.035f;
-    bool visible = false;
-    float normX = 0.0f;
-    float normY = 0.0f;
-    float size = kDefaultCursorSize;
 };
 
 class OpenXrManager {
@@ -195,8 +137,10 @@ public:
 
     bool CreateCursorSwapchain(uint32_t width = 64, uint32_t height = 64, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
     void DestroyCursorSwapchain();
-    bool HasCursorSwapchain() const { return m_hasCursorSwapchain; }
-    const EyeSwapchain& GetCursorSwapchain() const { return m_cursorSwapchain; }
+    bool HasCursorSwapchain() const { return m_cursorOverlay.HasSwapchain(); }
+    const EyeSwapchain& GetCursorSwapchain() const { return m_cursorOverlay.GetSwapchain(); }
+    OpenXrCursorOverlay& GetCursorOverlay() { return m_cursorOverlay; }
+    const OpenXrCursorOverlay& GetCursorOverlay() const { return m_cursorOverlay; }
 
     void SetMenuCursorState(const MenuCursorState& cursorState) { m_menuCursorState = cursorState; }
     const MenuCursorState& GetMenuCursorState() const { return m_menuCursorState; }
@@ -206,8 +150,8 @@ public:
     static XrPosef ComputeCursorQuadPose(const XrPosef& menuQuadPose, const XrExtent2Df& menuQuadSize,
                                          float normX, float normY, float cursorWidth, float cursorHeight);
 
-    const XrCompositionLayerQuad& GetLastSubmittedCursorQuadLayer() const { return m_lastSubmittedCursorQuadLayer; }
-    bool HasLastSubmittedCursorQuadLayer() const { return m_hasLastSubmittedCursorQuadLayer; }
+    const XrCompositionLayerQuad& GetLastSubmittedCursorQuadLayer() const { return m_cursorOverlay.GetLastSubmittedCursorQuadLayer(); }
+    bool HasLastSubmittedCursorQuadLayer() const { return m_cursorOverlay.HasLastSubmittedCursorQuadLayer(); }
 
     float GetIpd() const { return m_ipd; }
     void SetIpd(float ipd) { m_ipd = ipd; }
@@ -268,16 +212,12 @@ private:
     uint64_t m_copyFenceValues[kCopyRingSize] = {0, 0};
     uint64_t m_currentFenceValue = 0;
     uint32_t m_copyRingIndex = 0;
-    HANDLE m_copyFenceEvent = nullptr;
+    ScopedEventHandle m_copyFenceEvent;
 
     EyeSwapchain m_eyeSwapchains[2];
     bool m_hasEyeSwapchains = false;
-    EyeSwapchain m_cursorSwapchain;
-    bool m_hasCursorSwapchain = false;
-    bool m_cursorTextureUploaded = false;
+    OpenXrCursorOverlay m_cursorOverlay;
     MenuCursorState m_menuCursorState;
-    XrCompositionLayerQuad m_lastSubmittedCursorQuadLayer{ XR_TYPE_COMPOSITION_LAYER_QUAD };
-    bool m_hasLastSubmittedCursorQuadLayer = false;
     float m_ipd = 0.064f;
     uint64_t m_submittedFramePairCount = 0;
     uint64_t m_submittedQuadFrameCount = 0;

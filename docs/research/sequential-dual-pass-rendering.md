@@ -93,7 +93,7 @@ Our audit of the current repository establishes the exact operating mechanics of
 |          |---> Injects: global 'VRBridge' table into sandboxed Luau VM                            |
 |          |                                                                                        |
 |          v (In-Engine Scripting)                                                                  |
-|  [VRCompanion.lua] (src/VRCompanion.lua)                                                           |
+|  [VRCompanion.lua] (mods/FS25_VRCompanion/src/VRCompanion.lua)                             |
 |          |---> Hooks: VehicleCamera.update, PlayerCamera.updateRotation/Position, HUDElement.draw  |
 |          |---> Drives: setCamera, setFovY, setProjectionOffset, IPD convergence parity             |
 |          |                                                                                        |
@@ -127,7 +127,7 @@ Our audit of the current repository establishes the exact operating mechanics of
 - **OpenXR Frame Synchronization:** [`src/openxr/openxr_manager.cpp:1111-1200`](file:///c:/Users/jacob/Documents/FarmingSimVr/src/openxr/openxr_manager.cpp#L1111-L1200) (`BeginFrame`), [`1208-1356`](file:///c:/Users/jacob/Documents/FarmingSimVr/src/openxr/openxr_manager.cpp#L1208-L1356) (`CopyBackBufferToEye`), and [`1358-1468`](file:///c:/Users/jacob/Documents/FarmingSimVr/src/openxr/openxr_manager.cpp#L1358-L1468) (`SubmitFramePair`).
   - Strict enforcement: `xrWaitFrame` and `xrBeginFrame` define the lifecycle boundary; swapchain images are acquired, copied via D3D12 command lists with fence synchronization ring buffers (`kCopyRingSize = 3`), and released before `xrEndFrame`.
 - **Luau VRBridge In-Process Table:** [`src/luau/vr_bridge.cpp:45-162`](file:///c:/Users/jacob/Documents/FarmingSimVr/src/luau/vr_bridge.cpp#L45-L162). Exposes `getFrameParity`, `getFrameIndex`, `getIpd`, `getHeadPose`, `getEyeProjection`, `setMenuVisible`, `set2DViewActive`, and dynamic properties via `__index`.
-- **In-Engine Camera Coordination:** [`src/VRCompanion.lua:2319-2383`](file:///c:/Users/jacob/Documents/FarmingSimVr/src/VRCompanion.lua#L2319-L2383) (`applyCameraProjection`), [`2630-2808`](file:///c:/Users/jacob/Documents/FarmingSimVr/src/VRCompanion.lua#L2630-L2808) (`onVehicleCameraUpdate`), [`2818-2911`](file:///c:/Users/jacob/Documents/FarmingSimVr/src/VRCompanion.lua#L2818-L2911) (`onPlayerCameraUpdate`).
+- **In-Engine Camera Coordination:** [`mods/FS25_VRCompanion/src/VRCompanion.lua:2319-2383`](file:///c:/Users/jacob/Documents/FarmingSimVr/mods/FS25_VRCompanion/src/VRCompanion.lua#L2319-L2383) (`applyCameraProjection`), [`2630-2808`](file:///c:/Users/jacob/Documents/FarmingSimVr/mods/FS25_VRCompanion/src/VRCompanion.lua#L2630-L2808) (`onVehicleCameraUpdate`), [`2818-2911`](file:///c:/Users/jacob/Documents/FarmingSimVr/mods/FS25_VRCompanion/src/VRCompanion.lua#L2818-L2911) (`onPlayerCameraUpdate`).
   - Active parity index dynamically alternates camera position by $\pm\frac{\text{IPD}}{2}$ and configures vertical FOV via `setFovY`.
 - **NGX DLSS Dual Handle Virtualization:** [`src/ngx/ngx_interceptor.cpp:40-180`](file:///c:/Users/jacob/Documents/FarmingSimVr/scratch/disasm.txt#L10) and [`src/ngx/virtual_ngx_handle.h:200-280`](file:///c:/Users/jacob/Documents/FarmingSimVr/src/proxy/dxgi_proxy.h#L1) (Git reflog `commit 8937e7f`).
   - Detours `NVSDK_NGX_D3D12_CreateFeature`, `ReleaseFeature`, and `EvaluateFeature`.
@@ -824,7 +824,7 @@ int VRBridge::Lua_SetRenderingMode(lua_State* L) {
 
 ### 7.2 In-Engine Scripting (`VRCompanion.lua`, `settings.xml`)
 
-#### Extensions to `src/VRCompanion.lua`:
+#### Extensions to `mods/FS25_VRCompanion/src/VRCompanion.lua`:
 ```lua
 -- Rendering Mode Constants
 VRCompanion.RENDERING_MODE_AFR = "AFR"
@@ -902,7 +902,7 @@ end
 | **REF-03** | DXGI Swapchain Interception & Window Decoupling | `src/proxy/dxgi_proxy.cpp` | Lines 427–455 (AFR presentation loop), lines 488–672 (Window scaling), lines 800–1156 (Mirror window clamping). |
 | **REF-04** | OpenXR Manager & Swapchain Implementation | `src/openxr/openxr_manager.cpp` | Lines 1111–1200 (`BeginFrame`), lines 1208–1356 (`CopyBackBufferToEye`), lines 1358–1468 (`SubmitFramePair`). |
 | **REF-05** | Luau In-Process VRBridge Subsystem | `src/luau/vr_bridge.cpp` & `vr_bridge.h` | `vr_bridge.h:36-44` (Parity tracking, IPD), `vr_bridge.cpp:45-162` (Table injection), lines 425–436 (`AdvanceFrame`). |
-| **REF-06** | In-Engine Companion Mod Implementation | `src/VRCompanion.lua` | Lines 345–398 & 648–755 (HUD convergence parity), lines 2319–2383 (`applyCameraProjection`), lines 2630–2808 (In-cab 6DOF), lines 1009–1211 (`settings.xml`). |
+| **REF-06** | In-Engine Companion Mod Implementation | `mods/FS25_VRCompanion/src/VRCompanion.lua` | Lines 345–398 & 648–755 (HUD convergence parity), lines 2319–2383 (`applyCameraProjection`), lines 2630–2808 (In-cab 6DOF), lines 1009–1211 (`settings.xml`). |
 | **REF-07** | NGX DLSS Dual Handle Virtualization | `src/ngx/ngx_interceptor.cpp` & `virtual_ngx_handle.h` (Reflog 8937e7f) | `virtual_ngx_handle.h:200-280` (`VirtualNgxHandle`), `ngx_interceptor.cpp:40-180` (Feature evaluation, 2.0x MV scale). |
 | **REF-08** | D3D12 Stereo Telemetry Probe Execution Log | `fs25_vr.log` & `src/telemetry/d3d12_interceptor.cpp` | `fs25_vr.log:40167-40220` (Single viewport pass confirmation), `d3d12_interceptor.cpp:94-150` (Detour hooks). |
 | **REF-09** | Microsoft DirectX 12 Agility SDK Specification | Microsoft Learn (`D3D12Core.dll` SDK 610) | `ID3D12GraphicsCommandList::Close`, `SetGraphicsRootConstantBufferView`, `OMSetRenderTargets`, `ResourceBarrier`. |

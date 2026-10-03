@@ -15,6 +15,12 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
     <multiplayer supported="true"/>
     <iconFilename>icon_vr.png</iconFilename>
     <extraSourceFiles>
+        <sourceFile filename="src/VRCompanionConfig.lua"/>
+        <sourceFile filename="src/VRCompanionCore.lua"/>
+        <sourceFile filename="src/VRCompanionStereo.lua"/>
+        <sourceFile filename="src/VRCompanionLocomotion.lua"/>
+        <sourceFile filename="src/VRCompanionHud.lua"/>
+        <sourceFile filename="src/VRCompanionInput.lua"/>
         <sourceFile filename="src/VRCompanion.lua"/>
     </extraSourceFiles>
     <l10n>

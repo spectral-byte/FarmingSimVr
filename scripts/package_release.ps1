@@ -28,7 +28,7 @@ Write-Host "[Package] Staged dxgi.dll"
 # Package Companion Mod
 Push-Location $companionDir
 try {
-    tar.exe -a -cf "$bundleDir\mods\FS25_VRCompanion.zip" modDesc.xml icon_vr.png src/VRCompanion.lua
+    tar.exe -a -cf "$bundleDir\mods\FS25_VRCompanion.zip" modDesc.xml icon_vr.png src/*.lua
     Copy-Item "$bundleDir\mods\FS25_VRCompanion.zip" "$releaseDir\FS25_VRCompanion.zip" -Force
     Write-Host "[Package] Packaged FS25_VRCompanion.zip"
 } finally {

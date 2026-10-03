@@ -1,6 +1,6 @@
 # Farming Simulator 25 VR (FS25 VR)
 
-[![Tests](https://img.shields.io/badge/tests-286%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-322%20passed-brightgreen.svg)]()
 [![OpenXR](https://img.shields.io/badge/OpenXR-1.1-blue.svg)]()
 [![DirectX](https://img.shields.io/badge/Direct3D-12-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey.svg)]()
@@ -182,16 +182,19 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 # Build Injector DLL and Test Executable
 ninja -C build dxgi fs25_vr_tests
 
-# Run automated unit and integration tests (286 tests)
+# Run automated unit and integration tests (322 tests)
 ctest --test-dir build --output-on-failure
 ```
 
-### Packaging the Companion Mod
+### Packaging and Deploying the Companion Mod
 
 ```powershell
 # Using tar.exe to preserve POSIX directory entries required by GIANTS Engine
 cd mods\FS25_VRCompanion
-tar.exe -a -cf ..\..\build\FS25_VRCompanion.zip modDesc.xml icon_vr.png src/VRCompanion.lua
+tar.exe -a -cf ..\..\build\FS25_VRCompanion.zip modDesc.xml icon_vr.png src/*.lua
+
+# Or use the automated deployment script to build the zip and deploy directly to game directories:
+.\scripts\deploy.ps1
 ```
 
 ---

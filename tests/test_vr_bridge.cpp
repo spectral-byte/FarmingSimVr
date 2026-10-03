@@ -922,3 +922,63 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
     EXPECT_EQ(fs25vr::NgxInterceptor::Instance().GetDlssPresetOverride(), 11);
 }
 
+TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    // VRBridge should expose exactly kExposedFieldCount fields (1 version string + 29 functions)
+    const char* expectedKeys[] = {
+        "version",
+        "isReady",
+        "handshake",
+        "isCompanionActive",
+        "onMapUnload",
+        "getStereoTelemetry",
+        "isStereoActive",
+        "getRequiresAfrFallback",
+        "getHeadPose",
+        "recenter",
+        "getEyeProjection",
+        "getFrameParity",
+        "getFrameIndex",
+        "getIpd",
+        "getEyePose",
+        "setMenuVisible",
+        "getIsMenuVisible",
+        "alignMenuQuad",
+        "set2DViewActive",
+        "getIs2DViewActive",
+        "getRenderingMode",
+        "setRenderingMode",
+        "getSubPassIndex",
+        "setSubPassIndex",
+        "advanceSubPass",
+        "resetTemporalHistory",
+        "signalDiscontinuity",
+        "setDlssMvScale",
+        "setDlssSharpness",
+        "setDlssPreset"
+    };
+
+    lua_getglobal(L, "VRBridge");
+    ASSERT_TRUE(lua_istable(L, -1));
+
+    int count = 0;
+    lua_pushnil(L);
+    while (lua_next(L, -2) != 0) {
+        count++;
+        lua_pop(L, 1);
+    }
+
+    EXPECT_EQ(count, fs25vr::VRBridge::kExposedFieldCount);
+    EXPECT_EQ(sizeof(expectedKeys) / sizeof(expectedKeys[0]), fs25vr::VRBridge::kExposedFieldCount);
+
+    // Verify key presence directly from the pushed VRBridge table
+    for (const char* key : expectedKeys) {
+        lua_getfield(L, -1, key);
+        EXPECT_FALSE(lua_isnil(L, -1)) << "Missing expected field: " << key;
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1); // pop VRBridge table
+}
+

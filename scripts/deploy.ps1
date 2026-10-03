@@ -1,4 +1,4 @@
-﻿# Deploy script for Farming Simulator 25 VR Injector and Companion Mod
+# Deploy script for Farming Simulator 25 VR Injector and Companion Mod
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -22,7 +22,7 @@ $destZip = Join-Path $modsDir "FS25_VRCompanion.zip"
 
 Push-Location $companionDir
 try {
-    tar.exe -a -cf $destZip modDesc.xml icon_vr.png src/VRCompanion.lua
+    tar.exe -a -cf $destZip modDesc.xml icon_vr.png src/*.lua
     Write-Host "[Deploy] Packaged and deployed FS25_VRCompanion.zip to $modsDir"
 } finally {
     Pop-Location

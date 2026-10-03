@@ -61,8 +61,9 @@ bool VRBridge::Inject(lua_State* L) {
 
     int origTop = lua_gettop(L);
 
-    // Create table for VRBridge
-    lua_createtable(L, 0, 25);
+    // Create table for VRBridge pre-allocated for all exposed fields (version + 29 functions)
+    // to prevent dynamic table resizing/rehashing during startup
+    lua_createtable(L, 0, kExposedFieldCount);
 
     // VRBridge.version = "1.0.0"
     lua_pushstring(L, m_version.c_str());

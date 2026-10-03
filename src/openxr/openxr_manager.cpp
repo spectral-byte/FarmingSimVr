@@ -6,44 +6,6 @@
 #include <cmath>
 #include <algorithm>
 
-namespace {
-
-static const char* const s_arrowCursorPattern[32] = {
-    "X                               ",
-    "XX                              ",
-    "X.X                             ",
-    "X..X                            ",
-    "X...X                           ",
-    "X....X                          ",
-    "X.....X                         ",
-    "X......X                        ",
-    "X.......X                       ",
-    "X........X                      ",
-    "X.....XXXXX                     ",
-    "X..X..X                         ",
-    "X.X X..X                        ",
-    "XX   X..X                       ",
-    "X     X..X                      ",
-    "       X..X                     ",
-    "        XX                      ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                ",
-    "                                "
-};
-
-} // anonymous namespace
 
 namespace fs25vr {
 
@@ -77,10 +39,7 @@ OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
 
 OpenXrManager::~OpenXrManager() {
     Shutdown();
-    if (m_copyFenceEvent) {
-        CloseHandle(m_copyFenceEvent);
-        m_copyFenceEvent = nullptr;
-    }
+    m_copyFenceEvent.Close();
 }
 
 bool OpenXrManager::CheckD3D12ExtensionSupport() {
@@ -378,32 +337,11 @@ bool OpenXrManager::CreateTrackingSpaces() {
 }
 
 EulerAngles OpenXrManager::QuaternionToEuler(const Quaternion& q) {
-    EulerAngles angles;
-    float sinPitch = 2.0f * (q.w * q.x - q.y * q.z);
-    if (std::abs(sinPitch) >= 0.99999f) {
-        angles.pitch = std::copysign(3.14159265f / 2.0f, sinPitch);
-        angles.yaw = 2.0f * std::atan2(q.y, q.w);
-        angles.roll = 0.0f;
-    } else {
-        angles.pitch = std::asin(std::clamp(sinPitch, -1.0f, 1.0f));
-        angles.yaw = std::atan2(2.0f * (q.w * q.y + q.x * q.z), 1.0f - 2.0f * (q.x * q.x + q.y * q.y));
-        angles.roll = std::atan2(2.0f * (q.w * q.z + q.x * q.y), 1.0f - 2.0f * (q.x * q.x + q.z * q.z));
-    }
-    return angles;
+    return fs25vr::QuaternionToEuler(q);
 }
 
 Vector3 OpenXrManager::RotateVectorByQuaternion(const Quaternion& q, const Vector3& v) {
-    // t = 2 * cross(q.xyz, v)
-    float tx = 2.0f * (q.y * v.z - q.z * v.y);
-    float ty = 2.0f * (q.z * v.x - q.x * v.z);
-    float tz = 2.0f * (q.x * v.y - q.y * v.x);
-
-    // v' = v + qw * t + cross(q.xyz, t)
-    return Vector3(
-        v.x + q.w * tx + (q.y * tz - q.z * ty),
-        v.y + q.w * ty + (q.z * tx - q.x * tz),
-        v.z + q.w * tz + (q.x * ty - q.y * tx)
-    );
+    return fs25vr::RotateVectorByQuaternion(q, v);
 }
 
 Vector3 OpenXrManager::ComputeEyePosition(const HeadPose& headPose, float ipd, uint32_t eyeIndex) {
@@ -847,9 +785,9 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
 void OpenXrManager::DestroyEyeSwapchains() {
     if (m_copyFence && m_queue && m_currentFenceValue > 0) {
         if (m_copyFence->GetCompletedValue() < m_currentFenceValue) {
-            if (m_copyFenceEvent) {
-                m_copyFence->SetEventOnCompletion(m_currentFenceValue, m_copyFenceEvent);
-                WaitForSingleObject(m_copyFenceEvent, INFINITE);
+            if (m_copyFenceEvent.IsValid()) {
+                m_copyFence->SetEventOnCompletion(m_currentFenceValue, m_copyFenceEvent.Get());
+                WaitForSingleObject(m_copyFenceEvent.Get(), INFINITE);
             }
         }
     }
@@ -861,10 +799,7 @@ void OpenXrManager::DestroyEyeSwapchains() {
         m_copyAllocators[r].Reset();
     }
     m_copyRingIndex = 0;
-    if (m_copyFenceEvent) {
-        CloseHandle(m_copyFenceEvent);
-        m_copyFenceEvent = nullptr;
-    }
+    m_copyFenceEvent.Close();
     for (uint32_t i = 0; i < 2; ++i) {
         if (m_eyeSwapchains[i].handle != XR_NULL_HANDLE) {
             m_dispatch->DestroySwapchain(m_eyeSwapchains[i].handle);
@@ -903,209 +838,18 @@ bool OpenXrManager::EnumerateSwapchainImagesHelper(EyeSwapchain& sc) {
 }
 
 bool OpenXrManager::EnsureCursorTextureUploaded() {
-    if (m_cursorTextureUploaded) {
-        return true;
-    }
-    if (!m_hasCursorSwapchain || m_cursorSwapchain.handle == XR_NULL_HANDLE || m_cursorSwapchain.images.empty()) {
-        return false;
-    }
-    if (!m_device || !m_queue) {
-        return false;
-    }
-
-    uint32_t width = m_cursorSwapchain.width;
-    uint32_t height = m_cursorSwapchain.height;
-
-    // Generate procedural arrow cursor bitmap
-    std::vector<uint32_t> pixels(width * height, 0x00000000);
-    for (uint32_t y = 0; y < height; ++y) {
-        uint32_t srcY = (y * 32) / height;
-        const char* rowStr = (srcY < 32) ? s_arrowCursorPattern[srcY] : "";
-        size_t rowLen = strlen(rowStr);
-        for (uint32_t x = 0; x < width; ++x) {
-            uint32_t srcX = (x * 32) / width;
-            char ch = (srcX < rowLen) ? rowStr[srcX] : ' ';
-            uint32_t color = 0x00000000;
-            if (ch == 'X') {
-                color = 0xFF000000; // Black outline
-            } else if (ch == '.') {
-                color = 0xFFFFFFFF; // White interior
-            }
-            pixels[y * width + x] = color;
-        }
-    }
-
-    XrSwapchainImageAcquireInfo acqInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    uint32_t imgIdx = 0;
-    if (m_dispatch->AcquireSwapchainImage(m_cursorSwapchain.handle, &acqInfo, &imgIdx) != XR_SUCCESS) {
-        return false;
-    }
-
-    XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-    waitInfo.timeout = XR_INFINITE_DURATION;
-    if (m_dispatch->WaitSwapchainImage(m_cursorSwapchain.handle, &waitInfo) != XR_SUCCESS) {
-        return false;
-    }
-
-    ID3D12Resource* destRes = m_cursorSwapchain.images[imgIdx].texture;
-    if (destRes) {
-        UINT64 uploadBufferSize = 0;
-        D3D12_RESOURCE_DESC textureDesc = destRes->GetDesc();
-        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-        UINT numRows = 0;
-        UINT64 rowSizeInBytes = 0;
-        UINT64 totalBytes = 0;
-        m_device->GetCopyableFootprints(&textureDesc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
-        uploadBufferSize = totalBytes;
-
-        D3D12_HEAP_PROPERTIES heapProps{};
-        heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC bufDesc{};
-        bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        bufDesc.Width = uploadBufferSize;
-        bufDesc.Height = 1;
-        bufDesc.DepthOrArraySize = 1;
-        bufDesc.MipLevels = 1;
-        bufDesc.Format = DXGI_FORMAT_UNKNOWN;
-        bufDesc.SampleDesc.Count = 1;
-        bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
-        if (SUCCEEDED(m_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
-                                                        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                        IID_PPV_ARGS(&uploadBuffer)))) {
-            uint8_t* pMapped = nullptr;
-            if (SUCCEEDED(uploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&pMapped)))) {
-                const uint8_t* pSrc = reinterpret_cast<const uint8_t*>(pixels.data());
-                uint8_t* pDst = pMapped + footprint.Offset;
-                for (UINT r = 0; r < numRows; ++r) {
-                    memcpy(pDst + r * footprint.Footprint.RowPitch,
-                           pSrc + r * (width * sizeof(uint32_t)),
-                           width * sizeof(uint32_t));
-                }
-                uploadBuffer->Unmap(0, nullptr);
-
-                Microsoft::WRL::ComPtr<ID3D12CommandAllocator> cmdAlloc;
-                Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> cmdList;
-                m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc));
-                m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr, IID_PPV_ARGS(&cmdList));
-
-                D3D12_RESOURCE_BARRIER barrier{};
-                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                barrier.Transition.pResource = destRes;
-                barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-                barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-                barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                cmdList->ResourceBarrier(1, &barrier);
-
-                D3D12_TEXTURE_COPY_LOCATION dstLoc{};
-                dstLoc.pResource = destRes;
-                dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                dstLoc.SubresourceIndex = 0;
-
-                D3D12_TEXTURE_COPY_LOCATION srcLoc{};
-                srcLoc.pResource = uploadBuffer.Get();
-                srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-                srcLoc.PlacedFootprint = footprint;
-
-                cmdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
-
-                std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-                cmdList->ResourceBarrier(1, &barrier);
-
-                cmdList->Close();
-                ID3D12CommandList* lists[] = { cmdList.Get() };
-                m_queue->ExecuteCommandLists(1, lists);
-
-                Microsoft::WRL::ComPtr<ID3D12Fence> fence;
-                m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-                HANDLE hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-                m_queue->Signal(fence.Get(), 1);
-                fence->SetEventOnCompletion(1, hEvent);
-                WaitForSingleObject(hEvent, INFINITE);
-                CloseHandle(hEvent);
-            }
-        }
-    }
-    XrSwapchainImageReleaseInfo relInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    m_dispatch->ReleaseSwapchainImage(m_cursorSwapchain.handle, &relInfo);
-
-    m_cursorTextureUploaded = true;
-    return true;
+    return m_cursorOverlay.UploadTexture(m_device, m_queue, m_dispatch);
 }
 
 bool OpenXrManager::CreateCursorSwapchain(uint32_t width, uint32_t height, DXGI_FORMAT format) {
     if (m_session == XR_NULL_HANDLE) {
         return false;
     }
-    if (m_hasCursorSwapchain) {
-        return true;
-    }
-
-    DXGI_FORMAT selectedFormat = format;
-    uint32_t formatCount = 0;
-    if (m_dispatch->EnumerateSwapchainFormats(m_session, 0, &formatCount, nullptr) == XR_SUCCESS && formatCount > 0) {
-        std::vector<int64_t> supportedFormats(formatCount);
-        if (m_dispatch->EnumerateSwapchainFormats(m_session, formatCount, &formatCount, supportedFormats.data()) == XR_SUCCESS) {
-            bool formatSupported = false;
-            for (int64_t sf : supportedFormats) {
-                if (sf == format) {
-                    formatSupported = true;
-                    break;
-                }
-            }
-            if (!formatSupported) {
-                for (int64_t sf : supportedFormats) {
-                    if (sf == DXGI_FORMAT_R8G8B8A8_UNORM || sf == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || sf == DXGI_FORMAT_B8G8R8A8_UNORM) {
-                        selectedFormat = static_cast<DXGI_FORMAT>(sf);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    XrSwapchainCreateInfo createInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-    createInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-    createInfo.format = selectedFormat;
-    createInfo.sampleCount = 1;
-    createInfo.width = width;
-    createInfo.height = height;
-    createInfo.faceCount = 1;
-    createInfo.arraySize = 1;
-    createInfo.mipCount = 1;
-
-    XrResult res = m_dispatch->CreateSwapchain(m_session, &createInfo, &m_cursorSwapchain.handle);
-    if (res != XR_SUCCESS) {
-        LogError("OpenXrManager::CreateCursorSwapchain: CreateSwapchain failed (result " + std::to_string(res) + ")");
-        return false;
-    }
-
-    EnumerateSwapchainImagesHelper(m_cursorSwapchain);
-
-    m_cursorSwapchain.width = width;
-    m_cursorSwapchain.height = height;
-    m_cursorSwapchain.format = selectedFormat;
-    m_cursorSwapchain.lastCopiedIndex = 0;
-    m_cursorSwapchain.hasCopiedFrame = false;
-    m_hasCursorSwapchain = true;
-    m_cursorTextureUploaded = false;
-
-    // Attempt upload immediately if device & queue already present
-    EnsureCursorTextureUploaded();
-
-    LogInfo("OpenXrManager: Created cursor swapchain (" + std::to_string(width) + "x" + std::to_string(height) + ").");
-    return true;
+    return m_cursorOverlay.CreateSwapchain(m_session, m_dispatch, width, height, format, m_device, m_queue);
 }
 
 void OpenXrManager::DestroyCursorSwapchain() {
-    if (m_cursorSwapchain.handle != XR_NULL_HANDLE) {
-        m_dispatch->DestroySwapchain(m_cursorSwapchain.handle);
-        m_cursorSwapchain.handle = XR_NULL_HANDLE;
-    }
-    m_cursorSwapchain.images.clear();
-    m_hasCursorSwapchain = false;
-    m_cursorTextureUploaded = false;
+    m_cursorOverlay.DestroySwapchain(m_dispatch);
 }
 
 bool OpenXrManager::BeginFrame() {
@@ -1241,8 +985,8 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
             for (uint32_t r = 0; r < kCopyRingSize; ++r) {
                 m_copyFenceValues[r] = 0;
             }
-            if (!m_copyFenceEvent) {
-                m_copyFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+            if (!m_copyFenceEvent.IsValid()) {
+                m_copyFenceEvent = ScopedEventHandle::Create(nullptr, FALSE, FALSE, nullptr);
             }
         }
 
@@ -1264,9 +1008,9 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
             uint64_t waitVal = m_copyFenceValues[ringSlot];
             if (m_copyFence && waitVal > 0) {
                 if (m_copyFence->GetCompletedValue() < waitVal) {
-                    if (m_copyFenceEvent) {
-                        m_copyFence->SetEventOnCompletion(waitVal, m_copyFenceEvent);
-                        WaitForSingleObject(m_copyFenceEvent, INFINITE);
+                    if (m_copyFenceEvent.IsValid()) {
+                        m_copyFence->SetEventOnCompletion(waitVal, m_copyFenceEvent.Get());
+                        WaitForSingleObject(m_copyFenceEvent.Get(), INFINITE);
                     }
                 }
             }
@@ -1572,33 +1316,9 @@ bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df*
     m_lastSubmittedQuadLayer = quadLayer;
 
     XrCompositionLayerQuad cursorQuadLayer{XR_TYPE_COMPOSITION_LAYER_QUAD};
-    bool showCursor = m_menuCursorState.visible && m_hasCursorSwapchain && (m_cursorSwapchain.handle != XR_NULL_HANDLE);
-    if (showCursor) {
-        cursorQuadLayer.next = nullptr;
-        cursorQuadLayer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-        cursorQuadLayer.space = m_localSpace;
-        cursorQuadLayer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-        cursorQuadLayer.subImage.swapchain = m_cursorSwapchain.handle;
-        cursorQuadLayer.subImage.imageRect.offset = { 0, 0 };
-        cursorQuadLayer.subImage.imageRect.extent = {
-            static_cast<int32_t>(m_cursorSwapchain.width),
-            static_cast<int32_t>(m_cursorSwapchain.height)
-        };
-        cursorQuadLayer.subImage.imageArrayIndex = 0;
-
-        if (!m_cursorTextureUploaded) {
-            EnsureCursorTextureUploaded();
-        }
-
-        float cSize = m_menuCursorState.size > 0.0f ? m_menuCursorState.size : MenuCursorState::kDefaultCursorSize;
-        cursorQuadLayer.pose = ComputeCursorQuadPose(quadLayer.pose, quadLayer.size,
-                                                     m_menuCursorState, cSize, cSize);
-        cursorQuadLayer.size = { cSize, cSize };
-        m_lastSubmittedCursorQuadLayer = cursorQuadLayer;
-        m_hasLastSubmittedCursorQuadLayer = true;
-    } else {
-        m_hasLastSubmittedCursorQuadLayer = false;
-    }
+    bool showCursor = m_cursorOverlay.PrepareCompositionLayer(
+        quadLayer, m_menuCursorState, m_localSpace, cursorQuadLayer,
+        m_device, m_queue, m_dispatch);
 
     const XrCompositionLayerBaseHeader* layers[2] = {
         reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quadLayer),
@@ -1641,38 +1361,12 @@ bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df*
 
 XrPosef OpenXrManager::ComputeCursorQuadPose(const XrPosef& menuQuadPose, const XrExtent2Df& menuQuadSize,
                                             const MenuCursorState& cursorState, float cursorWidth, float cursorHeight) {
-    return ComputeCursorQuadPose(menuQuadPose, menuQuadSize, cursorState.normX, cursorState.normY, cursorWidth, cursorHeight);
+    return OpenXrCursorOverlay::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, cursorState, cursorWidth, cursorHeight);
 }
 
 XrPosef OpenXrManager::ComputeCursorQuadPose(const XrPosef& menuQuadPose, const XrExtent2Df& menuQuadSize,
                                             float normX, float normY, float cursorWidth, float cursorHeight) {
-    float u = std::max(0.0f, std::min(1.0f, normX));
-    float v = std::max(0.0f, std::min(1.0f, normY));
-
-    // Map normalized [0, 1] to local quad surface coordinates
-    float localX = (u - 0.5f) * menuQuadSize.width;
-    float localY = (0.5f - v) * menuQuadSize.height;
-
-    // Hotspot offset: tip of cursor is top-left corner of cursor quad
-    // Center of cursor quad is offset by (+cursorWidth/2, -cursorHeight/2)
-    // Forward offset of 2mm (+Z in local quad space, towards player) eliminates z-fighting
-    Vector3 localOffset(
-        localX + 0.5f * cursorWidth,
-        localY - 0.5f * cursorHeight,
-        0.002f
-    );
-
-    Quaternion q(menuQuadPose.orientation.x, menuQuadPose.orientation.y,
-                 menuQuadPose.orientation.z, menuQuadPose.orientation.w);
-    Vector3 rotatedOffset = RotateVectorByQuaternion(q, localOffset);
-
-    XrPosef cursorPose{};
-    cursorPose.position.x = menuQuadPose.position.x + rotatedOffset.x;
-    cursorPose.position.y = menuQuadPose.position.y + rotatedOffset.y;
-    cursorPose.position.z = menuQuadPose.position.z + rotatedOffset.z;
-
-    cursorPose.orientation = menuQuadPose.orientation;
-    return cursorPose;
+    return OpenXrCursorOverlay::ComputeCursorQuadPose(menuQuadPose, menuQuadSize, normX, normY, cursorWidth, cursorHeight);
 }
 
 } // namespace fs25vr

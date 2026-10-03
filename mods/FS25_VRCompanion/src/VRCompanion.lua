@@ -3,7 +3,28 @@
 -- Interfaces with in-process native VRBridge table injected by dxgi.dll
 -- ====================================================================
 
-VRCompanion = {}
+-- If modular subsystem files were already loaded via extraSourceFiles in GIANTS Engine,
+-- bypass monolithic re-initialization so the decoupled modules are the live execution code.
+if VRCompanion ~= nil
+    and VRCompanion.Config ~= nil and VRCompanion.Config.loadConfiguration ~= nil
+    and VRCompanion.Core ~= nil and VRCompanion.Core.loadMap ~= nil
+    and VRCompanion.Stereo ~= nil and VRCompanion.Stereo.applyCameraProjection ~= nil
+    and VRCompanion.Locomotion ~= nil and VRCompanion.Locomotion.snapTurn ~= nil
+    and VRCompanion.Hud ~= nil and VRCompanion.Hud.applyHudState ~= nil
+    and VRCompanion.Input ~= nil and VRCompanion.Input.registerActionEvents ~= nil then
+    if addModEventListener ~= nil then
+        addModEventListener(VRCompanion)
+    end
+    return VRCompanion
+end
+
+VRCompanion = VRCompanion or {}
+VRCompanion.Config = VRCompanion.Config or {}
+VRCompanion.Core = VRCompanion.Core or {}
+VRCompanion.Stereo = VRCompanion.Stereo or {}
+VRCompanion.Locomotion = VRCompanion.Locomotion or {}
+VRCompanion.Hud = VRCompanion.Hud or {}
+VRCompanion.Input = VRCompanion.Input or {}
 VRCompanion.name = g_currentModName or "FS25_VRCompanion"
 VRCompanion.modDirectory = g_currentModDirectory or ""
 VRCompanion.version = "1.0.0.0"
@@ -122,11 +143,16 @@ VRCompanion.RECENTER_MODES = {
 }
 
 function VRCompanion:getRenderingMode()
-    if VRBridge ~= nil and type(VRBridge.getRenderingMode) == "function" then
-        local mode = VRBridge.getRenderingMode()
-        if mode == "SequentialDualPass" or mode == "DualPass" or mode == 1 then
-            return self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
-        elseif mode == "AFR" or mode == 0 then
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil then
+        if type(bridge.getRenderingMode) == "function" then
+            local mode = bridge.getRenderingMode()
+            if mode == "SequentialDualPass" or mode == "DualPass" or mode == 1 then
+                return self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+            elseif mode == "AFR" or mode == 0 then
+                return self.RENDERING_MODE_AFR
+            end
+        elseif type(bridge.getFrameParity) == "function" and not self.renderingModeExplicit then
             return self.RENDERING_MODE_AFR
         end
     end
@@ -150,6 +176,7 @@ function VRCompanion:setRenderingMode(modeStr, saveConfig)
 
     local oldMode = self:getRenderingMode()
     self.renderingMode = targetMode
+    self.renderingModeExplicit = true
 
     if VRBridge ~= nil and type(VRBridge.setRenderingMode) == "function" then
         VRBridge.setRenderingMode(targetMode)
@@ -1847,10 +1874,10 @@ function VRCompanion:restoreHudInsets(preserveOrigAnchors)
     local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
     local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_Y)
 
-    self.hudAnchorLeft = left
-    self.hudAnchorRight = right
-    self.hudAnchorBottom = bottom
-    self.hudAnchorTop = top
+    self.hudAnchorLeft = baseLeft
+    self.hudAnchorRight = baseRight
+    self.hudAnchorBottom = baseBottom
+    self.hudAnchorTop = baseTop
     self.currentConvergenceOffset = 0.0
     self.currentConvergenceDisparity = 0.0
 
@@ -3246,12 +3273,14 @@ function VRCompanion:getResolvedHeadPose()
 end
 
 function VRCompanion:getActiveEyeIndex(afrFallback)
-    if not self.isMenuVisible and not self.is2DViewActive and afrFallback then
+    if not self.isMenuVisible and not self.is2DViewActive then
         if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then
             return (self:getSubPassIndex() % 2 == 1) and 1 or 0
         end
-        local parity = self:getFrameParity()
-        return (parity % 2 == 1) and 1 or 0
+        if afrFallback then
+            local parity = self:getFrameParity()
+            return (parity % 2 == 1) and 1 or 0
+        end
     end
     return 0
 end
@@ -4672,6 +4701,151 @@ function VRCompanion:consoleCommandSetRenderingMode(modeStr)
     print(string.format("[FS25_VR] Stereo Presentation Mode is now: %s (%s)", tostring(newMode), modeLabel))
     return string.format("Stereo Presentation Mode set to: %s (%s, Saved)", tostring(newMode), modeLabel)
 end
+
+-- ====================================================================
+-- Subsystem Table Exports
+-- ====================================================================
+
+-- Config Subsystem
+VRCompanion.Config.clamp = function(self, ...) return VRCompanion.clamp(VRCompanion, ...) end
+VRCompanion.Config.getUserSettingsPath = function(self, ...) return VRCompanion.getUserSettingsPath(VRCompanion, ...) end
+VRCompanion.Config.saveConfiguration = function(self, ...) return VRCompanion.saveConfiguration(VRCompanion, ...) end
+VRCompanion.Config.loadConfiguration = function(self, ...) return VRCompanion.loadConfiguration(VRCompanion, ...) end
+
+-- Hud Subsystem
+VRCompanion.Hud.computeConvergenceDisparity = function(self, ...) return VRCompanion.computeConvergenceDisparity(VRCompanion, ...) end
+VRCompanion.Hud.getConvergenceDisparity = function(self, ...) return VRCompanion.getConvergenceDisparity(VRCompanion, ...) end
+VRCompanion.Hud.getConvergenceOffset = function(self, ...) return VRCompanion.getConvergenceOffset(VRCompanion, ...) end
+VRCompanion.Hud.getFillLevelsDisplay = function(self, ...) return VRCompanion.getFillLevelsDisplay(VRCompanion, ...) end
+VRCompanion.Hud.positionFillLevelsUnderVehicle = function(self, ...) return VRCompanion.positionFillLevelsUnderVehicle(VRCompanion, ...) end
+VRCompanion.Hud.updateHudConvergence = function(self, ...) return VRCompanion.updateHudConvergence(VRCompanion, ...) end
+VRCompanion.Hud.getHudState = function(self, ...) return VRCompanion.getHudState(VRCompanion, ...) end
+VRCompanion.Hud.isDisplayVisible = function(self, ...) return VRCompanion.isDisplayVisible(VRCompanion, ...) end
+VRCompanion.Hud.applyHudState = function(self, ...) return VRCompanion.applyHudState(VRCompanion, ...) end
+VRCompanion.Hud.setHudState = function(self, ...) return VRCompanion.setHudState(VRCompanion, ...) end
+VRCompanion.Hud.cycleHudState = function(self, ...) return VRCompanion.cycleHudState(VRCompanion, ...) end
+VRCompanion.Hud.onHudToggleAction = function(self, ...) return VRCompanion.onHudToggleAction(VRCompanion, ...) end
+VRCompanion.Hud.calculateHudAnchors = function(self, ...) return VRCompanion.calculateHudAnchors(VRCompanion, ...) end
+VRCompanion.Hud.configureHudInsets = function(self, ...) return VRCompanion.configureHudInsets(VRCompanion, ...) end
+VRCompanion.Hud.getHudInsets = function(self, ...) return VRCompanion.getHudInsets(VRCompanion, ...) end
+VRCompanion.Hud.positionHudDisplay = function(self, ...) return VRCompanion.positionHudDisplay(VRCompanion, ...) end
+VRCompanion.Hud.repositionAllHudDisplays = function(self, ...) return VRCompanion.repositionAllHudDisplays(VRCompanion, ...) end
+VRCompanion.Hud.applyHudInsets = function(self, ...) return VRCompanion.applyHudInsets(VRCompanion, ...) end
+VRCompanion.Hud.restoreHudInsets = function(self, ...) return VRCompanion.restoreHudInsets(VRCompanion, ...) end
+VRCompanion.Hud.hookHud = function(self, ...) return VRCompanion.hookHud(VRCompanion, ...) end
+VRCompanion.Hud.unhookHud = function(self, ...) return VRCompanion.unhookHud(VRCompanion, ...) end
+
+-- Input Subsystem
+VRCompanion.Input.registerActionEvents = function(self, ...) return VRCompanion.registerActionEvents(VRCompanion, ...) end
+VRCompanion.Input.isKeySnapLeft = function(self, ...) return VRCompanion.isKeySnapLeft(VRCompanion, ...) end
+VRCompanion.Input.isKeySnapRight = function(self, ...) return VRCompanion.isKeySnapRight(VRCompanion, ...) end
+VRCompanion.Input.isKeyNumPad0 = function(self, ...) return VRCompanion.isKeyNumPad0(VRCompanion, ...) end
+VRCompanion.Input.isKeyV = function(self, ...) return VRCompanion.isKeyV(VRCompanion, ...) end
+VRCompanion.Input.isCtrlHeld = function(self, ...) return VRCompanion.isCtrlHeld(VRCompanion, ...) end
+VRCompanion.Input.keyEvent = function(self, ...) return VRCompanion.keyEvent(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetHudInsets = function(self, ...) return VRCompanion.consoleCommandSetHudInsets(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetHudTopInset = function(self, ...) return VRCompanion.consoleCommandSetHudTopInset(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetHudState = function(self, ...) return VRCompanion.consoleCommandSetHudState(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetHudFillUnderVehicle = function(self, ...) return VRCompanion.consoleCommandSetHudFillUnderVehicle(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetHudFillGap = function(self, ...) return VRCompanion.consoleCommandSetHudFillGap(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetHudLoadNotification = function(self, ...) return VRCompanion.consoleCommandSetHudLoadNotification(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetRecenterMode = function(self, ...) return VRCompanion.consoleCommandSetRecenterMode(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetSnapTurnAngle = function(self, ...) return VRCompanion.consoleCommandSetSnapTurnAngle(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSet2DView = function(self, ...) return VRCompanion.consoleCommandSet2DView(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandToggleView = function(self, ...) return VRCompanion.consoleCommandToggleView(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetDlssMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssMvScale(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetDlssSharpness = function(self, ...) return VRCompanion.consoleCommandSetDlssSharpness(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetDlssPreset = function(self, ...) return VRCompanion.consoleCommandSetDlssPreset(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetRenderingMode = function(self, ...) return VRCompanion.consoleCommandSetRenderingMode(VRCompanion, ...) end
+
+-- Locomotion Subsystem
+VRCompanion.Locomotion.getRecenterMode = function(self, ...) return VRCompanion.getRecenterMode(VRCompanion, ...) end
+VRCompanion.Locomotion.setRecenterMode = function(self, ...) return VRCompanion.setRecenterMode(VRCompanion, ...) end
+VRCompanion.Locomotion.getSnapTurnAngle = function(self, ...) return VRCompanion.getSnapTurnAngle(VRCompanion, ...) end
+VRCompanion.Locomotion.setSnapTurnAngle = function(self, ...) return VRCompanion.setSnapTurnAngle(VRCompanion, ...) end
+VRCompanion.Locomotion.getSnapTurnAngleDegrees = function(self, ...) return VRCompanion.getSnapTurnAngleDegrees(VRCompanion, ...) end
+VRCompanion.Locomotion.getCurrentTimeMs = function(self, ...) return VRCompanion.getCurrentTimeMs(VRCompanion, ...) end
+VRCompanion.Locomotion.isSnapTurnDebounced = function(self, ...) return VRCompanion.isSnapTurnDebounced(VRCompanion, ...) end
+VRCompanion.Locomotion.resetSnapTurnDebounce = function(self, ...) return VRCompanion.resetSnapTurnDebounce(VRCompanion, ...) end
+VRCompanion.Locomotion.initVehicleCameraState = function(self, ...) return VRCompanion.initVehicleCameraState(VRCompanion, ...) end
+VRCompanion.Locomotion.saveVehicleRotationState = function(self, ...) return VRCompanion.saveVehicleRotationState(VRCompanion, ...) end
+VRCompanion.Locomotion.restoreVehicleRotationState = function(self, ...) return VRCompanion.restoreVehicleRotationState(VRCompanion, ...) end
+VRCompanion.Locomotion.resetVehicleTransforms = function(self, ...) return VRCompanion.resetVehicleTransforms(VRCompanion, ...) end
+VRCompanion.Locomotion.onEnterVehicle = function(self, ...) return VRCompanion.onEnterVehicle(VRCompanion, ...) end
+VRCompanion.Locomotion.onLeaveVehicle = function(self, ...) return VRCompanion.onLeaveVehicle(VRCompanion, ...) end
+VRCompanion.Locomotion.onVehicleTransition = function(self, ...) return VRCompanion.onVehicleTransition(VRCompanion, ...) end
+VRCompanion.Locomotion.onVehicleCameraChanged = function(self, ...) return VRCompanion.onVehicleCameraChanged(VRCompanion, ...) end
+VRCompanion.Locomotion.getPlayerBaseTranslation = function(self, ...) return VRCompanion.getPlayerBaseTranslation(VRCompanion, ...) end
+VRCompanion.Locomotion.normalizeAngle = function(self, ...) return VRCompanion.normalizeAngle(VRCompanion, ...) end
+VRCompanion.Locomotion.getVehicleLookYaw = function(self, ...) return VRCompanion.getVehicleLookYaw(VRCompanion, ...) end
+VRCompanion.Locomotion.rotateVectorByYaw = function(self, ...) return VRCompanion.rotateVectorByYaw(VRCompanion, ...) end
+VRCompanion.Locomotion.updateVehicleCameraTrackingNode = function(self, ...) return VRCompanion.updateVehicleCameraTrackingNode(VRCompanion, ...) end
+VRCompanion.Locomotion.snapTurn = function(self, ...) return VRCompanion.snapTurn(VRCompanion, ...) end
+VRCompanion.Locomotion.snapTurnLeft = function(self, ...) return VRCompanion.snapTurnLeft(VRCompanion, ...) end
+VRCompanion.Locomotion.snapTurnRight = function(self, ...) return VRCompanion.snapTurnRight(VRCompanion, ...) end
+VRCompanion.Locomotion.realignVehicleCameraToSeat = function(self, ...) return VRCompanion.realignVehicleCameraToSeat(VRCompanion, ...) end
+VRCompanion.Locomotion.realignPlayerCameraToRoot = function(self, ...) return VRCompanion.realignPlayerCameraToRoot(VRCompanion, ...) end
+VRCompanion.Locomotion.onRecenterAction = function(self, ...) return VRCompanion.onRecenterAction(VRCompanion, ...) end
+VRCompanion.Locomotion.onSnapTurnLeftAction = function(self, ...) return VRCompanion.onSnapTurnLeftAction(VRCompanion, ...) end
+VRCompanion.Locomotion.onSnapTurnRightAction = function(self, ...) return VRCompanion.onSnapTurnRightAction(VRCompanion, ...) end
+
+-- Stereo Subsystem
+VRCompanion.Stereo.getRenderingMode = function(self, ...) return VRCompanion.getRenderingMode(VRCompanion, ...) end
+VRCompanion.Stereo.setRenderingMode = function(self, ...) return VRCompanion.setRenderingMode(VRCompanion, ...) end
+VRCompanion.Stereo.getSubPassIndex = function(self, ...) return VRCompanion.getSubPassIndex(VRCompanion, ...) end
+VRCompanion.Stereo.setSubPassIndex = function(self, ...) return VRCompanion.setSubPassIndex(VRCompanion, ...) end
+VRCompanion.Stereo.advanceSubPass = function(self, ...) return VRCompanion.advanceSubPass(VRCompanion, ...) end
+VRCompanion.Stereo.getStereoCameraNodes = function(self, ...) return VRCompanion.getStereoCameraNodes(VRCompanion, ...) end
+VRCompanion.Stereo.bindRenderingCamera = function(self, ...) return VRCompanion.bindRenderingCamera(VRCompanion, ...) end
+VRCompanion.Stereo.syncActiveEyeCamera = function(self, ...) return VRCompanion.syncActiveEyeCamera(VRCompanion, ...) end
+VRCompanion.Stereo.initDualEyeCameraNodes = function(self, ...) return VRCompanion.initDualEyeCameraNodes(VRCompanion, ...) end
+VRCompanion.Stereo.ensureDualEyeCameraNodes = function(self, ...) return VRCompanion.ensureDualEyeCameraNodes(VRCompanion, ...) end
+VRCompanion.Stereo.initCyclopeanAudioListener = function(self, ...) return VRCompanion.initCyclopeanAudioListener(VRCompanion, ...) end
+VRCompanion.Stereo.ensureCyclopeanAudioListener = function(self, ...) return VRCompanion.ensureCyclopeanAudioListener(VRCompanion, ...) end
+VRCompanion.Stereo.signalDiscontinuityFlush = function(self, ...) return VRCompanion.signalDiscontinuityFlush(VRCompanion, ...) end
+VRCompanion.Stereo.getIs2DViewActive = function(self, ...) return VRCompanion.getIs2DViewActive(VRCompanion, ...) end
+VRCompanion.Stereo.set2DViewActive = function(self, ...) return VRCompanion.set2DViewActive(VRCompanion, ...) end
+VRCompanion.Stereo.toggle2DView = function(self, ...) return VRCompanion.toggle2DView(VRCompanion, ...) end
+VRCompanion.Stereo.isToggleViewDebounced = function(self, ...) return VRCompanion.isToggleViewDebounced(VRCompanion, ...) end
+VRCompanion.Stereo.resetToggleViewDebounce = function(self, ...) return VRCompanion.resetToggleViewDebounce(VRCompanion, ...) end
+VRCompanion.Stereo.onToggleVrViewAction = function(self, ...) return VRCompanion.onToggleVrViewAction(VRCompanion, ...) end
+VRCompanion.Stereo.restoreCameraProjectionsFor2D = function(self, ...) return VRCompanion.restoreCameraProjectionsFor2D(VRCompanion, ...) end
+VRCompanion.Stereo.isPassThroughMode = function(self, ...) return VRCompanion.isPassThroughMode(VRCompanion, ...) end
+VRCompanion.Stereo.setPassThroughMode = function(self, ...) return VRCompanion.setPassThroughMode(VRCompanion, ...) end
+VRCompanion.Stereo.isHeadTrackingActive = function(self, ...) return VRCompanion.isHeadTrackingActive(VRCompanion, ...) end
+VRCompanion.Stereo.setHeadTrackingEnabled = function(self, ...) return VRCompanion.setHeadTrackingEnabled(VRCompanion, ...) end
+VRCompanion.Stereo.applyCameraProjection = function(self, ...) return VRCompanion.applyCameraProjection(VRCompanion, ...) end
+VRCompanion.Stereo.getFrameParity = function(self, ...) return VRCompanion.getFrameParity(VRCompanion, ...) end
+VRCompanion.Stereo.getIpd = function(self, ...) return VRCompanion.getIpd(VRCompanion, ...) end
+VRCompanion.Stereo.requiresAfrFallback = function(self, ...) return VRCompanion.requiresAfrFallback(VRCompanion, ...) end
+VRCompanion.Stereo.computeEyeOffset = function(self, ...) return VRCompanion.computeEyeOffset(VRCompanion, ...) end
+VRCompanion.Stereo.getResolvedHeadPose = function(self, ...) return VRCompanion.getResolvedHeadPose(VRCompanion, ...) end
+VRCompanion.Stereo.getActiveEyeIndex = function(self, ...) return VRCompanion.getActiveEyeIndex(VRCompanion, ...) end
+VRCompanion.Stereo.onVehicleCameraUpdate = function(self, ...) return VRCompanion.onVehicleCameraUpdate(VRCompanion, ...) end
+VRCompanion.Stereo.onPlayerCameraMakeCurrent = function(self, ...) return VRCompanion.onPlayerCameraMakeCurrent(VRCompanion, ...) end
+VRCompanion.Stereo.onPlayerCameraUpdate = function(self, ...) return VRCompanion.onPlayerCameraUpdate(VRCompanion, ...) end
+VRCompanion.Stereo.getPlayerCameraYaw = function(self, ...) return VRCompanion.getPlayerCameraYaw(VRCompanion, ...) end
+VRCompanion.Stereo.onPlayerCameraUpdateRotation = function(self, ...) return VRCompanion.onPlayerCameraUpdateRotation(VRCompanion, ...) end
+VRCompanion.Stereo.updateMenuBackgroundCamera = function(self, ...) return VRCompanion.updateMenuBackgroundCamera(VRCompanion, ...) end
+VRCompanion.Stereo.restoreMenuBackgroundCamera = function(self, ...) return VRCompanion.restoreMenuBackgroundCamera(VRCompanion, ...) end
+
+-- Core Subsystem
+VRCompanion.Core.loadMap = function(self, ...) return VRCompanion.loadMap(VRCompanion, ...) end
+VRCompanion.Core.update = function(self, ...) return VRCompanion.update(VRCompanion, ...) end
+VRCompanion.Core.deleteMap = function(self, ...) return VRCompanion.deleteMap(VRCompanion, ...) end
+VRCompanion.Core.pollGuiVisibility = function(self, ...) return VRCompanion.pollGuiVisibility(VRCompanion, ...) end
+VRCompanion.Core.getPlayerCamera = function(self, ...) return VRCompanion.getPlayerCamera(VRCompanion, ...) end
+VRCompanion.Core.getControlledVehicle = function(self, ...) return VRCompanion.getControlledVehicle(VRCompanion, ...) end
+VRCompanion.Core.getActiveVehicleCamera = function(self, ...) return VRCompanion.getActiveVehicleCamera(VRCompanion, ...) end
+VRCompanion.Core.getVehicleActiveCamera = function(self, ...) return VRCompanion.getVehicleActiveCamera(VRCompanion, ...) end
+VRCompanion.Core.hookVehicleCamera = function(self, ...) return VRCompanion.hookVehicleCamera(VRCompanion, ...) end
+VRCompanion.Core.hookEnterable = function(self, ...) return VRCompanion.hookEnterable(VRCompanion, ...) end
+VRCompanion.Core.hookVehicleSpeed = function(self, ...) return VRCompanion.hookVehicleSpeed(VRCompanion, ...) end
+VRCompanion.Core.unhookVehicleSpeed = function(self, ...) return VRCompanion.unhookVehicleSpeed(VRCompanion, ...) end
+VRCompanion.Core.hookPlayerCamera = function(self, ...) return VRCompanion.hookPlayerCamera(VRCompanion, ...) end
+VRCompanion.Core.onMissionUpdate = function(self, ...) return VRCompanion.onMissionUpdate(VRCompanion, ...) end
+VRCompanion.Core.hookMissionUpdate = function(self, ...) return VRCompanion.hookMissionUpdate(VRCompanion, ...) end
+VRCompanion.Core.unhookMissionUpdate = function(self, ...) return VRCompanion.unhookMissionUpdate(VRCompanion, ...) end
 
 -- Register as an engine mod event listener if in-game environment
 if addModEventListener ~= nil then

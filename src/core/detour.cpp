@@ -161,7 +161,7 @@ void WriteIndirectJump(uint8_t* destination, void* targetAddress) {
     std::memcpy(destination + 6, &targetAddress, sizeof(void*));
 }
 
-void* AllocateNear(void* target, size_t size) {
+void* AllocateNear(void* target, size_t size, DWORD protect = PAGE_READWRITE) {
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     uintptr_t step = si.dwAllocationGranularity;
@@ -175,15 +175,15 @@ void* AllocateNear(void* target, size_t size) {
 
     // Try allocating nearby within ±2GB range
     for (uintptr_t addr = (targetAddr + step) & ~(step - 1); addr < maxAddr; addr += step) {
-        void* mem = VirtualAlloc(reinterpret_cast<void*>(addr), size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        void* mem = VirtualAlloc(reinterpret_cast<void*>(addr), size, MEM_COMMIT | MEM_RESERVE, protect);
         if (mem) return mem;
     }
     for (uintptr_t addr = (targetAddr > step ? targetAddr - step : 0) & ~(step - 1); addr > minAddr; addr -= step) {
-        void* mem = VirtualAlloc(reinterpret_cast<void*>(addr), size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        void* mem = VirtualAlloc(reinterpret_cast<void*>(addr), size, MEM_COMMIT | MEM_RESERVE, protect);
         if (mem) return mem;
     }
 
-    return VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    return VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, protect);
 }
 
 } // anonymous namespace
@@ -290,7 +290,7 @@ bool FunctionDetour::Install(void* targetFunction, void* detourFunction) {
     constexpr size_t kPrologueOffset = 16;
     size_t totalTrampolineSize = kPrologueOffset + m_hookSize + 16;
 
-    m_trampoline = AllocateNear(targetFunction, totalTrampolineSize);
+    m_trampoline = AllocateNear(targetFunction, totalTrampolineSize, PAGE_READWRITE);
     if (!m_trampoline) {
         LogError("FunctionDetour: Failed to allocate trampoline memory near target.");
         m_originalBytes.clear();
@@ -332,6 +332,18 @@ bool FunctionDetour::Install(void* targetFunction, void* detourFunction) {
 
     if (!canUseRelJump && m_hookSize < 14) {
         LogError("FunctionDetour: Trampoline is out of 32-bit displacement range and hook size < 14 bytes.");
+        VirtualFree(m_trampoline, 0, MEM_RELEASE);
+        m_trampoline = nullptr;
+        m_trampolineEntry = nullptr;
+        m_originalBytes.clear();
+        m_hookSize = 0;
+        return false;
+    }
+
+    // Transition trampoline memory from PAGE_READWRITE to PAGE_EXECUTE_READ (W^X / DEP compliance)
+    DWORD trampOldProtect = 0;
+    if (!VirtualProtect(m_trampoline, totalTrampolineSize, PAGE_EXECUTE_READ, &trampOldProtect)) {
+        LogError("FunctionDetour: Failed to transition trampoline memory to PAGE_EXECUTE_READ.");
         VirtualFree(m_trampoline, 0, MEM_RELEASE);
         m_trampoline = nullptr;
         m_trampolineEntry = nullptr;

@@ -18,6 +18,8 @@ enum class VRRenderingMode : uint32_t {
 
 class VRBridge {
 public:
+    static constexpr int kExposedFieldCount = 30; // 1 version property + 29 exposed functions
+
     static VRBridge& Instance();
 
     explicit VRBridge(std::shared_ptr<OpenXrManager> openXrManager = nullptr,

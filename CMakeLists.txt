@@ -60,6 +60,7 @@ include_directories(
 set(CORE_SOURCES
     src/core/logger.cpp
     src/core/logger.h
+    src/core/math_utils.h
     src/core/detour.cpp
     src/core/detour.h
     src/luau/vr_bridge.cpp
@@ -67,10 +68,14 @@ set(CORE_SOURCES
     src/luau/luau_interceptor.cpp
     src/luau/luau_interceptor.h
     src/openxr/openxr_dispatch.h
+    src/openxr/openxr_cursor_overlay.h
+    src/openxr/openxr_cursor_overlay.cpp
     src/openxr/openxr_manager.cpp
     src/openxr/openxr_manager.h
     src/proxy/system_dxgi.h
     src/proxy/system_dxgi.cpp
+    src/proxy/mirror_window_controller.h
+    src/proxy/mirror_window_controller.cpp
     src/proxy/dxgi_proxy.cpp
     src/proxy/dxgi_proxy.h
     src/telemetry/graphics_telemetry_probe.h
@@ -107,8 +112,11 @@ target_compile_definitions(dxgi PRIVATE
 add_executable(fs25_vr_tests
     ${CORE_SOURCES}
     tests/test_main.cpp
+    tests/test_math_utils.cpp
     tests/test_logger.cpp
+    tests/test_openxr_cursor_overlay.cpp
     tests/test_openxr_manager.cpp
+    tests/test_mirror_window_controller.cpp
     tests/test_dxgi_proxy.cpp
     tests/test_detour.cpp
     tests/test_vr_bridge.cpp
@@ -119,6 +127,8 @@ add_executable(fs25_vr_tests
     tests/test_virtual_ngx_handle.cpp
     tests/test_dlss_evaluation.cpp
     tests/test_ngx_interceptor.cpp
+    tests/luau_test_runner.cpp
+    tests/test_luau_suites.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
@@ -140,3 +150,10 @@ target_compile_definitions(fs25_vr_tests PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(fs25_vr_tests DISCOVERY_TIMEOUT 30)
+
+add_custom_target(run_luau_tests
+    COMMAND fs25_vr_tests --gtest_filter=LuauTestSuiteTest.*
+    DEPENDS fs25_vr_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Running standalone Luau test suites via GoogleTest runner"
+)

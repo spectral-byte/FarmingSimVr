@@ -125,3 +125,26 @@ TEST_F(DetourTest, SafelyRejectsShortFunctionsContainingRet) {
     EXPECT_FALSE(installed) << "Detour must safely reject functions containing ret before hook size";
     EXPECT_FALSE(detour.IsInstalled());
 }
+
+TEST_F(DetourTest, EnforcesWriteXorExecuteTrampolineMemoryProtection) {
+    fs25vr::FunctionDetour detour;
+
+    bool installed = detour.Install(reinterpret_cast<void*>(&AddNumbers),
+                                   reinterpret_cast<void*>(&DetourAddNumbers));
+    ASSERT_TRUE(installed);
+    ASSERT_TRUE(detour.IsInstalled());
+
+    void* originalTrampoline = detour.GetOriginal();
+    ASSERT_NE(originalTrampoline, nullptr);
+
+    MEMORY_BASIC_INFORMATION mbi{};
+    SIZE_T queryResult = VirtualQuery(originalTrampoline, &mbi, sizeof(mbi));
+    ASSERT_GT(queryResult, 0U);
+
+    // Verify W^X compliance: Trampoline must be PAGE_EXECUTE_READ, never PAGE_EXECUTE_READWRITE
+    EXPECT_EQ(mbi.Protect, static_cast<DWORD>(PAGE_EXECUTE_READ));
+    EXPECT_NE(mbi.Protect, static_cast<DWORD>(PAGE_EXECUTE_READWRITE));
+
+    detour.Uninstall();
+}
+
