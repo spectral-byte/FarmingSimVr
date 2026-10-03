@@ -30,3 +30,4 @@ scratch/
 *.exp
 *.zip
 *.obj
+.deps/

@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Superseded PR pushes are cancelled; every push to main keeps its own result.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # Fetched dependencies (OpenXR-SDK, GoogleTest, Luau) live outside the
+      # build tree so they can be cached across runs. Only the sources and the
+      # FetchContent stamps are cached; the *-build trees are rebuilt anyway.
+      # Keyed on CMakeLists.txt, where the pinned dependency tags are declared.
+      - name: Cache fetched dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .deps/*-src
+            .deps/*-subbuild
+          key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DFETCHCONTENT_BASE_DIR="${{ github.workspace }}/.deps"
+
+      - name: Build (Injector DLL and tests)
+        run: cmake --build build --target dxgi fs25_vr_tests
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 120
+
+      # ctest runs each test in its own process; a single-process run catches
+      # state leaking between tests through the singletons.
+      - name: Test (single process)
+        run: build\fs25_vr_tests.exe --gtest_brief=1
+
+      - name: Upload dxgi.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: dxgi-dll
+          path: |
+            build/dxgi.dll
+            build/dxgi.pdb
+          if-no-files-found: error

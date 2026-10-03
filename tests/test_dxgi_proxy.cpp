@@ -2601,8 +2601,12 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
 }
 
 TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) {
-    // Replicate Desktop Mirror Window geometry (clamped on ultrawide/4K display)
-    HWND testWnd = CreateWindowA("STATIC", "MouseLookCenterWnd", WS_OVERLAPPEDWINDOW, 100, 100, 1000, 800, nullptr, nullptr, nullptr, nullptr);
+    // Replicate Desktop Mirror Window geometry (clamped on ultrawide/4K display).
+    // The window must lie fully on screen (CI runners are 1024x768) or the OS clamps
+    // ClipCursor to the desktop and the hooked clip rect can't be verified exactly.
+    HWND testWnd = CreateWindowA("STATIC", "MouseLookCenterWnd", WS_OVERLAPPEDWINDOW,
+        GetSystemMetrics(SM_XVIRTUALSCREEN) + 50, GetSystemMetrics(SM_YVIRTUALSCREEN) + 50, 800, 600,
+        nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(testWnd != nullptr);
 
     auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
