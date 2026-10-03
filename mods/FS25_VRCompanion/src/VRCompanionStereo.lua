@@ -13,6 +13,10 @@ if VRCompanion.renderingMode == nil then
     VRCompanion.renderingMode = VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
 end
 
+VRCompanion.RENDERING_MODE_DUAL_PASS = VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+if VRCompanion.headTrackingEnabled == nil then
+    VRCompanion.headTrackingEnabled = true
+end
 VRCompanion.subPassIndex = VRCompanion.subPassIndex or 0
 VRCompanion.accumulatedPass1Dt = VRCompanion.accumulatedPass1Dt or 0.0
 

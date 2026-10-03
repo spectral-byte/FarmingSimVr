@@ -1,7 +1,12 @@
 #include <gtest/gtest.h>
 #include "luau/vr_bridge.h"
 #include "luacode.h"
+#include "luau_test_runner.h"
+#include <algorithm>
 #include <fstream>
+#include <map>
+#include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -37,6 +42,15 @@ std::string ReadFile(const std::string& path) {
     return buffer.str();
 }
 
+// Loads the shipped module files in modDesc order (exactly as the engine does).
+int LoadCompanionModChecked(lua_State* L) {
+    std::string err;
+    int status = LoadCompanionMod(L, &err);
+    if (status != 0) {
+        fprintf(stderr, "\n[Companion Mod load error]: %s\n", err.c_str());
+    }
+    return status;
+}
 int RunLuauChunk(lua_State* L, const std::string& code, const char* chunkName) {
     size_t bytecodeSize = 0;
     char* bytecode = luau_compile(code.c_str(), code.length(), nullptr, &bytecodeSize);
@@ -214,14 +228,75 @@ TEST_F(CompanionModTest, MetadataDescriptorIsValid) {
     EXPECT_NE(modDescContent.find("VRCompanion.lua"), std::string::npos);
 }
 
+TEST_F(CompanionModTest, HarnessLoadOrderMatchesModDescExtraSourceFiles) {
+    std::string modDescContent = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
+    ASSERT_FALSE(modDescContent.empty());
+
+    std::vector<std::string> listed = ParseModDescSourceFiles(modDescContent);
+    ASSERT_FALSE(listed.empty());
+    EXPECT_EQ(listed, CompanionModLoadOrder())
+        << "Test harness load order diverged from <extraSourceFiles> in modDesc.xml";
+}
+
+TEST_F(CompanionModTest, EveryModDescSourceFileExistsAndEntryScriptIsLast) {
+    std::vector<std::string> listed = ParseModDescSourceFiles(ReadFile("mods/FS25_VRCompanion/modDesc.xml"));
+    ASSERT_FALSE(listed.empty());
+    for (const auto& file : listed) {
+        EXPECT_FALSE(ReadFile(std::string("mods/FS25_VRCompanion/") + file).empty()) << file;
+    }
+    EXPECT_EQ(listed.back(), "src/VRCompanion.lua");
+}
+
+TEST_F(CompanionModTest, EntryScriptContainsOnlyModRegistration) {
+    std::string entry = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(entry.empty());
+    EXPECT_EQ(entry.find("function"), std::string::npos) << "Entry script must not define functions";
+    EXPECT_EQ(entry.find("VRCompanion."), std::string::npos) << "Entry script must not define members";
+    EXPECT_NE(entry.find("addModEventListener(VRCompanion)"), std::string::npos);
+}
+
+TEST_F(CompanionModTest, EveryCompanionModFunctionIsDefinedInExactlyOneFile) {
+    std::regex defRe(R"(^\s*(?:local\s+)?function\s+([A-Za-z_][\w\.]*[:\.]?[A-Za-z_]\w*)\s*\(|^\s*(VRCompanion[\w\.]*)\s*=\s*function\s*\()");
+    std::map<std::string, std::string> definedIn;
+    std::vector<std::string> duplicates;
+    for (const auto& file : CompanionModLoadOrder()) {
+        std::istringstream lines(ReadFile(std::string("mods/FS25_VRCompanion/") + file));
+        std::string line;
+        while (std::getline(lines, line)) {
+            std::smatch m;
+            if (!std::regex_search(line, m, defRe)) continue;
+            std::string name = m[1].matched ? m[1].str() : m[2].str();
+            std::replace(name.begin(), name.end(), ':', '.');
+            if (name.rfind("VRCompanion", 0) != 0) continue;
+            auto [it, inserted] = definedIn.emplace(name, file);
+            if (!inserted) {
+                duplicates.push_back(name + " (" + it->second + " and " + file + ")");
+            }
+        }
+    }
+    EXPECT_GT(definedIn.size(), 100u);
+    for (const auto& d : duplicates) ADD_FAILURE() << "Defined in more than one file: " << d;
+}
+
+TEST_F(CompanionModTest, PackagedModZipContainsModDescIconAndEveryModuleFile) {
+    std::string script = ReadFile("scripts/package_release.ps1");
+    ASSERT_FALSE(script.empty());
+    // Packaging globs src/*.lua; every modDesc-listed file must live directly in src/.
+    EXPECT_NE(script.find("src/*.lua"), std::string::npos);
+    EXPECT_NE(script.find("modDesc.xml"), std::string::npos);
+    EXPECT_NE(script.find("icon_vr.png"), std::string::npos);
+    for (const auto& file : ParseModDescSourceFiles(ReadFile("mods/FS25_VRCompanion/modDesc.xml"))) {
+        EXPECT_EQ(file.rfind("src/", 0), 0u) << file;
+        EXPECT_EQ(file.find('/', 4), std::string::npos) << file;
+        EXPECT_EQ(file.substr(file.size() - 4), ".lua") << file;
+    }
+}
 TEST_F(CompanionModTest, PerformsHandshakeWhenVRBridgePresent) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
 
-    int loadStatus = RunLuauChunk(L, scriptContent, "=VRCompanion.lua");
+    int loadStatus = LoadCompanionModChecked(L);
     ASSERT_EQ(loadStatus, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
 
     // Simulate engine triggering loadMap
@@ -243,10 +318,8 @@ TEST_F(CompanionModTest, PerformsHandshakeWhenVRBridgePresent) {
 }
 
 TEST_F(CompanionModTest, FallsBackGracefullyInPassThroughModeWhenVRBridgeAbsent) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
 
-    int loadStatus = RunLuauChunk(L, scriptContent, "=VRCompanion.lua");
+    int loadStatus = LoadCompanionModChecked(L);
     ASSERT_EQ(loadStatus, 0);
 
     // Call loadMap without VRBridge present
@@ -276,10 +349,8 @@ TEST_F(CompanionModTest, HandlesFailedHandshakeGracefully) {
         }
     )", "=setupFailingVRBridge");
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
 
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
 
     RunLuauChunk(L, "assert(VRCompanion.handshakeComplete == false)", "=assertNoHandshake");
@@ -306,9 +377,7 @@ TEST_F(CompanionModTest, InvokesEngineStereoRenderingTogglesDuringMapExecution) 
         end
     )", "=setupStereoGlobals");
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Call loadMap
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
@@ -352,9 +421,7 @@ TEST_F(CompanionModTest, LogsStereoTelemetryProbeResolutionDuringMapUpdate) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
 
     // Call update(16.6)
@@ -372,9 +439,7 @@ TEST_F(CompanionModTest, LogsStereoTelemetryProbeResolutionDuringMapUpdate) {
 }
 
 TEST_F(CompanionModTest, HandlesMissingStereoRenderingTogglesGracefully) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Without setting setStereoRendering, loadMap should not throw
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
@@ -412,9 +477,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
     bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup mock engine scene graph functions
     ASSERT_EQ(RunLuauChunk(L, R"(
@@ -486,9 +549,7 @@ TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking
     bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup player camera mock
     ASSERT_EQ(RunLuauChunk(L, R"(
@@ -541,9 +602,7 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
     bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup mock scene graph, active vehicle camera, and player camera
     ASSERT_EQ(RunLuauChunk(L, R"(
@@ -633,9 +692,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCame
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup engine camera mocks via shared helper
     SetupCameraMockGlobals(L);
@@ -674,9 +731,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamer
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup player camera mocks via shared helper
     SetupCameraMockGlobals(L);
@@ -714,9 +769,7 @@ TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDispa
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -750,9 +803,7 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup camera mocks via shared helper
     SetupCameraMockGlobals(L);
@@ -803,9 +854,7 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     bridge.SetIpd(0.064f); // 64mm IPD -> +/- 0.032m
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -873,9 +922,7 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     bridge.SetIpd(0.064f);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -957,9 +1004,7 @@ TEST_F(CompanionModTest, SkipsAfrAlternationWhenRequiresAfrFallbackIsFalse) {
     bridge.SetIpd(0.064f);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1003,9 +1048,7 @@ TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFT
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1062,9 +1105,7 @@ TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFT
 }
 
 TEST_F(CompanionModTest, FallsBackToEngineTrackIRWhenVRBridgePoseUnavailable) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1112,9 +1153,7 @@ TEST_F(CompanionModTest, UnloadMapNotifiesVRBridgeAndRevertsCompanionActiveState
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     EXPECT_FALSE(bridge.IsCompanionActive());
 
@@ -1141,9 +1180,7 @@ TEST_F(CompanionModTest, PollsGuiVisibilityDuringUpdateAndNotifiesVRBridge) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Mock g_gui with getIsGuiVisible method
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1205,9 +1242,7 @@ TEST_F(CompanionModTest, SuppressesAfrEyeOffsetAndAlternationWhenMenuVisible) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_gui = {
@@ -1232,9 +1267,7 @@ TEST_F(CompanionModTest, HandlesMissingOrFailingGuiGracefullyWithoutError) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // 1. g_gui is nil
     ASSERT_EQ(RunLuauChunk(L, "_G.g_gui = nil", "=nilGui"), 0);
@@ -1256,9 +1289,7 @@ TEST_F(CompanionModTest, UnloadMapResetsMenuVisibilityState) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_gui = {
@@ -1291,9 +1322,7 @@ TEST_F(CompanionModTest, ActiveGuiAppliesHeadPoseTrackingToActiveCameraNode) {
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup showroom / background menu camera mocks
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1360,9 +1389,7 @@ TEST_F(CompanionModTest, ActiveGuiRestoresCameraTransformWhenMenuClosed) {
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.activeCamNode = 888
@@ -1414,9 +1441,7 @@ TEST_F(CompanionModTest, ActiveGuiPreserves2DMouseAndControllerInteractions) {
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.activeCamNode = 101
@@ -1462,9 +1487,7 @@ TEST_F(CompanionModTest, RecenterActionRealignsMenuQuadWhenInMenu) {
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_gui = {
@@ -1502,9 +1525,7 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear)
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1683,9 +1704,7 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear)
 }
 
 TEST_F(CompanionModTest, DefinesAndCalculatesDefaultAndCustomVRHudInsets) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.20, "DEFAULT_HUD_INSET_X must be 0.20")
@@ -1709,9 +1728,7 @@ TEST_F(CompanionModTest, DefinesAndCalculatesDefaultAndCustomVRHudInsets) {
 }
 
 TEST_F(CompanionModTest, ClampsVRHudInsetsAndScaleWithinSafeBoundaries) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local minL, minR, minB, minT, minS = VRCompanion:calculateHudAnchors(-0.5, -0.5, 0.1)
@@ -1731,9 +1748,7 @@ TEST_F(CompanionModTest, ClampsVRHudInsetsAndScaleWithinSafeBoundaries) {
 }
 
 TEST_F(CompanionModTest, ExposesConfigurationWithGracefulFallbackToDefaults) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:configureHudInsets(0.22, 0.14, 0.92)
@@ -1758,9 +1773,7 @@ TEST_F(CompanionModTest, ExposesConfigurationWithGracefulFallbackToDefaults) {
 }
 
 TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_hudAnchorLeft = 0.0
@@ -1824,9 +1837,7 @@ TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad
 }
 
 TEST_F(CompanionModTest, RestoresStandard2DHudCornerAnchorsOnMapUnload) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_hudAnchorLeft = 0.0
@@ -1856,9 +1867,7 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresHudToggleActionAndBindings) {
 }
 
 TEST_F(CompanionModTest, HudStateMachineDefinesThreeStageStatesAndCyclesCyclically) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.HUD_STATE_HIDDEN == 0, "HUD_STATE_HIDDEN must be 0")
@@ -1896,9 +1905,7 @@ TEST_F(CompanionModTest, HudStateMachineDefinesThreeStageStatesAndCyclesCyclical
 }
 
 TEST_F(CompanionModTest, AppliesHudStatesCorrectlyAcrossDisplays) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local hud = {
@@ -1938,9 +1945,7 @@ TEST_F(CompanionModTest, AppliesHudStatesCorrectlyAcrossDisplays) {
 }
 
 TEST_F(CompanionModTest, IsDisplayVisibleFiltersComponentsAcrossAllThreeStates) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local displays = {
@@ -1984,9 +1989,7 @@ TEST_F(CompanionModTest, IsDisplayVisibleFiltersComponentsAcrossAllThreeStates) 
 }
 
 TEST_F(CompanionModTest, HooksNativeEngineHudDisplaysAndSuppressesFilteredComponentsOnDraw) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local draws = {
@@ -2100,9 +2103,7 @@ TEST_F(CompanionModTest, HooksNativeEngineHudDisplaysAndSuppressesFilteredCompon
 }
 
 TEST_F(CompanionModTest, UnhookHudRestoresOriginalFunctionsCleanly) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local origCalled = false
@@ -2123,9 +2124,7 @@ TEST_F(CompanionModTest, UnhookHudRestoresOriginalFunctionsCleanly) {
 }
 
 TEST_F(CompanionModTest, LoadMapDefaultsToHiddenAndRegistersHudToggleAction) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredActions = {}
@@ -2172,9 +2171,7 @@ TEST_F(CompanionModTest, LoadMapDefaultsToHiddenAndRegistersHudToggleAction) {
 }
 
 TEST_F(CompanionModTest, GuiMenuTransitionsPreserveUserSelectedHudState) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local mockHud = {
@@ -2220,9 +2217,7 @@ TEST_F(CompanionModTest, GuiMenuTransitionsPreserveUserSelectedHudState) {
 }
 
 TEST_F(CompanionModTest, ComputesPhysicalIpdScaledDisparityAtTargetConvergenceDepth) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         -- 1. Default IPD (0.064m) at target depth (~1.8m) yields 0.012 disparity
@@ -2269,9 +2264,7 @@ TEST_F(CompanionModTest, AlternatesPositiveDisparityOnLeftParityAndNegativeOnRig
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Set simulated IPD on native OpenXR manager: 64mm
     oxr->SetIpd(0.064f);
@@ -2308,9 +2301,7 @@ TEST_F(CompanionModTest, UpdatesConvergenceEveryFrameWithoutCoordinateDriftAcros
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     oxr->SetIpd(0.064f);
 
@@ -2342,9 +2333,7 @@ TEST_F(CompanionModTest, RevertsConvergenceOffsetSmoothlyToZeroInPassThroughOrDi
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     oxr->SetIpd(0.064f);
 
@@ -2399,9 +2388,7 @@ TEST_F(CompanionModTest, RevertsConvergenceOffsetSmoothlyToZeroInPassThroughOrDi
 }
 
 TEST_F(CompanionModTest, RecenterModeDefaultsToBothWithVrTrackingSpaceEnabled) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE == true, "Default recenterVrTrackingSpace constant must be true")
@@ -2420,9 +2407,7 @@ TEST_F(CompanionModTest, RecenterActionInBothModeZeroesCameraYawAndCallsBridgeRe
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local mockInsideCam = {
@@ -2464,9 +2449,7 @@ TEST_F(CompanionModTest, RecenterActionInVehicleOnlyModeZeroesCameraYawAndBypass
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local mockInsideCam = {
@@ -2500,9 +2483,7 @@ TEST_F(CompanionModTest, RecenterActionInVehicleOnlyModeZeroesCameraYawAndBypass
 }
 
 TEST_F(CompanionModTest, LoadsRecenterVrTrackingSpaceFromXml) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local mockXmlStore = {
@@ -2539,9 +2520,7 @@ TEST_F(CompanionModTest, LoadsRecenterVrTrackingSpaceFromXml) {
 }
 
 TEST_F(CompanionModTest, SavesRecenterVrTrackingSpaceToXml) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local savedBools = {}
@@ -2568,9 +2547,7 @@ TEST_F(CompanionModTest, SavesRecenterVrTrackingSpaceToXml) {
 }
 
 TEST_F(CompanionModTest, ConsoleCommandRecenterModeInspectsTogglesAndPersistsMode) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local savedXml = false
@@ -2616,9 +2593,7 @@ TEST_F(CompanionModTest, ConsoleCommandRecenterModeInspectsTogglesAndPersistsMod
 }
 
 TEST_F(CompanionModTest, RegistersAndUnregistersRecenterModeConsoleCommands) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredCommands = {}
@@ -2646,9 +2621,7 @@ TEST_F(CompanionModTest, RegistersAndUnregistersRecenterModeConsoleCommands) {
 }
 
 TEST_F(CompanionModTest, SnapTurnDefaultsAndConfigurableTurnAngle) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.DEFAULT_SNAP_TURN_ANGLE ~= nil, "DEFAULT_SNAP_TURN_ANGLE must be defined")
@@ -2665,9 +2638,7 @@ TEST_F(CompanionModTest, SnapTurnDefaultsAndConfigurableTurnAngle) {
 }
 
 TEST_F(CompanionModTest, SnapTurnDebounceCooldownEnforcesMinimum250ms) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -2703,9 +2674,7 @@ TEST_F(CompanionModTest, SnapTurnDebounceCooldownEnforcesMinimum250ms) {
 }
 
 TEST_F(CompanionModTest, InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNode) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -2753,9 +2722,7 @@ TEST_F(CompanionModTest, InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNod
 }
 
 TEST_F(CompanionModTest, RecenterResetsSnappedCameraRotYToNeutralForwardWindshield) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -2803,9 +2770,7 @@ TEST_F(CompanionModTest, RecenterResetsSnappedCameraRotYToNeutralForwardWindshie
 }
 
 TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerSnapTurnsAndRejectsHeldKeyRepeat) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -2850,9 +2815,7 @@ TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerSnapTurnsAndRejectsHeld
 }
 
 TEST_F(CompanionModTest, OnFootSnapTurnAdjustsPlayerCharacterYawNode) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -2909,9 +2872,7 @@ TEST_F(CompanionModTest, OnFootSnapTurnAdjustsPlayerCharacterYawNode) {
 }
 
 TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookRemainCollinearAfterSnapTurnWithoutDrift) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -3047,9 +3008,7 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookRemainCollinearAfte
 }
 
 TEST_F(CompanionModTest, OnFootSnapTurnSuppressedWhenGuiMenuVisible) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -3116,9 +3075,7 @@ TEST_F(CompanionModTest, OnFootSnapTurnSuppressedWhenGuiMenuVisible) {
 }
 
 TEST_F(CompanionModTest, SnapTurnInEngineActionEventsRegistration) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredEvents = {}
@@ -3146,9 +3103,7 @@ TEST_F(CompanionModTest, SnapTurnInEngineActionEventsRegistration) {
 }
 
 TEST_F(CompanionModTest, SnapTurnXmlConfigurationLoadingAndSaving) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local savedValues = {}
@@ -3179,9 +3134,7 @@ TEST_F(CompanionModTest, SnapTurnXmlConfigurationLoadingAndSaving) {
 }
 
 TEST_F(CompanionModTest, SnapTurnConsoleCommand) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion.snapTurnAngle = math.pi * 0.5
@@ -3201,9 +3154,7 @@ TEST_F(CompanionModTest, Is2DViewActiveDefaultsToFalseAndSynchronizesWithVRBridg
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.is2DViewActive == false, "is2DViewActive must default to false")
@@ -3241,9 +3192,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraBypasses6DOFTrackingIn2DMode) {
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -3312,9 +3261,7 @@ TEST_F(CompanionModTest, OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMous
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -3371,9 +3318,7 @@ TEST_F(CompanionModTest, CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMo
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -3408,9 +3353,7 @@ TEST_F(CompanionModTest, HudConvergenceDisparityZeroedAndFullFrameAnchorsApplied
     bridge.SetIpd(0.064f);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion.handshakeComplete = true
@@ -3455,9 +3398,7 @@ TEST_F(CompanionModTest, ModeIsStickyAcrossInGameGuiMenus) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local menuVisible = false
@@ -3491,9 +3432,7 @@ TEST_F(CompanionModTest, FreshMapLoadAlwaysInitializesIn3DVrMode) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         -- Force 2D mode before map load
@@ -3515,9 +3454,7 @@ TEST_F(CompanionModTest, SnapTurnSuppressedWhen2DViewActive) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local mockVehCam = {
@@ -3549,9 +3486,7 @@ TEST_F(CompanionModTest, ConsoleCommandsManage2DViewMode) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:set2DViewActive(false)
@@ -3587,9 +3522,7 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresToggleViewActionAndBindings) 
 }
 
 TEST_F(CompanionModTest, ToggleViewInEngineActionEventsRegistration) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredEvents = {}
@@ -3623,9 +3556,7 @@ TEST_F(CompanionModTest, ToggleViewActionTogglesModeWithDebounceAndSilentExecuti
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local warningCalls = 0
@@ -3664,9 +3595,7 @@ TEST_F(CompanionModTest, RecenterIn2DModeRealignsFloatingQuadWithoutResettingVeh
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local alignMenuQuadCalls = 0
@@ -3714,9 +3643,7 @@ TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerToggleViewAndDebounceHe
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:set2DViewActive(false)
@@ -3765,9 +3692,7 @@ TEST_F(CompanionModTest, ImplementsGetAndSetRenderingMode) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.RENDERING_MODE_AFR == "AFR", "RENDERING_MODE_AFR must be 'AFR'")
@@ -3804,9 +3729,7 @@ TEST_F(CompanionModTest, QueriesNativeRenderingModeOnInitializationAndHandshake)
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Initial map load should handshake and query native rendering mode
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMap"), 0);
@@ -3833,9 +3756,7 @@ TEST_F(CompanionModTest, RenderingModePersistenceAcrossMapUnload) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // First map load
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMap1"), 0);
@@ -3863,9 +3784,7 @@ TEST_F(CompanionModTest, DualPassMissionUpdatePacingAndCameraSelection) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.currentCamera = 0
@@ -3922,9 +3841,7 @@ TEST_F(CompanionModTest, DualPassHudConvergenceLockedToSubPassEyeIndex) {
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     oxr->SetIpd(0.064f);
 
@@ -3969,9 +3886,7 @@ TEST_F(CompanionModTest, DualEyeCameraNodesAndCyclopeanAudioListenerInitializedO
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -4010,9 +3925,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrame
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -4069,9 +3982,7 @@ TEST_F(CompanionModTest, DualCameraNodesRetainIndependentTransformHistoryAcrossA
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -4137,9 +4048,7 @@ TEST_F(CompanionModTest, CyclopeanAudioListenerBoundAtNeutralHeadMidpointWithout
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -4194,9 +4103,7 @@ TEST_F(CompanionModTest, MonoscopicAnd2DModeBypassesDualCameraSwitching) {
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -4227,9 +4134,7 @@ TEST_F(CompanionModTest, DualPassSimulationFrozenWithIdenticalVehicleAndWorldCoo
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.currentCamera = 0
@@ -4302,9 +4207,7 @@ TEST_F(CompanionModTest, DeleteMapCleansUpDualCameraNodesAndCyclopeanAudioListen
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -4324,9 +4227,7 @@ TEST_F(CompanionModTest, CompanionModFlagsDiscontinuityOnSnapTurnRecenterAnd2DVi
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Initial state: clear any initialization discontinuities
     bridge.ConsumeDiscontinuity(0);
@@ -4380,9 +4281,7 @@ TEST_F(CompanionModTest, RenderingModeXmlPersistenceRoundtripAndLoad) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local savedStrings = {}
@@ -4442,9 +4341,7 @@ TEST_F(CompanionModTest, RenderingModeConsoleCommandAndNotificationAlert) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredCommands = {}
@@ -4540,9 +4437,7 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -4668,9 +4563,7 @@ TEST_F(CompanionModTest, VehicleSpeedAndFerryDtZeroGuardsPreventDivideByZeroExce
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local vehSpeedCallCount = 0
@@ -4737,9 +4630,7 @@ TEST_F(CompanionModTest, CameraManagerActiveCameraBindingEliminatesEngineWarning
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local rawSetCameraCalled = 0
@@ -4783,9 +4674,7 @@ TEST_F(CompanionModTest, SequentialDualPassSubPass1ExplicitlySynchronizesRightEy
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")

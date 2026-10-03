@@ -590,7 +590,7 @@ function VRCompanion:unhookMissionUpdate()
     local m00 = Mission00 or (_G and _G.Mission00)
     if self.origMission00Update ~= nil and m00 ~= nil then
         m00.update = self.origMission00Update
-        m00.update = nil
+        self.origMission00Update = nil
     end
 
     local mission = g_currentMission or (_G and _G.g_currentMission)

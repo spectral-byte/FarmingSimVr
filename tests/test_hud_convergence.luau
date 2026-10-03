@@ -9,12 +9,8 @@ _G.g_hudAnchorRight = 1.0
 _G.g_hudAnchorBottom = 0.0
 _G.g_hudAnchorTop = 1.0
 
--- Load VRCompanion.lua
-local fs = require("@lune/fs")
-local content = fs.readFile("mods/FS25_VRCompanion/src/VRCompanion.lua")
-local chunk = loadstring(content, "VRCompanion.lua")
-assert(chunk, "Failed to compile VRCompanion.lua")
-chunk()
+-- Load the Companion Mod module files in modDesc order, exactly as the engine does
+loadCompanionMod()
 
 local passed = 0
 local failed = 0
