@@ -49,6 +49,10 @@ DxgiProxy& DxgiProxy::Instance() {
     return instance;
 }
 
+DxgiProxy* DxgiProxy::GetActiveProxy() {
+    return s_activeProxy;
+}
+
 DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
                      std::shared_ptr<OpenXrManager> openXrManager,
                      std::shared_ptr<LuauInterceptor> luauInterceptor,
@@ -315,13 +319,28 @@ void DxgiProxy::DetachAll() {
     m_targetRenderHeight = 0;
     m_cachedSwapChain = nullptr;
     m_cachedSwapChain3.Reset();
+    m_lastPresentSuppressed = false;
+    m_pendingRenderingMode.reset();
 }
 
-void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT /*flags*/) {
+void DxgiProxy::LatchPendingRenderingMode() {
+    if (m_pendingRenderingMode.has_value()) {
+        VRRenderingMode newMode = *m_pendingRenderingMode;
+        m_pendingRenderingMode.reset();
+        if (m_vrBridge) {
+            m_vrBridge->SetRenderingMode(newMode);
+        }
+        LogInfo("DxgiProxy: Latched pending rendering mode on completed compositor frame boundary: " +
+                std::string(newMode == VRRenderingMode::SequentialDualPass ? "SequentialDualPass" : "AFR"));
+    }
+}
+
+bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT /*flags*/) {
+    m_lastPresentSuppressed = false;
     OnPrePresent(swapChain);
 
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
-        return;
+        return true;
     }
 
     if (!m_gameHwnd && swapChain) {
@@ -413,11 +432,14 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
             // Active during pre-game / Main Menu, in-game GUI menus (ESC pause menu, shop, etc.),
             // or in 2D Floating Window Mode.
             m_openXrManager->SubmitMenuQuad();
+            m_lastPresentSuppressed = false;
+            return true;
         } else {
             if (m_wasInQuadMode) {
-                // Seamlessly returning to 3D VR mode: reset AFR frame parity
+                // Seamlessly returning to stereoscopic 3D VR view: reset AFR frame parity and subPassIndex
                 if (m_vrBridge) {
                     m_vrBridge->SetFrameParity(0);
+                    m_vrBridge->ResetSubPass();
                 }
             }
             m_wasInQuadMode = false;
@@ -438,30 +460,68 @@ void DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
                 if (m_vrBridge) {
                     m_vrBridge->AdvanceFrame();
                 }
+                LatchPendingRenderingMode();
+                m_lastPresentSuppressed = false;
+                return true;
             } else {
-                // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
-                uint32_t parity = m_vrBridge ? m_vrBridge->GetFrameParity() : 0;
-                m_openXrManager->CopyBackBufferToEye(parity, pBackBuffer);
+                VRRenderingMode renderingMode = m_vrBridge ? m_vrBridge->GetRenderingMode() : VRRenderingMode::AFR;
+                if (renderingMode == VRRenderingMode::SequentialDualPass) {
+                    uint32_t subPass = m_vrBridge ? m_vrBridge->GetSubPassIndex() : 0;
+                    if (subPass == 0) {
+                        // Sub-Pass 0 (Left Eye): Copies backbuffer to OpenXR eye swapchain 0, suppresses physical present, advances subPassIndex to 1
+                        m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
+                        if (m_vrBridge) {
+                            m_vrBridge->SetSubPassIndex(1);
+                        }
+                        m_lastPresentSuppressed = true;
+                        return false;
+                    } else {
+                        // Sub-Pass 1 (Right Eye): Copies backbuffer to OpenXR eye swapchain 1, submits pair, executes physical present, resets subPassIndex to 0
+                        m_openXrManager->CopyBackBufferToEye(1, pBackBuffer);
+                        m_openXrManager->SubmitFramePair();
+                        if (m_vrBridge) {
+                            m_vrBridge->AdvanceFrame();
+                        }
+                        LatchPendingRenderingMode();
+                        m_lastPresentSuppressed = false;
+                        return true;
+                    }
+                } else {
+                    // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
+                    uint32_t parity = m_vrBridge ? m_vrBridge->GetFrameParity() : 0;
+                    m_openXrManager->CopyBackBufferToEye(parity, pBackBuffer);
 
-                if (parity == 1) {
-                    m_openXrManager->SubmitFramePair();
-                }
+                    if (parity == 1) {
+                        m_openXrManager->SubmitFramePair();
+                    }
 
-                if (m_vrBridge) {
-                    m_vrBridge->AdvanceFrame();
+                    if (m_vrBridge) {
+                        m_vrBridge->AdvanceFrame();
+                    }
+
+                    if (parity == 1) {
+                        LatchPendingRenderingMode();
+                    }
+                    m_lastPresentSuppressed = false;
+                    return true;
                 }
             }
         }
     }
+    m_lastPresentSuppressed = false;
+    return true;
 }
 
-void DxgiProxy::OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* /*params*/) {
-    OnPresent(swapChain, syncInterval, flags);
+bool DxgiProxy::OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* /*params*/) {
+    return OnPresent(swapChain, syncInterval, flags);
 }
 
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UINT syncInterval, UINT flags) {
     DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
-    proxy->OnPresent(self, syncInterval, flags);
+    bool shouldPresent = proxy->OnPresent(self, syncInterval, flags);
+    if (!shouldPresent) {
+        return S_OK;
+    }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(
         proxy->m_detourPresent.GetOriginal()
     );
@@ -474,7 +534,10 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UIN
 
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
     DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
-    proxy->OnPresent1(self, syncInterval, flags, params);
+    bool shouldPresent = proxy->OnPresent1(self, syncInterval, flags, params);
+    if (!shouldPresent) {
+        return S_OK;
+    }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*)>(
         proxy->m_detourPresent1.GetOriginal()
     );
@@ -915,6 +978,33 @@ bool DxgiProxy::DetachWindowSubclass() {
     m_lastEnforcedHeight = 0;
     m_lastMonitor = nullptr;
     return removed;
+}
+
+void DxgiProxy::GetDecoupledTargetResolution(uint32_t& outWidth, uint32_t& outHeight) const {
+    if (m_targetRenderWidth > 0 && m_targetRenderHeight > 0) {
+        outWidth = m_targetRenderWidth;
+        outHeight = m_targetRenderHeight;
+        return;
+    }
+    if (m_openXrManager && m_openXrManager->IsActive()) {
+        if (m_openXrManager->HasEyeSwapchains()) {
+            const auto& sc = m_openXrManager->GetEyeSwapchain(0);
+            if (sc.width > 0 && sc.height > 0) {
+                outWidth = sc.width;
+                outHeight = sc.height;
+                return;
+            }
+        }
+        uint32_t recW = m_openXrManager->GetRecommendedEyeWidth(0);
+        uint32_t recH = m_openXrManager->GetRecommendedEyeHeight(0);
+        if (recW > 0 && recH > 0) {
+            outWidth = recW;
+            outHeight = recH;
+            return;
+        }
+    }
+    outWidth = 0;
+    outHeight = 0;
 }
 
 bool DxgiProxy::ApplyInitialWindowClamp(HWND hWnd) {

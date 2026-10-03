@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "luau/vr_bridge.h"
+#include "ngx/ngx_interceptor.h"
 #include "luacode.h"
 #include <string>
 
@@ -255,6 +256,7 @@ TEST_F(VrBridgeTest, ExposesEyeProjectionAndPrunesAliasesInLuauScript) {
 
 TEST_F(VrBridgeTest, ExposesFrameParityAndFrameIndexAndIpdToLuau) {
     fs25vr::VRBridge bridge;
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string script = R"luau(
@@ -441,6 +443,7 @@ TEST_F(VrBridgeTest, ExposesCompanionActiveStatusAndHandlesMapUnload) {
 
 TEST_F(VrBridgeTest, ExposesMenuVisibilityAndSynchronizesStateBetweenLuauAndCpp) {
     fs25vr::VRBridge bridge;
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     ASSERT_TRUE(bridge.Inject(L));
 
     // Initially false in both C++ and Luau
@@ -544,6 +547,7 @@ TEST_F(VrBridgeTest, ExposesAlignMenuQuadToLuau) {
 
 TEST_F(VrBridgeTest, Exposes2DViewActiveMethodsAndPropertyToLuauScript) {
     fs25vr::VRBridge bridge;
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     ASSERT_TRUE(bridge.Inject(L));
 
     // Initially false in both C++ and Luau
@@ -623,5 +627,298 @@ TEST_F(VrBridgeTest, Set2DViewActiveTrueTriggersQuadAlignmentOnOpenXrManager) {
     EXPECT_NEAR(quadPose.position.x, 1.0f, 0.001f);
     EXPECT_NEAR(quadPose.position.y, 1.7f, 0.001f);
     EXPECT_NEAR(quadPose.position.z, 0.5f, 0.001f);
+}
+
+TEST_F(VrBridgeTest, DefaultRenderingModeIsSequentialDualPassAndThreadSafe) {
+    fs25vr::VRBridge bridge;
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::SequentialDualPass);
+    EXPECT_TRUE(bridge.IsSequentialDualPass());
+    EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
+}
+
+TEST_F(VrBridgeTest, ModeTransitionsSwitchStateAndResetSubPassAndParity) {
+    fs25vr::VRBridge bridge;
+
+    // Advance to parity 1 and sub-pass 1
+    bridge.SetFrameParity(1);
+    bridge.SetSubPassIndex(1);
+    EXPECT_EQ(bridge.GetFrameParity(), 1u);
+    EXPECT_EQ(bridge.GetSubPassIndex(), 1u);
+
+    // Switch to AFR
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::AFR);
+    EXPECT_FALSE(bridge.IsSequentialDualPass());
+
+    // Clean reset: mode change must reset subPassIndex and frameParity to 0
+    EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
+    EXPECT_EQ(bridge.GetFrameParity(), 0u);
+
+    // Advance again
+    bridge.SetFrameParity(1);
+    bridge.SetSubPassIndex(1);
+    EXPECT_EQ(bridge.GetSubPassIndex(), 1u);
+
+    // Switch back to Sequential Dual-Pass
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::SequentialDualPass);
+    EXPECT_TRUE(bridge.IsSequentialDualPass());
+    EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
+    EXPECT_EQ(bridge.GetFrameParity(), 0u);
+}
+
+TEST_F(VrBridgeTest, SubPassCyclingAndFrameBoundaryResets) {
+    fs25vr::VRBridge bridge;
+    EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
+
+    // Sub-pass cycling (0 -> 1 -> 0 -> 1)
+    uint32_t next = bridge.AdvanceSubPass();
+    EXPECT_EQ(next, 1u);
+    EXPECT_EQ(bridge.GetSubPassIndex(), 1u);
+
+    next = bridge.AdvanceSubPass();
+    EXPECT_EQ(next, 0u);
+    EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
+
+    // Advance to sub-pass 1, then advance frame boundary
+    bridge.AdvanceSubPass();
+    EXPECT_EQ(bridge.GetSubPassIndex(), 1u);
+
+    // AdvanceFrame represents the presentation boundary and must reset subPassIndex to 0
+    bridge.AdvanceFrame();
+    EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
+
+    // SetFrameIndex also represents boundary reset
+    bridge.SetSubPassIndex(1);
+    EXPECT_EQ(bridge.GetSubPassIndex(), 1u);
+    bridge.SetFrameIndex(10);
+    EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
+}
+
+TEST_F(VrBridgeTest, ExposesRenderingModeAndSubPassToLuauScript) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string script = R"luau(
+        assert(type(VRBridge.getRenderingMode) == "function", "getRenderingMode must be a function")
+        assert(type(VRBridge.setRenderingMode) == "function", "setRenderingMode must be a function")
+        assert(type(VRBridge.getSubPassIndex) == "function", "getSubPassIndex must be a function")
+
+        -- Default initial state
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass", "default getRenderingMode() must be 'SequentialDualPass'")
+        assert(VRBridge.renderingMode == "SequentialDualPass", "default renderingMode property must be 'SequentialDualPass'")
+        assert(VRBridge.renderingModeIndex == 1, "default renderingModeIndex property must be 1")
+        assert(VRBridge.getSubPassIndex() == 0, "default getSubPassIndex() must be 0")
+        assert(VRBridge.subPassIndex == 0, "default subPassIndex property must be 0")
+
+        -- Can request integer explicitly
+        assert(VRBridge.getRenderingMode("int") == 1, "getRenderingMode('int') must return 1")
+
+        -- Can retrieve multiple return values (string, int)
+        local modeStr, modeIdx = VRBridge.getRenderingMode()
+        assert(modeStr == "SequentialDualPass" and modeIdx == 1, "multiple return values mismatch")
+
+        -- Switch mode via string in Luau
+        VRBridge.setRenderingMode("AFR")
+        assert(VRBridge.getRenderingMode() == "AFR", "getRenderingMode() must be 'AFR' after set")
+        assert(VRBridge.renderingMode == "AFR", "renderingMode property must be 'AFR'")
+        assert(VRBridge.renderingModeIndex == 0, "renderingModeIndex property must be 0")
+        assert(VRBridge.getRenderingMode("int") == 0, "getRenderingMode('int') must return 0")
+
+        -- Switch mode via integer in Luau
+        VRBridge.setRenderingMode(1)
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass", "getRenderingMode() must be 'SequentialDualPass' after set(1)")
+        assert(VRBridge.renderingModeIndex == 1, "renderingModeIndex must be 1")
+
+        -- Switch mode via case-insensitive aliases
+        VRBridge.setRenderingMode("SequentialDualPass")
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass", "getRenderingMode() must recognize 'SequentialDualPass'")
+
+        -- Toggle mode
+        VRBridge.setRenderingMode("toggle")
+        assert(VRBridge.getRenderingMode() == "AFR", "toggle must switch back to AFR")
+        VRBridge.setRenderingMode("toggle")
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass", "toggle must switch back to SequentialDualPass")
+    )luau";
+
+    int status = RunLuauString(L, script);
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::SequentialDualPass);
+}
+
+TEST_F(VrBridgeTest, HandshakeNegotiationAndModePersistence) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string script = R"luau(
+        -- Standard handshake exposes renderingMode and renderingModeIndex (default: SequentialDualPass)
+        local hs = VRBridge.handshake()
+        assert(hs.success == true, "handshake must succeed")
+        assert(hs.renderingMode == "SequentialDualPass", "hs.renderingMode must initially be 'SequentialDualPass'")
+        assert(hs.renderingModeIndex == 1, "hs.renderingModeIndex must initially be 1")
+
+        -- Handshake negotiation with preferred mode
+        local hsAfr = VRBridge.handshake("AFR")
+        assert(hsAfr.success == true, "negotiated handshake must succeed")
+        assert(hsAfr.renderingMode == "AFR", "hsAfr.renderingMode must be 'AFR'")
+        assert(hsAfr.renderingModeIndex == 0, "hsAfr.renderingModeIndex must be 0")
+        assert(VRBridge.getRenderingMode() == "AFR", "VRBridge must reflect negotiated mode")
+
+        -- Map unload does NOT destroy chosen mode (mode persistence), but resets subPassIndex to 0
+        VRBridge.onMapUnload()
+        assert(VRBridge.getRenderingMode() == "AFR", "mode must persist across map unload")
+        assert(VRBridge.getSubPassIndex() == 0, "subPassIndex must be reset to 0 on map unload")
+    )luau";
+
+    int status = RunLuauString(L, script);
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::AFR);
+    EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
+}
+
+TEST_F(VrBridgeTest, SetsAndAdvancesSubPassIndexInLuau) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string script = R"luau(
+        assert(type(VRBridge.getSubPassIndex) == "function", "getSubPassIndex must be a function")
+        assert(type(VRBridge.setSubPassIndex) == "function", "setSubPassIndex must be a function")
+        assert(type(VRBridge.advanceSubPass) == "function", "advanceSubPass must be a function")
+
+        assert(VRBridge.getSubPassIndex() == 0, "initial subPassIndex must be 0")
+        assert(VRBridge.subPassIndex == 0, "initial subPassIndex property must be 0")
+
+        -- Set to 1
+        VRBridge.setSubPassIndex(1)
+        assert(VRBridge.getSubPassIndex() == 1, "subPassIndex must be 1 after setSubPassIndex(1)")
+        assert(VRBridge.subPassIndex == 1, "subPassIndex property must be 1")
+
+        -- Advance from 1 -> 0
+        local nextPass = VRBridge.advanceSubPass()
+        assert(nextPass == 0, "advanceSubPass from 1 must return 0")
+        assert(VRBridge.getSubPassIndex() == 0, "subPassIndex must be 0 after advanceSubPass")
+
+        -- Advance from 0 -> 1
+        nextPass = VRBridge.advanceSubPass()
+        assert(nextPass == 1, "advanceSubPass from 0 must return 1")
+        assert(VRBridge.getSubPassIndex() == 1, "subPassIndex must be 1 after advanceSubPass")
+
+        -- Modulo clamping: setSubPassIndex(2) -> 0
+        VRBridge.setSubPassIndex(2)
+        assert(VRBridge.getSubPassIndex() == 0, "setSubPassIndex(2) must wrap to 0")
+    )luau";
+
+    int status = RunLuauString(L, script);
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+}
+
+TEST_F(VrBridgeTest, DiscontinuitySignallingExposedToLuauAndFlagsBothContexts) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_FALSE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_FALSE(bridge.HasPendingDiscontinuity(1));
+
+    // Signal in C++
+    bridge.SignalDiscontinuity();
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+
+    // Consume Left context
+    EXPECT_TRUE(bridge.ConsumeDiscontinuity(0));
+    EXPECT_FALSE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+
+    // Consume Right context
+    EXPECT_TRUE(bridge.ConsumeDiscontinuity(1));
+    EXPECT_FALSE(bridge.HasPendingDiscontinuity(1));
+
+    // Re-signal via Luau resetTemporalHistory()
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(type(VRBridge.resetTemporalHistory) == "function", "resetTemporalHistory must be a function")
+        VRBridge.resetTemporalHistory()
+    )luau"), 0);
+
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+
+    // Also via signalDiscontinuity alias
+    EXPECT_TRUE(bridge.ConsumeDiscontinuity(0));
+    EXPECT_TRUE(bridge.ConsumeDiscontinuity(1));
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(type(VRBridge.signalDiscontinuity) == "function", "signalDiscontinuity must be a function")
+        VRBridge.signalDiscontinuity()
+    )luau"), 0);
+
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+}
+
+TEST_F(VrBridgeTest, ViewTransitionsAndRecenterFlagDiscontinuity) {
+    fs25vr::VRBridge bridge;
+
+    // Recenter flags discontinuity
+    bridge.Recenter();
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+    bridge.ConsumeDiscontinuity(0);
+    bridge.ConsumeDiscontinuity(1);
+
+    // 2D view toggle flags discontinuity
+    bridge.Set2DViewActive(true);
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+    bridge.ConsumeDiscontinuity(0);
+    bridge.ConsumeDiscontinuity(1);
+
+    // Setting same 2D view state does not flag again
+    bridge.Set2DViewActive(true);
+    EXPECT_FALSE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_FALSE(bridge.HasPendingDiscontinuity(1));
+
+    // Toggling back to 3D flags discontinuity
+    bridge.Set2DViewActive(false);
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+    bridge.ConsumeDiscontinuity(0);
+    bridge.ConsumeDiscontinuity(1);
+
+    // Menu visibility toggle flags discontinuity
+    bridge.SetMenuVisible(true);
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+}
+
+TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    const std::string testScript = R"(
+        assert(type(VRBridge.setDlssMvScale) == "function", "setDlssMvScale missing")
+        assert(type(VRBridge.setDlssSharpness) == "function", "setDlssSharpness missing")
+        assert(type(VRBridge.setDlssPreset) == "function", "setDlssPreset missing")
+
+        assert(VRBridge.setDlssMvScale(0.0) == true, "setDlssMvScale single arg failed")
+        assert(VRBridge.setDlssMvScale(0.5, 0.75) == true, "setDlssMvScale dual arg failed")
+        assert(VRBridge.setDlssSharpness(0.65) == true, "setDlssSharpness failed")
+        assert(VRBridge.setDlssPreset(11) == true, "setDlssPreset failed")
+    )";
+
+    EXPECT_EQ(RunLuauString(L, testScript), 0);
+    EXPECT_FLOAT_EQ(fs25vr::NgxInterceptor::Instance().GetMvScaleMultiplierX(), 0.5f);
+    EXPECT_FLOAT_EQ(fs25vr::NgxInterceptor::Instance().GetMvScaleMultiplierY(), 0.75f);
+    EXPECT_FLOAT_EQ(fs25vr::NgxInterceptor::Instance().GetSharpnessOverride(), 0.65f);
+    EXPECT_EQ(fs25vr::NgxInterceptor::Instance().GetDlssPresetOverride(), 11);
 }
 

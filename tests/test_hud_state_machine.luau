@@ -652,19 +652,21 @@ test("RegisterActionEventsReArmsOnVehicleTransitionsAndPeriodicUpdate", function
     VRCompanion.recenterActionEventId = nil
     VRCompanion.snapLeftActionEventId = nil
     VRCompanion.snapRightActionEventId = nil
+    VRCompanion.toggleViewActionEventId = nil
     VRCompanion:registerActionEvents(true)
-    assert(registrations == 4, "Should register HUD_TOGGLE, RECENTER, SNAP_LEFT, and SNAP_RIGHT")
+    assert(registrations == 5, "Should register HUD_TOGGLE, RECENTER, SNAP_LEFT, SNAP_RIGHT, and TOGGLE_VIEW")
     assert(VRCompanion.hudToggleActionEventId ~= nil)
     assert(VRCompanion.recenterActionEventId ~= nil)
     assert(VRCompanion.snapLeftActionEventId ~= nil)
     assert(VRCompanion.snapRightActionEventId ~= nil)
+    assert(VRCompanion.toggleViewActionEventId ~= nil)
 
     -- Simulate engine clearing actionEvents table upon entering a vehicle
     _G.g_inputBinding.actionEvents = {}
 
     -- Calling registerActionEvents() detects missing events and re-registers
     VRCompanion:registerActionEvents(false)
-    assert(registrations == 8, "Should automatically re-register missing action events")
+    assert(registrations == 10, "Should automatically re-register missing action events")
 
     _G.g_inputBinding = nil
 end)

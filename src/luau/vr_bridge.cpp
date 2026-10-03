@@ -1,7 +1,26 @@
 #include "vr_bridge.h"
+#include "proxy/dxgi_proxy.h"
 #include "core/logger.h"
+#include "ngx/ngx_interceptor.h"
 
 namespace fs25vr {
+
+static bool ParseRenderingMode(const char* s, VRRenderingMode& outMode) {
+    if (!s) return false;
+    if (_stricmp(s, "sequentialdualpass") == 0 || _stricmp(s, "dualpass") == 0 ||
+        _stricmp(s, "dual_pass") == 0 || _stricmp(s, "dual") == 0 ||
+        _stricmp(s, "sequential") == 0 || _stricmp(s, "sdp") == 0 ||
+        _stricmp(s, "1") == 0) {
+        outMode = VRRenderingMode::SequentialDualPass;
+        return true;
+    }
+    if (_stricmp(s, "afr") == 0 || _stricmp(s, "alternate") == 0 ||
+        _stricmp(s, "alternateframe") == 0 || _stricmp(s, "0") == 0) {
+        outMode = VRRenderingMode::AFR;
+        return true;
+    }
+    return false;
+}
 
 VRBridge& VRBridge::Instance() {
     static VRBridge instance;
@@ -144,6 +163,56 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushcclosure(L, &VRBridge::Lua_GetIs2DViewActive, "getIs2DViewActive", 1);
     lua_setfield(L, -2, "getIs2DViewActive");
 
+    // VRBridge.getRenderingMode = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetRenderingMode, "getRenderingMode", 1);
+    lua_setfield(L, -2, "getRenderingMode");
+
+    // VRBridge.setRenderingMode = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_SetRenderingMode, "setRenderingMode", 1);
+    lua_setfield(L, -2, "setRenderingMode");
+
+    // VRBridge.getSubPassIndex = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_GetSubPassIndex, "getSubPassIndex", 1);
+    lua_setfield(L, -2, "getSubPassIndex");
+
+    // VRBridge.setSubPassIndex = function(index) [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_SetSubPassIndex, "setSubPassIndex", 1);
+    lua_setfield(L, -2, "setSubPassIndex");
+
+    // VRBridge.advanceSubPass = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_AdvanceSubPass, "advanceSubPass", 1);
+    lua_setfield(L, -2, "advanceSubPass");
+
+    // VRBridge.resetTemporalHistory = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_ResetTemporalHistory, "resetTemporalHistory", 1);
+    lua_setfield(L, -2, "resetTemporalHistory");
+
+    // VRBridge.signalDiscontinuity = function() [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_SignalDiscontinuity, "signalDiscontinuity", 1);
+    lua_setfield(L, -2, "signalDiscontinuity");
+
+    // VRBridge.setDlssMvScale = function(scaleX, [scaleY]) [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_SetDlssMvScale, "setDlssMvScale", 1);
+    lua_setfield(L, -2, "setDlssMvScale");
+
+    // VRBridge.setDlssSharpness = function(sharpness) [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_SetDlssSharpness, "setDlssSharpness", 1);
+    lua_setfield(L, -2, "setDlssSharpness");
+
+    // VRBridge.setDlssPreset = function(preset) [bound with 'this' upvalue]
+    lua_pushlightuserdata(L, this);
+    lua_pushcclosure(L, &VRBridge::Lua_SetDlssPreset, "setDlssPreset", 1);
+    lua_setfield(L, -2, "setDlssPreset");
+
     // Set metatable on VRBridge table for dynamic property access (__index)
     lua_createtable(L, 0, 1);
     lua_pushlightuserdata(L, this);
@@ -167,7 +236,9 @@ bool VRBridge::IsReady() const {
 
 bool VRBridge::PerformHandshake() {
     m_handshakeCompleted = true;
-    LogInfo("[VRBridge] Native-to-Luau handshake completed successfully.");
+    m_subPassIndex.store(0);
+    SetFrameParity(0);
+    LogInfo("[VRBridge] Native-to-Luau handshake completed successfully. SubPassIndex and FrameParity aligned to 0.");
     return true;
 }
 
@@ -183,9 +254,22 @@ int VRBridge::Lua_Handshake(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
 
+    // Handshake negotiation: allow Luau to optionally specify a preferred mode
+    if (lua_gettop(L) >= 1) {
+        if (lua_isnumber(L, 1)) {
+            int val = lua_tointeger(L, 1);
+            self->SetRenderingMode((val == 1) ? VRRenderingMode::SequentialDualPass : VRRenderingMode::AFR);
+        } else if (lua_isstring(L, 1)) {
+            VRRenderingMode parsedMode;
+            if (ParseRenderingMode(lua_tostring(L, 1), parsedMode)) {
+                self->SetRenderingMode(parsedMode);
+            }
+        }
+    }
+
     self->PerformHandshake();
 
-    lua_createtable(L, 0, 3);
+    lua_createtable(L, 0, 5);
 
     lua_pushboolean(L, 1);
     lua_setfield(L, -2, "success");
@@ -196,6 +280,13 @@ int VRBridge::Lua_Handshake(lua_State* L) {
     const char* modeStr = self->IsReady() ? "Active" : "PassThrough";
     lua_pushstring(L, modeStr);
     lua_setfield(L, -2, "mode");
+
+    const char* rendStr = (self->GetRenderingMode() == VRRenderingMode::SequentialDualPass) ? "SequentialDualPass" : "AFR";
+    lua_pushstring(L, rendStr);
+    lua_setfield(L, -2, "renderingMode");
+
+    lua_pushinteger(L, static_cast<int>(self->GetRenderingMode()));
+    lua_setfield(L, -2, "renderingModeIndex");
 
     return 1;
 }
@@ -214,6 +305,7 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
 
     self->SetCompanionActive(false);
     self->SetFrameParity(0);
+    self->ResetSubPass();
     self->SetMenuVisible(false);
     self->Set2DViewActive(false);
     LogInfo("[VRBridge] Companion Mod map unloaded; reverted to Menu Quad layer mode.");
@@ -277,6 +369,7 @@ void VRBridge::Recenter() {
     if (m_openXrManager) {
         m_openXrManager->Recenter();
     }
+    SignalDiscontinuity();
     LogInfo("VRBridge: Recenter triggered.");
 }
 
@@ -422,9 +515,31 @@ int VRBridge::Lua_GetEyeProjection(lua_State* L) {
     return 1;
 }
 
+void VRBridge::ResetSubPassAndParity() {
+    if (m_renderingMode.load() == VRRenderingMode::SequentialDualPass) {
+        m_frameParity = 0;
+    } else {
+        m_frameParity = static_cast<uint32_t>(m_frameIndex % 2);
+    }
+    m_subPassIndex.store(0);
+}
+
 void VRBridge::AdvanceFrame() {
     m_frameIndex++;
-    m_frameParity = static_cast<uint32_t>(m_frameIndex % 2);
+    ResetSubPassAndParity();
+}
+
+void VRBridge::SetFrameIndex(uint64_t index) {
+    m_frameIndex = index;
+    ResetSubPassAndParity();
+}
+
+void VRBridge::SetRenderingMode(VRRenderingMode mode) {
+    m_renderingMode.store(mode);
+    m_subPassIndex.store(0);
+    SetFrameParity(0);
+    LogInfo(std::string("VRBridge: Rendering mode set to: ") +
+            (mode == VRRenderingMode::SequentialDualPass ? "SequentialDualPass" : "AFR"));
 }
 
 void VRBridge::SetFrameParity(uint32_t parity) {
@@ -521,6 +636,8 @@ void VRBridge::SetMenuVisible(bool visible) {
     if (m_menuVisible != visible) {
         m_menuVisible = visible;
         SetFrameParity(0);
+        ResetSubPass();
+        SignalDiscontinuity();
         if (visible) {
             if (m_openXrManager) {
                 m_openXrManager->AlignMenuQuadToHeadPose();
@@ -570,6 +687,8 @@ void VRBridge::Set2DViewActive(bool active) {
     if (m_2dViewActive != active) {
         m_2dViewActive = active;
         SetFrameParity(0);
+        ResetSubPass();
+        SignalDiscontinuity();
         if (active) {
             if (m_openXrManager) {
                 m_openXrManager->AlignMenuQuadToHeadPose();
@@ -601,6 +720,94 @@ int VRBridge::Lua_GetIs2DViewActive(lua_State* L) {
     return 1;
 }
 
+int VRBridge::Lua_GetRenderingMode(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    VRRenderingMode mode = self->GetRenderingMode();
+    const char* str = (mode == VRRenderingMode::SequentialDualPass) ? "SequentialDualPass" : "AFR";
+    int intVal = static_cast<int>(mode);
+
+    if (lua_gettop(L) >= 1 && lua_isstring(L, 1)) {
+        const char* fmt = lua_tostring(L, 1);
+        if (fmt && (_stricmp(fmt, "int") == 0 || _stricmp(fmt, "number") == 0 || _stricmp(fmt, "index") == 0)) {
+            lua_pushinteger(L, intVal);
+            return 1;
+        }
+    }
+
+    lua_pushstring(L, str);
+    lua_pushinteger(L, intVal);
+    return 2;
+}
+
+int VRBridge::Lua_SetRenderingMode(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    if (lua_gettop(L) >= 1) {
+        VRRenderingMode targetMode = VRRenderingMode::SequentialDualPass;
+        bool hasTarget = false;
+        if (lua_isnumber(L, 1)) {
+            int val = lua_tointeger(L, 1);
+            targetMode = (val == 0) ? VRRenderingMode::AFR : VRRenderingMode::SequentialDualPass;
+            hasTarget = true;
+        } else if (lua_isstring(L, 1)) {
+            const char* s = lua_tostring(L, 1);
+            if (s && (_stricmp(s, "toggle") == 0)) {
+                targetMode = self->IsSequentialDualPass() ? VRRenderingMode::AFR : VRRenderingMode::SequentialDualPass;
+                hasTarget = true;
+            } else {
+                VRRenderingMode parsedMode;
+                if (ParseRenderingMode(s, parsedMode)) {
+                    targetMode = parsedMode;
+                    hasTarget = true;
+                } else {
+                    targetMode = VRRenderingMode::SequentialDualPass;
+                    hasTarget = true;
+                }
+            }
+        }
+
+        if (hasTarget) {
+            auto* proxy = DxgiProxy::GetActiveProxy();
+            if (proxy && proxy->IsActive()) {
+                proxy->SetPendingRenderingMode(targetMode);
+            } else {
+                self->SetRenderingMode(targetMode);
+            }
+        }
+    }
+    return 0;
+}
+
+int VRBridge::Lua_GetSubPassIndex(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    lua_pushinteger(L, static_cast<int>(self->GetSubPassIndex()));
+    return 1;
+}
+
+int VRBridge::Lua_SetSubPassIndex(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    if (lua_gettop(L) >= 1 && lua_isnumber(L, 1)) {
+        self->SetSubPassIndex(static_cast<uint32_t>(lua_tointeger(L, 1)));
+    }
+    return 0;
+}
+
+int VRBridge::Lua_AdvanceSubPass(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    uint32_t next = self->AdvanceSubPass();
+    lua_pushinteger(L, static_cast<int>(next));
+    return 1;
+}
+
 int VRBridge::Lua_Index(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
@@ -619,6 +826,19 @@ int VRBridge::Lua_Index(lua_State* L) {
             lua_pushinteger(L, static_cast<int>(self->GetFrameIndex()));
             return 1;
         }
+        if (strcmp(key, "renderingMode") == 0) {
+            const char* str = (self->GetRenderingMode() == VRRenderingMode::SequentialDualPass) ? "SequentialDualPass" : "AFR";
+            lua_pushstring(L, str);
+            return 1;
+        }
+        if (strcmp(key, "renderingModeIndex") == 0) {
+            lua_pushinteger(L, static_cast<int>(self->GetRenderingMode()));
+            return 1;
+        }
+        if (strcmp(key, "subPassIndex") == 0) {
+            lua_pushinteger(L, static_cast<int>(self->GetSubPassIndex()));
+            return 1;
+        }
         if (strcmp(key, "ipd") == 0) {
             lua_pushnumber(L, self->GetIpd());
             return 1;
@@ -635,8 +855,70 @@ int VRBridge::Lua_Index(lua_State* L) {
             lua_pushboolean(L, self->Is2DViewActive() ? 1 : 0);
             return 1;
         }
+        if (strcmp(key, "hasPendingDiscontinuity") == 0) {
+            lua_pushboolean(L, (self->HasPendingDiscontinuity(0) || self->HasPendingDiscontinuity(1)) ? 1 : 0);
+            return 1;
+        }
     }
     lua_pushnil(L);
+    return 1;
+}
+
+void VRBridge::SignalDiscontinuity() {
+    m_discontinuityPendingLeft = true;
+    m_discontinuityPendingRight = true;
+    LogInfo("[VRBridge] SignalDiscontinuity: Discontinuity flush flagged across dual contexts.");
+}
+
+bool VRBridge::HasPendingDiscontinuity(uint32_t contextIndex) const {
+    if (contextIndex == 1) {
+        return m_discontinuityPendingRight.load();
+    }
+    return m_discontinuityPendingLeft.load();
+}
+
+bool VRBridge::ConsumeDiscontinuity(uint32_t contextIndex) {
+    if (contextIndex == 1) {
+        return m_discontinuityPendingRight.exchange(false);
+    }
+    return m_discontinuityPendingLeft.exchange(false);
+}
+
+int VRBridge::Lua_ResetTemporalHistory(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    self->SignalDiscontinuity();
+    return 0;
+}
+
+int VRBridge::Lua_SignalDiscontinuity(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) self = &Instance();
+
+    self->SignalDiscontinuity();
+    return 0;
+}
+
+int VRBridge::Lua_SetDlssMvScale(lua_State* L) {
+    double scaleX = luaL_checknumber(L, 1);
+    double scaleY = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : scaleX;
+    NgxInterceptor::Instance().SetMvScaleMultiplier(static_cast<float>(scaleX), static_cast<float>(scaleY));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int VRBridge::Lua_SetDlssSharpness(lua_State* L) {
+    double sharp = luaL_checknumber(L, 1);
+    NgxInterceptor::Instance().SetSharpnessOverride(static_cast<float>(sharp), true);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int VRBridge::Lua_SetDlssPreset(lua_State* L) {
+    int preset = static_cast<int>(luaL_checkinteger(L, 1));
+    NgxInterceptor::Instance().SetDlssPresetOverride(preset);
+    lua_pushboolean(L, 1);
     return 1;
 }
 

@@ -89,6 +89,7 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         <hudFillLevelGap>0.004</hudFillLevelGap>
         <showHudLoadNotification>false</showHudLoadNotification>
         <recenterVrTrackingSpace>true</recenterVrTrackingSpace>
+        <renderingMode>DualPass</renderingMode>
         <snapTurnAngle>90</snapTurnAngle>
     </vrSettings>
     <actions>

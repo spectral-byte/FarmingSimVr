@@ -52,8 +52,15 @@ public:
     bool IsFactoryAttached() const { return m_factoryAttached; }
 
     void OnPrePresent(IDXGISwapChain* swapChain);
-    void OnPresent(IDXGISwapChain* swapChain, UINT syncInterval = 0, UINT flags = 0);
-    void OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval = 0, UINT flags = 0, const DXGI_PRESENT_PARAMETERS* params = nullptr);
+    bool OnPresent(IDXGISwapChain* swapChain, UINT syncInterval = 0, UINT flags = 0);
+    bool OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval = 0, UINT flags = 0, const DXGI_PRESENT_PARAMETERS* params = nullptr);
+
+    bool IsPresentSuppressed() const { return m_lastPresentSuppressed; }
+
+    void SetPendingRenderingMode(VRRenderingMode mode) { m_pendingRenderingMode = mode; }
+    std::optional<VRRenderingMode> GetPendingRenderingMode() const { return m_pendingRenderingMode; }
+    void LatchPendingRenderingMode();
+    static DxgiProxy* GetActiveProxy();
 
     void SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue);
     static bool ExtractD3D12DeviceAndQueue(
@@ -92,6 +99,7 @@ public:
         m_targetRenderWidth = width;
         m_targetRenderHeight = height;
     }
+    void GetDecoupledTargetResolution(uint32_t& outWidth, uint32_t& outHeight) const;
     bool ApplyInitialWindowClamp(HWND hWnd);
     void EnforceClampedMirrorWindowDimensions(HWND hWnd);
     static LRESULT CALLBACK MirrorWindowSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
@@ -153,6 +161,8 @@ private:
     HMONITOR m_lastMonitor = nullptr;
     uint32_t m_targetRenderWidth = 0;
     uint32_t m_targetRenderHeight = 0;
+    bool m_lastPresentSuppressed = false;
+    std::optional<VRRenderingMode> m_pendingRenderingMode;
 
     IDXGISwapChain* m_cachedSwapChain = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;

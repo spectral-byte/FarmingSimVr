@@ -22,6 +22,27 @@ VRCompanion.vehicleRotationStates = {}
 VRCompanion.isMenuVisible = false
 VRCompanion.is2DViewActive = false
 VRCompanion.guiVisibilityInitialized = false
+
+-- Stereo Presentation Mode constants (Issue #54, Issue #56)
+VRCompanion.RENDERING_MODE_AFR = "AFR"
+VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS = "SequentialDualPass"
+VRCompanion.RENDERING_MODE_DUAL_PASS = VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+VRCompanion.renderingMode = VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+VRCompanion.subPassIndex = 0
+VRCompanion.cameraNodeLeft = nil
+VRCompanion.cameraNodeRight = nil
+VRCompanion.activeRenderingCamera = nil
+VRCompanion.missionUpdateHooked = false
+VRCompanion.origFSBaseMissionUpdate = nil
+VRCompanion.origMission00Update = nil
+VRCompanion.origMissionInstanceUpdate = nil
+VRCompanion.inMissionUpdate = false
+VRCompanion.vehicleSpeedHooked = false
+VRCompanion.origVehicleUpdateVehicleSpeed = nil
+VRCompanion.origVehicleSpeedFuncs = nil
+VRCompanion.origFerryUpdatePosition = nil
+VRCompanion.accumulatedPass1Dt = 0.0
+VRCompanion.lastMissionUpdateError = nil
 VRCompanion.hudToggleActionEventId = nil
 VRCompanion.recenterActionEventId = nil
 VRCompanion.snapLeftActionEventId = nil
@@ -100,6 +121,434 @@ VRCompanion.RECENTER_MODES = {
     VEHICLE_ONLY = "VehicleOnly"
 }
 
+function VRCompanion:getRenderingMode()
+    if VRBridge ~= nil and type(VRBridge.getRenderingMode) == "function" then
+        local mode = VRBridge.getRenderingMode()
+        if mode == "SequentialDualPass" or mode == "DualPass" or mode == 1 then
+            return self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+        elseif mode == "AFR" or mode == 0 then
+            return self.RENDERING_MODE_AFR
+        end
+    end
+    return self.renderingMode or self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+end
+
+function VRCompanion:setRenderingMode(modeStr, saveConfig)
+    local targetMode = self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+    if modeStr ~= nil then
+        local lower = string.lower(tostring(modeStr))
+        if lower == "sequentialdualpass" or lower == "dualpass" or lower == "dual" or lower == "dual_pass" or lower == "sequential" or lower == "sdp" or lower == "1" then
+            targetMode = self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+        elseif lower == "toggle" then
+            targetMode = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) 
+                and self.RENDERING_MODE_AFR 
+                or self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+        elseif lower == "afr" or lower == "alternate" or lower == "alternateframe" or lower == "0" then
+            targetMode = self.RENDERING_MODE_AFR
+        end
+    end
+
+    local oldMode = self:getRenderingMode()
+    self.renderingMode = targetMode
+
+    if VRBridge ~= nil and type(VRBridge.setRenderingMode) == "function" then
+        VRBridge.setRenderingMode(targetMode)
+    end
+
+    if oldMode ~= targetMode then
+        self:signalDiscontinuityFlush()
+        self.accumulatedPass1Dt = 0.0
+    end
+
+    print(string.format("[FS25_VR] Active VR Rendering Mode: %s", targetMode))
+
+    if saveConfig == true and type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
+
+    return targetMode
+end
+
+function VRCompanion:getSubPassIndex()
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil then
+        if type(bridge.getSubPassIndex) == "function" then
+            return bridge.getSubPassIndex()
+        elseif bridge.subPassIndex ~= nil then
+            return bridge.subPassIndex
+        end
+    end
+    return self.subPassIndex or 0
+end
+
+function VRCompanion:setSubPassIndex(idx)
+    local val = (idx or 0) % 2
+    self.subPassIndex = val
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil then
+        if type(bridge.setSubPassIndex) == "function" then
+            bridge.setSubPassIndex(val)
+        elseif bridge.subPassIndex ~= nil then
+            bridge.subPassIndex = val
+        end
+    end
+    return val
+end
+
+function VRCompanion:advanceSubPass()
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.advanceSubPass) == "function" then
+        local nextPass = bridge.advanceSubPass()
+        self.subPassIndex = nextPass
+        return nextPass
+    end
+    local current = self:getSubPassIndex()
+    local nextPass = (current == 0) and 1 or 0
+    return self:setSubPassIndex(nextPass)
+end
+
+function VRCompanion:getStereoCameraNodes(activeCam)
+    local cam = activeCam
+    if cam == nil then
+        local curVeh = self:getControlledVehicle()
+        if curVeh ~= nil then
+            cam = self:getVehicleActiveCamera(curVeh)
+        end
+    end
+    if cam == nil then
+        cam = self.activePlayerCamera
+    end
+
+    local camLeft = self.cameraNodeLeft
+    local camRight = self.cameraNodeRight
+
+    if cam ~= nil then
+        if cam.cameraNodeLeft ~= nil then
+            camLeft = cam.cameraNodeLeft
+        end
+        if cam.cameraNodeRight ~= nil then
+            camRight = cam.cameraNodeRight
+        end
+
+        -- If not yet created for this camera, initialize them
+        if camLeft == nil or camRight == nil then
+            local baseNode = (cam.firstPersonCamera ~= nil) and cam.firstPersonCamera or cam.cameraNode
+            if camLeft == nil then
+                if type(createCamera) == "function" then
+                    local fovY = (type(getFovY) == "function" and baseNode and getFovY(baseNode)) or 1.0472
+                    camLeft = createCamera("vrStereoCamLeft", fovY, 0.15, 2000.0)
+                else
+                    camLeft = (baseNode and (baseNode .. "_left")) or (baseNode or 2001)
+                end
+            end
+            if camRight == nil then
+                if type(createCamera) == "function" then
+                    local fovY = (type(getFovY) == "function" and baseNode and getFovY(baseNode)) or 1.0472
+                    camRight = createCamera("vrStereoCamRight", fovY, 0.15, 2000.0)
+                else
+                    camRight = (baseNode and (baseNode .. "_right")) or ((baseNode or 2001) + 1)
+                end
+            end
+            cam.cameraNodeLeft = camLeft
+            cam.cameraNodeRight = camRight
+        end
+    end
+
+    if camLeft == nil then
+        if type(createCamera) == "function" then
+            camLeft = createCamera("vrDefaultCamLeft", 1.0472, 0.15, 2000.0)
+        else
+            camLeft = 2001
+        end
+    end
+    if camRight == nil then
+        if type(createCamera) == "function" then
+            camRight = createCamera("vrDefaultCamRight", 1.0472, 0.15, 2000.0)
+        else
+            camRight = 2002
+        end
+    end
+
+    self.cameraNodeLeft = camLeft
+    self.cameraNodeRight = camRight
+
+    return camLeft, camRight
+end
+
+function VRCompanion:bindRenderingCamera(targetCam)
+    if targetCam == nil then return end
+    local bound = false
+    local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
+    if camMgr ~= nil and type(camMgr.setActiveCamera) == "function" then
+        local ok = pcall(camMgr.setActiveCamera, camMgr, targetCam)
+        if ok then
+            bound = true
+        end
+    end
+    if not bound then
+        local setCameraFn = setCamera or (_G and _G.setCamera)
+        if type(setCameraFn) == "function" then
+            pcall(setCameraFn, targetCam)
+        end
+    end
+    self.activeRenderingCamera = targetCam
+    if _G then
+        _G.currentCamera = targetCam
+        _G.activeCamera = targetCam
+    end
+end
+
+function VRCompanion:syncActiveEyeCamera(subPass)
+    local curVeh = self:getControlledVehicle()
+    if curVeh ~= nil then
+        local cam = self:getVehicleActiveCamera(curVeh)
+        if cam ~= nil and cam.isInside then
+            self:onVehicleCameraUpdate(cam, 0.0)
+            return
+        end
+    end
+
+    local playerCam = self:getPlayerCamera()
+    if playerCam ~= nil then
+        self:onPlayerCameraUpdate(playerCam, 0.0)
+    end
+end
+
+function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
+    if self.inMissionUpdate then
+        return origUpdateFn(missionSelf, dt, ...)
+    end
+
+    local isSequentialDualPass = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS)
+        and not self.is2DViewActive
+        and not self.isMenuVisible
+        and not self:isPassThroughMode()
+
+    if not isSequentialDualPass then
+        self.accumulatedPass1Dt = 0.0
+        return origUpdateFn(missionSelf, dt, ...)
+    end
+
+    local rawDt = dt or 0.0
+    if rawDt < 0.0 then
+        rawDt = 0.0
+    end
+
+    local subPass = self:getSubPassIndex() % 2
+
+    if subPass == 1 then
+        -- Sub-Pass 1 (Right Eye): Freeze simulation at timestamp T.
+        -- Accumulate delta time for Sub-Pass 0 of the next stereo frame to maintain 100% realtime speed.
+        self.accumulatedPass1Dt = (self.accumulatedPass1Dt or 0.0) + rawDt
+        if self.accumulatedPass1Dt > 200.0 then
+            self.accumulatedPass1Dt = 200.0
+        end
+
+        local camLeft, camRight = self:getStereoCameraNodes()
+        local targetCam = camRight
+
+        self:bindRenderingCamera(targetCam)
+        if targetCam ~= nil then
+            self:applyCameraProjection(targetCam, 1)
+        end
+
+        -- Synchronize right eye camera transforms without running engine simulation
+        self:syncActiveEyeCamera(1)
+        self:bindRenderingCamera(targetCam)
+        self:updateHudConvergence(0.0)
+
+        return nil
+    end
+
+    -- Sub-Pass 0 (Left Eye): Advance simulation with accumulated delta time.
+    local effectiveDt = rawDt + (self.accumulatedPass1Dt or 0.0)
+    self.accumulatedPass1Dt = 0.0
+    if effectiveDt > 200.0 then
+        effectiveDt = 200.0
+    end
+
+    -- Stereoscopic camera selection:
+    -- Sub-Pass 0: cameraNodeLeft is bound as active rendering camera
+    local camLeft, camRight = self:getStereoCameraNodes()
+    local targetCam = camLeft
+
+    self:bindRenderingCamera(targetCam)
+
+    -- Update camera projection for active eye
+    if targetCam ~= nil then
+        self:applyCameraProjection(targetCam, 0)
+    end
+
+    -- Run mission update with accumulated real dt under reentrancy guard and pcall protection
+    self.inMissionUpdate = true
+    local ok, res = pcall(origUpdateFn, missionSelf, effectiveDt, ...)
+    self.inMissionUpdate = false
+    if not ok then
+        if self.lastMissionUpdateError ~= tostring(res) then
+            print(string.format("[FS25_VR] [Warning] Mission update error on Sub-Pass %d (dt=%s): %s",
+                subPass, tostring(effectiveDt), tostring(res)))
+            self.lastMissionUpdateError = tostring(res)
+        end
+        res = nil
+    end
+
+    self:syncActiveEyeCamera(0)
+    self:bindRenderingCamera(targetCam)
+    self:updateHudConvergence(effectiveDt)
+
+    return res
+end
+
+function VRCompanion:hookMissionUpdate()
+    if self.missionUpdateHooked then
+        return
+    end
+
+    local hooked = false
+
+    local fsBase = FSBaseMission or (_G and _G.FSBaseMission)
+    if fsBase ~= nil and type(fsBase.update) == "function" and self.origFSBaseMissionUpdate == nil then
+        self.origFSBaseMissionUpdate = fsBase.update
+        fsBase.update = function(missionSelf, dt, ...)
+            return self:onMissionUpdate(missionSelf, dt, self.origFSBaseMissionUpdate, ...)
+        end
+        hooked = true
+    end
+
+    local m00 = Mission00 or (_G and _G.Mission00)
+    if m00 ~= nil and type(m00.update) == "function" and self.origMission00Update == nil then
+        self.origMission00Update = m00.update
+        m00.update = function(missionSelf, dt, ...)
+            return self:onMissionUpdate(missionSelf, dt, self.origMission00Update, ...)
+        end
+        hooked = true
+    end
+
+    self.missionUpdateHooked = hooked
+    if hooked then
+        print("[FS25_VR] Hooked mission update loop for Sequential Dual-Pass simulation pacing.")
+    end
+end
+
+function VRCompanion:unhookMissionUpdate()
+    local fsBase = FSBaseMission or (_G and _G.FSBaseMission)
+    if self.origFSBaseMissionUpdate ~= nil and fsBase ~= nil then
+        fsBase.update = self.origFSBaseMissionUpdate
+        self.origFSBaseMissionUpdate = nil
+    end
+
+    local m00 = Mission00 or (_G and _G.Mission00)
+    if self.origMission00Update ~= nil and m00 ~= nil then
+        m00.update = self.origMission00Update
+        self.origMission00Update = nil
+    end
+
+    local mission = g_currentMission or (_G and _G.g_currentMission)
+    if self.origMissionInstanceUpdate ~= nil and mission ~= nil then
+        mission.update = self.origMissionInstanceUpdate
+        self.origMissionInstanceUpdate = nil
+    end
+
+    self.accumulatedPass1Dt = 0.0
+    self.missionUpdateHooked = false
+    print("[FS25_VR] Unhooked mission update loop.")
+end
+
+-- Dual Eye Camera Nodes & Cyclopean Audio Listener (Issue #49)
+VRCompanion.cameraNodeLeft = nil
+VRCompanion.cameraNodeRight = nil
+VRCompanion.cyclopeanAudioListenerNode = nil
+VRCompanion.activeRenderingCameraNode = nil
+
+function VRCompanion:initDualEyeCameraNodes(referenceCamNode)
+    local createCameraFn = createCamera or (_G and _G.createCamera)
+    local createTransformGroupFn = createTransformGroup or (_G and _G.createTransformGroup)
+
+    local fovY = 1.0472
+    local nearClip = 0.15
+    local farClip = 2000.0
+
+    if referenceCamNode ~= nil and referenceCamNode ~= 0 then
+        local getFovYFn = getFovY or (_G and _G.getFovY)
+        if type(getFovYFn) == "function" then
+            local ok, f = pcall(getFovYFn, referenceCamNode)
+            if ok and f ~= nil then fovY = f end
+        end
+        local getNearClipFn = getNearClip or (_G and _G.getNearClip)
+        if type(getNearClipFn) == "function" then
+            local ok, nc = pcall(getNearClipFn, referenceCamNode)
+            if ok and nc ~= nil then nearClip = nc end
+        end
+        local getFarClipFn = getFarClip or (_G and _G.getFarClip)
+        if type(getFarClipFn) == "function" then
+            local ok, fc = pcall(getFarClipFn, referenceCamNode)
+            if ok and fc ~= nil then farClip = fc end
+        end
+    end
+
+    if self.cameraNodeLeft == nil or self.cameraNodeLeft == 0 then
+        if type(createCameraFn) == "function" then
+            self.cameraNodeLeft = createCameraFn("cameraNodeLeft", fovY, nearClip, farClip)
+        elseif type(createTransformGroupFn) == "function" then
+            self.cameraNodeLeft = createTransformGroupFn("cameraNodeLeft")
+        end
+    end
+
+    if self.cameraNodeRight == nil or self.cameraNodeRight == 0 then
+        if type(createCameraFn) == "function" then
+            self.cameraNodeRight = createCameraFn("cameraNodeRight", fovY, nearClip, farClip)
+        elseif type(createTransformGroupFn) == "function" then
+            self.cameraNodeRight = createTransformGroupFn("cameraNodeRight")
+        end
+    end
+
+    return self.cameraNodeLeft, self.cameraNodeRight
+end
+
+function VRCompanion:ensureDualEyeCameraNodes(referenceCamNode)
+    if self.cameraNodeLeft == nil or self.cameraNodeRight == nil or self.cameraNodeLeft == 0 or self.cameraNodeRight == 0 then
+        self:initDualEyeCameraNodes(referenceCamNode)
+    end
+    return self.cameraNodeLeft, self.cameraNodeRight
+end
+
+function VRCompanion:initCyclopeanAudioListener(referenceNode)
+    local createTransformGroupFn = createTransformGroup or (_G and _G.createTransformGroup)
+    local setAudioListenerFn = setAudioListener or (_G and _G.setAudioListener)
+
+    if self.cyclopeanAudioListenerNode == nil or self.cyclopeanAudioListenerNode == 0 then
+        if type(createTransformGroupFn) == "function" then
+            self.cyclopeanAudioListenerNode = createTransformGroupFn("cyclopeanAudioListenerNode")
+        end
+    end
+
+    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
+        if type(setAudioListenerFn) == "function" then
+            pcall(setAudioListenerFn, self.cyclopeanAudioListenerNode)
+        end
+    end
+
+    return self.cyclopeanAudioListenerNode
+end
+
+function VRCompanion:ensureCyclopeanAudioListener(referenceNode)
+    if self.cyclopeanAudioListenerNode == nil or self.cyclopeanAudioListenerNode == 0 then
+        self:initCyclopeanAudioListener(referenceNode)
+    end
+    return self.cyclopeanAudioListenerNode
+end
+
+function VRCompanion:signalDiscontinuityFlush()
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil then
+        if type(bridge.signalDiscontinuity) == "function" then
+            bridge.signalDiscontinuity()
+        elseif type(bridge.resetTemporalHistory) == "function" then
+            bridge.resetTemporalHistory()
+        end
+    end
+end
+
 function VRCompanion:getIs2DViewActive()
     return self.is2DViewActive == true
 end
@@ -114,6 +563,7 @@ function VRCompanion:set2DViewActive(active)
     end
 
     if wasActive ~= newActive then
+        self:signalDiscontinuityFlush()
         if newActive then
             print("[FS25_VR] Entered 2D Floating Window Mode.")
             self:restoreCameraProjectionsFor2D()
@@ -382,7 +832,11 @@ end
 function VRCompanion:getConvergenceOffset(parity, disparity)
     local targetParity = parity
     if targetParity == nil then
-        targetParity = self:getFrameParity()
+        if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then
+            targetParity = self:getSubPassIndex() % 2
+        else
+            targetParity = self:getFrameParity()
+        end
     end
 
     local targetDisparity = disparity
@@ -390,8 +844,8 @@ function VRCompanion:getConvergenceOffset(parity, disparity)
         targetDisparity = self:getConvergenceDisparity()
     end
 
-    -- Parity 0 (even, Left eye): positive offset (+Delta x)
-    -- Parity 1 (odd, Right eye): negative offset (-Delta x)
+    -- Parity / Eye index 0 (Left eye): positive offset (+Delta x)
+    -- Parity / Eye index 1 (Right eye): negative offset (-Delta x)
     local sign = (targetParity % 2 == 1) and -1.0 or 1.0
     return sign * targetDisparity
 end
@@ -687,11 +1141,16 @@ function VRCompanion:updateHudConvergence(dt)
         end
     end
 
-    -- Active AFR frame parity:
-    -- 0: Left eye (positive offset +Delta x)
-    -- 1: Right eye (negative offset -Delta x)
-    local parity = self:getFrameParity()
-    local offset = self:getConvergenceOffset(parity, self.currentConvergenceDisparity)
+    -- Stereoscopic eye convergence offset:
+    -- In Sequential Dual-Pass: locked statically to sub-pass eye index (0 = Left, 1 = Right)
+    -- In Alternate Frame Rendering (AFR): alternate on frame parity (0 = Left, 1 = Right)
+    local eyeOrParity = nil
+    if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then
+        eyeOrParity = self:getSubPassIndex() % 2
+    else
+        eyeOrParity = self:getFrameParity()
+    end
+    local offset = self:getConvergenceOffset(eyeOrParity, self.currentConvergenceDisparity)
 
     self.currentConvergenceOffset = offset
 
@@ -1006,6 +1465,19 @@ local function readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile, ...)
     return nil
 end
 
+local function readXmlString(getXmlStringFn, xmlFile, ...)
+    local keys = {...}
+    for _, k in ipairs(keys) do
+        if type(getXmlStringFn) == "function" then
+            local val = getXmlStringFn(xmlFile, k)
+            if val ~= nil and val ~= "" then
+                return tostring(val)
+            end
+        end
+    end
+    return nil
+end
+
 function VRCompanion:getUserSettingsPath()
     local getAppPathFn = getUserProfileAppPath or _G.getUserProfileAppPath
     if type(getAppPathFn) == "function" then
@@ -1025,6 +1497,7 @@ function VRCompanion:saveConfiguration(xmlPath)
     local createXmlFn = createXMLFile or _G.createXMLFile
     local setXmlFloatFn = setXMLFloat or _G.setXMLFloat
     local setXmlBoolFn = setXMLBool or _G.setXMLBool
+    local setXmlStringFn = setXMLString or _G.setXMLString
     local saveXmlFn = saveXMLFile or _G.saveXMLFile
     local deleteXmlFn = delete or _G.delete
 
@@ -1052,6 +1525,10 @@ function VRCompanion:saveConfiguration(xmlPath)
             setXmlBoolFn(xmlFile, "vrSettings.fillLevelUnderVehicle", self.fillLevelUnderVehicle == true)
             setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
             setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
+        end
+        if type(setXmlStringFn) == "function" then
+            local modeStr = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "DualPass" or "AFR"
+            setXmlStringFn(xmlFile, "vrSettings.renderingMode", modeStr)
         end
         setXmlFloatFn(xmlFile, "vrSettings.hudFillLevelGap", self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP)
         setXmlFloatFn(xmlFile, "vrSettings.snapTurnAngle", self:getSnapTurnAngleDegrees())
@@ -1157,6 +1634,14 @@ function VRCompanion:loadConfiguration(xmlPath)
                     "modDesc.vrSettings.snapTurnAngle", "modDesc.vrSettings.snapTurnAngle#value")
                 if loadedSnapAngle ~= nil and loadedSnapAngle > 0 then
                     self.snapTurnAngle = math.rad(loadedSnapAngle)
+                end
+
+                local loadedMode = readXmlString(getXmlStringFn, xmlFile,
+                    "vrSettings.renderingMode", "vrSettings.renderingMode#value",
+                    "renderingMode", "renderingMode#value",
+                    "modDesc.vrSettings.renderingMode", "modDesc.vrSettings.renderingMode#value")
+                if loadedMode ~= nil and loadedMode ~= "" then
+                    self:setRenderingMode(loadedMode, false)
                 end
 
                 if type(deleteXmlFn) == "function" then
@@ -1775,10 +2260,24 @@ function VRCompanion:loadMap(name)
 
         if handshakeResult and handshakeResult.success == true then
             self.handshakeComplete = true
-            print(string.format("[FS25_VR] Handshake successful! VRBridge detected (version: %s, mode: %s, ready: %s).",
+
+            -- Query and synchronize native rendering mode state (Issue #54)
+            local nativeMode = handshakeResult.renderingMode
+            if nativeMode == nil and type(VRBridge.getRenderingMode) == "function" then
+                nativeMode = VRBridge.getRenderingMode()
+            end
+
+            if nativeMode == "AFR" or nativeMode == 0 then
+                self.renderingMode = self.RENDERING_MODE_AFR
+            else
+                self.renderingMode = self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+            end
+
+            print(string.format("[FS25_VR] Handshake successful! VRBridge detected (version: %s, mode: %s, ready: %s, renderingMode: %s).",
                 tostring(handshakeResult.version or version),
                 tostring(handshakeResult.mode or "unknown"),
-                tostring(ready)))
+                tostring(ready),
+                tostring(self:getRenderingMode())))
         else
             self.handshakeComplete = false
             print(string.format("[FS25_VR] Handshake failed or rejected by native VRBridge (version: %s, ready: %s).",
@@ -1786,6 +2285,7 @@ function VRCompanion:loadMap(name)
                 tostring(ready)))
         end
     else
+        self.renderingMode = self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
         print("[FS25_VR] VRBridge not detected. Running in standard 2D Pass-Through Mode.")
     end
 
@@ -1818,7 +2318,13 @@ function VRCompanion:loadMap(name)
     self:hookVehicleCamera()
     self:hookPlayerCamera()
     self:hookEnterable()
+    self:hookVehicleSpeed()
     self:hookHud()
+    self:hookMissionUpdate()
+
+    -- 4a. Initialize Dual Eye Camera Nodes and Cyclopean Audio Listener (Issue #49)
+    self:initDualEyeCameraNodes()
+    self:initCyclopeanAudioListener()
 
     -- 5. Register in-engine actions (Recenter and HUD Toggle)
     self:registerActionEvents(true)
@@ -1851,6 +2357,10 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrSnapTurnAngle", "Set or query VR snap turn angle in degrees: vrSnapTurnAngle [degrees]", "consoleCommandSetSnapTurnAngle", self)
         addConsoleCommand("vr2DView", "Set or query 2D Floating Window Mode: vr2DView [true|false|toggle]", "consoleCommandSet2DView", self)
         addConsoleCommand("vrToggleView", "Toggle 2D Floating Window Mode: vrToggleView", "consoleCommandToggleView", self)
+        addConsoleCommand("vrDlssMvScale", "Set DLSS motion vector scale multiplier: vrDlssMvScale <scaleX> [scaleY]", "consoleCommandSetDlssMvScale", self)
+        addConsoleCommand("vrDlssSharpness", "Set DLSS sharpness override: vrDlssSharpness <sharpness 0.0-1.0>", "consoleCommandSetDlssSharpness", self)
+        addConsoleCommand("vrDlssPreset", "Set DLSS preset hint: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L>", "consoleCommandSetDlssPreset", self)
+        addConsoleCommand("vrRenderingMode", "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", "consoleCommandSetRenderingMode", self)
     end
 
     if self.showHudLoadNotification == true then
@@ -2203,6 +2713,107 @@ function VRCompanion:hookEnterable()
     end
 end
 
+function VRCompanion:hookVehicleSpeed()
+    if self.origVehicleSpeedFuncs == nil then
+        self.origVehicleSpeedFuncs = {}
+    end
+
+    local function hookTableSpeed(target, label)
+        if target == nil or type(target.updateVehicleSpeed) ~= "function" then
+            return
+        end
+        if self.origVehicleSpeedFuncs[target] ~= nil then
+            return
+        end
+        local origFn = target.updateVehicleSpeed
+        self.origVehicleSpeedFuncs[target] = origFn
+        target.updateVehicleSpeed = function(vehSelf, dt, ...)
+            if dt == nil or dt <= 0.00001 then
+                return
+            end
+            return origFn(vehSelf, dt, ...)
+        end
+        if label then
+            print(string.format("[FS25_VR] Hooked %s.updateVehicleSpeed for dt=0 guard.", label))
+        end
+    end
+
+    local vehClass = Vehicle or (_G and _G.Vehicle)
+    if vehClass ~= nil and type(vehClass.updateVehicleSpeed) == "function" and self.origVehicleUpdateVehicleSpeed == nil then
+        self.origVehicleUpdateVehicleSpeed = vehClass.updateVehicleSpeed
+    end
+    hookTableSpeed(vehClass, "Vehicle")
+
+    local rrClass = RailroadVehicle or (_G and _G.RailroadVehicle)
+    hookTableSpeed(rrClass, "RailroadVehicle")
+
+    local locoClass = Locomotive or (_G and _G.Locomotive)
+    hookTableSpeed(locoClass, "Locomotive")
+
+    -- Scan _G for any classes/tables with updateVehicleSpeed
+    if _G ~= nil then
+        for name, val in pairs(_G) do
+            if type(name) == "string" and type(val) == "table" and type(val.updateVehicleSpeed) == "function" then
+                if self.origVehicleSpeedFuncs[val] == nil then
+                    hookTableSpeed(val, name)
+                end
+            end
+        end
+    end
+
+    -- Scan active vehicles in g_currentMission
+    local mission = g_currentMission or (_G and _G.g_currentMission)
+    if mission ~= nil and mission.vehicles ~= nil then
+        for _, veh in pairs(mission.vehicles) do
+            if type(veh) == "table" and type(veh.updateVehicleSpeed) == "function" then
+                if self.origVehicleSpeedFuncs[veh] == nil then
+                    hookTableSpeed(veh, nil)
+                end
+            end
+        end
+    end
+
+    local ferryClass = Ferry or (_G and _G.Ferry)
+    if ferryClass ~= nil and type(ferryClass.updatePosition) == "function" and self.origFerryUpdatePosition == nil then
+        self.origFerryUpdatePosition = ferryClass.updatePosition
+        ferryClass.updatePosition = function(ferrySelf, dt, ...)
+            if dt == nil or dt <= 0.00001 then
+                return
+            end
+            return self.origFerryUpdatePosition(ferrySelf, dt, ...)
+        end
+        print("[FS25_VR] Hooked Ferry.updatePosition for dt=0 guard.")
+    end
+
+    self.vehicleSpeedHooked = true
+end
+
+function VRCompanion:unhookVehicleSpeed()
+    if self.origVehicleSpeedFuncs ~= nil then
+        for target, origFn in pairs(self.origVehicleSpeedFuncs) do
+            if target ~= nil and origFn ~= nil then
+                target.updateVehicleSpeed = origFn
+            end
+        end
+        self.origVehicleSpeedFuncs = {}
+    end
+
+    local vehClass = Vehicle or (_G and _G.Vehicle)
+    if self.origVehicleUpdateVehicleSpeed ~= nil and vehClass ~= nil then
+        vehClass.updateVehicleSpeed = self.origVehicleUpdateVehicleSpeed
+        self.origVehicleUpdateVehicleSpeed = nil
+    end
+
+    local ferryClass = Ferry or (_G and _G.Ferry)
+    if self.origFerryUpdatePosition ~= nil and ferryClass ~= nil then
+        ferryClass.updatePosition = self.origFerryUpdatePosition
+        self.origFerryUpdatePosition = nil
+    end
+
+    self.vehicleSpeedHooked = false
+    print("[FS25_VR] Unhooked Vehicle/Ferry dt=0 guards.")
+end
+
 function VRCompanion:getPlayerCameraYaw(cam)
     if not cam then return 0 end
     local getRotationFn = getRotation or (_G and _G.getRotation)
@@ -2368,13 +2979,15 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex)
         setFovY(camNode, proj.fovY)
     end
 
-    -- In VR AFR mode: keep camera centered on optical axis (0, 0) to guarantee
-    -- parallel rays at infinity and natural binocular convergence without cross-eyed disparity shear.
-    -- If allowObliqueProjection is explicitly enabled, pass the asymmetric projection offsets.
+    -- In both AFR and Sequential Dual-Pass modes: keep camera centered on optical axis (0, 0) by default to guarantee
+    -- parallel rays at infinity and natural binocular convergence without cross-eyed disparity shear, matching
+    -- OpenXrManager::SubmitFramePair's aspect-ratio matched symmetric FOV.
+    -- If allowObliqueProjection is explicitly enabled, pass asymmetric projection offsets.
     if type(setProjectionOffset) == "function" then
         local offsetX = 0
         local offsetY = 0
-        if self.allowObliqueProjection and proj.xOffset ~= nil and proj.yOffset ~= nil then
+        local allowOblique = (self.allowObliqueProjection == true)
+        if allowOblique and proj.xOffset ~= nil and proj.yOffset ~= nil then
             offsetX = proj.xOffset * (self.projectionOffsetScale or 1.0)
             offsetY = proj.yOffset * (self.projectionOffsetScale or 1.0)
         end
@@ -2542,6 +3155,7 @@ function VRCompanion:snapTurn(direction, angleOverride, curTime)
 
         self:updateVehicleCameraTrackingNode(vehCam)
         self.lastSnapTurnTime = t
+        self:signalDiscontinuityFlush()
         print(string.format("[FS25_VR] In-cab snap turn %s (%.1f deg): rotY = %.3f",
             direction < 0 and "left" or "right", math.deg(angle), vehCam.rotY))
         return true, vehCam.rotY
@@ -2569,6 +3183,7 @@ function VRCompanion:snapTurn(direction, angleOverride, curTime)
             end
 
             self.lastSnapTurnTime = t
+            self:signalDiscontinuityFlush()
             print(string.format("[FS25_VR] On-foot snap turn %s (%.1f deg): yawNode = %.3f",
                 direction < 0 and "left" or "right", math.deg(angle), newYaw))
             return true, newYaw
@@ -2628,7 +3243,10 @@ function VRCompanion:getResolvedHeadPose()
 end
 
 function VRCompanion:getActiveEyeIndex(afrFallback)
-    if afrFallback and not self.isMenuVisible and not self.is2DViewActive then
+    if not self.isMenuVisible and not self.is2DViewActive and afrFallback then
+        if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then
+            return (self:getSubPassIndex() % 2 == 1) and 1 or 0
+        end
         local parity = self:getFrameParity()
         return (parity % 2 == 1) and 1 or 0
     end
@@ -2747,10 +3365,12 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
 
     local cabTransX, cabTransY, cabTransZ = eyeTx, eyeTy, eyeTz
     local cabRotX, cabRotY, cabRotZ = pitch, yaw, roll
+    local midCabTransX, midCabTransY, midCabTransZ = tx, ty, tz
 
     if cam.headTrackingNode ~= nil and camParent ~= 0 then
         if type(localToLocalFn) == "function" then
             cabTransX, cabTransY, cabTransZ = localToLocalFn(cam.headTrackingNode, camParent, eyeTx, eyeTy, eyeTz)
+            midCabTransX, midCabTransY, midCabTransZ = localToLocalFn(cam.headTrackingNode, camParent, tx, ty, tz)
         else
             local nodeTransX, nodeTransY, nodeTransZ = 0, 0, 0
             if type(getTranslationFn) == "function" then
@@ -2761,6 +3381,11 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
             cabTransX = nodeTransX + rotTx
             cabTransY = nodeTransY + rotTy
             cabTransZ = nodeTransZ + rotTz
+
+            local rotMidTx, rotMidTy, rotMidTz = self:rotateVectorByYaw(tx, ty, tz, targetHeadRotY)
+            midCabTransX = nodeTransX + rotMidTx
+            midCabTransY = nodeTransY + rotMidTy
+            midCabTransZ = nodeTransZ + rotMidTz
         end
 
         if type(localRotationToLocalFn) == "function" then
@@ -2784,6 +3409,11 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         cabTransY = baseY + rotTy
         cabTransZ = baseZ + rotTz
 
+        local rotMidTx, rotMidTy, rotMidTz = self:rotateVectorByYaw(tx, ty, tz, totalGazeYaw)
+        midCabTransX = baseX + rotMidTx
+        midCabTransY = baseY + rotMidTy
+        midCabTransZ = baseZ + rotMidTz
+
         -- Combined head tracking rotation: total driver gaze yaw in cab + physical head yaw
         -- Vertical pitch is maintained level to the physical head horizon
         local combYaw = self:normalizeAngle(totalGazeYaw + yaw)
@@ -2791,6 +3421,66 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         cabRotX = pitch
         cabRotY = combYaw
         cabRotZ = roll
+    end
+
+    self:ensureDualEyeCameraNodes(cam.cameraNode)
+    self:ensureCyclopeanAudioListener(cam.cameraNode)
+
+    if camParent ~= nil and camParent ~= 0 and type(linkFn) == "function" and type(getParentFn) == "function" then
+        if self.cameraNodeLeft ~= nil and getParentFn(self.cameraNodeLeft) ~= camParent then
+            pcall(linkFn, camParent, self.cameraNodeLeft)
+        end
+        if self.cameraNodeRight ~= nil and getParentFn(self.cameraNodeRight) ~= camParent then
+            pcall(linkFn, camParent, self.cameraNodeRight)
+        end
+        if self.cyclopeanAudioListenerNode ~= nil and getParentFn(self.cyclopeanAudioListenerNode) ~= camParent then
+            pcall(linkFn, camParent, self.cyclopeanAudioListenerNode)
+        end
+    end
+
+    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
+        if type(setTranslationFn) == "function" then
+            setTranslationFn(self.cyclopeanAudioListenerNode, midCabTransX, midCabTransY, midCabTransZ)
+        end
+        if type(setRotationFn) == "function" then
+            setRotationFn(self.cyclopeanAudioListenerNode, cabRotX, cabRotY, cabRotZ)
+        end
+        local setAudioListenerFn = setAudioListener or (_G and _G.setAudioListener)
+        if type(setAudioListenerFn) == "function" then
+            setAudioListenerFn(self.cyclopeanAudioListenerNode)
+        end
+    end
+
+    local isStereoActive = afrFallback and not self.isMenuVisible and not self.is2DViewActive
+
+    if isStereoActive then
+        local isRightEye = (eyeIndex == 1)
+        local activeEyeCam = isRightEye and self.cameraNodeRight or self.cameraNodeLeft
+
+        if activeEyeCam ~= nil and activeEyeCam ~= 0 then
+            self:applyCameraProjection(activeEyeCam, eyeIndex)
+            if type(setTranslationFn) == "function" then
+                setTranslationFn(activeEyeCam, cabTransX, cabTransY, cabTransZ)
+            end
+            if type(setRotationFn) == "function" then
+                setRotationFn(activeEyeCam, cabRotX, cabRotY, cabRotZ)
+            end
+            self:bindRenderingCamera(activeEyeCam)
+            self.activeRenderingCameraNode = activeEyeCam
+        end
+    else
+        local targetNode = self.cameraNodeLeft or cam.cameraNode
+        if targetNode ~= nil and targetNode ~= 0 then
+            self:applyCameraProjection(targetNode, 0)
+            if type(setTranslationFn) == "function" then
+                setTranslationFn(targetNode, cabTransX, cabTransY, cabTransZ)
+            end
+            if type(setRotationFn) == "function" then
+                setRotationFn(targetNode, cabRotX, cabRotY, cabRotZ)
+            end
+            self:bindRenderingCamera(targetNode)
+            self.activeRenderingCameraNode = targetNode
+        end
     end
 
     if type(setTranslationFn) == "function" then
@@ -2878,10 +3568,12 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
 
     local finalTx, finalTy, finalTz = eyeTx, eyeTy, eyeTz
     local finalRotX, finalRotY, finalRotZ = pitch, yaw, roll
+    local finalMidTx, finalMidTy, finalMidTz = tx, ty, tz
 
     if cam.vrHeadTrackingNode ~= nil and camParent ~= 0 then
         if type(localToLocal) == "function" then
             finalTx, finalTy, finalTz = localToLocal(cam.vrHeadTrackingNode, camParent, eyeTx, eyeTy, eyeTz)
+            finalMidTx, finalMidTy, finalMidTz = localToLocal(cam.vrHeadTrackingNode, camParent, tx, ty, tz)
         end
         if type(localRotationToLocal) == "function" then
             finalRotX, finalRotY, finalRotZ = localRotationToLocal(cam.vrHeadTrackingNode, camParent, pitch, yaw, roll)
@@ -2891,9 +3583,74 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
         finalTx = (base.x or base[1] or 0) + eyeTx
         finalTy = (base.y or base[2] or 0) + eyeTy
         finalTz = (base.z or base[3] or 0) + eyeTz
+
+        finalMidTx = (base.x or base[1] or 0) + tx
+        finalMidTy = (base.y or base[2] or 0) + ty
+        finalMidTz = (base.z or base[3] or 0) + tz
+
         finalRotX = pitch
         finalRotY = yaw + math.pi
         finalRotZ = roll
+    end
+
+    self:ensureDualEyeCameraNodes(activeCamNode)
+    self:ensureCyclopeanAudioListener(activeCamNode)
+
+    if camParent ~= nil and camParent ~= 0 and type(link) == "function" and type(getParent) == "function" then
+        if self.cameraNodeLeft ~= nil and getParent(self.cameraNodeLeft) ~= camParent then
+            pcall(link, camParent, self.cameraNodeLeft)
+        end
+        if self.cameraNodeRight ~= nil and getParent(self.cameraNodeRight) ~= camParent then
+            pcall(link, camParent, self.cameraNodeRight)
+        end
+        if self.cyclopeanAudioListenerNode ~= nil and getParent(self.cyclopeanAudioListenerNode) ~= camParent then
+            pcall(link, camParent, self.cyclopeanAudioListenerNode)
+        end
+    end
+
+    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
+        if type(setTranslation) == "function" then
+            setTranslation(self.cyclopeanAudioListenerNode, finalMidTx, finalMidTy, finalMidTz)
+        end
+        if type(setRotation) == "function" then
+            setRotation(self.cyclopeanAudioListenerNode, finalRotX, finalRotY, finalRotZ)
+        end
+        local setAudioListenerFn = setAudioListener or (_G and _G.setAudioListener)
+        if type(setAudioListenerFn) == "function" then
+            setAudioListenerFn(self.cyclopeanAudioListenerNode)
+        end
+    end
+
+    local isStereoActive = afrFallback and not self.isMenuVisible and not self.is2DViewActive
+
+    if isStereoActive then
+        local isRightEye = (eyeIndex == 1)
+        local activeEyeCam = isRightEye and self.cameraNodeRight or self.cameraNodeLeft
+
+        if activeEyeCam ~= nil and activeEyeCam ~= 0 then
+            self:applyCameraProjection(activeEyeCam, eyeIndex)
+            if type(setTranslation) == "function" then
+                setTranslation(activeEyeCam, finalTx, finalTy, finalTz)
+            end
+            if type(setRotation) == "function" then
+                setRotation(activeEyeCam, finalRotX, finalRotY, finalRotZ)
+            end
+            self:bindRenderingCamera(activeEyeCam)
+            self.activeRenderingCameraNode = activeEyeCam
+        end
+    else
+        local targetNode = self.cameraNodeLeft or activeCamNode
+        if targetNode ~= nil and targetNode ~= 0 then
+            self:applyCameraProjection(targetNode, 0)
+            if type(setTranslation) == "function" then
+                setTranslation(targetNode, finalTx, finalTy, finalTz)
+            end
+            if type(setRotation) == "function" then
+                setRotation(targetNode, finalRotX, finalRotY, finalRotZ)
+            end
+            self:bindRenderingCamera(targetNode)
+            self.activeRenderingCameraNode = targetNode
+        end
     end
 
     if type(setTranslation) == "function" then
@@ -3002,9 +3759,27 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
 
     if type(setTranslationFn) == "function" then
         setTranslationFn(cam.cameraNode, cabTransX, cabTransY, cabTransZ)
+        if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
+            setTranslationFn(self.cameraNodeLeft, cabTransX, cabTransY, cabTransZ)
+        end
+        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
+            setTranslationFn(self.cameraNodeRight, cabTransX, cabTransY, cabTransZ)
+        end
+        if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
+            setTranslationFn(self.cyclopeanAudioListenerNode, cabTransX, cabTransY, cabTransZ)
+        end
     end
     if type(setRotationFn) == "function" then
         setRotationFn(cam.cameraNode, cabRotX, cabRotY, cabRotZ)
+        if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
+            setRotationFn(self.cameraNodeLeft, cabRotX, cabRotY, cabRotZ)
+        end
+        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
+            setRotationFn(self.cameraNodeRight, cabRotX, cabRotY, cabRotZ)
+        end
+        if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
+            setRotationFn(self.cyclopeanAudioListenerNode, cabRotX, cabRotY, cabRotZ)
+        end
     end
 end
 
@@ -3039,9 +3814,27 @@ function VRCompanion:realignPlayerCameraToRoot(cam)
 
     if type(setTranslation) == "function" then
         setTranslation(activeCamNode, finalTx, finalTy, finalTz)
+        if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
+            setTranslation(self.cameraNodeLeft, finalTx, finalTy, finalTz)
+        end
+        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
+            setTranslation(self.cameraNodeRight, finalTx, finalTy, finalTz)
+        end
+        if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
+            setTranslation(self.cyclopeanAudioListenerNode, finalTx, finalTy, finalTz)
+        end
     end
     if type(setRotation) == "function" then
         setRotation(activeCamNode, finalRotX, finalRotY, finalRotZ)
+        if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
+            setRotation(self.cameraNodeLeft, finalRotX, finalRotY, finalRotZ)
+        end
+        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
+            setRotation(self.cameraNodeRight, finalRotX, finalRotY, finalRotZ)
+        end
+        if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
+            setRotation(self.cyclopeanAudioListenerNode, finalRotX, finalRotY, finalRotZ)
+        end
     end
 end
 
@@ -3160,8 +3953,9 @@ end
 
 function VRCompanion:onRecenterAction()
     print("[FS25_VR] Recenter Action triggered.")
+    self:signalDiscontinuityFlush()
+    local bridge = VRBridge or (_G and _G.VRBridge)
     if self.is2DViewActive then
-        local bridge = VRBridge or (_G and _G.VRBridge)
         if bridge ~= nil and type(bridge.alignMenuQuad) == "function" then
             bridge.alignMenuQuad()
         end
@@ -3169,13 +3963,9 @@ function VRCompanion:onRecenterAction()
         return
     end
     local recenterTracking = (self.recenterVrTrackingSpace ~= false)
-    local bridge = VRBridge or (_G and _G.VRBridge)
     if recenterTracking then
         if bridge ~= nil and type(bridge.recenter) == "function" then
             bridge.recenter()
-        end
-        if bridge ~= nil and type(bridge.resetTemporalHistory) == "function" then
-            bridge.resetTemporalHistory()
         end
         if self.isMenuVisible then
             print("[FS25_VR] Menu Quad layer realigned directly in front of head pose.")
@@ -3254,6 +4044,12 @@ function VRCompanion:update(dt)
     end
     if not self.hudHooked then
         self:hookHud()
+    end
+    if not self.missionUpdateHooked then
+        self:hookMissionUpdate()
+    end
+    if not self.vehicleSpeedHooked or self.origFerryUpdatePosition == nil then
+        self:hookVehicleSpeed()
     end
 
     -- Update physical IPD-scaled HUD convergence parity across alternating AFR frames
@@ -3337,17 +4133,46 @@ function VRCompanion:deleteMap()
     -- Unhook HUD display hooks cleanly
     self:unhookHud()
 
+    -- Unhook mission update loop cleanly
+    self:unhookMissionUpdate()
+
+    -- Unhook vehicle speed guards cleanly
+    self:unhookVehicleSpeed()
+
+    self.inMissionUpdate = false
     self.handshakeComplete = false
     self.lastReportedVerdict = nil
     self.frameTicks = 0
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
     self.activePlayerCamera = nil
+    self.cameraNodeLeft = nil
+    self.cameraNodeRight = nil
+    self.activeRenderingCamera = nil
+    self.subPassIndex = 0
+    self.accumulatedPass1Dt = 0.0
     self.enterableHooked = false
     self.lastControlledVehicle = nil
     self.vehicleRotationStates = {}
     self.isMenuVisible = false
     self.guiVisibilityInitialized = false
+
+    local deleteFn = delete or (_G and _G.delete)
+    if type(deleteFn) == "function" then
+        if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
+            pcall(deleteFn, self.cameraNodeLeft)
+        end
+        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
+            pcall(deleteFn, self.cameraNodeRight)
+        end
+        if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
+            pcall(deleteFn, self.cyclopeanAudioListenerNode)
+        end
+    end
+    self.cameraNodeLeft = nil
+    self.cameraNodeRight = nil
+    self.cyclopeanAudioListenerNode = nil
+    self.activeRenderingCameraNode = nil
     self:restoreMenuBackgroundCamera()
 
     if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
@@ -3413,6 +4238,7 @@ function VRCompanion:deleteMap()
         removeConsoleCommand("vrSnapTurnAngle")
         removeConsoleCommand("vr2DView")
         removeConsoleCommand("vrToggleView")
+        removeConsoleCommand("vrRenderingMode")
     end
 end
 
@@ -3762,6 +4588,86 @@ function VRCompanion:consoleCommandToggleView()
     self:toggle2DView()
     print(string.format("[FS25_VR] 2D Floating Window Mode toggled to: %s", tostring(self.is2DViewActive)))
     return string.format("2D Floating Window Mode toggled to: %s", tostring(self.is2DViewActive))
+end
+
+function VRCompanion:consoleCommandSetDlssMvScale(scaleXStr, scaleYStr)
+    local sx = tonumber(scaleXStr)
+    if sx == nil then
+        return "Usage: vrDlssMvScale <scaleX> [scaleY] (e.g. 0.0 to eliminate stereoscopic smearing, 1.0 for default)"
+    end
+    local sy = tonumber(scaleYStr) or sx
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.setDlssMvScale) == "function" then
+        bridge.setDlssMvScale(sx, sy)
+        print(string.format("[FS25_VR] DLSS Motion Vector scale multiplier set to: X=%.2f, Y=%.2f", sx, sy))
+        return string.format("DLSS Motion Vector scale multiplier set to: X=%.2f, Y=%.2f", sx, sy)
+    else
+        return "VRBridge.setDlssMvScale is not available."
+    end
+end
+
+function VRCompanion:consoleCommandSetDlssSharpness(sharpStr)
+    local s = tonumber(sharpStr)
+    if s == nil then
+        return "Usage: vrDlssSharpness <sharpness 0.0 - 1.0> (e.g. 0.50)"
+    end
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.setDlssSharpness) == "function" then
+        bridge.setDlssSharpness(s)
+        print(string.format("[FS25_VR] DLSS Sharpness override set to: %.2f", s))
+        return string.format("DLSS Sharpness override set to: %.2f", s)
+    else
+        return "VRBridge.setDlssSharpness is not available."
+    end
+end
+
+function VRCompanion:consoleCommandSetDlssPreset(presetStr)
+    local p = tonumber(presetStr)
+    if p == nil then
+        return "Usage: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L> (e.g. 11 for Preset K)"
+    end
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.setDlssPreset) == "function" then
+        bridge.setDlssPreset(p)
+        print(string.format("[FS25_VR] DLSS Preset hint override set to: %d", p))
+        return string.format("DLSS Preset hint override set to: %d", p)
+    else
+        return "VRBridge.setDlssPreset is not available."
+    end
+end
+
+function VRCompanion:consoleCommandSetRenderingMode(modeStr)
+    local curMode = self:getRenderingMode()
+    if modeStr == nil or modeStr == "" or string.lower(tostring(modeStr)) == "status" then
+        local modeName = (curMode == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "Sequential Dual-Pass (DualPass)" or "Alternate Frame Rendering (AFR)"
+        return string.format("Current Stereo Presentation Mode: %s. Usage: vrRenderingMode <afr|dualpass|toggle>", modeName)
+    end
+
+    local low = string.lower(tostring(modeStr))
+    if low ~= "afr" and low ~= "dualpass" and low ~= "toggle" and low ~= "sequentialdualpass" and low ~= "dual" and low ~= "dual_pass" and low ~= "sequential" and low ~= "sdp" and low ~= "alternate" and low ~= "alternateframe" and low ~= "0" and low ~= "1" then
+        return "Usage: vrRenderingMode <afr|dualpass|toggle>"
+    end
+
+    local newMode = self:setRenderingMode(modeStr, true)
+    local modeLabel = (newMode == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "Sequential Dual-Pass" or "Alternate Frame Rendering (AFR)"
+    local alertMsg = string.format("Stereo Presentation Mode: %s", modeLabel)
+
+    local mission = g_currentMission or (_G and _G.g_currentMission)
+    if mission ~= nil then
+        if type(mission.addIngameNotification) == "function" then
+            pcall(function()
+                local notifType = (FSBaseMission and FSBaseMission.INGAME_NOTIFICATION_INFO) or 0
+                mission:addIngameNotification(notifType, alertMsg)
+            end)
+        elseif type(mission.showBlinkingWarning) == "function" then
+            pcall(function()
+                mission:showBlinkingWarning(alertMsg, 3000)
+            end)
+        end
+    end
+
+    print(string.format("[FS25_VR] Stereo Presentation Mode is now: %s (%s)", tostring(newMode), modeLabel))
+    return string.format("Stereo Presentation Mode set to: %s (%s, Saved)", tostring(newMode), modeLabel)
 end
 
 -- Register as an engine mod event listener if in-game environment

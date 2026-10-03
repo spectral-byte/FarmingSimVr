@@ -77,6 +77,91 @@ void SetupCameraMockGlobals(lua_State* L) {
                 return angle
             end
         }
+        if _G.setCamera == nil then
+            _G.activeCamera = 0
+            function setCamera(node)
+                _G.activeCamera = node
+            end
+        end
+        if _G.getCamera == nil then
+            function getCamera()
+                return _G.activeCamera or 0
+            end
+        end
+        if _G.setAudioListener == nil then
+            _G.activeAudioListener = 0
+            function setAudioListener(node)
+                _G.activeAudioListener = node
+            end
+        end
+        if _G.getAudioListener == nil then
+            function getAudioListener()
+                return _G.activeAudioListener or 0
+            end
+        end
+        if _G.createCamera == nil then
+            _G.cameraCount = 0
+            _G.createdCameras = {}
+            function createCamera(name, fovY, nearClip, farClip)
+                _G.cameraCount = (_G.cameraCount or 0) + 1
+                local id = 700 + _G.cameraCount
+                _G.createdCameras[id] = { name = name, fovY = fovY, nearClip = nearClip, farClip = farClip }
+                _G.cameraFovY[id] = fovY
+                if _G.nodes then
+                    _G.nodes[id] = { name = name, parent = 0, trans = {0, 0, 0}, rot = {0, 0, 0} }
+                end
+                return id
+            end
+        end
+        if _G.createTransformGroup == nil then
+            _G.transformGroupCount = 0
+            function createTransformGroup(name)
+                _G.transformGroupCount = (_G.transformGroupCount or 0) + 1
+                local id = 800 + _G.transformGroupCount
+                if _G.nodes then
+                    _G.nodes[id] = { name = name, parent = 0, trans = {0, 0, 0}, rot = {0, 0, 0} }
+                end
+                return id
+            end
+        end
+        if _G.nodeTranslations == nil then _G.nodeTranslations = {} end
+        if _G.setTranslation == nil then
+            function setTranslation(node, x, y, z)
+                _G.nodeTranslations[node] = { x = x, y = y, z = z, [1] = x, [2] = y, [3] = z }
+                if _G.nodes and _G.nodes[node] then
+                    _G.nodes[node].trans = { x, y, z }
+                end
+            end
+        end
+        if _G.getTranslation == nil then
+            function getTranslation(node)
+                if _G.nodes and _G.nodes[node] then
+                    local t = _G.nodes[node].trans or {0, 0, 0}
+                    return t[1], t[2], t[3]
+                end
+                local t = _G.nodeTranslations[node] or {0, 0, 0}
+                return t[1] or t.x or 0, t[2] or t.y or 0, t[3] or t.z or 0
+            end
+        end
+        if _G.nodeRotations == nil then _G.nodeRotations = {} end
+        if _G.setRotation == nil then
+            function setRotation(node, rx, ry, rz)
+                _G.nodeRotations[node] = { rx = rx, ry = ry, rz = rz, [1] = rx, [2] = ry, [3] = rz }
+                if _G.nodes and _G.nodes[node] then
+                    _G.nodes[node].rot = { rx, ry, rz }
+                end
+            end
+        end
+        if _G.getRotation == nil then
+            function getRotation(node)
+                if _G.nodes and _G.nodes[node] then
+                    local r = _G.nodes[node].rot or {0, 0, 0}
+                    return r[1], r[2], r[3]
+                end
+                local r = _G.nodeRotations[node] or {0, 0, 0}
+                return r[1] or r.rx or 0, r[2] or r.ry or 0, r[3] or r.rz or 0
+            end
+        end
     )luau", "=setupCameraMocks");
 }
 
@@ -714,6 +799,7 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     oxr->SetSimulatedPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     bridge.SetIpd(0.064f); // 64mm IPD -> +/- 0.032m
     ASSERT_TRUE(bridge.Inject(L));
 
@@ -783,6 +869,7 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     oxr->SetSimulatedPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     bridge.SetIpd(0.064f);
     ASSERT_TRUE(bridge.Inject(L));
 
@@ -2178,6 +2265,7 @@ TEST_F(CompanionModTest, ComputesPhysicalIpdScaledDisparityAtTargetConvergenceDe
 TEST_F(CompanionModTest, AlternatesPositiveDisparityOnLeftParityAndNegativeOnRightParity) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
     fs25vr::VRBridge bridge(oxr, nullptr);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
@@ -3672,6 +3760,1083 @@ TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerToggleViewAndDebounceHe
         assert(VRCompanion.isToggleViewKeyDown == false, "Key release must clear isToggleViewKeyDown")
     )luau", "=testKeyEventShortcuts"), 0);
 }
+
+TEST_F(CompanionModTest, ImplementsGetAndSetRenderingMode) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.RENDERING_MODE_AFR == "AFR", "RENDERING_MODE_AFR must be 'AFR'")
+        assert(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS == "SequentialDualPass", "RENDERING_MODE_SEQUENTIAL_DUAL_PASS must be 'SequentialDualPass'")
+        assert(VRCompanion.RENDERING_MODE_DUAL_PASS == "SequentialDualPass", "RENDERING_MODE_DUAL_PASS must be alias")
+        assert(type(VRCompanion.getRenderingMode) == "function", "getRenderingMode must be a function")
+        assert(type(VRCompanion.setRenderingMode) == "function", "setRenderingMode must be a function")
+
+        -- Initially SequentialDualPass
+        assert(VRCompanion:getRenderingMode() == "SequentialDualPass", "initial getRenderingMode must be 'SequentialDualPass'")
+
+        -- Switch to AFR
+        local res = VRCompanion:setRenderingMode("AFR")
+        assert(res == "AFR", "setRenderingMode('AFR') must return 'AFR'")
+        assert(VRCompanion:getRenderingMode() == "AFR", "getRenderingMode must return 'AFR'")
+        assert(VRBridge.getRenderingMode() == "AFR", "VRBridge native mode must synchronize to 'AFR'")
+
+        -- Toggle back to SequentialDualPass
+        local toggled = VRCompanion:setRenderingMode("toggle")
+        assert(toggled == "SequentialDualPass", "setRenderingMode('toggle') must toggle to 'SequentialDualPass'")
+        assert(VRCompanion:getRenderingMode() == "SequentialDualPass", "getRenderingMode must return 'SequentialDualPass'")
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass", "VRBridge native mode must synchronize to 'SequentialDualPass'")
+
+        -- Set via alias
+        VRCompanion:setRenderingMode("dual")
+        assert(VRCompanion:getRenderingMode() == "SequentialDualPass", "setRenderingMode('dual') must set SequentialDualPass")
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass", "VRBridge must reflect dual")
+    )luau", "=testRenderingMode"), 0);
+}
+
+TEST_F(CompanionModTest, QueriesNativeRenderingModeOnInitializationAndHandshake) {
+    fs25vr::VRBridge bridge;
+    // Pre-configure native state to Sequential Dual-Pass
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Initial map load should handshake and query native rendering mode
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMap"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.handshakeComplete == true, "handshake must be completed")
+        assert(VRCompanion:getRenderingMode() == "SequentialDualPass", "VRCompanion must query native state and be 'SequentialDualPass'")
+        assert(VRCompanion.renderingMode == "SequentialDualPass", "VRCompanion.renderingMode property must be 'SequentialDualPass'")
+    )luau", "=assertNativeSync"), 0);
+
+    // Verify log contains the active rendering mode
+    bool foundModeLog = false;
+    for (const auto& msg : s_capturedLogs) {
+        if (msg.find("renderingMode: SequentialDualPass") != std::string::npos ||
+            msg.find("Active VR Rendering Mode: SequentialDualPass") != std::string::npos) {
+            foundModeLog = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundModeLog);
+}
+
+TEST_F(CompanionModTest, RenderingModePersistenceAcrossMapUnload) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // First map load
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMap1"), 0);
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::SequentialDualPass);
+
+    // User switches to AFR in game
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:setRenderingMode('AFR')", "=setAFR"), 0);
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::AFR);
+
+    // Map unload
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMap"), 0);
+    // Native state must persist AFR
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::AFR);
+    EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
+
+    // Second map load
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapAlpine')", "=loadMap2"), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.handshakeComplete == true, "handshake must succeed on second map")
+        assert(VRCompanion:getRenderingMode() == "AFR", "mode must persist across map reloads")
+    )luau", "=assertPersistence"), 0);
+}
+
+TEST_F(CompanionModTest, DualPassMissionUpdatePacingAndCameraSelection) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.currentCamera = 0
+        function _G.setCamera(cam)
+            _G.currentCamera = cam
+        end
+        function _G.getCamera()
+            return _G.currentCamera
+        end
+
+        local capturedDt = nil
+        _G.FSBaseMission = {
+            update = function(self, dt)
+                capturedDt = dt
+            end
+        }
+
+        VRCompanion:loadMap("mapUS")
+        VRCompanion.handshakeComplete = true
+        VRCompanion.passThroughMode = false
+        VRCompanion.headTrackingEnabled = true
+        VRCompanion:setRenderingMode("DualPass")
+        VRCompanion.is2DViewActive = false
+        VRCompanion.isMenuVisible = false
+
+        VRCompanion.cameraNodeLeft = 5001
+        VRCompanion.cameraNodeRight = 5002
+
+        -- 1. Sub-Pass 0 (Left Eye): real dt and cameraNodeLeft
+        VRBridge.setSubPassIndex(0)
+        _G.FSBaseMission:update(16.666)
+        assert(math.abs(capturedDt - 16.666) < 0.001, "Sub-Pass 0 must receive real dt")
+        assert(_G.currentCamera == 5001, "Sub-Pass 0 must bind cameraNodeLeft (5001)")
+        assert(VRCompanion.activeRenderingCamera == 5001, "activeRenderingCamera must be 5001")
+
+        -- 2. Sub-Pass 1 (Right Eye): simulation frozen (no update called) and cameraNodeRight bound
+        capturedDt = nil
+        VRBridge.setSubPassIndex(1)
+        _G.FSBaseMission:update(16.666)
+        assert(capturedDt == nil, "Sub-Pass 1 must freeze simulation (FSBaseMission.update not invoked)")
+        assert(_G.currentCamera == 5002, "Sub-Pass 1 must bind cameraNodeRight (5002)")
+        assert(VRCompanion.activeRenderingCamera == 5002, "activeRenderingCamera must be 5002")
+
+        -- 3. Cleanup on deleteMap
+        VRCompanion:deleteMap()
+        assert(VRCompanion.missionUpdateHooked == false, "missionUpdateHooked must be false after deleteMap")
+
+        _G.FSBaseMission = nil
+    )luau", "=testDualPassPacing"), 0);
+}
+
+TEST_F(CompanionModTest, DualPassHudConvergenceLockedToSubPassEyeIndex) {
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    oxr->SetIpd(0.064f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:loadMap("mapUS")
+        VRCompanion.handshakeComplete = true
+        VRCompanion.passThroughMode = false
+        VRCompanion.headTrackingEnabled = true
+        VRCompanion:setRenderingMode("DualPass")
+        VRCompanion.is2DViewActive = false
+        VRCompanion.isMenuVisible = false
+        VRCompanion.currentConvergenceDisparity = 0.012
+
+        -- SubPass 0 (Left Eye) -> +0.012
+        VRBridge.setSubPassIndex(0)
+        local off0 = VRCompanion:getConvergenceOffset(nil, 0.012)
+        assert(math.abs(off0 - 0.012) < 0.0001, "SubPass 0 must yield +0.012")
+        VRCompanion:updateHudConvergence(0.016)
+        assert(math.abs(VRCompanion.currentConvergenceOffset - 0.012) < 0.0001, "updateHudConvergence must set +0.012 on SubPass 0")
+
+        -- SubPass 1 (Right Eye) -> -0.012
+        VRBridge.setSubPassIndex(1)
+        local off1 = VRCompanion:getConvergenceOffset(nil, 0.012)
+        assert(math.abs(off1 - (-0.012)) < 0.0001, "SubPass 1 must yield -0.012")
+        VRCompanion:updateHudConvergence(0.016)
+        assert(math.abs(VRCompanion.currentConvergenceOffset - (-0.012)) < 0.0001, "updateHudConvergence must set -0.012 on SubPass 1")
+
+        -- Mismatched frame parity does NOT affect Dual-Pass eye locking
+        VRBridge.setSubPassIndex(0)
+        local origParity = VRCompanion.getFrameParity
+        VRCompanion.getFrameParity = function() return 1 end
+        VRCompanion:updateHudConvergence(0.016)
+        assert(math.abs(VRCompanion.currentConvergenceOffset - 0.012) < 0.0001, "subPassIndex must lock to Left eye (+0.012)")
+
+        VRCompanion.getFrameParity = origParity
+        VRCompanion:deleteMap()
+    )luau", "=testDualPassHudConvergence"), 0);
+}
+
+TEST_F(CompanionModTest, DualEyeCameraNodesAndCyclopeanAudioListenerInitializedOnMapLoad) {
+    SetupCameraMockGlobals(L);
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:loadMap("testMap")
+
+        -- 1. Dual eye camera nodes must be initialized and non-nil
+        assert(VRCompanion.cameraNodeLeft ~= nil and VRCompanion.cameraNodeLeft ~= 0,
+            "VRCompanion.cameraNodeLeft must be initialized on map load")
+        assert(VRCompanion.cameraNodeRight ~= nil and VRCompanion.cameraNodeRight ~= 0,
+            "VRCompanion.cameraNodeRight must be initialized on map load")
+
+        -- 2. Left and Right camera nodes must be distinct
+        assert(VRCompanion.cameraNodeLeft ~= VRCompanion.cameraNodeRight,
+            "cameraNodeLeft and cameraNodeRight must be distinct scene-graph camera nodes")
+
+        -- 3. Dedicated Cyclopean Audio Listener node must be initialized
+        assert(VRCompanion.cyclopeanAudioListenerNode ~= nil and VRCompanion.cyclopeanAudioListenerNode ~= 0,
+            "VRCompanion.cyclopeanAudioListenerNode must be initialized on map load")
+
+        -- 4. Engine audio listener must be bound to the cyclopean audio listener node
+        assert(getAudioListener() == VRCompanion.cyclopeanAudioListenerNode,
+            "Engine audio listener must be bound to cyclopeanAudioListenerNode via setAudioListener")
+    )luau", "=testDualEyeInit"), 0);
+}
+
+TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrameParity) {
+    SetupCameraMockGlobals(L);
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
+    oxr->SetSimulatedPose(simPose);
+    oxr->SetIpd(0.064f);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    RegisterTestSetFrameParity(bridge);
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:loadMap("testMap")
+        VRCompanion:setRenderingMode("AFR")
+        VRCompanion:set2DViewActive(false)
+        VRCompanion.handshakeComplete = true
+
+        local mockVehCam = {
+            isInside = true,
+            cameraNode = 100,
+            origRotY = 0,
+            origRotX = 0,
+            origRotZ = 0,
+            rotY = 0,
+            rotX = 0,
+            rotZ = 0,
+            transX = 0,
+            transY = 1.8,
+            transZ = 0.5
+        }
+
+        local leftCam = VRCompanion.cameraNodeLeft
+        local rightCam = VRCompanion.cameraNodeRight
+        assert(leftCam ~= nil and rightCam ~= nil and leftCam ~= rightCam)
+
+        -- 1. AFR Parity 0 (Left Eye)
+        VRBridge.setFrameParity(0)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        assert(getCamera() == leftCam, "Active camera on Parity 0 must be cameraNodeLeft")
+
+        -- 2. AFR Parity 1 (Right Eye)
+        VRBridge.setFrameParity(1)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        assert(getCamera() == rightCam, "Active camera on Parity 1 must be cameraNodeRight")
+
+        -- 3. Alternating back to AFR Parity 0 (Left Eye)
+        VRBridge.setFrameParity(0)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        assert(getCamera() == leftCam, "Active camera on next Parity 0 must return to cameraNodeLeft")
+    )luau", "=testVehicleCamParitySwitch"), 0);
+}
+
+TEST_F(CompanionModTest, DualCameraNodesRetainIndependentTransformHistoryAcrossAfrCycles) {
+    SetupCameraMockGlobals(L);
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
+    oxr->SetSimulatedPose(simPose);
+    oxr->SetIpd(0.064f);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    RegisterTestSetFrameParity(bridge);
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:loadMap("testMap")
+        VRCompanion:setRenderingMode("AFR")
+        VRCompanion:set2DViewActive(false)
+        VRCompanion.handshakeComplete = true
+
+        local mockVehCam = {
+            isInside = true,
+            cameraNode = 100,
+            transX = 0, transY = 1.8, transZ = 0
+        }
+
+        local leftCam = VRCompanion.cameraNodeLeft
+        local rightCam = VRCompanion.cameraNodeRight
+
+        -- Frame 0: Left Eye (Parity 0)
+        VRBridge.setFrameParity(0)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        local l0_x, l0_y, l0_z = getTranslation(leftCam)
+
+        -- Frame 1: Right Eye (Parity 1)
+        VRBridge.setFrameParity(1)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        local r1_x, r1_y, r1_z = getTranslation(rightCam)
+        local l1_x, l1_y, l1_z = getTranslation(leftCam)
+
+        -- cameraNodeLeft must retain its previous transform state during right eye frame!
+        assert(math.abs(l1_x - l0_x) < 0.0001, "cameraNodeLeft must retain transform history on parity 1")
+        assert(math.abs(l1_y - l0_y) < 0.0001, "cameraNodeLeft Y must remain unchanged on parity 1")
+        assert(math.abs(l1_z - l0_z) < 0.0001, "cameraNodeLeft Z must remain unchanged on parity 1")
+
+        -- Right eye must have stereoscopic offset relative to left eye
+        assert(math.abs(r1_x - l0_x) > 0.01, "Right eye and left eye must have non-zero stereoscopic offset")
+
+        -- Frame 2: Left Eye (Parity 0) with forward motion
+        VRBridge.setFrameParity(0)
+        mockVehCam.transZ = 0.1
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        local l2_x, l2_y, l2_z = getTranslation(leftCam)
+        local r2_x, r2_y, r2_z = getTranslation(rightCam)
+
+        -- cameraNodeRight must retain its transform history during left eye frame!
+        assert(math.abs(r2_x - r1_x) < 0.0001, "cameraNodeRight must retain transform history on parity 0")
+
+        -- Single-eye motion vector (l2 - l0): pure translation along movement direction without horizontal jump
+        local horizontalDelta = math.abs(l2_x - l0_x)
+        assert(horizontalDelta < 0.001, "Eye-stride motion vector must have zero horizontal jump contamination")
+    )luau", "=testTransformHistoryRetention"), 0);
+}
+
+TEST_F(CompanionModTest, CyclopeanAudioListenerBoundAtNeutralHeadMidpointWithoutInterEyeJitter) {
+    SetupCameraMockGlobals(L);
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
+    oxr->SetSimulatedPose(simPose);
+    oxr->SetIpd(0.064f);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    RegisterTestSetFrameParity(bridge);
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:loadMap("testMap")
+        VRCompanion:setRenderingMode("AFR")
+        VRCompanion:set2DViewActive(false)
+        VRCompanion.handshakeComplete = true
+
+        local mockVehCam = {
+            isInside = true,
+            cameraNode = 100,
+            transX = 0, transY = 1.8, transZ = 0.5
+        }
+
+        local audioNode = VRCompanion.cyclopeanAudioListenerNode
+        assert(audioNode ~= nil and audioNode ~= 0)
+
+        -- Parity 0 (Left Eye)
+        VRBridge.setFrameParity(0)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        local a0_x, a0_y, a0_z = getTranslation(audioNode)
+        local leftCam_x, _, _ = getTranslation(VRCompanion.cameraNodeLeft)
+
+        -- Parity 1 (Right Eye)
+        VRBridge.setFrameParity(1)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        local a1_x, a1_y, a1_z = getTranslation(audioNode)
+        local rightCam_x, _, _ = getTranslation(VRCompanion.cameraNodeRight)
+
+        -- Cyclopean audio listener must be stationary at neutral midpoint between eyes across both parities
+        assert(math.abs(a1_x - a0_x) < 0.0001, "Cyclopean audio listener must not hop between eyes across frames")
+        assert(math.abs(a1_y - a0_y) < 0.0001, "Audio listener Y must remain stationary")
+        assert(math.abs(a1_z - a0_z) < 0.0001, "Audio listener Z must remain stationary")
+
+        -- Cyclopean midpoint X must be at head midpoint (0 in local space) rather than eye offsets
+        assert(math.abs(a0_x) < 0.005, "Cyclopean audio listener X must be centered at head pose midpoint")
+        assert(math.abs(leftCam_x - a0_x) > 0.01, "Left eye must be offset from cyclopean midpoint")
+        assert(math.abs(rightCam_x - a0_x) > 0.01, "Right eye must be offset from cyclopean midpoint")
+    )luau", "=testCyclopeanAudioStationary"), 0);
+}
+
+TEST_F(CompanionModTest, MonoscopicAnd2DModeBypassesDualCameraSwitching) {
+    SetupCameraMockGlobals(L);
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
+    oxr->SetSimulatedPose(simPose);
+    oxr->SetIpd(0.064f);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    RegisterTestSetFrameParity(bridge);
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:loadMap("testMap")
+        VRCompanion:set2DViewActive(true) -- Enter 2D Floating Window Mode
+
+        local mockVehCam = {
+            isInside = true,
+            cameraNode = 100,
+            transX = 0, transY = 1.8, transZ = 0.5
+        }
+
+        -- On parity 0
+        VRBridge.setFrameParity(0)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        local cam0 = getCamera()
+
+        -- On parity 1
+        VRBridge.setFrameParity(1)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        local cam1 = getCamera()
+
+        -- In 2D mode, camera must NOT alternate to right eye
+        assert(cam0 == cam1, "Camera must not alternate across frames in 2D mode (Single-Context Bypass)")
+    )luau", "=test2DModeBypassesAlternation"), 0);
+}
+
+TEST_F(CompanionModTest, DualPassSimulationFrozenWithIdenticalVehicleAndWorldCoordinates) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.currentCamera = 0
+        function _G.setCamera(cam)
+            _G.currentCamera = cam
+        end
+
+        local mockVehicle = {
+            posX = 200.0,
+            posZ = 50.0,
+            speedMs = 15.0,
+            update = function(self, dt)
+                local dtSec = (dt > 1.0) and (dt * 0.001) or dt
+                self.posX = self.posX + self.speedMs * dtSec
+            end
+        }
+
+        local mockObject = {
+            animTime = 0.0,
+            update = function(self, dt)
+                local dtSec = (dt > 1.0) and (dt * 0.001) or dt
+                self.animTime = self.animTime + dtSec
+            end
+        }
+
+        _G.FSBaseMission = {
+            controlledVehicle = mockVehicle,
+            update = function(self, dt)
+                mockVehicle:update(dt)
+                mockObject:update(dt)
+            end
+        }
+
+        VRCompanion:loadMap("mapUS")
+        VRCompanion.handshakeComplete = true
+        VRCompanion.passThroughMode = false
+        VRCompanion.headTrackingEnabled = true
+        VRCompanion:setRenderingMode("DualPass")
+        VRCompanion.cameraNodeLeft = 6001
+        VRCompanion.cameraNodeRight = 6002
+
+        -- Pass 0: real dt advances simulation
+        VRBridge.setSubPassIndex(0)
+        _G.FSBaseMission:update(33.333)
+
+        local p0VehX = mockVehicle.posX
+        local p0Anim = mockObject.animTime
+        assert(_G.currentCamera == 6001, "Pass 0 camera must be cameraNodeLeft")
+        assert(p0VehX > 200.0, "Vehicle must advance on Pass 0")
+        assert(p0Anim > 0.0, "Object must advance on Pass 0")
+
+        -- Pass 1: clamped dt = 0 freezes simulation at exact same coordinates
+        VRBridge.setSubPassIndex(1)
+        _G.FSBaseMission:update(33.333)
+
+        local p1VehX = mockVehicle.posX
+        local p1Anim = mockObject.animTime
+        assert(_G.currentCamera == 6002, "Pass 1 camera must be cameraNodeRight")
+
+        assert(p0VehX == p1VehX, string.format("Vehicle X must be identical across Pass 0 and 1: P0=%.6f, P1=%.6f", p0VehX, p1VehX))
+        assert(p0Anim == p1Anim, string.format("Object animTime must be identical across Pass 0 and 1: P0=%.6f, P1=%.6f", p0Anim, p1Anim))
+
+        VRCompanion:deleteMap()
+        _G.FSBaseMission = nil
+    )luau", "=testIdenticalCoordinates"), 0);
+}
+
+TEST_F(CompanionModTest, DeleteMapCleansUpDualCameraNodesAndCyclopeanAudioListener) {
+    SetupCameraMockGlobals(L);
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.cameraNodeLeft ~= nil)
+        assert(VRCompanion.cameraNodeRight ~= nil)
+        assert(VRCompanion.cyclopeanAudioListenerNode ~= nil)
+
+        VRCompanion:deleteMap()
+        assert(VRCompanion.cameraNodeLeft == nil, "cameraNodeLeft must be nil after deleteMap")
+        assert(VRCompanion.cameraNodeRight == nil, "cameraNodeRight must be nil after deleteMap")
+        assert(VRCompanion.cyclopeanAudioListenerNode == nil, "cyclopeanAudioListenerNode must be nil after deleteMap")
+    )luau", "=testDeleteMapCleanup"), 0);
+}
+
+TEST_F(CompanionModTest, CompanionModFlagsDiscontinuityOnSnapTurnRecenterAnd2DViewToggle) {
+    SetupCameraMockGlobals(L);
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    // Initial state: clear any initialization discontinuities
+    bridge.ConsumeDiscontinuity(0);
+    bridge.ConsumeDiscontinuity(1);
+    EXPECT_FALSE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_FALSE(bridge.HasPendingDiscontinuity(1));
+
+    // 1. Recenter Action flags discontinuity across VRBridge
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:onRecenterAction()
+    )luau", "=testRecenterDiscontinuity"), 0);
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+    bridge.ConsumeDiscontinuity(0);
+    bridge.ConsumeDiscontinuity(1);
+
+    // 2. 2D/3D Mode toggle flags discontinuity across VRBridge
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:set2DViewActive(true)
+    )luau", "=test2DViewToggleDiscontinuity"), 0);
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+    bridge.ConsumeDiscontinuity(0);
+    bridge.ConsumeDiscontinuity(1);
+
+    // Toggling back to 3D mode also flags discontinuity
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:set2DViewActive(false)
+    )luau", "=testRestore3DDiscontinuity"), 0);
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+    bridge.ConsumeDiscontinuity(0);
+    bridge.ConsumeDiscontinuity(1);
+
+    // 3. Snap Turn locomotion flags discontinuity across VRBridge
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local mockVehCam = {
+            isInside = true,
+            rotY = 0,
+            origRotY = 0
+        }
+        VRCompanion.getActiveVehicleCamera = function() return mockVehCam end
+        local ok, res = VRCompanion:snapTurnLeft()
+        assert(ok == true, "Snap turn must succeed")
+    )luau", "=testSnapTurnDiscontinuity"), 0);
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(0));
+    EXPECT_TRUE(bridge.HasPendingDiscontinuity(1));
+}
+
+TEST_F(CompanionModTest, RenderingModeXmlPersistenceRoundtripAndLoad) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local savedStrings = {}
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function(xml, key, val)
+            savedStrings[key] = val
+        end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+
+        -- 1. Verify saving SequentialDualPass writes "DualPass" to vrSettings.renderingMode
+        VRCompanion:setRenderingMode("DualPass")
+        VRCompanion:saveConfiguration("dummy.xml")
+        assert(savedStrings["vrSettings.renderingMode"] == "DualPass", 
+            string.format("Expected 'DualPass' in vrSettings.renderingMode, got '%s'", tostring(savedStrings["vrSettings.renderingMode"])))
+
+        -- 2. Verify saving AFR writes "AFR" to vrSettings.renderingMode
+        VRCompanion:setRenderingMode("AFR")
+        VRCompanion:saveConfiguration("dummy.xml")
+        assert(savedStrings["vrSettings.renderingMode"] == "AFR", 
+            string.format("Expected 'AFR' in vrSettings.renderingMode, got '%s'", tostring(savedStrings["vrSettings.renderingMode"])))
+
+        -- 3. Verify loading XML with "DualPass" restores SequentialDualPass
+        local mockXmlStore = {
+            ["vrSettings.renderingMode"] = "DualPass"
+        }
+        _G.loadXMLFile = function() return 2 end
+        _G.getXMLFloat = function() return nil end
+        _G.getXMLBool = function() return nil end
+        _G.getXMLString = function(xml, key)
+            return mockXmlStore[key]
+        end
+
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion:getRenderingMode() == "SequentialDualPass", "Must restore SequentialDualPass from XML")
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass", "VRBridge must reflect SequentialDualPass")
+
+        -- 4. Verify loading XML with "AFR" restores AFR
+        mockXmlStore["vrSettings.renderingMode"] = "AFR"
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion:getRenderingMode() == "AFR", "Must restore AFR from XML")
+        assert(VRBridge.getRenderingMode() == "AFR", "VRBridge must reflect AFR")
+
+        -- 5. Verify map load restores user settings.xml preference
+        mockXmlStore["vrSettings.renderingMode"] = "DualPass"
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion:getRenderingMode() == "SequentialDualPass", "Map load must restore SequentialDualPass from settings.xml")
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass", "VRBridge must reflect SequentialDualPass on map load")
+    )luau", "=testRenderingModeXmlRoundtrip"), 0);
+}
+
+TEST_F(CompanionModTest, RenderingModeConsoleCommandAndNotificationAlert) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        local removedCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName, target = target }
+        end
+        _G.removeConsoleCommand = function(cmd)
+            removedCommands[cmd] = true
+        end
+
+        local warningAlerts = {}
+        local ingameNotifications = {}
+        _G.g_currentMission = {
+            showBlinkingWarning = function(self, msg, duration)
+                table.insert(warningAlerts, { msg = msg, duration = duration })
+            end,
+            addIngameNotification = function(self, notifType, msg)
+                table.insert(ingameNotifications, { notifType = notifType, msg = msg })
+            end
+        }
+
+        local savedStrings = {}
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function(xml, key, val) savedStrings[key] = val end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        -- 1. Test loadMap registers vrRenderingMode console command
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrRenderingMode"] ~= nil, "vrRenderingMode console command must be registered on map load")
+        assert(registeredCommands["vrRenderingMode"].funcName == "consoleCommandSetRenderingMode", 
+            "registered callback must be consoleCommandSetRenderingMode")
+
+        -- 2. Query status with empty or 'status' argument
+        assert(type(VRCompanion.consoleCommandSetRenderingMode) == "function", "consoleCommandSetRenderingMode must be a function")
+        local statusRes = VRCompanion:consoleCommandSetRenderingMode("status")
+        assert(string.find(statusRes, "Current Stereo Presentation Mode") ~= nil, "Status response must describe current mode")
+
+        -- 3. Invalid input returns usage
+        local invalidRes = VRCompanion:consoleCommandSetRenderingMode("invalid_mode")
+        assert(string.find(invalidRes, "Usage: vrRenderingMode") ~= nil, "Invalid mode must return usage instructions")
+
+        -- 4. Switch to DualPass via console command
+        warningAlerts = {}
+        ingameNotifications = {}
+        local dualRes = VRCompanion:consoleCommandSetRenderingMode("dualpass")
+        assert(VRCompanion:getRenderingMode() == "SequentialDualPass", "Mode must be SequentialDualPass")
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass", "VRBridge must reflect SequentialDualPass")
+        assert(savedStrings["vrSettings.renderingMode"] == "DualPass", "User preference must persist to settings.xml")
+        assert(string.find(dualRes, "SequentialDualPass") ~= nil or string.find(dualRes, "Dual%-Pass") ~= nil, 
+            "Console response must report updated status")
+        assert(#warningAlerts > 0 or #ingameNotifications > 0, "In-game notification alert must be displayed on mode switch")
+
+        -- 5. Toggle mode via console command
+        warningAlerts = {}
+        ingameNotifications = {}
+        local toggleRes = VRCompanion:consoleCommandSetRenderingMode("toggle")
+        assert(VRCompanion:getRenderingMode() == "AFR", "Mode must toggle to AFR")
+        assert(VRBridge.getRenderingMode() == "AFR", "VRBridge must reflect AFR")
+        assert(savedStrings["vrSettings.renderingMode"] == "AFR", "Toggled preference must persist to settings.xml")
+        assert(#warningAlerts > 0 or #ingameNotifications > 0, "In-game notification alert must be displayed on toggle")
+
+        -- 6. Switch back to afr explicitly
+        local afrRes = VRCompanion:consoleCommandSetRenderingMode("afr")
+        assert(VRCompanion:getRenderingMode() == "AFR", "Explicit afr command must set AFR")
+
+        -- 7. Test deleteMap removes console command
+        VRCompanion:deleteMap()
+        assert(removedCommands["vrRenderingMode"] == true, "deleteMap must unregister vrRenderingMode")
+    )luau", "=testRenderingModeConsoleCommand"), 0);
+}
+
+TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDrivingAndOnFoot) {
+    SetupCameraMockGlobals(L);
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
+    oxr->SetSimulatedPose(simPose);
+    oxr->SetIpd(0.064f);
+
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
+    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    oxr->SetSimulatedProjection(1, fs25vr::OpenXrManager::ComputeProjectionFromFov(rightFov));
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    RegisterTestSetFrameParity(bridge);
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:loadMap("testMap")
+        VRCompanion:set2DViewActive(false)
+        VRCompanion.handshakeComplete = true
+
+        local mockVehCam = {
+            isInside = true,
+            cameraNode = 301,
+            origRotY = 0, origRotX = 0, origRotZ = 0,
+            rotY = 0, rotX = 0, rotZ = 0,
+            transX = 0, transY = 1.8, transZ = 0.5
+        }
+
+        local mockPlayerCam = {
+            cameraNode = 401,
+            firstPersonCamera = 401,
+            yawNode = 402,
+            vrHeadTrackingNode = nil,
+            transX = 0, transY = 1.7, transZ = 0,
+            rotY = 0, rotX = 0, rotZ = 0
+        }
+        VRCompanion.activePlayerCamera = mockPlayerCam
+
+        local leftCam = VRCompanion.cameraNodeLeft
+        local rightCam = VRCompanion.cameraNodeRight
+        local audioNode = VRCompanion.cyclopeanAudioListenerNode
+        assert(leftCam ~= nil and rightCam ~= nil and audioNode ~= nil)
+
+        VRCompanion:setRenderingMode("AFR")
+
+        -- PHASE 1: Vehicle driving in AFR mode
+        VRBridge.setFrameParity(0)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        assert(getCamera() == leftCam, "In AFR parity 0, vehicle camera must be Left")
+        local l_x, l_y, l_z = getTranslation(leftCam)
+
+        VRBridge.setFrameParity(1)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        assert(getCamera() == rightCam, "In AFR parity 1, vehicle camera must be Right")
+        local r_x, r_y, r_z = getTranslation(rightCam)
+        assert(math.abs(r_x - l_x) > 0.01, "Left and right vehicle cameras must have stereoscopic offset")
+
+        local afrAudioX, _, _ = getTranslation(audioNode)
+        assert(math.abs(afrAudioX) < 0.005, "Cyclopean audio listener must be at head center in AFR")
+
+        -- PHASE 2: Live switch to Sequential Dual-Pass via console command while driving
+        VRCompanion:consoleCommandSetRenderingMode("dualpass")
+        assert(VRCompanion:getRenderingMode() == "SequentialDualPass", "Mode must be SequentialDualPass")
+        assert(VRBridge.getRenderingMode() == "SequentialDualPass")
+        VRBridge.setFrameParity(0)
+
+        -- SubPass 0 (Left Eye)
+        VRBridge.setSubPassIndex(0)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        assert(getCamera() == leftCam, "In DualPass SubPass 0, vehicle camera must be Left")
+        local dp_lx, _, _ = getTranslation(leftCam)
+        -- In DualPass, projection offset must remain centered on optical axis to match OpenXR symmetric FOV
+        local offX0, offY0 = getProjectionOffset(leftCam)
+        assert(math.abs(offX0) < 0.0001, "Camera projection X offset must remain centered in DualPass")
+        assert(math.abs(offY0) < 0.0001, "Camera projection Y offset must remain centered in DualPass")
+
+        -- When allowObliqueProjection is explicitly enabled in DualPass, asymmetric offsets are applied
+        VRCompanion.allowObliqueProjection = true
+        VRCompanion:applyCameraProjection(leftCam, 0)
+        local oblX, _ = getProjectionOffset(leftCam)
+        assert(math.abs(oblX) > 0.001, "Oblique frustum offset must be applied when allowObliqueProjection is true")
+        VRCompanion.allowObliqueProjection = false
+
+        -- SubPass 1 (Right Eye)
+        VRBridge.setSubPassIndex(1)
+        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
+        assert(getCamera() == rightCam, "In DualPass SubPass 1, vehicle camera must be Right")
+        local dp_rx, _, _ = getTranslation(rightCam)
+        assert(math.abs(dp_rx - dp_lx) > 0.01, "Left and right vehicle cameras must have stereoscopic offset in DualPass")
+
+        -- Audio listener must remain centered during DualPass driving
+        local dpAudioX, _, _ = getTranslation(audioNode)
+        assert(math.abs(dpAudioX - afrAudioX) < 0.0001, "Audio listener must not shift when switching to DualPass")
+
+        -- PHASE 3: On-foot locomotion in Sequential Dual-Pass
+        VRCompanion.getControlledVehicle = function() return nil end
+
+        -- SubPass 0 (Left Eye)
+        VRBridge.setSubPassIndex(0)
+        VRCompanion:onPlayerCameraUpdate(mockPlayerCam, 0.016)
+        assert(getCamera() == leftCam, "In DualPass SubPass 0, player on-foot camera must be Left")
+        local foot_lx, _, _ = getTranslation(leftCam)
+        local footOffX, footOffY = getProjectionOffset(leftCam)
+        assert(math.abs(footOffX) < 0.0001, "On-foot camera projection X offset must remain centered in DualPass")
+        assert(math.abs(footOffY) < 0.0001, "On-foot camera projection Y offset must remain centered in DualPass")
+
+        -- SubPass 1 (Right Eye)
+        VRBridge.setSubPassIndex(1)
+        VRCompanion:onPlayerCameraUpdate(mockPlayerCam, 0.016)
+        assert(getCamera() == rightCam, "In DualPass SubPass 1, player on-foot camera must be Right")
+        local foot_rx, _, _ = getTranslation(rightCam)
+        assert(math.abs(foot_rx - foot_lx) > 0.01, "Left and right on-foot cameras must have stereoscopic offset in DualPass")
+
+        -- Audio listener on foot remains centered
+        local footAudioX, _, _ = getTranslation(audioNode)
+        assert(math.abs(footAudioX - dpAudioX) < 0.005, "Audio listener must remain centered during on-foot locomotion")
+
+        -- PHASE 4: Live toggle back to AFR while on-foot
+        VRCompanion:consoleCommandSetRenderingMode("toggle")
+        assert(VRCompanion:getRenderingMode() == "AFR", "Mode must toggle back to AFR")
+        assert(VRBridge.getRenderingMode() == "AFR")
+
+        VRBridge.setFrameParity(0)
+        VRCompanion:onPlayerCameraUpdate(mockPlayerCam, 0.016)
+        assert(getCamera() == leftCam, "In AFR parity 0 on-foot, camera must be Left")
+
+        VRBridge.setFrameParity(1)
+        VRCompanion:onPlayerCameraUpdate(mockPlayerCam, 0.016)
+        assert(getCamera() == rightCam, "In AFR parity 1 on-foot, camera must be Right")
+
+        VRCompanion:deleteMap()
+    )luau", "=testLiveModeSwitchingLocomotion"), 0);
+}
+
+TEST_F(CompanionModTest, VehicleSpeedAndFerryDtZeroGuardsPreventDivideByZeroException) {
+    SetupCameraMockGlobals(L);
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local vehSpeedCallCount = 0
+        local ferryCallCount = 0
+
+        Vehicle = {
+            updateVehicleSpeed = function(self, dt)
+                vehSpeedCallCount = vehSpeedCallCount + 1
+                if dt == 0 or dt == nil then
+                    error("Divide by zero error")
+                end
+                return 100 / dt
+            end
+        }
+
+        Ferry = {
+            updatePosition = function(self, dt)
+                ferryCallCount = ferryCallCount + 1
+                if dt == 0 or dt == nil then
+                    error("Divide by zero error")
+                end
+                return 50 / dt
+            end
+        }
+
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.vehicleSpeedHooked == true, "vehicleSpeedHooked must be true after loadMap")
+
+        -- 1. dt = 0 must be safely intercepted
+        local ok0, _ = pcall(function() Vehicle:updateVehicleSpeed(0.0) end)
+        assert(ok0, "Vehicle:updateVehicleSpeed(0.0) must not throw")
+        assert(vehSpeedCallCount == 0, "Original updateVehicleSpeed must not be called when dt is 0")
+
+        -- 2. dt <= 0.00001 must also be intercepted
+        local okEps, _ = pcall(function() Vehicle:updateVehicleSpeed(0.000005) end)
+        assert(okEps, "Vehicle:updateVehicleSpeed with epsilon dt must not throw")
+        assert(vehSpeedCallCount == 0, "Original updateVehicleSpeed must not be called for epsilon dt")
+
+        -- 3. Normal dt passes through
+        local spd = Vehicle:updateVehicleSpeed(16.0)
+        assert(vehSpeedCallCount == 1, "Original updateVehicleSpeed must be called for valid dt")
+        assert(math.abs(spd - (100 / 16.0)) < 0.001)
+
+        -- 4. Ferry dt = 0 must be intercepted
+        local okFerry0, _ = pcall(function() Ferry:updatePosition(0.0) end)
+        assert(okFerry0, "Ferry:updatePosition(0.0) must not throw")
+        assert(ferryCallCount == 0, "Original Ferry:updatePosition must not be called when dt is 0")
+
+        -- 5. Ferry normal dt passes through
+        Ferry:updatePosition(10.0)
+        assert(ferryCallCount == 1, "Original Ferry:updatePosition must be called for valid dt")
+
+        -- 6. deleteMap cleanly unhooks
+        VRCompanion:deleteMap()
+        assert(VRCompanion.vehicleSpeedHooked == false, "vehicleSpeedHooked must be false after deleteMap")
+
+        Vehicle = nil
+        Ferry = nil
+    )luau", "=testVehicleSpeedDtZeroGuards"), 0);
+}
+
+TEST_F(CompanionModTest, CameraManagerActiveCameraBindingEliminatesEngineWarnings) {
+    SetupCameraMockGlobals(L);
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local rawSetCameraCalled = 0
+        local managerBoundCam = nil
+
+        local origSetCamera = _G.setCamera
+        _G.setCamera = function(node)
+            rawSetCameraCalled = rawSetCameraCalled + 1
+            origSetCamera(node)
+        end
+
+        _G.g_cameraManager = {
+            setActiveCamera = function(self, cam)
+                managerBoundCam = cam
+            end
+        }
+
+        VRCompanion:bindRenderingCamera(9001)
+        assert(managerBoundCam == 9001, "g_cameraManager:setActiveCamera must be called with targetCam")
+        assert(rawSetCameraCalled == 0, "Raw setCamera must NOT be called when g_cameraManager is available")
+        assert(VRCompanion.activeRenderingCamera == 9001, "activeRenderingCamera must be 9001")
+        assert(_G.currentCamera == 9001, "_G.currentCamera must be 9001")
+        assert(_G.activeCamera == 9001, "_G.activeCamera must be 9001")
+
+        -- Cleanup
+        _G.g_cameraManager = nil
+        _G.setCamera = origSetCamera
+    )luau", "=testCameraManagerActiveCameraBinding"), 0);
+}
+
+TEST_F(CompanionModTest, SequentialDualPassSubPass1ExplicitlySynchronizesRightEyeCamera) {
+    SetupCameraMockGlobals(L);
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
+    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
+    oxr->SetSimulatedPose(simPose);
+    oxr->SetIpd(0.064f);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(scriptContent.empty());
+    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:loadMap("testMap")
+        VRCompanion:consoleCommandSetRenderingMode("dualpass")
+        assert(VRCompanion:getRenderingMode() == "SequentialDualPass")
+
+        local mockVehCam = {
+            isInside = true,
+            cameraNode = 501,
+            origRotY = 0, origRotX = 0, origRotZ = 0,
+            rotY = 0, rotX = 0, rotZ = 0,
+            transX = 0, transY = 1.8, transZ = 0.5
+        }
+
+        local mockVehicle = {
+            getActiveCamera = function(self)
+                return mockVehCam
+            end
+        }
+
+        g_currentMission = {
+            controlledVehicle = mockVehicle,
+            update = function(self, dt)
+                -- Even if vehicle update does NOT call VehicleCamera.update on dt=0:
+            end
+        }
+
+        local leftCam = VRCompanion.cameraNodeLeft
+        local rightCam = VRCompanion.cameraNodeRight
+
+        -- Sub-Pass 0: Left Eye
+        VRBridge.setSubPassIndex(0)
+        VRCompanion:syncActiveEyeCamera(0)
+        assert(getCamera() == leftCam, "Sub-Pass 0 must bind Left Camera")
+        local l_x, l_y, l_z = getTranslation(leftCam)
+
+        -- Sub-Pass 1: Right Eye (simulation paused / dt=0)
+        VRBridge.setSubPassIndex(1)
+        VRCompanion:syncActiveEyeCamera(1)
+        assert(getCamera() == rightCam, "Sub-Pass 1 must bind Right Camera")
+        local r_x, r_y, r_z = getTranslation(rightCam)
+
+        -- Right Eye must have +IPD offset relative to Left Eye
+        assert(math.abs((r_x - l_x) - 0.064) < 0.005, string.format("Right eye must have +0.064m IPD offset relative to Left: L=%.4f, R=%.4f", l_x, r_x))
+
+        VRCompanion:deleteMap()
+        g_currentMission = nil
+    )luau", "=testDualPassSubPass1SyncActiveEyeCamera"), 0);
+}
+
+
 
 
 

@@ -491,6 +491,234 @@ TEST(DxgiProxyTest, OnPresentCopiesLeftEyeOnFrame0AndRightEyeOnFrame1WithPairSub
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u); // parity advanced back to 0
 }
 
+TEST(DxgiProxyTest, SequentialDualPassSubPass0SuppressesPresentAndAdvancesSubPass) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameIndex(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+
+    // Sub-Pass 0 (Left Eye): copies eye 0, suppresses physical DXGI present, advances subPassIndex to 1 within the same logical frame
+    bool presented = proxy.OnPresent(nullptr, 0, 0);
+
+    EXPECT_FALSE(presented);
+    EXPECT_TRUE(proxy.IsPresentSuppressed());
+    EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_FALSE(openXrManager->GetEyeSwapchain(1).hasCopiedFrame);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(mockDispatch->endFrameCalls, 0u);
+    EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+    EXPECT_EQ(vrBridge->GetFrameIndex(), 0u); // Frame index remains on the same logical frame
+}
+
+TEST(DxgiProxyTest, SequentialDualPassSubPass1SubmitsPairAndExecutesPresent) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // Sub-Pass 0 (Left Eye)
+    EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
+    EXPECT_EQ(vrBridge->GetFrameIndex(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+
+    // Sub-Pass 1 (Right Eye): copies eye 1, submits pair, executes physical present, resets subPassIndex to 0 and advances logical frame
+    bool presented = proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_TRUE(presented);
+    EXPECT_FALSE(proxy.IsPresentSuppressed());
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
+    EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameIndex(), 1u); // Exactly 1 logical frame boundary completed
+}
+
+TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
+    s_mockPresentCalls = 0;
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    std::vector<void*> vtable(30, nullptr);
+    vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
+    vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+    vtable[2] = reinterpret_cast<void*>(&MockRelease);
+    vtable[7] = reinterpret_cast<void*>(&MockGetDevice);
+    vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
+    vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
+    vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    MockComObject mockSwapChain{ vtable.data() };
+
+    ASSERT_TRUE(proxy.AttachSwapChain(reinterpret_cast<IDXGISwapChain*>(&mockSwapChain)));
+    auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
+    void** hookedVTable = *reinterpret_cast<void***>(pSwapChain);
+    auto pfnPresent = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(hookedVTable[kPresentVTableSlot]);
+
+    // Sub-Pass 0: returns S_OK, physical present call is suppressed (s_mockPresentCalls remains 0)
+    HRESULT hr0 = pfnPresent(pSwapChain, 1, 0);
+    EXPECT_EQ(hr0, S_OK);
+    EXPECT_EQ(s_mockPresentCalls, 0);
+    EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
+    EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+
+    // Sub-Pass 1: returns S_OK, physical present call executes (s_mockPresentCalls increments), pair submitted
+    HRESULT hr1 = pfnPresent(pSwapChain, 1, 0);
+    EXPECT_EQ(hr1, S_OK);
+    EXPECT_GT(s_mockPresentCalls, 0);
+    EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+
+    proxy.DetachAll();
+}
+
+TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryFromSequentialDualPassToAfr) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // Sub-Pass 0
+    EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
+
+    // Mode change requested during Sub-Pass 0
+    proxy.SetPendingRenderingMode(VRRenderingMode::AFR);
+    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::AFR);
+    // Mode must NOT have changed yet because compositor frame is mid-pair
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
+
+    // Sub-Pass 1 completes the pair
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+
+    // Completed frame boundary: pending mode is latched atomically
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
+    EXPECT_FALSE(proxy.GetPendingRenderingMode().has_value());
+    EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+}
+
+TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryFromAfrToSequentialDualPass) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::AFR);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // Queue pending mode change to SequentialDualPass
+    proxy.SetPendingRenderingMode(VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
+
+    // AFR Frame 0 (parity = 0, Left Eye): does NOT complete pair
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+    // Mode must NOT be latched yet!
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
+    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
+
+    // AFR Frame 1 (parity = 1, Right Eye): completes pair and calls SubmitFramePair()
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+
+    // Completed frame boundary: pending mode is latched atomically
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
+    EXPECT_FALSE(proxy.GetPendingRenderingMode().has_value());
+    EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // Next pass is now Dual-Pass Sub-Pass 0: suppresses present!
+    EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_TRUE(proxy.IsPresentSuppressed());
+    EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
+}
+
+TEST(DxgiProxyTest, LuauSetRenderingModeQueuesPendingModeWhenProxyActiveAndLatchesOnBoundary) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    ASSERT_TRUE(vrBridge->Inject(L));
+
+    // Sub-Pass 0 (Left Eye)
+    EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
+
+    // Companion Mod / Luau calls VRBridge.setRenderingMode("AFR") mid-pair
+    lua_getglobal(L, "VRBridge");
+    lua_getfield(L, -1, "setRenderingMode");
+    lua_pushstring(L, "AFR");
+    ASSERT_EQ(lua_pcall(L, 1, 0, 0), 0);
+    lua_pop(L, 1); // pop VRBridge
+
+    // Mode is queued into DxgiProxy::m_pendingRenderingMode and NOT latched mid-pair
+    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::AFR);
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
+
+    // Sub-Pass 1 (Right Eye) completes the pair
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+
+    // Latched strictly on completed compositor frame boundary
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
+    EXPECT_FALSE(proxy.GetPendingRenderingMode().has_value());
+
+    lua_close(L);
+}
+
 TEST(DxgiProxyTest, AttachSwapChainHooksPresentAndInvokesOnPresent) {
     s_mockPresentCalls = 0;
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
@@ -502,6 +730,7 @@ TEST(DxgiProxyTest, AttachSwapChainHooksPresentAndInvokesOnPresent) {
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::AFR);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
 
     std::vector<void*> vtable(30, nullptr);
@@ -591,6 +820,7 @@ TEST(DxgiProxyTest, OnPresentGatesAfrPacingBehindTelemetryProbe) {
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, probe);
     vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::AFR);
     DxgiProxy proxy(nullptr, openXrManager, nullptr, probe, nullptr, vrBridge);
 
     // In native stereo mode, OnPresent submits rendered stereo frames directly on every frame without suppression
