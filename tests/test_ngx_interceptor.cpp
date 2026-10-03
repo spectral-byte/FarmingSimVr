@@ -316,8 +316,8 @@ TEST_F(NgxInterceptorTest, DetachAllResetsDlssTuningOverridesToDefaults) {
     EXPECT_EQ(interceptor.GetDlssPresetOverride(), NVSDK_NGX_DLSS_Hint_Render_Preset_K);
     EXPECT_FLOAT_EQ(interceptor.GetSharpnessOverride(), 0.50f);
     EXPECT_TRUE(interceptor.IsForceSharpnessOverride());
-    EXPECT_FLOAT_EQ(interceptor.GetMvScaleMultiplierX(), NgxInterceptor::kDefaultMvScaleMultiplier);
-    EXPECT_FLOAT_EQ(interceptor.GetMvScaleMultiplierY(), NgxInterceptor::kDefaultMvScaleMultiplier);
+    EXPECT_FLOAT_EQ(interceptor.GetMvScaleMultiplierX(), NgxInterceptor::kDefaultAfrMvScale);
+    EXPECT_FLOAT_EQ(interceptor.GetMvScaleMultiplierY(), NgxInterceptor::kDefaultAfrMvScale);
 }
 
 TEST_F(NgxInterceptorTest, SharpnessAndPresetOverridesAppliedToBothContextsInDualPass) {

@@ -410,8 +410,8 @@ void NgxInterceptor::DetachAll() {
     m_dlssPresetOverride = kDefaultDlssPresetOverride;
     m_sharpnessOverride = kDefaultSharpnessOverride;
     m_forceSharpnessOverride = kDefaultForceSharpnessOverride;
-    m_mvScaleMultiplierX = kDefaultMvScaleMultiplier;
-    m_mvScaleMultiplierY = kDefaultMvScaleMultiplier;
+    m_mvScaleMultiplierX = kDefaultAfrMvScale;
+    m_mvScaleMultiplierY = kDefaultAfrMvScale;
     m_lastRenderingMode.store(-1);
     m_internalDiscontinuityPendingLeft.store(false);
     m_internalDiscontinuityPendingRight.store(false);
@@ -765,6 +765,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
 
     const NVSDK_NGX_Handle* target = nullptr;
     uint32_t contextIndex = 0;
+    bool singleContextBypass = false;
 
     if (interceptor.IsVirtualHandle(InFeatureHandle)) {
         auto* vHandle = interceptor.GetVirtualHandle(InFeatureHandle);
@@ -774,6 +775,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         } else if (interceptor.IsSingleContextBypassActive()) {
             target = vHandle->hLeft;
             contextIndex = 0;
+            singleContextBypass = true;
         } else {
             uint32_t eyeIndex = isDualPass ? interceptor.GetActiveDualPassEyeIndex()
                                            : (bridge ? bridge->GetFrameParity() : 0);
@@ -832,20 +834,23 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         }
     }
 
+    // Eye-stride compensation only applies when consecutive evaluations of a context
+    // are two frames apart (AFR). SDP and the monoscopic single-context bypass are 1.0x.
+    bool eyeStride = !isDualPass && !singleContextBypass;
     float prevScaleX = 1.0f, prevScaleY = 1.0f;
-    bool hadPrevScaleX = false, hadPrevScaleY = false;
-    float scaleMulX = isDualPass ? 1.0f : interceptor.GetMvScaleMultiplierX();
-    float scaleMulY = isDualPass ? 1.0f : interceptor.GetMvScaleMultiplierY();
+    float scaleMulX = eyeStride ? interceptor.GetMvScaleMultiplierX() : 1.0f;
+    float scaleMulY = eyeStride ? interceptor.GetMvScaleMultiplierY() : 1.0f;
+    bool wroteScale = false;
     if (mutableParams) {
-        if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_MV_Scale_X, &prevScaleX))) {
-            hadPrevScaleX = true;
-        }
-        if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &prevScaleY))) {
-            hadPrevScaleY = true;
-        }
-        if (scaleMulX != 1.0f || scaleMulY != 1.0f || hadPrevScaleX || hadPrevScaleY) {
+        // An absent MV scale means 1.0 to DLSS, which is also what we restore it to.
+        float scale = 1.0f;
+        if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_MV_Scale_X, &scale))) prevScaleX = scale;
+        scale = 1.0f;
+        if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &scale))) prevScaleY = scale;
+        if (scaleMulX != 1.0f || scaleMulY != 1.0f) {
             mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX * scaleMulX);
             mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY * scaleMulY);
+            wroteScale = true;
         }
     }
 
@@ -899,9 +904,10 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         }
     }
 
-    if (mutableParams) {
-        if (hadPrevScaleX) mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX);
-        if (hadPrevScaleY) mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY);
+    // Always undo our write so a reused parameter block never compounds the multiplier
+    if (wroteScale) {
+        mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX);
+        mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY);
     }
 
     return res;

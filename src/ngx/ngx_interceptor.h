@@ -136,7 +136,9 @@ public:
     static constexpr int kDefaultDlssPresetOverride = NVSDK_NGX_DLSS_Hint_Render_Preset_K;
     static constexpr float kDefaultSharpnessOverride = 0.50f;
     static constexpr bool kDefaultForceSharpnessOverride = true;
-    static constexpr float kDefaultMvScaleMultiplier = 0.0f;
+    // Eye-Stride Motion Vector compensation under AFR (ADR-0015). Overridable
+    // via SetMvScaleMultiplier; SDP always evaluates at 1.0x.
+    static constexpr float kDefaultAfrMvScale = 2.0f;
 
     int GetDlssPresetOverride() const { return m_dlssPresetOverride; }
     void SetDlssPresetOverride(int preset) { m_dlssPresetOverride = preset; }
@@ -174,8 +176,8 @@ private:
     int m_dlssPresetOverride = kDefaultDlssPresetOverride;
     float m_sharpnessOverride = kDefaultSharpnessOverride;
     bool m_forceSharpnessOverride = kDefaultForceSharpnessOverride;
-    float m_mvScaleMultiplierX = kDefaultMvScaleMultiplier;
-    float m_mvScaleMultiplierY = kDefaultMvScaleMultiplier;
+    float m_mvScaleMultiplierX = kDefaultAfrMvScale;
+    float m_mvScaleMultiplierY = kDefaultAfrMvScale;
     std::atomic<uint64_t> m_evalCount{0};
 
     std::atomic<int> m_lastRenderingMode{-1};

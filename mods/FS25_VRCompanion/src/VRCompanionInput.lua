@@ -525,7 +525,7 @@ end
 function VRCompanion:consoleCommandSetDlssMvScale(scaleXStr, scaleYStr)
     local sx = tonumber(scaleXStr)
     if sx == nil then
-        return "Usage: vrDlssMvScale <scaleX> [scaleY] (e.g. 0.0 to eliminate stereoscopic smearing, 1.0 for default)"
+        return "Usage: vrDlssMvScale <scaleX> [scaleY] (default 2.0 under AFR; 1.0 disables eye-stride compensation)"
     end
     local sy = tonumber(scaleYStr) or sx
     local bridge = VRBridge or (_G and _G.VRBridge)

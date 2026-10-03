@@ -1108,6 +1108,130 @@ TEST_F(DlssEvaluationTest, MotionVectorScaleMultiplierAppliedDuringEvaluate) {
     MockReleaseFeature(virtualHandle);
 }
 
+TEST_F(DlssEvaluationTest, AfrDefaultsMotionVectorScaleTo2xWithoutOverride) {
+    auto& interceptor = NgxInterceptor::Instance();
+    interceptor.AttachDirect(MockCreateFeature, MockReleaseFeature, &MockEvaluateFeature);
+    interceptor.SetVRBridge(&VRBridge::Instance());
+    ASSERT_EQ(VRBridge::Instance().GetRenderingMode(), VRRenderingMode::AFR);
+
+    NgxParameterImpl createParams;
+    createParams.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    createParams.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(interceptor.Intercept_CreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &createParams, &virtualHandle), NVSDK_NGX_Result_Success);
+
+    NgxParameterImpl evalParams;
+    evalParams.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    evalParams.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    evalParams.Set(NVSDK_NGX_Parameter_MV_Scale_X, 0.5f);
+    evalParams.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 0.25f);
+
+    ASSERT_EQ(interceptor.Intercept_EvaluateFeature(nullptr, virtualHandle, &evalParams, nullptr), NVSDK_NGX_Result_Success);
+
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
+    ASSERT_EQ(s_evaluatedMvScaleY.size(), 1u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], 1.0f);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[0], 0.5f);
+
+    float restoredX = 0.0f, restoredY = 0.0f;
+    EXPECT_EQ(evalParams.Get(NVSDK_NGX_Parameter_MV_Scale_X, &restoredX), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(evalParams.Get(NVSDK_NGX_Parameter_MV_Scale_Y, &restoredY), NVSDK_NGX_Result_Success);
+    EXPECT_FLOAT_EQ(restoredX, 0.5f);
+    EXPECT_FLOAT_EQ(restoredY, 0.25f);
+
+    MockReleaseFeature(virtualHandle);
+}
+
+TEST_F(DlssEvaluationTest, AfrDefaultScaleDoesNotCompoundOnReusedParametersWithoutMvScale) {
+    auto& interceptor = NgxInterceptor::Instance();
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    auto& bridge = VRBridge::Instance();
+    interceptor.SetVRBridge(&bridge);
+
+    // The game never sets MV.Scale and reuses the same parameter block every frame
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
+
+    for (uint32_t frame = 0; frame < 3; ++frame) {
+        bridge.SetFrameParity(frame % 2);
+        EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+    }
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 3u);
+    for (size_t i = 0; i < 3; ++i) {
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[i], NgxInterceptor::kDefaultAfrMvScale);
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[i], NgxInterceptor::kDefaultAfrMvScale);
+    }
+
+    // Switching to SDP on the same block must evaluate at 1.0x, not a leftover 2.0x
+    bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    bridge.SetSubPassIndex(0);
+    EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 4u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[3], 1.0f);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[3], 1.0f);
+
+    MockReleaseFeature(virtualHandle);
+}
+
+TEST_F(DlssEvaluationTest, SingleContextBypassEvaluatesAt1xUnderAfr) {
+    auto& interceptor = NgxInterceptor::Instance();
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    auto& bridge = VRBridge::Instance();
+    interceptor.SetVRBridge(&bridge);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_X, 0.5f);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 0.5f);
+
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
+
+    // 2D Floating Window and GUI menu frames are monoscopic and one frame apart
+    bridge.Set2DViewActive(true);
+    EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+    bridge.Set2DViewActive(false);
+    bridge.SetMenuVisible(true);
+    EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 2u);
+    for (size_t i = 0; i < 2; ++i) {
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[i], 0.5f);
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[i], 0.5f);
+    }
+
+    MockReleaseFeature(virtualHandle);
+}
+
+TEST_F(DlssEvaluationTest, SequentialDualPassEvaluatesAt1xByDefault) {
+    auto& interceptor = NgxInterceptor::Instance();
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    auto& bridge = VRBridge::Instance();
+    interceptor.SetVRBridge(&bridge);
+    bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_X, 0.5f);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 0.5f);
+
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
+    bridge.SetSubPassIndex(0);
+    EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], 0.5f);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[0], 0.5f);
+
+    MockReleaseFeature(virtualHandle);
+}
+
 TEST_F(DlssEvaluationTest, SequentialDualPassSubPassRoutingRoutesLeftAndRightWithinSameFrame) {
     auto& interceptor = NgxInterceptor::Instance();
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
