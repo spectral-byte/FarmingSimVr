@@ -1,0 +1,225 @@
+# Farming Simulator 25 VR (FS25 VR)
+
+[![Tests](https://img.shields.io/badge/tests-286%20passed-brightgreen.svg)]()
+[![OpenXR](https://img.shields.io/badge/OpenXR-1.1-blue.svg)]()
+[![DirectX](https://img.shields.io/badge/Direct3D-12-orange.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey.svg)]()
+[![Release](https://img.shields.io/badge/release-v1.0.0-success.svg)](https://github.com/jacoch17/FarmingSimVr/releases)
+
+High-performance virtual reality modding architecture for **Farming Simulator 25** running on GIANTS Engine 10 under Direct3D 12. Seamlessly interfaces GIANTS Engine 10 with any standard OpenXR runtime (Meta Quest Link/AirLink, Virtual Desktop, SteamVR, Pimax, Bigscreen Beyond).
+
+---
+
+## Architecture Overview
+
+FS25 VR is built as a hybrid two-tier architecture:
+
+1. **Native Direct3D 12 Proxy Injector (`dxgi.dll`)**:
+   - Intercepts DXGI swapchain presentation and hooks into the DirectX 12 rendering pipeline.
+   - Initializes and manages the OpenXR session lifecycle, reference spaces, swapchain images, and compositor submission.
+   - Virtualizes temporal upscalers (NVIDIA DLSS / NGX) with dual feature contexts to completely eliminate stereoscopic history ghosting.
+   - Provides an OpenXR floating quad layer for 2D UI menus and dialogs with hardware-accurate alpha-blended mouse cursor injection.
+   - Automatically decouples desktop mirror window rendering from native headset display resolution.
+   - Intercepts the in-process Luau VM state and injects the global `VRBridge` state and synchronization table.
+
+2. **In-Engine Luau Companion Mod (`FS25_VRCompanion.zip`)**:
+   - Executes directly inside GIANTS Engine 10's Luau environment.
+   - Consumes 6DOF head poses and asymmetric perspective projections from `VRBridge`.
+   - Manages dual eye camera nodes and cyclopean spatial audio listener alignment.
+   - Coordinates Sequential Dual-Pass (SDP) and Alternate Frame Rendering (AFR) pipelines.
+   - Features comprehensive VR HUD anchoring with configurable insets and IPD-scaled stereoscopic convergence depth.
+   - Implements in-engine snap turn locomotion, 2D floating window view toggling, and reference space recentering.
+
+```
+       +-------------------------------------------------------------+
+       |                  GIANTS Engine 10 (FS25)                    |
+       |                                                             |
+       |  +------------------------+      +-----------------------+  |
+       |  |  FS25_VRCompanion.zip  |      |   Direct3D 12 Engine  |  |
+       |  |   (In-Engine Luau)     |      |      Render Loop      |  |
+       |  +-----------+------------+      +-----------+-----------+  |
+       +--------------|-------------------------------|--------------+
+                      |                               |
+          VRBridge    | Interception                  | DXGI Present
+          State Table |                               | Interception
+                      v                               v
+       +-------------------------------------------------------------+
+       |                      dxgi.dll (Proxy)                       |
+       |                                                             |
+       |  +-------------------+  +------------------+  +----------+  |
+       |  | Luau Interceptor  |  | Virtual NGX DLSS |  | D3D12    |  |
+       |  | & VRBridge Sync   |  | Dual Context     |  | Pipeline |  |
+       |  +-------------------+  +------------------+  +----+-----+  |
+       +----------------------------------------------------|--------+
+                                                            |
+                                               xrEndFrame   v
+                                             +-----------------------+
+                                             |     OpenXR Runtime    |
+                                             |  (Quest / SteamVR)    |
+                                             +-----------------------+
+```
+
+---
+
+## Key Features
+
+- **Stereo Presentation Modes**:
+  - **Sequential Dual-Pass (SDP)**: Renders left and right eye perspectives sequentially within a single logical compositor frame. The right sub-pass clamps engine delta time to zero ($\Delta t = 0$), freezing simulation, physics, and foliage wind while eliminating in-engine TAA ghosting and DLSS history smearing. Recommended for high-end systems (RTX 3080/4080/4090).
+  - **Alternate Frame Rendering (AFR)**: Alternates left and right eye perspectives on sequential engine frames for lightweight GPU load on midrange graphics cards.
+  - Dynamically switchable via console command or configuration settings with seamless discontinuity flushing.
+- **6DOF Head Tracking**: Positional and rotational tracking for both on-foot locomotion and vehicle cockpits with collinear translation and decoupled look yaw rotation.
+- **Oblique Perspective Projection**: Asymmetric projection matrices computed per eye directly from headset display optics and FOV.
+- **Temporal Upscaler Virtualization**:
+  - Isolated left and right `NVSDK_NGX_Handle` instances.
+  - Context-aware motion vector scaling ($1.0\times$ in Dual-Pass, $2.0\times$ in AFR).
+  - Synchronous discontinuity reset on teleports, snap turns, and view transitions.
+- **Dynamic In-Engine VR HUD**:
+  - Normalized viewport insets contract interface elements into the headset's optical sweet spot.
+  - Physical IPD-scaled stereoscopic convergence depth prevents eye strain.
+  - Clean vertical stacking of fill levels and machine telemetry.
+  - Three-stage HUD display cycle: **Full HUD** $\rightarrow$ **Streamlined Telemetry** $\rightarrow$ **Hidden**.
+- **Floating Quad Layer for Menus**:
+  - 2D menus, title screen, and map dialogs render cleanly onto a floating 3D quad layer in OpenXR space.
+  - Alpha-blended hardware mouse cursor projected accurately onto the floating quad.
+  - Dynamic quad centering and 6DOF background showroom tracking.
+- **In-Engine 2D View Toggle**: Instant hotkey toggle between full 3D VR and a 2D floating virtual screen for comfortable cutscene or menu viewing.
+- **Snap Turn Locomotion**: Instant rotational increments (configurable 30°, 45°, 90°) for both on-foot walking and in-cab vehicle driving.
+- **Desktop Mirror Window Decoupling**: Renders at native headset resolution while maintaining an unscaled, clamped desktop mirror window without aspect ratio distortion.
+
+---
+
+## Installation Guide
+
+### System Requirements
+
+- **Operating System**: Windows 10 or 11 (64-bit)
+- **Game**: Farming Simulator 25 (Direct3D 12)
+- **VR Headset**: Any PC VR headset with OpenXR support:
+  - Meta Quest 2 / 3 / Pro (via Quest Link, AirLink, or Virtual Desktop)
+  - Valve Index, HTC Vive, Bigscreen Beyond (via SteamVR)
+  - Pimax headsets (via PimaxXR / OpenXR runtime)
+- **Software Prerequisites**: Microsoft Visual C++ 2015–2022 Redistributable (x64)
+
+### Step 1: Install the Native Injector (`dxgi.dll`)
+
+1. Locate your Farming Simulator 25 installation folder:
+   - **Steam**: `C:\Program Files (x86)\Steam\steamapps\common\Farming Simulator 25\`
+   - **GIANTS Standalone**: `C:\Program Files\Farming Simulator 2025\`
+   - **Epic Games**: `C:\Program Files\Epic Games\FarmingSimulator25\`
+2. Open the **`x64`** subdirectory (where `FarmingSimulator2025Game.exe` is located).
+3. Copy **`dxgi.dll`** into this **`x64`** folder.
+
+> [!NOTE]
+> `dxgi.dll` acts as a DirectX 12 proxy library. To uninstall or disable VR, simply rename or delete `dxgi.dll` from the `x64` folder.
+
+### Step 2: Install the Companion Mod (`FS25_VRCompanion.zip`)
+
+1. Locate your Farming Simulator 25 mods directory:
+   - `Documents\My Games\FarmingSimulator2025\mods\`
+2. Copy **`FS25_VRCompanion.zip`** into this `mods` directory.
+   - **Do NOT unzip this file!** Farming Simulator reads mod archives directly in `.zip` format.
+
+### Step 3: Launch the Game
+
+1. Connect your VR headset and verify your OpenXR runtime is running (e.g. Meta Quest Link app, SteamVR, or Virtual Desktop).
+2. Launch Farming Simulator 25 normally (e.g. from Steam or desktop shortcut).
+3. When loading or starting a Career / Savegame, make sure **FS25 VR Companion Mod** is checked / enabled in the Mod Selection list.
+4. Put on your headset and enter the virtual farm!
+
+---
+
+## Controls and Keybindings
+
+| Action | Keyboard Binding | Gamepad Binding | Description |
+| :--- | :--- | :--- | :--- |
+| **Recenter VR View** | `NumPad 5` | `R3 / Right Stick Click (Button 11)` | Re-zeros head translation and tracking space |
+| **Toggle VR View Mode** | `Right Ctrl + V` or `NumPad 0` | `L3 / Left Stick Click (Button 9)` | Toggles between 3D VR and 2D Floating Window |
+| **Toggle VR HUD Mode** | `Right Ctrl + H` | `Button 10` | Cycles Full $\rightarrow$ Streamlined $\rightarrow$ Hidden HUD |
+| **VR Snap Turn Left** | `NumPad 4` | `LB / Left Bumper (Button 5)` | Instant left rotation increment |
+| **VR Snap Turn Right** | `NumPad 6` | `RB / Right Bumper (Button 6)` | Instant right rotation increment |
+
+> All keybindings can also be customized in the in-game Controls Options menu under the **FS25 VR** category.
+
+---
+
+## Settings & Console Commands
+
+VR settings are automatically persisted to:  
+`Documents\My Games\FarmingSimulator2025\modSettings\FS25_VRCompanion\settings.xml`
+
+### In-Game Console Commands
+
+Press the tilde key (`` ` `` / `~`) to open the in-engine developer console:
+
+- `vrRenderingMode <afr|dualpass|toggle>`: Switch between Sequential Dual-Pass and Alternate Frame Rendering.
+- `vrHudInset <horizontal> <vertical>`: Adjust normalized HUD margin insets (default: `0.30 0.22`).
+- `vrHudUiScale <scale>`: Adjust HUD element size scaling (default: `0.82`).
+- `vrHudConvergence <meters>`: Set stereoscopic depth convergence distance for 2D UI (default: `1.8`).
+- `vrSnapTurnAngle <degrees>`: Set snap turn rotational angle step (default: `90`).
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+- Windows 10/11 64-bit
+- Visual Studio 2022 or Build Tools with C++20 standard library and MSVC v143+
+- CMake 3.20+
+- Ninja build system
+- Git
+
+### Build Instructions
+
+```powershell
+# Clone repository
+git clone https://github.com/jacoch17/FarmingSimVr.git
+cd FarmingSimVr
+
+# Configure CMake with Ninja
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+# Build Injector DLL and Test Executable
+ninja -C build dxgi fs25_vr_tests
+
+# Run automated unit and integration tests (286 tests)
+ctest --test-dir build --output-on-failure
+```
+
+### Packaging the Companion Mod
+
+```powershell
+# Using tar.exe to preserve POSIX directory entries required by GIANTS Engine
+cd mods\FS25_VRCompanion
+tar.exe -a -cf ..\..\build\FS25_VRCompanion.zip modDesc.xml icon_vr.png src/VRCompanion.lua
+```
+
+---
+
+## Architecture Decision Records (ADRs)
+
+For in-depth technical documentation, refer to the architecture records in [`docs/adr/`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/):
+
+- [`ADR-0001`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0001-hybrid-injector-and-companion-mod-architecture.md): Hybrid Injector and In-Engine Companion Mod via VRBridge
+- [`ADR-0002`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0002-in-process-luau-state-interception.md): In-Process Luau State Interception & VRBridge Table Injection
+- [`ADR-0003`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0003-afr-frame-pacing-and-telemetry-probe.md): Alternate Frame Rendering (AFR) Pacing & Telemetry Probe
+- [`ADR-0004`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0004-graceful-openxr-pass-through-fallback.md): Graceful OpenXR Pass-Through Fallback
+- [`ADR-0005`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0005-oblique-frustum-projection-via-vrbridge.md): Oblique Frustum Projection via VRBridge
+- [`ADR-0006`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0006-openxr-floating-quad-layer-for-menus.md): OpenXR Floating Quad Layer for Menus
+- [`ADR-0007`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0007-in-game-gui-menu-detection-and-quad-layer-switching.md): In-Game GUI Menu Detection and Quad Layer Switching
+- [`ADR-0008`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0008-dynamic-quad-centering-and-background-camera-tracking.md): Dynamic Quad Centering and Background 6DOF Camera Tracking
+- [`ADR-0009`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0009-openxr-alpha-blended-mouse-cursor-layer.md): OpenXR Alpha-Blended Mouse Cursor Quad Layer for Menus
+- [`ADR-0010`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0010-in-engine-vr-hud-inset-and-convergence-parity.md): In-Engine VR HUD Inset and Convergence Parity
+- [`ADR-0011`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0011-openxr-reference-space-recentering.md): OpenXR Reference Space Recentering via poseInReferenceSpace
+- [`ADR-0012`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0012-in-engine-snap-turn-locomotion.md): In-Engine Snap Turn Locomotion
+- [`ADR-0013`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0013-in-engine-2d-floating-window-view-toggle.md): In-Engine 2D Floating Window View Toggle
+- [`ADR-0014`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0014-desktop-mirror-window-resolution-decoupling.md): Desktop Mirror Window Resolution Decoupling
+- [`ADR-0015`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0015-sequential-dual-pass-stereo-presentation-pipeline.md): Sequential Dual-Pass Stereo Presentation Pipeline
+- [`ADR-0016`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0016-dual-feature-context-virtualization-for-temporal-upscalers.md): Dual Feature Context Virtualization for Temporal Upscalers
+
+---
+
+## License & Credits
+
+Developed by the **FS25 VR Team**. Built with Khronos OpenXR, Luau, and GoogleTest.  
+Farming Simulator 25 is a trademark of GIANTS Software GmbH.
