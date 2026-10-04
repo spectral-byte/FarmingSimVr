@@ -5,13 +5,22 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $builtDll = Join-Path $repoRoot "build\dxgi.dll"
 $companionDir = Join-Path $repoRoot "mods\FS25_VRCompanion"
 $releaseDir = Join-Path $repoRoot "build\release"
-$bundleDir = Join-Path $releaseDir "FS25_VR_v1.0.0"
+$modDescPath = Join-Path $companionDir "modDesc.xml"
 
 Write-Host "Packaging FS25 VR Release..."
 
 if (-not (Test-Path $builtDll)) {
     Write-Error "build\dxgi.dll not found. Build project first (ninja -C build dxgi)."
 }
+
+# Read the release version from modDesc
+[xml]$modDesc = Get-Content $modDescPath -Raw
+$version = $modDesc.modDesc.version
+if ([string]::IsNullOrWhiteSpace($version)) {
+    Write-Error "No <version> element found in $modDescPath."
+}
+$bundleName = "FS25_VR_v$version"
+$bundleDir = Join-Path $releaseDir $bundleName
 
 # Clean and recreate staging directories
 if (Test-Path $releaseDir) {
@@ -60,7 +69,7 @@ try {
 # Write README.txt
 $readmeContent = @"
 ================================================================================
-  Farming Simulator 25 VR (FS25 VR) - Version 1.0.0
+  Farming Simulator 25 VR (FS25 VR) - Version $version
   Virtual Reality for GIANTS Engine 10 under Direct3D 12
 ================================================================================
 
@@ -136,7 +145,7 @@ https://github.com/jacoch17/FarmingSimVr
 Set-Content -Path "$bundleDir\README.txt" -Value $readmeContent -Encoding utf8
 
 # Create master bundle zip
-$zipBundle = Join-Path $releaseDir "FS25_VR_v1.0.0.zip"
+$zipBundle = Join-Path $releaseDir "$bundleName.zip"
 Push-Location $bundleDir
 try {
     tar.exe -a -cf $zipBundle x64/dxgi.dll mods/FS25_VRCompanion.zip README.txt THIRD_PARTY_NOTICES.txt

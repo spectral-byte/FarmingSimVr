@@ -1,10 +1,15 @@
 # Deploy script for Farming Simulator 25 VR Injector and Companion Mod
+param(
+    [string]$GameDir = "C:\Program Files (x86)\Steam\steamapps\common\Farming Simulator 25"
+)
+
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $builtDll = Join-Path $repoRoot "build\dxgi.dll"
-$gameX64Dir = "C:\Program Files (x86)\Steam\steamapps\common\Farming Simulator 25\x64"
-$modsDir = "C:\Users\jacob\Documents\My Games\FarmingSimulator2025\mods"
+$gameX64Dir = Join-Path $GameDir "x64"
+$documentsDir = [Environment]::GetFolderPath("MyDocuments")
+$modsDir = Join-Path $documentsDir "My Games\FarmingSimulator2025\mods"
 
 Write-Host "Deploying FS25 VR artifacts..."
 
