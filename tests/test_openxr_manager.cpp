@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "openxr/openxr_manager.h"
+#include "luau/vr_bridge.h"
 #include "fake_openxr_events.h"
 #include <cstring>
 #include <unordered_set>
@@ -2251,6 +2252,225 @@ TEST(OpenXrManagerTest, SubmitMenuQuadSubmitsSingleLayerWhenCursorHidden) {
     EXPECT_EQ(menuQuad.subImage.swapchain, manager.GetEyeSwapchain(0).handle);
 }
 
+namespace {
+
+HeadPose MakeRenderTestPose(float x, float y, float z) {
+    HeadPose pose;
+    pose.position = Vector3(x, y, z);
+    pose.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    pose.isValid = true;
+    return pose;
+}
+
+struct RenderPoseFixture {
+    std::shared_ptr<MockOpenXrDispatch> dispatch = std::make_shared<MockOpenXrDispatch>();
+    std::shared_ptr<OpenXrManager> manager;
+    std::unique_ptr<VRBridge> bridge;
+
+    explicit RenderPoseFixture(VRRenderingMode mode) {
+        dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+        manager = std::make_shared<OpenXrManager>(dispatch);
+        EXPECT_TRUE(manager->Initialize());
+        EXPECT_TRUE(manager->CreateSession());
+        EXPECT_TRUE(manager->CreateTrackingSpaces());
+        manager->PollEvents();  // consume READY so the session is running
+        EXPECT_TRUE(manager->IsSessionRunning());
+        EXPECT_TRUE(manager->CreateEyeSwapchains(1920, 1080));
+        manager->SetIpd(0.064f);
+        bridge = std::make_unique<VRBridge>(manager, nullptr);
+        bridge->SetRenderingMode(mode);
+    }
+};
+
+} // namespace
+
+TEST(OpenXrManagerTest, SequentialDualPassSubmitsEachEyeWithPoseItWasRenderedWith) {
+    RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
+
+    // Sub-pass 0: engine reads the head pose, then the head moves before present.
+    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.bridge->GetHeadPose();
+    f.manager->SetSimulatedPose(MakeRenderTestPose(5.0f, 1.6f, 5.0f));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
+
+    // Sub-pass 1: same again with different poses.
+    f.bridge->SetSubPassIndex(1);
+    f.manager->SetSimulatedPose(MakeRenderTestPose(0.2f, 1.7f, -0.3f));
+    f.bridge->GetHeadPose();
+    f.manager->SetSimulatedPose(MakeRenderTestPose(9.0f, 9.0f, 9.0f));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
+    ASSERT_TRUE(f.manager->SubmitFramePair());
+
+    ASSERT_EQ(f.dispatch->lastSubmittedProjectionViews.size(), 2u);
+    const auto& v0 = f.dispatch->lastSubmittedProjectionViews[0];
+    const auto& v1 = f.dispatch->lastSubmittedProjectionViews[1];
+    EXPECT_NEAR(v0.pose.position.x, -0.032f, 0.001f);
+    EXPECT_NEAR(v0.pose.position.y, 1.6f, 0.001f);
+    EXPECT_NEAR(v0.pose.position.z, 0.0f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.x, 0.2f + 0.032f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.y, 1.7f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.z, -0.3f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, AfrSubmitsEachEyeWithPoseItWasRenderedWith) {
+    RenderPoseFixture f(VRRenderingMode::AFR);
+    ASSERT_EQ(f.bridge->GetFrameParity(), 0u);
+
+    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.bridge->GetHeadPose();
+    f.manager->SetSimulatedPose(MakeRenderTestPose(5.0f, 1.6f, 5.0f));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
+    f.bridge->AdvanceFrame();
+    ASSERT_EQ(f.bridge->GetFrameParity(), 1u);
+
+    f.manager->SetSimulatedPose(MakeRenderTestPose(0.2f, 1.7f, -0.3f));
+    f.bridge->GetHeadPose();
+    f.manager->SetSimulatedPose(MakeRenderTestPose(9.0f, 9.0f, 9.0f));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
+    ASSERT_TRUE(f.manager->SubmitFramePair());
+
+    ASSERT_EQ(f.dispatch->lastSubmittedProjectionViews.size(), 2u);
+    const auto& v0 = f.dispatch->lastSubmittedProjectionViews[0];
+    const auto& v1 = f.dispatch->lastSubmittedProjectionViews[1];
+    EXPECT_NEAR(v0.pose.position.x, -0.032f, 0.001f);
+    EXPECT_NEAR(v0.pose.position.z, 0.0f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.x, 0.2f + 0.032f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.z, -0.3f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, FrameBeginPollDoesNotOverwriteRecordedRenderPose) {
+    RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
+
+    // Pose recorded before any OpenXR frame has begun (BeginFrame happens inside the first copy).
+    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.bridge->GetHeadPose();
+    ASSERT_FALSE(f.manager->IsFrameBegun());
+    f.manager->SetSimulatedPose(MakeRenderTestPose(3.0f, 1.0f, 3.0f));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
+    EXPECT_NEAR(f.manager->GetCapturedEyePose(0).position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(f.manager->GetCapturedEyePose(0).position.z, 0.0f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, FallsBackToPolledPoseWhenNoRenderPoseRecorded) {
+    RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
+
+    f.manager->SetSimulatedPose(MakeRenderTestPose(1.0f, 1.5f, 2.0f));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
+    f.manager->SetSimulatedPose(MakeRenderTestPose(1.0f, 1.5f, 2.0f));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
+    ASSERT_TRUE(f.manager->SubmitFramePair());
+
+    const auto& v0 = f.dispatch->lastSubmittedProjectionViews[0];
+    EXPECT_NEAR(v0.pose.position.x, 1.0f - 0.032f, 0.001f);
+    EXPECT_NEAR(v0.pose.position.z, 2.0f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, RecordedRenderPoseIsConsumedByCopy) {
+    RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
+
+    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.bridge->GetHeadPose();
+    EXPECT_TRUE(f.manager->HasRecordedRenderPose(0));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
+    EXPECT_FALSE(f.manager->HasRecordedRenderPose(0));
+}
+
+TEST(OpenXrManagerTest, RuntimeTrackedPosesSubmitEachEyeWithItsRenderPose) {
+    // No simulated pose: poses come from xrLocateSpace, at the current time before the frame
+    // begins and at the predicted display time (cached) once it has.
+    RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
+    auto setTracked = [&](float x, float y, float z) {
+        f.dispatch->mockSpaceLocation.pose.position = { x, y, z };
+    };
+
+    setTracked(0.0f, 1.6f, 0.0f);
+    f.bridge->GetHeadPose();  // eye 0 render pose, located before the frame begins
+    setTracked(5.0f, 1.6f, 5.0f);
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));  // BeginFrame locates at display time
+
+    f.bridge->SetSubPassIndex(1);
+    f.bridge->GetHeadPose();  // eye 1, inside the open frame: the display-time pose
+    setTracked(9.0f, 9.0f, 9.0f);
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
+    ASSERT_TRUE(f.manager->SubmitFramePair());
+
+    ASSERT_EQ(f.dispatch->lastSubmittedProjectionViews.size(), 2u);
+    const auto& v0 = f.dispatch->lastSubmittedProjectionViews[0];
+    const auto& v1 = f.dispatch->lastSubmittedProjectionViews[1];
+    EXPECT_NEAR(v0.pose.position.x, -0.032f, 0.001f);
+    EXPECT_NEAR(v0.pose.position.z, 0.0f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.x, 5.0f + 0.032f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.z, 5.0f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, InvalidPoseIsNotRecorded) {
+    RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
+    HeadPose invalid = MakeRenderTestPose(1.0f, 1.0f, 1.0f);
+    invalid.isValid = false;
+    f.manager->SetSimulatedPose(invalid);
+    f.bridge->GetHeadPose();
+    EXPECT_FALSE(f.manager->HasRecordedRenderPose(0));
+}
+
+TEST(OpenXrManagerTest, GetEyePoseRecordsForTheRequestedEye) {
+    RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
+    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.bridge->GetEyePose(1);
+    EXPECT_FALSE(f.manager->HasRecordedRenderPose(0));
+    EXPECT_TRUE(f.manager->HasRecordedRenderPose(1));
+}
+
+TEST(OpenXrManagerTest, UnconsumedRenderPoseExpiresAtFrameEnd) {
+    RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
+    f.dispatch->mockShouldRender = XR_FALSE;  // copies skip the swapchain and consume nothing
+
+    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.bridge->GetHeadPose();
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(f.manager->HasRecordedRenderPose(0));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
+    ASSERT_TRUE(f.manager->SubmitFramePair());
+
+    EXPECT_FALSE(f.manager->HasRecordedRenderPose(0));
+}
+
+TEST(OpenXrManagerTest, RecenterDropsRecordedRenderPoses) {
+    RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
+    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.bridge->GetEyePose(0);
+    f.bridge->GetEyePose(1);
+
+    f.manager->Recenter();  // recorded poses are in the pre-recenter tracking space
+
+    EXPECT_FALSE(f.manager->HasRecordedRenderPose(0));
+    EXPECT_FALSE(f.manager->HasRecordedRenderPose(1));
+}
+
+TEST(OpenXrManagerTest, SessionStopDropsRecordedRenderPoses) {
+    RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
+    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.bridge->GetEyePose(0);
+
+    // Headset taken off: on resume the pose would be from before the pause.
+    f.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    f.manager->PollEvents();
+    ASSERT_FALSE(f.manager->IsSessionRunning());
+
+    EXPECT_FALSE(f.manager->HasRecordedRenderPose(0));
+}
+
+TEST(OpenXrManagerTest, ShareRenderPoseAcrossEyesUsesWhicheverEyeWasRecorded) {
+    RenderPoseFixture f(VRRenderingMode::AFR);
+    f.manager->RecordRenderPose(1, MakeRenderTestPose(0.3f, 1.6f, 0.0f));
+
+    f.manager->ShareRenderPoseAcrossEyes();
+    f.manager->SetSimulatedPose(MakeRenderTestPose(7.0f, 7.0f, 7.0f));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
+
+    EXPECT_NEAR(f.manager->GetCapturedEyePose(0).position.x, 0.3f, 0.001f);
+    EXPECT_NEAR(f.manager->GetCapturedEyePose(1).position.x, 0.3f, 0.001f);
+}
 } // namespace fs25vr
 
 

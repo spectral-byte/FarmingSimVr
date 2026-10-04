@@ -954,6 +954,47 @@ TEST(DxgiProxyTest, EnforcesStrictOpenXrLifecycleAndContinuousPresentationAcross
     EXPECT_FALSE(openXrManager->IsFrameBegun());
 }
 
+TEST(DxgiProxyTest, NativeStereoSubmitsBothEyesWithTheOneRenderPose) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto probe = std::make_shared<GraphicsTelemetryProbe>();
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, probe);
+    vrBridge->PerformHandshake();
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, probe, nullptr, vrBridge);
+
+    D3D12_VIEWPORT vps[2]{
+        { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
+        { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
+    };
+    D3D12_RECT scissors[2]{ { 0, 0, 1920, 1080 }, { 1920, 0, 3840, 1080 } };
+    probe->RecordViewports(2, vps);
+    probe->RecordScissorRects(2, scissors);
+    probe->OnFrameBoundary();
+    ASSERT_TRUE(probe->HasNativeStereoDetected());
+
+    // The engine renders both eyes from one head pose, read once; the head then moves.
+    HeadPose rendered;
+    rendered.position = Vector3(0.0f, 1.6f, 0.0f);
+    rendered.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    rendered.isValid = true;
+    openXrManager->SetSimulatedPose(rendered);
+    vrBridge->GetHeadPose();
+    HeadPose moved = rendered;
+    moved.position = Vector3(5.0f, 1.6f, 5.0f);
+    openXrManager->SetSimulatedPose(moved);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    ASSERT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_NEAR(openXrManager->GetCapturedEyePose(0).position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(openXrManager->GetCapturedEyePose(1).position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(openXrManager->GetCapturedEyePose(1).position.z, 0.0f, 0.001f);
+}
+
 struct MockD3D12Environment {
     std::vector<void*> devVTable;
     std::vector<void*> queueVTable;

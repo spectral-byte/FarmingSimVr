@@ -196,6 +196,17 @@ public:
     static Vector3 ComputeEyePosition(const HeadPose& headPose, float ipd, uint32_t eyeIndex);
     static HeadPose ComputeEyePose(const HeadPose& headPose, float ipd, uint32_t eyeIndex);
 
+    // Records the head pose handed to the Companion Mod for this eye's render. The next
+    // CopyBackBufferToEye for that eye uses it (instead of the pose polled at frame begin)
+    // as the pose the eye is submitted with. Consumed by the copy.
+    void RecordRenderPose(uint32_t eyeIndex, const HeadPose& pose);
+    bool HasRecordedRenderPose(uint32_t eyeIndex) const {
+        return eyeIndex < 2 && m_hasRenderPose[eyeIndex];
+    }
+    // Native stereo: both eyes come from one render, so a pose recorded for either eye is used
+    // for both. Call before copying the eyes.
+    void ShareRenderPoseAcrossEyes();
+
     const HeadPose& GetCapturedEyePose(uint32_t eyeIndex = 0) const {
         return m_capturedEyePoses[eyeIndex >= 2 ? 0 : eyeIndex];
     }
@@ -253,6 +264,9 @@ private:
     HeadPose m_rawPose;
     HeadPose m_lastPose;
     HeadPose m_capturedEyePoses[2]{};
+    HeadPose m_renderPoses[2]{};
+    bool m_hasRenderPose[2]{false, false};
+    void ClearRenderPoses();
     RecenterOffset m_recenterOffset;
     bool m_hasRecenter = false;
     bool m_useSimulatedPose = false;

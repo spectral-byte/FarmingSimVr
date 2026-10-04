@@ -37,6 +37,7 @@ public:
     std::shared_ptr<OpenXrManager> GetOpenXrManager() const { return m_openXrManager; }
 
     HeadPose GetHeadPose();
+    HeadPose GetHeadPoseForEye(uint32_t eyeIndex);
     void Recenter();
     EyeProjection GetEyeProjection(uint32_t eyeIndex = 0);
 

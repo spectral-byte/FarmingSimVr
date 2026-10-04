@@ -360,8 +360,15 @@ int VRBridge::Lua_IsStereoActive(lua_State* L) {
 }
 
 HeadPose VRBridge::GetHeadPose() {
+    return GetHeadPoseForEye(GetFrameParity());
+}
+
+HeadPose VRBridge::GetHeadPoseForEye(uint32_t eyeIndex) {
     if (m_openXrManager) {
-        return m_openXrManager->PollHeadPose();
+        HeadPose pose = m_openXrManager->PollHeadPose();
+        // Remember the pose handed out for this eye's render so submission uses it.
+        m_openXrManager->RecordRenderPose(eyeIndex, pose);
+        return pose;
     }
     return {};
 }
@@ -566,7 +573,7 @@ void VRBridge::SetIpd(float ipd) {
 }
 
 HeadPose VRBridge::GetEyePose(uint32_t eyeIndex) {
-    HeadPose pose = GetHeadPose();
+    HeadPose pose = GetHeadPoseForEye(eyeIndex);
     return OpenXrManager::ComputeEyePose(pose, GetIpd(), eyeIndex);
 }
 

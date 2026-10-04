@@ -236,6 +236,7 @@ void OpenXrManager::Shutdown() {
     m_beginSessionFailures = 0;
     m_frameBegun = false;
     m_hasRecenter = false;
+    ClearRenderPoses();
     m_useSimulatedPose = false;
     m_useSimulatedProjections = false;
     m_eyeProjections[0] = {};
@@ -393,6 +394,7 @@ void OpenXrManager::EndRunningSession() {
     m_lastLocatedViewsTime = 0;
     m_eyeSwapchains[0].hasCopiedFrame = false;
     m_eyeSwapchains[1].hasCopiedFrame = false;
+    ClearRenderPoses();
 
     XrResult res = m_dispatch->EndSession(m_session);
     if (XR_FAILED(res)) {
@@ -576,6 +578,7 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
 }
 
 void OpenXrManager::Recenter() {
+    ClearRenderPoses();
     Vector3 recenterPos = m_rawPose.position;
     float recenterYaw = m_rawPose.rotation.yaw;
     if (std::abs(recenterYaw) < 1e-6f && (std::abs(m_rawPose.orientation.x) > 1e-6f ||
@@ -998,6 +1001,33 @@ void OpenXrManager::DestroyCursorSwapchain() {
     m_cursorOverlay.DestroySwapchain(m_dispatch);
 }
 
+void OpenXrManager::RecordRenderPose(uint32_t eyeIndex, const HeadPose& pose) {
+    if (eyeIndex >= 2 || !pose.isValid) {
+        return;
+    }
+    m_renderPoses[eyeIndex] = pose;
+    m_hasRenderPose[eyeIndex] = true;
+}
+
+void OpenXrManager::ShareRenderPoseAcrossEyes() {
+    // Native stereo renders both eyes in one pass from one head pose, but the Companion Mod
+    // records it under a single eye. Submit both halves with that pose so they reproject together.
+    for (uint32_t src = 0; src < 2; ++src) {
+        if (m_hasRenderPose[src]) {
+            m_renderPoses[1 - src] = m_renderPoses[src];
+            m_hasRenderPose[1 - src] = true;
+            return;
+        }
+    }
+}
+
+void OpenXrManager::ClearRenderPoses() {
+    // A record not consumed by its frame's copy (shouldRender false, a skipped copy, a recenter)
+    // belongs to an older frame or tracking space; never let a later frame submit it.
+    m_hasRenderPose[0] = false;
+    m_hasRenderPose[1] = false;
+}
+
 bool OpenXrManager::BeginFrame() {
     if (m_session == XR_NULL_HANDLE) {
         return false;
@@ -1061,6 +1091,7 @@ bool OpenXrManager::EndFrame() {
 
     XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
     m_frameBegun = false;
+    ClearRenderPoses();
     m_lastPolledTime = 0;
     m_lastLocatedViewsTime = 0;
     if (XR_FAILED(res)) {
@@ -1091,8 +1122,14 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
         return true;
     }
 
-    // Cache the captured head pose at the moment this eye's frame is copied
-    m_capturedEyePoses[eyeIndex] = m_lastPose;
+    // Submit the eye with the pose the engine rendered it with (recorded when VRBridge handed
+    // it to the Companion Mod). Fall back to the pose polled at frame begin if none was recorded.
+    if (m_hasRenderPose[eyeIndex]) {
+        m_capturedEyePoses[eyeIndex] = m_renderPoses[eyeIndex];
+        m_hasRenderPose[eyeIndex] = false;
+    } else {
+        m_capturedEyePoses[eyeIndex] = m_lastPose;
+    }
 
     XrSwapchain swapchain = m_eyeSwapchains[eyeIndex].handle;
     if (swapchain == XR_NULL_HANDLE) {
@@ -1336,6 +1373,7 @@ bool OpenXrManager::SubmitFramePair() {
 
     XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
     m_frameBegun = false;
+    ClearRenderPoses();
     m_lastPolledTime = 0;
     m_lastLocatedViewsTime = 0;
     if (XR_FAILED(res)) {
@@ -1476,6 +1514,7 @@ bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df*
 
     XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
     m_frameBegun = false;
+    ClearRenderPoses();
     m_lastPolledTime = 0;
     m_lastLocatedViewsTime = 0;
     if (XR_FAILED(res)) {

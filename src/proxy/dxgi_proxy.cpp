@@ -488,6 +488,7 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
                 // In native stereo mode, both eye views are rendered simultaneously in the current backbuffer pass.
                 // Submit both eyes directly to the OpenXR compositor without skipping or suppressing frames.
                 // If mid-pair transition occurred and eye 0 was already copied in the active frame, avoid redundant acquisition.
+                m_openXrManager->ShareRenderPoseAcrossEyes();
                 if (!m_openXrManager->GetEyeSwapchain(0).hasCopiedFrame) {
                     m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
                 }
