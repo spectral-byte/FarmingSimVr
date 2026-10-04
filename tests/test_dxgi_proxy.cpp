@@ -1,5 +1,7 @@
 ﻿#include <gtest/gtest.h>
 #include "proxy/dxgi_proxy.h"
+#include "core/dll_lifecycle.h"
+#include "core/injector_runtime.h"
 #include "proxy/system_dxgi.h"
 #include "openxr/openxr_manager.h"
 #include "fake_openxr_events.h"
@@ -498,6 +500,111 @@ TEST(DxgiProxyTest, OnPresentCopiesLeftEyeOnFrame0AndRightEyeOnFrame1WithPairSub
     EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u); // parity advanced back to 0
+}
+
+TEST(InjectorRuntimeTest, WiresSubsystemsWithFakesAndDrivesPresentEndToEnd) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto probe = std::make_shared<GraphicsTelemetryProbe>();
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, probe);
+    vrBridge->PerformHandshake();
+
+    InjectorRuntime::Dependencies deps;
+    deps.openXrManager = openXrManager;
+    deps.vrBridge = vrBridge;
+    deps.telemetryProbe = probe;
+    deps.luauInterceptor = std::make_shared<LuauInterceptor>(vrBridge);
+    deps.d3d12Interceptor = std::make_shared<D3D12Interceptor>(probe);
+    deps.windowController = std::make_shared<MirrorWindowController>();
+    deps.ngxInterceptor = std::make_shared<NgxInterceptor>();
+    auto ngx = deps.ngxInterceptor;
+    DxgiProxy* runtimeProxy = nullptr;
+
+    {
+        InjectorRuntime runtime(std::move(deps));
+        runtimeProxy = &runtime.GetDxgiProxy();
+
+        // One object owns and wires every subsystem.
+        EXPECT_EQ(&runtime.GetOpenXrManager(), openXrManager.get());
+        EXPECT_EQ(&runtime.GetVrBridge(), vrBridge.get());
+        EXPECT_EQ(&runtime.GetTelemetryProbe(), probe.get());
+        EXPECT_EQ(&runtime.GetDxgiProxy().GetOpenXrManager(), openXrManager.get());
+        EXPECT_EQ(&runtime.GetDxgiProxy().GetVrBridge(), vrBridge.get());
+        EXPECT_EQ(&runtime.GetDxgiProxy().GetLuauInterceptor(), &runtime.GetLuauInterceptor());
+        EXPECT_EQ(&runtime.GetDxgiProxy().GetD3D12Interceptor(), &runtime.GetD3D12Interceptor());
+        EXPECT_EQ(&runtime.GetDxgiProxy().GetWindowController(), &runtime.GetWindowController());
+        EXPECT_EQ(ngx->GetVRBridge(), vrBridge.get());
+        EXPECT_EQ(ngx->GetOpenXrManager(), openXrManager.get());
+        EXPECT_EQ(ngx->GetDxgiProxy(), &runtime.GetDxgiProxy());
+
+        // Drive an AFR present pair through the runtime-owned proxy.
+        runtime.GetDxgiProxy().OnPresent(nullptr, 0, 0);
+        EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+        EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+        runtime.GetDxgiProxy().OnPresent(nullptr, 0, 0);
+        EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+        EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
+    }
+
+    // The runtime does not leave the NGX interceptor pointing at freed subsystems.
+    EXPECT_NE(ngx->GetDxgiProxy(), runtimeProxy);
+    EXPECT_NE(ngx->GetVRBridge(), vrBridge.get());
+    EXPECT_NE(ngx->GetOpenXrManager(), openXrManager.get());
+}
+
+TEST(InjectorRuntimeTest, ProductionRuntimeBacksTheDxgiProxySingleton) {
+    EXPECT_EQ(&DxgiProxy::Instance(), &InjectorRuntime::Instance().GetDxgiProxy());
+}
+
+TEST(InjectorRuntimeTest, ProductionRuntimeKeepsNgxActiveChecks) {
+    // In Pass-Through the NGX hooks must not see the proxy, or DLSS would be created at the mirror
+    // target resolution instead of the game's own output size.
+    DxgiProxy& proxy = InjectorRuntime::Instance().GetDxgiProxy();
+    ASSERT_FALSE(proxy.IsActive());
+    EXPECT_EQ(NgxInterceptor::Instance().GetDxgiProxy(), nullptr);
+}
+
+TEST(InjectorRuntimeTest, RuntimeWithoutInjectedNgxLeavesTheNgxSingletonAlone) {
+    auto openXrManager = std::make_shared<OpenXrManager>(std::make_shared<MockActiveOpenXrDispatch>());
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, std::make_shared<GraphicsTelemetryProbe>());
+    VRBridge* singletonBridge = NgxInterceptor::Instance().GetVRBridge();
+
+    InjectorRuntime::Dependencies deps;
+    deps.openXrManager = openXrManager;
+    deps.vrBridge = vrBridge;
+    InjectorRuntime runtime(std::move(deps));
+
+    EXPECT_EQ(NgxInterceptor::Instance().GetVRBridge(), singletonBridge);
+    EXPECT_NE(NgxInterceptor::Instance().GetDxgiProxy(), &runtime.GetDxgiProxy());
+}
+
+TEST(InjectorRuntimeTest, DestructorTakesNoNgxLockWhileProcessTerminates) {
+    // A thread killed at termination may own the NGX mutex; the destructor must not touch it.
+    auto ngx = std::make_shared<NgxInterceptor>();
+    InjectorRuntime::Dependencies deps;
+    deps.openXrManager = std::make_shared<OpenXrManager>(std::make_shared<MockActiveOpenXrDispatch>());
+    deps.ngxInterceptor = ngx;
+    DxgiProxy* runtimeProxy = nullptr;
+    {
+        InjectorRuntime runtime(std::move(deps));
+        runtimeProxy = &runtime.GetDxgiProxy();
+        OnProcessDetach(reinterpret_cast<LPVOID>(1));  // non-null lpReserved: process terminating
+    }
+    ResetProcessTerminatingForTesting();
+    // The terminating destructors also left the active proxy/controller statics dangling; a
+    // normally destroyed proxy clears them.
+    { DxgiProxy clearActiveStatics(nullptr, std::make_shared<OpenXrManager>(std::make_shared<MockActiveOpenXrDispatch>())); }
+
+    // The wiring was left untouched, so the destructor never reached the locking setters.
+    EXPECT_EQ(ngx->GetDxgiProxy(), runtimeProxy);
+    ngx->SetDxgiProxy(nullptr);
+    ngx->SetVRBridge(nullptr);
+    ngx->SetOpenXrManager(nullptr);
 }
 
 TEST(DxgiProxyTest, SequentialDualPassSubPass0SuppressesPresentAndAdvancesSubPass) {

@@ -1,5 +1,6 @@
 ﻿#include "dxgi_proxy.h"
 #include "core/logger.h"
+#include "core/injector_runtime.h"
 #include "core/dll_lifecycle.h"
 #include "ngx/ngx_interceptor.h"
 #include <utility>
@@ -25,16 +26,8 @@ HRESULT ForwardFactoryCall(const char* funcName, PFN pfn, Args&&... args) {
 } // anonymous namespace
 
 DxgiProxy& DxgiProxy::Instance() {
-    static DxgiProxy instance(
-        std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {}),
-        std::shared_ptr<OpenXrManager>(&OpenXrManager::Instance(), [](auto*) {}),
-        std::shared_ptr<LuauInterceptor>(&LuauInterceptor::Instance(), [](auto*) {}),
-        std::shared_ptr<GraphicsTelemetryProbe>(&GraphicsTelemetryProbe::Instance(), [](auto*) {}),
-        std::shared_ptr<D3D12Interceptor>(&D3D12Interceptor::Instance(), [](auto*) {}),
-        std::shared_ptr<VRBridge>(&VRBridge::Instance(), [](auto*) {}),
-        std::shared_ptr<MirrorWindowController>(&MirrorWindowController::Instance(), [](auto*) {})
-    );
-    return instance;
+    // The composition root builds and wires the production proxy on first use.
+    return InjectorRuntime::Instance().GetDxgiProxy();
 }
 
 DxgiProxy* DxgiProxy::GetActiveProxy() {
@@ -776,25 +769,27 @@ HRESULT DxgiProxy::DXGIGetDebugInterface1(UINT Flags, REFIID riid, void** pDebug
 extern "C" {
 
 HRESULT WINAPI Proxy_CreateDXGIFactory(REFIID riid, void** ppFactory) {
-    return fs25vr::DxgiProxy::Instance().CreateDXGIFactory(riid, ppFactory);
+    return fs25vr::InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory(riid, ppFactory);
 }
 
 HRESULT WINAPI Proxy_CreateDXGIFactory1(REFIID riid, void** ppFactory) {
-    return fs25vr::DxgiProxy::Instance().CreateDXGIFactory1(riid, ppFactory);
+    return fs25vr::InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory1(riid, ppFactory);
 }
 
 HRESULT WINAPI Proxy_CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory) {
-    return fs25vr::DxgiProxy::Instance().CreateDXGIFactory2(Flags, riid, ppFactory);
+    return fs25vr::InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory2(Flags, riid, ppFactory);
 }
 
 HRESULT WINAPI Proxy_DXGIDeclareAdapterRemovalSupport() {
-    return fs25vr::DxgiProxy::Instance().DXGIDeclareAdapterRemovalSupport();
+    return fs25vr::InjectorRuntime::Instance().GetDxgiProxy().DXGIDeclareAdapterRemovalSupport();
 }
 
 HRESULT WINAPI Proxy_DXGIGetDebugInterface1(UINT Flags, REFIID riid, void** pDebug) {
-    return fs25vr::DxgiProxy::Instance().DXGIGetDebugInterface1(Flags, riid, pDebug);
+    return fs25vr::InjectorRuntime::Instance().GetDxgiProxy().DXGIGetDebugInterface1(Flags, riid, pDebug);
 }
 
+// The remaining exports forward to the system dxgi.dll and touch no Injector subsystem, so they
+// bypass the runtime: a PIX or app-compat call should not construct and wire every subsystem.
 HRESULT WINAPI Proxy_DXGID3D10CreateDevice(HMODULE hModule, IDXGIAdapter* pAdapter, UINT Flags, DWORD RuntimeVersion, void* pOutputs) {
     auto pfn = reinterpret_cast<HRESULT(WINAPI*)(HMODULE, IDXGIAdapter*, UINT, DWORD, void*)>(
         fs25vr::SystemDxgi::Instance().GetExport("DXGID3D10CreateDevice"));

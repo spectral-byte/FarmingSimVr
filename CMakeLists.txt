@@ -64,6 +64,8 @@ set(CORE_SOURCES
     src/core/math_utils.h
     src/core/detour.cpp
     src/core/detour.h
+    src/core/injector_runtime.cpp
+    src/core/injector_runtime.h
     src/core/dll_lifecycle.cpp
     src/core/dll_lifecycle.h
     src/luau/vr_bridge.cpp
