@@ -89,7 +89,6 @@ public:
     bool CreateTrackingSpaces();
     HeadPose PollHeadPose(XrTime time = 0);
     void Recenter();
-    void SetSimulatedPose(const HeadPose& pose);
     const HeadPose& GetLastPose() const { return m_lastPose; }
     const HeadPose& GetRawPose() const { return m_rawPose; }
 
@@ -97,7 +96,6 @@ public:
     bool LocateActiveViews(XrTime time = 0);
     XrTime GetCurrentXrTime() const;
     const EyeProjection& GetEyeProjection(uint32_t eyeIndex = 0) const;
-    void SetSimulatedProjection(uint32_t eyeIndex, const EyeProjection& proj);
     static EyeProjection ComputeProjectionFromFov(const XrFovf& fov);
 
     uint32_t GetRecommendedEyeWidth(uint32_t eyeIndex = 0) const;
@@ -212,11 +210,6 @@ public:
     }
 
 private:
-    struct RecenterOffset {
-        Vector3 position{ 0.0f, 0.0f, 0.0f };
-        float yaw = 0.0f;
-    };
-
     std::shared_ptr<IOpenXrDispatch> m_dispatch;
     OpenXrState m_state = OpenXrState::Uninitialized;
     XrInstance m_instance = XR_NULL_HANDLE;
@@ -267,14 +260,8 @@ private:
     HeadPose m_renderPoses[2]{};
     bool m_hasRenderPose[2]{false, false};
     void ClearRenderPoses();
-    RecenterOffset m_recenterOffset;
-    bool m_hasRecenter = false;
-    bool m_useSimulatedPose = false;
-    HeadPose m_simulatedPose;
 
     EyeProjection m_eyeProjections[2];
-    EyeProjection m_simulatedProjections[2];
-    bool m_useSimulatedProjections = false;
 
     std::vector<XrViewConfigurationView> m_viewConfigViews;
 

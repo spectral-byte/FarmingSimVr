@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "luau/vr_bridge.h"
+#include "fake_openxr_runtime.h"
 #include "luacode.h"
 #include "luau_test_runner.h"
 #include <algorithm>
@@ -466,12 +467,13 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresRecenterActionAndInputBinding
 }
 
 TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBinding) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.15f, 0.05f, -0.10f);
     simPose.rotation = fs25vr::EulerAngles(0.20f, -0.30f, 0.02f);
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetIpd(0.0f);
@@ -538,12 +540,13 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
 }
 
 TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.04f, -0.03f, 0.02f);
     simPose.rotation = fs25vr::EulerAngles(0.12f, 0.18f, -0.01f);
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetIpd(0.0f);
@@ -592,11 +595,12 @@ TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking
 }
 
 TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirmation) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.5f, 0.2f, -0.3f);
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetIpd(0.0f);
@@ -681,13 +685,14 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
 }
 
 TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCamera) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    headset.SetEyeFov(0, leftFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -720,13 +725,14 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCame
 }
 
 TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamera) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    headset.SetEyeFov(0, leftFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -758,13 +764,14 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamer
 }
 
 TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDisparity) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    headset.SetEyeFov(0, leftFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -792,13 +799,14 @@ TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDispa
 }
 
 TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    headset.SetEyeFov(0, leftFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -837,17 +845,18 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
 }
 
 TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSequentialFramesInCab) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
     XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
-    oxr->SetSimulatedProjection(1, fs25vr::OpenXrManager::ComputeProjectionFromFov(rightFov));
+    headset.SetEyeFov(0, leftFov);
+    headset.SetEyeFov(1, rightFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
@@ -905,17 +914,18 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
 }
 
 TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSequentialFramesOnFoot) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
     XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
-    oxr->SetSimulatedProjection(1, fs25vr::OpenXrManager::ComputeProjectionFromFov(rightFov));
+    headset.SetEyeFov(0, leftFov);
+    headset.SetEyeFov(1, rightFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
@@ -974,14 +984,15 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
 }
 
 TEST_F(CompanionModTest, SkipsAfrAlternationWhenRequiresAfrFallbackIsFalse) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf fov{ -0.90f, 0.90f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(fov));
+    headset.SetEyeFov(0, fov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     auto probe = std::make_shared<fs25vr::GraphicsTelemetryProbe>();
     // Configure probe with native stereo detected
@@ -1038,12 +1049,13 @@ TEST_F(CompanionModTest, SkipsAfrAlternationWhenRequiresAfrFallbackIsFalse) {
 }
 
 TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFTracking) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.1f, 0.2f, 0.3f);
     simPose.rotation = fs25vr::EulerAngles(0.05f, 0.10f, 0.02f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -1312,12 +1324,13 @@ TEST_F(CompanionModTest, UnloadMapResetsMenuVisibilityState) {
 }
 
 TEST_F(CompanionModTest, ActiveGuiAppliesHeadPoseTrackingToActiveCameraNode) {
-    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::FakeTrackedHeadset headset;
+    auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.2f, 0.1f, -0.05f);
     simPose.rotation = fs25vr::EulerAngles(0.05f, 0.15f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -1379,12 +1392,13 @@ TEST_F(CompanionModTest, ActiveGuiAppliesHeadPoseTrackingToActiveCameraNode) {
 }
 
 TEST_F(CompanionModTest, ActiveGuiRestoresCameraTransformWhenMenuClosed) {
-    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::FakeTrackedHeadset headset;
+    auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.5f, 0.2f, -0.1f);
     simPose.rotation = fs25vr::EulerAngles(0.1f, 0.2f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -1432,11 +1446,12 @@ TEST_F(CompanionModTest, ActiveGuiRestoresCameraTransformWhenMenuClosed) {
 }
 
 TEST_F(CompanionModTest, ActiveGuiPreserves2DMouseAndControllerInteractions) {
-    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::FakeTrackedHeadset headset;
+    auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.1f, 0.0f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -1478,11 +1493,12 @@ TEST_F(CompanionModTest, ActiveGuiPreserves2DMouseAndControllerInteractions) {
 }
 
 TEST_F(CompanionModTest, RecenterActionRealignsMenuQuadWhenInMenu) {
-    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::FakeTrackedHeadset headset;
+    auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(1.0f, 1.5f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -1515,12 +1531,13 @@ TEST_F(CompanionModTest, RecenterActionRealignsMenuQuadWhenInMenu) {
 }
 
 TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -2398,11 +2415,12 @@ TEST_F(CompanionModTest, RecenterModeDefaultsToBothWithVrTrackingSpaceEnabled) {
 }
 
 TEST_F(CompanionModTest, RecenterActionInBothModeZeroesCameraYawAndCallsBridgeRecenter) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.4f, 0.1f, -0.2f);
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -2440,11 +2458,12 @@ TEST_F(CompanionModTest, RecenterActionInBothModeZeroesCameraYawAndCallsBridgeRe
 }
 
 TEST_F(CompanionModTest, RecenterActionInVehicleOnlyModeZeroesCameraYawAndBypassesBridgeRecenter) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.4f, 0.1f, -0.2f);
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -3182,12 +3201,13 @@ TEST_F(CompanionModTest, Is2DViewActiveDefaultsToFalseAndSynchronizesWithVRBridg
 }
 
 TEST_F(CompanionModTest, InCabVehicleCameraBypasses6DOFTrackingIn2DMode) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.15f, 0.05f, -0.10f);
     simPose.rotation = fs25vr::EulerAngles(0.12f, 0.25f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -3251,12 +3271,13 @@ TEST_F(CompanionModTest, InCabVehicleCameraBypasses6DOFTrackingIn2DMode) {
 }
 
 TEST_F(CompanionModTest, OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMouseLook) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.1f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.2f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -3311,9 +3332,10 @@ TEST_F(CompanionModTest, OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMous
 }
 
 TEST_F(CompanionModTest, CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMode) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    headset.SetEyeFov(0, leftFov);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -3913,12 +3935,13 @@ TEST_F(CompanionModTest, DualEyeCameraNodesAndCyclopeanAudioListenerInitializedO
 
 TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrameParity) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -3970,12 +3993,13 @@ TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrame
 
 TEST_F(CompanionModTest, DualCameraNodesRetainIndependentTransformHistoryAcrossAfrCycles) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -4036,12 +4060,13 @@ TEST_F(CompanionModTest, DualCameraNodesRetainIndependentTransformHistoryAcrossA
 
 TEST_F(CompanionModTest, CyclopeanAudioListenerBoundAtNeutralHeadMidpointWithoutInterEyeJitter) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -4091,12 +4116,13 @@ TEST_F(CompanionModTest, CyclopeanAudioListenerBoundAtNeutralHeadMidpointWithout
 
 TEST_F(CompanionModTest, MonoscopicAnd2DModeBypassesDualCameraSwitching) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -4420,18 +4446,19 @@ TEST_F(CompanionModTest, RenderingModeConsoleCommandAndNotificationAlert) {
 
 TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDrivingAndOnFoot) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
     XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
-    oxr->SetSimulatedProjection(1, fs25vr::OpenXrManager::ComputeProjectionFromFov(rightFov));
+    headset.SetEyeFov(0, leftFov);
+    headset.SetEyeFov(1, rightFov);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -4663,12 +4690,13 @@ TEST_F(CompanionModTest, CameraManagerActiveCameraBindingEliminatesEngineWarning
 
 TEST_F(CompanionModTest, SequentialDualPassSubPass1ExplicitlySynchronizesRightEyeCamera) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     fs25vr::VRBridge bridge(oxr, nullptr);

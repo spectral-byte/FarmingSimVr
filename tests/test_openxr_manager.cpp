@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "openxr/openxr_manager.h"
+#include "fake_openxr_tracking.h"
 #include "luau/vr_bridge.h"
 #include "fake_openxr_events.h"
 #include <cstring>
@@ -177,20 +178,15 @@ public:
     XrResult destroySessionResult = XR_SUCCESS;
     XrResult createReferenceSpaceResult = XR_SUCCESS;
     XrResult destroySpaceResult = XR_SUCCESS;
-    XrResult locateSpaceResult = XR_SUCCESS;
 
     bool createSessionCalled = false;
     bool beginSessionCalled = false;
     bool endSessionCalled = false;
     bool destroySessionCalled = false;
     XrSessionBeginInfo lastBeginSessionInfo{};
-    XrSpaceLocation mockSpaceLocation{
-        XR_TYPE_SPACE_LOCATION,
-        nullptr,
-        XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT |
-        XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT,
-        { {0.0f, 0.0f, 0.0f, 1.0f}, {0.1f, 0.2f, -0.3f} }
-    };
+
+    // Head tracking: drive poses through tracking.SetHeadPose() / tracking.SetEyeFov().
+    FakeOpenXrTracking tracking;
 
     XrResult CreateSession(
         XrInstance /*instance*/,
@@ -231,11 +227,6 @@ public:
         return destroySessionResult;
     }
 
-    struct MockSpaceInfo {
-        XrReferenceSpaceType type;
-        XrPosef poseInReferenceSpace;
-    };
-    std::unordered_map<XrSpace, MockSpaceInfo> mockReferenceSpaces;
     std::vector<XrReferenceSpaceCreateInfo> createdReferenceSpaces;
     uint32_t destroySpaceCalls = 0;
     std::vector<XrSpace> destroyedSpaces;
@@ -245,20 +236,14 @@ public:
         const XrReferenceSpaceCreateInfo* createInfo,
         XrSpace* space) override {
         if (createReferenceSpaceResult != XR_SUCCESS) return createReferenceSpaceResult;
-        static uintptr_t s_spaceHandle = 0x50ACE001;
-        XrSpace handle = reinterpret_cast<XrSpace>(s_spaceHandle++);
-        if (space) *space = handle;
-        if (createInfo) {
-            createdReferenceSpaces.push_back(*createInfo);
-            mockReferenceSpaces[handle] = { createInfo->referenceSpaceType, createInfo->poseInReferenceSpace };
-        }
-        return XR_SUCCESS;
+        if (createInfo) createdReferenceSpaces.push_back(*createInfo);
+        return tracking.CreateReferenceSpace(createInfo, space);
     }
 
     XrResult DestroySpace(XrSpace space) override {
         destroySpaceCalls++;
         destroyedSpaces.push_back(space);
-        mockReferenceSpaces.erase(space);
+        tracking.DestroySpace(space);
         return destroySpaceResult;
     }
 
@@ -267,45 +252,8 @@ public:
         XrSpace baseSpace,
         XrTime /*time*/,
         XrSpaceLocation* location) override {
-        if (locateSpaceResult != XR_SUCCESS) return locateSpaceResult;
-        if (!location) return XR_SUCCESS;
-
-        *location = mockSpaceLocation;
-
-        auto it = mockReferenceSpaces.find(baseSpace);
-        if (it != mockReferenceSpaces.end() && it->second.type == XR_REFERENCE_SPACE_TYPE_LOCAL) {
-            const XrPosef& refPose = it->second.poseInReferenceSpace;
-            float dx = mockSpaceLocation.pose.position.x - refPose.position.x;
-            float dy = mockSpaceLocation.pose.position.y - refPose.position.y;
-            float dz = mockSpaceLocation.pose.position.z - refPose.position.z;
-
-            Quaternion qRefInv(-refPose.orientation.x, -refPose.orientation.y, -refPose.orientation.z, refPose.orientation.w);
-            Vector3 relPos = OpenXrManager::RotateVectorByQuaternion(qRefInv, Vector3(dx, dy, dz));
-
-            Quaternion qMock(mockSpaceLocation.pose.orientation.x, mockSpaceLocation.pose.orientation.y,
-                             mockSpaceLocation.pose.orientation.z, mockSpaceLocation.pose.orientation.w);
-            Quaternion relOri = qRefInv * qMock;
-
-            location->pose.position.x = relPos.x;
-            location->pose.position.y = relPos.y;
-            location->pose.position.z = relPos.z;
-
-            location->pose.orientation.x = relOri.x;
-            location->pose.orientation.y = relOri.y;
-            location->pose.orientation.z = relOri.z;
-            location->pose.orientation.w = relOri.w;
-        }
-        return XR_SUCCESS;
+        return tracking.LocateSpace(baseSpace, location);
     }
-
-    XrResult locateViewsResult = XR_SUCCESS;
-    XrViewState mockViewState{
-        XR_TYPE_VIEW_STATE,
-        nullptr,
-        XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_TRACKED_BIT |
-        XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_POSITION_TRACKED_BIT
-    };
-    std::vector<XrView> mockViews;
 
     XrResult LocateViews(
         XrSession /*session*/,
@@ -314,21 +262,7 @@ public:
         uint32_t viewCapacityInput,
         uint32_t* viewCountOutput,
         XrView* views) override {
-        if (locateViewsResult != XR_SUCCESS) return locateViewsResult;
-        if (viewState) {
-            *viewState = mockViewState;
-        }
-        if (viewCountOutput) {
-            *viewCountOutput = static_cast<uint32_t>(mockViews.size());
-        }
-        if (viewCapacityInput == 0) {
-            return XR_SUCCESS;
-        }
-        uint32_t count = (viewCapacityInput < mockViews.size()) ? viewCapacityInput : static_cast<uint32_t>(mockViews.size());
-        for (uint32_t i = 0; i < count; ++i) {
-            views[i] = mockViews[i];
-        }
-        return XR_SUCCESS;
+        return tracking.LocateViews(viewState, viewCapacityInput, viewCountOutput, views);
     }
 
     XrResult enumerateSwapchainFormatsResult = XR_SUCCESS;
@@ -647,8 +581,8 @@ TEST(OpenXrManagerTest, PollsHeadPoseFromOpenXrSpaceAndCalculatesEulerAngles) {
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
     float sinPitch = std::sin(0.5235988f * 0.5f);
     float cosPitch = std::cos(0.5235988f * 0.5f);
-    mockDispatch->mockSpaceLocation.pose.position = { 0.1f, 0.2f, 0.3f };
-    mockDispatch->mockSpaceLocation.pose.orientation = { sinPitch, 0.0f, 0.0f, cosPitch };
+    mockDispatch->tracking.head.pose.position = { 0.1f, 0.2f, 0.3f };
+    mockDispatch->tracking.head.pose.orientation = { sinPitch, 0.0f, 0.0f, cosPitch };
 
     OpenXrManager manager(mockDispatch);
     ASSERT_TRUE(manager.Initialize());
@@ -672,8 +606,8 @@ TEST(OpenXrManagerTest, RecenteringZeroesTranslationalAndYawOffsets) {
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
     float sinYaw = std::sin(0.3f * 0.5f);
     float cosYaw = std::cos(0.3f * 0.5f);
-    mockDispatch->mockSpaceLocation.pose.position = { 0.5f, 1.2f, -0.4f };
-    mockDispatch->mockSpaceLocation.pose.orientation = { 0.0f, sinYaw, 0.0f, cosYaw };
+    mockDispatch->tracking.head.pose.position = { 0.5f, 1.2f, -0.4f };
+    mockDispatch->tracking.head.pose.orientation = { 0.0f, sinYaw, 0.0f, cosYaw };
 
     OpenXrManager manager(mockDispatch);
     ASSERT_TRUE(manager.Initialize());
@@ -697,7 +631,7 @@ TEST(OpenXrManagerTest, RecenteringZeroesTranslationalAndYawOffsets) {
     EXPECT_NEAR(after.orientation.z, 0.0f, 0.001f);
     EXPECT_NEAR(after.orientation.w, 1.0f, 0.001f);
 
-    mockDispatch->mockSpaceLocation.pose.position = { 0.6f, 1.25f, -0.42f };
+    mockDispatch->tracking.head.pose.position = { 0.6f, 1.25f, -0.42f };
     HeadPose moved = manager.PollHeadPose();
     EXPECT_NEAR(moved.position.y, 0.05f, 0.005f);
 }
@@ -724,8 +658,8 @@ TEST(OpenXrManagerTest, RecenterRecreatesLocalSpaceWithPoseInReferenceSpaceAndPr
     Quaternion qPitch(std::sin(halfPitch), 0.0f, 0.0f, std::cos(halfPitch));
     Quaternion qCombined = qYaw * qPitch;
 
-    mockDispatch->mockSpaceLocation.pose.position = { 1.5f, 0.8f, -2.0f };
-    mockDispatch->mockSpaceLocation.pose.orientation = { qCombined.x, qCombined.y, qCombined.z, qCombined.w };
+    mockDispatch->tracking.head.pose.position = { 1.5f, 0.8f, -2.0f };
+    mockDispatch->tracking.head.pose.orientation = { qCombined.x, qCombined.y, qCombined.z, qCombined.w };
 
     uint32_t destroyCallsBefore = mockDispatch->destroySpaceCalls;
     size_t createdSpacesBefore = mockDispatch->createdReferenceSpaces.size();
@@ -771,8 +705,8 @@ TEST(OpenXrManagerTest, PollHeadPoseNativelyReflectsRecenteredReferenceFrameAndP
     Quaternion qPitch(std::sin(halfPitch), 0.0f, 0.0f, std::cos(halfPitch));
     Quaternion qHead = qYaw * qPitch;
 
-    mockDispatch->mockSpaceLocation.pose.position = { 2.0f, 1.2f, -1.0f };
-    mockDispatch->mockSpaceLocation.pose.orientation = { qHead.x, qHead.y, qHead.z, qHead.w };
+    mockDispatch->tracking.head.pose.position = { 2.0f, 1.2f, -1.0f };
+    mockDispatch->tracking.head.pose.orientation = { qHead.x, qHead.y, qHead.z, qHead.w };
 
     manager.Recenter();
 
@@ -792,7 +726,7 @@ TEST(OpenXrManagerTest, PollHeadPoseNativelyReflectsRecenteredReferenceFrameAndP
     EXPECT_NEAR(raw.rotation.pitch, pitch, 0.01f);
 }
 
-TEST(OpenXrManagerTest, RecenterSimulatedPoseCompatibility) {
+TEST(OpenXrManagerTest, RecenterRebasesLaterHeadMovementToTheRecenteredOrigin) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
     OpenXrManager manager(mockDispatch);
@@ -804,7 +738,7 @@ TEST(OpenXrManagerTest, RecenterSimulatedPoseCompatibility) {
     simPose.position = Vector3(1.0f, 2.0f, 3.0f);
     simPose.rotation = EulerAngles(0.0f, 0.4f, 0.0f);
     simPose.isValid = true;
-    manager.SetSimulatedPose(simPose);
+    mockDispatch->tracking.SetHeadPose(simPose);
 
     manager.Recenter();
 
@@ -818,12 +752,58 @@ TEST(OpenXrManagerTest, RecenterSimulatedPoseCompatibility) {
     movedPose.position = Vector3(1.0f, 2.5f, 3.0f);
     movedPose.rotation = EulerAngles(0.0f, 0.4f, 0.0f);
     movedPose.isValid = true;
-    manager.SetSimulatedPose(movedPose);
+    mockDispatch->tracking.SetHeadPose(movedPose);
 
     HeadPose movedPolled = manager.PollHeadPose();
     EXPECT_NEAR(movedPolled.position.y, 0.5f, 0.001f);
 }
 
+TEST(OpenXrManagerTest, PollEyeProjectionReportsFovsDrivenThroughFakeTracking) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    XrFovf rightFov{ -0.80f, 0.90f, 0.70f, -0.60f };
+    mockDispatch->tracking.SetEyeFov(0, leftFov);
+    mockDispatch->tracking.SetEyeFov(1, rightFov);
+
+    EyeProjection left = manager.PollEyeProjection(0);
+    EyeProjection right = manager.PollEyeProjection(1);
+    ASSERT_TRUE(left.isValid);
+    ASSERT_TRUE(right.isValid);
+    EXPECT_NEAR(left.angleLeft, -0.90f, 0.0001f);
+    EXPECT_NEAR(left.angleRight, 0.80f, 0.0001f);
+    EXPECT_NEAR(right.angleUp, 0.70f, 0.0001f);
+    EXPECT_NEAR(right.angleDown, -0.60f, 0.0001f);
+    EXPECT_NEAR(manager.GetEyeProjection(1).angleLeft, -0.80f, 0.0001f);
+}
+
+TEST(OpenXrManagerTest, PollHeadPoseReportsEulerPoseDrivenThroughFakeTracking) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    HeadPose placed;
+    placed.position = Vector3(0.4f, 1.7f, -0.2f);
+    placed.rotation = EulerAngles(0.25f, -0.15f, 0.05f);
+    placed.isValid = true;
+    mockDispatch->tracking.SetHeadPose(placed);
+
+    HeadPose polled = manager.PollHeadPose();
+    EXPECT_TRUE(polled.isValid);
+    EXPECT_FALSE(polled.positionTracked);
+    EXPECT_NEAR(polled.position.y, 1.7f, 0.0001f);
+    EXPECT_NEAR(polled.rotation.pitch, 0.25f, 0.001f);
+    EXPECT_NEAR(polled.rotation.yaw, -0.15f, 0.001f);
+    EXPECT_NEAR(polled.rotation.roll, 0.05f, 0.001f);
+}
 TEST(OpenXrManagerTest, ShutdownDestroysBaseLocalSpaceAndLocalSpace) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
@@ -872,7 +852,7 @@ TEST(OpenXrManagerTest, LocatesViewsAndExtractsAsymmetricFovTangents) {
     rightView.pose.position = { 0.032f, 0.0f, 0.0f }; // +IPD/2
     rightView.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
 
-    mockDispatch->mockViews = { leftView, rightView };
+    mockDispatch->tracking.views = { leftView, rightView };
 
     OpenXrManager manager(mockDispatch);
     ASSERT_TRUE(manager.Initialize());
@@ -1099,14 +1079,14 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
 
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
     XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
-    manager.SetSimulatedProjection(0, OpenXrManager::ComputeProjectionFromFov(leftFov));
-    manager.SetSimulatedProjection(1, OpenXrManager::ComputeProjectionFromFov(rightFov));
+    mockDispatch->tracking.SetEyeFov(0, leftFov);
+    mockDispatch->tracking.SetEyeFov(1, rightFov);
 
     HeadPose simPose;
     simPose.position = Vector3(0.0f, 1.6f, 0.0f);
     simPose.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     simPose.isValid = true;
-    manager.SetSimulatedPose(simPose);
+    mockDispatch->tracking.SetHeadPose(simPose);
     manager.SetIpd(0.064f);
 
     EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
@@ -1162,7 +1142,7 @@ TEST(OpenXrManagerTest, CapturesSeparateTemporalPosesPerEyeAndRotatesByQuaternio
     leftPose.position = Vector3(0.0f, 1.6f, 0.0f);
     leftPose.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     leftPose.isValid = true;
-    manager.SetSimulatedPose(leftPose);
+    mockDispatch->tracking.SetHeadPose(leftPose);
 
     EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
 
@@ -1172,7 +1152,8 @@ TEST(OpenXrManagerTest, CapturesSeparateTemporalPosesPerEyeAndRotatesByQuaternio
     rightPose.position = Vector3(0.1f, 1.6f, 0.2f);
     rightPose.orientation = Quaternion(0.0f, 0.7071068f, 0.0f, 0.7071068f);
     rightPose.isValid = true;
-    manager.SetSimulatedPose(rightPose);
+    mockDispatch->tracking.SetHeadPose(rightPose);
+    manager.PollHeadPose(2000000);  // eye 0's frame is still open; poll the later head pose explicitly
 
     EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
 
@@ -1752,7 +1733,7 @@ TEST(OpenXrManagerTest, SubmitFramePairAppliesSafeFovAndNormalizedOrientationFal
     ASSERT_TRUE(manager.CreateTrackingSpaces());
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
-    // Do NOT set simulated projection or simulated pose (leave uninitialized/zero)
+    // Do NOT set the head pose or eye FOVs on the fake runtime (leave uninitialized/zero)
     EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
     EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
 
@@ -1790,7 +1771,7 @@ TEST(OpenXrManagerTest, BeginFrameLocatesViewsAndRefreshesProjectionsAndPose) {
     rightView.pose.position = { 0.033f, 0.0f, 0.0f };
     rightView.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
 
-    mockDispatch->mockViews = { leftView, rightView };
+    mockDispatch->tracking.views = { leftView, rightView };
 
     OpenXrManager manager(mockDispatch);
     ASSERT_TRUE(manager.Initialize());
@@ -1930,7 +1911,7 @@ TEST(OpenXrManagerTest, SubmitMenuQuadRespectsRecenterOffset) {
     simPose.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
-    manager.SetSimulatedPose(simPose);
+    mockDispatch->tracking.SetHeadPose(simPose);
 
     manager.Recenter();
 
@@ -2058,7 +2039,7 @@ TEST(OpenXrManagerTest, SubmitMenuQuadAlignsToHeadPoseOnRecenter) {
     float halfYaw = 0.785398f * 0.5f;
     simPose.orientation = Quaternion(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
     simPose.isValid = true;
-    manager.SetSimulatedPose(simPose);
+    mockDispatch->tracking.SetHeadPose(simPose);
 
     // Recenter view while in menu
     manager.Recenter();
@@ -2096,7 +2077,8 @@ TEST(OpenXrManagerTest, MenuQuadRemainsAnchoredInLocalSpaceAcrossHeadMotion) {
     initialPose.position = Vector3(0.0f, 1.7f, 0.0f);
     initialPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     initialPose.isValid = true;
-    manager.SetSimulatedPose(initialPose);
+    mockDispatch->tracking.SetHeadPose(initialPose);
+    manager.PollHeadPose();
 
     // Explicitly align quad to initial pose
     manager.AlignMenuQuadToHeadPose();
@@ -2106,7 +2088,7 @@ TEST(OpenXrManagerTest, MenuQuadRemainsAnchoredInLocalSpaceAcrossHeadMotion) {
     movedPose.position = Vector3(0.0f, 1.7f, -0.5f);
     movedPose.rotation = EulerAngles(0.3f, 0.2f, 0.1f);
     movedPose.isValid = true;
-    manager.SetSimulatedPose(movedPose);
+    mockDispatch->tracking.SetHeadPose(movedPose);
 
     // Submit quad again
     ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
@@ -2287,17 +2269,20 @@ struct RenderPoseFixture {
 TEST(OpenXrManagerTest, SequentialDualPassSubmitsEachEyeWithPoseItWasRenderedWith) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
 
-    // Sub-pass 0: engine reads the head pose, then the head moves before present.
-    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    // Sub-pass 0: engine reads the head pose (located before the frame begins), then the head
+    // moves before present; BeginFrame locates the moved head at the predicted display time.
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetHeadPose();
-    f.manager->SetSimulatedPose(MakeRenderTestPose(5.0f, 1.6f, 5.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(5.0f, 1.6f, 5.0f));
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
 
-    // Sub-pass 1: same again with different poses.
+    // Sub-pass 1 runs inside the open frame, so the engine reads the display-time pose; the
+    // head then moves again and is polled before present, so the latest polled pose (the
+    // fallback) differs from the one eye 1 was rendered with.
     f.bridge->SetSubPassIndex(1);
-    f.manager->SetSimulatedPose(MakeRenderTestPose(0.2f, 1.7f, -0.3f));
     f.bridge->GetHeadPose();
-    f.manager->SetSimulatedPose(MakeRenderTestPose(9.0f, 9.0f, 9.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(9.0f, 9.0f, 9.0f));
+    f.manager->PollHeadPose(2000000);
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
     ASSERT_TRUE(f.manager->SubmitFramePair());
 
@@ -2307,25 +2292,27 @@ TEST(OpenXrManagerTest, SequentialDualPassSubmitsEachEyeWithPoseItWasRenderedWit
     EXPECT_NEAR(v0.pose.position.x, -0.032f, 0.001f);
     EXPECT_NEAR(v0.pose.position.y, 1.6f, 0.001f);
     EXPECT_NEAR(v0.pose.position.z, 0.0f, 0.001f);
-    EXPECT_NEAR(v1.pose.position.x, 0.2f + 0.032f, 0.001f);
-    EXPECT_NEAR(v1.pose.position.y, 1.7f, 0.001f);
-    EXPECT_NEAR(v1.pose.position.z, -0.3f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.x, 5.0f + 0.032f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.y, 1.6f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.z, 5.0f, 0.001f);
 }
 
 TEST(OpenXrManagerTest, AfrSubmitsEachEyeWithPoseItWasRenderedWith) {
     RenderPoseFixture f(VRRenderingMode::AFR);
     ASSERT_EQ(f.bridge->GetFrameParity(), 0u);
 
-    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetHeadPose();
-    f.manager->SetSimulatedPose(MakeRenderTestPose(5.0f, 1.6f, 5.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(5.0f, 1.6f, 5.0f));
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
     f.bridge->AdvanceFrame();
     ASSERT_EQ(f.bridge->GetFrameParity(), 1u);
 
-    f.manager->SetSimulatedPose(MakeRenderTestPose(0.2f, 1.7f, -0.3f));
+    // The OpenXR frame is still open, so the engine reads the display-time pose for eye 1; the
+    // later poll makes the fallback pose differ from the one eye 1 was rendered with.
     f.bridge->GetHeadPose();
-    f.manager->SetSimulatedPose(MakeRenderTestPose(9.0f, 9.0f, 9.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(9.0f, 9.0f, 9.0f));
+    f.manager->PollHeadPose(2000000);
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
     ASSERT_TRUE(f.manager->SubmitFramePair());
 
@@ -2334,18 +2321,17 @@ TEST(OpenXrManagerTest, AfrSubmitsEachEyeWithPoseItWasRenderedWith) {
     const auto& v1 = f.dispatch->lastSubmittedProjectionViews[1];
     EXPECT_NEAR(v0.pose.position.x, -0.032f, 0.001f);
     EXPECT_NEAR(v0.pose.position.z, 0.0f, 0.001f);
-    EXPECT_NEAR(v1.pose.position.x, 0.2f + 0.032f, 0.001f);
-    EXPECT_NEAR(v1.pose.position.z, -0.3f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.x, 5.0f + 0.032f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.z, 5.0f, 0.001f);
 }
-
 TEST(OpenXrManagerTest, FrameBeginPollDoesNotOverwriteRecordedRenderPose) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
 
     // Pose recorded before any OpenXR frame has begun (BeginFrame happens inside the first copy).
-    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetHeadPose();
     ASSERT_FALSE(f.manager->IsFrameBegun());
-    f.manager->SetSimulatedPose(MakeRenderTestPose(3.0f, 1.0f, 3.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(3.0f, 1.0f, 3.0f));
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
     EXPECT_NEAR(f.manager->GetCapturedEyePose(0).position.x, 0.0f, 0.001f);
     EXPECT_NEAR(f.manager->GetCapturedEyePose(0).position.z, 0.0f, 0.001f);
@@ -2354,9 +2340,9 @@ TEST(OpenXrManagerTest, FrameBeginPollDoesNotOverwriteRecordedRenderPose) {
 TEST(OpenXrManagerTest, FallsBackToPolledPoseWhenNoRenderPoseRecorded) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
 
-    f.manager->SetSimulatedPose(MakeRenderTestPose(1.0f, 1.5f, 2.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(1.0f, 1.5f, 2.0f));
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
-    f.manager->SetSimulatedPose(MakeRenderTestPose(1.0f, 1.5f, 2.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(1.0f, 1.5f, 2.0f));
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
     ASSERT_TRUE(f.manager->SubmitFramePair());
 
@@ -2368,7 +2354,7 @@ TEST(OpenXrManagerTest, FallsBackToPolledPoseWhenNoRenderPoseRecorded) {
 TEST(OpenXrManagerTest, RecordedRenderPoseIsConsumedByCopy) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
 
-    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetHeadPose();
     EXPECT_TRUE(f.manager->HasRecordedRenderPose(0));
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
@@ -2376,11 +2362,11 @@ TEST(OpenXrManagerTest, RecordedRenderPoseIsConsumedByCopy) {
 }
 
 TEST(OpenXrManagerTest, RuntimeTrackedPosesSubmitEachEyeWithItsRenderPose) {
-    // No simulated pose: poses come from xrLocateSpace, at the current time before the frame
+    // Poses come from xrLocateSpace, at the current time before the frame
     // begins and at the predicted display time (cached) once it has.
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
     auto setTracked = [&](float x, float y, float z) {
-        f.dispatch->mockSpaceLocation.pose.position = { x, y, z };
+        f.dispatch->tracking.head.pose.position = { x, y, z };
     };
 
     setTracked(0.0f, 1.6f, 0.0f);
@@ -2407,14 +2393,14 @@ TEST(OpenXrManagerTest, InvalidPoseIsNotRecorded) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
     HeadPose invalid = MakeRenderTestPose(1.0f, 1.0f, 1.0f);
     invalid.isValid = false;
-    f.manager->SetSimulatedPose(invalid);
+    f.dispatch->tracking.SetHeadPose(invalid);
     f.bridge->GetHeadPose();
     EXPECT_FALSE(f.manager->HasRecordedRenderPose(0));
 }
 
 TEST(OpenXrManagerTest, GetEyePoseRecordsForTheRequestedEye) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
-    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetEyePose(1);
     EXPECT_FALSE(f.manager->HasRecordedRenderPose(0));
     EXPECT_TRUE(f.manager->HasRecordedRenderPose(1));
@@ -2424,7 +2410,7 @@ TEST(OpenXrManagerTest, UnconsumedRenderPoseExpiresAtFrameEnd) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
     f.dispatch->mockShouldRender = XR_FALSE;  // copies skip the swapchain and consume nothing
 
-    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetHeadPose();
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
     ASSERT_TRUE(f.manager->HasRecordedRenderPose(0));
@@ -2436,7 +2422,7 @@ TEST(OpenXrManagerTest, UnconsumedRenderPoseExpiresAtFrameEnd) {
 
 TEST(OpenXrManagerTest, RecenterDropsRecordedRenderPoses) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
-    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetEyePose(0);
     f.bridge->GetEyePose(1);
 
@@ -2448,7 +2434,7 @@ TEST(OpenXrManagerTest, RecenterDropsRecordedRenderPoses) {
 
 TEST(OpenXrManagerTest, SessionStopDropsRecordedRenderPoses) {
     RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
-    f.manager->SetSimulatedPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
     f.bridge->GetEyePose(0);
 
     // Headset taken off: on resume the pose would be from before the pause.
@@ -2464,7 +2450,7 @@ TEST(OpenXrManagerTest, ShareRenderPoseAcrossEyesUsesWhicheverEyeWasRecorded) {
     f.manager->RecordRenderPose(1, MakeRenderTestPose(0.3f, 1.6f, 0.0f));
 
     f.manager->ShareRenderPoseAcrossEyes();
-    f.manager->SetSimulatedPose(MakeRenderTestPose(7.0f, 7.0f, 7.0f));
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(7.0f, 7.0f, 7.0f));
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
     ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
 

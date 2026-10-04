@@ -5,6 +5,7 @@
 #include "proxy/system_dxgi.h"
 #include "openxr/openxr_manager.h"
 #include "fake_openxr_events.h"
+#include "fake_openxr_tracking.h"
 #include "ngx/ngx_interceptor.h"
 #include <wrl/client.h>
 #include <unordered_set>
@@ -220,37 +221,30 @@ public:
     XrResult BeginSession(XrSession, const XrSessionBeginInfo*) override { return XR_SUCCESS; }
     XrResult EndSession(XrSession) override { return XR_SUCCESS; }
     XrResult DestroySession(XrSession) override { return XR_SUCCESS; }
-    XrResult CreateReferenceSpace(XrSession, const XrReferenceSpaceCreateInfo*, XrSpace* space) override {
-        static uintptr_t s_space = 0x50ACE001;
-        if (space) *space = reinterpret_cast<XrSpace>(s_space++);
+    // Head at (0, 1.5, 0) with the eyes 64 mm apart, both with the same asymmetric FOV; tests
+    // move the head and change FOVs through tracking.
+    FakeOpenXrTracking tracking = MakeDefaultTracking();
+    static FakeOpenXrTracking MakeDefaultTracking() {
+        FakeOpenXrTracking tracking;
+        tracking.head.pose.position = { 0.0f, 1.5f, 0.0f };
+        for (uint32_t i = 0; i < 2; ++i) {
+            tracking.SetEyeFov(i, { -0.90f, 0.80f, 0.85f, -0.85f });
+            tracking.views[i].pose.position = { (i == 0 ? -0.032f : 0.032f), 1.5f, 0.0f };
+        }
+        return tracking;
+    }
+    XrResult CreateReferenceSpace(XrSession, const XrReferenceSpaceCreateInfo* createInfo, XrSpace* space) override {
+        return tracking.CreateReferenceSpace(createInfo, space);
+    }
+    XrResult DestroySpace(XrSpace space) override {
+        tracking.DestroySpace(space);
         return XR_SUCCESS;
     }
-    XrResult DestroySpace(XrSpace) override { return XR_SUCCESS; }
-    XrResult LocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation* location) override {
-        if (location) {
-            location->locationFlags = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT |
-                                      XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
-            location->pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
-            location->pose.position = { 0.0f, 1.5f, 0.0f };
-        }
-        return XR_SUCCESS;
+    XrResult LocateSpace(XrSpace, XrSpace baseSpace, XrTime, XrSpaceLocation* location) override {
+        return tracking.LocateSpace(baseSpace, location);
     }
     XrResult LocateViews(XrSession, const XrViewLocateInfo*, XrViewState* viewState, uint32_t viewCapacityInput, uint32_t* viewCountOutput, XrView* views) override {
-        if (viewCountOutput) *viewCountOutput = 2;
-        if (viewState) {
-            viewState->viewStateFlags = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_TRACKED_BIT |
-                                        XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_POSITION_TRACKED_BIT;
-        }
-        if (viewCapacityInput >= 2 && views) {
-            for (uint32_t i = 0; i < 2; ++i) {
-                views[i].type = XR_TYPE_VIEW;
-                views[i].next = nullptr;
-                views[i].pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
-                views[i].pose.position = { (i == 0 ? -0.032f : 0.032f), 1.5f, 0.0f };
-                views[i].fov = { -0.90f, 0.80f, 0.85f, -0.85f };
-            }
-        }
-        return XR_SUCCESS;
+        return tracking.LocateViews(viewState, viewCapacityInput, viewCountOutput, views);
     }
     XrResult EnumerateSwapchainFormats(XrSession, uint32_t formatCapacityInput, uint32_t* formatCountOutput, int64_t* formats) override {
         if (formatCountOutput) *formatCountOutput = 1;
@@ -1089,11 +1083,11 @@ TEST(DxgiProxyTest, NativeStereoSubmitsBothEyesWithTheOneRenderPose) {
     rendered.position = Vector3(0.0f, 1.6f, 0.0f);
     rendered.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     rendered.isValid = true;
-    openXrManager->SetSimulatedPose(rendered);
+    mockDispatch->tracking.SetHeadPose(rendered);
     vrBridge->GetHeadPose();
     HeadPose moved = rendered;
     moved.position = Vector3(5.0f, 1.6f, 5.0f);
-    openXrManager->SetSimulatedPose(moved);
+    mockDispatch->tracking.SetHeadPose(moved);
 
     proxy.OnPresent(nullptr, 0, 0);
     ASSERT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
@@ -1777,7 +1771,7 @@ TEST(DxgiProxyTest, TransitionInto2DFloatingWindowModeTriggersQuadAlignment) {
     simPose.position = Vector3(2.0f, 1.7f, 3.0f);
     simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    mockDispatch->tracking.SetHeadPose(simPose);
 
     // Trigger VR View Toggle Action to activate 2D Floating Window Mode
     vrBridge->Set2DViewActive(true);
@@ -1845,7 +1839,7 @@ TEST(DxgiProxyTest, TransitionIntoMenuModeTriggersQuadAlignment) {
     simPose.position = Vector3(1.0f, 1.6f, -2.0f);
     simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    mockDispatch->tracking.SetHeadPose(simPose);
 
     // Initial frame in pre-game menu: should align menu quad to simPose
     proxy.OnPresent(nullptr, 0, 0);
