@@ -1,5 +1,6 @@
 #include "luau_interceptor.h"
 #include "core/logger.h"
+#include "core/dll_lifecycle.h"
 #include <windows.h>
 #include <cstring>
 #include <string>
@@ -24,6 +25,7 @@ LuauInterceptor::LuauInterceptor(std::shared_ptr<VRBridge> bridge)
 }
 
 LuauInterceptor::~LuauInterceptor() {
+    if (IsProcessTerminating()) return;
     Detach();
 }
 

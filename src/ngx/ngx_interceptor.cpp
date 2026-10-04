@@ -1,5 +1,6 @@
 #include "ngx_interceptor.h"
 #include "core/logger.h"
+#include "core/dll_lifecycle.h"
 #include "luau/vr_bridge.h"
 #include "proxy/dxgi_proxy.h"
 #include "openxr/openxr_manager.h"
@@ -18,6 +19,7 @@ NgxInterceptor& NgxInterceptor::Instance() {
 NgxInterceptor::NgxInterceptor() = default;
 
 NgxInterceptor::~NgxInterceptor() {
+    if (IsProcessTerminating()) return;
     DetachAll();
 }
 

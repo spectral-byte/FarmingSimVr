@@ -1,5 +1,6 @@
 #include "detour.h"
 #include "logger.h"
+#include "dll_lifecycle.h"
 #include <windows.h>
 #include <cstring>
 #include <cstdint>
@@ -191,6 +192,8 @@ void* AllocateNear(void* target, size_t size, DWORD protect = PAGE_READWRITE) {
 FunctionDetour::FunctionDetour() = default;
 
 FunctionDetour::~FunctionDetour() {
+    // At termination the patch stays and the trampoline is never freed (see IsProcessTerminating).
+    if (IsProcessTerminating()) return;
     Uninstall();
 }
 

@@ -1,6 +1,7 @@
 #include "mirror_window_controller.h"
 #include "openxr/openxr_manager.h"
 #include "core/logger.h"
+#include "core/dll_lifecycle.h"
 #include <dxgi.h>
 #include <algorithm>
 #include <cmath>
@@ -47,6 +48,7 @@ MirrorWindowController::MirrorWindowController(std::function<bool()> isVrActive)
 }
 
 MirrorWindowController::~MirrorWindowController() {
+    if (IsProcessTerminating()) return;
     DetachAll();
     if (s_activeController == this) {
         s_activeController = nullptr;

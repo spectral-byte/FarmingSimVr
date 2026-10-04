@@ -1,5 +1,7 @@
 #include "dxgi_proxy.h"
 #include "core/logger.h"
+#include "core/dll_lifecycle.h"
+#include "ngx/ngx_interceptor.h"
 #include <utility>
 #include <windowsx.h>
 #include <algorithm>
@@ -74,6 +76,7 @@ DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
 }
 
 DxgiProxy::~DxgiProxy() {
+    if (IsProcessTerminating()) return;
     DetachAll();
     if (s_activeProxy == this) {
         s_activeProxy = nullptr;
@@ -81,8 +84,12 @@ DxgiProxy::~DxgiProxy() {
 }
 
 void DxgiProxy::EnsureVrInitialized() {
-    if (!m_vrInitialized) {
-        m_vrInitialized = true;
+    // Deferred from DllMain (loader lock). Runs before the game creates its D3D12 device.
+    // Installed on every factory call (idempotent and locked), not only the first, so a concurrent
+    // caller blocks until the LoadLibrary hooks exist instead of loading nvngx unhooked.
+    NgxInterceptor::Instance().InstallModuleLoadHooks();
+    if (!m_vrInitialized.exchange(true)) {
+        NgxInterceptor::Instance().CheckAndAttachLoadedModule();
         LogInfo("Intercepted DXGI startup sequence. Initializing OpenXR subsystem...");
         m_openXrManager->Initialize();
         if (m_openXrManager->IsPassThrough()) {

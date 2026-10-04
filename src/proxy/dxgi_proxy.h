@@ -12,6 +12,7 @@
 #include <dxgi1_4.h>
 #include <commctrl.h>
 #include <wrl/client.h>
+#include <atomic>
 #include <memory>
 #include <optional>
 
@@ -144,7 +145,7 @@ private:
 
     bool m_swapChainAttached = false;
     bool m_factoryAttached = false;
-    bool m_vrInitialized = false;
+    std::atomic<bool> m_vrInitialized{false};
     bool m_wasInQuadMode = false;
     bool m_lastPresentSuppressed = false;
     std::optional<VRRenderingMode> m_pendingRenderingMode;

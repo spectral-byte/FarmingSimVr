@@ -1,5 +1,6 @@
 #include "d3d12_interceptor.h"
 #include "core/logger.h"
+#include "core/dll_lifecycle.h"
 
 namespace fs25vr {
 
@@ -17,6 +18,7 @@ D3D12Interceptor::D3D12Interceptor(std::shared_ptr<GraphicsTelemetryProbe> probe
 }
 
 D3D12Interceptor::~D3D12Interceptor() {
+    if (IsProcessTerminating()) return;
     DetachAll();
 }
 

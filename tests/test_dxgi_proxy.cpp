@@ -2,6 +2,7 @@
 #include "proxy/dxgi_proxy.h"
 #include "proxy/system_dxgi.h"
 #include "openxr/openxr_manager.h"
+#include "ngx/ngx_interceptor.h"
 #include <wrl/client.h>
 #include <unordered_set>
 
@@ -110,6 +111,9 @@ TEST(DxgiProxyTest, ForwardsCreateDXGIFactory2SilentlyInPassThrough) {
 }
 
 TEST(DxgiProxyTest, BinaryLoadsAndInterceptsStartupInPassThrough) {
+    // The DLL carries its own NgxInterceptor; drop this binary's LoadLibrary hooks first so the two
+    // copies do not hook the same kernel32 entry points on top of each other.
+    NgxInterceptor::Instance().DetachAll();
     HMODULE hProxy = LoadLibraryA("dxgi.dll");
     if (!hProxy) {
         hProxy = LoadLibraryA("build/dxgi.dll");

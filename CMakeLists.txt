@@ -55,6 +55,8 @@ set(CORE_SOURCES
     src/core/math_utils.h
     src/core/detour.cpp
     src/core/detour.h
+    src/core/dll_lifecycle.cpp
+    src/core/dll_lifecycle.h
     src/luau/vr_bridge.cpp
     src/luau/vr_bridge.h
     src/luau/luau_interceptor.cpp
@@ -108,9 +110,14 @@ add_library(dxgi SHARED
 
 target_link_libraries(dxgi PRIVATE fs25_vr_core)
 
+# Stand-in nvngx.dll for tests (exports the NGX D3D12 entry points)
+add_library(fake_nvngx SHARED tests/fake_nvngx.cpp)
+set_target_properties(fake_nvngx PROPERTIES OUTPUT_NAME nvngx)
+
 # Test executable target
 add_executable(fs25_vr_tests
     tests/test_main.cpp
+    tests/test_dll_lifecycle.cpp
     tests/test_math_utils.cpp
     tests/test_logger.cpp
     tests/test_openxr_cursor_overlay.cpp
@@ -142,7 +149,9 @@ add_dependencies(fs25_vr_tests dxgi)
 
 target_compile_definitions(fs25_vr_tests PRIVATE
     PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    FAKE_NVNGX_PATH="$<TARGET_FILE:fake_nvngx>"
 )
+add_dependencies(fs25_vr_tests fake_nvngx)
 
 include(GoogleTest)
 gtest_discover_tests(fs25_vr_tests DISCOVERY_TIMEOUT 30)
