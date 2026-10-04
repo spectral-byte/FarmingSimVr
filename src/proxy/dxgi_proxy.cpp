@@ -776,6 +776,10 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
     if (pDesc && proxy->IsActive()) {
+        // Before any override below: an unusable format must leave the swap chain untouched.
+        proxy->m_openXrManager->EnsureBackBufferFormatSupported(pDesc->BufferDesc.Format);
+    }
+    if (pDesc && proxy->IsActive()) {
         if (pDesc->BufferDesc.Width > 0 && pDesc->BufferDesc.Height > 0) {
             proxy->SetTargetRenderResolution(pDesc->BufferDesc.Width, pDesc->BufferDesc.Height);
         }
@@ -806,6 +810,10 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
+    }
+    if (pDesc && proxy->IsActive()) {
+        // Before any override below: an unusable format must leave the swap chain untouched.
+        proxy->m_openXrManager->EnsureBackBufferFormatSupported(pDesc->Format);
     }
     if (pDesc && proxy->IsActive()) {
         if (pDesc->Width > 0 && pDesc->Height > 0) {

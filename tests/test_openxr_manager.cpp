@@ -949,6 +949,117 @@ TEST(OpenXrManagerTest, CreatesEyeSwapchainsAndEnumeratesImages) {
     EXPECT_EQ(mockDispatch->destroySwapchainCalls, 2u);
 }
 
+TEST(OpenXrManagerTest, NegotiatesCopyCompatibleSrgbVariantOfBackBufferFormat) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    // Runtime prefers FP16/10-bit but also offers a variant of the back buffer family.
+    mockDispatch->mockSwapchainFormats = {
+        DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    EXPECT_TRUE(manager.CreateEyeSwapchains(1920, 1080, DXGI_FORMAT_R8G8B8A8_UNORM));
+    EXPECT_EQ(manager.GetEyeSwapchain(0).format, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    EXPECT_EQ(manager.GetEyeSwapchain(1).format, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+}
+
+TEST(OpenXrManagerTest, StaysInPassThroughWhenNoCompatibleSwapchainFormat) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->mockSwapchainFormats = { DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R10G10B10A2_UNORM };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    manager.PollEvents();  // consume READY so the session is running
+    ASSERT_TRUE(manager.IsSessionRunning());
+
+    EXPECT_FALSE(manager.CreateEyeSwapchains(1920, 1080, DXGI_FORMAT_R8G8B8A8_UNORM));
+    EXPECT_FALSE(manager.HasEyeSwapchains());
+    EXPECT_EQ(mockDispatch->createSwapchainCalls, 0u);
+    EXPECT_TRUE(manager.IsPassThrough());
+    // Pass-Through Mode holds no OpenXR session. (xrEndSession is not called: it is only valid
+    // once the runtime has moved the session to STOPPING; xrDestroySession is valid in any state.)
+    EXPECT_FALSE(manager.HasSession());
+    EXPECT_TRUE(mockDispatch->destroySessionCalled);
+    EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
+}
+
+TEST(OpenXrManagerTest, FailedFormatQueryRequestsBackBufferFormatInsteadOfPassThrough) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->enumerateSwapchainFormatsResult = XR_ERROR_RUNTIME_FAILURE;
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    EXPECT_TRUE(manager.EnsureBackBufferFormatSupported(DXGI_FORMAT_R8G8B8A8_UNORM));
+    EXPECT_TRUE(manager.CreateEyeSwapchains(1920, 1080, DXGI_FORMAT_R8G8B8A8_UNORM));
+    EXPECT_EQ(manager.GetEyeSwapchain(0).format, DXGI_FORMAT_R8G8B8A8_UNORM);
+    EXPECT_TRUE(manager.IsActive());
+}
+
+TEST(OpenXrManagerTest, EmptyFormatListRequestsBackBufferFormatInsteadOfPassThrough) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->mockSwapchainFormats = {};
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    EXPECT_TRUE(manager.CreateEyeSwapchains(1920, 1080, DXGI_FORMAT_B8G8R8A8_UNORM));
+    EXPECT_EQ(manager.GetEyeSwapchain(0).format, DXGI_FORMAT_B8G8R8A8_UNORM);
+    EXPECT_TRUE(manager.IsActive());
+}
+
+TEST(OpenXrManagerTest, EnsureBackBufferFormatSupportedReleasesOpenXrOnlyWhenIncompatible) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+
+    // Default mock offers R8G8B8A8 sRGB/UNORM.
+    EXPECT_TRUE(manager.EnsureBackBufferFormatSupported(DXGI_FORMAT_R8G8B8A8_UNORM));
+    EXPECT_TRUE(manager.IsActive());
+    EXPECT_TRUE(manager.HasSession());
+
+    EXPECT_FALSE(manager.EnsureBackBufferFormatSupported(DXGI_FORMAT_R16G16B16A16_FLOAT));
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.HasSession());
+    EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
+
+    // Inert afterwards.
+    EXPECT_FALSE(manager.EnsureBackBufferFormatSupported(DXGI_FORMAT_R8G8B8A8_UNORM));
+    EXPECT_TRUE(manager.IsPassThrough());
+}
+
+TEST(OpenXrManagerTest, SelectCompatibleSwapchainFormatRules) {
+    using M = OpenXrManager;
+    const std::vector<int64_t> all = { DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_B8G8R8A8_UNORM,
+                                       DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R8G8B8A8_UNORM };
+    // Exact match wins over variant
+    EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM, all), DXGI_FORMAT_R8G8B8A8_UNORM);
+    EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, all), DXGI_FORMAT_B8G8R8A8_UNORM);
+    // Typeless back buffer resolves to a member of its family
+    EXPECT_NE(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_TYPELESS, all), DXGI_FORMAT_UNKNOWN);
+    // 10-bit/FP16 back buffers only match themselves
+    EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R16G16B16A16_FLOAT, all), DXGI_FORMAT_R16G16B16A16_FLOAT);
+    EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R10G10B10A2_UNORM, all), DXGI_FORMAT_UNKNOWN);
+    // Different family never matches
+    EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM, { DXGI_FORMAT_B8G8R8A8_UNORM }), DXGI_FORMAT_UNKNOWN);
+    EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM, {}), DXGI_FORMAT_UNKNOWN);
+}
+
 TEST(OpenXrManagerTest, CopiesBackBufferAndPerformsImageAcquireWaitRelease) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };

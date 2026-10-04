@@ -268,7 +268,9 @@ bool OpenXrCursorOverlay::UploadTexture(ID3D12Device* device, ID3D12CommandQueue
                 D3D12_RESOURCE_BARRIER barrier{};
                 barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
                 barrier.Transition.pResource = destRes;
-                barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+                // OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be
+                // returned to RENDER_TARGET before release.
+                barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
                 barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
                 barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
                 cmdList->ResourceBarrier(1, &barrier);

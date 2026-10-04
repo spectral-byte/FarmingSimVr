@@ -808,6 +808,72 @@ void OpenXrManager::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQu
     }
 }
 
+DXGI_FORMAT OpenXrManager::SelectCompatibleSwapchainFormat(DXGI_FORMAT backBufferFormat, const std::vector<int64_t>& supported) {
+    // Candidates in preference order: exact match, then same-family variants.
+    DXGI_FORMAT candidates[3] = { backBufferFormat, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN };
+    switch (backBufferFormat) {
+    case DXGI_FORMAT_R8G8B8A8_UNORM:      candidates[1] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; break;
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: candidates[1] = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+    case DXGI_FORMAT_B8G8R8A8_UNORM:      candidates[1] = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB; break;
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: candidates[1] = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+        candidates[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+        candidates[1] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        break;
+    case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+        candidates[0] = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        candidates[1] = DXGI_FORMAT_B8G8R8A8_UNORM;
+        break;
+    default: break;
+    }
+    for (DXGI_FORMAT candidate : candidates) {
+        if (candidate == DXGI_FORMAT_UNKNOWN) continue;
+        for (int64_t sf : supported) {
+            if (sf == static_cast<int64_t>(candidate)) return candidate;
+        }
+    }
+    return DXGI_FORMAT_UNKNOWN;
+}
+
+DXGI_FORMAT OpenXrManager::NegotiateEyeSwapchainFormat(DXGI_FORMAT backBufferFormat) {
+    // The eye image is filled by a straight copy from the back buffer, so the negotiated
+    // format must be copy-compatible with it. Never fall back to an incompatible format.
+    std::vector<int64_t> supportedFormats;
+    uint32_t formatCount = 0;
+    XrResult res = m_dispatch->EnumerateSwapchainFormats(m_session, 0, &formatCount, nullptr);
+    if (XR_SUCCEEDED(res) && formatCount > 0) {
+        supportedFormats.resize(formatCount);
+        res = m_dispatch->EnumerateSwapchainFormats(m_session, formatCount, &formatCount, supportedFormats.data());
+        supportedFormats.resize(XR_SUCCEEDED(res) ? formatCount : 0);
+    }
+    if (supportedFormats.empty()) {
+        // A failed query says nothing about compatibility; let swapchain creation decide.
+        LogWarn("OpenXrManager: Could not enumerate swapchain formats (result " + std::to_string(res) +
+                "); requesting back buffer format " + std::to_string(backBufferFormat) + " unchanged.");
+        return backBufferFormat;
+    }
+    return SelectCompatibleSwapchainFormat(backBufferFormat, supportedFormats);
+}
+
+void OpenXrManager::EnterPassThroughForIncompatibleFormat(DXGI_FORMAT backBufferFormat) {
+    LogError("OpenXrManager: OpenXR runtime offers no swapchain format compatible with back buffer format " +
+             std::to_string(backBufferFormat) + ".");
+    // Pass-Through Mode means no OpenXR session, so end and release everything rather than leave
+    // a begun session with no frames ever submitted.
+    ReleaseAndEnterPassThrough("no copy-compatible swapchain format");
+}
+
+bool OpenXrManager::EnsureBackBufferFormatSupported(DXGI_FORMAT backBufferFormat) {
+    if (m_session == XR_NULL_HANDLE || m_state != OpenXrState::Active) {
+        return m_state == OpenXrState::Active;
+    }
+    if (NegotiateEyeSwapchainFormat(backBufferFormat) == DXGI_FORMAT_UNKNOWN) {
+        EnterPassThroughForIncompatibleFormat(backBufferFormat);
+        return false;
+    }
+    return true;
+}
+
 bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FORMAT format) {
     if (m_session == XR_NULL_HANDLE || m_state != OpenXrState::Active) {
         return false;
@@ -816,55 +882,13 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
         return true;
     }
 
-    DXGI_FORMAT selectedFormat = format;
-
-    uint32_t formatCount = 0;
-    if ((XR_SUCCEEDED(m_dispatch->EnumerateSwapchainFormats(m_session, 0, &formatCount, nullptr))) && formatCount > 0) {
-        std::vector<int64_t> supportedFormats(formatCount);
-        if ((XR_SUCCEEDED(m_dispatch->EnumerateSwapchainFormats(m_session, formatCount, &formatCount, supportedFormats.data())))) {
-            bool directlySupported = false;
-            for (int64_t sf : supportedFormats) {
-                if (sf == static_cast<int64_t>(format)) {
-                    directlySupported = true;
-                    break;
-                }
-            }
-
-            if (!directlySupported && !supportedFormats.empty()) {
-                bool foundVariant = false;
-                int64_t variant = 0;
-                if (format == DXGI_FORMAT_R8G8B8A8_UNORM) variant = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-                else if (format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) variant = DXGI_FORMAT_R8G8B8A8_UNORM;
-                else if (format == DXGI_FORMAT_B8G8R8A8_UNORM) variant = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
-                else if (format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) variant = DXGI_FORMAT_B8G8R8A8_UNORM;
-
-                for (int64_t sf : supportedFormats) {
-                    if (variant != 0 && sf == variant) {
-                        selectedFormat = static_cast<DXGI_FORMAT>(sf);
-                        foundVariant = true;
-                        break;
-                    }
-                }
-
-                if (!foundVariant) {
-                    for (int64_t sf : supportedFormats) {
-                        if (sf == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || sf == DXGI_FORMAT_R8G8B8A8_UNORM ||
-                            sf == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || sf == DXGI_FORMAT_B8G8R8A8_UNORM ||
-                            sf == DXGI_FORMAT_R10G10B10A2_UNORM || sf == DXGI_FORMAT_R16G16B16A16_FLOAT) {
-                            selectedFormat = static_cast<DXGI_FORMAT>(sf);
-                            foundVariant = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (!foundVariant && !supportedFormats.empty()) {
-                    selectedFormat = static_cast<DXGI_FORMAT>(supportedFormats.front());
-                }
-
-                LogInfo("OpenXrManager: Format " + std::to_string(format) + " not directly supported. Negotiated swapchain format: " + std::to_string(selectedFormat));
-            }
-        }
+    DXGI_FORMAT selectedFormat = NegotiateEyeSwapchainFormat(format);
+    if (selectedFormat == DXGI_FORMAT_UNKNOWN) {
+        EnterPassThroughForIncompatibleFormat(format);
+        return false;
+    }
+    if (selectedFormat != format) {
+        LogInfo("OpenXrManager: Format " + std::to_string(format) + " not directly supported. Negotiated swapchain format: " + std::to_string(selectedFormat));
     }
 
     for (uint32_t i = 0; i < 2; ++i) {
@@ -1149,7 +1173,9 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
                 barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
                 barriers[1].Transition.pResource = destTexture;
-                barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+                // OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be
+                // returned to RENDER_TARGET before release.
+                barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
                 barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
                 barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 

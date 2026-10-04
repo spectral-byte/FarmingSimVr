@@ -2232,6 +2232,50 @@ TEST(DxgiProxyTest, SubclassLifecycleTeardownOnNcDestroyAndDetachAll) {
     }
 }
 
+TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndLeavesSwapChainUntouchedWhenFormatUnsupported) {
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();  // offers R8G8B8A8_UNORM only
+    auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    DxgiProxy proxy(nullptr, openXrManager);
+
+    DXGI_SWAP_CHAIN_DESC1 desc{};
+    desc.Width = 3840;
+    desc.Height = 2160;
+    desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    desc.Scaling = DXGI_SCALING_NONE;
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
+    fullscreenDesc.Windowed = FALSE;
+
+    DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, &desc, &fullscreenDesc, nullptr, nullptr);
+
+    EXPECT_TRUE(openXrManager->IsPassThrough());
+    EXPECT_FALSE(openXrManager->HasSession());
+    EXPECT_EQ(desc.Scaling, DXGI_SCALING_NONE);
+    EXPECT_TRUE(fullscreenDesc.Windowed == FALSE);
+    EXPECT_EQ(proxy.GetTargetRenderWidth(), 0u);
+}
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainLeavesSwapChainUntouchedWhenFormatUnsupported) {
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();  // offers R8G8B8A8_UNORM only
+    auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    DxgiProxy proxy(nullptr, openXrManager);
+
+    DXGI_SWAP_CHAIN_DESC desc{};
+    desc.BufferDesc.Width = 3840;
+    desc.BufferDesc.Height = 2160;
+    desc.BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+    desc.Windowed = FALSE;
+
+    DxgiProxy::Intercept_CreateSwapChain(nullptr, nullptr, &desc, nullptr);
+
+    EXPECT_TRUE(openXrManager->IsPassThrough());
+    EXPECT_FALSE(openXrManager->HasSession());
+    EXPECT_TRUE(desc.Windowed == FALSE);
+}
+
 TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiveVrMode) {
     // 1. Active VR Mode: mutates pDesc->Scaling to DXGI_SCALING_STRETCH
     {

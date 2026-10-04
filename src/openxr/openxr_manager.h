@@ -109,6 +109,14 @@ public:
     ID3D12CommandQueue* GetD3D12CommandQueue() const { return m_queue; }
 
     bool CreateEyeSwapchains(uint32_t width = 0, uint32_t height = 0, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    // Picks the supported swapchain format that a plain copy from a back buffer of
+    // `backBufferFormat` can target (same format family; UNORM/sRGB variants allowed).
+    // Returns DXGI_FORMAT_UNKNOWN when none is compatible.
+    static DXGI_FORMAT SelectCompatibleSwapchainFormat(DXGI_FORMAT backBufferFormat, const std::vector<int64_t>& supported);
+    // Called when the game creates its swap chain, before any DXGI overrides are applied. Releases
+    // OpenXR and enters Pass-Through Mode if no eye-swapchain format is copy-compatible with the
+    // back buffer. Returns whether VR is still active.
+    bool EnsureBackBufferFormatSupported(DXGI_FORMAT backBufferFormat);
     void DestroyEyeSwapchains();
     bool HasEyeSwapchains() const { return m_hasEyeSwapchains; }
     const EyeSwapchain& GetEyeSwapchain(uint32_t eyeIndex = 0) const;
@@ -264,6 +272,9 @@ private:
     bool CheckD3D12ExtensionSupport();
     bool EnumerateSwapchainImagesHelper(EyeSwapchain& sc);
     bool EnsureCursorTextureUploaded();
+    // Copy-compatible eye format, the back buffer format if the runtime query failed, or UNKNOWN.
+    DXGI_FORMAT NegotiateEyeSwapchainFormat(DXGI_FORMAT backBufferFormat);
+    void EnterPassThroughForIncompatibleFormat(DXGI_FORMAT backBufferFormat);
 };
 
 } // namespace fs25vr
