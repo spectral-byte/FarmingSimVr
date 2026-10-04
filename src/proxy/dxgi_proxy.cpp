@@ -75,10 +75,11 @@ void DxgiProxy::EnsureVrInitialized() {
                 m_openXrManager->CreateTrackingSpaces();
             }
         }
-        if (m_luauInterceptor) {
-            m_luauInterceptor->AttachToEngine();
+        if (m_luauInterceptor && m_luauInterceptor->AttachToEngine()) {
+            LogInfo("In-process Luau state interception channel armed.");
+        } else {
+            LogWarn("In-process Luau state interception channel not armed; VRBridge will not be injected.");
         }
-        LogInfo("In-process Luau state interception channel armed.");
     }
 }
 

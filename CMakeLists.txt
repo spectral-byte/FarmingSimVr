@@ -38,10 +38,12 @@ FetchContent_MakeAvailable(googletest)
 # Fetch Luau for in-process Luau VM interaction and TDD
 set(LUAU_BUILD_CLI OFF CACHE BOOL "Do not build Luau CLI" FORCE)
 set(LUAU_BUILD_TESTS OFF CACHE BOOL "Do not build Luau tests" FORCE)
+# Must match the Luau FS25 embeds; bumping it also means updating the host fingerprint (ADR-0002 amendment).
+set(FS25VR_LUAU_TAG 0.662)
 FetchContent_Declare(
     luau
     GIT_REPOSITORY https://github.com/luau-lang/luau.git
-    GIT_TAG 0.650
+    GIT_TAG ${FS25VR_LUAU_TAG}
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(luau)
@@ -156,6 +158,7 @@ add_dependencies(fs25_vr_tests dxgi)
 target_compile_definitions(fs25_vr_tests PRIVATE
     PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     FAKE_NVNGX_PATH="$<TARGET_FILE:fake_nvngx>"
+    FS25VR_LUAU_TAG="${FS25VR_LUAU_TAG}"
 )
 add_dependencies(fs25_vr_tests fake_nvngx)
 

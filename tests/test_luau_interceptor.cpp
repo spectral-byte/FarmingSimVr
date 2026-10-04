@@ -3,7 +3,11 @@
 #include "luau/luau_interceptor.h"
 #include "luau/vr_bridge.h"
 #include "luacode.h"
+#include <windows.h>
+#include <cstring>
+#include <iterator>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -218,3 +222,177 @@ TEST_F(LuauInterceptorTest, FindQueryFunctionInTextResolvesFunctionWhenStringInR
     EXPECT_EQ(resolved, &mockBuffer[fnOffset]);
 }
 
+
+namespace {
+
+// Lays the NUL-terminated markers out back to back, as they sit in a host .rdata section.
+std::vector<uint8_t> MakeRdata(const std::vector<std::string>& markers) {
+    std::vector<uint8_t> rdata(64, 0);
+    for (const std::string& marker : markers) {
+        rdata.insert(rdata.end(), marker.begin(), marker.end());
+        rdata.push_back(0);
+        rdata.insert(rdata.end(), 8, 0);
+    }
+    return rdata;
+}
+
+std::vector<std::string> AllFingerprintMarkers() {
+    return std::vector<std::string>(std::begin(fs25vr::kHostLuauFingerprint), std::end(fs25vr::kHostLuauFingerprint));
+}
+
+// An executable stand-in for the host module: .text holds a query function plus the registration code
+// that pairs it with its name, and .rdata holds that name followed by the given strings. Executable so
+// the detour can really be installed when the guard lets AttachToHostSections through.
+class MockHost {
+public:
+    static constexpr size_t kTextSize = 0x100;
+    static constexpr size_t kRdataOffset = 0x200;
+    static constexpr size_t kSize = 0x1000;
+    static constexpr size_t kFnOffset = 0x20;
+
+    explicit MockHost(const std::vector<std::string>& rdataStrings) {
+        m_base = static_cast<uint8_t*>(VirtualAlloc(nullptr, kSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        if (!m_base) return;
+        std::memset(m_base, 0x90, kTextSize);
+        std::memset(m_base + kTextSize, 0, kSize - kTextSize);
+
+        const uint8_t fnEntry[] = {0x48, 0x83, 0xEC, 0x28};  // sub rsp, 0x28
+        std::memcpy(m_base + kFnOffset, fnEntry, sizeof(fnEntry));
+
+        size_t cursor = kRdataOffset;
+        const char queryName[] = "isHeadTrackingAvailable";
+        std::memcpy(m_base + cursor, queryName, sizeof(queryName));
+        const uint8_t* queryString = m_base + cursor;
+        cursor += sizeof(queryName);
+        for (const std::string& s : rdataStrings) {
+            std::memcpy(m_base + cursor, s.c_str(), s.size() + 1);
+            cursor += s.size() + 1;
+        }
+
+        EmitRipLea(0x80, 0x4C, 0x05, queryString);       // lea r8, [rip + queryName]
+        EmitRipLea(0x87, 0x48, 0x15, m_base + kFnOffset); // lea rdx, [rip + fn]
+    }
+    ~MockHost() {
+        if (m_base) VirtualFree(m_base, 0, MEM_RELEASE);
+    }
+    MockHost(const MockHost&) = delete;
+    MockHost& operator=(const MockHost&) = delete;
+
+    bool Valid() const { return m_base != nullptr; }
+    const uint8_t* Text() const { return m_base; }
+    const uint8_t* Rdata() const { return m_base + kRdataOffset; }
+    size_t RdataSize() const { return kSize - kRdataOffset; }
+    void* QueryFunction() const { return m_base + kFnOffset; }
+
+private:
+    void EmitRipLea(size_t off, uint8_t rex, uint8_t modrm, const uint8_t* target) {
+        m_base[off] = rex;
+        m_base[off + 1] = 0x8D;
+        m_base[off + 2] = modrm;
+        const int32_t disp = static_cast<int32_t>(target - (m_base + off + 7));
+        std::memcpy(m_base + off + 3, &disp, sizeof(disp));
+    }
+
+    uint8_t* m_base = nullptr;
+};
+
+} // anonymous namespace
+
+TEST_F(LuauInterceptorTest, AttachToHostSectionsRefusesHostWithoutTheLuauFingerprint) {
+    MockHost host({});
+    ASSERT_TRUE(host.Valid());
+    auto& interceptor = runtime->GetLuauInterceptor();
+
+    EXPECT_FALSE(interceptor.AttachToHostSections(host.Rdata(), host.RdataSize(), host.Text(), MockHost::kTextSize));
+    EXPECT_FALSE(interceptor.GetDetour().IsInstalled());
+}
+
+TEST_F(LuauInterceptorTest, AttachToHostSectionsRefusesHostWhoseVmMarkersAreMissing) {
+    // Front end matches 0.662 but the VM half of the fingerprint is absent: still a mismatch.
+    std::vector<std::string> frontEndOnly = AllFingerprintMarkers();
+    frontEndOnly.resize(5);
+    ASSERT_EQ(frontEndOnly.back(), "LuauAllowFragmentParsing");
+    MockHost host(frontEndOnly);
+    ASSERT_TRUE(host.Valid());
+    auto& interceptor = runtime->GetLuauInterceptor();
+
+    EXPECT_FALSE(interceptor.AttachToHostSections(host.Rdata(), host.RdataSize(), host.Text(), MockHost::kTextSize));
+    EXPECT_FALSE(interceptor.GetDetour().IsInstalled());
+}
+
+TEST_F(LuauInterceptorTest, AttachToHostSectionsAttachesToMatchingHost) {
+    // Control for the refusal tests: the same mock host, plus the fingerprint, does get the detour.
+    MockHost host(AllFingerprintMarkers());
+    ASSERT_TRUE(host.Valid());
+    auto& interceptor = runtime->GetLuauInterceptor();
+
+    EXPECT_TRUE(interceptor.AttachToHostSections(host.Rdata(), host.RdataSize(), host.Text(), MockHost::kTextSize));
+    EXPECT_TRUE(interceptor.GetDetour().IsInstalled());
+    interceptor.Detach();
+}
+
+TEST(LuauVersionGuardTest, HostCarryingEveryFingerprintMarkerMatches) {
+    std::vector<std::string> markers;
+    for (const char* marker : fs25vr::kHostLuauFingerprint) markers.emplace_back(marker);
+    std::vector<uint8_t> rdata = MakeRdata(markers);
+
+    EXPECT_TRUE(fs25vr::HostEmbedsMatchingLuau(rdata.data(), rdata.size()));
+}
+
+TEST(LuauVersionGuardTest, HostMissingAnyFingerprintMarkerIsAMismatch) {
+    constexpr size_t markerCount = sizeof(fs25vr::kHostLuauFingerprint) / sizeof(fs25vr::kHostLuauFingerprint[0]);
+    for (size_t skipped = 0; skipped < markerCount; ++skipped) {
+        std::vector<std::string> markers;
+        for (size_t i = 0; i < markerCount; ++i) {
+            if (i != skipped) markers.emplace_back(fs25vr::kHostLuauFingerprint[i]);
+        }
+        std::vector<uint8_t> rdata = MakeRdata(markers);
+
+        EXPECT_FALSE(fs25vr::HostEmbedsMatchingLuau(rdata.data(), rdata.size()))
+            << "missing marker: " << fs25vr::kHostLuauFingerprint[skipped];
+    }
+}
+
+TEST(LuauVersionGuardTest, MarkerWithLeadingCharactersDoesNotCount) {
+    std::vector<std::string> markers = AllFingerprintMarkers();
+    markers[0] = "x" + markers[0];
+    std::vector<uint8_t> rdata = MakeRdata(markers);
+
+    EXPECT_FALSE(fs25vr::HostEmbedsMatchingLuau(rdata.data(), rdata.size()));
+}
+
+TEST(LuauVersionGuardTest, MarkerWithTrailingCharactersDoesNotCount) {
+    std::vector<std::string> markers = AllFingerprintMarkers();
+    markers[0] = markers[0] + "Extra";
+    std::vector<uint8_t> rdata = MakeRdata(markers);
+
+    EXPECT_FALSE(fs25vr::HostEmbedsMatchingLuau(rdata.data(), rdata.size()));
+}
+
+TEST(LuauVersionGuardTest, MarkerAtTheStartOfTheSectionCounts) {
+    std::vector<uint8_t> rdata = MakeRdata(AllFingerprintMarkers());
+    rdata.erase(rdata.begin(), rdata.begin() + 64);  // drop the leading padding so a marker sits at offset 0
+    ASSERT_NE(rdata[0], 0);
+
+    EXPECT_TRUE(fs25vr::HostEmbedsMatchingLuau(rdata.data(), rdata.size()));
+}
+
+TEST(LuauVersionGuardTest, MarkerCutOffByTheSectionEndDoesNotCount) {
+    // The last marker's terminating NUL falls just outside the section.
+    std::vector<uint8_t> rdata = MakeRdata(AllFingerprintMarkers());
+    const size_t sectionSize = rdata.size() - 8 - 1;
+
+    EXPECT_FALSE(fs25vr::HostEmbedsMatchingLuau(rdata.data(), sectionSize));
+    EXPECT_TRUE(fs25vr::HostEmbedsMatchingLuau(rdata.data(), sectionSize + 1));
+}
+
+TEST(LuauVersionGuardTest, EmptySectionIsAMismatch) {
+    const uint8_t byte = 0;
+    EXPECT_FALSE(fs25vr::HostEmbedsMatchingLuau(nullptr, 0));
+    EXPECT_FALSE(fs25vr::HostEmbedsMatchingLuau(&byte, 0));
+}
+
+TEST(LuauVersionGuardTest, GuardVersionMatchesTheLinkedLuauTag) {
+    // FS25VR_LUAU_TAG is CMakeLists.txt's GIT_TAG: bumping it without updating the guard fails here.
+    EXPECT_STREQ(fs25vr::kExpectedLuauVersion, FS25VR_LUAU_TAG);
+}
