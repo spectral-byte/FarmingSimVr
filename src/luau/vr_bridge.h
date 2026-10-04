@@ -20,12 +20,9 @@ enum class VRRenderingMode : uint32_t {
 
 class VRBridge {
 public:
-    static VRBridge& Instance();
-
-    // A subsystem left null stays absent: VRBridge never falls back to another subsystem's singleton.
-    // Instance() is the one place the process-wide singletons are wired to this bridge.
-    explicit VRBridge(std::shared_ptr<OpenXrManager> openXrManager = nullptr,
-                      std::shared_ptr<NgxInterceptor> ngxInterceptor = nullptr);
+    // The composition root (InjectorRuntime) supplies both subsystems; a null one is absent.
+    VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
+             std::shared_ptr<NgxInterceptor> ngxInterceptor);
 
     bool Inject(lua_State* L);
     bool IsInjected(lua_State* L);
@@ -36,6 +33,7 @@ public:
     bool IsCompanionActive() const { return m_handshakeCompleted; }
     void SetCompanionActive(bool active) { m_handshakeCompleted = active; }
     std::shared_ptr<OpenXrManager> GetOpenXrManager() const { return m_openXrManager; }
+    std::shared_ptr<NgxInterceptor> GetNgxInterceptor() const { return m_ngxInterceptor; }
 
     HeadPose GetHeadPose();
     HeadPose GetHeadPoseForEye(uint32_t eyeIndex);

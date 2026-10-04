@@ -37,9 +37,9 @@ bool HostEmbedsMatchingLuau(const uint8_t* rdataBase, size_t rdataSize);
 
 class LuauInterceptor {
 public:
-    // A null bridge leaves the interceptor with nothing to inject; there is no singleton fallback.
-    // Production wiring comes from InjectorRuntime.
-    explicit LuauInterceptor(std::shared_ptr<VRBridge> bridge = nullptr);
+    // The composition root (InjectorRuntime) supplies the bridge; a null one leaves the interceptor
+    // with nothing to inject.
+    explicit LuauInterceptor(std::shared_ptr<VRBridge> bridge);
     ~LuauInterceptor();
 
     // Attach installs the detour only while a live InjectorRuntime owns the interceptor, so the hook

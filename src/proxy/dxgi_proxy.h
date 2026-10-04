@@ -27,18 +27,15 @@ inline constexpr size_t kResizeBuffers1VTableSlot = 39;
 
 class DxgiProxy {
 public:
-    // The production proxy, owned by the composition root.
-    static DxgiProxy& Instance();
-
-    // Collaborators are used as given; a null one is absent (there is no singleton fallback), except
-    // the window controller, which defaults to a fresh one. Production wiring comes from InjectorRuntime.
+    // Every collaborator is supplied by the caller (production wiring comes from InjectorRuntime); a
+    // null one is absent and its feature is skipped. The window controller is required.
     // AttachSwapChain/AttachFactory install detours only while a live InjectorRuntime owns the proxy.
-    explicit DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi = nullptr,
-                       std::shared_ptr<OpenXrManager> openXrManager = nullptr,
-                       std::shared_ptr<LuauInterceptor> luauInterceptor = nullptr,
-                       std::shared_ptr<VRBridge> vrBridge = nullptr,
-                       std::shared_ptr<MirrorWindowController> windowController = nullptr,
-                       std::shared_ptr<NgxInterceptor> ngxInterceptor = nullptr);
+    DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
+              std::shared_ptr<OpenXrManager> openXrManager,
+              std::shared_ptr<LuauInterceptor> luauInterceptor,
+              std::shared_ptr<VRBridge> vrBridge,
+              std::shared_ptr<MirrorWindowController> windowController,
+              std::shared_ptr<NgxInterceptor> ngxInterceptor);
     ~DxgiProxy();
 
     HRESULT CreateDXGIFactory(REFIID riid, void** ppFactory);
@@ -80,7 +77,7 @@ public:
     ISystemDxgi* GetSystemDxgi() { return m_systemDxgi.get(); }
     LuauInterceptor* GetLuauInterceptor() { return m_luauInterceptor.get(); }
     VRBridge* GetVrBridge() { return m_vrBridge.get(); }
-    // Never null: defaults to a fresh controller.
+    // Never null: the controller is a required collaborator.
     MirrorWindowController& GetWindowController() { return *m_windowController; }
 
     // Set by InjectorRuntime while it owns this proxy and hooks can find it.

@@ -22,12 +22,15 @@ HRESULT ForwardFactoryCall(const char* funcName, PFN pfn, Args&&... args) {
     return pfn(std::forward<Args>(args)...);
 }
 
+// The passthrough exports touch no Injector subsystem, so they reach the system dxgi.dll through a
+// loader of their own: a PIX or app-compat call should not construct and wire every subsystem.
+FARPROC SystemExport(const char* name) {
+    static SystemDxgi passthrough;
+    return passthrough.GetExport(name);
+}
+
 } // anonymous namespace
 
-DxgiProxy& DxgiProxy::Instance() {
-    // The composition root builds and wires the production proxy on first use.
-    return InjectorRuntime::Instance().GetDxgiProxy();
-}
 
 DxgiProxy* DxgiProxy::ForHook(FunctionDetour DxgiProxy::*detour) {
     InjectorRuntime* runtime = InjectorRuntime::ForHook([detour](InjectorRuntime& r) {
@@ -46,7 +49,7 @@ DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
       m_openXrManager(std::move(openXrManager)),
       m_luauInterceptor(std::move(luauInterceptor)),
       m_vrBridge(std::move(vrBridge)),
-      m_windowController(windowController ? std::move(windowController) : std::make_shared<MirrorWindowController>()),
+      m_windowController(std::move(windowController)),
       m_ngxInterceptor(std::move(ngxInterceptor)) {
     m_windowController->SetIsVrActiveCallback([this]() { return IsActive(); });
 }
@@ -754,95 +757,94 @@ HRESULT WINAPI Proxy_DXGIGetDebugInterface1(UINT Flags, REFIID riid, void** pDeb
     return fs25vr::InjectorRuntime::Instance().GetDxgiProxy().DXGIGetDebugInterface1(Flags, riid, pDebug);
 }
 
-// The remaining exports forward to the system dxgi.dll and touch no Injector subsystem, so they
-// bypass the runtime: a PIX or app-compat call should not construct and wire every subsystem.
+// The remaining exports forward to the system dxgi.dll and bypass the runtime (see SystemExport).
 HRESULT WINAPI Proxy_DXGID3D10CreateDevice(HMODULE hModule, IDXGIAdapter* pAdapter, UINT Flags, DWORD RuntimeVersion, void* pOutputs) {
     auto pfn = reinterpret_cast<HRESULT(WINAPI*)(HMODULE, IDXGIAdapter*, UINT, DWORD, void*)>(
-        fs25vr::SystemDxgi::Instance().GetExport("DXGID3D10CreateDevice"));
+        fs25vr::SystemExport("DXGID3D10CreateDevice"));
     return pfn ? pfn(hModule, pAdapter, Flags, RuntimeVersion, pOutputs) : E_FAIL;
 }
 
 HRESULT WINAPI Proxy_DXGID3D10CreateLayeredDevice(void* a, void* b, void* c, void* d, void* e) {
     auto pfn = reinterpret_cast<HRESULT(WINAPI*)(void*, void*, void*, void*, void*)>(
-        fs25vr::SystemDxgi::Instance().GetExport("DXGID3D10CreateLayeredDevice"));
+        fs25vr::SystemExport("DXGID3D10CreateLayeredDevice"));
     return pfn ? pfn(a, b, c, d, e) : E_FAIL;
 }
 
 SIZE_T WINAPI Proxy_DXGID3D10GetLayeredDeviceSize(const void* pConfiguration, UINT Size) {
     auto pfn = reinterpret_cast<SIZE_T(WINAPI*)(const void*, UINT)>(
-        fs25vr::SystemDxgi::Instance().GetExport("DXGID3D10GetLayeredDeviceSize"));
+        fs25vr::SystemExport("DXGID3D10GetLayeredDeviceSize"));
     return pfn ? pfn(pConfiguration, Size) : 0;
 }
 
 HRESULT WINAPI Proxy_DXGID3D10RegisterLayers(const void* pLayers, UINT NumLayers) {
     auto pfn = reinterpret_cast<HRESULT(WINAPI*)(const void*, UINT)>(
-        fs25vr::SystemDxgi::Instance().GetExport("DXGID3D10RegisterLayers"));
+        fs25vr::SystemExport("DXGID3D10RegisterLayers"));
     return pfn ? pfn(pLayers, NumLayers) : E_FAIL;
 }
 
 HRESULT WINAPI Proxy_DXGIDisableVBlankVirtualization() {
     auto pfn = reinterpret_cast<HRESULT(WINAPI*)()>(
-        fs25vr::SystemDxgi::Instance().GetExport("DXGIDisableVBlankVirtualization"));
+        fs25vr::SystemExport("DXGIDisableVBlankVirtualization"));
     return pfn ? pfn() : E_FAIL;
 }
 
 HRESULT WINAPI Proxy_DXGIReportAdapterConfiguration(void* pConf) {
     auto pfn = reinterpret_cast<HRESULT(WINAPI*)(void*)>(
-        fs25vr::SystemDxgi::Instance().GetExport("DXGIReportAdapterConfiguration"));
+        fs25vr::SystemExport("DXGIReportAdapterConfiguration"));
     return pfn ? pfn(pConf) : E_FAIL;
 }
 
 void WINAPI Proxy_DXGIDumpJournal(void* pJournal) {
     auto pfn = reinterpret_cast<void(WINAPI*)(void*)>(
-        fs25vr::SystemDxgi::Instance().GetExport("DXGIDumpJournal"));
+        fs25vr::SystemExport("DXGIDumpJournal"));
     if (pfn) pfn(pJournal);
 }
 
 void WINAPI Proxy_PIXBeginCapture(DWORD captureFlags, const void* captureArgs) {
     auto pfn = reinterpret_cast<void(WINAPI*)(DWORD, const void*)>(
-        fs25vr::SystemDxgi::Instance().GetExport("PIXBeginCapture"));
+        fs25vr::SystemExport("PIXBeginCapture"));
     if (pfn) pfn(captureFlags, captureArgs);
 }
 
 void WINAPI Proxy_PIXEndCapture() {
     auto pfn = reinterpret_cast<void(WINAPI*)()>(
-        fs25vr::SystemDxgi::Instance().GetExport("PIXEndCapture"));
+        fs25vr::SystemExport("PIXEndCapture"));
     if (pfn) pfn();
 }
 
 DWORD WINAPI Proxy_PIXGetCaptureState() {
     auto pfn = reinterpret_cast<DWORD(WINAPI*)()>(
-        fs25vr::SystemDxgi::Instance().GetExport("PIXGetCaptureState"));
+        fs25vr::SystemExport("PIXGetCaptureState"));
     return pfn ? pfn() : 0;
 }
 
 HRESULT WINAPI Proxy_SetAppCompatStringPointer(DWORD unknown, const char* str) {
     auto pfn = reinterpret_cast<HRESULT(WINAPI*)(DWORD, const char*)>(
-        fs25vr::SystemDxgi::Instance().GetExport("SetAppCompatStringPointer"));
+        fs25vr::SystemExport("SetAppCompatStringPointer"));
     return pfn ? pfn(unknown, str) : E_FAIL;
 }
 
 void WINAPI Proxy_UpdateHMDEmulationStatus(BOOL status) {
     auto pfn = reinterpret_cast<void(WINAPI*)(BOOL)>(
-        fs25vr::SystemDxgi::Instance().GetExport("UpdateHMDEmulationStatus"));
+        fs25vr::SystemExport("UpdateHMDEmulationStatus"));
     if (pfn) pfn(status);
 }
 
 void WINAPI Proxy_ApplyCompatResolutionQuirking(void* a, void* b, void* c, void* d) {
     auto pfn = reinterpret_cast<void(WINAPI*)(void*, void*, void*, void*)>(
-        fs25vr::SystemDxgi::Instance().GetExport("ApplyCompatResolutionQuirking"));
+        fs25vr::SystemExport("ApplyCompatResolutionQuirking"));
     if (pfn) pfn(a, b, c, d);
 }
 
 void WINAPI Proxy_CompatString(void* a, void* b, void* c, void* d) {
     auto pfn = reinterpret_cast<void(WINAPI*)(void*, void*, void*, void*)>(
-        fs25vr::SystemDxgi::Instance().GetExport("CompatString"));
+        fs25vr::SystemExport("CompatString"));
     if (pfn) pfn(a, b, c, d);
 }
 
 void WINAPI Proxy_CompatValue(void* a, void* b, void* c, void* d) {
     auto pfn = reinterpret_cast<void(WINAPI*)(void*, void*, void*, void*)>(
-        fs25vr::SystemDxgi::Instance().GetExport("CompatValue"));
+        fs25vr::SystemExport("CompatValue"));
     if (pfn) pfn(a, b, c, d);
 }
 

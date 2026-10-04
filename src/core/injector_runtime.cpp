@@ -46,23 +46,10 @@ void Unregister(InjectorRuntime* runtime, bool mayBlock) {
     g_current.store(live.runtimes.empty() ? nullptr : live.runtimes.back());
 }
 
-// Wraps a process-lifetime singleton without taking ownership.
-template <typename T>
-std::shared_ptr<T> Borrow(T& singleton) {
-    return std::shared_ptr<T>(&singleton, [](T*) {});
-}
-
-template <typename T>
-void FillFromSingleton(std::shared_ptr<T>& slot) {
-    if (!slot) {
-        slot = Borrow(T::Instance());
-    }
-}
-
 } // namespace
 
 InjectorRuntime& InjectorRuntime::Instance() {
-    static InjectorRuntime runtime{ProductionTag{}};
+    static InjectorRuntime runtime;
     return runtime;
 }
 
@@ -79,22 +66,24 @@ InjectorRuntime* InjectorRuntime::FindLive(void* ctx, bool (*pred)(void*, Inject
     return nullptr;
 }
 
-InjectorRuntime::InjectorRuntime(ProductionTag) : InjectorRuntime(Dependencies{}, /*wiresNgxInterceptor=*/true) {}
-
-// Only a runtime that owns the NGX interceptor wires it: the production runtime (the NGX singleton) or a
-// test runtime given its own. Any other runtime would rewire the production interceptor to its fakes
-// and unwire it on destruction.
-InjectorRuntime::InjectorRuntime(Dependencies deps)
-    : InjectorRuntime(deps, static_cast<bool>(deps.ngxInterceptor)) {}
-
-InjectorRuntime::InjectorRuntime(Dependencies deps, bool wiresNgxInterceptor)
-    : m_deps(std::move(deps)), m_wiresNgxInterceptor(wiresNgxInterceptor) {
-    if (!m_deps.systemDxgi) m_deps.systemDxgi = Borrow<ISystemDxgi>(SystemDxgi::Instance());
-    FillFromSingleton(m_deps.openXrManager);
-    FillFromSingleton(m_deps.vrBridge);
+InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
+    // Every subsystem the caller did not supply is created here, so the runtime owns the whole graph.
+    // A supplied VRBridge brings its collaborators: adopt them, so the bridge and the hooks share one
+    // OpenXR manager and one NGX interceptor.
+    if (m_deps.vrBridge) {
+        if (!m_deps.openXrManager) m_deps.openXrManager = m_deps.vrBridge->GetOpenXrManager();
+        if (!m_deps.ngxInterceptor) m_deps.ngxInterceptor = m_deps.vrBridge->GetNgxInterceptor();
+    }
+    if (!m_deps.systemDxgi) m_deps.systemDxgi = std::make_shared<SystemDxgi>();
+    if (!m_deps.openXrManager) {
+        m_deps.openXrManager = std::make_shared<OpenXrManager>(std::make_shared<NativeOpenXrDispatch>());
+    }
+    if (!m_deps.ngxInterceptor) m_deps.ngxInterceptor = std::make_shared<NgxInterceptor>();
+    if (!m_deps.vrBridge) {
+        m_deps.vrBridge = std::make_shared<VRBridge>(m_deps.openXrManager, m_deps.ngxInterceptor);
+    }
     if (!m_deps.luauInterceptor) m_deps.luauInterceptor = std::make_shared<LuauInterceptor>(m_deps.vrBridge);
     if (!m_deps.windowController) m_deps.windowController = std::make_shared<MirrorWindowController>();
-    FillFromSingleton(m_deps.ngxInterceptor);
 
     m_proxy = std::make_unique<DxgiProxy>(
         m_deps.systemDxgi, m_deps.openXrManager, m_deps.luauInterceptor,
@@ -111,11 +100,9 @@ InjectorRuntime::InjectorRuntime(Dependencies deps, bool wiresNgxInterceptor)
     m_deps.windowController->SetOwnedByRuntime(true);
     m_deps.luauInterceptor->SetOwnedByRuntime(true);
 
-    if (m_wiresNgxInterceptor) {
-        m_deps.ngxInterceptor->SetVRBridge(m_deps.vrBridge.get());
-        m_deps.ngxInterceptor->SetOpenXrManager(m_deps.openXrManager.get());
-        m_deps.ngxInterceptor->SetDxgiProxy(m_proxy.get());
-    }
+    m_deps.ngxInterceptor->SetVRBridge(m_deps.vrBridge.get());
+    m_deps.ngxInterceptor->SetOpenXrManager(m_deps.openXrManager.get());
+    m_deps.ngxInterceptor->SetDxgiProxy(m_proxy.get());
 }
 
 InjectorRuntime::~InjectorRuntime() {
@@ -134,7 +121,6 @@ InjectorRuntime::~InjectorRuntime() {
 
     Unregister(this, /*mayBlock=*/true);
 
-    if (!m_wiresNgxInterceptor) return;
     // Do not leave the NGX interceptor pointing at objects we are about to free.
     m_deps.ngxInterceptor->SetDxgiProxy(nullptr);
     m_deps.ngxInterceptor->SetVRBridge(nullptr);

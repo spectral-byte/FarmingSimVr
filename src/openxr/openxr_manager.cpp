@@ -28,13 +28,8 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
     return static_cast<XrTime>((qpc.QuadPart * 1000000000LL) / freq.QuadPart);
 }
 
-OpenXrManager& OpenXrManager::Instance() {
-    static OpenXrManager instance;
-    return instance;
-}
-
 OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
-    : m_dispatch(dispatch ? std::move(dispatch) : std::make_shared<NativeOpenXrDispatch>()) {
+    : m_dispatch(std::move(dispatch)) {
 }
 
 OpenXrManager::~OpenXrManager() {

@@ -15,13 +15,11 @@ class DxgiProxy;
 // Composition root: constructs and wires every Injector subsystem.
 //
 // Production uses Instance(), created on the first call into a DXGI export. Tests construct their own
-// runtime with fakes. The window controller and Luau interceptor are created here when not injected.
-// Any other subsystem left null in Dependencies falls back to the existing singleton (wrapped in a
-// no-op deleter), so those singletons keep working until they are migrated. Those singletons are
-// wired to each other, not to injected fakes: inject every subsystem a test observes.
+// runtime with fakes. Any subsystem left null in Dependencies is created here, so the runtime is the
+// only place subsystems are built and no subsystem has a singleton accessor of its own. Inject every
+// subsystem a test observes; the others are fresh, real ones wired to the ones supplied.
 // The NGX interceptor is wired to the runtime's OpenXR manager, VRBridge and DXGI proxy, and reaches
-// no other subsystem. The production runtime wires the NGX singleton; a test runtime wires only an
-// NGX interceptor it was given, leaving the singleton as it is.
+// no other subsystem.
 //
 // Hook entry points are plain function pointers with no context argument, so they find their
 // subsystem through the registry of live runtimes (ForHook). The DXGI, Win32 and Luau subsystems
@@ -38,7 +36,7 @@ public:
         std::shared_ptr<NgxInterceptor> ngxInterceptor;
     };
 
-    // Process-wide runtime, created on first use from the singletons.
+    // Process-wide runtime, created on first use.
     static InjectorRuntime& Instance();
 
     // The most recently constructed runtime that is still alive, whatever order runtimes are
@@ -62,6 +60,7 @@ public:
     InjectorRuntime(const InjectorRuntime&) = delete;
     InjectorRuntime& operator=(const InjectorRuntime&) = delete;
 
+    ISystemDxgi& GetSystemDxgi() { return *m_deps.systemDxgi; }
     DxgiProxy& GetDxgiProxy() { return *m_proxy; }
     OpenXrManager& GetOpenXrManager() { return *m_deps.openXrManager; }
     VRBridge& GetVrBridge() { return *m_deps.vrBridge; }
@@ -70,16 +69,11 @@ public:
     NgxInterceptor& GetNgxInterceptor() { return *m_deps.ngxInterceptor; }
 
 private:
-    struct ProductionTag {};
-    explicit InjectorRuntime(ProductionTag);
-    InjectorRuntime(Dependencies deps, bool wiresNgxInterceptor);
-
     // The newest live runtime for which pred(ctx, runtime) holds, or null.
     static InjectorRuntime* FindLive(void* ctx, bool (*pred)(void*, InjectorRuntime&));
 
     Dependencies m_deps;
     std::unique_ptr<DxgiProxy> m_proxy;
-    bool m_wiresNgxInterceptor = false;
 };
 
 } // namespace fs25vr

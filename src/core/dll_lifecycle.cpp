@@ -20,8 +20,9 @@ void OnProcessDetach(LPVOID lpReserved) {
         // Set before returning: the CRT runs our static destructors right after DllMain.
         s_processTerminating = true;
     } else {
-        // FreeLibrary: safe to unwind our own hooks.
-        NgxInterceptor::Instance().DetachAll();
+        // FreeLibrary: safe to unwind our own hooks. Unwind whichever interceptor owns the live
+        // detours, not the newest runtime's, so no hook is left pointing into the unloaded DLL.
+        NgxInterceptor::DetachLiveHooks();
     }
     Logger::Instance().Flush();
 }

@@ -29,8 +29,6 @@ public:
 
 class SystemDxgi : public ISystemDxgi {
 public:
-    static SystemDxgi& Instance();
-
     SystemDxgi();
     ~SystemDxgi() override;
 

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "core/detour.h"
 #include "core/dll_lifecycle.h"
+#include "core/injector_runtime.h"
 #include "ngx/ngx_interceptor.h"
 #include "openxr/openxr_manager.h"
 #include "proxy/dxgi_proxy.h"
@@ -77,15 +78,16 @@ public:
 class DllLifecycleTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        NgxInterceptor::Instance().DetachAll();
+        m_ngx = std::make_shared<NgxInterceptor>();
     }
     void TearDown() override {
         ResetProcessTerminatingForTesting();
-        NgxInterceptor::Instance().DetachAll();
+        m_ngx->DetachAll();
         if (m_fakeNgx) {
             FreeLibrary(m_fakeNgx);
             m_fakeNgx = nullptr;
         }
+        m_ngx.reset();
     }
 
     HMODULE LoadFakeNgx() {
@@ -93,19 +95,16 @@ protected:
         return m_fakeNgx;
     }
 
-    // The proxy installs the NGX hooks on the interceptor it is given; these tests observe the singleton.
-    static std::shared_ptr<NgxInterceptor> NgxSingleton() {
-        return std::shared_ptr<NgxInterceptor>(&NgxInterceptor::Instance(), [](auto*) {});
-    }
-
-    static HRESULT CreateFactoryThroughNewProxy() {
+    // The proxy installs the NGX hooks on the interceptor it is given; these tests observe m_ngx.
+    HRESULT CreateFactoryThroughNewProxy() {
         auto openXrManager = std::make_shared<OpenXrManager>(std::make_shared<FailingOpenXrDispatch>());
-        auto systemDxgi = std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {});
-        DxgiProxy proxy(systemDxgi, openXrManager, nullptr, nullptr, nullptr, NgxSingleton());
+        auto systemDxgi = std::make_shared<SystemDxgi>();
+        DxgiProxy proxy(systemDxgi, openXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), m_ngx);
         Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
         return proxy.CreateDXGIFactory1(IID_PPV_ARGS(&factory));
     }
 
+    std::shared_ptr<NgxInterceptor> m_ngx;
     HMODULE m_fakeNgx = nullptr;
 };
 
@@ -115,21 +114,35 @@ TEST_F(DllLifecycleTest, ProcessAttachInstallsNoHooksAndDoesNotAttachNgx) {
     // Use the test exe's own module as a stand-in for the Injector DLL handle.
     OnProcessAttach(GetModuleHandleW(nullptr));
 
-    EXPECT_FALSE(NgxInterceptor::Instance().AreModuleHooksInstalled());
-    EXPECT_FALSE(NgxInterceptor::Instance().IsAttached());
+    EXPECT_FALSE(m_ngx->AreModuleHooksInstalled());
+    EXPECT_FALSE(m_ngx->IsAttached());
 }
 
 TEST_F(DllLifecycleTest, ProcessDetachDuringTerminationSkipsHookRemoval) {
-    ASSERT_TRUE(NgxInterceptor::Instance().InstallModuleLoadHooks());
+    ASSERT_TRUE(m_ngx->InstallModuleLoadHooks());
 
     OnProcessDetach(reinterpret_cast<LPVOID>(1));  // non-null lpReserved: process terminating
     EXPECT_TRUE(IsProcessTerminating());
-    EXPECT_TRUE(NgxInterceptor::Instance().AreModuleHooksInstalled());
+    EXPECT_TRUE(m_ngx->AreModuleHooksInstalled());
 
     ResetProcessTerminatingForTesting();
     OnProcessDetach(nullptr);  // FreeLibrary: cleanup allowed
     EXPECT_FALSE(IsProcessTerminating());
-    EXPECT_FALSE(NgxInterceptor::Instance().AreModuleHooksInstalled());
+    EXPECT_FALSE(m_ngx->AreModuleHooksInstalled());
+}
+
+TEST_F(DllLifecycleTest, ProcessDetachUnwindsTheHookOwnerNotTheNewestRuntime) {
+    ASSERT_TRUE(m_ngx->InstallModuleLoadHooks());
+
+    // A newer runtime with an interceptor of its own must not hide the hooks m_ngx owns.
+    InjectorRuntime::Dependencies deps;
+    deps.openXrManager = std::make_shared<OpenXrManager>(std::make_shared<FailingOpenXrDispatch>());
+    InjectorRuntime newer(std::move(deps));
+    ASSERT_NE(&newer.GetNgxInterceptor(), m_ngx.get());
+
+    OnProcessDetach(nullptr);
+
+    EXPECT_FALSE(m_ngx->AreModuleHooksInstalled());
 }
 
 TEST_F(DllLifecycleTest, DestructorsRunAfterTerminationDetachLeaveHooksInPlace) {
@@ -157,9 +170,9 @@ TEST_F(DllLifecycleTest, ConcurrentFirstFactoryCallsReturnOnlyAfterHooksInstalle
     constexpr int kThreads = 8;
     std::atomic<int> sawHooksMissing{0};
     for (int round = 0; round < kRounds; ++round) {
-        NgxInterceptor::Instance().DetachAll();
+        m_ngx->DetachAll();
         auto openXrManager = std::make_shared<OpenXrManager>(std::make_shared<FailingOpenXrDispatch>());
-        DxgiProxy proxy(std::make_shared<ImmediateSystemDxgi>(), openXrManager, nullptr, nullptr, nullptr, NgxSingleton());
+        DxgiProxy proxy(std::make_shared<ImmediateSystemDxgi>(), openXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), m_ngx);
 
         std::atomic<int> ready{0};
         std::vector<std::thread> threads;
@@ -170,7 +183,7 @@ TEST_F(DllLifecycleTest, ConcurrentFirstFactoryCallsReturnOnlyAfterHooksInstalle
                 void* factory = nullptr;
                 proxy.CreateDXGIFactory1(__uuidof(IDXGIFactory1), &factory);
                 // On return the game may load nvngx immediately; the hooks must already exist.
-                if (!NgxInterceptor::Instance().AreModuleHooksInstalled()) {
+                if (!m_ngx->AreModuleHooksInstalled()) {
                     sawHooksMissing.fetch_add(1);
                 }
             });
@@ -182,29 +195,29 @@ TEST_F(DllLifecycleTest, ConcurrentFirstFactoryCallsReturnOnlyAfterHooksInstalle
 }
 
 TEST_F(DllLifecycleTest, FirstDxgiFactoryCallInstallsHooks) {
-    ASSERT_FALSE(NgxInterceptor::Instance().AreModuleHooksInstalled());
+    ASSERT_FALSE(m_ngx->AreModuleHooksInstalled());
 
     EXPECT_EQ(CreateFactoryThroughNewProxy(), S_OK);
 
-    EXPECT_TRUE(NgxInterceptor::Instance().AreModuleHooksInstalled());
+    EXPECT_TRUE(m_ngx->AreModuleHooksInstalled());
 }
 
 TEST_F(DllLifecycleTest, FirstDxgiFactoryCallAttachesToAlreadyLoadedNgx) {
     ASSERT_NE(LoadFakeNgx(), nullptr);
-    ASSERT_FALSE(NgxInterceptor::Instance().IsAttached());
+    ASSERT_FALSE(m_ngx->IsAttached());
 
     EXPECT_EQ(CreateFactoryThroughNewProxy(), S_OK);
 
-    EXPECT_TRUE(NgxInterceptor::Instance().IsAttached());
+    EXPECT_TRUE(m_ngx->IsAttached());
 }
 
 TEST_F(DllLifecycleTest, HooksInstalledOnFactoryCallAttachToNgxLoadedLater) {
     EXPECT_EQ(CreateFactoryThroughNewProxy(), S_OK);
-    ASSERT_FALSE(NgxInterceptor::Instance().IsAttached());
+    ASSERT_FALSE(m_ngx->IsAttached());
 
     ASSERT_NE(LoadFakeNgx(), nullptr);
 
-    EXPECT_TRUE(NgxInterceptor::Instance().IsAttached());
+    EXPECT_TRUE(m_ngx->IsAttached());
 }
 
 } // namespace

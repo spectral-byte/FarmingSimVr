@@ -77,9 +77,7 @@ struct EyeProjection {
 
 class OpenXrManager {
 public:
-    static OpenXrManager& Instance();
-
-    explicit OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch = nullptr);
+    explicit OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch);
     ~OpenXrManager();
 
     bool Initialize();

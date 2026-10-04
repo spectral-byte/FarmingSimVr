@@ -18,19 +18,12 @@ std::atomic<NgxInterceptor*> s_featureHost{nullptr};
 std::atomic<NgxInterceptor*> s_loadHookHost{nullptr};
 } // namespace
 
-NgxInterceptor& NgxInterceptor::Instance() {
-    static NgxInterceptor instance;
-    return instance;
+NgxInterceptor* NgxInterceptor::FeatureHost() {
+    return s_featureHost.load();
 }
 
-NgxInterceptor& NgxInterceptor::FeatureHost() {
-    NgxInterceptor* host = s_featureHost.load();
-    return host ? *host : Instance();
-}
-
-NgxInterceptor& NgxInterceptor::LoadHookHost() {
-    NgxInterceptor* host = s_loadHookHost.load();
-    return host ? *host : Instance();
+NgxInterceptor* NgxInterceptor::LoadHookHost() {
+    return s_loadHookHost.load();
 }
 
 NgxInterceptor::NgxInterceptor() = default;
@@ -116,6 +109,10 @@ bool NgxInterceptor::AttachDirectInternal(
         m_isAttached = false;
     }
 
+    // Publish the host before any detour goes live: a game thread can enter a detour the moment it is
+    // enabled, and an entry point with no host fails the call.
+    NgxInterceptor* previousHost = s_featureHost.exchange(this);
+
     bool createInstalled = m_detourCreateFeature.Install(
         reinterpret_cast<void*>(pfnCreate),
         reinterpret_cast<void*>(&NgxInterceptor::Intercept_CreateFeature)
@@ -129,48 +126,26 @@ bool NgxInterceptor::AttachDirectInternal(
         LogError("NgxInterceptor: Failed to install CreateFeature or ReleaseFeature detours.");
         if (m_detourCreateFeature.IsInstalled()) m_detourCreateFeature.Uninstall();
         if (m_detourReleaseFeature.IsInstalled()) m_detourReleaseFeature.Uninstall();
+        NgxInterceptor* expectedHost = this;
+        s_featureHost.compare_exchange_strong(expectedHost, previousHost);
         return false;
     }
 
-    m_origCreateFeature = reinterpret_cast<PFN_NVSDK_NGX_D3D12_CreateFeature>(m_detourCreateFeature.GetOriginal());
-    m_origReleaseFeature = reinterpret_cast<PFN_NVSDK_NGX_D3D12_ReleaseFeature>(m_detourReleaseFeature.GetOriginal());
-
-    if (pfnEvaluate) {
-        if (m_detourEvaluateFeature.Install(reinterpret_cast<void*>(pfnEvaluate), reinterpret_cast<void*>(&NgxInterceptor::Intercept_EvaluateFeature))) {
-            m_origEvaluateFeature = reinterpret_cast<PFN_NVSDK_NGX_D3D12_EvaluateFeature>(m_detourEvaluateFeature.GetOriginal());
-        } else {
-            LogError("NgxInterceptor: Failed to install EvaluateFeature detour.");
-        }
-    } else {
-        m_origEvaluateFeature = nullptr;
+    if (pfnEvaluate &&
+        !m_detourEvaluateFeature.Install(reinterpret_cast<void*>(pfnEvaluate), reinterpret_cast<void*>(&NgxInterceptor::Intercept_EvaluateFeature))) {
+        LogError("NgxInterceptor: Failed to install EvaluateFeature detour.");
     }
-
     if (pfnAlloc) {
-        if (m_detourAllocateParameters.Install(reinterpret_cast<void*>(pfnAlloc), reinterpret_cast<void*>(&NgxInterceptor::Intercept_AllocateParameters))) {
-            m_origAllocateParameters = reinterpret_cast<PFN_NVSDK_NGX_D3D12_AllocateParameters>(m_detourAllocateParameters.GetOriginal());
-        }
-    } else {
-        m_origAllocateParameters = nullptr;
+        m_detourAllocateParameters.Install(reinterpret_cast<void*>(pfnAlloc), reinterpret_cast<void*>(&NgxInterceptor::Intercept_AllocateParameters));
     }
-
     if (pfnDestroy) {
-        if (m_detourDestroyParameters.Install(reinterpret_cast<void*>(pfnDestroy), reinterpret_cast<void*>(&NgxInterceptor::Intercept_DestroyParameters))) {
-            m_origDestroyParameters = reinterpret_cast<PFN_NVSDK_NGX_D3D12_DestroyParameters>(m_detourDestroyParameters.GetOriginal());
-        }
-    } else {
-        m_origDestroyParameters = nullptr;
+        m_detourDestroyParameters.Install(reinterpret_cast<void*>(pfnDestroy), reinterpret_cast<void*>(&NgxInterceptor::Intercept_DestroyParameters));
     }
-
     if (pfnGetCaps) {
-        if (m_detourGetCapabilityParameters.Install(reinterpret_cast<void*>(pfnGetCaps), reinterpret_cast<void*>(&NgxInterceptor::Intercept_GetCapabilityParameters))) {
-            m_origGetCapabilityParameters = reinterpret_cast<PFN_NVSDK_NGX_D3D12_GetCapabilityParameters>(m_detourGetCapabilityParameters.GetOriginal());
-        }
-    } else {
-        m_origGetCapabilityParameters = nullptr;
+        m_detourGetCapabilityParameters.Install(reinterpret_cast<void*>(pfnGetCaps), reinterpret_cast<void*>(&NgxInterceptor::Intercept_GetCapabilityParameters));
     }
 
     m_isAttached = true;
-    s_featureHost.store(this);
     LogInfo("NgxInterceptor: Successfully attached NGX feature lifecycle detours.");
     return true;
 }
@@ -284,21 +259,18 @@ bool NgxInterceptor::AttachModule(HMODULE hNgxModule) {
 
     if (m_isAttached) {
         // If already attached to feature functions, but parameter functions were missing, attach parameter detours now
-        if (pfnAlloc && !m_origAllocateParameters) {
+        if (pfnAlloc && !m_detourAllocateParameters.IsInstalled()) {
             if (m_detourAllocateParameters.Install(reinterpret_cast<void*>(pfnAlloc), reinterpret_cast<void*>(&NgxInterceptor::Intercept_AllocateParameters))) {
-                m_origAllocateParameters = reinterpret_cast<PFN_NVSDK_NGX_D3D12_AllocateParameters>(m_detourAllocateParameters.GetOriginal());
                 LogInfo("NgxInterceptor: Successfully attached deferred AllocateParameters detour.");
             }
         }
-        if (pfnDestroy && !m_origDestroyParameters) {
+        if (pfnDestroy && !m_detourDestroyParameters.IsInstalled()) {
             if (m_detourDestroyParameters.Install(reinterpret_cast<void*>(pfnDestroy), reinterpret_cast<void*>(&NgxInterceptor::Intercept_DestroyParameters))) {
-                m_origDestroyParameters = reinterpret_cast<PFN_NVSDK_NGX_D3D12_DestroyParameters>(m_detourDestroyParameters.GetOriginal());
                 LogInfo("NgxInterceptor: Successfully attached deferred DestroyParameters detour.");
             }
         }
-        if (pfnGetCaps && !m_origGetCapabilityParameters) {
+        if (pfnGetCaps && !m_detourGetCapabilityParameters.IsInstalled()) {
             if (m_detourGetCapabilityParameters.Install(reinterpret_cast<void*>(pfnGetCaps), reinterpret_cast<void*>(&NgxInterceptor::Intercept_GetCapabilityParameters))) {
-                m_origGetCapabilityParameters = reinterpret_cast<PFN_NVSDK_NGX_D3D12_GetCapabilityParameters>(m_detourGetCapabilityParameters.GetOriginal());
                 LogInfo("NgxInterceptor: Successfully attached deferred GetCapabilityParameters detour.");
             }
         }
@@ -347,29 +319,30 @@ bool NgxInterceptor::InstallModuleLoadHooks() {
     void* pfnLoadLibraryA = reinterpret_cast<void*>(GetProcAddress(hKernel32, "LoadLibraryA"));
     void* pfnLoadLibraryExA = reinterpret_cast<void*>(GetProcAddress(hKernel32, "LoadLibraryExA"));
 
+    // Publish the host before any detour goes live. A LoadLibrary detour with no trampoline calls the
+    // hooked LoadLibrary again and recurses until the stack overflows, so the detours must never see a
+    // host other than the one whose trampolines they are. LoadLibrary can be hooked only once, so a
+    // second interceptor stays out while another owns the hooks.
+    NgxInterceptor* noHost = nullptr;
+    if (!s_loadHookHost.compare_exchange_strong(noHost, this)) {
+        LogError("NgxInterceptor: Another interceptor already owns the module load detours.");
+        return false;
+    }
+
     if (pfnLoadLibraryW) {
-        if (m_detourLoadLibraryW.Install(pfnLoadLibraryW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryW))) {
-            m_origLoadLibraryW = reinterpret_cast<HMODULE(WINAPI*)(LPCWSTR)>(m_detourLoadLibraryW.GetOriginal());
-        }
+        m_detourLoadLibraryW.Install(pfnLoadLibraryW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryW));
     }
     if (pfnLoadLibraryExW) {
-        if (m_detourLoadLibraryExW.Install(pfnLoadLibraryExW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryExW))) {
-            m_origLoadLibraryExW = reinterpret_cast<HMODULE(WINAPI*)(LPCWSTR, HANDLE, DWORD)>(m_detourLoadLibraryExW.GetOriginal());
-        }
+        m_detourLoadLibraryExW.Install(pfnLoadLibraryExW, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryExW));
     }
     if (pfnLoadLibraryA) {
-        if (m_detourLoadLibraryA.Install(pfnLoadLibraryA, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryA))) {
-            m_origLoadLibraryA = reinterpret_cast<HMODULE(WINAPI*)(LPCSTR)>(m_detourLoadLibraryA.GetOriginal());
-        }
+        m_detourLoadLibraryA.Install(pfnLoadLibraryA, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryA));
     }
     if (pfnLoadLibraryExA) {
-        if (m_detourLoadLibraryExA.Install(pfnLoadLibraryExA, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryExA))) {
-            m_origLoadLibraryExA = reinterpret_cast<HMODULE(WINAPI*)(LPCSTR, HANDLE, DWORD)>(m_detourLoadLibraryExA.GetOriginal());
-        }
+        m_detourLoadLibraryExA.Install(pfnLoadLibraryExA, reinterpret_cast<void*>(&NgxInterceptor::Intercept_LoadLibraryExA));
     }
 
     m_moduleHooksInstalled = true;
-    s_loadHookHost.store(this);
     LogInfo("NgxInterceptor: Module load detours installed.");
     return true;
 }
@@ -382,11 +355,6 @@ void NgxInterceptor::UninstallModuleLoadHooks() {
     if (m_detourLoadLibraryA.IsInstalled()) m_detourLoadLibraryA.Uninstall();
     if (m_detourLoadLibraryExW.IsInstalled()) m_detourLoadLibraryExW.Uninstall();
     if (m_detourLoadLibraryW.IsInstalled()) m_detourLoadLibraryW.Uninstall();
-
-    m_origLoadLibraryW = nullptr;
-    m_origLoadLibraryExW = nullptr;
-    m_origLoadLibraryA = nullptr;
-    m_origLoadLibraryExA = nullptr;
 
     m_moduleHooksInstalled = false;
     NgxInterceptor* expectedLoadHost = this;
@@ -404,13 +372,6 @@ void NgxInterceptor::Detach() {
     if (m_detourAllocateParameters.IsInstalled()) m_detourAllocateParameters.Uninstall();
     if (m_detourDestroyParameters.IsInstalled()) m_detourDestroyParameters.Uninstall();
     if (m_detourGetCapabilityParameters.IsInstalled()) m_detourGetCapabilityParameters.Uninstall();
-
-    m_origCreateFeature = nullptr;
-    m_origReleaseFeature = nullptr;
-    m_origEvaluateFeature = nullptr;
-    m_origAllocateParameters = nullptr;
-    m_origDestroyParameters = nullptr;
-    m_origGetCapabilityParameters = nullptr;
 
     m_attachedModule = nullptr;
     m_isAttached = false;
@@ -440,6 +401,11 @@ void NgxInterceptor::DetachAll() {
     m_lastRenderingMode.store(-1);
     m_internalDiscontinuityPendingLeft.store(false);
     m_internalDiscontinuityPendingRight.store(false);
+}
+
+void NgxInterceptor::DetachLiveHooks() {
+    if (NgxInterceptor* host = s_featureHost.load()) host->DetachAll();
+    if (NgxInterceptor* host = s_loadHookHost.load()) host->DetachAll();
 }
 
 bool NgxInterceptor::IsAttached() const {
@@ -567,7 +533,12 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
     }
     *OutHandle = nullptr;
 
-    auto& interceptor = FeatureHost();
+    NgxInterceptor* host = FeatureHost();
+    if (!host) {
+        LogError("NgxInterceptor: No interceptor owns the CreateFeature detour");
+        return NVSDK_NGX_Result_Fail;
+    }
+    auto& interceptor = *host;
     auto origCreate = interceptor.GetOriginalCreateFeature();
     if (!origCreate) {
         LogError("NgxInterceptor: Original CreateFeature is null");
@@ -724,7 +695,12 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_ReleaseFeature(NVSDK_NGX_Handle* InHa
         return NVSDK_NGX_Result_FAIL_InvalidParameter;
     }
 
-    auto& interceptor = FeatureHost();
+    NgxInterceptor* host = FeatureHost();
+    if (!host) {
+        LogError("NgxInterceptor: No interceptor owns the ReleaseFeature detour");
+        return NVSDK_NGX_Result_Fail;
+    }
+    auto& interceptor = *host;
     auto origRelease = interceptor.GetOriginalReleaseFeature();
     if (!origRelease) {
         LogError("NgxInterceptor: Original ReleaseFeature is null");
@@ -770,7 +746,12 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         return NVSDK_NGX_Result_FAIL_InvalidParameter;
     }
 
-    auto& interceptor = FeatureHost();
+    NgxInterceptor* host = FeatureHost();
+    if (!host) {
+        LogError("NgxInterceptor: No interceptor owns the EvaluateFeature detour");
+        return NVSDK_NGX_Result_Fail;
+    }
+    auto& interceptor = *host;
     auto origEval = interceptor.GetOriginalEvaluateFeature();
     if (!origEval) {
         LogError("NgxInterceptor: Original EvaluateFeature is null");
@@ -942,7 +923,9 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
 NVSDK_NGX_Result NgxInterceptor::Intercept_AllocateParameters(NVSDK_NGX_Parameter** OutParameters) {
     if (!OutParameters) return NVSDK_NGX_Result_FAIL_InvalidParameter;
 
-    auto& interceptor = FeatureHost();
+    NgxInterceptor* host = FeatureHost();
+    if (!host) return NVSDK_NGX_Result_Fail;
+    auto& interceptor = *host;
     auto origAlloc = interceptor.GetOriginalAllocateParameters();
     if (origAlloc) {
         return origAlloc(OutParameters);
@@ -958,7 +941,9 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_AllocateParameters(NVSDK_NGX_Paramete
 NVSDK_NGX_Result NgxInterceptor::Intercept_GetCapabilityParameters(NVSDK_NGX_Parameter** OutParameters) {
     if (!OutParameters) return NVSDK_NGX_Result_FAIL_InvalidParameter;
 
-    auto& interceptor = FeatureHost();
+    NgxInterceptor* host = FeatureHost();
+    if (!host) return NVSDK_NGX_Result_Fail;
+    auto& interceptor = *host;
     auto origGetCaps = interceptor.GetOriginalGetCapabilityParameters();
     if (origGetCaps) {
         return origGetCaps(OutParameters);
@@ -974,7 +959,9 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_GetCapabilityParameters(NVSDK_NGX_Par
 NVSDK_NGX_Result NgxInterceptor::Intercept_DestroyParameters(NVSDK_NGX_Parameter* InParameters) {
     if (!InParameters) return NVSDK_NGX_Result_FAIL_InvalidParameter;
 
-    auto& interceptor = FeatureHost();
+    NgxInterceptor* host = FeatureHost();
+    if (!host) return NVSDK_NGX_Result_Fail;
+    auto& interceptor = *host;
     if (interceptor.UnregisterTrackedParameter(InParameters)) {
         return NVSDK_NGX_Result_Success;
     }
@@ -989,48 +976,49 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_DestroyParameters(NVSDK_NGX_Parameter
 
 // Intercept entry point: LoadLibraryW
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryW(LPCWSTR lpLibFileName) {
-    auto& interceptor = LoadHookHost();
-    auto orig = interceptor.m_origLoadLibraryW;
+    NgxInterceptor* interceptor = LoadHookHost();
+    // No trampoline means the hook is already gone, so the plain call cannot re-enter this detour.
+    auto orig = interceptor ? Original<decltype(&LoadLibraryW)>(interceptor->m_detourLoadLibraryW) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName) : LoadLibraryW(lpLibFileName);
 
-    if (hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor.AttachModule(hMod);
+    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
+        interceptor->AttachModule(hMod);
     }
     return hMod;
 }
 
 // Intercept entry point: LoadLibraryExW
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
-    auto& interceptor = LoadHookHost();
-    auto orig = interceptor.m_origLoadLibraryExW;
+    NgxInterceptor* interceptor = LoadHookHost();
+    auto orig = interceptor ? Original<decltype(&LoadLibraryExW)>(interceptor->m_detourLoadLibraryExW) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName, hFile, dwFlags) : LoadLibraryExW(lpLibFileName, hFile, dwFlags);
 
-    if (hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor.AttachModule(hMod);
+    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
+        interceptor->AttachModule(hMod);
     }
     return hMod;
 }
 
 // Intercept entry point: LoadLibraryA
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryA(LPCSTR lpLibFileName) {
-    auto& interceptor = LoadHookHost();
-    auto orig = interceptor.m_origLoadLibraryA;
+    NgxInterceptor* interceptor = LoadHookHost();
+    auto orig = interceptor ? Original<decltype(&LoadLibraryA)>(interceptor->m_detourLoadLibraryA) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName) : LoadLibraryA(lpLibFileName);
 
-    if (hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor.AttachModule(hMod);
+    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
+        interceptor->AttachModule(hMod);
     }
     return hMod;
 }
 
 // Intercept entry point: LoadLibraryExA
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
-    auto& interceptor = LoadHookHost();
-    auto orig = interceptor.m_origLoadLibraryExA;
+    NgxInterceptor* interceptor = LoadHookHost();
+    auto orig = interceptor ? Original<decltype(&LoadLibraryExA)>(interceptor->m_detourLoadLibraryExA) : nullptr;
     HMODULE hMod = orig ? orig(lpLibFileName, hFile, dwFlags) : LoadLibraryExA(lpLibFileName, hFile, dwFlags);
 
-    if (hMod && MatchesNgxName(lpLibFileName)) {
-        interceptor.AttachModule(hMod);
+    if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
+        interceptor->AttachModule(hMod);
     }
     return hMod;
 }

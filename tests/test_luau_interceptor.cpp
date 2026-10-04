@@ -40,7 +40,7 @@ protected:
     void SetUp() override {
         s_queryCallCount = 0;
         // Only a runtime-owned interceptor installs the detour, and the entry point resolves it through the runtime.
-        bridge = std::make_shared<fs25vr::VRBridge>();
+        bridge = std::make_shared<fs25vr::VRBridge>(nullptr, nullptr);
         fs25vr::InjectorRuntime::Dependencies deps;
         deps.vrBridge = bridge;
         runtime = std::make_unique<fs25vr::InjectorRuntime>(std::move(deps));
@@ -101,7 +101,7 @@ TEST_F(LuauInterceptorTest, InterceptsActiveLuaStateAndInjectsVRBridge) {
 }
 
 TEST_F(LuauInterceptorTest, DetourResolvesTheInterceptorThroughTheCurrentRuntime) {
-    auto isolatedBridge = std::make_shared<fs25vr::VRBridge>();
+    auto isolatedBridge = std::make_shared<fs25vr::VRBridge>(nullptr, nullptr);
     fs25vr::InjectorRuntime::Dependencies deps;
     deps.vrBridge = isolatedBridge;
     fs25vr::InjectorRuntime isolatedRuntime(std::move(deps));
@@ -126,7 +126,7 @@ TEST_F(LuauInterceptorTest, DetourResolvesTheInterceptorThatInstalledItNotTheNew
     ASSERT_TRUE(installer.Attach(reinterpret_cast<void*>(&Engine_isHeadTrackingAvailable)));
 
     fs25vr::InjectorRuntime::Dependencies deps;
-    deps.vrBridge = std::make_shared<fs25vr::VRBridge>();
+    deps.vrBridge = std::make_shared<fs25vr::VRBridge>(nullptr, nullptr);
     fs25vr::InjectorRuntime newerRuntime(std::move(deps));
     ASSERT_EQ(fs25vr::InjectorRuntime::Current(), &newerRuntime);
 

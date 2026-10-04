@@ -2259,7 +2259,7 @@ struct RenderPoseFixture {
         EXPECT_TRUE(manager->IsSessionRunning());
         EXPECT_TRUE(manager->CreateEyeSwapchains(1920, 1080));
         manager->SetIpd(0.064f);
-        bridge = std::make_unique<VRBridge>(manager);
+        bridge = std::make_unique<VRBridge>(manager, nullptr);
         bridge->SetRenderingMode(mode);
     }
 };
