@@ -20,6 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Reject proprietary files
+        shell: pwsh
+        run: scripts/check_proprietary.ps1
+
       - name: Set up MSVC developer environment
         uses: ilammy/msvc-dev-cmd@v1
         with:

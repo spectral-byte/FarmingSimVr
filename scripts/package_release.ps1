@@ -6,6 +6,7 @@ $builtDll = Join-Path $repoRoot "build\dxgi.dll"
 $companionDir = Join-Path $repoRoot "mods\FS25_VRCompanion"
 $releaseDir = Join-Path $repoRoot "build\release"
 $modDescPath = Join-Path $companionDir "modDesc.xml"
+$licensePath = Join-Path $repoRoot "LICENSE"
 
 Write-Host "Packaging FS25 VR Release..."
 
@@ -56,10 +57,14 @@ $noticeText = foreach ($notice in $notices) {
 Set-Content -Path "$bundleDir\THIRD_PARTY_NOTICES.txt" -Value $noticeText -Encoding utf8
 Write-Host "[Package] Wrote THIRD_PARTY_NOTICES.txt"
 
+# GPL-3.0: every distributed copy (the bundle and the standalone mod zip) carries the license.
+Copy-Item $licensePath "$bundleDir\LICENSE" -Force
+Write-Host "[Package] Staged LICENSE"
+
 # Package Companion Mod
 Push-Location $companionDir
 try {
-    tar.exe -a -cf "$bundleDir\mods\FS25_VRCompanion.zip" modDesc.xml icon_vr.png src/*.lua
+    tar.exe -a -cf "$bundleDir\mods\FS25_VRCompanion.zip" modDesc.xml icon_vr.png src/*.lua -C $repoRoot LICENSE
     Copy-Item "$bundleDir\mods\FS25_VRCompanion.zip" "$releaseDir\FS25_VRCompanion.zip" -Force
     Write-Host "[Package] Packaged FS25_VRCompanion.zip"
 } finally {
@@ -138,6 +143,12 @@ UNINSTALLATION
 - Delete 'dxgi.dll' from the game's 'x64' folder.
 - Delete 'FS25_VRCompanion.zip' from your 'mods' folder.
 
+LICENSE
+--------------------------------------------------------------------------------
+Copyright (C) 2026 TBD.
+FS25 VR is free software licensed under the GNU General Public License v3.0;
+see LICENSE. Bundled third-party library licenses are in THIRD_PARTY_NOTICES.txt.
+
 For full documentation and source code, visit:
 https://github.com/jacoch17/FarmingSimVr
 "@
@@ -148,7 +159,7 @@ Set-Content -Path "$bundleDir\README.txt" -Value $readmeContent -Encoding utf8
 $zipBundle = Join-Path $releaseDir "$bundleName.zip"
 Push-Location $bundleDir
 try {
-    tar.exe -a -cf $zipBundle x64/dxgi.dll mods/FS25_VRCompanion.zip README.txt THIRD_PARTY_NOTICES.txt
+    tar.exe -a -cf $zipBundle x64/dxgi.dll mods/FS25_VRCompanion.zip README.txt LICENSE THIRD_PARTY_NOTICES.txt
     Write-Host "[Package] Created $zipBundle"
 } finally {
     Pop-Location

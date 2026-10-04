@@ -304,6 +304,26 @@ TEST_F(CompanionModTest, PackagedModZipContainsModDescIconAndEveryModuleFile) {
         EXPECT_EQ(file.substr(file.size() - 4), ".lua") << file;
     }
 }
+
+TEST_F(CompanionModTest, ReleaseBundleAndModZipShipTheGplLicense) {
+    // GPL-3.0 requires conveying a copy of the license with every distributed copy;
+    // the mod zip is also published on its own, so it carries LICENSE too.
+    std::string script = ReadFile("scripts/package_release.ps1");
+    ASSERT_FALSE(script.empty());
+    std::istringstream lines(script);
+    std::string line;
+    bool modZipShipsLicense = false;
+    bool bundleZipShipsLicense = false;
+    while (std::getline(lines, line)) {
+        if (line.find("tar.exe") == std::string::npos) continue;
+        bool hasLicense = line.find("LICENSE") != std::string::npos;
+        if (line.find("FS25_VRCompanion.zip\" modDesc.xml") != std::string::npos) modZipShipsLicense = hasLicense;
+        if (line.find("$zipBundle") != std::string::npos) bundleZipShipsLicense = hasLicense;
+    }
+    EXPECT_TRUE(modZipShipsLicense);
+    EXPECT_TRUE(bundleZipShipsLicense);
+}
+
 TEST_F(CompanionModTest, PerformsHandshakeWhenVRBridgePresent) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
