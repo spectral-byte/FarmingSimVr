@@ -61,7 +61,7 @@ bool VRBridge::Inject(lua_State* L) {
 
     int origTop = lua_gettop(L);
 
-    // Create table for VRBridge pre-allocated for all exposed fields (version + 29 functions)
+    // Create table for VRBridge pre-allocated for all exposed fields (version + every table entry)
     // to prevent dynamic table resizing/rehashing during startup
     lua_createtable(L, 0, kExposedFieldCount);
 
@@ -69,151 +69,12 @@ bool VRBridge::Inject(lua_State* L) {
     lua_pushstring(L, m_version.c_str());
     lua_setfield(L, -2, "version");
 
-    // VRBridge.isReady = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_IsReady, "isReady", 1);
-    lua_setfield(L, -2, "isReady");
-
-    // VRBridge.handshake = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_Handshake, "handshake", 1);
-    lua_setfield(L, -2, "handshake");
-
-    // VRBridge.isCompanionActive = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_IsCompanionActive, "isCompanionActive", 1);
-    lua_setfield(L, -2, "isCompanionActive");
-
-    // VRBridge.onMapUnload = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_OnMapUnload, "onMapUnload", 1);
-    lua_setfield(L, -2, "onMapUnload");
-
-    // VRBridge.getStereoTelemetry = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetStereoTelemetry, "getStereoTelemetry", 1);
-    lua_setfield(L, -2, "getStereoTelemetry");
-
-    // VRBridge.isStereoActive = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_IsStereoActive, "isStereoActive", 1);
-    lua_setfield(L, -2, "isStereoActive");
-
-    // VRBridge.getRequiresAfrFallback = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_RequiresAfrFallback, "getRequiresAfrFallback", 1);
-    lua_setfield(L, -2, "getRequiresAfrFallback");
-
-    // VRBridge.getHeadPose = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetHeadPose, "getHeadPose", 1);
-    lua_setfield(L, -2, "getHeadPose");
-
-    // VRBridge.recenter = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_Recenter, "recenter", 1);
-    lua_setfield(L, -2, "recenter");
-
-    // VRBridge.getEyeProjection = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetEyeProjection, "getEyeProjection", 1);
-    lua_setfield(L, -2, "getEyeProjection");
-
-    // VRBridge.getFrameParity = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetFrameParity, "getFrameParity", 1);
-    lua_setfield(L, -2, "getFrameParity");
-
-    // VRBridge.getFrameIndex = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetFrameIndex, "getFrameIndex", 1);
-    lua_setfield(L, -2, "getFrameIndex");
-
-    // VRBridge.getIpd = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetIpd, "getIpd", 1);
-    lua_setfield(L, -2, "getIpd");
-
-    // VRBridge.getEyePose = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetEyePose, "getEyePose", 1);
-    lua_setfield(L, -2, "getEyePose");
-
-    // VRBridge.setMenuVisible = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_SetMenuVisible, "setMenuVisible", 1);
-    lua_setfield(L, -2, "setMenuVisible");
-
-    // VRBridge.getIsMenuVisible = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetIsMenuVisible, "getIsMenuVisible", 1);
-    lua_setfield(L, -2, "getIsMenuVisible");
-
-    // VRBridge.alignMenuQuad = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_AlignMenuQuad, "alignMenuQuad", 1);
-    lua_setfield(L, -2, "alignMenuQuad");
-
-    // VRBridge.set2DViewActive = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_Set2DViewActive, "set2DViewActive", 1);
-    lua_setfield(L, -2, "set2DViewActive");
-
-    // VRBridge.getIs2DViewActive = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetIs2DViewActive, "getIs2DViewActive", 1);
-    lua_setfield(L, -2, "getIs2DViewActive");
-
-    // VRBridge.getRenderingMode = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetRenderingMode, "getRenderingMode", 1);
-    lua_setfield(L, -2, "getRenderingMode");
-
-    // VRBridge.setRenderingMode = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_SetRenderingMode, "setRenderingMode", 1);
-    lua_setfield(L, -2, "setRenderingMode");
-
-    // VRBridge.getSubPassIndex = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_GetSubPassIndex, "getSubPassIndex", 1);
-    lua_setfield(L, -2, "getSubPassIndex");
-
-    // VRBridge.setSubPassIndex = function(index) [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_SetSubPassIndex, "setSubPassIndex", 1);
-    lua_setfield(L, -2, "setSubPassIndex");
-
-    // VRBridge.advanceSubPass = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_AdvanceSubPass, "advanceSubPass", 1);
-    lua_setfield(L, -2, "advanceSubPass");
-
-    // VRBridge.resetTemporalHistory = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_ResetTemporalHistory, "resetTemporalHistory", 1);
-    lua_setfield(L, -2, "resetTemporalHistory");
-
-    // VRBridge.signalDiscontinuity = function() [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_SignalDiscontinuity, "signalDiscontinuity", 1);
-    lua_setfield(L, -2, "signalDiscontinuity");
-
-    // VRBridge.setDlssMvScale = function(scaleX, [scaleY]) [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_SetDlssMvScale, "setDlssMvScale", 1);
-    lua_setfield(L, -2, "setDlssMvScale");
-
-    // VRBridge.setDlssSharpness = function(sharpness) [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_SetDlssSharpness, "setDlssSharpness", 1);
-    lua_setfield(L, -2, "setDlssSharpness");
-
-    // VRBridge.setDlssPreset = function(preset) [bound with 'this' upvalue]
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_SetDlssPreset, "setDlssPreset", 1);
-    lua_setfield(L, -2, "setDlssPreset");
-
+    // VRBridge.<name> = function [bound with 'this' upvalue], driven by kFunctionTable
+    for (const LuaFunctionEntry& entry : kFunctionTable) {
+        lua_pushlightuserdata(L, this);
+        lua_pushcclosure(L, entry.fn, entry.name, 1);
+        lua_setfield(L, -2, entry.name);
+    }
     // Set metatable on VRBridge table for dynamic property access (__index)
     lua_createtable(L, 0, 1);
     lua_pushlightuserdata(L, this);
@@ -381,53 +242,33 @@ void VRBridge::Recenter() {
     LogInfo("VRBridge: Recenter triggered.");
 }
 
+void VRBridge::PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex) {
+    lua_createtable(L, 0, eyeIndex >= 0 ? 14 : 13);
+
+    lua_pushnumber(L, pose.position.x); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, pose.position.y); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, pose.position.z); lua_setfield(L, -2, "z");
+    lua_pushnumber(L, pose.rotation.pitch); lua_setfield(L, -2, "pitch");
+    lua_pushnumber(L, pose.rotation.yaw); lua_setfield(L, -2, "yaw");
+    lua_pushnumber(L, pose.rotation.roll); lua_setfield(L, -2, "roll");
+    lua_pushnumber(L, pose.orientation.x); lua_setfield(L, -2, "qx");
+    lua_pushnumber(L, pose.orientation.y); lua_setfield(L, -2, "qy");
+    lua_pushnumber(L, pose.orientation.z); lua_setfield(L, -2, "qz");
+    lua_pushnumber(L, pose.orientation.w); lua_setfield(L, -2, "qw");
+    lua_pushboolean(L, pose.isValid ? 1 : 0); lua_setfield(L, -2, "isValid");
+    lua_pushboolean(L, pose.positionTracked ? 1 : 0); lua_setfield(L, -2, "isPositionTracked");
+    lua_pushboolean(L, pose.orientationTracked ? 1 : 0); lua_setfield(L, -2, "isOrientationTracked");
+    if (eyeIndex >= 0) {
+        lua_pushinteger(L, eyeIndex); lua_setfield(L, -2, "eye");
+    }
+}
 int VRBridge::Lua_GetHeadPose(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
 
     HeadPose pose = self->GetHeadPose();
 
-    lua_createtable(L, 0, 13);
-
-    lua_pushnumber(L, pose.position.x);
-    lua_setfield(L, -2, "x");
-
-    lua_pushnumber(L, pose.position.y);
-    lua_setfield(L, -2, "y");
-
-    lua_pushnumber(L, pose.position.z);
-    lua_setfield(L, -2, "z");
-
-    lua_pushnumber(L, pose.rotation.pitch);
-    lua_setfield(L, -2, "pitch");
-
-    lua_pushnumber(L, pose.rotation.yaw);
-    lua_setfield(L, -2, "yaw");
-
-    lua_pushnumber(L, pose.rotation.roll);
-    lua_setfield(L, -2, "roll");
-
-    lua_pushnumber(L, pose.orientation.x);
-    lua_setfield(L, -2, "qx");
-
-    lua_pushnumber(L, pose.orientation.y);
-    lua_setfield(L, -2, "qy");
-
-    lua_pushnumber(L, pose.orientation.z);
-    lua_setfield(L, -2, "qz");
-
-    lua_pushnumber(L, pose.orientation.w);
-    lua_setfield(L, -2, "qw");
-
-    lua_pushboolean(L, pose.isValid ? 1 : 0);
-    lua_setfield(L, -2, "isValid");
-
-    lua_pushboolean(L, pose.positionTracked ? 1 : 0);
-    lua_setfield(L, -2, "isPositionTracked");
-
-    lua_pushboolean(L, pose.orientationTracked ? 1 : 0);
-    lua_setfield(L, -2, "isOrientationTracked");
-
+    PushPoseTable(L, pose);
     return 1;
 }
 
@@ -622,21 +463,7 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
     }
 
     HeadPose pose = self->GetEyePose(eyeIndex);
-    lua_createtable(L, 0, 14);
-    lua_pushnumber(L, pose.position.x); lua_setfield(L, -2, "x");
-    lua_pushnumber(L, pose.position.y); lua_setfield(L, -2, "y");
-    lua_pushnumber(L, pose.position.z); lua_setfield(L, -2, "z");
-    lua_pushnumber(L, pose.rotation.pitch); lua_setfield(L, -2, "pitch");
-    lua_pushnumber(L, pose.rotation.yaw); lua_setfield(L, -2, "yaw");
-    lua_pushnumber(L, pose.rotation.roll); lua_setfield(L, -2, "roll");
-    lua_pushnumber(L, pose.orientation.x); lua_setfield(L, -2, "qx");
-    lua_pushnumber(L, pose.orientation.y); lua_setfield(L, -2, "qy");
-    lua_pushnumber(L, pose.orientation.z); lua_setfield(L, -2, "qz");
-    lua_pushnumber(L, pose.orientation.w); lua_setfield(L, -2, "qw");
-    lua_pushboolean(L, pose.isValid ? 1 : 0); lua_setfield(L, -2, "isValid");
-    lua_pushboolean(L, pose.positionTracked ? 1 : 0); lua_setfield(L, -2, "isPositionTracked");
-    lua_pushboolean(L, pose.orientationTracked ? 1 : 0); lua_setfield(L, -2, "isOrientationTracked");
-    lua_pushinteger(L, eyeIndex); lua_setfield(L, -2, "eye");
+    PushPoseTable(L, pose, static_cast<int>(eyeIndex));
     return 1;
 }
 

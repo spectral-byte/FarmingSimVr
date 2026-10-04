@@ -18,8 +18,6 @@ enum class VRRenderingMode : uint32_t {
 
 class VRBridge {
 public:
-    static constexpr int kExposedFieldCount = 30; // 1 version property + 29 exposed functions
-
     static VRBridge& Instance();
 
     explicit VRBridge(std::shared_ptr<OpenXrManager> openXrManager = nullptr,
@@ -113,6 +111,50 @@ public:
     static int Lua_Index(lua_State* L);
 
     static void PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, uint32_t eyeIndex);
+    // Builds a pose table; eyeIndex < 0 omits the "eye" field (head pose).
+    static void PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex = -1);
+
+    struct LuaFunctionEntry {
+        const char* name;
+        lua_CFunction fn;
+    };
+
+    // Single source of truth for the Lua-visible functions registered by Inject().
+    static constexpr LuaFunctionEntry kFunctionTable[] = {
+        {"isReady", &Lua_IsReady},
+        {"handshake", &Lua_Handshake},
+        {"isCompanionActive", &Lua_IsCompanionActive},
+        {"onMapUnload", &Lua_OnMapUnload},
+        {"getStereoTelemetry", &Lua_GetStereoTelemetry},
+        {"isStereoActive", &Lua_IsStereoActive},
+        {"getRequiresAfrFallback", &Lua_RequiresAfrFallback},
+        {"getHeadPose", &Lua_GetHeadPose},
+        {"recenter", &Lua_Recenter},
+        {"getEyeProjection", &Lua_GetEyeProjection},
+        {"getFrameParity", &Lua_GetFrameParity},
+        {"getFrameIndex", &Lua_GetFrameIndex},
+        {"getIpd", &Lua_GetIpd},
+        {"getEyePose", &Lua_GetEyePose},
+        {"setMenuVisible", &Lua_SetMenuVisible},
+        {"getIsMenuVisible", &Lua_GetIsMenuVisible},
+        {"alignMenuQuad", &Lua_AlignMenuQuad},
+        {"set2DViewActive", &Lua_Set2DViewActive},
+        {"getIs2DViewActive", &Lua_GetIs2DViewActive},
+        {"getRenderingMode", &Lua_GetRenderingMode},
+        {"setRenderingMode", &Lua_SetRenderingMode},
+        {"getSubPassIndex", &Lua_GetSubPassIndex},
+        {"setSubPassIndex", &Lua_SetSubPassIndex},
+        {"advanceSubPass", &Lua_AdvanceSubPass},
+        {"resetTemporalHistory", &Lua_ResetTemporalHistory},
+        {"signalDiscontinuity", &Lua_SignalDiscontinuity},
+        {"setDlssMvScale", &Lua_SetDlssMvScale},
+        {"setDlssSharpness", &Lua_SetDlssSharpness},
+        {"setDlssPreset", &Lua_SetDlssPreset},
+    };
+
+    // 1 version property + one field per table entry.
+    static constexpr int kExposedFieldCount =
+        1 + static_cast<int>(sizeof(kFunctionTable) / sizeof(kFunctionTable[0]));
 
 private:
     std::shared_ptr<OpenXrManager> m_openXrManager;
