@@ -5,9 +5,9 @@
 #include "openxr/openxr_manager.h"
 #include "proxy/dxgi_proxy.h"
 #include "proxy/system_dxgi.h"
+#include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
-#include <cstring>
 #include <thread>
 #include <vector>
 
@@ -128,31 +128,21 @@ TEST_F(DllLifecycleTest, ProcessDetachDuringTerminationSkipsHookRemoval) {
 }
 
 TEST_F(DllLifecycleTest, DestructorsRunAfterTerminationDetachLeaveHooksInPlace) {
-    // Learn the patched address (past any ILT thunk) and its original bytes.
-    uint8_t* patched = nullptr;
-    {
-        FunctionDetour probe;
-        ASSERT_TRUE(probe.Install(reinterpret_cast<void*>(&TerminationTarget), reinterpret_cast<void*>(&TerminationDetour)));
-        patched = static_cast<uint8_t*>(probe.GetTarget());
-    }
     ASSERT_EQ(TerminationTarget(5), 6);
-    uint8_t prologue[32];
-    std::memcpy(prologue, patched, sizeof(prologue));
 
+    void* patched = nullptr;  // past any ILT thunk
     {
         FunctionDetour detour;
         ASSERT_TRUE(detour.Install(reinterpret_cast<void*>(&TerminationTarget), reinterpret_cast<void*>(&TerminationDetour)));
+        patched = detour.GetTarget();
         OnProcessDetach(reinterpret_cast<LPVOID>(1));
     }  // ~FunctionDetour runs here, as the CRT's static destructors do after DllMain returns.
 
     EXPECT_EQ(TerminationTarget(5), -5);
 
-    // The destructor deliberately left the patch; undo it by hand.
-    DWORD oldProtect = 0;
-    ASSERT_TRUE(VirtualProtect(patched, sizeof(prologue), PAGE_EXECUTE_READWRITE, &oldProtect));
-    std::memcpy(patched, prologue, sizeof(prologue));
-    VirtualProtect(patched, sizeof(prologue), oldProtect, &oldProtect);
-    FlushInstructionCache(GetCurrentProcess(), patched, sizeof(prologue));
+    // The destructor deliberately left the hook. Remove it through MinHook so its
+    // hook table forgets the target too, or a later Install (e.g. --gtest_repeat) fails.
+    ASSERT_EQ(MH_RemoveHook(patched), MH_OK);
     EXPECT_EQ(TerminationTarget(5), 6);
 }
 

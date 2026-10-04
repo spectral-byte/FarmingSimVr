@@ -1,11 +1,10 @@
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
-#include <vector>
-
 namespace fs25vr {
 
+// Inline function hook backed by MinHook. MinHook is initialized exactly once
+// per process; installing and removing hooks suspends the other threads while
+// the target is patched.
 class FunctionDetour {
 public:
     FunctionDetour();
@@ -20,7 +19,7 @@ public:
     bool Install(void* targetFunction, void* detourFunction);
     bool Uninstall();
 
-    void* GetOriginal() const { return m_trampolineEntry ? m_trampolineEntry : m_trampoline; }
+    void* GetOriginal() const { return m_original; }
     void* GetTarget() const { return m_target; }
     void* GetDetour() const { return m_detour; }
     bool IsInstalled() const { return m_installed; }
@@ -28,10 +27,7 @@ public:
 private:
     void* m_target = nullptr;
     void* m_detour = nullptr;
-    void* m_trampoline = nullptr;
-    void* m_trampolineEntry = nullptr;
-    std::vector<uint8_t> m_originalBytes;
-    size_t m_hookSize = 0;
+    void* m_original = nullptr;
     bool m_installed = false;
 };
 

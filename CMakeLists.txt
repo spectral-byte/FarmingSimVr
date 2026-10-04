@@ -46,6 +46,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(luau)
 
+# Fetch MinHook for inline hooking (pinned release)
+FetchContent_Declare(
+    minhook
+    GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
+    GIT_TAG v1.3.4
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(minhook)
+
 enable_testing()
 
 # Core source files
@@ -91,6 +100,7 @@ target_include_directories(fs25_vr_core PUBLIC
 
 target_link_libraries(fs25_vr_core PUBLIC
     openxr_loader
+    minhook
     Luau.VM
     d3d12.lib
     comctl32.lib

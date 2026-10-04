@@ -224,5 +224,6 @@ For in-depth technical documentation, refer to the architecture records in [`doc
 
 ## License & Credits
 
-Developed by the **FS25 VR Team**. Built with Khronos OpenXR, Luau, and GoogleTest.  
+Developed by the **FS25 VR Team**. Built with Khronos OpenXR, Luau, MinHook, and GoogleTest.  
+Release bundles include `THIRD_PARTY_NOTICES.txt` with the licenses of the libraries linked into `dxgi.dll`.  
 Farming Simulator 25 is a trademark of GIANTS Software GmbH.

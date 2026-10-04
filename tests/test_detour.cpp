@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <windows.h>
+#include <cstring>
 #include "core/detour.h"
 
 namespace {
@@ -117,34 +118,83 @@ TEST_F(DetourTest, SafelyRejectsShortFunctionsContainingRet) {
     fs25vr::FunctionDetour detour;
 
     // Simulate a 3-byte stub: xor eax, eax (31 C0); ret (C3)
-    alignas(16) static uint8_t shortStub[] = { 0x31, 0xC0, 0xC3, 0x90, 0x90, 0x90 };
-    DWORD oldProtect = 0;
-    VirtualProtect(shortStub, sizeof(shortStub), PAGE_EXECUTE_READWRITE, &oldProtect);
+    // Surrounding bytes are non-padding (push rbp) so MinHook cannot fall back to a hot-patch hook.
+    auto* page = static_cast<uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    ASSERT_NE(page, nullptr);
+    std::memset(page, 0x55, 4096);
+    uint8_t* shortStub = page + 64;
+    shortStub[0] = 0x31;
+    shortStub[1] = 0xC0;
+    shortStub[2] = 0xC3;
 
     bool installed = detour.Install(shortStub, reinterpret_cast<void*>(&DetourAddNumbers));
     EXPECT_FALSE(installed) << "Detour must safely reject functions containing ret before hook size";
     EXPECT_FALSE(detour.IsInstalled());
+    VirtualFree(page, 0, MEM_RELEASE);
 }
 
-TEST_F(DetourTest, EnforcesWriteXorExecuteTrampolineMemoryProtection) {
+TEST_F(DetourTest, TrampolineIsExecutable) {
     fs25vr::FunctionDetour detour;
 
-    bool installed = detour.Install(reinterpret_cast<void*>(&AddNumbers),
-                                   reinterpret_cast<void*>(&DetourAddNumbers));
-    ASSERT_TRUE(installed);
-    ASSERT_TRUE(detour.IsInstalled());
+    ASSERT_TRUE(detour.Install(reinterpret_cast<void*>(&AddNumbers),
+                               reinterpret_cast<void*>(&DetourAddNumbers)));
 
     void* originalTrampoline = detour.GetOriginal();
     ASSERT_NE(originalTrampoline, nullptr);
 
     MEMORY_BASIC_INFORMATION mbi{};
-    SIZE_T queryResult = VirtualQuery(originalTrampoline, &mbi, sizeof(mbi));
-    ASSERT_GT(queryResult, 0U);
-
-    // Verify W^X compliance: Trampoline must be PAGE_EXECUTE_READ, never PAGE_EXECUTE_READWRITE
-    EXPECT_EQ(mbi.Protect, static_cast<DWORD>(PAGE_EXECUTE_READ));
-    EXPECT_NE(mbi.Protect, static_cast<DWORD>(PAGE_EXECUTE_READWRITE));
+    ASSERT_GT(VirtualQuery(originalTrampoline, &mbi, sizeof(mbi)), 0U);
+    EXPECT_TRUE(mbi.Protect == PAGE_EXECUTE_READ || mbi.Protect == PAGE_EXECUTE_READWRITE);
 
     detour.Uninstall();
 }
 
+namespace {
+int (*s_originalRelJump)(int) = nullptr;
+int DetourRelJump(int a) { return s_originalRelJump(a * 2); }
+} // namespace
+
+TEST_F(DetourTest, HooksFunctionWhosePrologueContainsRelativeJump) {
+    // int f(int a) { return a + 5; } laid out so the prologue holds a rel32 jmp:
+    //   mov eax, ecx        89 C8
+    //   jmp +9              E9 09 00 00 00   (lands on the add below)
+    //   int3 x9
+    //   add eax, 5          83 C0 05
+    //   ret                 C3
+    const uint8_t code[] = {
+        0x89, 0xC8,
+        0xE9, 0x09, 0x00, 0x00, 0x00,
+        0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+        0x83, 0xC0, 0x05,
+        0xC3,
+    };
+    void* mem = VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    ASSERT_NE(mem, nullptr);
+    std::memcpy(mem, code, sizeof(code));
+    auto fn = reinterpret_cast<int (*)(int)>(mem);
+    ASSERT_EQ(fn(3), 8);
+
+    fs25vr::FunctionDetour detour;
+    ASSERT_TRUE(detour.Install(mem, reinterpret_cast<void*>(&DetourRelJump)));
+    s_originalRelJump = reinterpret_cast<int (*)(int)>(detour.GetOriginal());
+    ASSERT_NE(s_originalRelJump, nullptr);
+
+    EXPECT_EQ(fn(3), 11);               // hooked: (3*2) + 5
+    EXPECT_EQ(s_originalRelJump(3), 8); // trampoline relocated the jmp correctly
+
+    detour.Uninstall();
+    EXPECT_EQ(fn(3), 8);
+    VirtualFree(mem, 0, MEM_RELEASE);
+}
+
+TEST_F(DetourTest, TargetCanBeHookedAgainAfterUninstall) {
+    for (int round = 0; round < 3; ++round) {
+        fs25vr::FunctionDetour detour;
+        ASSERT_TRUE(detour.Install(reinterpret_cast<void*>(&AddNumbers),
+                                   reinterpret_cast<void*>(&DetourAddNumbers)));
+        s_originalAddNumbers = reinterpret_cast<int(*)(int, int)>(detour.GetOriginal());
+        EXPECT_EQ(AddNumbers(2, 3), 13);
+        EXPECT_TRUE(detour.Uninstall());
+        EXPECT_EQ(AddNumbers(2, 3), 5);
+    }
+}

@@ -25,6 +25,28 @@ Copy-Item $builtDll "$bundleDir\x64\dxgi.dll" -Force
 Copy-Item $builtDll "$releaseDir\dxgi.dll" -Force
 Write-Host "[Package] Staged dxgi.dll"
 
+# dxgi.dll statically links these dependencies; their licenses require shipping the notices.
+$depsDir = Join-Path $repoRoot "build\_deps"
+$notices = @(
+    @{ Name = "MinHook";            File = "minhook-src\LICENSE.txt" },
+    @{ Name = "Luau";               File = "luau-src\LICENSE.txt" },
+    @{ Name = "Lua (used by Luau)"; File = "luau-src\lua_LICENSE.txt" },
+    @{ Name = "OpenXR SDK";         File = "openxr-src\LICENSE" }
+)
+$noticeText = foreach ($notice in $notices) {
+    $path = Join-Path $depsDir $notice.File
+    if (-not (Test-Path $path)) {
+        Write-Error "$path not found. Configure the build first (cmake -B build) so dependencies are fetched."
+    }
+    "=" * 80
+    "  $($notice.Name)"
+    "=" * 80
+    Get-Content $path -Raw
+    ""
+}
+Set-Content -Path "$bundleDir\THIRD_PARTY_NOTICES.txt" -Value $noticeText -Encoding utf8
+Write-Host "[Package] Wrote THIRD_PARTY_NOTICES.txt"
+
 # Package Companion Mod
 Push-Location $companionDir
 try {
@@ -117,7 +139,7 @@ Set-Content -Path "$bundleDir\README.txt" -Value $readmeContent -Encoding utf8
 $zipBundle = Join-Path $releaseDir "FS25_VR_v1.0.0.zip"
 Push-Location $bundleDir
 try {
-    tar.exe -a -cf $zipBundle x64/dxgi.dll mods/FS25_VRCompanion.zip README.txt
+    tar.exe -a -cf $zipBundle x64/dxgi.dll mods/FS25_VRCompanion.zip README.txt THIRD_PARTY_NOTICES.txt
     Write-Host "[Package] Created $zipBundle"
 } finally {
     Pop-Location
