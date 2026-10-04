@@ -30,16 +30,16 @@ print("Running VR HUD Inset Tests...")
 
 -- Slice 1: Anchor calculations, default values, and clamp boundaries
 test("CalculatesDefaultHudAnchorsAndScale", function()
-    assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.20, "DEFAULT_HUD_INSET_X must be 0.20")
-    assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.16, "DEFAULT_HUD_INSET_Y must be 0.16")
-    assert(VRCompanion.DEFAULT_HUD_UI_SCALE == 0.88, "DEFAULT_HUD_UI_SCALE must be 0.88")
+    assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.30, "DEFAULT_HUD_INSET_X must be 0.30")
+    assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.22, "DEFAULT_HUD_INSET_Y must be 0.22")
+    assert(VRCompanion.DEFAULT_HUD_UI_SCALE == 0.82, "DEFAULT_HUD_UI_SCALE must be 0.82")
 
     local left, right, bottom, top, scale = VRCompanion:calculateHudAnchors()
-    assert(math.abs(left - 0.20) < 0.0001, "Default left anchor must be 0.20")
-    assert(math.abs(right - 0.80) < 0.0001, "Default right anchor must be 0.80")
-    assert(math.abs(bottom - 0.16) < 0.0001, "Default bottom anchor must be 0.16")
-    assert(math.abs(top - 0.84) < 0.0001, "Default top anchor must be 0.84")
-    assert(math.abs(scale - 0.88) < 0.0001, "Default scale multiplier must be 0.88")
+    assert(math.abs(left - 0.30) < 0.0001, "Default left anchor must be 0.30")
+    assert(math.abs(right - 0.70) < 0.0001, "Default right anchor must be 0.70")
+    assert(math.abs(bottom - 0.22) < 0.0001, "Default bottom anchor must be 0.22")
+    assert(math.abs(top - 0.78) < 0.0001, "Default top anchor must be 0.78")
+    assert(math.abs(scale - 0.82) < 0.0001, "Default scale multiplier must be 0.82")
 end)
 
 test("CalculatesCustomHudAnchorsCorrectly", function()
@@ -92,19 +92,20 @@ test("LoadsConfigurationWithGracefulFallbackWhenUnspecified", function()
 
     -- Call loadConfiguration with non-existent path
     local insets = VRCompanion:loadConfiguration("non_existent_file.xml")
-    assert(math.abs(insets.left - 0.20) < 0.0001, "Must fall back to default left 0.20")
-    assert(math.abs(insets.right - 0.80) < 0.0001, "Must fall back to default right 0.80")
-    assert(math.abs(insets.bottom - 0.16) < 0.0001, "Must fall back to default bottom 0.16")
-    assert(math.abs(insets.top - 0.84) < 0.0001, "Must fall back to default top 0.84")
-    assert(math.abs(insets.scaleMultiplier - 0.88) < 0.0001, "Must fall back to default scale 0.88")
+    assert(math.abs(insets.left - 0.30) < 0.0001, "Must fall back to default left 0.30")
+    assert(math.abs(insets.right - 0.70) < 0.0001, "Must fall back to default right 0.70")
+    assert(math.abs(insets.bottom - 0.22) < 0.0001, "Must fall back to default bottom 0.22")
+    assert(math.abs(insets.top - 0.78) < 0.0001, "Must fall back to default top 0.78")
+    assert(math.abs(insets.scaleMultiplier - 0.82) < 0.0001, "Must fall back to default scale 0.82")
 end)
 
 test("LoadsConfigurationFromXmlWhenSpecified", function()
     -- Mock GIANTS XML functions
     _G.mockXmlData = {
-        ["modDesc.vrSettings.hudInsetHorizontal"] = 0.22,
-        ["modDesc.vrSettings.hudInsetVertical"] = 0.15,
-        ["modDesc.vrSettings.hudUiScale"] = 0.85
+        ["vrSettings.hudInsetHorizontal"] = 0.22,
+        ["vrSettings.hudInsetVertical"] = 0.15,
+        ["vrSettings.hudInsetTop"] = 0.15,
+        ["vrSettings.hudUiScale"] = 0.85
     }
     _G.loadXMLFile = function(tag, path) return 123 end
     _G.getXMLFloat = function(xmlFile, key)
@@ -112,7 +113,7 @@ test("LoadsConfigurationFromXmlWhenSpecified", function()
     end
     _G.delete = function(xmlFile) end
 
-    local insets = VRCompanion:loadConfiguration("mockModDesc.xml")
+    local insets = VRCompanion:loadConfiguration("mockSettings.xml")
     assert(math.abs(insets.left - 0.22) < 0.0001, "Loaded left anchor must be 0.22")
     assert(math.abs(insets.right - 0.78) < 0.0001, "Loaded right anchor must be 0.78")
     assert(math.abs(insets.bottom - 0.15) < 0.0001, "Loaded bottom anchor must be 0.15")
@@ -169,15 +170,15 @@ test("AppliesDefaultVRHudInsetsUponMapLoad", function()
     -- Simulate map load
     VRCompanion:loadMap("mapUS")
 
-    -- Global engine anchors must contract inward by 20% horizontal and 16% vertical
-    assert(math.abs(_G.g_hudAnchorLeft - 0.20) < 0.0001, "g_hudAnchorLeft must be 0.20 upon map load")
-    assert(math.abs(_G.g_hudAnchorRight - 0.80) < 0.0001, "g_hudAnchorRight must be 0.80 upon map load")
-    assert(math.abs(_G.g_hudAnchorBottom - 0.16) < 0.0001, "g_hudAnchorBottom must be 0.16 upon map load")
-    assert(math.abs(_G.g_hudAnchorTop - 0.84) < 0.0001, "g_hudAnchorTop must be 0.84 upon map load")
+    -- Global engine anchors must contract inward by the default insets (30% horizontal, 22% vertical and top)
+    assert(math.abs(_G.g_hudAnchorLeft - 0.30) < 0.0001, "g_hudAnchorLeft must be 0.30 upon map load")
+    assert(math.abs(_G.g_hudAnchorRight - 0.70) < 0.0001, "g_hudAnchorRight must be 0.70 upon map load")
+    assert(math.abs(_G.g_hudAnchorBottom - 0.22) < 0.0001, "g_hudAnchorBottom must be 0.22 upon map load")
+    assert(math.abs(_G.g_hudAnchorTop - 0.78) < 0.0001, "g_hudAnchorTop must be 0.78 upon map load")
 
-    -- UI scale multiplier applied (0.88x)
-    assert(math.abs(VRCompanion.effectiveUiScale - 0.88) < 0.0001, "effectiveUiScale must be 0.88")
-    assert(mockDisplays.speedMeter.scale == 0.88, "SpeedMeterDisplay must receive 0.88 scale")
+    -- UI scale multiplier applied (0.82x)
+    assert(math.abs(VRCompanion.effectiveUiScale - 0.82) < 0.0001, "effectiveUiScale must be 0.82")
+    assert(mockDisplays.speedMeter.scale == 0.82, "SpeedMeterDisplay must receive 0.82 scale")
 
     -- All 5 standard HUD displays must have repositioned / updated
     assert(mockDisplays.speedMeter.storeScaledValuesCalled == true, "SpeedMeterDisplay.storeScaledValues must be called")
@@ -188,24 +189,24 @@ test("AppliesDefaultVRHudInsetsUponMapLoad", function()
 
     -- Verify specific display positions match configured VR safe insets
     assert(mockDisplays.speedMeter.position ~= nil, "SpeedMeterDisplay must have position set")
-    assert(math.abs(mockDisplays.speedMeter.position.x - 0.80) < 0.0001, "SpeedMeterDisplay must anchor to right 0.80")
-    assert(math.abs(mockDisplays.speedMeter.position.y - 0.16) < 0.0001, "SpeedMeterDisplay must anchor to bottom 0.16")
+    assert(math.abs(mockDisplays.speedMeter.position.x - 0.70) < 0.0001, "SpeedMeterDisplay must anchor to right 0.70")
+    assert(math.abs(mockDisplays.speedMeter.position.y - 0.22) < 0.0001, "SpeedMeterDisplay must anchor to bottom 0.22")
 
     assert(mockDisplays.inputHelp.position ~= nil, "InputHelpDisplay must have position set")
-    assert(math.abs(mockDisplays.inputHelp.position.x - 0.20) < 0.0001, "InputHelpDisplay must anchor to left 0.20")
-    assert(math.abs(mockDisplays.inputHelp.position.y - 0.84) < 0.0001, "InputHelpDisplay must anchor to top 0.84")
+    assert(math.abs(mockDisplays.inputHelp.position.x - 0.30) < 0.0001, "InputHelpDisplay must anchor to left 0.30")
+    assert(math.abs(mockDisplays.inputHelp.position.y - 0.78) < 0.0001, "InputHelpDisplay must anchor to top 0.78")
 
     assert(mockDisplays.gameInfo.position ~= nil, "GameInfoDisplay must have position set")
-    assert(math.abs(mockDisplays.gameInfo.position.x - 0.80) < 0.0001, "GameInfoDisplay must anchor to right 0.80")
-    assert(math.abs(mockDisplays.gameInfo.position.y - 0.84) < 0.0001, "GameInfoDisplay must anchor to top 0.84")
+    assert(math.abs(mockDisplays.gameInfo.position.x - 0.70) < 0.0001, "GameInfoDisplay must anchor to right 0.70")
+    assert(math.abs(mockDisplays.gameInfo.position.y - 0.78) < 0.0001, "GameInfoDisplay must anchor to top 0.78")
 
     assert(mockDisplays.contextAction.position ~= nil, "ContextActionDisplay must have position set")
-    assert(math.abs(mockDisplays.contextAction.position.x - 0.20) < 0.0001, "ContextActionDisplay must anchor to left 0.20")
-    assert(math.abs(mockDisplays.contextAction.position.y - 0.16) < 0.0001, "ContextActionDisplay must anchor to bottom 0.16")
+    assert(math.abs(mockDisplays.contextAction.position.x - 0.30) < 0.0001, "ContextActionDisplay must anchor to left 0.30")
+    assert(math.abs(mockDisplays.contextAction.position.y - 0.22) < 0.0001, "ContextActionDisplay must anchor to bottom 0.22")
 
     assert(mockDisplays.ingameMap.position ~= nil, "IngameMap must have position set")
-    assert(math.abs(mockDisplays.ingameMap.position.x - 0.20) < 0.0001, "IngameMap must anchor to left 0.20")
-    assert(math.abs(mockDisplays.ingameMap.position.y - 0.16) < 0.0001, "IngameMap must anchor to bottom 0.16")
+    assert(math.abs(mockDisplays.ingameMap.position.x - 0.30) < 0.0001, "IngameMap must anchor to left 0.30")
+    assert(math.abs(mockDisplays.ingameMap.position.y - 0.22) < 0.0001, "IngameMap must anchor to bottom 0.22")
 
     -- Clean up map lifecycle
     VRCompanion:deleteMap()
@@ -215,28 +216,28 @@ test("PositionsIndividualDisplaysViaHelper", function()
     local sm = { storeScaledValues = function(self) self.stored = true end }
     VRCompanion:positionHudDisplay(sm, "SpeedMeterDisplay")
     assert(sm.stored == true, "positionHudDisplay must trigger storeScaledValues")
-    assert(math.abs(sm.anchorX - 0.80) < 0.0001, "SpeedMeter anchorX must be 0.80")
-    assert(math.abs(sm.anchorY - 0.16) < 0.0001, "SpeedMeter anchorY must be 0.16")
+    assert(math.abs(sm.anchorX - 0.70) < 0.0001, "SpeedMeter anchorX must be 0.70")
+    assert(math.abs(sm.anchorY - 0.22) < 0.0001, "SpeedMeter anchorY must be 0.22")
 
     local ih = {}
     VRCompanion:positionHudDisplay(ih, "InputHelpDisplay")
-    assert(math.abs(ih.anchorX - 0.20) < 0.0001, "InputHelp anchorX must be 0.20")
-    assert(math.abs(ih.anchorY - 0.84) < 0.0001, "InputHelp anchorY must be 0.84")
+    assert(math.abs(ih.anchorX - 0.30) < 0.0001, "InputHelp anchorX must be 0.30")
+    assert(math.abs(ih.anchorY - 0.78) < 0.0001, "InputHelp anchorY must be 0.78")
 
     local gi = {}
     VRCompanion:positionHudDisplay(gi, "GameInfoDisplay")
-    assert(math.abs(gi.anchorX - 0.80) < 0.0001, "GameInfo anchorX must be 0.80")
-    assert(math.abs(gi.anchorY - 0.84) < 0.0001, "GameInfo anchorY must be 0.84")
+    assert(math.abs(gi.anchorX - 0.70) < 0.0001, "GameInfo anchorX must be 0.70")
+    assert(math.abs(gi.anchorY - 0.78) < 0.0001, "GameInfo anchorY must be 0.78")
 
     local ca = {}
     VRCompanion:positionHudDisplay(ca, "ContextActionDisplay")
-    assert(math.abs(ca.anchorX - 0.20) < 0.0001, "ContextAction anchorX must be 0.20")
-    assert(math.abs(ca.anchorY - 0.16) < 0.0001, "ContextAction anchorY must be 0.16")
+    assert(math.abs(ca.anchorX - 0.30) < 0.0001, "ContextAction anchorX must be 0.30")
+    assert(math.abs(ca.anchorY - 0.22) < 0.0001, "ContextAction anchorY must be 0.22")
 
     local map = {}
     VRCompanion:positionHudDisplay(map, "IngameMap")
-    assert(math.abs(map.anchorX - 0.20) < 0.0001, "IngameMap anchorX must be 0.20")
-    assert(math.abs(map.anchorY - 0.16) < 0.0001, "IngameMap anchorY must be 0.16")
+    assert(math.abs(map.anchorX - 0.30) < 0.0001, "IngameMap anchorX must be 0.30")
+    assert(math.abs(map.anchorY - 0.22) < 0.0001, "IngameMap anchorY must be 0.22")
 end)
 
 test("PositionsDisplaysWithDimensionsOffset", function()
@@ -246,18 +247,18 @@ test("PositionsDisplaysWithDimensionsOffset", function()
         storeScaledValues = function(self) self.stored = true end
     }
     VRCompanion:positionHudDisplay(smWithDim, "SpeedMeterDisplay")
-    -- SpeedMeter is bottom-right: anchorX = right (0.80) - width (0.15) = 0.65, anchorY = bottom (0.16)
-    assert(math.abs(smWithDim.anchorX - 0.65) < 0.0001, "SpeedMeter with width must anchor to 0.65")
-    assert(math.abs(smWithDim.anchorY - 0.16) < 0.0001, "SpeedMeter anchorY must be 0.16")
+    -- SpeedMeter is bottom-right: anchorX = right (0.70) - width (0.15) = 0.55, anchorY = bottom (0.22)
+    assert(math.abs(smWithDim.anchorX - 0.55) < 0.0001, "SpeedMeter with width must anchor to 0.55")
+    assert(math.abs(smWithDim.anchorY - 0.22) < 0.0001, "SpeedMeter anchorY must be 0.22")
 
     local giWithDim = {
         getWidth = function() return 0.20 end,
         getHeight = function() return 0.12 end
     }
     VRCompanion:positionHudDisplay(giWithDim, "GameInfoDisplay")
-    -- GameInfo is top-right: anchorX = 0.80 - 0.20 = 0.60, anchorY = 0.84 - 0.12 = 0.72
-    assert(math.abs(giWithDim.anchorX - 0.60) < 0.0001, "GameInfo with width must anchor to 0.60")
-    assert(math.abs(giWithDim.anchorY - 0.72) < 0.0001, "GameInfo with height must anchor to 0.72")
+    -- GameInfo is top-right: anchorX = 0.70 - 0.20 = 0.50, anchorY = 0.78 - 0.12 = 0.66
+    assert(math.abs(giWithDim.anchorX - 0.50) < 0.0001, "GameInfo with width must anchor to 0.50")
+    assert(math.abs(giWithDim.anchorY - 0.66) < 0.0001, "GameInfo with height must anchor to 0.66")
 end)
 
 test("RestoresOriginalHudAnchorsAndUiScaleOnMapUnload", function()
@@ -281,9 +282,9 @@ test("RestoresOriginalHudAnchorsAndUiScaleOnMapUnload", function()
     VRCompanion:configureHudInsets()
     VRCompanion:loadMap("mapUS")
 
-    -- Effective scale: 1.20 * 0.88 = 1.056
-    assert(math.abs(VRCompanion.effectiveUiScale - 1.056) < 0.0001, "Effective scale should be base 1.20 * 0.88")
-    assert(math.abs(mockHud.speedMeter.scale - 1.056) < 0.0001, "SpeedMeter display scale set to 1.056")
+    -- Effective scale: 1.20 * 0.82 = 0.984
+    assert(math.abs(VRCompanion.effectiveUiScale - 0.984) < 0.0001, "Effective scale should be base 1.20 * 0.82")
+    assert(math.abs(mockHud.speedMeter.scale - 0.984) < 0.0001, "SpeedMeter display scale set to 0.984")
 
     -- Unload map
     VRCompanion:deleteMap()
@@ -344,24 +345,18 @@ test("SavesConfigurationToXmlFile", function()
     _G.delete = nil
 end)
 
-test("LoadsUserSettingsXmlOverridingModDescDefaults", function()
+test("LoadsUserSettingsXmlWithoutReadingModDesc", function()
+    local loadedPaths = {}
     _G.getUserProfileAppPath = function() return "C:/Users/test/Documents/My Games/FarmingSimulator2025/" end
     _G.loadXMLFile = function(tag, path)
+        table.insert(loadedPaths, path)
         if string.find(path, "modSettings") then
             return 101 -- user settings file handle
-        elseif string.find(path, "modDesc") then
-            return 102 -- modDesc file handle
         end
         return 0
     end
     _G.getXMLFloat = function(xmlFile, key)
-        if xmlFile == 102 then
-            -- modDesc defaults
-            if key == "modDesc.vrSettings.hudInsetHorizontal" then return 0.20 end
-            if key == "modDesc.vrSettings.hudInsetVertical" then return 0.16 end
-            if key == "modDesc.vrSettings.hudUiScale" then return 0.88 end
-        elseif xmlFile == 101 then
-            -- user settings override
+        if xmlFile == 101 then
             if key == "vrSettings.hudInsetHorizontal" then return 0.33 end
             if key == "vrSettings.hudInsetVertical" then return 0.25 end
             if key == "vrSettings.hudUiScale" then return 0.75 end
@@ -371,19 +366,271 @@ test("LoadsUserSettingsXmlOverridingModDescDefaults", function()
     end
     _G.delete = function(xmlFile) end
 
-    VRCompanion.modDirectory = "C:/mockModDir/"
     local insets = VRCompanion:loadConfiguration()
 
-    assert(math.abs(insets.left - 0.33) < 0.0001, "User settings should override left to 0.33")
-    assert(math.abs(insets.bottom - 0.25) < 0.0001, "User settings should override bottom to 0.25")
-    assert(math.abs(insets.scaleMultiplier - 0.75) < 0.0001, "User settings should override scale to 0.75")
-    assert(math.abs(VRCompanion.hudConvergenceDepth - 2.1) < 0.0001, "User settings should override convergence depth to 2.1")
+    assert(math.abs(insets.left - 0.33) < 0.0001, "User settings should set left to 0.33")
+    assert(math.abs(insets.bottom - 0.25) < 0.0001, "User settings should set bottom to 0.25")
+    assert(math.abs(insets.scaleMultiplier - 0.75) < 0.0001, "User settings should set scale to 0.75")
+    assert(math.abs(VRCompanion.hudConvergenceDepth - 2.1) < 0.0001, "User settings should set convergence depth to 2.1")
+    for _, p in ipairs(loadedPaths) do
+        assert(not string.find(p, "modDesc"), "modDesc.xml must not be read for setting defaults")
+    end
 
-    VRCompanion.modDirectory = ""
     _G.getUserProfileAppPath = nil
     _G.loadXMLFile = nil
     _G.getXMLFloat = nil
     _G.delete = nil
+end)
+
+-- Issue #83: every default is defined exactly once, in the DEFAULT_* constants
+test("DefaultsMatchTheValuesPreviouslyYieldedByModDesc", function()
+    assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.30, "horizontal inset default")
+    assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.22, "vertical inset default")
+    assert(VRCompanion.DEFAULT_HUD_INSET_TOP == 0.22, "top inset default")
+    assert(VRCompanion.DEFAULT_HUD_UI_SCALE == 0.82, "UI scale default")
+    assert(VRCompanion.DEFAULT_CONVERGENCE_DEPTH == 1.8, "convergence depth default")
+    assert(VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP == 0.004, "fill level gap default")
+    assert(VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE == true, "fill level under vehicle default")
+    assert(VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION == false, "load notification default")
+    assert(VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE == true, "recenter tracking default")
+    assert(math.abs(VRCompanion.DEFAULT_SNAP_TURN_ANGLE - math.rad(90)) < 0.0001, "snap turn default")
+    assert(VRCompanion.DEFAULT_RENDERING_MODE == VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, "stereo presentation mode default")
+end)
+
+test("ModDescDoesNotDefineSettingDefaults", function()
+    local fs = require("@lune/fs")
+    local modDescContent = fs.readFile("mods/FS25_VRCompanion/modDesc.xml")
+    assert(string.find(modDescContent, "<vrSettings>", 1, true) == nil, "modDesc.xml must not define <vrSettings> defaults")
+end)
+
+test("SavedSettingsRoundTripThroughLoader", function()
+    local store = {}
+    _G.getUserProfileAppPath = function() return "C:/Users/test/Documents/My Games/FarmingSimulator2025/" end
+    _G.createFolder = function() end
+    _G.createXMLFile = function() return 999 end
+    _G.setXMLFloat = function(_, key, val) store[key] = val end
+    _G.setXMLBool = function(_, key, val) store[key] = val end
+    _G.setXMLString = function(_, key, val) store[key] = val end
+    _G.saveXMLFile = function() end
+    _G.loadXMLFile = function() return 555 end
+    _G.getXMLFloat = function(_, key) return store[key] end
+    _G.getXMLBool = function(_, key) return store[key] end
+    _G.getXMLString = function(_, key) return store[key] end
+    _G.delete = function() end
+
+    VRCompanion:configureHudInsets(0.31, 0.19, 0.77, 0.27)
+    VRCompanion.hudConvergenceDepth = 2.4
+    VRCompanion.hudFillLevelGap = 0.01
+    VRCompanion.fillLevelUnderVehicle = false
+    VRCompanion.showHudLoadNotification = true
+    VRCompanion.recenterVrTrackingSpace = false
+    VRCompanion.snapTurnAngle = math.rad(45)
+    VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_AFR, false)
+    assert(VRCompanion:saveConfiguration("settings.xml") == true, "save must succeed")
+
+    -- Reset everything to defaults, then load what was saved
+    VRCompanion:configureHudInsets()
+    VRCompanion.hudConvergenceDepth = nil
+    VRCompanion.hudFillLevelGap = nil
+    VRCompanion.fillLevelUnderVehicle = nil
+    VRCompanion.showHudLoadNotification = nil
+    VRCompanion.recenterVrTrackingSpace = nil
+    VRCompanion.snapTurnAngle = nil
+    VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)
+    local insets = VRCompanion:loadConfiguration("settings.xml")
+
+    assert(math.abs(insets.insetX - 0.31) < 0.0001, "horizontal inset must round-trip")
+    assert(math.abs(insets.insetY - 0.19) < 0.0001, "vertical inset must round-trip")
+    assert(math.abs(insets.insetTop - 0.27) < 0.0001, "top inset must round-trip")
+    assert(math.abs(insets.scaleMultiplier - 0.77) < 0.0001, "UI scale must round-trip")
+    assert(math.abs(VRCompanion.hudConvergenceDepth - 2.4) < 0.0001, "convergence depth must round-trip")
+    assert(math.abs(VRCompanion.hudFillLevelGap - 0.01) < 0.0001, "fill level gap must round-trip")
+    assert(VRCompanion.fillLevelUnderVehicle == false, "fill level under vehicle must round-trip")
+    assert(VRCompanion.showHudLoadNotification == true, "load notification must round-trip")
+    assert(VRCompanion.recenterVrTrackingSpace == false, "recenter tracking must round-trip")
+    assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(45)) < 0.0001, "snap turn angle must round-trip")
+    assert(VRCompanion:getRenderingMode() == VRCompanion.RENDERING_MODE_AFR, "stereo presentation mode must round-trip")
+
+    -- Restore defaults for later tests
+    VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
+    VRCompanion.fillLevelUnderVehicle = VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE
+    VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
+    VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
+    VRCompanion.hudFillLevelGap = VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP
+    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)
+    VRCompanion:configureHudInsets()
+    _G.getUserProfileAppPath = nil
+    _G.createFolder = nil
+    _G.createXMLFile = nil
+    _G.setXMLFloat = nil
+    _G.setXMLBool = nil
+    _G.setXMLString = nil
+    _G.saveXMLFile = nil
+    _G.loadXMLFile = nil
+    _G.getXMLFloat = nil
+    _G.getXMLBool = nil
+    _G.getXMLString = nil
+    _G.delete = nil
+end)
+
+test("LoaderIgnoresAliasAndLegacyKeysNoReleaseWrote", function()
+    _G.loadXMLFile = function() return 555 end
+    _G.getXMLFloat = function(_, key)
+        if key == "vrSettings.hudTopInset" or key == "vrSettings.hudInsetVerticalTop"
+            or key == "vrSettings.hudInsetTop#value" then return 0.45 end
+        return nil
+    end
+    _G.getXMLBool = function(_, key)
+        if key == "vrSettings.showHudLoadAlert" or key == "vrSettings.showLoadNotification"
+            or key == "vrSettings.recenterTracking" then return true end
+        return nil
+    end
+    _G.delete = function() end
+
+    VRCompanion.showHudLoadNotification = nil
+    VRCompanion.recenterVrTrackingSpace = nil
+    local insets = VRCompanion:loadConfiguration("settings.xml")
+    assert(math.abs(insets.insetTop - VRCompanion.DEFAULT_HUD_INSET_TOP) < 0.0001, "alias top inset keys must be ignored")
+    assert(VRCompanion.showHudLoadNotification == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "alias notification keys must be ignored")
+    assert(VRCompanion.recenterVrTrackingSpace == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "alias recenter key must be ignored")
+
+    _G.loadXMLFile = nil
+    _G.getXMLFloat = nil
+    _G.getXMLBool = nil
+    _G.delete = nil
+    VRCompanion:configureHudInsets()
+end)
+
+test("RuntimeStateStartsFromDefaultConstants", function()
+    -- Load a fresh copy of the mod and check every setting's runtime value against its constant
+    local saved = _G.VRCompanion
+    _G.VRCompanion = nil
+    local ok, err = pcall(function()
+        loadCompanionMod()
+        local fresh = _G.VRCompanion
+        assert(fresh.hudInsetX == fresh.DEFAULT_HUD_INSET_X, "hudInsetX starts at its default")
+        assert(fresh.hudInsetY == fresh.DEFAULT_HUD_INSET_Y, "hudInsetY starts at its default")
+        assert(fresh.hudInsetTop == fresh.DEFAULT_HUD_INSET_TOP, "hudInsetTop starts at its default")
+        assert(math.abs(fresh.hudAnchorTopBase - (1.0 - fresh.DEFAULT_HUD_INSET_TOP)) < 0.0001, "top anchor starts at the top inset default")
+        assert(fresh.hudUiScaleMultiplier == fresh.DEFAULT_HUD_UI_SCALE, "UI scale starts at its default")
+        assert(fresh.effectiveUiScale == fresh.DEFAULT_HUD_UI_SCALE, "effective UI scale starts at its default")
+        assert(fresh.hudConvergenceDepth == fresh.DEFAULT_CONVERGENCE_DEPTH, "convergence depth starts at its default")
+        assert(fresh.hudFillLevelGap == fresh.DEFAULT_HUD_FILL_LEVEL_GAP, "fill level gap starts at its default")
+        assert(fresh.fillLevelUnderVehicle == fresh.DEFAULT_FILL_LEVEL_UNDER_VEHICLE, "fill level under vehicle starts at its default")
+        assert(fresh.showHudLoadNotification == fresh.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "load notification starts at its default")
+        assert(fresh.recenterVrTrackingSpace == fresh.DEFAULT_RECENTER_VR_TRACKING_SPACE, "recenter tracking starts at its default")
+        assert(fresh.snapTurnAngle == fresh.DEFAULT_SNAP_TURN_ANGLE, "snap turn angle starts at its default")
+        assert(fresh.renderingMode == fresh.DEFAULT_RENDERING_MODE, "stereo presentation mode starts at its default")
+    end)
+    _G.VRCompanion = saved
+    assert(ok, tostring(err))
+
+    -- The runtime values are assigned from the constants, not from a second copy of the literal
+    local fs = require("@lune/fs")
+    local configSource = fs.readFile("mods/FS25_VRCompanion/src/VRCompanionConfig.lua")
+    for _, field in ipairs({ "fillLevelUnderVehicle", "showHudLoadNotification", "recenterVrTrackingSpace", "hudFillLevelGap" }) do
+        local literal = string.match(configSource, "\nVRCompanion%." .. field .. " = ([%w%.]+)\n")
+        assert(literal == nil or string.find(literal, "DEFAULT_", 1, true) ~= nil,
+            string.format("VRCompanion.%s must be initialised from its DEFAULT_* constant, got %s", field, tostring(literal)))
+    end
+end)
+
+test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
+    local store = {}
+    local saveCount = 0
+    local bridgeMode = nil
+    _G.getUserProfileAppPath = function() return "C:/Users/test/Documents/My Games/FarmingSimulator2025/" end
+    _G.loadXMLFile = function() return 0 end -- no settings.xml yet
+    _G.createFolder = function() end
+    _G.createXMLFile = function() return 999 end
+    _G.setXMLFloat = function(_, key, val) store[key] = val end
+    _G.setXMLBool = function(_, key, val) store[key] = val end
+    _G.setXMLString = function(_, key, val) store[key] = val end
+    _G.saveXMLFile = function() saveCount = saveCount + 1 end
+    _G.delete = function() end
+    -- A bridge that exposes frame parity but no rendering mode reads as AFR until a mode is set explicitly
+    _G.VRBridge = {
+        getFrameParity = function() return 0 end,
+        setRenderingMode = function(mode) bridgeMode = mode end,
+    }
+
+    -- Leftover state from an earlier session must not leak into the first-run file
+    VRCompanion:configureHudInsets(0.10, 0.10, 1.00, 0.40)
+    VRCompanion.hudConvergenceDepth = nil
+    VRCompanion.hudFillLevelGap = nil
+    VRCompanion.fillLevelUnderVehicle = nil
+    VRCompanion.showHudLoadNotification = nil
+    VRCompanion.recenterVrTrackingSpace = nil
+    VRCompanion.snapTurnAngle = nil
+    VRCompanion.renderingMode = VRCompanion.RENDERING_MODE_AFR
+    VRCompanion.renderingModeExplicit = nil
+
+    local insets = VRCompanion:loadConfiguration()
+
+    -- Every default is applied
+    assert(math.abs(insets.insetX - VRCompanion.DEFAULT_HUD_INSET_X) < 0.0001, "horizontal inset default applied")
+    assert(math.abs(insets.insetY - VRCompanion.DEFAULT_HUD_INSET_Y) < 0.0001, "vertical inset default applied")
+    assert(math.abs(insets.insetTop - VRCompanion.DEFAULT_HUD_INSET_TOP) < 0.0001, "top inset default applied")
+    assert(math.abs(insets.scaleMultiplier - VRCompanion.DEFAULT_HUD_UI_SCALE) < 0.0001, "UI scale default applied")
+    assert(VRCompanion.hudConvergenceDepth == VRCompanion.DEFAULT_CONVERGENCE_DEPTH, "convergence depth default applied")
+    assert(VRCompanion.hudFillLevelGap == VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP, "fill level gap default applied")
+    assert(VRCompanion.fillLevelUnderVehicle == VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE, "fill level under vehicle default applied")
+    assert(VRCompanion.showHudLoadNotification == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "load notification default applied")
+    assert(VRCompanion.recenterVrTrackingSpace == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "recenter tracking default applied")
+    assert(VRCompanion:getSnapTurnAngle() == VRCompanion.DEFAULT_SNAP_TURN_ANGLE, "snap turn default applied")
+    assert(VRCompanion:getRenderingMode() == VRCompanion.DEFAULT_RENDERING_MODE, "stereo presentation mode default applied")
+    assert(VRCompanion.renderingModeExplicit == true, "default mode is applied through setRenderingMode")
+    assert(bridgeMode == VRCompanion.DEFAULT_RENDERING_MODE, "default mode must reach VRBridge")
+
+    -- ...and the first-run settings file contains exactly those defaults
+    assert(saveCount == 1, "first run must create the settings file")
+    assert(math.abs(store["vrSettings.hudInsetHorizontal"] - VRCompanion.DEFAULT_HUD_INSET_X) < 0.0001, "saved horizontal inset")
+    assert(math.abs(store["vrSettings.hudInsetVertical"] - VRCompanion.DEFAULT_HUD_INSET_Y) < 0.0001, "saved vertical inset")
+    assert(math.abs(store["vrSettings.hudInsetTop"] - VRCompanion.DEFAULT_HUD_INSET_TOP) < 0.0001, "saved top inset")
+    assert(math.abs(store["vrSettings.hudUiScale"] - VRCompanion.DEFAULT_HUD_UI_SCALE) < 0.0001, "saved UI scale")
+    assert(math.abs(store["vrSettings.hudConvergenceDepth"] - VRCompanion.DEFAULT_CONVERGENCE_DEPTH) < 0.0001, "saved convergence depth")
+    assert(math.abs(store["vrSettings.hudFillLevelGap"] - VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP) < 0.0001, "saved fill level gap")
+    assert(store["vrSettings.fillLevelUnderVehicle"] == VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE, "saved fill level under vehicle")
+    assert(store["vrSettings.showHudLoadNotification"] == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "saved load notification")
+    assert(store["vrSettings.recenterVrTrackingSpace"] == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "saved recenter tracking")
+    assert(math.abs(store["vrSettings.snapTurnAngle"] - math.deg(VRCompanion.DEFAULT_SNAP_TURN_ANGLE)) < 0.0001, "saved snap turn angle")
+    assert(store["vrSettings.renderingMode"] == "DualPass", "saved stereo presentation mode must be DualPass, got " .. tostring(store["vrSettings.renderingMode"]))
+
+    _G.VRBridge = nil
+    VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)
+    VRCompanion:configureHudInsets()
+    _G.getUserProfileAppPath = nil
+    _G.loadXMLFile = nil
+    _G.createFolder = nil
+    _G.createXMLFile = nil
+    _G.setXMLFloat = nil
+    _G.setXMLBool = nil
+    _G.setXMLString = nil
+    _G.saveXMLFile = nil
+    _G.delete = nil
+end)
+
+test("SettingsFileWithoutHudInsetTopUsesTheTopInsetDefault", function()
+    _G.loadXMLFile = function() return 555 end
+    _G.getXMLFloat = function(_, key)
+        if key == "vrSettings.hudInsetHorizontal" then return 0.12 end
+        if key == "vrSettings.hudInsetVertical" then return 0.10 end
+        return nil
+    end
+    _G.delete = function() end
+
+    VRCompanion:configureHudInsets(0.30, 0.30, 0.82, 0.45)
+    local insets = VRCompanion:loadConfiguration("settings.xml")
+    assert(math.abs(insets.insetY - 0.10) < 0.0001, "vertical inset is read from the file")
+    assert(math.abs(insets.insetTop - VRCompanion.DEFAULT_HUD_INSET_TOP) < 0.0001, "missing top inset falls back to DEFAULT_HUD_INSET_TOP")
+    assert(math.abs(insets.top - (1.0 - VRCompanion.DEFAULT_HUD_INSET_TOP)) < 0.0001, "top anchor uses DEFAULT_HUD_INSET_TOP")
+    assert(math.abs(insets.bottom - 0.10) < 0.0001, "bottom anchor uses the loaded vertical inset")
+
+    _G.loadXMLFile = nil
+    _G.getXMLFloat = nil
+    _G.delete = nil
+    VRCompanion:configureHudInsets()
 end)
 
 -- Slice 5: Fill level positioning under vehicle element (SpeedMeterDisplay)

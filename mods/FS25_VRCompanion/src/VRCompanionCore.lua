@@ -8,7 +8,6 @@ VRCompanion = VRCompanion or {}
 VRCompanion.Core = VRCompanion.Core or {}
 
 VRCompanion.name = VRCompanion.name or g_currentModName or "FS25_VRCompanion"
-VRCompanion.modDirectory = VRCompanion.modDirectory or g_currentModDirectory or ""
 VRCompanion.version = VRCompanion.version or "1.0.0.0"
 
 VRCompanion.handshakeComplete = (VRCompanion.handshakeComplete ~= nil) and VRCompanion.handshakeComplete or false
@@ -82,7 +81,7 @@ function VRCompanion:loadMap(name)
                 tostring(ready)))
         end
     else
-        self.renderingMode = self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+        self.renderingMode = self.DEFAULT_RENDERING_MODE
         print("[FS25_VR] VRBridge not detected. Running in standard 2D Pass-Through Mode.")
     end
 

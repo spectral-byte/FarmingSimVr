@@ -85,19 +85,6 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
             <de>VR-Blickdrehungswinkel (Grad)</de>
         </text>
     </l10n>
-    <vrSettings>
-        <hudInsetHorizontal>0.30</hudInsetHorizontal>
-        <hudInsetVertical>0.22</hudInsetVertical>
-        <hudInsetTop>0.22</hudInsetTop>
-        <hudUiScale>0.82</hudUiScale>
-        <hudConvergenceDepth>1.8</hudConvergenceDepth>
-        <fillLevelUnderVehicle>true</fillLevelUnderVehicle>
-        <hudFillLevelGap>0.004</hudFillLevelGap>
-        <showHudLoadNotification>false</showHudLoadNotification>
-        <recenterVrTrackingSpace>true</recenterVrTrackingSpace>
-        <renderingMode>DualPass</renderingMode>
-        <snapTurnAngle>90</snapTurnAngle>
-    </vrSettings>
     <actions>
         <action name="VR_RECENTER" category="ONFOOT VEHICLE"/>
         <action name="VR_RECENTER_VIEW" category="ONFOOT VEHICLE"/>

@@ -327,7 +327,7 @@ function VRCompanion:consoleCommandSetHudInsets(insetXStr, insetYStr, scaleStr, 
         return string.format("Usage: vrHudInsets <insetX> <insetY> [scale] [topInset] (current: insetX=%.2f, insetY=%.2f, topInset=%.2f, scale=%.2f)",
             self.hudInsetX or self.DEFAULT_HUD_INSET_X,
             self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
-            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
+            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP,
             self.hudUiScaleMultiplier or self.DEFAULT_HUD_UI_SCALE)
     end
     self:configureHudInsets(ix, iy, sc or self.hudUiScaleMultiplier, it or self.hudInsetTop or iy)
@@ -337,7 +337,7 @@ function VRCompanion:consoleCommandSetHudInsets(insetXStr, insetYStr, scaleStr, 
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
             mission:showBlinkingWarning(string.format("VR HUD Insets: X=%.2f, Y=%.2f, Top=%.2f, Scale=%.2fx (Saved)",
-                self.hudInsetX, self.hudInsetY, self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y, self.effectiveUiScale), 2500)
+                self.hudInsetX, self.hudInsetY, self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP, self.effectiveUiScale), 2500)
         end)
     end
     return string.format("VR HUD insets updated and saved: Left=%.2f, Right=%.2f, Bottom=%.2f, Top=%.2f, Scale=%.2fx",
@@ -348,8 +348,8 @@ function VRCompanion:consoleCommandSetHudTopInset(topInsetStr)
     local topVal = tonumber(topInsetStr)
     if topVal == nil then
         return string.format("Usage: vrHudTopInset <topInset> (0.0 to 0.50, current: %.2f, topAnchor: %.2f)",
-            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
-            self.hudAnchorTop or (1.0 - (self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y)))
+            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP,
+            self.hudAnchorTop or (1.0 - (self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP)))
     end
     local clampedTop = self:clamp(topVal, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
     self.hudInsetTop = clampedTop

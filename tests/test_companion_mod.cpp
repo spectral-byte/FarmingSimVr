@@ -485,7 +485,7 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresRecenterActionAndInputBinding
     EXPECT_NE(modDescContent.find("<action name=\"VR_RECENTER\""), std::string::npos);
     EXPECT_NE(modDescContent.find("<actionBinding action=\"VR_RECENTER\""), std::string::npos);
     EXPECT_NE(modDescContent.find("KEY_numPad5"), std::string::npos);
-    EXPECT_NE(modDescContent.find("<recenterVrTrackingSpace>true</recenterVrTrackingSpace>"), std::string::npos);
+    EXPECT_EQ(modDescContent.find("<vrSettings>"), std::string::npos) << "Setting defaults live in the DEFAULT_* constants, not modDesc.xml";
     EXPECT_NE(modDescContent.find("setting_recenterVrTrackingSpace"), std::string::npos);
 }
 
@@ -1682,16 +1682,16 @@ TEST_F(CompanionModTest, DefinesAndCalculatesDefaultAndCustomVRHudInsets) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.20, "DEFAULT_HUD_INSET_X must be 0.20")
-        assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.16, "DEFAULT_HUD_INSET_Y must be 0.16")
-        assert(VRCompanion.DEFAULT_HUD_UI_SCALE == 0.88, "DEFAULT_HUD_UI_SCALE must be 0.88")
+        assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.30, "DEFAULT_HUD_INSET_X must be 0.30")
+        assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.22, "DEFAULT_HUD_INSET_Y must be 0.22")
+        assert(VRCompanion.DEFAULT_HUD_UI_SCALE == 0.82, "DEFAULT_HUD_UI_SCALE must be 0.82")
 
         local left, right, bottom, top, scale = VRCompanion:calculateHudAnchors()
-        assert(math.abs(left - 0.20) < 0.0001, "left anchor default must be 0.20")
-        assert(math.abs(right - 0.80) < 0.0001, "right anchor default must be 0.80")
-        assert(math.abs(bottom - 0.16) < 0.0001, "bottom anchor default must be 0.16")
-        assert(math.abs(top - 0.84) < 0.0001, "top anchor default must be 0.84")
-        assert(math.abs(scale - 0.88) < 0.0001, "scale multiplier default must be 0.88")
+        assert(math.abs(left - 0.30) < 0.0001, "left anchor default must be 0.30")
+        assert(math.abs(right - 0.70) < 0.0001, "right anchor default must be 0.70")
+        assert(math.abs(bottom - 0.22) < 0.0001, "bottom anchor default must be 0.22")
+        assert(math.abs(top - 0.78) < 0.0001, "top anchor default must be 0.78")
+        assert(math.abs(scale - 0.82) < 0.0001, "scale multiplier default must be 0.82")
 
         local cLeft, cRight, cBottom, cTop, cScale = VRCompanion:calculateHudAnchors(0.12, 0.08, 0.95)
         assert(math.abs(cLeft - 0.12) < 0.0001, "custom left anchor must be 0.12")
@@ -1739,11 +1739,11 @@ TEST_F(CompanionModTest, ExposesConfigurationWithGracefulFallbackToDefaults) {
         VRCompanion.hudInsetY = nil
         VRCompanion.hudUiScaleMultiplier = nil
         local fb = VRCompanion:loadConfiguration("missing_file.xml")
-        assert(math.abs(fb.left - 0.20) < 0.0001, "fallback left must be default 0.20")
-        assert(math.abs(fb.right - 0.80) < 0.0001, "fallback right must be default 0.80")
-        assert(math.abs(fb.bottom - 0.16) < 0.0001, "fallback bottom must be default 0.16")
-        assert(math.abs(fb.top - 0.84) < 0.0001, "fallback top must be default 0.84")
-        assert(math.abs(fb.scaleMultiplier - 0.88) < 0.0001, "fallback scale must be default 0.88")
+        assert(math.abs(fb.left - 0.30) < 0.0001, "fallback left must be default 0.30")
+        assert(math.abs(fb.right - 0.70) < 0.0001, "fallback right must be default 0.70")
+        assert(math.abs(fb.bottom - 0.22) < 0.0001, "fallback bottom must be default 0.22")
+        assert(math.abs(fb.top - 0.78) < 0.0001, "fallback top must be default 0.78")
+        assert(math.abs(fb.scaleMultiplier - 0.82) < 0.0001, "fallback scale must be default 0.82")
     )luau", "=verifyConfigApi"), 0);
 }
 
@@ -1785,15 +1785,15 @@ TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad
         VRCompanion:loadMap('testMap')
 
         -- Global anchors contracted
-        assert(math.abs(_G.g_hudAnchorLeft - 0.20) < 0.0001, "g_hudAnchorLeft must be 0.20")
-        assert(math.abs(_G.g_hudAnchorRight - 0.80) < 0.0001, "g_hudAnchorRight must be 0.80")
-        assert(math.abs(_G.g_hudAnchorBottom - 0.16) < 0.0001, "g_hudAnchorBottom must be 0.16")
-        assert(math.abs(_G.g_hudAnchorTop - 0.84) < 0.0001, "g_hudAnchorTop must be 0.84")
+        assert(math.abs(_G.g_hudAnchorLeft - 0.30) < 0.0001, "g_hudAnchorLeft must be 0.30")
+        assert(math.abs(_G.g_hudAnchorRight - 0.70) < 0.0001, "g_hudAnchorRight must be 0.70")
+        assert(math.abs(_G.g_hudAnchorBottom - 0.22) < 0.0001, "g_hudAnchorBottom must be 0.22")
+        assert(math.abs(_G.g_hudAnchorTop - 0.78) < 0.0001, "g_hudAnchorTop must be 0.78")
 
-        -- UI scale multiplier applied (0.88x)
-        assert(math.abs(VRCompanion.effectiveUiScale - 0.88) < 0.0001, "effectiveUiScale must be 0.88")
+        -- UI scale multiplier applied (0.82x)
+        assert(math.abs(VRCompanion.effectiveUiScale - 0.82) < 0.0001, "effectiveUiScale must be 0.82")
         assert(displays.speedMeter.setScaleCalled == true, "SpeedMeterDisplay.setScale must be called")
-        assert(displays.speedMeter.scale == 0.88, "SpeedMeterDisplay scale must be 0.88")
+        assert(displays.speedMeter.scale == 0.82, "SpeedMeterDisplay scale must be 0.82")
 
         -- All standard displays repositioned
         assert(displays.speedMeter.storeScaledValuesCalled == true, "speedMeter storeScaledValues called")
@@ -1803,11 +1803,11 @@ TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad
         assert(displays.ingameMap.storeScaledValuesCalled == true, "ingameMap storeScaledValues called")
 
         -- Display positioning coordinates
-        assert(displays.speedMeter.position.x == 0.80 and displays.speedMeter.position.y == 0.16, "speedMeter bottom-right")
-        assert(displays.inputHelp.position.x == 0.20 and displays.inputHelp.position.y == 0.84, "inputHelp top-left")
-        assert(displays.gameInfo.position.x == 0.80 and displays.gameInfo.position.y == 0.84, "gameInfo top-right")
-        assert(displays.contextAction.position.x == 0.20 and displays.contextAction.position.y == 0.16, "contextAction bottom-left")
-        assert(displays.ingameMap.position.x == 0.20 and displays.ingameMap.position.y == 0.16, "ingameMap bottom-left")
+        assert(displays.speedMeter.position.x == 0.70 and displays.speedMeter.position.y == 0.22, "speedMeter bottom-right")
+        assert(displays.inputHelp.position.x == 0.30 and displays.inputHelp.position.y == 0.78, "inputHelp top-left")
+        assert(displays.gameInfo.position.x == 0.70 and displays.gameInfo.position.y == 0.78, "gameInfo top-right")
+        assert(displays.contextAction.position.x == 0.30 and displays.contextAction.position.y == 0.22, "contextAction bottom-left")
+        assert(displays.ingameMap.position.x == 0.30 and displays.ingameMap.position.y == 0.22, "ingameMap bottom-left")
     )luau", "=verifyDisplaysUponMapLoad"), 0);
 }
 
@@ -1822,7 +1822,7 @@ TEST_F(CompanionModTest, RestoresStandard2DHudCornerAnchorsOnMapUnload) {
         _G.g_currentMission = { hud = {} }
 
         VRCompanion:loadMap('testMap')
-        assert(math.abs(_G.g_hudAnchorLeft - 0.20) < 0.0001, "g_hudAnchorLeft must be 0.20 when loaded")
+        assert(math.abs(_G.g_hudAnchorLeft - 0.30) < 0.0001, "g_hudAnchorLeft must be 0.30 when loaded")
 
         VRCompanion:deleteMap()
         assert(math.abs(_G.g_hudAnchorLeft - 0.0) < 0.0001, "g_hudAnchorLeft restored to 0.0")

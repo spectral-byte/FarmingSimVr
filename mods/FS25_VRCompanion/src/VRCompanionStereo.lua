@@ -9,8 +9,10 @@ VRCompanion.Stereo = VRCompanion.Stereo or {}
 
 VRCompanion.RENDERING_MODE_AFR = "AFR"
 VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS = "SequentialDualPass"
+-- Default Stereo Presentation Mode (the single source of truth for this default)
+VRCompanion.DEFAULT_RENDERING_MODE = VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
 if VRCompanion.renderingMode == nil then
-    VRCompanion.renderingMode = VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+    VRCompanion.renderingMode = VRCompanion.DEFAULT_RENDERING_MODE
 end
 
 VRCompanion.RENDERING_MODE_DUAL_PASS = VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
@@ -62,11 +64,11 @@ function VRCompanion:getRenderingMode()
             return self.RENDERING_MODE_AFR
         end
     end
-    return self.renderingMode or self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+    return self.renderingMode or self.DEFAULT_RENDERING_MODE
 end
 
 function VRCompanion:setRenderingMode(modeStr, saveConfig)
-    local targetMode = self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+    local targetMode = self.DEFAULT_RENDERING_MODE
     if modeStr ~= nil then
         local lower = string.lower(tostring(modeStr))
         if lower == "sequentialdualpass" or lower == "dualpass" or lower == "dual" or lower == "dual_pass" or lower == "sequential" or lower == "sdp" or lower == "1" then

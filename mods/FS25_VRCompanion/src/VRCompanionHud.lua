@@ -28,12 +28,13 @@ VRCompanion.HUD_STATE_NAMES = {
 if VRCompanion.hudState == nil then VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN end
 if VRCompanion.hudInsetX == nil then VRCompanion.hudInsetX = VRCompanion.DEFAULT_HUD_INSET_X end
 if VRCompanion.hudInsetY == nil then VRCompanion.hudInsetY = VRCompanion.DEFAULT_HUD_INSET_Y end
+if VRCompanion.hudInsetTop == nil then VRCompanion.hudInsetTop = VRCompanion.DEFAULT_HUD_INSET_TOP end
 if VRCompanion.hudUiScaleMultiplier == nil then VRCompanion.hudUiScaleMultiplier = VRCompanion.DEFAULT_HUD_UI_SCALE end
 if VRCompanion.hudConvergenceDepth == nil then VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH end
 if VRCompanion.hudAnchorLeftBase == nil then VRCompanion.hudAnchorLeftBase = VRCompanion.DEFAULT_HUD_INSET_X end
 if VRCompanion.hudAnchorRightBase == nil then VRCompanion.hudAnchorRightBase = 1.0 - VRCompanion.DEFAULT_HUD_INSET_X end
 if VRCompanion.hudAnchorBottomBase == nil then VRCompanion.hudAnchorBottomBase = VRCompanion.DEFAULT_HUD_INSET_Y end
-if VRCompanion.hudAnchorTopBase == nil then VRCompanion.hudAnchorTopBase = 1.0 - VRCompanion.DEFAULT_HUD_INSET_Y end
+if VRCompanion.hudAnchorTopBase == nil then VRCompanion.hudAnchorTopBase = 1.0 - VRCompanion.DEFAULT_HUD_INSET_TOP end
 if VRCompanion.hudAnchorLeft == nil then VRCompanion.hudAnchorLeft = VRCompanion.hudAnchorLeftBase end
 if VRCompanion.hudAnchorRight == nil then VRCompanion.hudAnchorRight = VRCompanion.hudAnchorRightBase end
 if VRCompanion.hudAnchorBottom == nil then VRCompanion.hudAnchorBottom = VRCompanion.hudAnchorBottomBase end
@@ -201,7 +202,7 @@ function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
     local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_INSET_X)
     local shiftedRight = self:clamp(baseRight + currentOffset, 0.0, 1.0)
     local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
-    local uiScale = self.effectiveUiScale or 0.88
+    local uiScale = self.effectiveUiScale or self.DEFAULT_HUD_UI_SCALE
 
     local flHeight = nil
     if type(display.getHeight) == "function" then
@@ -394,7 +395,7 @@ function VRCompanion:updateHudConvergence(dt)
     local baseLeft = self.hudAnchorLeftBase or self.DEFAULT_HUD_INSET_X
     local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_INSET_X)
     local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
-    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_Y)
+    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_TOP)
 
     local shiftedLeft = self:clamp(baseLeft + offset, 0.0, 1.0)
     local shiftedRight = self:clamp(baseRight + offset, 0.0, 1.0)
@@ -569,7 +570,11 @@ end
 function VRCompanion:calculateHudAnchors(insetX, insetY, scaleMultiplier, insetTop)
     local clampedInsetX = self:clamp(insetX or self.DEFAULT_HUD_INSET_X, self.MIN_HUD_INSET_X, self.MAX_HUD_INSET_X)
     local clampedInsetY = self:clamp(insetY or self.DEFAULT_HUD_INSET_Y, self.MIN_HUD_INSET_Y, self.MAX_HUD_INSET_Y)
-    local rawInsetTop = insetTop or clampedInsetY
+    -- No top inset: the top edge follows an explicitly given vertical inset, else DEFAULT_HUD_INSET_TOP
+    local rawInsetTop = insetTop
+    if rawInsetTop == nil then
+        rawInsetTop = (insetY ~= nil) and clampedInsetY or self.DEFAULT_HUD_INSET_TOP
+    end
     local clampedInsetTop = self:clamp(rawInsetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
     local clampedScale = self:clamp(scaleMultiplier or self.DEFAULT_HUD_UI_SCALE, self.MIN_HUD_UI_SCALE, self.MAX_HUD_UI_SCALE)
 
@@ -587,8 +592,10 @@ function VRCompanion:configureHudInsets(insetX, insetY, scaleMultiplier, insetTo
     self.hudInsetY = self:clamp(insetY or self.DEFAULT_HUD_INSET_Y, self.MIN_HUD_INSET_Y, self.MAX_HUD_INSET_Y)
     if insetTop ~= nil then
         self.hudInsetTop = self:clamp(insetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
+    elseif insetY ~= nil then
+        self.hudInsetTop = nil -- top edge follows the vertical inset
     else
-        self.hudInsetTop = nil
+        self.hudInsetTop = self.DEFAULT_HUD_INSET_TOP
     end
     self.hudUiScaleMultiplier = scale
     self.hudAnchorLeftBase = left
@@ -608,12 +615,12 @@ function VRCompanion:getHudInsets()
         left = self.hudAnchorLeft or self.DEFAULT_HUD_INSET_X,
         right = self.hudAnchorRight or (1.0 - self.DEFAULT_HUD_INSET_X),
         bottom = self.hudAnchorBottom or self.DEFAULT_HUD_INSET_Y,
-        top = self.hudAnchorTop or (1.0 - self.DEFAULT_HUD_INSET_Y),
+        top = self.hudAnchorTop or (1.0 - self.DEFAULT_HUD_INSET_TOP),
         baseLeft = self.hudAnchorLeftBase or self.hudAnchorLeft or self.DEFAULT_HUD_INSET_X,
         baseRight = self.hudAnchorRightBase or self.hudAnchorRight or (1.0 - self.DEFAULT_HUD_INSET_X),
         insetX = self.hudInsetX or self.DEFAULT_HUD_INSET_X,
         insetY = self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
-        insetTop = self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
+        insetTop = self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP,
         scaleMultiplier = self.hudUiScaleMultiplier or self.DEFAULT_HUD_UI_SCALE,
         effectiveScale = self.effectiveUiScale or self.DEFAULT_HUD_UI_SCALE,
         convergenceOffset = self.currentConvergenceOffset or 0.0,
@@ -771,7 +778,7 @@ function VRCompanion:restoreHudInsets(preserveOrigAnchors)
     local baseLeft = self.hudAnchorLeftBase or self.DEFAULT_HUD_INSET_X
     local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_INSET_X)
     local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
-    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_Y)
+    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_TOP)
 
     self.hudAnchorLeft = baseLeft
     self.hudAnchorRight = baseRight
