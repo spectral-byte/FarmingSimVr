@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 
+#pragma comment(lib, "comctl32.lib")
+
 namespace fs25vr {
 
 namespace {

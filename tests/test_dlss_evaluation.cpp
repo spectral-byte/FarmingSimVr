@@ -644,7 +644,7 @@ TEST_F(DlssEvaluationTest, DecoupledTargetResolutionOverridesCreateFeatureParame
 
     auto systemDxgi = std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {});
     DxgiProxy proxy(systemDxgi, nullptr);
-    proxy.SetTargetRenderResolution(3840, 2160);
+    proxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
     interceptor.SetDxgiProxy(&proxy);
 
     uint32_t targetW = 0, targetH = 0;
@@ -699,7 +699,7 @@ TEST_F(DlssEvaluationTest, DecoupledResolutionEnforcedDuringEvaluateFeature) {
 
     auto systemDxgi = std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {});
     DxgiProxy proxy(systemDxgi, nullptr);
-    proxy.SetTargetRenderResolution(3840, 2160);
+    proxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
     interceptor.SetDxgiProxy(&proxy);
 
     NgxParameterImpl createParams;
@@ -957,7 +957,7 @@ TEST_F(DlssEvaluationTest, TargetResolutionPrefersSwapchainRenderResolutionOverO
 
     auto systemDxgi = std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {});
     DxgiProxy proxy(systemDxgi, openXrManager);
-    proxy.SetTargetRenderResolution(1920, 1080);
+    proxy.GetWindowController().SetTargetRenderResolution(1920, 1080);
     interceptor.SetDxgiProxy(&proxy);
 
     // Target render resolution (1920x1080) MUST take precedence over supersampled HMD view (4940x4136)
