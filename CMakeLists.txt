@@ -63,6 +63,8 @@ enable_testing()
 set(CORE_SOURCES
     src/core/logger.cpp
     src/core/logger.h
+    src/core/thread_trace.cpp
+    src/core/thread_trace.h
     src/core/math_utils.h
     src/core/detour.cpp
     src/core/detour.h
@@ -130,6 +132,7 @@ add_executable(fs25_vr_tests
     tests/test_dll_lifecycle.cpp
     tests/test_math_utils.cpp
     tests/test_logger.cpp
+    tests/test_thread_trace.cpp
     tests/test_openxr_cursor_overlay.cpp
     tests/test_openxr_manager.cpp
     tests/test_mirror_window_controller.cpp

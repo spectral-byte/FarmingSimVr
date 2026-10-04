@@ -1,5 +1,6 @@
 #include "vr_bridge.h"
 #include "core/logger.h"
+#include "core/thread_trace.h"
 #include "ngx/ngx_interceptor.h"
 
 namespace fs25vr {
@@ -166,6 +167,7 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
 
+    FS25VR_TRACE_THREAD("VRBridge.onMapUnload");
     self->SetCompanionActive(false);
     self->SetFrameParity(0);
     self->ResetSubPass();
@@ -262,6 +264,7 @@ int VRBridge::Lua_GetHeadPose(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
 
+    FS25VR_TRACE_THREAD("VRBridge.getHeadPose");
     HeadPose pose = self->GetHeadPose();
 
     PushPoseTable(L, pose);
@@ -272,6 +275,7 @@ int VRBridge::Lua_Recenter(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
 
+    FS25VR_TRACE_THREAD("VRBridge.recenter");
     self->Recenter();
 
     lua_createtable(L, 0, 1);
@@ -355,6 +359,7 @@ int VRBridge::Lua_GetEyeProjection(lua_State* L) {
         }
     }
 
+    FS25VR_TRACE_THREAD("VRBridge.getEyeProjection");
     EyeProjection proj = self->GetEyeProjection(eyeIndex);
     PushEyeProjectionTable(L, proj, eyeIndex);
     return 1;
@@ -474,6 +479,7 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
         }
     }
 
+    FS25VR_TRACE_THREAD("VRBridge.getEyePose");
     HeadPose pose = self->GetEyePose(eyeIndex);
     PushPoseTable(L, pose, static_cast<int>(eyeIndex));
     return 1;
@@ -506,6 +512,7 @@ int VRBridge::Lua_AlignMenuQuad(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
 
+    FS25VR_TRACE_THREAD("VRBridge.alignMenuQuad");
     self->AlignMenuQuad();
     return 0;
 }
@@ -518,6 +525,7 @@ int VRBridge::Lua_SetMenuVisible(lua_State* L) {
     if (lua_gettop(L) >= 1) {
         visible = (lua_toboolean(L, 1) != 0);
     }
+    FS25VR_TRACE_THREAD("VRBridge.setMenuVisible");
     self->SetMenuVisible(visible);
     return 0;
 }
@@ -555,6 +563,7 @@ int VRBridge::Lua_Set2DViewActive(lua_State* L) {
     if (lua_gettop(L) >= 1) {
         active = (lua_toboolean(L, 1) != 0);
     }
+    FS25VR_TRACE_THREAD("VRBridge.set2DViewActive");
     self->Set2DViewActive(active);
     return 0;
 }
@@ -592,6 +601,7 @@ int VRBridge::Lua_SetRenderingMode(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) self = &Instance();
 
+    FS25VR_TRACE_THREAD("VRBridge.setRenderingMode");
     if (lua_gettop(L) >= 1) {
         VRRenderingMode targetMode = VRRenderingMode::SequentialDualPass;
         bool hasTarget = false;

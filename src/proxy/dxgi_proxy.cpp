@@ -1,5 +1,6 @@
 #include "dxgi_proxy.h"
 #include "core/logger.h"
+#include "core/thread_trace.h"
 #include "core/injector_runtime.h"
 #include "core/dll_lifecycle.h"
 #include "ngx/ngx_interceptor.h"
@@ -300,6 +301,7 @@ void DxgiProxy::LatchPendingRenderingMode() {
 }
 
 bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT /*flags*/) {
+    FS25VR_TRACE_THREAD("DxgiProxy.Present");
     m_lastPresentSuppressed = false;
 
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
