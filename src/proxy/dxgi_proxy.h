@@ -55,6 +55,8 @@ public:
     void OnPrePresent(IDXGISwapChain* swapChain);
     bool OnPresent(IDXGISwapChain* swapChain, UINT syncInterval = 0, UINT flags = 0);
     bool OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval = 0, UINT flags = 0, const DXGI_PRESENT_PARAMETERS* params = nullptr);
+    // Sync interval forwarded to the real Present: 0 while xrWaitFrame paces frames, else the game's.
+    UINT EffectiveSyncInterval(UINT gameSyncInterval) const;
 
     bool IsPresentSuppressed() const { return m_lastPresentSuppressed; }
 

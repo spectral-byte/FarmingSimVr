@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "openxr/openxr_manager.h"
+#include "fake_openxr_events.h"
 #include <cstring>
 #include <unordered_set>
 #include <unordered_map>
@@ -197,7 +198,16 @@ public:
         createSessionCalled = true;
         if (createSessionResult != XR_SUCCESS) return createSessionResult;
         if (session) *session = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xCAFE0001));
+        if (autoReadyOnCreateSession) events.PushSessionState(XR_SESSION_STATE_READY);
         return XR_SUCCESS;
+    }
+
+    FakeOpenXrEventQueue events;
+    bool autoReadyOnCreateSession = true;
+    uint32_t pollEventCalls = 0;
+    XrResult PollEvent(XrInstance, XrEventDataBuffer* eventData) override {
+        pollEventCalls++;
+        return events.Poll(eventData);
     }
 
     XrResult BeginSession(
@@ -1399,17 +1409,27 @@ TEST(OpenXrManagerTest, SuppressesSwapchainAcquisitionWhenShouldRenderIsFalse) {
     EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
 }
 
-TEST(OpenXrManagerTest, CreateSessionInvokesBeginSessionWithPrimaryStereo) {
+TEST(OpenXrManagerTest, CreateSessionDoesNotBeginUntilRuntimeReportsReady) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->autoReadyOnCreateSession = false;
 
     OpenXrManager manager(mockDispatch);
     ASSERT_TRUE(manager.Initialize());
     ASSERT_FALSE(manager.IsSessionRunning());
 
     ASSERT_TRUE(manager.CreateSession());
-    EXPECT_TRUE(manager.IsSessionRunning());
     EXPECT_TRUE(mockDispatch->createSessionCalled);
+    EXPECT_FALSE(manager.IsSessionRunning());
+    EXPECT_FALSE(mockDispatch->beginSessionCalled);
+
+    manager.PollEvents();
+    EXPECT_FALSE(manager.IsSessionRunning());
+
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    manager.PollEvents();
+    EXPECT_TRUE(manager.IsSessionRunning());
+    EXPECT_EQ(manager.GetSessionState(), XR_SESSION_STATE_READY);
     EXPECT_TRUE(mockDispatch->beginSessionCalled);
     EXPECT_EQ(mockDispatch->lastBeginSessionInfo.primaryViewConfigurationType, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO);
 
@@ -1419,20 +1439,197 @@ TEST(OpenXrManagerTest, CreateSessionInvokesBeginSessionWithPrimaryStereo) {
     EXPECT_TRUE(mockDispatch->destroySessionCalled);
 }
 
-TEST(OpenXrManagerTest, CreateSessionFailsWhenBeginSessionFails) {
+TEST(OpenXrManagerTest, BeginSessionIsRetriedAfterFailingOnReady) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
-    mockDispatch->beginSessionResult = XR_ERROR_SESSION_NOT_READY;
+    mockDispatch->beginSessionResult = XR_ERROR_RUNTIME_FAILURE;
 
     OpenXrManager manager(mockDispatch);
     ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
 
-    EXPECT_FALSE(manager.CreateSession());
+    manager.PollEvents();
     EXPECT_FALSE(manager.IsSessionRunning());
-    EXPECT_TRUE(mockDispatch->createSessionCalled);
     EXPECT_TRUE(mockDispatch->beginSessionCalled);
+    EXPECT_TRUE(manager.IsActive());
+    EXPECT_FALSE(manager.BeginFrame());
+
+    // No second READY event arrives; the next poll retries on its own.
+    mockDispatch->beginSessionResult = XR_SUCCESS;
+    manager.PollEvents();
+    EXPECT_TRUE(manager.IsSessionRunning());
+    EXPECT_TRUE(manager.BeginFrame());
 }
 
+TEST(OpenXrManagerTest, SessionLostFromWaitFrameEntersPassThrough) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    manager.PollEvents();
+    ASSERT_TRUE(manager.IsSessionRunning());
+
+    // The runtime died without queueing LOSS_PENDING.
+    mockDispatch->waitFrameResult = XR_ERROR_SESSION_LOST;
+    EXPECT_FALSE(manager.BeginFrame());
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.HasSession());
+    EXPECT_TRUE(mockDispatch->destroySessionCalled);
+}
+
+TEST(OpenXrManagerTest, InstanceLostFromEndFrameEntersPassThrough) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    manager.PollEvents();
+    ASSERT_TRUE(manager.BeginFrame());
+
+    mockDispatch->endFrameResult = XR_ERROR_INSTANCE_LOST;
+    EXPECT_FALSE(manager.EndFrame());
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.HasSession());
+}
+
+TEST(OpenXrManagerTest, OtherFrameErrorsKeepVrActive) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    manager.PollEvents();
+
+    mockDispatch->waitFrameResult = XR_ERROR_RUNTIME_FAILURE;
+    EXPECT_FALSE(manager.BeginFrame());
+    EXPECT_TRUE(manager.IsActive());
+    EXPECT_TRUE(manager.IsSessionRunning());
+
+    mockDispatch->waitFrameResult = XR_SUCCESS;
+    EXPECT_TRUE(manager.BeginFrame());
+}
+
+TEST(OpenXrManagerTest, StoppingEndsSessionAndLaterReadyResumesVr) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    manager.PollEvents();
+    ASSERT_TRUE(manager.IsSessionRunning());
+
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    manager.PollEvents();
+    EXPECT_FALSE(manager.IsSessionRunning());
+    EXPECT_TRUE(mockDispatch->endSessionCalled);
+    EXPECT_TRUE(manager.IsActive());
+    EXPECT_TRUE(manager.HasSession());
+    EXPECT_FALSE(manager.BeginFrame());
+
+    mockDispatch->beginSessionCalled = false;
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_IDLE);
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    manager.PollEvents();
+    EXPECT_TRUE(manager.IsSessionRunning());
+    EXPECT_TRUE(mockDispatch->beginSessionCalled);
+    EXPECT_TRUE(manager.IsActive());
+}
+
+TEST(OpenXrManagerTest, LossPendingReleasesResourcesAndEntersPassThrough) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    manager.PollEvents();
+    ASSERT_TRUE(manager.IsSessionRunning());
+
+    mockDispatch->destroyInstanceCalled = false;
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    manager.PollEvents();
+
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.IsActive());
+    EXPECT_FALSE(manager.IsSessionRunning());
+    EXPECT_FALSE(manager.HasSession());
+    EXPECT_TRUE(mockDispatch->destroySessionCalled);
+    EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
+
+    // Further polling and frame calls are inert and must not crash.
+    uint32_t pollsBefore = mockDispatch->pollEventCalls;
+    manager.PollEvents();
+    EXPECT_EQ(mockDispatch->pollEventCalls, pollsBefore);
+    EXPECT_FALSE(manager.BeginFrame());
+}
+
+TEST(OpenXrManagerTest, ExitingReleasesResourcesAndEntersPassThrough) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    manager.PollEvents();
+
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_EXITING);
+    manager.PollEvents();
+
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.HasSession());
+    EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
+}
+
+TEST(OpenXrManagerTest, InstanceLossPendingEntersPassThrough) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    manager.PollEvents();
+
+    mockDispatch->events.PushInstanceLossPending();
+    manager.PollEvents();
+    EXPECT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.HasSession());
+}
+
+TEST(OpenXrManagerTest, BeginFramePollsEventsAndRefusesFramesWhileSessionNotRunning) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->autoReadyOnCreateSession = false;
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+
+    EXPECT_FALSE(manager.BeginFrame());
+    EXPECT_GT(mockDispatch->pollEventCalls, 0u);
+
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    EXPECT_TRUE(manager.BeginFrame());
+    EXPECT_TRUE(manager.IsSessionRunning());
+}
+
+TEST(OpenXrManagerTest, SuccessCodesOtherThanXrSuccessAreNotTreatedAsFailures) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->beginSessionResult = XR_SESSION_LOSS_PENDING;
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    manager.PollEvents();
+    EXPECT_TRUE(manager.IsSessionRunning());
+}
 TEST(OpenXrManagerTest, SubmitFramePairAppliesSafeFovAndNormalizedOrientationFallbacks) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };

@@ -171,6 +171,12 @@ public:
     XrSpace GetViewSpace() const { return m_viewSpace; }
     bool HasSession() const { return m_session != XR_NULL_HANDLE; }
     bool IsSessionRunning() const { return m_sessionRunning; }
+    XrSessionState GetSessionState() const { return m_sessionState; }
+
+    // Drains the runtime event queue and drives the session lifecycle: begin on READY,
+    // end on STOPPING, release resources and enter Pass-Through Mode on EXITING,
+    // LOSS_PENDING or instance loss. Call once per presented frame.
+    void PollEvents();
     bool HasTrackingSpaces() const {
         return m_localSpace != XR_NULL_HANDLE &&
                m_baseLocalSpace != XR_NULL_HANDLE &&
@@ -199,6 +205,8 @@ private:
 
     XrSession m_session = XR_NULL_HANDLE;
     bool m_sessionRunning = false;
+    XrSessionState m_sessionState = XR_SESSION_STATE_UNKNOWN;
+    uint32_t m_beginSessionFailures = 0;
     XrSpace m_baseLocalSpace = XR_NULL_HANDLE;
     XrSpace m_localSpace = XR_NULL_HANDLE;
     XrSpace m_viewSpace = XR_NULL_HANDLE;
@@ -248,6 +256,11 @@ private:
 
     std::vector<XrViewConfigurationView> m_viewConfigViews;
 
+    void HandleSessionStateChanged(XrSessionState state);
+    void BeginRunningSession();
+    void EndRunningSession();
+    void ReleaseAndEnterPassThrough(const char* reason);
+    bool EnterPassThroughIfLost(XrResult res);
     bool CheckD3D12ExtensionSupport();
     bool EnumerateSwapchainImagesHelper(EyeSwapchain& sc);
     bool EnsureCursorTextureUploaded();

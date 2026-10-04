@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "fake_openxr_events.h"
 #include "ngx/ngx_defs.h"
 #include "ngx/virtual_ngx_handle.h"
 #include "ngx/ngx_interceptor.h"
@@ -803,8 +804,12 @@ public:
         }
         return XR_SUCCESS;
     }
+    // Fake runtime event queue; a created session reports READY like a real runtime would.
+    FakeOpenXrEventQueue events;
+    XrResult PollEvent(XrInstance, XrEventDataBuffer* eventData) override { return events.Poll(eventData); }
     XrResult CreateSession(XrInstance, const XrSessionCreateInfo*, XrSession* session) override {
         if (session) *session = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xCAFE0001));
+        events.PushSessionState(XR_SESSION_STATE_READY);
         return XR_SUCCESS;
     }
     XrResult BeginSession(XrSession, const XrSessionBeginInfo*) override { return XR_SUCCESS; }

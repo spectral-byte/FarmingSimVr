@@ -2,6 +2,7 @@
 #include "proxy/dxgi_proxy.h"
 #include "proxy/system_dxgi.h"
 #include "openxr/openxr_manager.h"
+#include "fake_openxr_events.h"
 #include "ngx/ngx_interceptor.h"
 #include <wrl/client.h>
 #include <unordered_set>
@@ -206,8 +207,12 @@ public:
         }
         return XR_SUCCESS;
     }
+    // Fake runtime event queue; a created session reports READY like a real runtime would.
+    FakeOpenXrEventQueue events;
+    XrResult PollEvent(XrInstance, XrEventDataBuffer* eventData) override { return events.Poll(eventData); }
     XrResult CreateSession(XrInstance, const XrSessionCreateInfo*, XrSession* session) override {
         if (session) *session = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xCAFE0001));
+        events.PushSessionState(XR_SESSION_STATE_READY);
         return XR_SUCCESS;
     }
     XrResult BeginSession(XrSession, const XrSessionBeginInfo*) override { return XR_SUCCESS; }
@@ -1236,6 +1241,115 @@ TEST(DxgiProxyTest, OnPresentSubmitsQuadContinuouslyWithoutAfrPacing) {
         EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
     }
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+}
+
+TEST(DxgiProxyTest, OnPresentPollsEventsPausesVrWhileStoppedAndResumesOnReady) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // READY is consumed by the first present, which then submits a quad frame.
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_TRUE(openXrManager->IsSessionRunning());
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+
+    // STOPPING: no VR submissions, but the game keeps presenting to the mirror window.
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_FALSE(openXrManager->IsSessionRunning());
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+
+    // READY again: VR resumes.
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_TRUE(openXrManager->IsSessionRunning());
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 2u);
+}
+
+TEST(DxgiProxyTest, KeepsGameSyncIntervalWhileSessionIsPaused) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    // Before READY nothing calls xrWaitFrame, so the game's vsync must stay in effect.
+    EXPECT_EQ(proxy.EffectiveSyncInterval(1), 1u);
+
+    proxy.OnPresent(nullptr, 1, 0);
+    ASSERT_TRUE(openXrManager->IsSessionRunning());
+    EXPECT_EQ(proxy.EffectiveSyncInterval(1), 0u);
+
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    proxy.OnPresent(nullptr, 1, 0);
+    ASSERT_FALSE(openXrManager->IsSessionRunning());
+    EXPECT_EQ(proxy.EffectiveSyncInterval(1), 1u);
+
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    proxy.OnPresent(nullptr, 1, 0);
+    EXPECT_EQ(proxy.EffectiveSyncInterval(1), 0u);
+}
+
+TEST(DxgiProxyTest, AfrResumesWithLeftEyeAfterSessionPause) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::AFR);
+
+    // Pause right after the left eye of a pair.
+    proxy.OnPresent(nullptr, 0, 0);
+    ASSERT_EQ(vrBridge->GetFrameParity(), 1u);
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // Resume: the first frame is a fresh left eye, not the right half of the abandoned pair.
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+}
+
+TEST(DxgiProxyTest, OnPresentContinuesInPassThroughAfterLossPending) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    ASSERT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_TRUE(openXrManager->IsPassThrough());
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_FALSE(proxy.IsPresentSuppressed());
 }
 
 TEST(DxgiProxyTest, SeamlesslyTransitionsBetweenQuadAndStereoOnCompanionHandshakeAndUnload) {

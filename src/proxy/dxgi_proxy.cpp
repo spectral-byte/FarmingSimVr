@@ -348,6 +348,14 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
         return true;
     }
 
+    // Poll runtime events once per presented frame; this may begin/end the session or
+    // drop the Injector into Pass-Through Mode (EXITING, LOSS_PENDING, instance loss).
+    m_openXrManager->PollEvents();
+    if (!m_openXrManager->IsActive()) {
+        m_lastPresentSuppressed = false;
+        return true;
+    }
+
     if (!GetGameHwnd() && swapChain) {
         DXGI_SWAP_CHAIN_DESC desc{};
         if (SUCCEEDED(swapChain->GetDesc(&desc)) && desc.OutputWindow) {
@@ -421,6 +429,21 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
                 m_cachedBackBuffers[bufferIndex] = backBuffer;
             }
         }
+    }
+
+    if (m_openXrManager->HasEyeSwapchains() && !m_openXrManager->IsSessionRunning()) {
+        // Session is IDLE/STOPPING (headset asleep, dashboard) or not yet READY: submit no VR
+        // frames and let the game keep presenting to the Desktop Mirror Window.
+        // On resume, start a fresh eye pair and re-align the menu quad to the new head pose.
+        if (m_vrBridge) {
+            m_vrBridge->SetFrameParity(0);
+            if (m_vrBridge->GetSubPassIndex() != 0) {
+                m_vrBridge->ResetSubPass();
+            }
+        }
+        m_wasInQuadMode = false;
+        m_lastPresentSuppressed = false;
+        return true;
     }
 
     if (m_openXrManager->HasEyeSwapchains()) {
@@ -526,6 +549,13 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
     return true;
 }
 
+UINT DxgiProxy::EffectiveSyncInterval(UINT gameSyncInterval) const {
+    // xrWaitFrame paces frames only while the session runs. While it is paused (headset asleep,
+    // not yet READY) keep the game's own vsync so the Desktop Mirror Window does not run uncapped.
+    bool xrPacing = m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning();
+    return xrPacing ? 0 : gameSyncInterval;
+}
+
 bool DxgiProxy::OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* /*params*/) {
     return OnPresent(swapChain, syncInterval, flags);
 }
@@ -540,8 +570,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UIN
         proxy->m_detourPresent.GetOriginal()
     );
     if (orig) {
-        UINT effectiveSyncInterval = (proxy->m_openXrManager && proxy->m_openXrManager->IsActive()) ? 0 : syncInterval;
-        return orig(self, effectiveSyncInterval, flags);
+        return orig(self, proxy->EffectiveSyncInterval(syncInterval), flags);
     }
     return S_OK;
 }
@@ -556,8 +585,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
         proxy->m_detourPresent1.GetOriginal()
     );
     if (orig) {
-        UINT effectiveSyncInterval = (proxy->m_openXrManager && proxy->m_openXrManager->IsActive()) ? 0 : syncInterval;
-        return orig(self, effectiveSyncInterval, flags, params);
+        return orig(self, proxy->EffectiveSyncInterval(syncInterval), flags, params);
     }
     return S_OK;
 }
