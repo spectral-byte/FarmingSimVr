@@ -128,7 +128,6 @@ set_target_properties(fake_nvngx PROPERTIES OUTPUT_NAME nvngx)
 
 # Test executable target
 add_executable(fs25_vr_tests
-    tests/test_main.cpp
     tests/test_dll_lifecycle.cpp
     tests/test_math_utils.cpp
     tests/test_logger.cpp
@@ -150,7 +149,7 @@ add_executable(fs25_vr_tests
 
 target_link_libraries(fs25_vr_tests PRIVATE
     fs25_vr_core
-    GTest::gtest
+    GTest::gtest_main
     Luau.Compiler
     dxgi.lib
 )
