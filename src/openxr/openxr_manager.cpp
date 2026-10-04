@@ -927,18 +927,6 @@ void OpenXrManager::RecordRenderPose(uint32_t eyeIndex, const HeadPose& pose) {
     m_hasRenderPose[eyeIndex] = true;
 }
 
-void OpenXrManager::ShareRenderPoseAcrossEyes() {
-    // Native stereo renders both eyes in one pass from one head pose, but the Companion Mod
-    // records it under a single eye. Submit both halves with that pose so they reproject together.
-    for (uint32_t src = 0; src < 2; ++src) {
-        if (m_hasRenderPose[src]) {
-            m_renderPoses[1 - src] = m_renderPoses[src];
-            m_hasRenderPose[1 - src] = true;
-            return;
-        }
-    }
-}
-
 void OpenXrManager::ClearRenderPoses() {
     // A record not consumed by its frame's copy (shouldRender false, a skipped copy, a recenter)
     // belongs to an older frame or tracking space; never let a later frame submit it.

@@ -8,8 +8,6 @@ class ISystemDxgi;
 class OpenXrManager;
 class VRBridge;
 class LuauInterceptor;
-class GraphicsTelemetryProbe;
-class D3D12Interceptor;
 class MirrorWindowController;
 class NgxInterceptor;
 class DxgiProxy;
@@ -30,8 +28,6 @@ public:
         std::shared_ptr<OpenXrManager> openXrManager;
         std::shared_ptr<VRBridge> vrBridge;
         std::shared_ptr<LuauInterceptor> luauInterceptor;
-        std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe;
-        std::shared_ptr<D3D12Interceptor> d3d12Interceptor;
         std::shared_ptr<MirrorWindowController> windowController;
         std::shared_ptr<NgxInterceptor> ngxInterceptor;
     };
@@ -49,8 +45,6 @@ public:
     OpenXrManager& GetOpenXrManager() { return *m_deps.openXrManager; }
     VRBridge& GetVrBridge() { return *m_deps.vrBridge; }
     LuauInterceptor& GetLuauInterceptor() { return *m_deps.luauInterceptor; }
-    GraphicsTelemetryProbe& GetTelemetryProbe() { return *m_deps.telemetryProbe; }
-    D3D12Interceptor& GetD3D12Interceptor() { return *m_deps.d3d12Interceptor; }
     MirrorWindowController& GetWindowController() { return *m_deps.windowController; }
     NgxInterceptor& GetNgxInterceptor() { return *m_deps.ngxInterceptor; }
 

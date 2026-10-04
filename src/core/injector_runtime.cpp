@@ -8,8 +8,6 @@
 #include "proxy/dxgi_proxy.h"
 #include "proxy/mirror_window_controller.h"
 #include "proxy/system_dxgi.h"
-#include "telemetry/d3d12_interceptor.h"
-#include "telemetry/graphics_telemetry_probe.h"
 
 namespace fs25vr {
 
@@ -49,14 +47,12 @@ InjectorRuntime::InjectorRuntime(Dependencies deps, bool wiresNgxInterceptor)
     FillFromSingleton(m_deps.openXrManager);
     FillFromSingleton(m_deps.vrBridge);
     FillFromSingleton(m_deps.luauInterceptor);
-    FillFromSingleton(m_deps.telemetryProbe);
-    FillFromSingleton(m_deps.d3d12Interceptor);
     FillFromSingleton(m_deps.windowController);
     FillFromSingleton(m_deps.ngxInterceptor);
 
     m_proxy = std::make_unique<DxgiProxy>(
-        m_deps.systemDxgi, m_deps.openXrManager, m_deps.luauInterceptor, m_deps.telemetryProbe,
-        m_deps.d3d12Interceptor, m_deps.vrBridge, m_deps.windowController);
+        m_deps.systemDxgi, m_deps.openXrManager, m_deps.luauInterceptor,
+        m_deps.vrBridge, m_deps.windowController);
 
     if (m_wiresNgxInterceptor) {
         m_deps.ngxInterceptor->SetVRBridge(m_deps.vrBridge.get());

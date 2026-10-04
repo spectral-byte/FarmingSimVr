@@ -31,24 +31,14 @@ std::shared_ptr<T> Borrow(T& singleton) {
 
 VRBridge& VRBridge::Instance() {
     static VRBridge instance(Borrow(OpenXrManager::Instance()),
-                             Borrow(GraphicsTelemetryProbe::Instance()),
                              Borrow(NgxInterceptor::Instance()));
     return instance;
 }
 
 VRBridge::VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
-                   std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe,
                    std::shared_ptr<NgxInterceptor> ngxInterceptor)
     : m_openXrManager(std::move(openXrManager)),
-      m_telemetryProbe(std::move(telemetryProbe)),
       m_ngxInterceptor(std::move(ngxInterceptor)) {
-}
-
-bool VRBridge::RequiresAfrFallback() const {
-    if (!m_telemetryProbe) {
-        return true;
-    }
-    return m_telemetryProbe->RequiresAfrFallback();
 }
 
 bool VRBridge::IsInjected(lua_State* L) {
@@ -186,38 +176,34 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
 }
 
 int VRBridge::Lua_GetStereoTelemetry(lua_State* L) {
+    // Fixed verdict: the telemetry probe was retired (ADR-0017); ADR-0015 records that
+    // GIANTS Engine 10 under D3D12 always needs AFR or SDP.
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    auto* probe = self ? self->m_telemetryProbe.get() : nullptr;
-
-    ProbeSnapshot snap = probe ? probe->GetSnapshot() : ProbeSnapshot{};
+    if (!self) self = &Instance();
+    const bool afrFallback = self->RequiresAfrFallback();
 
     lua_createtable(L, 0, 7);
 
-    lua_pushinteger(L, static_cast<int>(snap.frameIndex));
+    lua_pushinteger(L, 0);
     lua_setfield(L, -2, "frameIndex");
 
-    lua_pushinteger(L, static_cast<int>(snap.maxViewports));
+    lua_pushinteger(L, 0);
     lua_setfield(L, -2, "maxViewports");
 
-    lua_pushinteger(L, static_cast<int>(snap.passCount));
+    lua_pushinteger(L, 0);
     lua_setfield(L, -2, "passCount");
 
-    lua_pushboolean(L, snap.nativeStereo ? 1 : 0);
+    lua_pushboolean(L, afrFallback ? 0 : 1);
     lua_setfield(L, -2, "nativeStereo");
 
-    lua_pushboolean(L, snap.afrFallback ? 1 : 0);
+    lua_pushboolean(L, afrFallback ? 1 : 0);
     lua_setfield(L, -2, "afrFallback");
 
-    const char* verdictStr = "Inconclusive";
-    switch (snap.verdict) {
-    case StereoVerdict::NativeStereoDetected: verdictStr = "NativeStereoDetected"; break;
-    case StereoVerdict::AfrFallbackRequired: verdictStr = "AfrFallbackRequired"; break;
-    default: break;
-    }
-    lua_pushstring(L, verdictStr);
+    lua_pushstring(L, afrFallback ? "AfrFallbackRequired" : "NativeStereoDetected");
     lua_setfield(L, -2, "verdict");
 
-    lua_pushstring(L, snap.summary.c_str());
+    lua_pushstring(L, afrFallback ? "Native stereo is not available under D3D12; AFR or SDP is required."
+                                  : "Native stereo is available.");
     lua_setfield(L, -2, "summary");
 
     return 1;
@@ -225,9 +211,8 @@ int VRBridge::Lua_GetStereoTelemetry(lua_State* L) {
 
 int VRBridge::Lua_IsStereoActive(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    auto* probe = self ? self->m_telemetryProbe.get() : nullptr;
-
-    lua_pushboolean(L, (probe && probe->HasNativeStereoDetected()) ? 1 : 0);
+    if (!self) self = &Instance();
+    lua_pushboolean(L, self->RequiresAfrFallback() ? 0 : 1);
     return 1;
 }
 

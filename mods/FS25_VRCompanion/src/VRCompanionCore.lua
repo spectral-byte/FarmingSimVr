@@ -95,14 +95,10 @@ function VRCompanion:loadMap(name)
         print("[FS25_VR] Engine stereo rendering toggle 'setStereoRendering' not found in Luau environment.")
     end
 
-    -- 3. Query initial telemetry probe status if available
-    if VRBridge ~= nil and type(VRBridge.getStereoTelemetry) == "function" then
-        local telemetry = VRBridge.getStereoTelemetry()
-        self.lastReportedVerdict = telemetry.verdict
-        print(string.format("[FS25_VR] Telemetry Probe initialized (Frame: %d, Verdict: %s, Max Viewports: %d).",
-            telemetry.frameIndex or 0,
-            tostring(telemetry.verdict or "unknown"),
-            telemetry.maxViewports or 0))
+    -- 3. Report the stereo requirement (fixed since the telemetry probe was retired, ADR-0017)
+    if VRBridge ~= nil then
+        print(string.format("[FS25_VR] Stereo presentation: AFR fallback required: %s.",
+            tostring(self:requiresAfrFallback())))
     end
 
     -- 3b. Ensure engine head tracking setting is enabled
@@ -662,24 +658,6 @@ function VRCompanion:update(dt)
             self:onVehicleTransition(oldVeh, curVehicle)
         end
     end
-
-    if (self.lastReportedVerdict == nil or self.lastReportedVerdict == "Inconclusive") and self.frameTicks < 300 and VRBridge ~= nil and type(VRBridge.getStereoTelemetry) == "function" then
-        local telemetry = VRBridge.getStereoTelemetry()
-        if telemetry then
-            if telemetry.verdict ~= self.lastReportedVerdict then
-                self.lastReportedVerdict = telemetry.verdict
-                print(string.format("[FS25_VR] Telemetry Probe Resolution: %s (Max Viewports: %d, AFR Fallback: %s)",
-                    tostring(telemetry.verdict),
-                    telemetry.maxViewports or 0,
-                    tostring(telemetry.afrFallback)))
-            elseif self.frameTicks == 1 then
-                print(string.format("[FS25_VR] Telemetry Probe active (Frame: %d, Passes: %d, Verdict: %s)",
-                    telemetry.frameIndex or 0,
-                    telemetry.passCount or 0,
-                    tostring(telemetry.verdict or "unknown")))
-            end
-        end
-    end
 end
 
 function VRCompanion:deleteMap()
@@ -738,7 +716,6 @@ function VRCompanion:deleteMap()
 
     self.inMissionUpdate = false
     self.handshakeComplete = false
-    self.lastReportedVerdict = nil
     self.frameTicks = 0
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false

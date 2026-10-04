@@ -7,7 +7,6 @@
 #include "lua.h"
 #include "lualib.h"
 #include "openxr/openxr_manager.h"
-#include "telemetry/graphics_telemetry_probe.h"
 
 namespace fs25vr {
 
@@ -26,7 +25,6 @@ public:
     // A subsystem left null stays absent: VRBridge never falls back to another subsystem's singleton.
     // Instance() is the one place the process-wide singletons are wired to this bridge.
     explicit VRBridge(std::shared_ptr<OpenXrManager> openXrManager = nullptr,
-                      std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe = nullptr,
                       std::shared_ptr<NgxInterceptor> ngxInterceptor = nullptr);
 
     bool Inject(lua_State* L);
@@ -37,7 +35,6 @@ public:
     bool PerformHandshake();
     bool IsCompanionActive() const { return m_handshakeCompleted; }
     void SetCompanionActive(bool active) { m_handshakeCompleted = active; }
-    std::shared_ptr<GraphicsTelemetryProbe> GetTelemetryProbe() const { return m_telemetryProbe; }
     std::shared_ptr<OpenXrManager> GetOpenXrManager() const { return m_openXrManager; }
 
     HeadPose GetHeadPose();
@@ -45,7 +42,9 @@ public:
     void Recenter();
     EyeProjection GetEyeProjection(uint32_t eyeIndex = 0);
 
-    bool RequiresAfrFallback() const;
+    // GIANTS Engine 10 under D3D12 renders one viewport and one scene pass (ADR-0015, ADR-0017),
+    // so AFR or SDP is always required.
+    bool RequiresAfrFallback() const { return true; }
 
     VRRenderingMode GetRenderingMode() const { return m_renderingMode.load(); }
     void SetRenderingMode(VRRenderingMode mode);
@@ -172,7 +171,6 @@ public:
 
 private:
     std::shared_ptr<OpenXrManager> m_openXrManager;
-    std::shared_ptr<GraphicsTelemetryProbe> m_telemetryProbe;
     std::shared_ptr<NgxInterceptor> m_ngxInterceptor;
     std::string m_version = "1.0.0";
     bool m_handshakeCompleted = false;

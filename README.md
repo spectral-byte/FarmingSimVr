@@ -205,7 +205,7 @@ For in-depth technical documentation, refer to the architecture records in [`doc
 
 - [`ADR-0001`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0001-hybrid-injector-and-companion-mod-architecture.md): Hybrid Injector and In-Engine Companion Mod via VRBridge
 - [`ADR-0002`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0002-in-process-luau-state-interception.md): In-Process Luau State Interception & VRBridge Table Injection
-- [`ADR-0003`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0003-afr-frame-pacing-and-telemetry-probe.md): Alternate Frame Rendering (AFR) Pacing & Telemetry Probe
+- [`ADR-0003`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0003-afr-frame-pacing-and-telemetry-probe.md): Alternate Frame Rendering (AFR) Pacing & Telemetry Probe (probe superseded by ADR-0017)
 - [`ADR-0004`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0004-graceful-openxr-pass-through-fallback.md): Graceful OpenXR Pass-Through Fallback
 - [`ADR-0005`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0005-oblique-frustum-projection-via-vrbridge.md): Oblique Frustum Projection via VRBridge
 - [`ADR-0006`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0006-openxr-floating-quad-layer-for-menus.md): OpenXR Floating Quad Layer for Menus
@@ -219,6 +219,7 @@ For in-depth technical documentation, refer to the architecture records in [`doc
 - [`ADR-0014`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0014-desktop-mirror-window-resolution-decoupling.md): Desktop Mirror Window Resolution Decoupling
 - [`ADR-0015`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0015-sequential-dual-pass-stereo-presentation-pipeline.md): Sequential Dual-Pass Stereo Presentation Pipeline
 - [`ADR-0016`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0016-dual-feature-context-virtualization-for-temporal-upscalers.md): Dual Feature Context Virtualization for Temporal Upscalers
+- [`ADR-0017`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0017-retire-the-d3d12-telemetry-probe.md): Retire the D3D12 Telemetry Probe
 
 ---
 

@@ -5,8 +5,6 @@
 #include "openxr/openxr_manager.h"
 #include "luau/luau_interceptor.h"
 #include "luau/vr_bridge.h"
-#include "telemetry/graphics_telemetry_probe.h"
-#include "telemetry/d3d12_interceptor.h"
 #include "core/detour.h"
 #include <d3d12.h>
 #include <dxgi1_4.h>
@@ -32,8 +30,6 @@ public:
     explicit DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi = nullptr,
                        std::shared_ptr<OpenXrManager> openXrManager = nullptr,
                        std::shared_ptr<LuauInterceptor> luauInterceptor = nullptr,
-                       std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe = nullptr,
-                       std::shared_ptr<D3D12Interceptor> d3d12Interceptor = nullptr,
                        std::shared_ptr<VRBridge> vrBridge = nullptr,
                        std::shared_ptr<MirrorWindowController> windowController = nullptr);
     ~DxgiProxy();
@@ -51,7 +47,6 @@ public:
     bool IsSwapChainAttached() const { return m_swapChainAttached; }
     bool IsFactoryAttached() const { return m_factoryAttached; }
 
-    void OnPrePresent(IDXGISwapChain* swapChain);
     bool OnPresent(IDXGISwapChain* swapChain, UINT syncInterval = 0, UINT flags = 0);
     bool OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval = 0, UINT flags = 0, const DXGI_PRESENT_PARAMETERS* params = nullptr);
     // Sync interval forwarded to the real Present: 0 while xrWaitFrame paces frames, else the game's.
@@ -76,8 +71,6 @@ public:
     OpenXrManager& GetOpenXrManager() { return *m_openXrManager; }
     ISystemDxgi& GetSystemDxgi() { return *m_systemDxgi; }
     LuauInterceptor& GetLuauInterceptor() { return *m_luauInterceptor; }
-    GraphicsTelemetryProbe& GetTelemetryProbe() { return *m_telemetryProbe; }
-    D3D12Interceptor& GetD3D12Interceptor() { return *m_d3d12Interceptor; }
     VRBridge& GetVrBridge() { return *m_vrBridge; }
     MirrorWindowController& GetWindowController() { return *m_windowController; }
 
@@ -101,8 +94,6 @@ private:
     std::shared_ptr<ISystemDxgi> m_systemDxgi;
     std::shared_ptr<OpenXrManager> m_openXrManager;
     std::shared_ptr<LuauInterceptor> m_luauInterceptor;
-    std::shared_ptr<GraphicsTelemetryProbe> m_telemetryProbe;
-    std::shared_ptr<D3D12Interceptor> m_d3d12Interceptor;
     std::shared_ptr<VRBridge> m_vrBridge;
     std::shared_ptr<MirrorWindowController> m_windowController;
 

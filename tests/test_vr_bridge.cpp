@@ -85,14 +85,9 @@ TEST_F(VrBridgeTest, ExposesVersionAndIsReadyAndHandshakeToLuauScript) {
     }
 }
 
-TEST_F(VrBridgeTest, ExposesStereoTelemetryAndStereoStatusToLuauScript) {
-    auto probe = std::make_shared<fs25vr::GraphicsTelemetryProbe>();
-    fs25vr::VRBridge bridge(nullptr, probe);
+TEST_F(VrBridgeTest, ReportsFixedStereoTelemetryVerdictToLuauScript) {
+    fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
-
-    D3D12_VIEWPORT vp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
-    probe->RecordViewports(1, &vp);
-    probe->OnFrameBoundary();
 
     std::string script = R"(
         assert(type(VRBridge.getStereoTelemetry) == "function", "getStereoTelemetry must be a function")
@@ -100,16 +95,15 @@ TEST_F(VrBridgeTest, ExposesStereoTelemetryAndStereoStatusToLuauScript) {
 
         local t = VRBridge.getStereoTelemetry()
         assert(type(t) == "table", "getStereoTelemetry must return a table")
-        assert(t.frameIndex == 1, "frameIndex must be 1")
-        assert(t.maxViewports == 1, "maxViewports must be 1")
-        assert(t.passCount == 1, "passCount must be 1")
-        assert(type(t.nativeStereo) == "boolean", "nativeStereo must be boolean")
-        assert(type(t.afrFallback) == "boolean", "afrFallback must be boolean")
-        assert(type(t.verdict) == "string", "verdict must be string")
+        assert(type(t.frameIndex) == "number", "frameIndex must be a number")
+        assert(type(t.maxViewports) == "number", "maxViewports must be a number")
+        assert(type(t.passCount) == "number", "passCount must be a number")
+        assert(t.nativeStereo == false, "nativeStereo must be false")
+        assert(t.afrFallback == true, "afrFallback must be true")
+        assert(t.verdict == "AfrFallbackRequired", "verdict must be AfrFallbackRequired from the first frame")
         assert(type(t.summary) == "string", "summary must be string")
 
-        local active = VRBridge.isStereoActive()
-        assert(type(active) == "boolean", "isStereoActive must return boolean")
+        assert(VRBridge.isStereoActive() == false, "isStereoActive must be false")
     )";
 
     int status = RunLuauString(L, script);
@@ -130,7 +124,7 @@ TEST_F(VrBridgeTest, ExposesHeadPoseToLuauScript) {
     simPose.orientationTracked = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string script = R"(
@@ -168,7 +162,7 @@ TEST_F(VrBridgeTest, RecenterViaLuauResetsTranslationalOffsets) {
     simPose.orientationTracked = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string script = R"(
@@ -199,7 +193,7 @@ TEST_F(VrBridgeTest, ExposesEyeProjectionAndPrunesAliasesInLuauScript) {
     headset.SetEyeFov(0, leftFov);
     headset.SetEyeFov(1, rightFov);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string script = R"luau(
@@ -336,7 +330,7 @@ TEST_F(VrBridgeTest, ExposesEyePoseWithInterpupillaryShiftToLuau) {
     headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string script = R"luau(
@@ -367,50 +361,14 @@ TEST_F(VrBridgeTest, ExposesEyePoseWithInterpupillaryShiftToLuau) {
     }
 }
 
-TEST_F(VrBridgeTest, RequiresAfrFallbackReflectsTelemetryProbeVerdict) {
-    auto probe = std::make_shared<fs25vr::GraphicsTelemetryProbe>();
-    fs25vr::VRBridge bridge(nullptr, probe);
+TEST_F(VrBridgeTest, RequiresAfrFallbackIsTrueFromTheFirstFrame) {
+    fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
-    // Initially 0 frames, Inconclusive -> RequiresAfrFallback() is false
-    EXPECT_FALSE(bridge.RequiresAfrFallback());
-
-    // Record 5 monoscopic frames
-    D3D12_VIEWPORT vp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
-    D3D12_RECT scissor{ 0, 0, 1920, 1080 };
-    for (int i = 0; i < 5; ++i) {
-        probe->RecordViewports(1, &vp);
-        probe->RecordScissorRects(1, &scissor);
-        probe->OnFrameBoundary();
-    }
-
-    EXPECT_TRUE(probe->RequiresAfrFallback());
     EXPECT_TRUE(bridge.RequiresAfrFallback());
     ASSERT_EQ(RunLuauString(L, R"luau(
-        assert(VRBridge.requiresAfrFallback == true, "must be true when AFR fallback required")
-        assert(VRBridge.getRequiresAfrFallback() == true, "must return true when AFR fallback required")
-    )luau"), 0);
-
-    // Reset probe and simulate native stereo pass
-    probe->Reset();
-    D3D12_VIEWPORT vps[2]{
-        { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
-        { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
-    };
-    D3D12_RECT scissors[2]{
-        { 0, 0, 1920, 1080 },
-        { 1920, 0, 3840, 1080 }
-    };
-    probe->RecordViewports(2, vps);
-    probe->RecordScissorRects(2, scissors);
-    probe->OnFrameBoundary();
-
-    EXPECT_TRUE(probe->HasNativeStereoDetected());
-    EXPECT_FALSE(probe->RequiresAfrFallback());
-    EXPECT_FALSE(bridge.RequiresAfrFallback());
-    ASSERT_EQ(RunLuauString(L, R"luau(
-        assert(VRBridge.requiresAfrFallback == false, "must be false when native stereo detected")
-        assert(VRBridge.getRequiresAfrFallback() == false, "must return false when native stereo detected")
+        assert(VRBridge.requiresAfrFallback == true, "requiresAfrFallback must be true")
+        assert(VRBridge.getRequiresAfrFallback() == true, "getRequiresAfrFallback() must return true")
     )luau"), 0);
 }
 
@@ -513,7 +471,7 @@ TEST_F(VrBridgeTest, SetMenuVisibleTrueTriggersQuadAlignmentOnOpenXrManager) {
     headset.SetHeadPose(simPose);
     openXrManager->PollHeadPose();  // the engine polls the head pose every frame
 
-    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    fs25vr::VRBridge bridge(openXrManager);
     ASSERT_TRUE(bridge.Inject(L));
 
     EXPECT_FALSE(openXrManager->HasMenuQuadPose());
@@ -539,7 +497,7 @@ TEST_F(VrBridgeTest, ExposesAlignMenuQuadToLuau) {
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    fs25vr::VRBridge bridge(openXrManager);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(RunLuauString(L, R"luau(
@@ -621,7 +579,7 @@ TEST_F(VrBridgeTest, Set2DViewActiveTrueTriggersQuadAlignmentOnOpenXrManager) {
     headset.SetHeadPose(simPose);
     openXrManager->PollHeadPose();  // the engine polls the head pose every frame
 
-    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    fs25vr::VRBridge bridge(openXrManager);
     ASSERT_TRUE(bridge.Inject(L));
 
     EXPECT_FALSE(openXrManager->HasMenuQuadPose());
@@ -911,7 +869,7 @@ TEST_F(VrBridgeTest, ViewTransitionsAndRecenterFlagDiscontinuity) {
 
 TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
     auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
-    fs25vr::VRBridge bridge(nullptr, nullptr, ngx);
+    fs25vr::VRBridge bridge(nullptr, ngx);
     ASSERT_TRUE(bridge.Inject(L));
 
     const std::string testScript = R"(
@@ -947,7 +905,7 @@ TEST_F(VrBridgeTest, DlssTuningFunctionsReportFailureWithoutNgxInterceptor) {
 TEST_F(VrBridgeTest, SetRenderingModeIsImmediateWhileOpenXrIsInactive) {
     auto openXr = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::FakeOpenXrRuntime>());
     ASSERT_FALSE(openXr->IsActive());
-    fs25vr::VRBridge bridge(openXr, nullptr);
+    fs25vr::VRBridge bridge(openXr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
     ASSERT_TRUE(bridge.Inject(L));
 
@@ -960,7 +918,7 @@ TEST_F(VrBridgeTest, SetRenderingModeIsImmediateWhileOpenXrIsInactive) {
 TEST_F(VrBridgeTest, SetRenderingModeIsQueuedWhileOpenXrIsActiveUntilLatched) {
     fs25vr::FakeTrackedHeadset headset;
     ASSERT_TRUE(headset.manager->IsActive());
-    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    fs25vr::VRBridge bridge(headset.manager);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
     ASSERT_TRUE(bridge.Inject(L));
 

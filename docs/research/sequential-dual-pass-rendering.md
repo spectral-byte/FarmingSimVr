@@ -356,7 +356,7 @@ During our initial research ([`docs/research/fs25-vr-camera-mod.md:350-356`](fil
 - `setStereoRendering(boolean enable)`
 - `setInvertStereoRendering(boolean invert)`
 
-To determine whether GIANTS Engine 10 possessed native stereo pass or split-viewport capabilities under D3D12, the project deployed an automated telemetry probe (`GraphicsTelemetryProbe` in `src/telemetry/`).
+To determine whether GIANTS Engine 10 possessed native stereo pass or split-viewport capabilities under D3D12, the project deployed an automated telemetry probe (`GraphicsTelemetryProbe`, formerly in `src/telemetry/`). The probe was retired once it had answered that question; see ADR-0017. The code survives only in git history.
 
 #### Empirical Ground Truth from `fs25_vr.log`:
 Inspection of `fs25_vr.log` records the definitive runtime verdict:
@@ -904,7 +904,7 @@ end
 | **REF-05** | Luau In-Process VRBridge Subsystem | `src/luau/vr_bridge.cpp` & `vr_bridge.h` | `vr_bridge.h:36-44` (Parity tracking, IPD), `vr_bridge.cpp:45-162` (Table injection), lines 425–436 (`AdvanceFrame`). |
 | **REF-06** | In-Engine Companion Mod Implementation | `mods/FS25_VRCompanion/src/VRCompanion.lua` | Lines 345–398 & 648–755 (HUD convergence parity), lines 2319–2383 (`applyCameraProjection`), lines 2630–2808 (In-cab 6DOF), lines 1009–1211 (`settings.xml`). |
 | **REF-07** | NGX DLSS Dual Handle Virtualization | `src/ngx/ngx_interceptor.cpp` & `virtual_ngx_handle.h` (Reflog 8937e7f) | `virtual_ngx_handle.h:200-280` (`VirtualNgxHandle`), `ngx_interceptor.cpp:40-180` (Feature evaluation, 2.0x MV scale). |
-| **REF-08** | D3D12 Stereo Telemetry Probe Execution Log | `fs25_vr.log` & `src/telemetry/d3d12_interceptor.cpp` | `fs25_vr.log:40167-40220` (Single viewport pass confirmation), `d3d12_interceptor.cpp:94-150` (Detour hooks). |
+| **REF-08** | D3D12 Stereo Telemetry Probe Execution Log | `fs25_vr.log` & `src/telemetry/d3d12_interceptor.cpp` (removed by ADR-0017; see git history) | `fs25_vr.log:40167-40220` (Single viewport pass confirmation), `d3d12_interceptor.cpp:94-150` (Detour hooks). |
 | **REF-09** | Microsoft DirectX 12 Agility SDK Specification | Microsoft Learn (`D3D12Core.dll` SDK 610) | `ID3D12GraphicsCommandList::Close`, `SetGraphicsRootConstantBufferView`, `OMSetRenderTargets`, `ResourceBarrier`. |
 | **REF-10** | Khronos OpenXR 1.0 / 1.1 Core Specification | Khronos Group Standard (`XR_KHR_D3D12_enable`) | Sections 10.1 (`xrBeginFrame`), 10.2 (`xrWaitFrame`), 10.3 (`xrEndFrame`), Section 12 (`XR_KHR_D3D12_enable`). |
 | **REF-11** | Praydog REFramework & UEVR Architecture | `https://github.com/praydog/REFramework` & `UEVR` | Native scene view duplication patterns vs Direct3D 12 API command list duplication. |

@@ -2259,7 +2259,7 @@ struct RenderPoseFixture {
         EXPECT_TRUE(manager->IsSessionRunning());
         EXPECT_TRUE(manager->CreateEyeSwapchains(1920, 1080));
         manager->SetIpd(0.064f);
-        bridge = std::make_unique<VRBridge>(manager, nullptr);
+        bridge = std::make_unique<VRBridge>(manager);
         bridge->SetRenderingMode(mode);
     }
 };
@@ -2445,18 +2445,6 @@ TEST(OpenXrManagerTest, SessionStopDropsRecordedRenderPoses) {
     EXPECT_FALSE(f.manager->HasRecordedRenderPose(0));
 }
 
-TEST(OpenXrManagerTest, ShareRenderPoseAcrossEyesUsesWhicheverEyeWasRecorded) {
-    RenderPoseFixture f(VRRenderingMode::AFR);
-    f.manager->RecordRenderPose(1, MakeRenderTestPose(0.3f, 1.6f, 0.0f));
-
-    f.manager->ShareRenderPoseAcrossEyes();
-    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(7.0f, 7.0f, 7.0f));
-    ASSERT_TRUE(f.manager->CopyBackBufferToEye(0, nullptr));
-    ASSERT_TRUE(f.manager->CopyBackBufferToEye(1, nullptr));
-
-    EXPECT_NEAR(f.manager->GetCapturedEyePose(0).position.x, 0.3f, 0.001f);
-    EXPECT_NEAR(f.manager->GetCapturedEyePose(1).position.x, 0.3f, 0.001f);
-}
 } // namespace fs25vr
 
 

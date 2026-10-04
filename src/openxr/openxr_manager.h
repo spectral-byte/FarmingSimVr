@@ -201,9 +201,6 @@ public:
     bool HasRecordedRenderPose(uint32_t eyeIndex) const {
         return eyeIndex < 2 && m_hasRenderPose[eyeIndex];
     }
-    // Native stereo: both eyes come from one render, so a pose recorded for either eye is used
-    // for both. Call before copying the eyes.
-    void ShareRenderPoseAcrossEyes();
 
     const HeadPose& GetCapturedEyePose(uint32_t eyeIndex = 0) const {
         return m_capturedEyePoses[eyeIndex >= 2 ? 0 : eyeIndex];

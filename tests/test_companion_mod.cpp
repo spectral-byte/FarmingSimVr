@@ -430,25 +430,36 @@ TEST_F(CompanionModTest, InvokesEngineStereoRenderingTogglesDuringMapExecution) 
     EXPECT_TRUE(foundRestoreLog);
 }
 
-TEST_F(CompanionModTest, LogsStereoTelemetryProbeResolutionDuringMapUpdate) {
+TEST_F(CompanionModTest, RequiresAfrFallbackFromTheFirstFrameWithoutPollingTelemetry) {
     fs25vr::VRBridge bridge;
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
 
-    // Call update(16.6)
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
+    // The fixed verdict (ADR-0017) holds before the first update, with no probe to wait for.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion:requiresAfrFallback() == true, "AFR fallback must be required before the first frame")
+    )luau", "=assertBeforeUpdate"), 0);
 
-    // Verify telemetry log or status
-    bool foundTelemetryLog = false;
+    bool foundStereoLog = false;
     for (const auto& msg : s_capturedLogs) {
-        if (msg.find("Telemetry Probe") != std::string::npos || msg.find("telemetry") != std::string::npos) {
-            foundTelemetryLog = true;
+        if (msg.find("Stereo presentation: AFR fallback required: true") != std::string::npos) {
+            foundStereoLog = true;
             break;
         }
     }
-    EXPECT_TRUE(foundTelemetryLog);
+    EXPECT_TRUE(foundStereoLog);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        for _ = 1, 5 do VRCompanion:update(16.6) end
+        assert(VRCompanion:requiresAfrFallback() == true, "AFR fallback must stay required across updates")
+    )luau", "=updateCalls"), 0);
+
+    // No retired telemetry probe is reported, at load or while updating.
+    for (const auto& msg : s_capturedLogs) {
+        EXPECT_EQ(msg.find("Telemetry Probe"), std::string::npos) << msg;
+    }
 }
 
 TEST_F(CompanionModTest, HandlesMissingStereoRenderingTogglesGracefully) {
@@ -487,7 +498,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
@@ -560,7 +571,7 @@ TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
@@ -614,7 +625,7 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
@@ -706,7 +717,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCame
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -746,7 +757,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamer
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -785,7 +796,7 @@ TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDispa
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -820,7 +831,7 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -870,7 +881,7 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     bridge.SetIpd(0.064f); // 64mm IPD -> +/- 0.032m
     ASSERT_TRUE(bridge.Inject(L));
@@ -939,7 +950,7 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     bridge.SetIpd(0.064f);
     ASSERT_TRUE(bridge.Inject(L));
@@ -995,71 +1006,6 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     )luau", "=verifyFrame1OnFoot"), 0);
 }
 
-TEST_F(CompanionModTest, SkipsAfrAlternationWhenRequiresAfrFallbackIsFalse) {
-    fs25vr::FakeTrackedHeadset headset;
-    auto oxr = headset.manager;
-    XrFovf fov{ -0.90f, 0.90f, 0.85f, -0.85f };
-    headset.SetEyeFov(0, fov);
-
-    fs25vr::HeadPose simPose;
-    simPose.isValid = true;
-    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    headset.SetHeadPose(simPose);
-
-    auto probe = std::make_shared<fs25vr::GraphicsTelemetryProbe>();
-    // Configure probe with native stereo detected
-    D3D12_VIEWPORT vps[2]{
-        { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
-        { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
-    };
-    D3D12_RECT scissors[2]{
-        { 0, 0, 1920, 1080 },
-        { 1920, 0, 3840, 1080 }
-    };
-    probe->RecordViewports(2, vps);
-    probe->RecordScissorRects(2, scissors);
-    probe->OnFrameBoundary();
-
-    ASSERT_TRUE(probe->HasNativeStereoDetected());
-    ASSERT_FALSE(probe->RequiresAfrFallback());
-
-    fs25vr::VRBridge bridge(oxr, probe);
-    bridge.SetIpd(0.064f);
-    ASSERT_TRUE(bridge.Inject(L));
-
-    ASSERT_EQ(LoadCompanionModChecked(L), 0);
-
-    SetupCameraMockGlobals(L);
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        _G.cameraTranslations = {}
-        function setTranslation(node, x, y, z)
-            _G.cameraTranslations[node] = { x = x, y = y, z = z }
-        end
-        function setRotation(node, rx, ry, rz)
-        end
-
-        _G.mockVehicleCam = {
-            isInside = true,
-            cameraNode = 301,
-            origTransX = 0, origTransY = 1.5, origTransZ = 0
-        }
-    )luau", "=setupNativeStereoVehicleMocks"), 0);
-
-    // Frame 0: should NOT shift by IPD offset
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateNativeFrame0"), 0);
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(math.abs(_G.cameraTranslations[301].x) < 0.001, "translation x must remain centered when native stereo detected")
-    )luau", "=verifyNativeFrame0"), 0);
-
-    // Advance frame parity
-    bridge.AdvanceFrame();
-    // Frame 1: should still NOT shift by IPD offset
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateNativeFrame1"), 0);
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(math.abs(_G.cameraTranslations[301].x) < 0.001, "translation x must remain centered on next frame when native stereo detected")
-    )luau", "=verifyNativeFrame1"), 0);
-}
-
 TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFTracking) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
@@ -1069,7 +1015,7 @@ TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFT
     simPose.rotation = fs25vr::EulerAngles(0.05f, 0.10f, 0.02f);
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -1174,7 +1120,7 @@ TEST_F(CompanionModTest, FallsBackToEngineTrackIRWhenVRBridgePoseUnavailable) {
 }
 
 TEST_F(CompanionModTest, UnloadMapNotifiesVRBridgeAndRevertsCompanionActiveState) {
-    fs25vr::VRBridge bridge(nullptr, nullptr);
+    fs25vr::VRBridge bridge(nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -1201,7 +1147,7 @@ TEST_F(CompanionModTest, UnloadMapNotifiesVRBridgeAndRevertsCompanionActiveState
 }
 
 TEST_F(CompanionModTest, PollsGuiVisibilityDuringUpdateAndNotifiesVRBridge) {
-    fs25vr::VRBridge bridge(nullptr, nullptr);
+    fs25vr::VRBridge bridge(nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -1263,7 +1209,7 @@ TEST_F(CompanionModTest, PollsGuiVisibilityDuringUpdateAndNotifiesVRBridge) {
 }
 
 TEST_F(CompanionModTest, SuppressesAfrEyeOffsetAndAlternationWhenMenuVisible) {
-    fs25vr::VRBridge bridge(nullptr, nullptr);
+    fs25vr::VRBridge bridge(nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -1288,7 +1234,7 @@ TEST_F(CompanionModTest, SuppressesAfrEyeOffsetAndAlternationWhenMenuVisible) {
 }
 
 TEST_F(CompanionModTest, HandlesMissingOrFailingGuiGracefullyWithoutError) {
-    fs25vr::VRBridge bridge(nullptr, nullptr);
+    fs25vr::VRBridge bridge(nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -1310,7 +1256,7 @@ TEST_F(CompanionModTest, HandlesMissingOrFailingGuiGracefullyWithoutError) {
 }
 
 TEST_F(CompanionModTest, UnloadMapResetsMenuVisibilityState) {
-    fs25vr::VRBridge bridge(nullptr, nullptr);
+    fs25vr::VRBridge bridge(nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -1344,7 +1290,7 @@ TEST_F(CompanionModTest, ActiveGuiAppliesHeadPoseTrackingToActiveCameraNode) {
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    fs25vr::VRBridge bridge(openXrManager);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -1412,7 +1358,7 @@ TEST_F(CompanionModTest, ActiveGuiRestoresCameraTransformWhenMenuClosed) {
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    fs25vr::VRBridge bridge(openXrManager);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -1465,7 +1411,7 @@ TEST_F(CompanionModTest, ActiveGuiPreserves2DMouseAndControllerInteractions) {
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    fs25vr::VRBridge bridge(openXrManager);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -1512,7 +1458,7 @@ TEST_F(CompanionModTest, RecenterActionRealignsMenuQuadWhenInMenu) {
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(openXrManager, nullptr);
+    fs25vr::VRBridge bridge(openXrManager);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -1551,7 +1497,7 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear)
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -2288,7 +2234,7 @@ TEST_F(CompanionModTest, ComputesPhysicalIpdScaledDisparityAtTargetConvergenceDe
 
 TEST_F(CompanionModTest, AlternatesPositiveDisparityOnLeftParityAndNegativeOnRightParity) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
@@ -2326,7 +2272,7 @@ TEST_F(CompanionModTest, AlternatesPositiveDisparityOnLeftParityAndNegativeOnRig
 
 TEST_F(CompanionModTest, UpdatesConvergenceEveryFrameWithoutCoordinateDriftAcrossTenThousandCycles) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
@@ -2358,7 +2304,7 @@ TEST_F(CompanionModTest, UpdatesConvergenceEveryFrameWithoutCoordinateDriftAcros
 
 TEST_F(CompanionModTest, RevertsConvergenceOffsetSmoothlyToZeroInPassThroughOrDisabledTracking) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
@@ -2434,7 +2380,7 @@ TEST_F(CompanionModTest, RecenterActionInBothModeZeroesCameraYawAndCallsBridgeRe
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -2477,7 +2423,7 @@ TEST_F(CompanionModTest, RecenterActionInVehicleOnlyModeZeroesCameraYawAndBypass
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -3221,7 +3167,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraBypasses6DOFTrackingIn2DMode) {
     simPose.rotation = fs25vr::EulerAngles(0.12f, 0.25f, 0.0f);
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -3291,7 +3237,7 @@ TEST_F(CompanionModTest, OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMous
     simPose.rotation = fs25vr::EulerAngles(0.2f, 0.0f, 0.0f);
     headset.SetHeadPose(simPose);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -3349,7 +3295,7 @@ TEST_F(CompanionModTest, CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMo
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
     headset.SetEyeFov(0, leftFov);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -3383,7 +3329,7 @@ TEST_F(CompanionModTest, CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMo
 
 TEST_F(CompanionModTest, HudConvergenceDisparityZeroedAndFullFrameAnchorsAppliedIn2DMode) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     bridge.SetIpd(0.064f);
     ASSERT_TRUE(bridge.Inject(L));
 
@@ -3872,7 +3818,7 @@ TEST_F(CompanionModTest, DualPassMissionUpdatePacingAndCameraSelection) {
 
 TEST_F(CompanionModTest, DualPassHudConvergenceLockedToSubPassEyeIndex) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>();
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -3956,7 +3902,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrame
     headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
@@ -4015,7 +3961,7 @@ TEST_F(CompanionModTest, DualCameraNodesRetainIndependentTransformHistoryAcrossA
     headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
@@ -4082,7 +4028,7 @@ TEST_F(CompanionModTest, CyclopeanAudioListenerBoundAtNeutralHeadMidpointWithout
     headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
@@ -4139,7 +4085,7 @@ TEST_F(CompanionModTest, MonoscopicAnd2DModeBypassesDualCameraSwitching) {
     headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
@@ -4474,7 +4420,7 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
     headset.SetEyeFov(0, leftFov);
     headset.SetEyeFov(1, rightFov);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
@@ -4716,7 +4662,7 @@ TEST_F(CompanionModTest, SequentialDualPassSubPass1ExplicitlySynchronizesRightEy
     headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
-    fs25vr::VRBridge bridge(oxr, nullptr);
+    fs25vr::VRBridge bridge(oxr);
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);

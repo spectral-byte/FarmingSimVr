@@ -33,15 +33,11 @@ DxgiProxy& DxgiProxy::Instance() {
 DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
                      std::shared_ptr<OpenXrManager> openXrManager,
                      std::shared_ptr<LuauInterceptor> luauInterceptor,
-                     std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe,
-                     std::shared_ptr<D3D12Interceptor> d3d12Interceptor,
                      std::shared_ptr<VRBridge> vrBridge,
                      std::shared_ptr<MirrorWindowController> windowController)
     : m_systemDxgi(systemDxgi ? std::move(systemDxgi) : std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {})),
       m_openXrManager(openXrManager ? std::move(openXrManager) : std::shared_ptr<OpenXrManager>(&OpenXrManager::Instance(), [](auto*) {})),
       m_luauInterceptor(luauInterceptor ? std::move(luauInterceptor) : std::shared_ptr<LuauInterceptor>(&LuauInterceptor::Instance(), [](auto*) {})),
-      m_telemetryProbe(std::move(telemetryProbe)),
-      m_d3d12Interceptor(d3d12Interceptor ? std::move(d3d12Interceptor) : std::shared_ptr<D3D12Interceptor>(&D3D12Interceptor::Instance(), [](auto*) {})),
       m_vrBridge(vrBridge ? std::move(vrBridge) : std::shared_ptr<VRBridge>(&VRBridge::Instance(), [](auto*) {})),
       m_windowController(windowController ? std::move(windowController) : std::make_shared<MirrorWindowController>()) {
     m_windowController->SetIsVrActiveCallback([this]() { return IsActive(); });
@@ -77,23 +73,6 @@ void DxgiProxy::EnsureVrInitialized() {
             m_luauInterceptor->AttachToEngine();
         }
         LogInfo("In-process Luau state interception channel armed.");
-        if (m_d3d12Interceptor) {
-            m_d3d12Interceptor->SetTelemetryProbe(m_telemetryProbe);
-            if (m_telemetryProbe) {
-                m_telemetryProbe->SetCompletionCallback([this]() {
-                    if (m_d3d12Interceptor) {
-                        m_d3d12Interceptor->DetachAll();
-                    }
-                });
-            }
-        }
-        LogInfo("Direct3D 12 stereo telemetry probe armed.");
-    }
-}
-
-void DxgiProxy::OnPrePresent(IDXGISwapChain* /*swapChain*/) {
-    if (m_telemetryProbe) {
-        m_telemetryProbe->OnFrameBoundary();
     }
 }
 
@@ -102,9 +81,6 @@ void DxgiProxy::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue*
     m_d3d12Queue = queue;
     if (m_openXrManager && device && queue) {
         m_openXrManager->SetD3D12DeviceAndQueue(device, queue);
-    }
-    if (m_d3d12Interceptor && queue) {
-        m_d3d12Interceptor->AttachCommandQueue(queue);
     }
 }
 
@@ -312,7 +288,6 @@ void DxgiProxy::LatchPendingRenderingMode() {
 
 bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT /*flags*/) {
     m_lastPresentSuppressed = false;
-    OnPrePresent(swapChain);
 
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
         return true;
@@ -453,66 +428,46 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
             if (m_openXrManager->GetMenuCursorState().visible) {
                 m_openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
             }
-            bool isNativeStereo = m_telemetryProbe && m_telemetryProbe->HasNativeStereoDetected();
-            if (isNativeStereo) {
-                // In native stereo mode, both eye views are rendered simultaneously in the current backbuffer pass.
-                // Submit both eyes directly to the OpenXR compositor without skipping or suppressing frames.
-                // If mid-pair transition occurred and eye 0 was already copied in the active frame, avoid redundant acquisition.
-                m_openXrManager->ShareRenderPoseAcrossEyes();
-                if (!m_openXrManager->GetEyeSwapchain(0).hasCopiedFrame) {
+            VRRenderingMode renderingMode = m_vrBridge ? m_vrBridge->GetRenderingMode() : VRRenderingMode::AFR;
+            if (renderingMode == VRRenderingMode::SequentialDualPass) {
+                uint32_t subPass = m_vrBridge ? m_vrBridge->GetSubPassIndex() : 0;
+                if (subPass == 0) {
+                    // Sub-Pass 0 (Left Eye): Copies backbuffer to OpenXR eye swapchain 0, suppresses physical present, advances subPassIndex to 1
                     m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
+                    if (m_vrBridge) {
+                        m_vrBridge->SetSubPassIndex(1);
+                    }
+                    m_lastPresentSuppressed = true;
+                    return false;
+                } else {
+                    // Sub-Pass 1 (Right Eye): Copies backbuffer to OpenXR eye swapchain 1, submits pair, executes physical present, resets subPassIndex to 0
+                    m_openXrManager->CopyBackBufferToEye(1, pBackBuffer);
+                    m_openXrManager->SubmitFramePair();
+                    if (m_vrBridge) {
+                        m_vrBridge->AdvanceFrame();
+                    }
+                    LatchPendingRenderingMode();
+                    m_lastPresentSuppressed = false;
+                    return true;
                 }
-                m_openXrManager->CopyBackBufferToEye(1, pBackBuffer);
-                m_openXrManager->SubmitFramePair();
+            } else {
+                // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
+                uint32_t parity = m_vrBridge ? m_vrBridge->GetFrameParity() : 0;
+                m_openXrManager->CopyBackBufferToEye(parity, pBackBuffer);
+
+                if (parity == 1) {
+                    m_openXrManager->SubmitFramePair();
+                }
 
                 if (m_vrBridge) {
                     m_vrBridge->AdvanceFrame();
                 }
-                LatchPendingRenderingMode();
+
+                if (parity == 1) {
+                    LatchPendingRenderingMode();
+                }
                 m_lastPresentSuppressed = false;
                 return true;
-            } else {
-                VRRenderingMode renderingMode = m_vrBridge ? m_vrBridge->GetRenderingMode() : VRRenderingMode::AFR;
-                if (renderingMode == VRRenderingMode::SequentialDualPass) {
-                    uint32_t subPass = m_vrBridge ? m_vrBridge->GetSubPassIndex() : 0;
-                    if (subPass == 0) {
-                        // Sub-Pass 0 (Left Eye): Copies backbuffer to OpenXR eye swapchain 0, suppresses physical present, advances subPassIndex to 1
-                        m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
-                        if (m_vrBridge) {
-                            m_vrBridge->SetSubPassIndex(1);
-                        }
-                        m_lastPresentSuppressed = true;
-                        return false;
-                    } else {
-                        // Sub-Pass 1 (Right Eye): Copies backbuffer to OpenXR eye swapchain 1, submits pair, executes physical present, resets subPassIndex to 0
-                        m_openXrManager->CopyBackBufferToEye(1, pBackBuffer);
-                        m_openXrManager->SubmitFramePair();
-                        if (m_vrBridge) {
-                            m_vrBridge->AdvanceFrame();
-                        }
-                        LatchPendingRenderingMode();
-                        m_lastPresentSuppressed = false;
-                        return true;
-                    }
-                } else {
-                    // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
-                    uint32_t parity = m_vrBridge ? m_vrBridge->GetFrameParity() : 0;
-                    m_openXrManager->CopyBackBufferToEye(parity, pBackBuffer);
-
-                    if (parity == 1) {
-                        m_openXrManager->SubmitFramePair();
-                    }
-
-                    if (m_vrBridge) {
-                        m_vrBridge->AdvanceFrame();
-                    }
-
-                    if (parity == 1) {
-                        LatchPendingRenderingMode();
-                    }
-                    m_lastPresentSuppressed = false;
-                    return true;
-                }
             }
         }
     }
