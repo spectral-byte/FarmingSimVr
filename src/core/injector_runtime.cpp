@@ -31,17 +31,20 @@ void FillFromSingleton(std::shared_ptr<T>& slot) {
 } // namespace
 
 InjectorRuntime& InjectorRuntime::Instance() {
-    static InjectorRuntime runtime;
+    static InjectorRuntime runtime{ProductionTag{}};
     return runtime;
 }
 
-InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
-    // Only an injected NGX interceptor is wired to this runtime. The NGX singleton already falls back
-    // to the production subsystems behind IsActive() checks; overwriting its wiring would bypass
-    // those checks (Pass-Through would see the mirror target resolution) and let any other runtime
-    // rewire or unwire the production one.
-    m_wiresNgxInterceptor = static_cast<bool>(m_deps.ngxInterceptor);
+InjectorRuntime::InjectorRuntime(ProductionTag) : InjectorRuntime(Dependencies{}, /*wiresNgxInterceptor=*/true) {}
 
+// Only a runtime that owns the NGX interceptor wires it: the production runtime (the NGX singleton) or a
+// test runtime given its own. Any other runtime would rewire the production interceptor to its fakes
+// and unwire it on destruction.
+InjectorRuntime::InjectorRuntime(Dependencies deps)
+    : InjectorRuntime(deps, static_cast<bool>(deps.ngxInterceptor)) {}
+
+InjectorRuntime::InjectorRuntime(Dependencies deps, bool wiresNgxInterceptor)
+    : m_deps(std::move(deps)), m_wiresNgxInterceptor(wiresNgxInterceptor) {
     if (!m_deps.systemDxgi) m_deps.systemDxgi = Borrow<ISystemDxgi>(SystemDxgi::Instance());
     FillFromSingleton(m_deps.openXrManager);
     FillFromSingleton(m_deps.vrBridge);

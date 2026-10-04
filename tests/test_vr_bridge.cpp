@@ -910,7 +910,8 @@ TEST_F(VrBridgeTest, ViewTransitionsAndRecenterFlagDiscontinuity) {
 }
 
 TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
-    fs25vr::VRBridge bridge;
+    auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
+    fs25vr::VRBridge bridge(nullptr, nullptr, ngx);
     ASSERT_TRUE(bridge.Inject(L));
 
     const std::string testScript = R"(
@@ -925,10 +926,67 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
     )";
 
     EXPECT_EQ(RunLuauString(L, testScript), 0);
-    EXPECT_FLOAT_EQ(fs25vr::NgxInterceptor::Instance().GetMvScaleMultiplierX(), 0.5f);
-    EXPECT_FLOAT_EQ(fs25vr::NgxInterceptor::Instance().GetMvScaleMultiplierY(), 0.75f);
-    EXPECT_FLOAT_EQ(fs25vr::NgxInterceptor::Instance().GetSharpnessOverride(), 0.65f);
-    EXPECT_EQ(fs25vr::NgxInterceptor::Instance().GetDlssPresetOverride(), 11);
+    EXPECT_FLOAT_EQ(ngx->GetMvScaleMultiplierX(), 0.5f);
+    EXPECT_FLOAT_EQ(ngx->GetMvScaleMultiplierY(), 0.75f);
+    EXPECT_FLOAT_EQ(ngx->GetSharpnessOverride(), 0.65f);
+    EXPECT_EQ(ngx->GetDlssPresetOverride(), 11);
+}
+
+TEST_F(VrBridgeTest, DlssTuningFunctionsReportFailureWithoutNgxInterceptor) {
+    fs25vr::VRBridge bridge;
+    ASSERT_TRUE(bridge.Inject(L));
+
+    const std::string testScript = R"(
+        assert(VRBridge.setDlssMvScale(0.5) == false, "setDlssMvScale must fail without NGX")
+        assert(VRBridge.setDlssSharpness(0.65) == false, "setDlssSharpness must fail without NGX")
+        assert(VRBridge.setDlssPreset(11) == false, "setDlssPreset must fail without NGX")
+    )";
+    EXPECT_EQ(RunLuauString(L, testScript), 0);
+}
+
+TEST_F(VrBridgeTest, SetRenderingModeIsImmediateWhileOpenXrIsInactive) {
+    auto openXr = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::FakeOpenXrRuntime>());
+    ASSERT_FALSE(openXr->IsActive());
+    fs25vr::VRBridge bridge(openXr, nullptr);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_EQ(RunLuauString(L, "VRBridge.setRenderingMode('AFR')"), 0);
+
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::AFR);
+    EXPECT_FALSE(bridge.GetPendingRenderingMode().has_value());
+}
+
+TEST_F(VrBridgeTest, SetRenderingModeIsQueuedWhileOpenXrIsActiveUntilLatched) {
+    fs25vr::FakeTrackedHeadset headset;
+    ASSERT_TRUE(headset.manager->IsActive());
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_EQ(RunLuauString(L, "VRBridge.setRenderingMode('AFR')"), 0);
+
+    // Not applied mid frame pair: only queued until the compositor frame boundary.
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(bridge.GetPendingRenderingMode(), fs25vr::VRRenderingMode::AFR);
+
+    EXPECT_TRUE(bridge.LatchPendingRenderingMode());
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::AFR);
+    EXPECT_FALSE(bridge.GetPendingRenderingMode().has_value());
+    EXPECT_FALSE(bridge.LatchPendingRenderingMode());
+}
+
+TEST_F(VrBridgeTest, LatestQueuedRenderingModeWinsAndClearDropsIt) {
+    fs25vr::VRBridge bridge;
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
+
+    bridge.SetPendingRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    bridge.SetPendingRenderingMode(fs25vr::VRRenderingMode::AFR);
+    EXPECT_EQ(bridge.GetPendingRenderingMode(), fs25vr::VRRenderingMode::AFR);
+
+    bridge.ClearPendingRenderingMode();
+    EXPECT_FALSE(bridge.GetPendingRenderingMode().has_value());
+    EXPECT_FALSE(bridge.LatchPendingRenderingMode());
 }
 
 TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {

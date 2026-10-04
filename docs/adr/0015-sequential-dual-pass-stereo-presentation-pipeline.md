@@ -13,7 +13,7 @@ To eliminate ghosting and deliver pristine temporal reconstruction while preserv
    - **Sub-Pass 1 (Right Eye)**: The Companion Mod activates `cameraNodeRight` and clamps the simulation clock to zero ($\Delta t = 0$) by hooking `FSBaseMission.update` / `Mission00.update`. Game world simulation, physics, vehicle velocity, and foliage wind remain frozen at the exact same logical timestamp. The engine renders the Right Eye scene to the backbuffer. In `DxgiProxy::OnPresent`, the backbuffer is copied to OpenXR swapchain 1 (`CopyBackBufferToEye(1)`), `OpenXrManager::SubmitFramePair()` is called to submit both eyes synchronously via `xrEndFrame`, and the hardware DXGI present is executed to refresh the Win32 Desktop Mirror Window.
 
 2. **Frame-Boundary Atomic Transitions with Discontinuity Flush**:
-   - Switching between AFR and Sequential Dual-Pass is queued atomically into `m_pendingRenderingMode`.
+   - Switching between AFR and Sequential Dual-Pass is queued atomically in `VRBridge` (`m_pendingRenderingMode`); the DXGI proxy latches it at the frame boundary.
    - Transitions take effect exclusively on clean compositor frame boundaries following `SubmitFramePair()`.
    - On transition, `VRBridge` resets sub-pass and parity counters to 0, and `NgxInterceptor` asserts `NVSDK_NGX_Parameter_Reset = 1` for one frame across both DLSS contexts to discard stale history cleanly without texture smearing or black frames.
 

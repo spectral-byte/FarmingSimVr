@@ -11,9 +11,26 @@
 
 namespace fs25vr {
 
+namespace {
+// The instance whose detours are live. The detour entry points are plain function pointers, so they
+// resolve the interceptor that installed them here instead of reaching for the singleton.
+std::atomic<NgxInterceptor*> s_featureHost{nullptr};
+std::atomic<NgxInterceptor*> s_loadHookHost{nullptr};
+} // namespace
+
 NgxInterceptor& NgxInterceptor::Instance() {
     static NgxInterceptor instance;
     return instance;
+}
+
+NgxInterceptor& NgxInterceptor::FeatureHost() {
+    NgxInterceptor* host = s_featureHost.load();
+    return host ? *host : Instance();
+}
+
+NgxInterceptor& NgxInterceptor::LoadHookHost() {
+    NgxInterceptor* host = s_loadHookHost.load();
+    return host ? *host : Instance();
 }
 
 NgxInterceptor::NgxInterceptor() = default;
@@ -153,13 +170,14 @@ bool NgxInterceptor::AttachDirectInternal(
     }
 
     m_isAttached = true;
+    s_featureHost.store(this);
     LogInfo("NgxInterceptor: Successfully attached NGX feature lifecycle detours.");
     return true;
 }
 
 VRBridge* NgxInterceptor::GetVRBridge() const {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    return m_vrBridge ? m_vrBridge : &VRBridge::Instance();
+    return m_vrBridge;
 }
 
 void NgxInterceptor::SetVRBridge(VRBridge* bridge) {
@@ -169,8 +187,7 @@ void NgxInterceptor::SetVRBridge(VRBridge* bridge) {
 
 DxgiProxy* NgxInterceptor::GetDxgiProxy() const {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    if (m_dxgiProxy) return m_dxgiProxy;
-    return DxgiProxy::Instance().IsActive() ? &DxgiProxy::Instance() : nullptr;
+    return m_dxgiProxy;
 }
 
 void NgxInterceptor::SetDxgiProxy(DxgiProxy* proxy) {
@@ -182,7 +199,7 @@ OpenXrManager* NgxInterceptor::GetOpenXrManager() const {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     if (m_openXrManager) return m_openXrManager;
     if (m_dxgiProxy && m_dxgiProxy->GetOpenXrManager().IsActive()) return &m_dxgiProxy->GetOpenXrManager();
-    return OpenXrManager::Instance().IsActive() ? &OpenXrManager::Instance() : nullptr;
+    return nullptr;
 }
 
 void NgxInterceptor::SetOpenXrManager(OpenXrManager* mgr) {
@@ -194,8 +211,9 @@ void NgxInterceptor::GetTargetUpscalingDimensions(uint32_t& outWidth, uint32_t& 
     outWidth = 0;
     outHeight = 0;
 
+    // Pass-Through Mode: an inactive proxy would report the mirror target resolution, not the headset's.
     DxgiProxy* proxy = GetDxgiProxy();
-    if (proxy) {
+    if (proxy && proxy->IsActive()) {
         proxy->GetDecoupledTargetResolution(outWidth, outHeight);
         if (outWidth > 0 && outHeight > 0) {
             return;
@@ -351,6 +369,7 @@ bool NgxInterceptor::InstallModuleLoadHooks() {
     }
 
     m_moduleHooksInstalled = true;
+    s_loadHookHost.store(this);
     LogInfo("NgxInterceptor: Module load detours installed.");
     return true;
 }
@@ -370,6 +389,8 @@ void NgxInterceptor::UninstallModuleLoadHooks() {
     m_origLoadLibraryExA = nullptr;
 
     m_moduleHooksInstalled = false;
+    NgxInterceptor* expectedLoadHost = this;
+    s_loadHookHost.compare_exchange_strong(expectedLoadHost, nullptr);
     LogInfo("NgxInterceptor: Module load detours uninstalled.");
 }
 
@@ -393,6 +414,8 @@ void NgxInterceptor::Detach() {
 
     m_attachedModule = nullptr;
     m_isAttached = false;
+    NgxInterceptor* expectedFeatureHost = this;
+    s_featureHost.compare_exchange_strong(expectedFeatureHost, nullptr);
     m_lastRenderingMode.store(-1);
     m_internalDiscontinuityPendingLeft.store(false);
     m_internalDiscontinuityPendingRight.store(false);
@@ -544,7 +567,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
     }
     *OutHandle = nullptr;
 
-    auto& interceptor = Instance();
+    auto& interceptor = FeatureHost();
     auto origCreate = interceptor.GetOriginalCreateFeature();
     if (!origCreate) {
         LogError("NgxInterceptor: Original CreateFeature is null");
@@ -701,7 +724,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_ReleaseFeature(NVSDK_NGX_Handle* InHa
         return NVSDK_NGX_Result_FAIL_InvalidParameter;
     }
 
-    auto& interceptor = Instance();
+    auto& interceptor = FeatureHost();
     auto origRelease = interceptor.GetOriginalReleaseFeature();
     if (!origRelease) {
         LogError("NgxInterceptor: Original ReleaseFeature is null");
@@ -747,7 +770,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         return NVSDK_NGX_Result_FAIL_InvalidParameter;
     }
 
-    auto& interceptor = Instance();
+    auto& interceptor = FeatureHost();
     auto origEval = interceptor.GetOriginalEvaluateFeature();
     if (!origEval) {
         LogError("NgxInterceptor: Original EvaluateFeature is null");
@@ -919,7 +942,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
 NVSDK_NGX_Result NgxInterceptor::Intercept_AllocateParameters(NVSDK_NGX_Parameter** OutParameters) {
     if (!OutParameters) return NVSDK_NGX_Result_FAIL_InvalidParameter;
 
-    auto& interceptor = Instance();
+    auto& interceptor = FeatureHost();
     auto origAlloc = interceptor.GetOriginalAllocateParameters();
     if (origAlloc) {
         return origAlloc(OutParameters);
@@ -935,7 +958,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_AllocateParameters(NVSDK_NGX_Paramete
 NVSDK_NGX_Result NgxInterceptor::Intercept_GetCapabilityParameters(NVSDK_NGX_Parameter** OutParameters) {
     if (!OutParameters) return NVSDK_NGX_Result_FAIL_InvalidParameter;
 
-    auto& interceptor = Instance();
+    auto& interceptor = FeatureHost();
     auto origGetCaps = interceptor.GetOriginalGetCapabilityParameters();
     if (origGetCaps) {
         return origGetCaps(OutParameters);
@@ -951,7 +974,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_GetCapabilityParameters(NVSDK_NGX_Par
 NVSDK_NGX_Result NgxInterceptor::Intercept_DestroyParameters(NVSDK_NGX_Parameter* InParameters) {
     if (!InParameters) return NVSDK_NGX_Result_FAIL_InvalidParameter;
 
-    auto& interceptor = Instance();
+    auto& interceptor = FeatureHost();
     if (interceptor.UnregisterTrackedParameter(InParameters)) {
         return NVSDK_NGX_Result_Success;
     }
@@ -966,7 +989,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_DestroyParameters(NVSDK_NGX_Parameter
 
 // Intercept entry point: LoadLibraryW
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryW(LPCWSTR lpLibFileName) {
-    auto& interceptor = Instance();
+    auto& interceptor = LoadHookHost();
     auto orig = interceptor.m_origLoadLibraryW;
     HMODULE hMod = orig ? orig(lpLibFileName) : LoadLibraryW(lpLibFileName);
 
@@ -978,7 +1001,7 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryW(LPCWSTR lpLibFileName) {
 
 // Intercept entry point: LoadLibraryExW
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
-    auto& interceptor = Instance();
+    auto& interceptor = LoadHookHost();
     auto orig = interceptor.m_origLoadLibraryExW;
     HMODULE hMod = orig ? orig(lpLibFileName, hFile, dwFlags) : LoadLibraryExW(lpLibFileName, hFile, dwFlags);
 
@@ -990,7 +1013,7 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExW(LPCWSTR lpLibFileName, H
 
 // Intercept entry point: LoadLibraryA
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryA(LPCSTR lpLibFileName) {
-    auto& interceptor = Instance();
+    auto& interceptor = LoadHookHost();
     auto orig = interceptor.m_origLoadLibraryA;
     HMODULE hMod = orig ? orig(lpLibFileName) : LoadLibraryA(lpLibFileName);
 
@@ -1002,7 +1025,7 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryA(LPCSTR lpLibFileName) {
 
 // Intercept entry point: LoadLibraryExA
 HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
-    auto& interceptor = Instance();
+    auto& interceptor = LoadHookHost();
     auto orig = interceptor.m_origLoadLibraryExA;
     HMODULE hMod = orig ? orig(lpLibFileName, hFile, dwFlags) : LoadLibraryExA(lpLibFileName, hFile, dwFlags);
 

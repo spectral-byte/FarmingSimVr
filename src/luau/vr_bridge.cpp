@@ -1,5 +1,4 @@
 #include "vr_bridge.h"
-#include "proxy/dxgi_proxy.h"
 #include "core/logger.h"
 #include "ngx/ngx_interceptor.h"
 
@@ -22,15 +21,27 @@ static bool ParseRenderingMode(const char* s, VRRenderingMode& outMode) {
     return false;
 }
 
+namespace {
+// Wraps a process-lifetime singleton without taking ownership.
+template <typename T>
+std::shared_ptr<T> Borrow(T& singleton) {
+    return std::shared_ptr<T>(&singleton, [](T*) {});
+}
+} // namespace
+
 VRBridge& VRBridge::Instance() {
-    static VRBridge instance;
+    static VRBridge instance(Borrow(OpenXrManager::Instance()),
+                             Borrow(GraphicsTelemetryProbe::Instance()),
+                             Borrow(NgxInterceptor::Instance()));
     return instance;
 }
 
 VRBridge::VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
-                   std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe)
-    : m_openXrManager(openXrManager ? std::move(openXrManager) : std::shared_ptr<OpenXrManager>(&OpenXrManager::Instance(), [](auto*) {})),
-      m_telemetryProbe(std::move(telemetryProbe)) {
+                   std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe,
+                   std::shared_ptr<NgxInterceptor> ngxInterceptor)
+    : m_openXrManager(std::move(openXrManager)),
+      m_telemetryProbe(std::move(telemetryProbe)),
+      m_ngxInterceptor(std::move(ngxInterceptor)) {
 }
 
 bool VRBridge::RequiresAfrFallback() const {
@@ -176,9 +187,9 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
 
 int VRBridge::Lua_GetStereoTelemetry(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    auto* probe = (self && self->m_telemetryProbe) ? self->m_telemetryProbe.get() : &GraphicsTelemetryProbe::Instance();
+    auto* probe = self ? self->m_telemetryProbe.get() : nullptr;
 
-    ProbeSnapshot snap = probe->GetSnapshot();
+    ProbeSnapshot snap = probe ? probe->GetSnapshot() : ProbeSnapshot{};
 
     lua_createtable(L, 0, 7);
 
@@ -214,9 +225,9 @@ int VRBridge::Lua_GetStereoTelemetry(lua_State* L) {
 
 int VRBridge::Lua_IsStereoActive(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    auto* probe = (self && self->m_telemetryProbe) ? self->m_telemetryProbe.get() : &GraphicsTelemetryProbe::Instance();
+    auto* probe = self ? self->m_telemetryProbe.get() : nullptr;
 
-    lua_pushboolean(L, probe->HasNativeStereoDetected() ? 1 : 0);
+    lua_pushboolean(L, (probe && probe->HasNativeStereoDetected()) ? 1 : 0);
     return 1;
 }
 
@@ -389,6 +400,22 @@ void VRBridge::SetRenderingMode(VRRenderingMode mode) {
     SetFrameParity(0);
     LogInfo(std::string("VRBridge: Rendering mode set to: ") +
             (mode == VRRenderingMode::SequentialDualPass ? "SequentialDualPass" : "AFR"));
+}
+
+std::optional<VRRenderingMode> VRBridge::GetPendingRenderingMode() const {
+    int pending = m_pendingRenderingMode.load();
+    if (pending == kNoPendingMode) return std::nullopt;
+    return static_cast<VRRenderingMode>(pending);
+}
+
+bool VRBridge::LatchPendingRenderingMode() {
+    int pending = m_pendingRenderingMode.exchange(kNoPendingMode);
+    if (pending == kNoPendingMode) return false;
+    auto newMode = static_cast<VRRenderingMode>(pending);
+    SetRenderingMode(newMode);
+    LogInfo("[VRBridge] Latched pending rendering mode on completed compositor frame boundary: " +
+            std::string(newMode == VRRenderingMode::SequentialDualPass ? "SequentialDualPass" : "AFR"));
+    return true;
 }
 
 void VRBridge::SetFrameParity(uint32_t parity) {
@@ -605,9 +632,8 @@ int VRBridge::Lua_SetRenderingMode(lua_State* L) {
         }
 
         if (hasTarget) {
-            auto* proxy = DxgiProxy::GetActiveProxy();
-            if (proxy && proxy->IsActive()) {
-                proxy->SetPendingRenderingMode(targetMode);
+            if (self->m_openXrManager && self->m_openXrManager->IsActive()) {
+                self->SetPendingRenderingMode(targetMode);
             } else {
                 self->SetRenderingMode(targetMode);
             }
@@ -738,21 +764,36 @@ int VRBridge::Lua_SignalDiscontinuity(lua_State* L) {
 int VRBridge::Lua_SetDlssMvScale(lua_State* L) {
     double scaleX = luaL_checknumber(L, 1);
     double scaleY = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : scaleX;
-    NgxInterceptor::Instance().SetMvScaleMultiplier(static_cast<float>(scaleX), static_cast<float>(scaleY));
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self || !self->m_ngxInterceptor) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    self->m_ngxInterceptor->SetMvScaleMultiplier(static_cast<float>(scaleX), static_cast<float>(scaleY));
     lua_pushboolean(L, 1);
     return 1;
 }
 
 int VRBridge::Lua_SetDlssSharpness(lua_State* L) {
     double sharp = luaL_checknumber(L, 1);
-    NgxInterceptor::Instance().SetSharpnessOverride(static_cast<float>(sharp), true);
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self || !self->m_ngxInterceptor) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    self->m_ngxInterceptor->SetSharpnessOverride(static_cast<float>(sharp), true);
     lua_pushboolean(L, 1);
     return 1;
 }
 
 int VRBridge::Lua_SetDlssPreset(lua_State* L) {
     int preset = static_cast<int>(luaL_checkinteger(L, 1));
-    NgxInterceptor::Instance().SetDlssPresetOverride(preset);
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self || !self->m_ngxInterceptor) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    self->m_ngxInterceptor->SetDlssPresetOverride(preset);
     lua_pushboolean(L, 1);
     return 1;
 }

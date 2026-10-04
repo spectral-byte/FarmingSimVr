@@ -214,6 +214,18 @@ protected:
             return 0;
         }, "setFrameParity", 1);
         lua_setfield(L, -2, "setFrameParity");
+
+        // With an active OpenXR session a mode change is queued until the DXGI proxy latches it at a
+        // completed frame boundary. These tests have no proxy, so Luau latches it explicitly.
+        lua_pushlightuserdata(L, &bridge);
+        lua_pushcclosure(L, [](lua_State* state) -> int {
+            auto* b = static_cast<fs25vr::VRBridge*>(lua_touserdata(state, lua_upvalueindex(1)));
+            if (b) {
+                b->LatchPendingRenderingMode();
+            }
+            return 0;
+        }, "latchPendingRenderingMode", 1);
+        lua_setfield(L, -2, "latchPendingRenderingMode");
         lua_pop(L, 1);
     }
 };
@@ -3953,6 +3965,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrame
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
         VRCompanion:setRenderingMode("AFR")
+        VRBridge.latchPendingRenderingMode() -- test stand-in for the proxy's frame-boundary latch
         VRCompanion:set2DViewActive(false)
         VRCompanion.handshakeComplete = true
 
@@ -4078,6 +4091,7 @@ TEST_F(CompanionModTest, CyclopeanAudioListenerBoundAtNeutralHeadMidpointWithout
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
         VRCompanion:setRenderingMode("AFR")
+        VRBridge.latchPendingRenderingMode() -- test stand-in for the proxy's frame-boundary latch
         VRCompanion:set2DViewActive(false)
         VRCompanion.handshakeComplete = true
 
@@ -4495,6 +4509,7 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
         assert(leftCam ~= nil and rightCam ~= nil and audioNode ~= nil)
 
         VRCompanion:setRenderingMode("AFR")
+        VRBridge.latchPendingRenderingMode() -- test stand-in for the proxy's frame-boundary latch
 
         -- PHASE 1: Vehicle driving in AFR mode
         VRBridge.setFrameParity(0)
@@ -4513,6 +4528,7 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
 
         -- PHASE 2: Live switch to Sequential Dual-Pass via console command while driving
         VRCompanion:consoleCommandSetRenderingMode("dualpass")
+        VRBridge.latchPendingRenderingMode() -- test stand-in for the proxy's frame-boundary latch
         assert(VRCompanion:getRenderingMode() == "SequentialDualPass", "Mode must be SequentialDualPass")
         assert(VRBridge.getRenderingMode() == "SequentialDualPass")
         VRBridge.setFrameParity(0)
@@ -4570,6 +4586,7 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
 
         -- PHASE 4: Live toggle back to AFR while on-foot
         VRCompanion:consoleCommandSetRenderingMode("toggle")
+        VRBridge.latchPendingRenderingMode() -- test stand-in for the proxy's frame-boundary latch
         assert(VRCompanion:getRenderingMode() == "AFR", "Mode must toggle back to AFR")
         assert(VRBridge.getRenderingMode() == "AFR")
 

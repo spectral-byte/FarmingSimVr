@@ -1,4 +1,4 @@
-﻿#include <gtest/gtest.h>
+#include <gtest/gtest.h>
 #include "proxy/dxgi_proxy.h"
 #include "core/dll_lifecycle.h"
 #include "core/injector_runtime.h"
@@ -555,12 +555,30 @@ TEST(InjectorRuntimeTest, ProductionRuntimeBacksTheDxgiProxySingleton) {
     EXPECT_EQ(&DxgiProxy::Instance(), &InjectorRuntime::Instance().GetDxgiProxy());
 }
 
-TEST(InjectorRuntimeTest, ProductionRuntimeKeepsNgxActiveChecks) {
-    // In Pass-Through the NGX hooks must not see the proxy, or DLSS would be created at the mirror
-    // target resolution instead of the game's own output size.
+TEST(InjectorRuntimeTest, NgxInterceptorIgnoresAnInactiveProxyInPassThrough) {
+    // In Pass-Through the NGX hooks must not take the proxy's mirror target resolution, or DLSS would be
+    // created at that size instead of the game's own output size.
     DxgiProxy& proxy = InjectorRuntime::Instance().GetDxgiProxy();
     ASSERT_FALSE(proxy.IsActive());
-    EXPECT_EQ(NgxInterceptor::Instance().GetDxgiProxy(), nullptr);
+    proxy.GetWindowController().SetTargetRenderResolution(1280, 720);
+    NgxInterceptor::Instance().SetDxgiProxy(&proxy);
+
+    uint32_t width = 123, height = 456;
+    NgxInterceptor::Instance().GetTargetUpscalingDimensions(width, height);
+    EXPECT_EQ(width, 0u);
+    EXPECT_EQ(height, 0u);
+
+    NgxInterceptor::Instance().SetDxgiProxy(nullptr);
+    proxy.GetWindowController().SetTargetRenderResolution(0, 0);
+}
+
+TEST(InjectorRuntimeTest, UnwiredNgxInterceptorFindsNoSubsystemsThroughSingletons) {
+    NgxInterceptor ngx;
+    EXPECT_EQ(ngx.GetVRBridge(), nullptr);
+    EXPECT_EQ(ngx.GetDxgiProxy(), nullptr);
+    EXPECT_EQ(ngx.GetOpenXrManager(), nullptr);
+    EXPECT_FALSE(ngx.IsSingleContextBypassActive());
+    EXPECT_EQ(ngx.GetActiveDualPassEyeIndex(), 0u);
 }
 
 TEST(InjectorRuntimeTest, RuntimeWithoutInjectedNgxLeavesTheNgxSingletonAlone) {
@@ -728,8 +746,8 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
 
     // Mode change requested during Sub-Pass 0
-    proxy.SetPendingRenderingMode(VRRenderingMode::AFR);
-    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::AFR);
+    vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
+    EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::AFR);
     // Mode must NOT have changed yet because compositor frame is mid-pair
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
 
@@ -739,7 +757,7 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
 
     // Completed frame boundary: pending mode is latched atomically
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
-    EXPECT_FALSE(proxy.GetPendingRenderingMode().has_value());
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 }
@@ -758,8 +776,8 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
     DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
 
     // Queue pending mode change to SequentialDualPass
-    proxy.SetPendingRenderingMode(VRRenderingMode::SequentialDualPass);
-    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
+    vrBridge->SetPendingRenderingMode(VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
 
     // AFR Frame 0 (parity = 0, Left Eye): does NOT complete pair
@@ -768,7 +786,7 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
     // Mode must NOT be latched yet!
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
-    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
 
     // AFR Frame 1 (parity = 1, Right Eye): completes pair and calls SubmitFramePair()
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
@@ -776,7 +794,7 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
 
     // Completed frame boundary: pending mode is latched atomically
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
-    EXPECT_FALSE(proxy.GetPendingRenderingMode().has_value());
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
@@ -814,8 +832,8 @@ TEST(DxgiProxyTest, LuauSetRenderingModeQueuesPendingModeWhenProxyActiveAndLatch
     ASSERT_EQ(lua_pcall(L, 1, 0, 0), 0);
     lua_pop(L, 1); // pop VRBridge
 
-    // Mode is queued into DxgiProxy::m_pendingRenderingMode and NOT latched mid-pair
-    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::AFR);
+    // Mode is queued in VRBridge and NOT latched mid-pair
+    EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::AFR);
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
 
     // Sub-Pass 1 (Right Eye) completes the pair
@@ -824,7 +842,7 @@ TEST(DxgiProxyTest, LuauSetRenderingModeQueuesPendingModeWhenProxyActiveAndLatch
 
     // Latched strictly on completed compositor frame boundary
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
-    EXPECT_FALSE(proxy.GetPendingRenderingMode().has_value());
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
 
     lua_close(L);
 }

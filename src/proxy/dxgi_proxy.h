@@ -59,10 +59,9 @@ public:
 
     bool IsPresentSuppressed() const { return m_lastPresentSuppressed; }
 
-    void SetPendingRenderingMode(VRRenderingMode mode) { m_pendingRenderingMode = mode; }
-    std::optional<VRRenderingMode> GetPendingRenderingMode() const { return m_pendingRenderingMode; }
+    // Latches the Stereo Presentation Mode change queued in VRBridge. Called only at completed
+    // compositor frame-pair boundaries (ADR-0015).
     void LatchPendingRenderingMode();
-    static DxgiProxy* GetActiveProxy();
 
     void SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue);
     static bool ExtractD3D12DeviceAndQueue(
@@ -122,7 +121,6 @@ private:
     std::atomic<bool> m_vrInitialized{false};
     bool m_wasInQuadMode = false;
     bool m_lastPresentSuppressed = false;
-    std::optional<VRRenderingMode> m_pendingRenderingMode;
 
     IDXGISwapChain* m_cachedSwapChain = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;

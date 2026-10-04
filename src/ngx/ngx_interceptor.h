@@ -35,7 +35,9 @@ public:
     // Inspect exports of a loaded module (nvngx.dll) and install detours
     bool AttachModule(HMODULE hNgxModule);
 
-    // VRBridge dependency injection for testing and runtime synchronization
+    // Dependencies are wired by InjectorRuntime (or by a test). The interceptor never falls back to a
+    // global singleton: an unset dependency reads as null and its feature degrades gracefully.
+    // VRBridge dependency for mode, menu and discontinuity state
     class VRBridge* GetVRBridge() const;
     void SetVRBridge(class VRBridge* bridge);
 
@@ -156,6 +158,9 @@ public:
     }
 
 private:
+    static NgxInterceptor& FeatureHost();
+    static NgxInterceptor& LoadHookHost();
+
     bool AttachDirectInternal(
         PFN_NVSDK_NGX_D3D12_CreateFeature pfnCreate,
         PFN_NVSDK_NGX_D3D12_ReleaseFeature pfnRelease,

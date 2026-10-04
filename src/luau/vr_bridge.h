@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 #include "lua.h"
 #include "lualib.h"
@@ -9,6 +10,8 @@
 #include "telemetry/graphics_telemetry_probe.h"
 
 namespace fs25vr {
+
+class NgxInterceptor;
 
 enum class VRRenderingMode : uint32_t {
     AFR = 0,
@@ -20,8 +23,11 @@ class VRBridge {
 public:
     static VRBridge& Instance();
 
+    // A subsystem left null stays absent: VRBridge never falls back to another subsystem's singleton.
+    // Instance() is the one place the process-wide singletons are wired to this bridge.
     explicit VRBridge(std::shared_ptr<OpenXrManager> openXrManager = nullptr,
-                      std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe = nullptr);
+                      std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe = nullptr,
+                      std::shared_ptr<NgxInterceptor> ngxInterceptor = nullptr);
 
     bool Inject(lua_State* L);
     bool IsInjected(lua_State* L);
@@ -43,6 +49,14 @@ public:
 
     VRRenderingMode GetRenderingMode() const { return m_renderingMode.load(); }
     void SetRenderingMode(VRRenderingMode mode);
+
+    // Stereo Presentation Mode changes requested while the compositor is active are only queued here.
+    // The DXGI proxy latches them at a completed compositor frame boundary (ADR-0015).
+    void SetPendingRenderingMode(VRRenderingMode mode) { m_pendingRenderingMode.store(static_cast<int>(mode)); }
+    std::optional<VRRenderingMode> GetPendingRenderingMode() const;
+    void ClearPendingRenderingMode() { m_pendingRenderingMode.store(kNoPendingMode); }
+    // Applies the queued mode, if any. Returns true when a mode was latched.
+    bool LatchPendingRenderingMode();
     bool IsSequentialDualPass() const { return m_renderingMode.load() == VRRenderingMode::SequentialDualPass; }
 
     uint32_t GetSubPassIndex() const { return m_subPassIndex.load(); }
@@ -159,12 +173,15 @@ public:
 private:
     std::shared_ptr<OpenXrManager> m_openXrManager;
     std::shared_ptr<GraphicsTelemetryProbe> m_telemetryProbe;
+    std::shared_ptr<NgxInterceptor> m_ngxInterceptor;
     std::string m_version = "1.0.0";
     bool m_handshakeCompleted = false;
     bool m_menuVisible = false;
     bool m_2dViewActive = false;
 
     std::atomic<VRRenderingMode> m_renderingMode{VRRenderingMode::SequentialDualPass};
+    static constexpr int kNoPendingMode = -1;
+    std::atomic<int> m_pendingRenderingMode{kNoPendingMode};
     std::atomic<uint32_t> m_subPassIndex{0}; // 0 = Left Eye, 1 = Right Eye
 
     uint32_t m_frameParity = 0; // 0 = Left (2k), 1 = Right (2k+1)

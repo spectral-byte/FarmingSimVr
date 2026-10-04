@@ -1,4 +1,4 @@
-﻿#include "dxgi_proxy.h"
+#include "dxgi_proxy.h"
 #include "core/logger.h"
 #include "core/injector_runtime.h"
 #include "core/dll_lifecycle.h"
@@ -28,10 +28,6 @@ HRESULT ForwardFactoryCall(const char* funcName, PFN pfn, Args&&... args) {
 DxgiProxy& DxgiProxy::Instance() {
     // The composition root builds and wires the production proxy on first use.
     return InjectorRuntime::Instance().GetDxgiProxy();
-}
-
-DxgiProxy* DxgiProxy::GetActiveProxy() {
-    return s_activeProxy;
 }
 
 DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
@@ -303,18 +299,14 @@ void DxgiProxy::DetachAll() {
     m_cachedSwapChain3.Reset();
     m_cachedBackBuffers.clear();
     m_lastPresentSuppressed = false;
-    m_pendingRenderingMode.reset();
+    if (m_vrBridge) {
+        m_vrBridge->ClearPendingRenderingMode();
+    }
 }
 
 void DxgiProxy::LatchPendingRenderingMode() {
-    if (m_pendingRenderingMode.has_value()) {
-        VRRenderingMode newMode = *m_pendingRenderingMode;
-        m_pendingRenderingMode.reset();
-        if (m_vrBridge) {
-            m_vrBridge->SetRenderingMode(newMode);
-        }
-        LogInfo("DxgiProxy: Latched pending rendering mode on completed compositor frame boundary: " +
-                std::string(newMode == VRRenderingMode::SequentialDualPass ? "SequentialDualPass" : "AFR"));
+    if (m_vrBridge) {
+        m_vrBridge->LatchPendingRenderingMode();
     }
 }
 

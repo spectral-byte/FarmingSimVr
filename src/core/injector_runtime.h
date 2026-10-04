@@ -20,7 +20,9 @@ class DxgiProxy;
 // runtime with fakes. A subsystem left null in Dependencies falls back to the existing singleton
 // (wrapped in a no-op deleter), so the singletons keep working during the expand phase. Those
 // singletons are wired to each other, not to injected fakes: inject every subsystem a test observes.
-// An injected NGX interceptor is wired to this runtime; the NGX singleton is left as it is.
+// The NGX interceptor is wired to the runtime's OpenXR manager, VRBridge and DXGI proxy, and reaches
+// no other subsystem. The production runtime wires the NGX singleton; a test runtime wires only an
+// NGX interceptor it was given, leaving the singleton as it is.
 class InjectorRuntime {
 public:
     struct Dependencies {
@@ -53,6 +55,10 @@ public:
     NgxInterceptor& GetNgxInterceptor() { return *m_deps.ngxInterceptor; }
 
 private:
+    struct ProductionTag {};
+    explicit InjectorRuntime(ProductionTag);
+    InjectorRuntime(Dependencies deps, bool wiresNgxInterceptor);
+
     Dependencies m_deps;
     std::unique_ptr<DxgiProxy> m_proxy;
     bool m_wiresNgxInterceptor = false;
