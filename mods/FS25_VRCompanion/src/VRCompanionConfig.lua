@@ -48,6 +48,10 @@ VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICA
 VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE = true
 VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
 
+-- Oblique Frustum (ADR-0005): symmetric projection by default; per-eye asymmetric offsets are opt-in
+VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION = false
+VRCompanion.allowObliqueProjection = VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION
+
 VRCompanion.RECENTER_MODES = {
     BOTH = "Both",
     VEHICLE_ONLY = "VehicleOnly"
@@ -153,6 +157,7 @@ function VRCompanion:saveConfiguration(xmlPath)
             setXmlBoolFn(xmlFile, "vrSettings.fillLevelUnderVehicle", self.fillLevelUnderVehicle == true)
             setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
             setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
+            setXmlBoolFn(xmlFile, "vrSettings.allowObliqueProjection", self.allowObliqueProjection == true)
         end
         if type(setXmlStringFn) == "function" then
             local modeStr = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "DualPass" or "AFR"
@@ -240,6 +245,12 @@ function VRCompanion:loadConfiguration(xmlPath)
                     self.recenterVrTrackingSpace = loadedRecenterTracking
                 end
 
+                local loadedAllowOblique = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
+                    "vrSettings.allowObliqueProjection")
+                if loadedAllowOblique ~= nil then
+                    self.allowObliqueProjection = loadedAllowOblique
+                end
+
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.snapTurnAngle")
                 if loadedSnapAngle ~= nil and loadedSnapAngle > 0 then
@@ -298,6 +309,9 @@ function VRCompanion:loadConfiguration(xmlPath)
     end
     if self.recenterVrTrackingSpace == nil then
         self.recenterVrTrackingSpace = self.DEFAULT_RECENTER_VR_TRACKING_SPACE
+    end
+    if self.allowObliqueProjection == nil then
+        self.allowObliqueProjection = self.DEFAULT_ALLOW_OBLIQUE_PROJECTION
     end
     if self.snapTurnAngle == nil then
         self.snapTurnAngle = self.DEFAULT_SNAP_TURN_ANGLE

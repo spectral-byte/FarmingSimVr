@@ -9,7 +9,7 @@ To eliminate ghosting and deliver pristine temporal reconstruction while preserv
 
 1. **Double-Pumped Lockstep Presentation Engine**:
    Rather than attempting low-level D3D12 command list duplication, the presentation pipeline coordinates two sequential engine passes per compositor frame:
-   - **Sub-Pass 0 (Left Eye)**: The engine executes its normal update tick with real delta time $\Delta t$. The Companion Mod activates `cameraNodeLeft` with an oblique projection frustum. The engine renders the Left Eye scene to the swapchain backbuffer. In `DxgiProxy::OnPresent`, the backbuffer is copied to OpenXR swapchain 0 (`CopyBackBufferToEye(0)`), and the physical desktop swapchain flip is suppressed (`return S_OK`).
+   - **Sub-Pass 0 (Left Eye)**: The engine executes its normal update tick with real delta time $\Delta t$. The Companion Mod activates `cameraNodeLeft` with the eye's projection (symmetric by default, Oblique Frustum when enabled; see ADR-0005). The engine renders the Left Eye scene to the swapchain backbuffer. In `DxgiProxy::OnPresent`, the backbuffer is copied to OpenXR swapchain 0 (`CopyBackBufferToEye(0)`), and the physical desktop swapchain flip is suppressed (`return S_OK`).
    - **Sub-Pass 1 (Right Eye)**: The Companion Mod activates `cameraNodeRight` and clamps the simulation clock to zero ($\Delta t = 0$) by hooking `FSBaseMission.update` / `Mission00.update`. Game world simulation, physics, vehicle velocity, and foliage wind remain frozen at the exact same logical timestamp. The engine renders the Right Eye scene to the backbuffer. In `DxgiProxy::OnPresent`, the backbuffer is copied to OpenXR swapchain 1 (`CopyBackBufferToEye(1)`), `OpenXrManager::SubmitFramePair()` is called to submit both eyes synchronously via `xrEndFrame`, and the hardware DXGI present is executed to refresh the Win32 Desktop Mirror Window.
 
 2. **Frame-Boundary Atomic Transitions with Discontinuity Flush**:
@@ -22,7 +22,7 @@ To eliminate ghosting and deliver pristine temporal reconstruction while preserv
    - Under Sequential Dual-Pass, motion vector scaling is automatically locked to $1.0\times$, matching the engine's true $1\Delta t$ per-eye frame cadence.
 
 4. **Settings Persistence & In-Game Controls**:
-   - AFR remains the default out-of-the-box mode to guarantee high framerates on mainstream GPUs.
+   - Sequential Dual-Pass is the default out-of-the-box mode (`VRCompanion.DEFAULT_RENDERING_MODE`), because it avoids the TAA ghosting and DLSS smearing described above. The trade-off is GPU cost: SDP roughly doubles per-frame draw work, so midrange GPUs should switch to AFR (`vrRenderingMode afr`), which remains a fully supported option.
    - User preference is saved to `modSettings/FS25_VRCompanion/settings.xml` under `<renderingMode>AFR</renderingMode>` or `<renderingMode>DualPass</renderingMode>`.
    - Live switching is exposed via the in-game console command `vrRenderingMode <afr|dualpass|toggle>`.
 
@@ -33,4 +33,4 @@ Accepted
 - **Direct3D 12 Command List Duplication / Replay** (rejected: closed D3D12 command lists are immutable; re-recording or patching root descriptors, descriptor heaps, and split barriers across GIANTS Engine 10's 3-thread asynchronous render pool carries critical risk of `DXGI_ERROR_DEVICE_REMOVED`).
 - **Undocumented `setStereoRendering(true)`** (rejected: telemetry probe in `fs25_vr.log` confirmed GIANTS Engine 10 records only 1 viewport and 1 scene pass under D3D12; legacy DX11 stub).
 - **Native OS Timer Detouring for $\Delta t = 0$** (rejected: detouring `QueryPerformanceCounter` system-wide risks disrupting audio thread synchronization and Win32 message processing; Luau update hook clamping is strictly isolated to game simulation).
-- **Dual-Pass Only / Deprecating AFR** (rejected: Sequential Dual-Pass increases draw calls by ~85% and requires high-end hardware like RTX 4080/4090/5080; preserving AFR ensures smooth playability on midrange GPUs).
+- **Dual-Pass Only / Deprecating AFR** (rejected: Sequential Dual-Pass increases draw calls by ~85% and requires high-end hardware like RTX 4080/4090/5080; preserving AFR as a switchable option ensures smooth playability on midrange GPUs).

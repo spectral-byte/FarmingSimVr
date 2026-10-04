@@ -395,6 +395,7 @@ test("DefaultsMatchTheValuesPreviouslyYieldedByModDesc", function()
     assert(VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE == true, "recenter tracking default")
     assert(math.abs(VRCompanion.DEFAULT_SNAP_TURN_ANGLE - math.rad(90)) < 0.0001, "snap turn default")
     assert(VRCompanion.DEFAULT_RENDERING_MODE == VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, "stereo presentation mode default")
+    assert(VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION == false, "oblique projection default")
 end)
 
 test("ModDescDoesNotDefineSettingDefaults", function()
@@ -424,6 +425,7 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion.fillLevelUnderVehicle = false
     VRCompanion.showHudLoadNotification = true
     VRCompanion.recenterVrTrackingSpace = false
+    VRCompanion.allowObliqueProjection = true
     VRCompanion.snapTurnAngle = math.rad(45)
     VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_AFR, false)
     assert(VRCompanion:saveConfiguration("settings.xml") == true, "save must succeed")
@@ -435,6 +437,7 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion.fillLevelUnderVehicle = nil
     VRCompanion.showHudLoadNotification = nil
     VRCompanion.recenterVrTrackingSpace = nil
+    VRCompanion.allowObliqueProjection = nil
     VRCompanion.snapTurnAngle = nil
     VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)
     local insets = VRCompanion:loadConfiguration("settings.xml")
@@ -448,10 +451,12 @@ test("SavedSettingsRoundTripThroughLoader", function()
     assert(VRCompanion.fillLevelUnderVehicle == false, "fill level under vehicle must round-trip")
     assert(VRCompanion.showHudLoadNotification == true, "load notification must round-trip")
     assert(VRCompanion.recenterVrTrackingSpace == false, "recenter tracking must round-trip")
+    assert(VRCompanion.allowObliqueProjection == true, "oblique projection must round-trip")
     assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(45)) < 0.0001, "snap turn angle must round-trip")
     assert(VRCompanion:getRenderingMode() == VRCompanion.RENDERING_MODE_AFR, "stereo presentation mode must round-trip")
 
     -- Restore defaults for later tests
+    VRCompanion.allowObliqueProjection = VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION
     VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
     VRCompanion.fillLevelUnderVehicle = VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE
     VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
@@ -522,6 +527,7 @@ test("RuntimeStateStartsFromDefaultConstants", function()
         assert(fresh.recenterVrTrackingSpace == fresh.DEFAULT_RECENTER_VR_TRACKING_SPACE, "recenter tracking starts at its default")
         assert(fresh.snapTurnAngle == fresh.DEFAULT_SNAP_TURN_ANGLE, "snap turn angle starts at its default")
         assert(fresh.renderingMode == fresh.DEFAULT_RENDERING_MODE, "stereo presentation mode starts at its default")
+        assert(fresh.allowObliqueProjection == fresh.DEFAULT_ALLOW_OBLIQUE_PROJECTION, "oblique projection starts at its default")
     end)
     _G.VRCompanion = saved
     assert(ok, tostring(err))
@@ -529,7 +535,7 @@ test("RuntimeStateStartsFromDefaultConstants", function()
     -- The runtime values are assigned from the constants, not from a second copy of the literal
     local fs = require("@lune/fs")
     local configSource = fs.readFile("mods/FS25_VRCompanion/src/VRCompanionConfig.lua")
-    for _, field in ipairs({ "fillLevelUnderVehicle", "showHudLoadNotification", "recenterVrTrackingSpace", "hudFillLevelGap" }) do
+    for _, field in ipairs({ "fillLevelUnderVehicle", "showHudLoadNotification", "recenterVrTrackingSpace", "hudFillLevelGap", "allowObliqueProjection" }) do
         local literal = string.match(configSource, "\nVRCompanion%." .. field .. " = ([%w%.]+)\n")
         assert(literal == nil or string.find(literal, "DEFAULT_", 1, true) ~= nil,
             string.format("VRCompanion.%s must be initialised from its DEFAULT_* constant, got %s", field, tostring(literal)))
@@ -562,6 +568,7 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     VRCompanion.fillLevelUnderVehicle = nil
     VRCompanion.showHudLoadNotification = nil
     VRCompanion.recenterVrTrackingSpace = nil
+    VRCompanion.allowObliqueProjection = nil
     VRCompanion.snapTurnAngle = nil
     VRCompanion.renderingMode = VRCompanion.RENDERING_MODE_AFR
     VRCompanion.renderingModeExplicit = nil
@@ -578,6 +585,7 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     assert(VRCompanion.fillLevelUnderVehicle == VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE, "fill level under vehicle default applied")
     assert(VRCompanion.showHudLoadNotification == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "load notification default applied")
     assert(VRCompanion.recenterVrTrackingSpace == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "recenter tracking default applied")
+    assert(VRCompanion.allowObliqueProjection == VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION, "oblique projection default applied")
     assert(VRCompanion:getSnapTurnAngle() == VRCompanion.DEFAULT_SNAP_TURN_ANGLE, "snap turn default applied")
     assert(VRCompanion:getRenderingMode() == VRCompanion.DEFAULT_RENDERING_MODE, "stereo presentation mode default applied")
     assert(VRCompanion.renderingModeExplicit == true, "default mode is applied through setRenderingMode")
@@ -594,6 +602,7 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     assert(store["vrSettings.fillLevelUnderVehicle"] == VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE, "saved fill level under vehicle")
     assert(store["vrSettings.showHudLoadNotification"] == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "saved load notification")
     assert(store["vrSettings.recenterVrTrackingSpace"] == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "saved recenter tracking")
+    assert(store["vrSettings.allowObliqueProjection"] == VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION, "saved oblique projection")
     assert(math.abs(store["vrSettings.snapTurnAngle"] - math.deg(VRCompanion.DEFAULT_SNAP_TURN_ANGLE)) < 0.0001, "saved snap turn angle")
     assert(store["vrSettings.renderingMode"] == "DualPass", "saved stereo presentation mode must be DualPass, got " .. tostring(store["vrSettings.renderingMode"]))
 

@@ -602,6 +602,38 @@ function VRCompanion:consoleCommandSetRenderingMode(modeStr)
     return string.format("Stereo Presentation Mode set to: %s (%s, Saved)", tostring(newMode), modeLabel)
 end
 
+function VRCompanion:consoleCommandSetObliqueProjection(enabledStr)
+    local cur = (self.allowObliqueProjection == true)
+    if enabledStr == nil or enabledStr == "" or string.lower(tostring(enabledStr)) == "status" then
+        return string.format("Current Oblique Frustum projection: %s. Usage: vrObliqueProjection <true|false|toggle>",
+            cur and "Enabled" or "Disabled (symmetric)")
+    end
+
+    local low = string.lower(tostring(enabledStr))
+    local enabled
+    if low == "toggle" then
+        enabled = not cur
+    elseif low == "true" or low == "1" or low == "on" then
+        enabled = true
+    elseif low == "false" or low == "0" or low == "off" then
+        enabled = false
+    else
+        return "Usage: vrObliqueProjection <true|false|toggle>"
+    end
+
+    self.allowObliqueProjection = enabled
+    self:saveConfiguration()
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR Oblique Frustum: %s (Saved)",
+                enabled and "Enabled" or "Disabled"), 2500)
+        end)
+    end
+    print(string.format("[FS25_VR] Oblique Frustum projection set to: %s", tostring(enabled)))
+    return string.format("Oblique Frustum projection set to: %s (Saved)", tostring(enabled))
+end
+
 -- Export to Input subsystem table
 VRCompanion.Input.registerActionEvents = function(self, ...) return VRCompanion.registerActionEvents(VRCompanion, ...) end
 VRCompanion.Input.isKeySnapLeft = function(self, ...) return VRCompanion.isKeySnapLeft(VRCompanion, ...) end
@@ -624,5 +656,6 @@ VRCompanion.Input.consoleCommandSetDlssMvScale = function(self, ...) return VRCo
 VRCompanion.Input.consoleCommandSetDlssSharpness = function(self, ...) return VRCompanion.consoleCommandSetDlssSharpness(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetDlssPreset = function(self, ...) return VRCompanion.consoleCommandSetDlssPreset(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetRenderingMode = function(self, ...) return VRCompanion.consoleCommandSetRenderingMode(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetObliqueProjection = function(self, ...) return VRCompanion.consoleCommandSetObliqueProjection(VRCompanion, ...) end
 
 return VRCompanion.Input

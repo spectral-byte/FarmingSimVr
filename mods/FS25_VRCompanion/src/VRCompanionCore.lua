@@ -167,6 +167,7 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrDlssSharpness", "Set DLSS sharpness override: vrDlssSharpness <sharpness 0.0-1.0>", "consoleCommandSetDlssSharpness", self)
         addConsoleCommand("vrDlssPreset", "Set DLSS preset hint: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L>", "consoleCommandSetDlssPreset", self)
         addConsoleCommand("vrRenderingMode", "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", "consoleCommandSetRenderingMode", self)
+        addConsoleCommand("vrObliqueProjection", "Toggle Oblique Frustum projection: vrObliqueProjection <true|false|toggle>", "consoleCommandSetObliqueProjection", self)
     end
 
     if self.showHudLoadNotification == true then
@@ -826,6 +827,7 @@ function VRCompanion:deleteMap()
         removeConsoleCommand("vr2DView")
         removeConsoleCommand("vrToggleView")
         removeConsoleCommand("vrRenderingMode")
+        removeConsoleCommand("vrObliqueProjection")
     end
 end
 

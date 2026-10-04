@@ -821,6 +821,76 @@ TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDispa
     )luau", "=verifyCenteredProjection"), 0);
 }
 
+TEST_F(CompanionModTest, ObliqueProjectionConsoleCommandTogglesPersistsAndAppliesOffsets) {
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    headset.SetEyeFov(0, leftFov);
+
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    headset.SetHeadPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        local removedCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName, target = target }
+        end
+        _G.removeConsoleCommand = function(cmd)
+            removedCommands[cmd] = true
+        end
+
+        local savedBools = {}
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function(xml, key, val) savedBools[key] = val end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrObliqueProjection"] ~= nil, "vrObliqueProjection console command must be registered on map load")
+        assert(registeredCommands["vrObliqueProjection"].funcName == "consoleCommandSetObliqueProjection",
+            "registered callback must be consoleCommandSetObliqueProjection")
+
+        -- Defaults to symmetric projection
+        assert(VRCompanion.allowObliqueProjection == false, "oblique projection must default to off")
+        local statusRes = VRCompanion:consoleCommandSetObliqueProjection("status")
+        assert(string.find(statusRes, "Disabled") ~= nil, "status must report disabled by default")
+
+        local invalidRes = VRCompanion:consoleCommandSetObliqueProjection("maybe")
+        assert(string.find(invalidRes, "Usage: vrObliqueProjection") ~= nil, "invalid input must return usage")
+        assert(VRCompanion.allowObliqueProjection == false, "invalid input must not change the setting")
+
+        local cam = { isInside = true, cameraNode = 301, origTransX = 0, origTransY = 1.5, origTransZ = 0 }
+
+        -- Enabling applies per-eye asymmetric offsets and persists to settings.xml
+        VRCompanion:consoleCommandSetObliqueProjection("true")
+        assert(VRCompanion.allowObliqueProjection == true, "true must enable oblique projection")
+        assert(savedBools["vrSettings.allowObliqueProjection"] == true, "enabled preference must persist to settings.xml")
+        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+        assert(math.abs(_G.cameraProjectionOffsets[301].x) > 0.001, "enabled oblique projection must apply a horizontal offset")
+
+        -- Toggling back restores the centered projection and persists
+        VRCompanion:consoleCommandSetObliqueProjection("toggle")
+        assert(VRCompanion.allowObliqueProjection == false, "toggle must disable oblique projection")
+        assert(savedBools["vrSettings.allowObliqueProjection"] == false, "disabled preference must persist to settings.xml")
+        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+        assert(math.abs(_G.cameraProjectionOffsets[301].x) < 0.0001, "disabled oblique projection must center the projection")
+
+        VRCompanion:deleteMap()
+        assert(removedCommands["vrObliqueProjection"] == true, "deleteMap must unregister vrObliqueProjection")
+    )luau", "=testObliqueProjectionConsoleCommand"), 0);
+}
+
 TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;

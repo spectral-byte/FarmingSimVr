@@ -1,6 +1,6 @@
 # Farming Simulator 25 VR (FS25 VR)
 
-[![Tests](https://img.shields.io/badge/tests-322%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-387%20passed-brightgreen.svg)]()
 [![OpenXR](https://img.shields.io/badge/OpenXR-1.1-blue.svg)]()
 [![DirectX](https://img.shields.io/badge/Direct3D-12-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey.svg)]()
@@ -64,11 +64,11 @@ FS25 VR is built as a hybrid two-tier architecture:
 ## Key Features
 
 - **Stereo Presentation Modes**:
-  - **Sequential Dual-Pass (SDP)**: Renders left and right eye perspectives sequentially within a single logical compositor frame. The right sub-pass clamps engine delta time to zero ($\Delta t = 0$), freezing simulation, physics, and foliage wind while eliminating in-engine TAA ghosting and DLSS history smearing. Recommended for high-end systems (RTX 3080/4080/4090).
-  - **Alternate Frame Rendering (AFR)**: Alternates left and right eye perspectives on sequential engine frames for lightweight GPU load on midrange graphics cards.
+  - **Sequential Dual-Pass (SDP)**: Renders left and right eye perspectives sequentially within a single logical compositor frame. The right sub-pass clamps engine delta time to zero ($\Delta t = 0$), freezing simulation, physics, and foliage wind while eliminating in-engine TAA ghosting and DLSS history smearing. Default mode; recommended for high-end systems (RTX 3080/4080/4090).
+  - **Alternate Frame Rendering (AFR)**: Alternates left and right eye perspectives on sequential engine frames for lightweight GPU load on midrange graphics cards. Opt-in via `vrRenderingMode afr`.
   - Dynamically switchable via console command or configuration settings with seamless discontinuity flushing.
 - **6DOF Head Tracking**: Positional and rotational tracking for both on-foot locomotion and vehicle cockpits with collinear translation and decoupled look yaw rotation.
-- **Oblique Perspective Projection**: Asymmetric projection matrices computed per eye directly from headset display optics and FOV.
+- **Symmetric Projection (default) with opt-in Oblique Frustum**: The Injector submits an aspect-matched symmetric FOV and the Companion Mod applies no projection offset by default. Per-eye asymmetric offsets computed from headset optics are available via `vrObliqueProjection true` or `<allowObliqueProjection>true</allowObliqueProjection>` in `settings.xml` (see ADR-0005).
 - **Temporal Upscaler Virtualization**:
   - Isolated left and right `NVSDK_NGX_Handle` instances.
   - Context-aware motion vector scaling ($1.0\times$ in Dual-Pass, $2.0\times$ in AFR).
@@ -83,7 +83,7 @@ FS25 VR is built as a hybrid two-tier architecture:
   - Alpha-blended hardware mouse cursor projected accurately onto the floating quad.
   - Dynamic quad centering and 6DOF background showroom tracking.
 - **In-Engine 2D View Toggle**: Instant hotkey toggle between full 3D VR and a 2D floating virtual screen for comfortable cutscene or menu viewing.
-- **Snap Turn Locomotion**: Instant rotational increments (configurable 30°, 45°, 90°) for both on-foot walking and in-cab vehicle driving.
+- **Snap Turn Locomotion**: Instant rotational increments (configurable 30Â°, 45Â°, 90Â°) for both on-foot walking and in-cab vehicle driving.
 - **Desktop Mirror Window Decoupling**: Renders at native headset resolution while maintaining an unscaled, clamped desktop mirror window without aspect ratio distortion.
 
 ---
@@ -98,7 +98,7 @@ FS25 VR is built as a hybrid two-tier architecture:
   - Meta Quest 2 / 3 / Pro (via Quest Link, AirLink, or Virtual Desktop)
   - Valve Index, HTC Vive, Bigscreen Beyond (via SteamVR)
   - Pimax headsets (via PimaxXR / OpenXR runtime)
-- **Software Prerequisites**: Microsoft Visual C++ 2015–2022 Redistributable (x64)
+- **Software Prerequisites**: Microsoft Visual C++ 2015â€“2022 Redistributable (x64)
 
 ### Step 1: Install the Native Injector (`dxgi.dll`)
 
@@ -152,9 +152,9 @@ VR settings are automatically persisted to:
 Press the tilde key (`` ` `` / `~`) to open the in-engine developer console:
 
 - `vrRenderingMode <afr|dualpass|toggle>`: Switch between Sequential Dual-Pass and Alternate Frame Rendering.
-- `vrHudInset <horizontal> <vertical>`: Adjust normalized HUD margin insets (default: `0.30 0.22`).
-- `vrHudUiScale <scale>`: Adjust HUD element size scaling (default: `0.82`).
-- `vrHudConvergence <meters>`: Set stereoscopic depth convergence distance for 2D UI (default: `1.8`).
+- `vrObliqueProjection <true|false|toggle>`: Enable per-eye Oblique Frustum projection (default: `false`, symmetric).
+- `vrHudInsets <horizontal> <vertical> [scale] [top]`: Adjust normalized HUD margin insets and element scale (default: `0.30 0.22 0.82 0.22`).
+- HUD convergence depth is set via `<hudConvergenceDepth>` in `settings.xml` (default: `1.8`).
 - `vrSnapTurnAngle <degrees>`: Set snap turn rotational angle step (default: `90`).
 
 ---
@@ -182,7 +182,7 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 # Build Injector DLL and Test Executable
 ninja -C build dxgi fs25_vr_tests
 
-# Run automated unit and integration tests (322 tests)
+# Run automated unit and integration tests (387 tests)
 ctest --test-dir build --output-on-failure
 ```
 
