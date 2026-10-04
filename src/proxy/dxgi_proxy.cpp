@@ -12,8 +12,6 @@ namespace fs25vr {
 
 namespace {
 
-static DxgiProxy* s_activeProxy = nullptr;
-
 template <typename PFN, typename... Args>
 HRESULT ForwardFactoryCall(const char* funcName, PFN pfn, Args&&... args) {
     if (!pfn) {
@@ -30,44 +28,52 @@ DxgiProxy& DxgiProxy::Instance() {
     return InjectorRuntime::Instance().GetDxgiProxy();
 }
 
+DxgiProxy* DxgiProxy::ForHook(FunctionDetour DxgiProxy::*detour) {
+    InjectorRuntime* runtime = InjectorRuntime::ForHook([detour](InjectorRuntime& r) {
+        return (r.GetDxgiProxy().*detour).IsInstalled();
+    });
+    return runtime ? &runtime->GetDxgiProxy() : nullptr;
+}
+
 DxgiProxy::DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
                      std::shared_ptr<OpenXrManager> openXrManager,
                      std::shared_ptr<LuauInterceptor> luauInterceptor,
                      std::shared_ptr<VRBridge> vrBridge,
-                     std::shared_ptr<MirrorWindowController> windowController)
-    : m_systemDxgi(systemDxgi ? std::move(systemDxgi) : std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {})),
-      m_openXrManager(openXrManager ? std::move(openXrManager) : std::shared_ptr<OpenXrManager>(&OpenXrManager::Instance(), [](auto*) {})),
-      m_luauInterceptor(luauInterceptor ? std::move(luauInterceptor) : std::shared_ptr<LuauInterceptor>(&LuauInterceptor::Instance(), [](auto*) {})),
-      m_vrBridge(vrBridge ? std::move(vrBridge) : std::shared_ptr<VRBridge>(&VRBridge::Instance(), [](auto*) {})),
-      m_windowController(windowController ? std::move(windowController) : std::make_shared<MirrorWindowController>()) {
+                     std::shared_ptr<MirrorWindowController> windowController,
+                     std::shared_ptr<NgxInterceptor> ngxInterceptor)
+    : m_systemDxgi(std::move(systemDxgi)),
+      m_openXrManager(std::move(openXrManager)),
+      m_luauInterceptor(std::move(luauInterceptor)),
+      m_vrBridge(std::move(vrBridge)),
+      m_windowController(windowController ? std::move(windowController) : std::make_shared<MirrorWindowController>()),
+      m_ngxInterceptor(std::move(ngxInterceptor)) {
     m_windowController->SetIsVrActiveCallback([this]() { return IsActive(); });
-    MirrorWindowController::SetActiveController(m_windowController.get());
-    s_activeProxy = this;
 }
 
 DxgiProxy::~DxgiProxy() {
     if (IsProcessTerminating()) return;
     DetachAll();
-    if (s_activeProxy == this) {
-        s_activeProxy = nullptr;
-    }
 }
 
 void DxgiProxy::EnsureVrInitialized() {
     // Deferred from DllMain (loader lock). Runs before the game creates its D3D12 device.
     // Installed on every factory call (idempotent and locked), not only the first, so a concurrent
     // caller blocks until the LoadLibrary hooks exist instead of loading nvngx unhooked.
-    NgxInterceptor::Instance().InstallModuleLoadHooks();
+    if (m_ngxInterceptor) m_ngxInterceptor->InstallModuleLoadHooks();
     if (!m_vrInitialized.exchange(true)) {
-        NgxInterceptor::Instance().CheckAndAttachLoadedModule();
-        LogInfo("Intercepted DXGI startup sequence. Initializing OpenXR subsystem...");
-        m_openXrManager->Initialize();
-        if (m_openXrManager->IsPassThrough()) {
-            LogInfo("Injector operating in Pass-Through Mode (forwarding all calls silently).");
-        } else if (m_openXrManager->IsActive()) {
-            LogInfo("Injector operating in Active VR Mode.");
-            m_openXrManager->CreateSession();
-            m_openXrManager->CreateTrackingSpaces();
+        if (m_ngxInterceptor) m_ngxInterceptor->CheckAndAttachLoadedModule();
+        if (!m_openXrManager) {
+            LogWarn("DxgiProxy: No OpenXR manager supplied; forwarding all calls silently.");
+        } else {
+            LogInfo("Intercepted DXGI startup sequence. Initializing OpenXR subsystem...");
+            m_openXrManager->Initialize();
+            if (m_openXrManager->IsPassThrough()) {
+                LogInfo("Injector operating in Pass-Through Mode (forwarding all calls silently).");
+            } else if (m_openXrManager->IsActive()) {
+                LogInfo("Injector operating in Active VR Mode.");
+                m_openXrManager->CreateSession();
+                m_openXrManager->CreateTrackingSpaces();
+            }
         }
         if (m_luauInterceptor) {
             m_luauInterceptor->AttachToEngine();
@@ -155,8 +161,11 @@ bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
         m_windowController->AttachWindowSubclass(gameHwnd);
     }
     if (m_swapChainAttached) return true;
+    if (!m_ownedByRuntime) {
+        LogWarn("DxgiProxy::AttachSwapChain: Not owned by a live InjectorRuntime; detours not installed.");
+        return false;
+    }
 
-    s_activeProxy = this;
     void** vtable = *reinterpret_cast<void***>(swapChain);
     if (!vtable) {
         LogError("DxgiProxy::AttachSwapChain: VTable pointer is null.");
@@ -228,8 +237,11 @@ bool DxgiProxy::AttachFactory(IDXGIFactory* factory) {
         return false;
     }
     if (m_factoryAttached) return true;
+    if (!m_ownedByRuntime) {
+        LogWarn("DxgiProxy::AttachFactory: Not owned by a live InjectorRuntime; detours not installed.");
+        return false;
+    }
 
-    s_activeProxy = this;
     void** vtable = *reinterpret_cast<void***>(factory);
     if (!vtable) {
         LogError("DxgiProxy::AttachFactory: VTable pointer is null.");
@@ -487,7 +499,8 @@ bool DxgiProxy::OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval, UINT f
 }
 
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UINT syncInterval, UINT flags) {
-    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourPresent);
+    if (!proxy) return S_OK;
     bool shouldPresent = proxy->OnPresent(self, syncInterval, flags);
     if (!shouldPresent) {
         return S_OK;
@@ -502,7 +515,8 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UIN
 }
 
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
-    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourPresent1);
+    if (!proxy) return S_OK;
     bool shouldPresent = proxy->OnPresent1(self, syncInterval, flags, params);
     if (!shouldPresent) {
         return S_OK;
@@ -518,7 +532,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
 
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers(
     IDXGISwapChain* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags) {
-    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourResizeBuffers);
     if (proxy) {
         proxy->m_cachedSwapChain = nullptr;
         proxy->m_cachedSwapChain3.Reset();
@@ -546,7 +560,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers(
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers1(
     IDXGISwapChain3* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags,
     const UINT* pCreationNodeMask, IUnknown* const* ppPresentQueue) {
-    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourResizeBuffers1);
     if (proxy) {
         proxy->m_cachedSwapChain = nullptr;
         proxy->m_cachedSwapChain3.Reset();
@@ -577,7 +591,8 @@ void DxgiProxy::GetDecoupledTargetResolution(uint32_t& outWidth, uint32_t& outHe
 
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
     IDXGIFactory* self, IUnknown* pDevice, DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain) {
-    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourCreateSwapChain);
+    if (!proxy) return E_FAIL;
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
@@ -613,7 +628,8 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     IDXGIFactory2* self, IUnknown* pDevice, HWND hWnd, const DXGI_SWAP_CHAIN_DESC1* pDesc,
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc, IDXGIOutput* pRestrictToOutput,
     IDXGISwapChain1** ppSwapChain) {
-    DxgiProxy* proxy = s_activeProxy ? s_activeProxy : &DxgiProxy::Instance();
+    DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourCreateSwapChainForHwnd);
+    if (!proxy) return E_FAIL;
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
@@ -667,7 +683,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
 
 HRESULT DxgiProxy::CreateDXGIFactory(REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
-    HRESULT hr = ForwardFactoryCall("CreateDXGIFactory", m_systemDxgi->GetCreateDXGIFactory(), riid, ppFactory);
+    HRESULT hr = ForwardFactoryCall("CreateDXGIFactory", SystemPfn(&ISystemDxgi::GetCreateDXGIFactory), riid, ppFactory);
     if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
         Microsoft::WRL::ComPtr<IDXGIFactory> factory;
         if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
@@ -679,7 +695,7 @@ HRESULT DxgiProxy::CreateDXGIFactory(REFIID riid, void** ppFactory) {
 
 HRESULT DxgiProxy::CreateDXGIFactory1(REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
-    HRESULT hr = ForwardFactoryCall("CreateDXGIFactory1", m_systemDxgi->GetCreateDXGIFactory1(), riid, ppFactory);
+    HRESULT hr = ForwardFactoryCall("CreateDXGIFactory1", SystemPfn(&ISystemDxgi::GetCreateDXGIFactory1), riid, ppFactory);
     if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
         Microsoft::WRL::ComPtr<IDXGIFactory> factory;
         if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
@@ -691,7 +707,7 @@ HRESULT DxgiProxy::CreateDXGIFactory1(REFIID riid, void** ppFactory) {
 
 HRESULT DxgiProxy::CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
-    HRESULT hr = ForwardFactoryCall("CreateDXGIFactory2", m_systemDxgi->GetCreateDXGIFactory2(), Flags, riid, ppFactory);
+    HRESULT hr = ForwardFactoryCall("CreateDXGIFactory2", SystemPfn(&ISystemDxgi::GetCreateDXGIFactory2), Flags, riid, ppFactory);
     if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
         Microsoft::WRL::ComPtr<IDXGIFactory> factory;
         if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
@@ -702,12 +718,12 @@ HRESULT DxgiProxy::CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory)
 }
 
 HRESULT DxgiProxy::DXGIDeclareAdapterRemovalSupport() {
-    auto pfn = m_systemDxgi->GetDXGIDeclareAdapterRemovalSupport();
+    auto pfn = SystemPfn(&ISystemDxgi::GetDXGIDeclareAdapterRemovalSupport);
     return pfn ? pfn() : E_FAIL;
 }
 
 HRESULT DxgiProxy::DXGIGetDebugInterface1(UINT Flags, REFIID riid, void** pDebug) {
-    auto pfn = m_systemDxgi->GetDXGIGetDebugInterface1();
+    auto pfn = SystemPfn(&ISystemDxgi::GetDXGIGetDebugInterface1);
     return pfn ? pfn(Flags, riid, pDebug) : E_FAIL;
 }
 

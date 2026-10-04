@@ -1,6 +1,7 @@
 #include "luau_interceptor.h"
 #include "core/logger.h"
 #include "core/dll_lifecycle.h"
+#include "core/injector_runtime.h"
 #include <windows.h>
 #include <cstring>
 #include <string>
@@ -11,17 +12,8 @@
 
 namespace fs25vr {
 
-namespace {
-static LuauInterceptor* s_activeInterceptor = nullptr;
-} // anonymous namespace
-
-LuauInterceptor& LuauInterceptor::Instance() {
-    static LuauInterceptor instance;
-    return instance;
-}
-
 LuauInterceptor::LuauInterceptor(std::shared_ptr<VRBridge> bridge)
-    : m_bridge(bridge ? std::move(bridge) : std::shared_ptr<VRBridge>(&VRBridge::Instance(), [](auto*) {})) {
+    : m_bridge(std::move(bridge)) {
 }
 
 LuauInterceptor::~LuauInterceptor() {
@@ -35,20 +27,21 @@ bool LuauInterceptor::Attach(void* targetQueryFunction) {
         return false;
     }
 
+    if (!m_ownedByRuntime) {
+        LogWarn("LuauInterceptor::Attach: Not owned by a live InjectorRuntime; detour not installed.");
+        return false;
+    }
+
     if (m_detour.IsInstalled()) {
         LogWarn("LuauInterceptor::Attach: Already attached, detaching first.");
         Detach();
     }
 
-    s_activeInterceptor = this;
     bool success = m_detour.Install(targetQueryFunction, reinterpret_cast<void*>(&LuauInterceptor::DetourEntryPoint));
     if (success) {
         LogInfo("LuauInterceptor: Successfully attached detour to head-tracking availability query.");
     } else {
         LogError("LuauInterceptor: Failed to attach detour to target function.");
-        if (s_activeInterceptor == this) {
-            s_activeInterceptor = nullptr;
-        }
     }
     return success;
 }
@@ -240,9 +233,6 @@ void LuauInterceptor::Detach() {
         m_detour.Uninstall();
         LogInfo("LuauInterceptor: Detached from target function.");
     }
-    if (s_activeInterceptor == this) {
-        s_activeInterceptor = nullptr;
-    }
     m_activeState = nullptr;
     m_bridgeInjected = false;
 }
@@ -265,10 +255,10 @@ int LuauInterceptor::HandleQuery(lua_State* L) {
 }
 
 int LuauInterceptor::DetourEntryPoint(lua_State* L) {
-    if (s_activeInterceptor) {
-        return s_activeInterceptor->HandleQuery(L);
-    }
-    return Instance().HandleQuery(L);
+    InjectorRuntime* runtime = InjectorRuntime::ForHook([](InjectorRuntime& r) {
+        return r.GetLuauInterceptor().GetDetour().IsInstalled();
+    });
+    return runtime ? runtime->GetLuauInterceptor().HandleQuery(L) : 0;
 }
 
 } // namespace fs25vr

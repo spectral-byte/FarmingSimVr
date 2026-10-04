@@ -198,8 +198,8 @@ void NgxInterceptor::SetDxgiProxy(DxgiProxy* proxy) {
 OpenXrManager* NgxInterceptor::GetOpenXrManager() const {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     if (m_openXrManager) return m_openXrManager;
-    if (m_dxgiProxy && m_dxgiProxy->GetOpenXrManager().IsActive()) return &m_dxgiProxy->GetOpenXrManager();
-    return nullptr;
+    OpenXrManager* proxyManager = m_dxgiProxy ? m_dxgiProxy->GetOpenXrManager() : nullptr;
+    return (proxyManager && proxyManager->IsActive()) ? proxyManager : nullptr;
 }
 
 void NgxInterceptor::SetOpenXrManager(OpenXrManager* mgr) {

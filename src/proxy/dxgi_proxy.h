@@ -15,6 +15,8 @@
 
 namespace fs25vr {
 
+class NgxInterceptor;
+
 // Canonical DXGI vtable slot indices
 inline constexpr size_t kPresentVTableSlot = 8;
 inline constexpr size_t kResizeBuffersVTableSlot = 13;
@@ -25,13 +27,18 @@ inline constexpr size_t kResizeBuffers1VTableSlot = 39;
 
 class DxgiProxy {
 public:
+    // The production proxy, owned by the composition root.
     static DxgiProxy& Instance();
 
+    // Collaborators are used as given; a null one is absent (there is no singleton fallback), except
+    // the window controller, which defaults to a fresh one. Production wiring comes from InjectorRuntime.
+    // AttachSwapChain/AttachFactory install detours only while a live InjectorRuntime owns the proxy.
     explicit DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi = nullptr,
                        std::shared_ptr<OpenXrManager> openXrManager = nullptr,
                        std::shared_ptr<LuauInterceptor> luauInterceptor = nullptr,
                        std::shared_ptr<VRBridge> vrBridge = nullptr,
-                       std::shared_ptr<MirrorWindowController> windowController = nullptr);
+                       std::shared_ptr<MirrorWindowController> windowController = nullptr,
+                       std::shared_ptr<NgxInterceptor> ngxInterceptor = nullptr);
     ~DxgiProxy();
 
     HRESULT CreateDXGIFactory(REFIID riid, void** ppFactory);
@@ -68,11 +75,16 @@ public:
     ID3D12Device* GetD3D12Device() const { return m_d3d12Device.Get(); }
     ID3D12CommandQueue* GetD3D12CommandQueue() const { return m_d3d12Queue.Get(); }
 
-    OpenXrManager& GetOpenXrManager() { return *m_openXrManager; }
-    ISystemDxgi& GetSystemDxgi() { return *m_systemDxgi; }
-    LuauInterceptor& GetLuauInterceptor() { return *m_luauInterceptor; }
-    VRBridge& GetVrBridge() { return *m_vrBridge; }
+    // Null when the collaborator was not supplied.
+    OpenXrManager* GetOpenXrManager() { return m_openXrManager.get(); }
+    ISystemDxgi* GetSystemDxgi() { return m_systemDxgi.get(); }
+    LuauInterceptor* GetLuauInterceptor() { return m_luauInterceptor.get(); }
+    VRBridge* GetVrBridge() { return m_vrBridge.get(); }
+    // Never null: defaults to a fresh controller.
     MirrorWindowController& GetWindowController() { return *m_windowController; }
+
+    // Set by InjectorRuntime while it owns this proxy and hooks can find it.
+    void SetOwnedByRuntime(bool owned) { m_ownedByRuntime = owned; }
 
     bool IsActive() const { return m_openXrManager && m_openXrManager->IsActive(); }
     // Unlike the controller method, this resolves against this proxy's OpenXR manager.
@@ -91,11 +103,22 @@ public:
 private:
     void EnsureVrInitialized();
 
+    // The proxy a hook entry point acts for: the one in a live runtime that installed `detour`, else
+    // the current runtime's; null when no runtime is alive.
+    static DxgiProxy* ForHook(FunctionDetour DxgiProxy::*detour);
+
+    // A system export, or null when no system DXGI was supplied.
+    template <typename Pfn>
+    Pfn SystemPfn(Pfn (ISystemDxgi::*getter)()) {
+        return m_systemDxgi ? (m_systemDxgi.get()->*getter)() : nullptr;
+    }
+
     std::shared_ptr<ISystemDxgi> m_systemDxgi;
     std::shared_ptr<OpenXrManager> m_openXrManager;
     std::shared_ptr<LuauInterceptor> m_luauInterceptor;
     std::shared_ptr<VRBridge> m_vrBridge;
     std::shared_ptr<MirrorWindowController> m_windowController;
+    std::shared_ptr<NgxInterceptor> m_ngxInterceptor;
 
     Microsoft::WRL::ComPtr<ID3D12Device> m_d3d12Device;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> m_d3d12Queue;
@@ -109,6 +132,7 @@ private:
 
     bool m_swapChainAttached = false;
     bool m_factoryAttached = false;
+    bool m_ownedByRuntime = false;
     std::atomic<bool> m_vrInitialized{false};
     bool m_wasInQuadMode = false;
     bool m_lastPresentSuppressed = false;

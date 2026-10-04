@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
+#include "core/injector_runtime.h"
 #include "luau/luau_interceptor.h"
+#include "luau/vr_bridge.h"
 #include "luacode.h"
 #include <string>
 
@@ -28,9 +30,16 @@ int RunLuauString(lua_State* L, const std::string& code) {
 class LuauInterceptorTest : public ::testing::Test {
 protected:
     lua_State* L = nullptr;
+    std::shared_ptr<fs25vr::VRBridge> bridge;
+    std::unique_ptr<fs25vr::InjectorRuntime> runtime;
 
     void SetUp() override {
         s_queryCallCount = 0;
+        // Only a runtime-owned interceptor installs the detour, and the entry point resolves it through the runtime.
+        bridge = std::make_shared<fs25vr::VRBridge>();
+        fs25vr::InjectorRuntime::Dependencies deps;
+        deps.vrBridge = bridge;
+        runtime = std::make_unique<fs25vr::InjectorRuntime>(std::move(deps));
         L = luaL_newstate();
         luaL_openlibs(L);
 
@@ -40,17 +49,17 @@ protected:
     }
 
     void TearDown() override {
-        fs25vr::LuauInterceptor::Instance().Detach();
+        runtime->GetLuauInterceptor().Detach();
         if (L) {
             lua_close(L);
             L = nullptr;
         }
+        runtime.reset();
     }
 };
 
 TEST_F(LuauInterceptorTest, InterceptsActiveLuaStateAndInjectsVRBridge) {
-    auto& interceptor = fs25vr::LuauInterceptor::Instance();
-    interceptor.Detach();
+    auto& interceptor = runtime->GetLuauInterceptor();
 
     EXPECT_FALSE(interceptor.IsIntercepted());
     EXPECT_EQ(interceptor.GetActiveState(), nullptr);
@@ -87,10 +96,14 @@ TEST_F(LuauInterceptorTest, InterceptsActiveLuaStateAndInjectsVRBridge) {
     interceptor.Detach();
 }
 
-TEST_F(LuauInterceptorTest, SupportsIsolatedInstanceWithoutSingletonCoupling) {
+TEST_F(LuauInterceptorTest, DetourResolvesTheInterceptorThroughTheCurrentRuntime) {
     auto isolatedBridge = std::make_shared<fs25vr::VRBridge>();
-    fs25vr::LuauInterceptor isolatedInterceptor(isolatedBridge);
+    fs25vr::InjectorRuntime::Dependencies deps;
+    deps.vrBridge = isolatedBridge;
+    fs25vr::InjectorRuntime isolatedRuntime(std::move(deps));
+    ASSERT_EQ(fs25vr::InjectorRuntime::Current(), &isolatedRuntime);
 
+    auto& isolatedInterceptor = isolatedRuntime.GetLuauInterceptor();
     ASSERT_TRUE(isolatedInterceptor.Attach(reinterpret_cast<void*>(&Engine_isHeadTrackingAvailable)));
     EXPECT_FALSE(isolatedInterceptor.IsIntercepted());
 
@@ -99,8 +112,36 @@ TEST_F(LuauInterceptorTest, SupportsIsolatedInstanceWithoutSingletonCoupling) {
 
     EXPECT_TRUE(isolatedInterceptor.IsIntercepted());
     EXPECT_EQ(isolatedInterceptor.GetActiveState(), L);
+    EXPECT_FALSE(runtime->GetLuauInterceptor().IsIntercepted());
 
     isolatedInterceptor.Detach();
+}
+
+TEST_F(LuauInterceptorTest, DetourResolvesTheInterceptorThatInstalledItNotTheNewestRuntime) {
+    auto& installer = runtime->GetLuauInterceptor();
+    ASSERT_TRUE(installer.Attach(reinterpret_cast<void*>(&Engine_isHeadTrackingAvailable)));
+
+    fs25vr::InjectorRuntime::Dependencies deps;
+    deps.vrBridge = std::make_shared<fs25vr::VRBridge>();
+    fs25vr::InjectorRuntime newerRuntime(std::move(deps));
+    ASSERT_EQ(fs25vr::InjectorRuntime::Current(), &newerRuntime);
+
+    EXPECT_EQ(RunLuauString(L, "assert(isHeadTrackingAvailable() == true)"), 0);
+
+    // The query reached the real function through the installer's original, not a null one.
+    EXPECT_EQ(s_queryCallCount, 1);
+    EXPECT_TRUE(installer.IsIntercepted());
+    EXPECT_FALSE(newerRuntime.GetLuauInterceptor().IsIntercepted());
+}
+
+TEST_F(LuauInterceptorTest, StandaloneInterceptorInstallsNoDetour) {
+    // No runtime owns it, so the hook could not find its original: Attach must refuse.
+    fs25vr::LuauInterceptor standalone(bridge);
+    EXPECT_FALSE(standalone.Attach(reinterpret_cast<void*>(&Engine_isHeadTrackingAvailable)));
+    EXPECT_FALSE(standalone.GetDetour().IsInstalled());
+
+    EXPECT_EQ(RunLuauString(L, "assert(isHeadTrackingAvailable() == true)"), 0);
+    EXPECT_EQ(s_queryCallCount, 1);
 }
 
 TEST_F(LuauInterceptorTest, FindQueryFunctionInTextResolvesPairedFunctionAcrossRegisters) {

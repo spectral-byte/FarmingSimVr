@@ -93,10 +93,15 @@ protected:
         return m_fakeNgx;
     }
 
+    // The proxy installs the NGX hooks on the interceptor it is given; these tests observe the singleton.
+    static std::shared_ptr<NgxInterceptor> NgxSingleton() {
+        return std::shared_ptr<NgxInterceptor>(&NgxInterceptor::Instance(), [](auto*) {});
+    }
+
     static HRESULT CreateFactoryThroughNewProxy() {
         auto openXrManager = std::make_shared<OpenXrManager>(std::make_shared<FailingOpenXrDispatch>());
         auto systemDxgi = std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {});
-        DxgiProxy proxy(systemDxgi, openXrManager);
+        DxgiProxy proxy(systemDxgi, openXrManager, nullptr, nullptr, nullptr, NgxSingleton());
         Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
         return proxy.CreateDXGIFactory1(IID_PPV_ARGS(&factory));
     }
@@ -154,7 +159,7 @@ TEST_F(DllLifecycleTest, ConcurrentFirstFactoryCallsReturnOnlyAfterHooksInstalle
     for (int round = 0; round < kRounds; ++round) {
         NgxInterceptor::Instance().DetachAll();
         auto openXrManager = std::make_shared<OpenXrManager>(std::make_shared<FailingOpenXrDispatch>());
-        DxgiProxy proxy(std::make_shared<ImmediateSystemDxgi>(), openXrManager);
+        DxgiProxy proxy(std::make_shared<ImmediateSystemDxgi>(), openXrManager, nullptr, nullptr, nullptr, NgxSingleton());
 
         std::atomic<int> ready{0};
         std::vector<std::thread> threads;

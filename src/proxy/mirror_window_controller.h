@@ -17,8 +17,6 @@ inline constexpr UINT_PTR kMirrorWindowSubclassId = 0x56524653; // 'FSVR'
 
 class MirrorWindowController {
 public:
-    static MirrorWindowController& Instance();
-
     explicit MirrorWindowController(std::function<bool()> isVrActive = nullptr);
     ~MirrorWindowController();
 
@@ -64,7 +62,9 @@ public:
     // Menu cursor state update
     void UpdateMenuCursorState(IDXGISwapChain* swapChain, OpenXrManager* openXrManager);
 
-    // Win32 Detours management
+    // Win32 Detours management. Detours are installed only while a live InjectorRuntime owns the
+    // controller, so the hooks can always find the controller that holds their originals.
+    void SetOwnedByRuntime(bool owned) { m_ownedByRuntime = owned; }
     bool InstallDetours();
     void UninstallDetours();
     bool IsDetourGetClientRectInstalled() const { return m_detourGetClientRect.IsInstalled(); }
@@ -72,24 +72,27 @@ public:
     bool IsDetourSetCursorPosInstalled() const { return m_detourSetCursorPos.IsInstalled(); }
     bool IsDetourClipCursorInstalled() const { return m_detourClipCursor.IsInstalled(); }
 
-    // Detour Interceptors
+    // Detour interceptors. The Win32 hooks act for the controller that installed them; the window
+    // subclass procedure acts for the controller recorded in its reference data.
     static LRESULT CALLBACK MirrorWindowSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
     static BOOL WINAPI Intercept_GetClientRect(HWND hWnd, LPRECT lpRect);
     static BOOL WINAPI Intercept_ScreenToClient(HWND hWnd, LPPOINT lpPoint);
     static BOOL WINAPI Intercept_SetCursorPos(int X, int Y);
     static BOOL WINAPI Intercept_ClipCursor(const RECT* lpRect);
 
-    static MirrorWindowController* GetActiveController();
-    static void SetActiveController(MirrorWindowController* controller);
-
     void DetachAll();
 
 private:
     bool GetPhysicalWindowMetrics(HWND hWnd, RECT& outPhysRect, POINT& outClientOrigin) const;
 
+    // The controller a Win32 hook acts for: the one in a live runtime that installed `detour`, else
+    // the current runtime's; null when no runtime is alive.
+    static MirrorWindowController* ForHook(FunctionDetour MirrorWindowController::*detour);
+
     HWND m_gameHwnd = nullptr;
     std::function<bool()> m_isVrActive;
 
+    bool m_ownedByRuntime = false;
     bool m_windowSubclassed = false;
     bool m_inSizeMove = false;
     bool m_windowClampDirty = true;
