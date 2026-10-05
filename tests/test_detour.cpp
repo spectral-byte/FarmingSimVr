@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <windows.h>
 #include <cstring>
+#include <MinHook.h>
 #include "core/detour.h"
 
 namespace {
@@ -197,4 +198,26 @@ TEST_F(DetourTest, TargetCanBeHookedAgainAfterUninstall) {
         EXPECT_TRUE(detour.Uninstall());
         EXPECT_EQ(AddNumbers(2, 3), 5);
     }
+}
+
+TEST_F(DetourTest, InstallRecoversFromStaleHookLeftByFailedRemoval) {
+    // Reproduce the state a failed MH_RemoveHook leaves behind: MinHook still holds a
+    // created (disabled) hook for the target, but no FunctionDetour tracks it.
+    {
+        fs25vr::FunctionDetour warmup;
+        ASSERT_TRUE(warmup.Install(reinterpret_cast<void*>(&AddNumbers),
+                                   reinterpret_cast<void*>(&DetourAddNumbers)));
+        ASSERT_TRUE(warmup.Uninstall());  // also guarantees MinHook is initialized
+    }
+    void* stale = nullptr;
+    ASSERT_EQ(MH_CreateHook(reinterpret_cast<void*>(&AddNumbers),
+                            reinterpret_cast<void*>(&DetourAddNumbers), &stale), MH_OK);
+
+    fs25vr::FunctionDetour detour;
+    ASSERT_TRUE(detour.Install(reinterpret_cast<void*>(&AddNumbers),
+                               reinterpret_cast<void*>(&DetourAddNumbers)));
+    s_originalAddNumbers = reinterpret_cast<int(*)(int, int)>(detour.GetOriginal());
+    EXPECT_EQ(AddNumbers(2, 3), 13);
+    EXPECT_TRUE(detour.Uninstall());
+    EXPECT_EQ(AddNumbers(2, 3), 5);
 }

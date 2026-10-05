@@ -65,7 +65,7 @@ FunctionDetour::FunctionDetour(FunctionDetour&& other) noexcept
     : m_target(std::exchange(other.m_target, nullptr)),
       m_detour(std::exchange(other.m_detour, nullptr)),
       m_original(std::exchange(other.m_original, nullptr)),
-      m_installed(std::exchange(other.m_installed, false)) {}
+      m_installed(other.m_installed.exchange(false)) {}
 
 FunctionDetour& FunctionDetour::operator=(FunctionDetour&& other) noexcept {
     if (this != &other) {
@@ -73,7 +73,7 @@ FunctionDetour& FunctionDetour::operator=(FunctionDetour&& other) noexcept {
         m_target = std::exchange(other.m_target, nullptr);
         m_detour = std::exchange(other.m_detour, nullptr);
         m_original = std::exchange(other.m_original, nullptr);
-        m_installed = std::exchange(other.m_installed, false);
+        m_installed = other.m_installed.exchange(false);
     }
     return *this;
 }
@@ -95,6 +95,17 @@ bool FunctionDetour::Install(void* targetFunction, void* detourFunction) {
 
     void* original = nullptr;
     MH_STATUS status = MH_CreateHook(targetFunction, detourFunction, &original);
+    if (status == MH_ERROR_ALREADY_CREATED) {
+        // A previous Uninstall could not remove its hook, so MinHook still holds a stale one
+        // for this target that nothing tracks. Drop it and retry.
+        LogWarn("FunctionDetour: Removing a stale hook left by a failed uninstall.");
+        const MH_STATUS removeStatus = MH_RemoveHook(targetFunction);
+        if (removeStatus != MH_OK) {
+            LogError(std::string("FunctionDetour: MH_RemoveHook of stale hook failed: ") + MH_StatusToString(removeStatus));
+            return false;
+        }
+        status = MH_CreateHook(targetFunction, detourFunction, &original);
+    }
     if (status != MH_OK) {
         LogError(std::string("FunctionDetour: MH_CreateHook failed: ") + MH_StatusToString(status));
         return false;
