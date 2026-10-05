@@ -3103,11 +3103,11 @@ TEST_F(CompanionModTest, SnapTurnInEngineActionEventsRegistration) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredEvents = {}
         _G.g_inputBinding = {
-            actionEvents = {},
+            events = {}, actionEvents = {}, -- FS25: events keyed by event id, actionEvents keyed by action name
             registerActionEvent = function(self, actionName, target, callback, triggerUp, triggerDown, triggerAlways, startActive)
-                local id = #self.actionEvents + 1
+                local id = actionName .. "|table: 0x0|" .. (self.nextEventNumber or 1); self.nextEventNumber = (self.nextEventNumber or 1) + 1
                 local ev = { id = id, actionName = actionName, target = target, callback = callback }
-                self.actionEvents[id] = ev
+                self.events[id] = ev; self.actionEvents[actionName] = { ev }
                 registeredEvents[actionName] = ev
                 return true, id
             end,
@@ -3553,11 +3553,11 @@ TEST_F(CompanionModTest, ToggleViewInEngineActionEventsRegistration) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredEvents = {}
         _G.g_inputBinding = {
-            actionEvents = {},
+            events = {}, actionEvents = {}, -- FS25: events keyed by event id, actionEvents keyed by action name
             registerActionEvent = function(self, actionName, target, callback, triggerUp, triggerDown, triggerAlways, startActive)
-                local id = #self.actionEvents + 1
+                local id = actionName .. "|table: 0x0|" .. (self.nextEventNumber or 1); self.nextEventNumber = (self.nextEventNumber or 1) + 1
                 local ev = { id = id, actionName = actionName, target = target, callback = callback }
-                self.actionEvents[id] = ev
+                self.events[id] = ev; self.actionEvents[actionName] = { ev }
                 registeredEvents[actionName] = ev
                 return true, id
             end,

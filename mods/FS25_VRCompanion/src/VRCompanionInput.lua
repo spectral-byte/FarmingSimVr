@@ -14,7 +14,9 @@ function VRCompanion:registerActionEvents(force)
         return
     end
 
-    local actionEvents = inputBinding.actionEvents or (inputBinding.events and inputBinding.events)
+    -- FS25 keys `events` by the event id registerActionEvent returns; `actionEvents`
+    -- is keyed by action name, so it must not be used for id lookups.
+    local actionEvents = inputBinding.events
     local isHudEventActive = false
     local isRecenterEventActive = false
     local isSnapLeftEventActive = false

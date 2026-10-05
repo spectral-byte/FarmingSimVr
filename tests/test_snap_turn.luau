@@ -948,10 +948,11 @@ test("InEngineActionEventRegistrationForSnapTurnLeftAndRight", function()
     local eventVisibility = {}
 
     _G.g_inputBinding = {
-        actionEvents = {},
+        events = {},
+        actionEvents = {}, -- FS25: keyed by action name, not event id
         registerActionEvent = function(self, actionName, target, callback, triggerUp, triggerDown, triggerAlways, startActive)
             nextEventId = nextEventId + 1
-            local id = nextEventId
+            local id = actionName .. "|table: 0x0|" .. nextEventId
             local eventObj = {
                 id = id,
                 actionName = actionName,
@@ -963,7 +964,8 @@ test("InEngineActionEventRegistrationForSnapTurnLeftAndRight", function()
                 startActive = startActive
             }
             registeredEvents[actionName] = eventObj
-            self.actionEvents[id] = eventObj
+            self.events[id] = eventObj
+            self.actionEvents[actionName] = { eventObj }
             return true, id
         end,
         setActionEventTextPriority = function(self, id, prio)
@@ -1051,7 +1053,8 @@ test("InEngineActionEventRegistrationForSnapTurnLeftAndRight", function()
 
     -- 3. Verify re-arming: clearing actionEvents and calling registerActionEvents(false) re-registers
     local preCount = nextEventId
-    _G.g_inputBinding.actionEvents = {} -- cleared by engine during vehicle switch
+    _G.g_inputBinding.events = {} -- cleared by engine during vehicle switch
+    _G.g_inputBinding.actionEvents = {}
     VRCompanion:registerActionEvents(false)
     assert(nextEventId > preCount, "registerActionEvents(false) must re-register missing snap turn events")
 
