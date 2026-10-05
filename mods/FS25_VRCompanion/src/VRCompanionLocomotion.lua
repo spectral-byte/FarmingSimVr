@@ -28,8 +28,6 @@ if VRCompanion.snapTurnDebounceMs == nil then
     VRCompanion.snapTurnDebounceMs = VRCompanion.DEFAULT_SNAP_TURN_DEBOUNCE_MS
 end
 VRCompanion.lastSnapTurnTime = nil
-VRCompanion.isSnapLeftKeyDown = false
-VRCompanion.isSnapRightKeyDown = false
 VRCompanion.vehicleRotationStates = VRCompanion.vehicleRotationStates or {}
 
 function VRCompanion:getRecenterMode()
@@ -128,8 +126,6 @@ end
 
 function VRCompanion:resetSnapTurnDebounce()
     self.lastSnapTurnTime = nil
-    self.isSnapLeftKeyDown = false
-    self.isSnapRightKeyDown = false
 end
 
 function VRCompanion:initVehicleCameraState(veh, cam)

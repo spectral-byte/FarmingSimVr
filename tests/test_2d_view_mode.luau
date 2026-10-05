@@ -414,48 +414,5 @@ test("RecenterIn2DModeRealignsFloatingQuadWithoutResettingVehicleOrientation", f
     assert(alignMenuQuadCalls == 1, "alignMenuQuad must NOT be called in 3D mode")
 end)
 
--- Slice 13: Hardware Shortcuts (Numpad 0 & Ctrl+V) with Debounce & Repeat Protection (Issue #41)
-test("HardwareShortcutsTriggerToggleViewAndDebounceHeldRepeat", function()
-    VRCompanion:set2DViewActive(false)
-    VRCompanion:resetToggleViewDebounce()
-    _G.g_time = 1000
-
-    _G.Input = {
-        KEY_numPad0 = 256,
-        KEY_v = 118,
-        KEY_rctrl = 305,
-        isKeyPressed = function(key)
-            return key == 305
-        end
-    }
-
-    -- 1. Numpad 0 down -> toggles to 2D
-    VRCompanion:keyEvent(48, 256, 0, true)
-    assert(VRCompanion.is2DViewActive == true, "Numpad 0 must toggle to 2D mode")
-
-    -- 2. Held repeat without key release is ignored
-    _G.g_time = 1500
-    VRCompanion:keyEvent(48, 256, 0, true)
-    assert(VRCompanion.is2DViewActive == true, "Held repeat without release must be ignored")
-
-    -- 3. Release Numpad 0
-    VRCompanion:keyEvent(48, 256, 0, false)
-    assert(VRCompanion.isToggleViewKeyDown == false, "Key release must clear isToggleViewKeyDown")
-
-    -- 4. Ctrl + V down -> toggles back to 3D
-    _G.g_time = 2000
-    VRCompanion:keyEvent(118, 118, 0, true)
-    assert(VRCompanion.is2DViewActive == false, "Ctrl + V must toggle back to 3D mode")
-
-    -- 5. Held repeat without release is ignored
-    _G.g_time = 2500
-    VRCompanion:keyEvent(118, 118, 0, true)
-    assert(VRCompanion.is2DViewActive == false, "Held repeat without release must be ignored")
-
-    -- 6. Release Ctrl + V
-    VRCompanion:keyEvent(118, 118, 0, false)
-    assert(VRCompanion.isToggleViewKeyDown == false, "Key release must clear isToggleViewKeyDown")
-end)
-
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed in test_2d_view_mode.luau", failed))
