@@ -743,6 +743,123 @@ test("RailroadVehicleAndSubclassSpeedGuardsPreventDivideByZero", function()
     _G.Locomotive = nil
 end)
 
+-- Slice 12b: Per-frame update must not rescan _G / mission vehicles (Issue #9)
+test("UpdateDoesNotScanGlobalTableEveryFrameWithoutFerry", function()
+    _G.Vehicle = { updateVehicleSpeed = function(self, dt) return 1 end }
+    _G.Ferry = nil
+    VRCompanion:unhookVehicleSpeed()
+    _G.g_currentMission = nil
+
+    local realPairs = pairs
+    local globalScans = 0
+    _G.pairs = function(t, ...)
+        if t == _G then globalScans = globalScans + 1 end
+        return realPairs(t, ...)
+    end
+
+    local ok, err = pcall(function()
+        for _ = 1, 300 do VRCompanion:update(16.6) end
+    end)
+    _G.pairs = realPairs
+    assert(ok, tostring(err))
+
+    assert(globalScans >= 1, "guards must still be installed by update")
+    assert(globalScans <= 5, "update must not scan _G every frame, scans=" .. tostring(globalScans))
+
+    -- Guard still swallows dt=0
+    assert(pcall(function() _G.Vehicle:updateVehicleSpeed(0.0) end))
+
+    VRCompanion:unhookVehicleSpeed()
+    _G.Vehicle = nil
+end)
+
+test("LateFerryAndLateVehicleAreGuardedWithinBoundedUpdates", function()
+    local ferryCalls = 0
+    local vehCalls = 0
+    _G.Vehicle = { updateVehicleSpeed = function(self, dt) return 1 end }
+    _G.Ferry = nil
+    VRCompanion:unhookVehicleSpeed()
+    _G.g_currentMission = { vehicles = {} }
+    for _ = 1, 3 do VRCompanion:update(16.6) end
+
+    -- Ferry class appears after loadMap
+    local origFerry = function(self, dt)
+        ferryCalls = ferryCalls + 1
+        if dt == 0 then error("div by zero") end
+    end
+    _G.Ferry = { updatePosition = origFerry }
+    for _ = 1, 600 do VRCompanion:update(16.6) end
+    assert(_G.Ferry.updatePosition ~= origFerry, "late Ferry must get guarded within bounded updates")
+    assert(pcall(function() _G.Ferry:updatePosition(0.0) end), "Ferry dt=0 must be swallowed")
+    assert(ferryCalls == 0)
+
+    -- A vehicle instance appearing later
+    local veh = { updateVehicleSpeed = function(self, dt) vehCalls = vehCalls + 1 end }
+    local origVeh = veh.updateVehicleSpeed
+    _G.g_currentMission.vehicles[1] = veh
+    for _ = 1, 600 do VRCompanion:update(16.6) end
+    assert(veh.updateVehicleSpeed ~= origVeh, "late vehicle must get guarded within bounded updates")
+    veh:updateVehicleSpeed(0.0)
+    assert(vehCalls == 0)
+
+    -- deleteMap-equivalent restore
+    VRCompanion:unhookVehicleSpeed()
+    assert(_G.Ferry.updatePosition == origFerry, "Ferry original must be restored")
+    assert(veh.updateVehicleSpeed == origVeh, "vehicle original must be restored")
+    _G.Vehicle = nil
+    _G.Ferry = nil
+    _G.g_currentMission = nil
+end)
+
+test("LateFerryIsGuardedWithinBoundedUpdatesAfterMapReload", function()
+    _G.Vehicle = { updateVehicleSpeed = function(self, dt) return 1 end }
+    _G.Ferry = nil
+    VRCompanion:unhookVehicleSpeed()
+    _G.g_currentMission = { vehicles = {} }
+
+    -- A long first session, then back to the menu and into another save.
+    VRCompanion.frameTicks = 100000
+    VRCompanion:update(16.6)
+    VRCompanion:deleteMap()
+    _G.g_currentMission = { vehicles = {} }
+    VRCompanion:hookVehicleSpeed() -- what loadMap does
+
+    local origFerry = function(self, dt)
+        if dt == 0 then error("div by zero") end
+    end
+    _G.Ferry = { updatePosition = origFerry }
+    for _ = 1, 600 do VRCompanion:update(16.6) end
+    assert(_G.Ferry.updatePosition ~= origFerry, "late Ferry must get guarded within bounded updates after a reload")
+
+    VRCompanion:unhookVehicleSpeed()
+    _G.Vehicle = nil
+    _G.Ferry = nil
+    _G.g_currentMission = nil
+end)
+
+test("EnteringANewVehicleGuardsItWithoutWaitingForTheRetry", function()
+    _G.Vehicle = { updateVehicleSpeed = function(self, dt) return 1 end }
+    _G.Ferry = nil
+    VRCompanion:unhookVehicleSpeed()
+    _G.g_currentMission = { vehicles = {} }
+    for _ = 1, 3 do VRCompanion:update(16.6) end
+
+    local vehCalls = 0
+    local veh = { updateVehicleSpeed = function(self, dt) vehCalls = vehCalls + 1 end }
+    local origVeh = veh.updateVehicleSpeed
+    _G.g_currentMission.vehicles[1] = veh
+    _G.g_currentMission.controlledVehicle = veh
+    VRCompanion:update(16.6)
+    assert(veh.updateVehicleSpeed ~= origVeh, "an entered vehicle must be guarded on the transition update")
+    veh:updateVehicleSpeed(0.0)
+    assert(vehCalls == 0)
+
+    VRCompanion:unhookVehicleSpeed()
+    VRCompanion.lastControlledVehicle = nil
+    _G.Vehicle = nil
+    _G.g_currentMission = nil
+end)
+
 -- Slice 13: Base Camera Stereoscopic Translation in Dual-Pass and AFR Modes
 test("BaseCameraTranslatesStereoscopicallyInDualPassMode", function()
     local setTransCalls = {}

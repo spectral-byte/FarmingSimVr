@@ -10,6 +10,10 @@ VRCompanion.Core = VRCompanion.Core or {}
 VRCompanion.name = VRCompanion.name or g_currentModName or "FS25_VRCompanion"
 VRCompanion.version = VRCompanion.version or "1.0.0.0"
 
+-- Slow retry cadence (in update ticks) for re-running the dt=0 guard install so a late
+-- Ferry class or newly spawned vehicles are picked up without scanning _G every frame.
+VRCompanion.VEHICLE_SPEED_HOOK_RETRY_TICKS = 180
+
 VRCompanion.handshakeComplete = (VRCompanion.handshakeComplete ~= nil) and VRCompanion.handshakeComplete or false
 VRCompanion.frameTicks = VRCompanion.frameTicks or 0
 VRCompanion.lastControlledVehicle = VRCompanion.lastControlledVehicle or nil
@@ -393,6 +397,8 @@ function VRCompanion:hookVehicleSpeed()
     end
 
     self.vehicleSpeedHooked = true
+    -- Recorded here so the install from loadMap also restarts the slow retry cadence.
+    self.lastVehicleSpeedHookTick = self.frameTicks or 0
 end
 
 function VRCompanion:unhookVehicleSpeed()
@@ -633,7 +639,11 @@ function VRCompanion:update(dt)
     if not self.missionUpdateHooked then
         self:hookMissionUpdate()
     end
-    if not self.vehicleSpeedHooked or self.origFerryUpdatePosition == nil then
+    -- Install dt=0 guards once, then only retry (to catch a late Ferry class or newly
+    -- spawned vehicles) on a slow cadence or on a vehicle transition, never every frame.
+    local speedHookRetryDue = self.vehicleSpeedHooked
+        and (self.frameTicks - (self.lastVehicleSpeedHookTick or 0)) >= self.VEHICLE_SPEED_HOOK_RETRY_TICKS
+    if not self.vehicleSpeedHooked or speedHookRetryDue then
         self:hookVehicleSpeed()
     end
 
@@ -654,6 +664,8 @@ function VRCompanion:update(dt)
     if self.lastControlledVehicle ~= curVehicle then
         local oldVeh = self.lastControlledVehicle
         self.lastControlledVehicle = curVehicle
+        -- A new vehicle may have just been spawned/entered: re-run the guard install.
+        self:hookVehicleSpeed()
         if type(self.onVehicleTransition) == "function" then
             self:onVehicleTransition(oldVeh, curVehicle)
         end
@@ -717,6 +729,7 @@ function VRCompanion:deleteMap()
     self.inMissionUpdate = false
     self.handshakeComplete = false
     self.frameTicks = 0
+    self.lastVehicleSpeedHookTick = 0
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
     self.activePlayerCamera = nil
