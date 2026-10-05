@@ -464,10 +464,25 @@ function VRCompanion:hookPlayerCamera()
     end
 end
 
+-- Closes a frame-check scope however the wrapped call ended, then passes on its
+-- results or rethrows its error, so an error never leaves a scope open.
+local function endFrameChecksAfter(self, ok, ...)
+    self:endFrameChecks()
+    if not ok then
+        error((...), 0)
+    end
+    return ...
+end
+
 function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     if self.inMissionUpdate then
         return origUpdateFn(missionSelf, dt, ...)
     end
+    self:beginFrameChecks()
+    return endFrameChecksAfter(self, pcall(self.runMissionUpdate, self, missionSelf, dt, origUpdateFn, ...))
+end
+
+function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
     local isSequentialDualPass = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS)
         and not self.is2DViewActive
@@ -628,6 +643,11 @@ function VRCompanion:unhookMissionUpdate()
 end
 
 function VRCompanion:update(dt)
+    self:beginFrameChecks()
+    return endFrameChecksAfter(self, pcall(self.runUpdate, self, dt))
+end
+
+function VRCompanion:runUpdate(dt)
     self.frameTicks = (self.frameTicks or 0) + 1
 
     -- Synchronize 2D view active state with native VRBridge if changed externally
@@ -749,6 +769,7 @@ function VRCompanion:deleteMap()
 
     self.inMissionUpdate = false
     self.handshakeComplete = false
+    self:clearFrameChecks()
     self.frameTicks = 0
     self.lastVehicleSpeedHookTick = 0
     self.vehicleCameraHooked = false

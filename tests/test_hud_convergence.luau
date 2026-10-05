@@ -641,6 +641,217 @@ test("MenuTransitionsPreserveConvergenceParityState", function()
     _G.VRBridge = nil
 end)
 
+-- Issue #10: the pass-through and head-tracking checks resolve once per update
+local function withProbedUpdate(probe)
+    local real = VRCompanion.updateHudConvergence
+    VRCompanion.updateHudConvergence = function(self, dt)
+        probe()
+        return real(self, dt)
+    end
+    local ok, err = pcall(function() VRCompanion:update(16) end)
+    VRCompanion.updateHudConvergence = real
+    assert(ok, tostring(err))
+end
+
+-- Peak heap growth (KB) while running fn many times; per-call closures show up as growth
+local function peakHeapGrowthKb(fn, iterations)
+    fn()
+    local base = gcinfo()
+    local peak = 0
+    for i = 1, iterations do
+        fn()
+        local grown = gcinfo() - base
+        if grown > peak then peak = grown end
+    end
+    return peak
+end
+local function installCountingMocks()
+    local counts = { ready = 0, setting = 0, available = 0 }
+    local state = { ready = true, setting = true, available = true }
+    _G.VRBridge = { isReady = function() counts.ready = counts.ready + 1; return state.ready end, isCompanionActive = true }
+    _G.GameSettings = { SETTING = { IS_HEAD_TRACKING_ENABLED = 42 } }
+    _G.g_gameSettings = {
+        getValue = function(_, setting)
+            counts.setting = counts.setting + 1
+            return state.setting
+        end
+    }
+    _G.isHeadTrackingAvailable = function() counts.available = counts.available + 1; return state.available end
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = nil
+    VRCompanion.headTrackingEnabled = true
+    return counts, state
+end
+
+local function clearCountingMocks()
+    _G.VRBridge = nil
+    _G.GameSettings = nil
+    _G.g_gameSettings = nil
+    _G.isHeadTrackingAvailable = nil
+    VRCompanion.passThroughMode = nil
+    VRCompanion.headTrackingEnabled = true
+end
+
+test("RepeatedChecksWithinOneUpdateQueryEachSourceOnce", function()
+    local counts = installCountingMocks()
+    local results = {}
+    withProbedUpdate(function()
+        counts.ready, counts.setting, counts.available = 0, 0, 0
+        for i = 1, 10 do
+            results[#results + 1] = VRCompanion:isPassThroughMode()
+            results[#results + 1] = VRCompanion:isHeadTrackingActive()
+        end
+    end)
+    assert(counts.ready <= 1, "VRBridge.isReady queried " .. counts.ready .. " times in one update")
+    assert(counts.setting <= 1, "game setting read " .. counts.setting .. " times in one update")
+    assert(counts.available <= 1, "isHeadTrackingAvailable called " .. counts.available .. " times in one update")
+    for i = 1, #results, 2 do
+        assert(results[i] == false and results[i + 1] == true, "cached answers must match the resolved answers")
+    end
+    clearCountingMocks()
+end)
+
+local function bothChecks()
+    VRCompanion:isPassThroughMode()
+    VRCompanion:isHeadTrackingActive()
+end
+
+test("CachedChecksDoNotAllocateWithinAnUpdate", function()
+    installCountingMocks()
+    local peak
+    withProbedUpdate(function() peak = peakHeapGrowthKb(bothChecks, 20000) end)
+    assert(peak < 8, "cached checks grew the heap by " .. peak .. " KB")
+    clearCountingMocks()
+end)
+
+test("UncachedChecksDoNotCreateAClosurePerCall", function()
+    installCountingMocks()
+    local peak = peakHeapGrowthKb(bothChecks, 20000)
+    assert(peak < 8, "checks grew the heap by " .. peak .. " KB")
+    clearCountingMocks()
+end)
+test("ReadinessChangeIsReflectedByTheNextUpdate", function()
+    local counts, state = installCountingMocks()
+    local seen
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == false)
+    state.ready = false
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == true, "runtime becoming unready must show up on the next update")
+    _G.VRBridge = nil
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == true)
+    clearCountingMocks()
+end)
+
+test("HeadTrackingSettingAndAvailabilityChangesAreReflectedByTheNextUpdate", function()
+    local counts, state = installCountingMocks()
+    local seen
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == true)
+    state.setting = false
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == false, "head-tracking setting toggle must show up on the next update")
+    state.setting = true
+    state.available = false
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == false, "head tracking becoming unavailable must show up on the next update")
+    clearCountingMocks()
+end)
+
+test("SettersTakeEffectNoLaterThanTheNextUpdate", function()
+    installCountingMocks()
+    local seen
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == false)
+    VRCompanion:setPassThroughMode(true)
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == true, "setPassThroughMode(true) must apply by the next update")
+    VRCompanion:setPassThroughMode(false)
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == false)
+
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == true)
+    VRCompanion:setHeadTrackingEnabled(false)
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == false, "setHeadTrackingEnabled(false) must apply by the next update")
+    VRCompanion:setHeadTrackingEnabled(true)
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == true)
+    clearCountingMocks()
+end)
+
+-- The game runs VRCompanion:update inside the hooked mission update
+local function withHookedMissionUpdate(missionUpdate, fn, mode)
+    _G.FSBaseMission = { update = missionUpdate }
+    VRCompanion:setRenderingMode(mode or "AFR")
+    VRCompanion:setSubPassIndex(0)
+    VRCompanion:hookMissionUpdate()
+    local ok, err = pcall(fn)
+    VRCompanion:unhookMissionUpdate()
+    VRCompanion:setRenderingMode("AFR")
+    _G.FSBaseMission = nil
+    assert(ok, tostring(err))
+end
+
+test("UpdateNestedInTheHookedMissionUpdateQueriesEachSourceOncePerFrame", function()
+    local counts = installCountingMocks()
+    local real = VRCompanion.updateHudConvergence
+    VRCompanion.updateHudConvergence = function(self, dt)
+        for _ = 1, 10 do bothChecks() end
+        return real(self, dt)
+    end
+    local ok, err = true, nil
+    for _, mode in ipairs({ "AFR", "DualPass" }) do
+        if ok then
+            ok, err = pcall(withHookedMissionUpdate, function(self, dt) VRCompanion:update(dt) end, function()
+                for _ = 1, 3 do
+                    counts.ready, counts.setting, counts.available = 0, 0, 0
+                    -- Sub-pass 0 runs the mission update (and with it VRCompanion:update)
+                    VRCompanion:setSubPassIndex(0)
+                    _G.FSBaseMission:update(16)
+                    local where = mode .. ": "
+                    assert(counts.ready == 1, where .. "VRBridge.isReady queried " .. counts.ready .. " times in one frame")
+                    assert(counts.setting == 1, where .. "game setting read " .. counts.setting .. " times in one frame")
+                    assert(counts.available == 1, where .. "isHeadTrackingAvailable called " .. counts.available .. " times in one frame")
+                end
+            end, mode)
+        end
+    end
+    VRCompanion.updateHudConvergence = real
+    clearCountingMocks()
+    assert(ok, tostring(err))
+end)
+
+test("AnErrorDuringAnUpdateClosesTheFrameCheckScope", function()
+    local counts, state = installCountingMocks()
+    local real = VRCompanion.updateHudConvergence
+    VRCompanion.updateHudConvergence = function(self, dt)
+        bothChecks()
+        error("hud update failed")
+    end
+    local updateOk = pcall(function() VRCompanion:update(16) end)
+    VRCompanion.updateHudConvergence = real
+
+    local missionOk
+    local ok, err = pcall(withHookedMissionUpdate, function(self, dt)
+        bothChecks()
+        error("mission update failed")
+    end, function()
+        missionOk = pcall(function() _G.FSBaseMission:update(16) end)
+    end)
+
+    local depth = VRCompanion.frameCheckDepth or 0
+    state.ready = false
+    local seen = VRCompanion:isPassThroughMode()
+    clearCountingMocks()
+    assert(ok, tostring(err))
+    assert(updateOk == false and missionOk == false, "the errors must still reach the caller")
+    assert(depth == 0, "an error must not leave a frame-check scope open, depth=" .. tostring(depth))
+    assert(seen == true, "checks outside an update must resolve fresh after an error")
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 if failed > 0 then
     error(string.format("%d tests failed", failed))
