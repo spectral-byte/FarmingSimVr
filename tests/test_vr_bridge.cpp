@@ -404,15 +404,18 @@ TEST_F(VrBridgeTest, FillsCallerSuppliedTablesInPlaceForPoseAndProjection) {
             return n
         end
 
-        -- getHeadPose
-        local out = {}
-        local ret = VRBridge.getHeadPose(out)
-        assert(ret == out, "getHeadPose must return the supplied table")
+        -- A table lacking any field is never written into (the Injector must not insert keys into a
+        -- game-created table); a complete fresh table comes back instead, which is then filled in place.
+        local incomplete = {}
+        local out = VRBridge.getHeadPose(incomplete)
+        assert(out ~= incomplete and next(incomplete) == nil, "incomplete table must be left untouched")
+        assert(VRBridge.getHeadPose(out) == out, "getHeadPose must return a complete supplied table")
         assert(sameFields(out, VRBridge.getHeadPose(), "headPose") == 13, "head pose has 13 fields")
 
         -- getEyePose: index, string, default, and either argument order
-        local eyeOut = {}
+        local eyeOut = VRBridge.getEyePose(1, {})
         assert(VRBridge.getEyePose(1, eyeOut) == eyeOut, "getEyePose(1, out) returns out")
+        assert(VRBridge.getEyePose(1, out) ~= out, "a head-pose table lacks the eye field, so it is not filled in place")
         assert(eyeOut.eye == 1, "eye index honoured alongside output table")
         sameFields(eyeOut, VRBridge.getEyePose(1), "eyePose right")
         assert(VRBridge.getEyePose("left", eyeOut) == eyeOut)
@@ -424,7 +427,7 @@ TEST_F(VrBridgeTest, FillsCallerSuppliedTablesInPlaceForPoseAndProjection) {
         assert(eyeOut.eye == 0, "table-only call selects the default eye")
 
         -- getEyeProjection
-        local proj = {}
+        local proj = VRBridge.getEyeProjection(1, {})
         assert(VRBridge.getEyeProjection(1, proj) == proj, "getEyeProjection(1, out) returns out")
         assert(proj.eye == 1, "eye index honoured alongside output table")
         assert(sameFields(proj, VRBridge.getEyeProjection(1), "projection right") == 15)
@@ -437,7 +440,7 @@ TEST_F(VrBridgeTest, FillsCallerSuppliedTablesInPlaceForPoseAndProjection) {
         assert(proj.eye == 0, "table-only call selects the default eye")
 
         -- Refilling the same table overwrites previous values (no staleness)
-        local reused = {}
+        local reused = VRBridge.getEyeProjection(0, {})
         VRBridge.getEyeProjection(0, reused)
         local leftX = reused.xOffset
         VRBridge.getEyeProjection(1, reused)
