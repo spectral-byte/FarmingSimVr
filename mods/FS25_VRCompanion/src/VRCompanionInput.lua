@@ -14,7 +14,9 @@ function VRCompanion:registerActionEvents(force)
         return
     end
 
-    local actionEvents = inputBinding.actionEvents or (inputBinding.events and inputBinding.events)
+    -- FS25 keys `events` by the event id registerActionEvent returns; `actionEvents`
+    -- is keyed by action name, so it must not be used for id lookups.
+    local actionEvents = inputBinding.events
     local isHudEventActive = false
     local isRecenterEventActive = false
     local isSnapLeftEventActive = false
@@ -175,42 +177,6 @@ function VRCompanion:registerActionEvents(force)
             end
         end
     end
-
-    self:diagnoseActionEventStorage(inputBinding, force)
-end
-
--- TEMPORARY diagnostic for issue #16: logs how g_inputBinding stores registered
--- action events so the periodic re-registration check can be matched to FS25.
--- Capped so a mis-keyed check cannot flood the log. Remove once confirmed.
-function VRCompanion:diagnoseActionEventStorage(inputBinding, force)
-    self.eventStorageDiagCount = (self.eventStorageDiagCount or 0) + 1
-    if self.eventStorageDiagCount > 6 then
-        return
-    end
-    local ids = {
-        hud = self.hudToggleActionEventId, recenter = self.recenterActionEventId,
-        snapL = self.snapLeftActionEventId, snapR = self.snapRightActionEventId,
-        view = self.toggleViewActionEventId,
-    }
-    print(string.format("[FS25_VR][diag#16] registerActionEvents call %d force=%s ids: hud=%s recenter=%s snapL=%s snapR=%s view=%s",
-        self.eventStorageDiagCount, tostring(force), tostring(ids.hud), tostring(ids.recenter),
-        tostring(ids.snapL), tostring(ids.snapR), tostring(ids.view)))
-    print(string.format("[FS25_VR][diag#16] inputBinding.actionEvents=%s inputBinding.events=%s",
-        type(inputBinding.actionEvents), type(inputBinding.events)))
-    local probe = ids.hud
-    local keys = {}
-    for k, v in pairs(inputBinding) do
-        if type(v) == "table" then
-            local hit, count = "no", 0
-            pcall(function()
-                for _ in pairs(v) do count = count + 1 end
-                if probe ~= nil and v[probe] ~= nil then hit = "YES(" .. type(v[probe]) .. ")" end
-            end)
-            table.insert(keys, string.format("%s[n=%d,hasId=%s]", tostring(k), count, hit))
-        end
-    end
-    table.sort(keys)
-    print("[FS25_VR][diag#16] inputBinding table fields: " .. table.concat(keys, ", "))
 end
 
 function VRCompanion:consoleCommandSetHudInsets(insetXStr, insetYStr, scaleStr, topInsetStr)
