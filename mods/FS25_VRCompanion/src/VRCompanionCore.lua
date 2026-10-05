@@ -476,6 +476,8 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
     if not isSequentialDualPass then
         self.accumulatedPass1Dt = 0.0
+        self.deferRenderingCameraBind = false
+        self:endEyeProjectionScope()
         return origUpdateFn(missionSelf, dt, ...)
     end
 
@@ -485,6 +487,12 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     end
 
     local subPass = self:getSubPassIndex() % 2
+
+    -- One eye projection fetch and one rendering camera bind per sub-pass: camera
+    -- updates inside the sub-pass share the cached projection and leave the bind to
+    -- the single bindRenderingCamera call at the end.
+    self:beginEyeProjectionScope()
+    self.deferRenderingCameraBind = true
 
     if subPass == 1 then
         -- Sub-Pass 1 (Right Eye): Freeze simulation at timestamp T.
@@ -496,14 +504,12 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         local camLeft, camRight = self:getStereoCameraNodes()
         local targetCam = camRight
 
-        self:bindRenderingCamera(targetCam)
         if targetCam ~= nil then
-            self:applyCameraProjection(targetCam, 1)
+            self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, 1)
         end
 
         -- Synchronize right eye camera transforms without running engine simulation
-        self:syncActiveEyeCamera(1)
-        self:bindRenderingCamera(targetCam)
+        self:finishSubPass(subPass, 1, targetCam)
         if type(self.updateHudConvergence) == "function" then
             self:updateHudConvergence(0.0)
         end
@@ -522,11 +528,9 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     local camLeft, camRight = self:getStereoCameraNodes()
     local targetCam = camLeft
 
-    self:bindRenderingCamera(targetCam)
-
     -- Update camera projection for active eye
     if targetCam ~= nil then
-        self:applyCameraProjection(targetCam, 0)
+        self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, 0)
     end
 
     -- Run mission update with accumulated real dt under reentrancy guard and pcall protection
@@ -542,8 +546,7 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         res = nil
     end
 
-    self:syncActiveEyeCamera(0)
-    self:bindRenderingCamera(targetCam)
+    self:finishSubPass(subPass, 0, targetCam)
     if type(self.updateHudConvergence) == "function" then
         self:updateHudConvergence(effectiveDt)
     end
@@ -551,6 +554,22 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     return res
 end
 
+-- Runs one camera step of a sub-pass; an error is logged instead of escaping, so the
+-- sub-pass still ends with its single camera bind and closes its projection scope.
+function VRCompanion:runSubPassStep(subPass, fn, ...)
+    local ok, err = pcall(fn, self, ...)
+    if not ok and self.lastMissionUpdateError ~= tostring(err) then
+        print(string.format("[FS25_VR] [Warning] Camera update error on Sub-Pass %d: %s", subPass, tostring(err)))
+        self.lastMissionUpdateError = tostring(err)
+    end
+end
+
+function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam)
+    self:runSubPassStep(subPass, self.syncActiveEyeCamera, eyeIndex)
+    self.deferRenderingCameraBind = false
+    self:bindRenderingCamera(targetCam)
+    self:endEyeProjectionScope()
+end
 function VRCompanion:hookMissionUpdate()
     if self.missionUpdateHooked then
         return
@@ -602,6 +621,8 @@ function VRCompanion:unhookMissionUpdate()
     end
 
     self.accumulatedPass1Dt = 0.0
+    self.deferRenderingCameraBind = false
+    self:endEyeProjectionScope()
     self.missionUpdateHooked = false
     print("[FS25_VR] Unhooked mission update loop.")
 end

@@ -106,7 +106,7 @@ test("EyeProjectionReadsReuseOneTableAcrossCalls", function()
     VRCompanion:applyCameraProjection(7, 1)
     VRCompanion:applyCameraProjection(7, 0)
     assert(projCalls - before == 3, "getEyeProjection must be read each time")
-    assert(count(projTablesSeen) == 1, "bridge must only ever be handed one projection table")
+    assert(count(projTablesSeen) == 2, "bridge must only ever be handed one projection table per eye")
 end)
 
 test("PerFrameVehicleCameraUpdatesReuseBothTables", function()
@@ -120,7 +120,7 @@ test("PerFrameVehicleCameraUpdatesReuseBothTables", function()
         VRCompanion:onVehicleCameraUpdate(cam, 16.6)
     end
     assert(count(poseTablesSeen) == 1, "pose table must be reused across updates")
-    assert(count(projTablesSeen) == 1, "projection table must be reused across updates")
+    assert(count(projTablesSeen) <= 2, "projection tables (one per eye) must be reused across updates")
 end)
 
 test("TrackIrFallbackKeepsReusedTableAndDropsStaleQuaternion", function()

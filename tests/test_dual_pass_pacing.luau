@@ -943,5 +943,250 @@ test("BaseCameraTranslatesStereoscopicallyInDualPassMode", function()
     VRCompanion:setSubPassIndex(0)
 end)
 
+-- Slice 14: One eye projection fetch and one rendering camera bind per camera update / sub-pass
+local function installProjectionCountingBridge(state)
+    state.projectionFetches = 0
+    state.binds = {}
+    _G.setTranslation = function() end
+    _G.setRotation = function() end
+    _G.g_cameraManager = {
+        setActiveCamera = function(self, cam)
+            table.insert(state.binds, cam)
+        end
+    }
+    _G.VRBridge = {
+        isReady = function() return true end,
+        isCompanionActive = true,
+        getIpd = function() return 0.064 end,
+        getFrameParity = function() return state.parity or 0 end,
+        getRenderingMode = function() return state.mode end,
+        getSubPassIndex = function() return state.subPass or 0 end,
+        setSubPassIndex = function(idx) state.subPass = idx end,
+        getEyeProjection = function(eye)
+            state.projectionFetches = state.projectionFetches + 1
+            return { isValid = true, fovY = 1.0, xOffset = 0, yOffset = 0 }
+        end,
+        getHeadPose = function()
+            return { isValid = true, x = 0, y = 0, z = 0, pitch = 0, yaw = 0, roll = 0, qx = 0, qy = 0, qz = 0, qw = 1 }
+        end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.headTrackingEnabled = true
+    VRCompanion.is2DViewActive = false
+    VRCompanion.isMenuVisible = false
+end
+
+local function cleanupProjectionCountingBridge()
+    _G.setTranslation = nil
+    _G.setRotation = nil
+    _G.g_cameraManager = nil
+    _G.g_currentMission = nil
+    _G.VRBridge = nil
+    VRCompanion:setRenderingMode("AFR")
+    VRCompanion:setSubPassIndex(0)
+end
+
+test("VehicleCameraUpdateFetchesEyeProjectionOnceAndBindsOnce", function()
+    local vehCam = { isInside = true, cameraNode = 9101, origRotY = 0, origRotX = 0, origRotZ = 0 }
+    for _, mode in ipairs({ "AFR", "DualPass" }) do
+        for eye = 0, 1 do
+            local state = { mode = (mode == "AFR") and "AFR" or "SequentialDualPass", parity = eye, subPass = eye }
+            installProjectionCountingBridge(state)
+            VRCompanion.cameraNodeLeft = 9102
+            VRCompanion.cameraNodeRight = 9103
+            VRCompanion:setRenderingMode(mode)
+            VRCompanion:setSubPassIndex(eye)
+
+            VRCompanion:onVehicleCameraUpdate(vehCam, 0.016)
+
+            assert(state.projectionFetches == 1, string.format("%s eye %d: expected 1 eye projection fetch, got %d", mode, eye, state.projectionFetches))
+            assert(#state.binds == 1, string.format("%s eye %d: expected 1 camera bind, got %d", mode, eye, #state.binds))
+            local expected = (eye == 1) and 9103 or 9102
+            assert(state.binds[1] == expected, string.format("%s eye %d: expected bind of %d, got %s", mode, eye, expected, tostring(state.binds[1])))
+            cleanupProjectionCountingBridge()
+        end
+    end
+end)
+
+test("PlayerCameraUpdateFetchesEyeProjectionOnceAndBindsOnce", function()
+    local playerCam = { firstPersonCamera = 9201 }
+    for eye = 0, 1 do
+        local state = { mode = "AFR", parity = eye }
+        installProjectionCountingBridge(state)
+        VRCompanion.cameraNodeLeft = 9202
+        VRCompanion.cameraNodeRight = 9203
+        VRCompanion:setRenderingMode("AFR")
+
+        VRCompanion:onPlayerCameraUpdate(playerCam, 0.016)
+
+        assert(state.projectionFetches == 1, string.format("eye %d: expected 1 eye projection fetch, got %d", eye, state.projectionFetches))
+        assert(#state.binds == 1, string.format("eye %d: expected 1 camera bind, got %d", eye, #state.binds))
+        local expected = (eye == 1) and 9203 or 9202
+        assert(state.binds[1] == expected, string.format("eye %d: expected bind of %d, got %s", eye, expected, tostring(state.binds[1])))
+        cleanupProjectionCountingBridge()
+    end
+end)
+
+test("SequentialDualPassSubPassFetchesEyeProjectionOnceAndBindsOnce", function()
+    local vehCam = { isInside = true, cameraNode = 9301, origRotY = 0, origRotX = 0, origRotZ = 0 }
+    local state = { mode = "SequentialDualPass", subPass = 0 }
+    installProjectionCountingBridge(state)
+    _G.g_currentMission = { controlledVehicle = { getActiveCamera = function() return vehCam end } }
+    local updates = 0
+    _G.FSBaseMission = {
+        update = function(self, dt)
+            updates = updates + 1
+            -- the game's own camera hooks fire during the mission update on sub-pass 0
+            VRCompanion:onVehicleCameraUpdate(vehCam, dt)
+        end
+    }
+    VRCompanion.cameraNodeLeft = 9302
+    VRCompanion.cameraNodeRight = 9303
+    VRCompanion:setRenderingMode("DualPass")
+    VRCompanion:hookMissionUpdate()
+
+    for subPass = 0, 1 do
+        state.subPass = subPass
+        VRCompanion:setSubPassIndex(subPass)
+        state.projectionFetches = 0
+        state.binds = {}
+
+        _G.FSBaseMission:update(16.666)
+
+        assert(state.projectionFetches == 1, string.format("sub-pass %d: expected 1 eye projection fetch, got %d", subPass, state.projectionFetches))
+        assert(#state.binds == 1, string.format("sub-pass %d: expected 1 camera bind, got %d", subPass, #state.binds))
+        local expected = (subPass == 1) and 9303 or 9302
+        assert(state.binds[1] == expected, string.format("sub-pass %d: expected bind of %d, got %s", subPass, expected, tostring(state.binds[1])))
+    end
+    assert(updates == 1, "mission update must run only on sub-pass 0")
+
+    -- A projection cached for one sub-pass must not leak into the next camera update
+    state.projectionFetches = 0
+    VRCompanion:onVehicleCameraUpdate(vehCam, 0.016)
+    assert(state.projectionFetches == 1, "a camera update outside a sub-pass must fetch a fresh projection")
+
+    VRCompanion:unhookMissionUpdate()
+    _G.FSBaseMission = nil
+    cleanupProjectionCountingBridge()
+end)
+
+test("NonStereoCameraUpdateAppliesTheLeftEyeProjectionToTheLeftCamera", function()
+    local vehCam = { isInside = true, cameraNode = 9501, origRotY = 0, origRotX = 0, origRotZ = 0 }
+    local state = { mode = "SequentialDualPass", subPass = 1 }
+    installProjectionCountingBridge(state)
+    _G.VRBridge.requiresAfrFallback = false
+    _G.VRBridge.getEyeProjection = function(eye)
+        state.projectionFetches = state.projectionFetches + 1
+        return { isValid = true, fovY = (eye == 1) and 2.0 or 1.0, xOffset = 0, yOffset = 0 }
+    end
+    local fovByNode = {}
+    _G.setFovY = function(node, fov) fovByNode[node] = fov end
+    VRCompanion.cameraNodeLeft = 9502
+    VRCompanion.cameraNodeRight = 9503
+    VRCompanion:setRenderingMode("DualPass")
+    VRCompanion:setSubPassIndex(1)
+
+    local ok, err = pcall(function()
+        VRCompanion:onVehicleCameraUpdate(vehCam, 0.016)
+    end)
+    _G.setFovY = nil
+    cleanupProjectionCountingBridge()
+    assert(ok, tostring(err))
+    assert(fovByNode[9502] == 1.0, "the left camera must get the left eye's projection, got fovY=" .. tostring(fovByNode[9502]))
+end)
+
+test("SubPassStillBindsItsEyeCameraWhenTheCameraSyncThrows", function()
+    local state = { mode = "SequentialDualPass", subPass = 1 }
+    installProjectionCountingBridge(state)
+    _G.FSBaseMission = { update = function(self, dt) end }
+    VRCompanion.cameraNodeLeft = 9602
+    VRCompanion.cameraNodeRight = 9603
+    VRCompanion:setRenderingMode("DualPass")
+    VRCompanion:hookMissionUpdate()
+    local origSync = VRCompanion.syncActiveEyeCamera
+    VRCompanion.syncActiveEyeCamera = function() error("camera node was deleted") end
+
+    local results = {}
+    local ok, err = pcall(function()
+        for subPass = 0, 1 do
+            state.subPass = subPass
+            VRCompanion:setSubPassIndex(subPass)
+            state.binds = {}
+            _G.FSBaseMission:update(16.666)
+            results[subPass] = {
+                binds = state.binds,
+                deferred = VRCompanion.deferRenderingCameraBind,
+                scopeOpen = VRCompanion.eyeProjectionCache ~= nil and VRCompanion.eyeProjectionCache.active,
+            }
+        end
+    end)
+    VRCompanion.syncActiveEyeCamera = origSync
+    VRCompanion:unhookMissionUpdate()
+    _G.FSBaseMission = nil
+    cleanupProjectionCountingBridge()
+    assert(ok, tostring(err))
+
+    for subPass = 0, 1 do
+        local r = results[subPass]
+        local expected = (subPass == 1) and 9603 or 9602
+        assert(#r.binds == 1 and r.binds[1] == expected, string.format("sub-pass %d: eye camera %d must still be bound", subPass, expected))
+        assert(r.deferred == false, string.format("sub-pass %d: the deferred bind must be lifted", subPass))
+        assert(not r.scopeOpen, string.format("sub-pass %d: the projection scope must be closed", subPass))
+    end
+end)
+
+test("MenuBackgroundCameraReusesOffsetRecordAndRestoresExactOffset", function()
+    local camNode = 9401
+    local pos = { x = 10, y = 20, z = 30 }
+    local rot = { x = 0.1, y = 0.2, z = 0.3 }
+    local pose = { isValid = true, x = 1, y = 2, z = 3, pitch = 0.01, yaw = 0.02, roll = 0.03 }
+
+    local origGetCamera = _G.getCamera
+    _G.getCamera = function() return camNode end
+    _G.getTranslation = function() return pos.x, pos.y, pos.z end
+    _G.getRotation = function() return rot.x, rot.y, rot.z end
+    _G.setTranslation = function(_, x, y, z) pos.x, pos.y, pos.z = x, y, z end
+    _G.setRotation = function(_, x, y, z) rot.x, rot.y, rot.z = x, y, z end
+    _G.VRBridge = {
+        isReady = function() return true end,
+        isCompanionActive = true,
+        getHeadPose = function() return pose end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.headTrackingEnabled = true
+    VRCompanion.is2DViewActive = false
+    VRCompanion.isMenuVisible = true
+    VRCompanion.menuCameraOffsets = {}
+
+    VRCompanion:updateMenuBackgroundCamera(0.016)
+    local record = VRCompanion.menuCameraOffsets[camNode]
+    assert(record ~= nil, "an offset record must exist after the first menu camera update")
+    assert(pos.x == 11 and pos.y == 22 and pos.z == 33, "first update must apply the head pose translation")
+
+    -- Head moves; the same record is updated in place and the applied offset is replaced, not accumulated
+    pose.x, pose.y, pose.z = 4, 5, 6
+    pose.pitch, pose.yaw, pose.roll = 0.04, 0.05, 0.06
+    VRCompanion:updateMenuBackgroundCamera(0.016)
+    VRCompanion:updateMenuBackgroundCamera(0.016)
+    assert(rawequal(VRCompanion.menuCameraOffsets[camNode], record), "menu camera offset record must be reused across frames")
+    assert(pos.x == 14 and pos.y == 25 and pos.z == 36, "translation must be base + latest pose only")
+    assert(math.abs(rot.x - 0.14) < 1e-9 and math.abs(rot.y - 0.25) < 1e-9 and math.abs(rot.z - 0.36) < 1e-9, "rotation must be base + latest pose only")
+    assert(record.tx == 4 and record.ty == 5 and record.tz == 6 and record.rx == 0.04 and record.ry == 0.05 and record.rz == 0.06, "record must hold exactly the applied offset")
+
+    -- Restoring on menu close removes exactly the applied offset
+    VRCompanion:restoreMenuBackgroundCamera()
+    assert(pos.x == 10 and pos.y == 20 and pos.z == 30, "restore must return the base translation")
+    assert(math.abs(rot.x - 0.1) < 1e-9 and math.abs(rot.y - 0.2) < 1e-9 and math.abs(rot.z - 0.3) < 1e-9, "restore must return the base rotation")
+    assert(next(VRCompanion.menuCameraOffsets) == nil, "offset records must be cleared after restore")
+
+    _G.getCamera = origGetCamera
+    _G.getTranslation = nil
+    _G.getRotation = nil
+    _G.setTranslation = nil
+    _G.setRotation = nil
+    _G.VRBridge = nil
+    VRCompanion.isMenuVisible = false
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed", failed))
