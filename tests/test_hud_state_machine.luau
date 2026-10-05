@@ -589,44 +589,11 @@ test("LoadMapAndLifecycleIntegratesHudHooking", function()
     assert(VRCompanion.hudHooked == false, "deleteMap must unhook HUD displays")
 end)
 
-test("KeyEventDirectlyCyclesHudStateOnCtrlH", function()
-    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
-    assert(VRCompanion:getHudState() == 0)
-
-    -- Mock Input table
-    _G.Input = {
-        KEY_h = 104,
-        KEY_rctrl = 305,
-        KEY_lctrl = 306,
-        MOD_RCTRL = 64,
-        MOD_LCTRL = 32,
-        isKeyPressed = function(key)
-            return key == 305 -- Right Ctrl is pressed
-        end
-    }
-
-    -- 1. Press 'h' without isDown (key up) -> should not trigger
-    VRCompanion:keyEvent(104, 104, 64, false)
-    assert(VRCompanion:getHudState() == 0, "Key release must not cycle HUD")
-
-    -- 2. Press 'h' with isDown and RCtrl held -> cycles 0 -> 1 (Streamlined)
-    VRCompanion:keyEvent(104, 104, 64, true)
-    assert(VRCompanion:getHudState() == 1, "RCtrl + H key down must advance to Streamlined")
-
-    -- 3. Press 'h' with isDown and RCtrl held again -> cycles 1 -> 2 (Full)
-    VRCompanion:keyEvent(104, 104, 64, true)
-    assert(VRCompanion:getHudState() == 2, "RCtrl + H key down must advance to Full")
-
-    -- 4. Press 'h' with isDown and RCtrl held again -> cycles 2 -> 0 (Hidden)
-    VRCompanion:keyEvent(104, 104, 64, true)
-    assert(VRCompanion:getHudState() == 0, "RCtrl + H key down must advance to Hidden")
-
-    -- 5. Press 'h' with no Ctrl held -> should not trigger
-    _G.Input.isKeyPressed = function(key) return false end
-    VRCompanion:keyEvent(104, 104, 0, true)
-    assert(VRCompanion:getHudState() == 0, "Plain 'h' without Ctrl must not cycle HUD")
-
-    _G.Input = nil
+-- Bindings live in modDesc.xml and reach the mod only through g_inputBinding action events.
+-- A keyEvent on the mod listener would act on raw keys and ignore rebinding in the Controls menu.
+test("ModHasNoRawKeyEventHandlerSoBindingsComeOnlyFromInputBinding", function()
+    assert(VRCompanion.keyEvent == nil, "VRCompanion must not define keyEvent")
+    assert(VRCompanion.Input.keyEvent == nil, "VRCompanion.Input must not export keyEvent")
 end)
 
 test("RegisterActionEventsReArmsOnVehicleTransitionsAndPeriodicUpdate", function()

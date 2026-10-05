@@ -1,7 +1,8 @@
 -- ====================================================================
 -- FS25 VR Companion Mod: Input Subsystem
--- Manages in-engine action events, hardware key combinations, and
--- console commands.
+-- Manages in-engine action events and console commands. All key and
+-- gamepad bindings come from modDesc.xml via g_inputBinding, so players
+-- rebind them in the game's Controls menu.
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -68,12 +69,8 @@ function VRCompanion:registerActionEvents(force)
     end
 
     if force or not isRecenterEventActive then
-        local actionId = (InputAction and InputAction.VR_RECENTER_VIEW) or (_G.InputAction and _G.InputAction.VR_RECENTER_VIEW) or (InputAction and InputAction.VR_RECENTER) or (_G.InputAction and _G.InputAction.VR_RECENTER) or "VR_RECENTER_VIEW"
+        local actionId = (InputAction and InputAction.VR_RECENTER_VIEW) or (_G.InputAction and _G.InputAction.VR_RECENTER_VIEW) or "VR_RECENTER_VIEW"
         local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onRecenterAction, false, true, false, true)
-        if not success and actionId ~= "VR_RECENTER" then
-            local fallbackActionId = (InputAction and InputAction.VR_RECENTER) or (_G.InputAction and _G.InputAction.VR_RECENTER) or "VR_RECENTER"
-            success, eventId = inputBinding:registerActionEvent(fallbackActionId, self, self.onRecenterAction, false, true, false, true)
-        end
         if success and eventId then
             self.recenterActionEventId = eventId
             if type(inputBinding.setActionEventTextPriority) == "function" then
@@ -87,12 +84,12 @@ function VRCompanion:registerActionEvents(force)
             end
             if type(inputBinding.setActionEventText) == "function" then
                 pcall(function()
-                    local txt = (g_i18n and (g_i18n:getText("input_VR_RECENTER_VIEW") or g_i18n:getText("input_VR_RECENTER"))) or "Recenter VR View"
+                    local txt = (g_i18n and g_i18n:getText("input_VR_RECENTER_VIEW")) or "Recenter VR View"
                     inputBinding:setActionEventText(eventId, txt)
                 end)
             end
             if not self.recenterLoggedOnce then
-                print("[FS25_VR] Registered in-engine VR_RECENTER event.")
+                print("[FS25_VR] Registered in-engine VR_RECENTER_VIEW event.")
                 self.recenterLoggedOnce = true
             end
         end
@@ -177,144 +174,6 @@ function VRCompanion:registerActionEvents(force)
                 self.toggleViewLoggedOnce = true
             end
         end
-    end
-end
-
-function VRCompanion:isKeySnapLeft(sym, unicode)
-    local input = Input or (_G and _G.Input)
-    if input ~= nil and (input.KEY_kp_4 ~= nil or input.KEY_numPad4 ~= nil) then
-        return (sym == input.KEY_kp_4 or sym == input.KEY_numPad4)
-    end
-    return (sym == 260 or unicode == 52)
-end
-
-function VRCompanion:isKeySnapRight(sym, unicode)
-    local input = Input or (_G and _G.Input)
-    if input ~= nil and (input.KEY_kp_6 ~= nil or input.KEY_numPad6 ~= nil) then
-        return (sym == input.KEY_kp_6 or sym == input.KEY_numPad6)
-    end
-    return (sym == 262 or unicode == 54)
-end
-
-function VRCompanion:isKeyNumPad0(sym, unicode)
-    local input = Input or (_G and _G.Input)
-    if input ~= nil and (input.KEY_kp_0 ~= nil or input.KEY_numPad0 ~= nil) then
-        return (sym == input.KEY_kp_0 or sym == input.KEY_numPad0)
-    end
-    return (sym == 256 or unicode == 48)
-end
-
-function VRCompanion:isKeyV(sym, unicode)
-    local input = Input or (_G and _G.Input)
-    if input ~= nil and input.KEY_v ~= nil then
-        return (sym == input.KEY_v)
-    end
-    return (sym == 118 or unicode == 118 or unicode == 86)
-end
-
-function VRCompanion:isCtrlHeld(input, modifier)
-    if input ~= nil and type(input.isKeyPressed) == "function" then
-        if (input.KEY_rctrl ~= nil and input.isKeyPressed(input.KEY_rctrl))
-                or (input.KEY_lctrl ~= nil and input.isKeyPressed(input.KEY_lctrl)) then
-            return true
-        end
-    end
-    if modifier ~= nil and modifier > 0 then
-        local band = (bit32 and bit32.band) or (bit and bit.band) or function(a, b) return 0 end
-        local ctrlMask = (input and (input.MOD_RCTRL or input.MOD_LCTRL or input.MOD_CTRL)) or 0
-        if ctrlMask > 0 and band(modifier, ctrlMask) > 0 then
-            return true
-        elseif modifier == 4 or modifier == 32 or modifier == 64 or modifier == 96 then
-            return true
-        end
-    end
-    return false
-end
-
-function VRCompanion:keyEvent(unicode, sym, modifier, isDown)
-    local input = Input or (_G and _G.Input)
-    if not isDown then
-        if self:isKeySnapLeft(sym, unicode) then
-            self.isSnapLeftKeyDown = false
-        elseif self:isKeySnapRight(sym, unicode) then
-            self.isSnapRightKeyDown = false
-        end
-        if self:isKeyNumPad0(sym, unicode) or self:isKeyV(sym, unicode) then
-            self.isToggleViewKeyDown = false
-        end
-        return
-    end
-
-    local isH = false
-    if input ~= nil and input.KEY_h ~= nil then
-        isH = (sym == input.KEY_h)
-    else
-        isH = (sym == 104 or unicode == 104 or unicode == 72)
-    end
-
-    if isH then
-        if self:isCtrlHeld(input, modifier) then
-            local curTime = g_time or (_G and _G.g_time)
-            if curTime == nil or self.lastHudToggleTime == nil or (curTime - self.lastHudToggleTime) >= 300 then
-                print("[FS25_VR] Hardware keyEvent: Ctrl + H detected -> cycling HUD state.")
-                self:onHudToggleAction()
-            end
-            return
-        end
-    end
-
-    if self:isKeyV(sym, unicode) then
-        if self:isCtrlHeld(input, modifier) then
-            if self.isToggleViewKeyDown then
-                return
-            end
-            self.isToggleViewKeyDown = true
-            print("[FS25_VR] Hardware keyEvent: Ctrl + V detected -> toggling VR view mode.")
-            self:onToggleVrViewAction()
-            return
-        end
-    end
-
-    if self:isKeyNumPad0(sym, unicode) then
-        if self.isToggleViewKeyDown then
-            return
-        end
-        self.isToggleViewKeyDown = true
-        print("[FS25_VR] Hardware keyEvent: Numpad 0 detected -> toggling VR view mode.")
-        self:onToggleVrViewAction()
-        return
-    end
-
-    if self:isKeySnapLeft(sym, unicode) then
-        if self.isSnapLeftKeyDown then
-            return
-        end
-        self.isSnapLeftKeyDown = true
-        print("[FS25_VR] Hardware keyEvent: Numpad 4 detected -> snap turn left.")
-        self:snapTurnLeft()
-        return
-    end
-
-    local isRecenter = false
-    if input ~= nil and (input.KEY_kp_5 ~= nil or input.KEY_numPad5 ~= nil) then
-        isRecenter = (sym == input.KEY_kp_5 or sym == input.KEY_numPad5)
-    else
-        isRecenter = (sym == 261 or unicode == 53)
-    end
-    if isRecenter then
-        print("[FS25_VR] Hardware keyEvent: Numpad 5 detected -> recentering VR view.")
-        self:onRecenterAction()
-        return
-    end
-
-    if self:isKeySnapRight(sym, unicode) then
-        if self.isSnapRightKeyDown then
-            return
-        end
-        self.isSnapRightKeyDown = true
-        print("[FS25_VR] Hardware keyEvent: Numpad 6 detected -> snap turn right.")
-        self:snapTurnRight()
-        return
     end
 end
 
@@ -636,12 +495,6 @@ end
 
 -- Export to Input subsystem table
 VRCompanion.Input.registerActionEvents = function(self, ...) return VRCompanion.registerActionEvents(VRCompanion, ...) end
-VRCompanion.Input.isKeySnapLeft = function(self, ...) return VRCompanion.isKeySnapLeft(VRCompanion, ...) end
-VRCompanion.Input.isKeySnapRight = function(self, ...) return VRCompanion.isKeySnapRight(VRCompanion, ...) end
-VRCompanion.Input.isKeyNumPad0 = function(self, ...) return VRCompanion.isKeyNumPad0(VRCompanion, ...) end
-VRCompanion.Input.isKeyV = function(self, ...) return VRCompanion.isKeyV(VRCompanion, ...) end
-VRCompanion.Input.isCtrlHeld = function(self, ...) return VRCompanion.isCtrlHeld(VRCompanion, ...) end
-VRCompanion.Input.keyEvent = function(self, ...) return VRCompanion.keyEvent(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudInsets = function(self, ...) return VRCompanion.consoleCommandSetHudInsets(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudTopInset = function(self, ...) return VRCompanion.consoleCommandSetHudTopInset(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudState = function(self, ...) return VRCompanion.consoleCommandSetHudState(VRCompanion, ...) end

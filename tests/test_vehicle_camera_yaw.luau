@@ -636,7 +636,6 @@ test("RegistersVRRecenterViewActionAndBindsToRecenterAction", function()
     local registeredActions = {}
     _G.InputAction = {
         VR_RECENTER_VIEW = "VR_RECENTER_VIEW",
-        VR_RECENTER = "VR_RECENTER",
         VR_HUD_TOGGLE = "VR_HUD_TOGGLE"
     }
     _G.g_inputBinding = {
@@ -659,6 +658,7 @@ test("RegistersVRRecenterViewActionAndBindsToRecenterAction", function()
         if act == "VR_RECENTER_VIEW" then
             foundRecenterView = true
         end
+        assert(act ~= "VR_RECENTER", "Must not register the superseded VR_RECENTER action")
     end
     assert(foundRecenterView, "Must register VR_RECENTER_VIEW action in-engine")
 end)

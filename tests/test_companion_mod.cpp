@@ -502,8 +502,9 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresRecenterActionAndInputBinding
     std::string modDescContent = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
     ASSERT_FALSE(modDescContent.empty());
 
-    EXPECT_NE(modDescContent.find("<action name=\"VR_RECENTER\""), std::string::npos);
-    EXPECT_NE(modDescContent.find("<actionBinding action=\"VR_RECENTER\""), std::string::npos);
+    EXPECT_NE(modDescContent.find("<action name=\"VR_RECENTER_VIEW\""), std::string::npos);
+    EXPECT_NE(modDescContent.find("<actionBinding action=\"VR_RECENTER_VIEW\""), std::string::npos);
+    EXPECT_EQ(modDescContent.find("\"VR_RECENTER\""), std::string::npos) << "VR_RECENTER is superseded by VR_RECENTER_VIEW";
     EXPECT_NE(modDescContent.find("KEY_numPad5"), std::string::npos);
     EXPECT_EQ(modDescContent.find("<vrSettings>"), std::string::npos) << "Setting defaults live in the DEFAULT_* constants, not modDesc.xml";
     EXPECT_NE(modDescContent.find("setting_recenterVrTrackingSpace"), std::string::npos);
@@ -2836,51 +2837,6 @@ TEST_F(CompanionModTest, RecenterResetsSnappedCameraRotYToNeutralForwardWindshie
     )luau", "=verifyRecenterReset"), 0);
 }
 
-TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerSnapTurnsAndRejectsHeldKeyRepeat) {
-    ASSERT_EQ(LoadCompanionModChecked(L), 0);
-
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion:resetSnapTurnDebounce()
-
-        local mockCam = {
-            isInside = true,
-            cameraNode = 501,
-            origRotY = 0.0,
-            rotY = 0.0
-        }
-        _G.g_currentMission = {
-            controlledVehicle = {
-                getActiveCamera = function() return mockCam end
-            }
-        }
-        _G.g_time = 1000
-
-        -- Numpad 4 (Left, sym 260 / unicode 52)
-        VRCompanion:keyEvent(52, 260, 0, true)
-        assert(math.abs(mockCam.rotY - (math.pi * 0.5)) < 0.0001, "Numpad 4 snaps left")
-
-        -- Held key repeat at t = 1350 is rejected
-        _G.g_time = 1350
-        VRCompanion:keyEvent(52, 260, 0, true)
-        assert(math.abs(mockCam.rotY - (math.pi * 0.5)) < 0.0001, "Held repeat rejected")
-
-        -- Release key
-        VRCompanion:keyEvent(52, 260, 0, false)
-
-        -- Press Numpad 6 (Right, sym 262 / unicode 54) at t = 1400
-        _G.g_time = 1400
-        VRCompanion:keyEvent(54, 262, 0, true)
-        assert(math.abs(mockCam.rotY - 0.0) < 0.0001, "Numpad 6 snaps right back to 0")
-        VRCompanion:keyEvent(54, 262, 0, false)
-
-        -- Press Numpad 5 (Recenter, sym 261 / unicode 53)
-        mockCam.rotY = 1.25
-        _G.g_time = 1700
-        VRCompanion:keyEvent(53, 261, 0, true)
-        assert(math.abs(mockCam.rotY - mockCam.origRotY) < 0.0001, "Numpad 5 resets to origRotY")
-    )luau", "=verifyKeyEventShortcuts"), 0);
-}
-
 TEST_F(CompanionModTest, OnFootSnapTurnAdjustsPlayerCharacterYawNode) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
@@ -3707,55 +3663,6 @@ TEST_F(CompanionModTest, RecenterIn2DModeRealignsFloatingQuadWithoutResettingVeh
         assert(recenterCalls == 1, "VRBridge.recenter must be called when in 3D VR mode")
         assert(alignMenuQuadCalls == 1, "alignMenuQuad must NOT be called in 3D mode")
     )luau", "=testRecenterIn2DMode"), 0);
-}
-
-TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerToggleViewAndDebounceHeldRepeat) {
-    fs25vr::VRBridge bridge(nullptr, nullptr);
-    ASSERT_TRUE(bridge.Inject(L));
-
-    ASSERT_EQ(LoadCompanionModChecked(L), 0);
-
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion:set2DViewActive(false)
-        VRCompanion:resetToggleViewDebounce()
-        _G.g_time = 1000
-
-        _G.Input = {
-            KEY_numPad0 = 256,
-            KEY_v = 118,
-            KEY_rctrl = 305,
-            isKeyPressed = function(key)
-                return key == 305 -- Simulate Ctrl held
-            end
-        }
-
-        -- 1. Hardware shortcut: Numpad 0 (sym 256) key down -> toggles to 2D
-        VRCompanion:keyEvent(48, 256, 0, true)
-        assert(VRCompanion.is2DViewActive == true, "Numpad 0 keyEvent must toggle to 2D mode")
-
-        -- 2. Held repeat for Numpad 0 while key is still held down is ignored
-        _G.g_time = 1500 -- time advanced past debounce
-        VRCompanion:keyEvent(48, 256, 0, true)
-        assert(VRCompanion.is2DViewActive == true, "Repeated Numpad 0 key down without release must be ignored")
-
-        -- 3. Release Numpad 0
-        VRCompanion:keyEvent(48, 256, 0, false)
-        assert(VRCompanion.isToggleViewKeyDown == false, "Key release must clear isToggleViewKeyDown")
-
-        -- 4. Hardware shortcut: Ctrl + V (sym 118 with RCtrl held) -> toggles back to 3D
-        _G.g_time = 2000
-        VRCompanion:keyEvent(118, 118, 0, true)
-        assert(VRCompanion.is2DViewActive == false, "Ctrl + V keyEvent must toggle back to 3D mode")
-
-        -- 5. Held repeat for Ctrl + V is ignored
-        _G.g_time = 2500
-        VRCompanion:keyEvent(118, 118, 0, true)
-        assert(VRCompanion.is2DViewActive == false, "Repeated Ctrl + V key down without release must be ignored")
-
-        -- 6. Release Ctrl + V
-        VRCompanion:keyEvent(118, 118, 0, false)
-        assert(VRCompanion.isToggleViewKeyDown == false, "Key release must clear isToggleViewKeyDown")
-    )luau", "=testKeyEventShortcuts"), 0);
 }
 
 TEST_F(CompanionModTest, ImplementsGetAndSetRenderingMode) {

@@ -28,7 +28,6 @@ if VRCompanion.toggleViewDebounceMs == nil then
     VRCompanion.toggleViewDebounceMs = VRCompanion.DEFAULT_TOGGLE_VIEW_DEBOUNCE_MS
 end
 VRCompanion.lastToggleViewTime = nil
-VRCompanion.isToggleViewKeyDown = false
 if VRCompanion.is2DViewActive == nil then
     VRCompanion.is2DViewActive = false
 end
@@ -396,7 +395,6 @@ end
 
 function VRCompanion:resetToggleViewDebounce()
     self.lastToggleViewTime = nil
-    self.isToggleViewKeyDown = false
 end
 
 function VRCompanion:onToggleVrViewAction(actionName, keyStatus, curTime)

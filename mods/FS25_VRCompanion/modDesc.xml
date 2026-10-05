@@ -24,10 +24,6 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         <sourceFile filename="src/VRCompanion.lua"/>
     </extraSourceFiles>
     <l10n>
-        <text name="input_VR_RECENTER">
-            <en>Recenter VR View</en>
-            <de>VR-Ansicht zentrieren</de>
-        </text>
         <text name="input_VR_RECENTER_VIEW">
             <en>Recenter VR View</en>
             <de>VR-Ansicht zentrieren</de>
@@ -86,7 +82,6 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         </text>
     </l10n>
     <actions>
-        <action name="VR_RECENTER" category="ONFOOT VEHICLE"/>
         <action name="VR_RECENTER_VIEW" category="ONFOOT VEHICLE"/>
         <action name="VR_HUD_TOGGLE" category="ONFOOT VEHICLE"/>
         <action name="VR_SNAP_TURN_LEFT" category="ONFOOT VEHICLE"/>
@@ -94,10 +89,6 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         <action name="VR_TOGGLE_VIEW" category="ONFOOT VEHICLE"/>
     </actions>
     <inputBinding>
-        <actionBinding action="VR_RECENTER">
-            <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad5"/>
-            <binding device="GAMEPAD_DEFAULT" input="BUTTON_11"/>
-        </actionBinding>
         <actionBinding action="VR_RECENTER_VIEW">
             <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad5"/>
             <binding device="GAMEPAD_DEFAULT" input="BUTTON_11"/>

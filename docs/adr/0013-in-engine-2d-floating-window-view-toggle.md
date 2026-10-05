@@ -24,7 +24,7 @@ We established the following architectural design:
 
 3. **Lifecycle, HUD, and Recenter Rules**:
    - **HUD**: In 2D Floating Window Mode, convergence disparity is zeroed out and standard full-frame HUD anchors are used, avoiding redundant insets on the virtual screen.
-   - **Recenter**: Triggering `VR_RECENTER` (<kbd>Numpad 5</kbd>) while in 2D mode realigns the floating quad directly in front of the player's current head gaze.
+   - **Recenter**: Triggering `VR_RECENTER_VIEW` (<kbd>Numpad 5</kbd>) while in 2D mode realigns the floating quad directly in front of the player's current head gaze.
    - **Persistence**: The toggle state is sticky across in-game GUI menus (ESC pause menu, shop, map), but fresh map loads always initialize cleanly in 3D VR mode.
    - **Transition**: Transitions execute instantaneously and silently without intrusive on-screen warning popups.
 

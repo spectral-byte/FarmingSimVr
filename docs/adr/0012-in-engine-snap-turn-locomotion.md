@@ -16,7 +16,7 @@ We established the following architectural design for Snap Turn locomotion:
    - Single-fire on key/button down with a minimum debounce cooldown interval ($250$ms) prevents rapid accidental spin-outs.
 
 3. **Recenter and GUI Lifecycle Rules**:
-   - Triggering the Recenter Action (`VR_RECENTER`) resets any in-cab snap turn back to neutral windshield alignment (`cam.origRotY`).
+   - Triggering the Recenter Action (`VR_RECENTER_VIEW`) resets any in-cab snap turn back to neutral windshield alignment (`cam.origRotY`).
    - Snap turn actions are suppressed when in-game GUI menus are open (`isMenuVisible == true`) to protect 3D floating menu quad alignment.
 
 ## Status

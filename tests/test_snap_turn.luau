@@ -94,61 +94,6 @@ test("DebounceCooldownEnforcesMinimum250msBetweenSnapTurns", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 3: Single-Fire Per Press & Rejection of Held Inputs / Key Repeat in keyEvent
-test("KeyEventSingleFireRejectsHeldKeyRepeatUntilKeyReleased", function()
-    VRCompanion:resetSnapTurnDebounce()
-
-    local mockCam = {
-        isInside = true,
-        cameraNode = 201,
-        origRotY = 0.0,
-        rotY = 0.0
-    }
-    local mockVeh = {
-        getActiveCamera = function() return mockCam end
-    }
-    _G.g_currentMission = {
-        controlledVehicle = mockVeh
-    }
-    _G.g_time = 1000
-
-    -- Mock Input table
-    _G.Input = {
-        KEY_kp_4 = 260,
-        KEY_kp_6 = 262,
-        KEY_kp_5 = 261
-    }
-
-    -- 1. Press Numpad 4 (Left) key down at t = 1000: triggers snap turn left (+pi/2)
-    VRCompanion:keyEvent(52, 260, 0, true)
-    assert(math.abs(mockCam.rotY - (math.pi * 0.5)) < 0.0001, "First Numpad 4 press must snap turn left to +pi/2")
-
-    -- 2. OS key repeat arrives at t = 1350 (350ms later, > 250ms debounce) with isDown = true:
-    -- Because key was held without isDown = false, it must be rejected as held input!
-    _G.g_time = 1350
-    VRCompanion:keyEvent(52, 260, 0, true)
-    assert(math.abs(mockCam.rotY - (math.pi * 0.5)) < 0.0001, "Held key repeat must NOT trigger another turn")
-
-    -- 3. Another key repeat at t = 1700: still rejected
-    _G.g_time = 1700
-    VRCompanion:keyEvent(52, 260, 0, true)
-    assert(math.abs(mockCam.rotY - (math.pi * 0.5)) < 0.0001, "Held key repeat must still be rejected")
-
-    -- 4. Key is released (isDown = false) at t = 1750
-    _G.g_time = 1750
-    VRCompanion:keyEvent(52, 260, 0, false)
-    assert(math.abs(mockCam.rotY - (math.pi * 0.5)) < 0.0001, "Key release must not change camera rotation")
-
-    -- 5. Subsequent press down at t = 1800 (> 250ms since last turn): succeeds
-    _G.g_time = 1800
-    VRCompanion:keyEvent(52, 260, 0, true)
-    assert(math.abs(mockCam.rotY - (-math.pi)) < 0.0001 or math.abs(mockCam.rotY - math.pi) < 0.0001,
-        "New key press after release must trigger snap turn left to pi")
-
-    _G.Input = nil
-    VRCompanion:resetSnapTurnDebounce()
-end)
-
 -- Slice 4: In-Cab Snap Turning Adjusts cam.rotY and Updates headTrackingNode
 test("InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNode", function()
     VRCompanion:resetSnapTurnDebounce()
@@ -449,7 +394,7 @@ test("RecenterActionResetsSnappedRotYBackToNeutralWindshieldAlignment", function
     VRCompanion:snapTurnRight(nil, 1300)
     assert(math.abs(cam.rotY - 0.0) < 0.0001, "Camera facing backward (rotY = 0)")
 
-    -- 2. Trigger VR_RECENTER
+    -- 2. Trigger VR_RECENTER_VIEW
     VRCompanion:onRecenterAction()
 
     -- 3. cam.rotY must be cleanly restored to cam.origRotY (math.pi, facing forward windshield)
@@ -466,48 +411,6 @@ test("RecenterActionResetsSnappedRotYBackToNeutralWindshieldAlignment", function
     local camRot = nodeRotations[601]
     local lookX, _, lookZ = VRCompanion:rotateVectorByYaw(0, 0, -1, camRot.ry)
     assert(lookZ > 0.99, string.format("View after recenter must face forward (+Z), but lookZ = %f", lookZ))
-
-    VRCompanion:resetSnapTurnDebounce()
-end)
-
--- Slice 8: Direct Hardware Key Shortcuts in keyEvent (Numpad 4, 6, 5)
-test("KeyEventHardwareShortcutsTriggerSnapTurnsAndRecenter", function()
-    VRCompanion:resetSnapTurnDebounce()
-
-    local mockCam = {
-        isInside = true,
-        cameraNode = 701,
-        origRotY = math.pi,
-        rotY = math.pi
-    }
-    _G.g_currentMission = {
-        controlledVehicle = {
-            getActiveCamera = function() return mockCam end
-        }
-    }
-    _G.g_time = 1000
-
-    -- 1. Numpad 4 (Left) triggers snap turn left
-    -- Using fallback keycode 260 / unicode 52
-    VRCompanion:keyEvent(52, 260, 0, true)
-    assert(math.abs(mockCam.rotY - (-math.pi * 0.5)) < 0.0001, "Numpad 4 must snap turn left to -pi/2")
-    VRCompanion:keyEvent(52, 260, 0, false) -- release
-
-    -- 2. Numpad 6 (Right) triggers snap turn right
-    _G.g_time = 1300
-    VRCompanion:keyEvent(54, 262, 0, true)
-    assert(math.abs(math.abs(mockCam.rotY) - math.pi) < 0.0001, "Numpad 6 must snap turn right to pi")
-    VRCompanion:keyEvent(54, 262, 0, false) -- release
-
-    -- 3. Numpad 5 triggers recenter
-    _G.g_time = 1600
-    -- Snap turn right first to displace
-    VRCompanion:snapTurnRight(nil, 1600)
-    assert(math.abs(mockCam.rotY - (math.pi * 0.5)) < 0.0001)
-
-    -- Press Numpad 5 (sym 261 / unicode 53)
-    VRCompanion:keyEvent(53, 261, 0, true)
-    assert(math.abs(mockCam.rotY - mockCam.origRotY) < 0.0001, "Numpad 5 must reset view to origRotY")
 
     VRCompanion:resetSnapTurnDebounce()
 end)
@@ -981,8 +884,8 @@ test("OnFootAngleWrappingAcrossPiBoundariesAndFull360Cycles", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 15: On-Foot Hardware Key Shortcuts and Action Events
-test("OnFootKeyEventAndActionEventsTriggerSnapTurns", function()
+-- Slice 15: On-Foot Action Events
+test("OnFootActionEventsTriggerSnapTurns", function()
     VRCompanion:resetSnapTurnDebounce()
 
     local nodeRotations = {}
@@ -1021,33 +924,14 @@ test("OnFootKeyEventAndActionEventsTriggerSnapTurns", function()
     }
     _G.g_time = 1000
 
-    -- 1. Hardware shortcut: Numpad 4 (Left) triggers on-foot snap turn left
-    VRCompanion:keyEvent(52, 260, 0, true)
-    assert(math.abs(nodeRotations[10].ry - (math.pi * 0.5)) < 0.0001,
-        "Numpad 4 keyEvent must snap turn left to +pi/2 on foot")
-    VRCompanion:keyEvent(52, 260, 0, false) -- release
+    VRCompanion:onSnapTurnRightAction()
+    assert(math.abs(nodeRotations[10].ry - (-math.pi * 0.5)) < 0.0001,
+        "onSnapTurnRightAction must snap turn right to -pi/2")
 
-    -- 2. Hardware shortcut: Numpad 6 (Right) triggers on-foot snap turn right
     _G.g_time = 1300
-    VRCompanion:keyEvent(54, 262, 0, true)
+    VRCompanion:onSnapTurnLeftAction()
     assert(math.abs(nodeRotations[10].ry - 0.0) < 0.0001,
-        "Numpad 6 keyEvent must snap turn right back to 0.0 on foot")
-    VRCompanion:keyEvent(54, 262, 0, false) -- release
-
-    -- 3. In-engine Action Callbacks
-    _G.g_time = 1600
-    if type(VRCompanion.onSnapTurnRightAction) == "function" then
-        VRCompanion:onSnapTurnRightAction()
-        assert(math.abs(nodeRotations[10].ry - (-math.pi * 0.5)) < 0.0001,
-            "onSnapTurnRightAction must snap turn right to -pi/2")
-    end
-
-    _G.g_time = 1900
-    if type(VRCompanion.onSnapTurnLeftAction) == "function" then
-        VRCompanion:onSnapTurnLeftAction()
-        assert(math.abs(nodeRotations[10].ry - 0.0) < 0.0001,
-            "onSnapTurnLeftAction must snap turn left back to 0.0")
-    end
+        "onSnapTurnLeftAction must snap turn left back to 0.0")
 
     VRCompanion:resetSnapTurnDebounce()
 end)
