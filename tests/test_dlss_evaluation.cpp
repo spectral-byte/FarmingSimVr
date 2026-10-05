@@ -129,6 +129,8 @@ protected:
         m_bridge.Set2DViewActive(false);
         m_bridge.SetMenuVisible(false);
         m_bridge.SetFrameParity(0);
+        // Stereo presentation (and with it AFR eye alternation) starts at the Companion Mod handshake.
+        m_bridge.SetCompanionActive(true);
         m_ngx.SetVRBridge(&m_bridge);
     }
 
@@ -142,6 +144,7 @@ protected:
         m_bridge.Set2DViewActive(false);
         m_bridge.SetMenuVisible(false);
         m_bridge.SetFrameParity(0);
+        m_bridge.SetCompanionActive(false);
         s_evaluatedMvScaleX.clear();
         s_evaluatedMvScaleY.clear();
         s_createdParams.clear();
@@ -1220,6 +1223,63 @@ TEST_F(DlssEvaluationTest, SingleContextBypassEvaluatesAt1xUnderAfr) {
     }
 
     MockReleaseFeature(virtualHandle);
+}
+
+TEST_F(DlssEvaluationTest, AfrEvaluatesAt1xBeforeCompanionHandshake) {
+    auto& interceptor = m_ngx;
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    auto& bridge = m_bridge;
+    interceptor.SetVRBridge(&bridge);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_X, 0.5f);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 0.5f);
+
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
+
+    // Main menu before the handshake: presented as a quad layer, so parity never advances and
+    // every evaluation of the context is one frame apart, even with AFR selected.
+    bridge.SetCompanionActive(false);
+    ASSERT_EQ(bridge.GetRenderingMode(), VRRenderingMode::AFR);
+    for (int frame = 0; frame < 2; ++frame) {
+        EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+    }
+
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 2u);
+    for (size_t i = 0; i < 2; ++i) {
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[i], 0.5f);
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[i], 0.5f);
+    }
+
+    MockReleaseFeature(virtualHandle);
+}
+
+TEST_F(DlssEvaluationTest, AfrEvaluatesAt1xForHandleNotSplitPerEye) {
+    auto& interceptor = m_ngx;
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    interceptor.SetVRBridge(&m_bridge);
+    ASSERT_EQ(m_bridge.GetRenderingMode(), VRRenderingMode::AFR);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_X, 0.5f);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 0.5f);
+
+    // A handle the interceptor did not virtualize is a single context evaluated every frame.
+    NVSDK_NGX_Handle plainHandle{};
+    plainHandle.Id = 7;
+    m_bridge.SetFrameParity(1);
+    EXPECT_EQ(interceptor.Intercept_EvaluateFeature(nullptr, &plainHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+
+    ASSERT_EQ(s_evaluatedHandles.size(), 1u);
+    EXPECT_EQ(s_evaluatedHandles[0], &plainHandle);
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], 0.5f);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[0], 0.5f);
 }
 
 TEST_F(DlssEvaluationTest, SequentialDualPassEvaluatesAt1xByDefault) {

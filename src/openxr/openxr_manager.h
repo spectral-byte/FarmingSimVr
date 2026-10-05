@@ -179,7 +179,9 @@ public:
 
     // Drains the runtime event queue and drives the session lifecycle: begin on READY,
     // end on STOPPING, release resources and enter Pass-Through Mode on EXITING,
-    // LOSS_PENDING or instance loss. Call once per presented frame.
+    // LOSS_PENDING or instance loss. BeginFrame polls too; a caller that must see the lifecycle
+    // settled before it reaches BeginFrame (DxgiProxy::OnPresent) calls this first. A second poll
+    // in the same frame finds an empty queue.
     void PollEvents();
     bool HasTrackingSpaces() const {
         return m_localSpace != XR_NULL_HANDLE &&

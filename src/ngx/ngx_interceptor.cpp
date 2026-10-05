@@ -771,7 +771,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
 
     const NVSDK_NGX_Handle* target = nullptr;
     uint32_t contextIndex = 0;
-    bool singleContextBypass = false;
+    bool alternatesEyeContexts = false;
 
     if (interceptor.IsVirtualHandle(InFeatureHandle)) {
         auto* vHandle = interceptor.GetVirtualHandle(InFeatureHandle);
@@ -781,12 +781,12 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         } else if (interceptor.IsSingleContextBypassActive()) {
             target = vHandle->hLeft;
             contextIndex = 0;
-            singleContextBypass = true;
         } else {
             uint32_t eyeIndex = isDualPass ? interceptor.GetActiveDualPassEyeIndex()
                                            : (bridge ? bridge->GetFrameParity() : 0);
             target = (eyeIndex == 1 && vHandle->hRight) ? vHandle->hRight : vHandle->hLeft;
             contextIndex = (eyeIndex == 1 && vHandle->hRight) ? 1 : 0;
+            alternatesEyeContexts = (vHandle->hRight != nullptr);
         }
 
         if (!target) target = InFeatureHandle;
@@ -840,9 +840,11 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         }
     }
 
-    // Eye-stride compensation only applies when consecutive evaluations of a context
-    // are two frames apart (AFR). SDP and the monoscopic single-context bypass are 1.0x.
-    bool eyeStride = !isDualPass && !singleContextBypass;
+    // Eye-stride compensation only applies when consecutive evaluations of a context are two
+    // frames apart: AFR alternating a virtual handle's two eye contexts during stereo presentation,
+    // which starts at the Companion Mod handshake. SDP, the monoscopic single-context bypass, a
+    // handle that was not split per eye, and pre-handshake (quad layer) frames are 1.0x.
+    bool eyeStride = !isDualPass && alternatesEyeContexts && bridge && bridge->IsCompanionActive();
     float prevScaleX = 1.0f, prevScaleY = 1.0f;
     float scaleMulX = eyeStride ? interceptor.GetMvScaleMultiplierX() : 1.0f;
     float scaleMulY = eyeStride ? interceptor.GetMvScaleMultiplierY() : 1.0f;

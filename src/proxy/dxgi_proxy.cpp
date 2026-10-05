@@ -64,7 +64,9 @@ void DxgiProxy::EnsureVrInitialized() {
     // Installed on every factory call (idempotent and locked), not only the first, so a concurrent
     // caller blocks until the LoadLibrary hooks exist instead of loading nvngx unhooked.
     if (m_ngxInterceptor) m_ngxInterceptor->InstallModuleLoadHooks();
-    if (!m_vrInitialized.exchange(true)) {
+    // call_once, not a flag: a concurrent caller waits until initialization finishes, because it
+    // decides from the OpenXR state whether to hook the factory it is about to return.
+    std::call_once(m_vrInitOnce, [this] {
         if (m_ngxInterceptor) m_ngxInterceptor->CheckAndAttachLoadedModule();
         if (!m_openXrManager) {
             LogWarn("DxgiProxy: No OpenXR manager supplied; forwarding all calls silently.");
@@ -84,7 +86,7 @@ void DxgiProxy::EnsureVrInitialized() {
         } else {
             LogWarn("In-process Luau state interception channel not armed; VRBridge will not be injected.");
         }
-    }
+    });
 }
 
 void DxgiProxy::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue) {
@@ -311,7 +313,7 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
         return true;
     }
 
-    // Poll runtime events once per presented frame; this may begin/end the session or
+    // Poll runtime events before deciding how to present; this may begin/end the session or
     // drop the Injector into Pass-Through Mode (EXITING, LOSS_PENDING, instance loss).
     m_openXrManager->PollEvents();
     if (!m_openXrManager->IsActive()) {

@@ -44,10 +44,14 @@ public:
     static InjectorRuntime* Current();
 
     // The runtime a hook entry point acts for: the newest live runtime whose subsystem installed the
-    // hook (installed(runtime) is true), else Current(). installed runs under the registry lock, so it
-    // must only read detour state.
+    // hook (installed(runtime) is true), else Current(). installed may run under the registry lock, so
+    // it must only read detour state.
     template <typename Pred>
     static InjectorRuntime* ForHook(Pred installed) {
+        // Lock-free fast path for the hot hooks (Present, GetClientRect, ...): Current() is the newest
+        // live runtime, so when it installed the hook it is the answer. Production has one runtime.
+        InjectorRuntime* current = Current();
+        if (current && installed(*current)) return current;
         InjectorRuntime* owner = FindLive(&installed, [](void* ctx, InjectorRuntime& runtime) {
             return (*static_cast<Pred*>(ctx))(runtime);
         });

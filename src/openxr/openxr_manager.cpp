@@ -403,6 +403,8 @@ void OpenXrManager::EndRunningSession() {
 void OpenXrManager::ReleaseAndEnterPassThrough(const char* reason) {
     LogInfo(std::string("OpenXrManager: Releasing OpenXR resources (") + reason + "). Continuing in Pass-Through Mode.");
     m_frameBegun = false;
+    // Keeps Shutdown from calling xrEndSession, which is valid only once the runtime has moved the
+    // session to STOPPING; xrDestroySession is valid in any state and ends it.
     m_sessionRunning = false;
     Shutdown();
     m_state = OpenXrState::PassThrough;
@@ -778,8 +780,8 @@ DXGI_FORMAT OpenXrManager::NegotiateEyeSwapchainFormat(DXGI_FORMAT backBufferFor
 void OpenXrManager::EnterPassThroughForIncompatibleFormat(DXGI_FORMAT backBufferFormat) {
     LogError("OpenXrManager: OpenXR runtime offers no swapchain format compatible with back buffer format " +
              std::to_string(backBufferFormat) + ".");
-    // Pass-Through Mode means no OpenXR session, so end and release everything rather than leave
-    // a begun session with no frames ever submitted.
+    // Pass-Through Mode means no OpenXR session, so destroy the session and release everything
+    // rather than leave a begun session with no frames ever submitted.
     ReleaseAndEnterPassThrough("no copy-compatible swapchain format");
 }
 

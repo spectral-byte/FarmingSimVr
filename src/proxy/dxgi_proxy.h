@@ -9,8 +9,8 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
-#include <atomic>
 #include <memory>
+#include <mutex>
 #include <optional>
 
 namespace fs25vr {
@@ -130,7 +130,7 @@ private:
     bool m_swapChainAttached = false;
     bool m_factoryAttached = false;
     bool m_ownedByRuntime = false;
-    std::atomic<bool> m_vrInitialized{false};
+    std::once_flag m_vrInitOnce;
     bool m_wasInQuadMode = false;
     bool m_lastPresentSuppressed = false;
 

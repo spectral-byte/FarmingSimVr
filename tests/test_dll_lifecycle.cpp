@@ -9,6 +9,8 @@
 #include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
+#include <chrono>
+#include <future>
 #include <thread>
 #include <vector>
 
@@ -73,6 +75,21 @@ public:
     XrResult WaitFrame(XrSession, const XrFrameWaitInfo*, XrFrameState*) override { return XR_ERROR_FUNCTION_UNSUPPORTED; }
     XrResult BeginFrame(XrSession, const XrFrameBeginInfo*) override { return XR_ERROR_FUNCTION_UNSUPPORTED; }
     XrResult EndFrame(XrSession, const XrFrameEndInfo*) override { return XR_ERROR_FUNCTION_UNSUPPORTED; }
+};
+
+// Holds OpenXR initialization at its first runtime call until released, so a test can keep the
+// first factory call inside EnsureVrInitialized while a second one races it.
+class BlockingOpenXrDispatch : public FailingOpenXrDispatch {
+public:
+    XrResult EnumerateInstanceExtensionProperties(const char*, uint32_t, uint32_t*, XrExtensionProperties*) override {
+        entered.set_value();
+        released.wait();
+        return XR_ERROR_RUNTIME_UNAVAILABLE;
+    }
+
+    std::promise<void> entered;
+    std::promise<void> release;
+    std::shared_future<void> released = release.get_future().share();
 };
 
 class DllLifecycleTest : public ::testing::Test {
@@ -192,6 +209,36 @@ TEST_F(DllLifecycleTest, ConcurrentFirstFactoryCallsReturnOnlyAfterHooksInstalle
     }
 
     EXPECT_EQ(sawHooksMissing.load(), 0);
+}
+
+TEST_F(DllLifecycleTest, ConcurrentFactoryCallWaitsForOpenXrInitialization) {
+    auto dispatch = std::make_shared<BlockingOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(dispatch);
+    DxgiProxy proxy(std::make_shared<ImmediateSystemDxgi>(), openXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), m_ngx);
+
+    std::thread first([&]() {
+        void* factory = nullptr;
+        proxy.CreateDXGIFactory1(__uuidof(IDXGIFactory1), &factory);
+    });
+    dispatch->entered.get_future().wait();  // the first caller is inside OpenXR initialization
+
+    std::atomic<bool> secondReturned{false};
+    std::thread second([&]() {
+        void* factory = nullptr;
+        proxy.CreateDXGIFactory1(__uuidof(IDXGIFactory1), &factory);
+        secondReturned = true;
+    });
+
+    // The second caller decides from the OpenXR state whether to hook its factory, so it must not
+    // return while that state is still being established.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_FALSE(secondReturned.load());
+
+    dispatch->release.set_value();
+    first.join();
+    second.join();
+    EXPECT_TRUE(secondReturned.load());
+    EXPECT_TRUE(openXrManager->IsPassThrough());
 }
 
 TEST_F(DllLifecycleTest, FirstDxgiFactoryCallInstallsHooks) {
