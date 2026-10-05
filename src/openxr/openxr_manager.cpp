@@ -10,23 +10,32 @@
 
 namespace fs25vr {
 
+// The performance counter frequency is fixed at boot, so it is queried once.
+static int64_t QpcFrequency() {
+    static const int64_t freq = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return static_cast<int64_t>(f.QuadPart);
+    }();
+    return freq;
+}
+
 XrTime OpenXrManager::GetCurrentXrTime() const {
+    const int64_t freq = QpcFrequency();
     if (m_lastPredictedDisplayTime != 0) {
-        LARGE_INTEGER qpc, freq;
+        LARGE_INTEGER qpc;
         QueryPerformanceCounter(&qpc);
-        QueryPerformanceFrequency(&freq);
         int64_t elapsedQpc = qpc.QuadPart - m_lastPredictedQpc;
-        if (elapsedQpc > 0 && freq.QuadPart > 0) {
-            XrTime deltaNs = static_cast<XrTime>((elapsedQpc * 1000000000LL) / freq.QuadPart);
+        if (elapsedQpc > 0 && freq > 0) {
+            XrTime deltaNs = static_cast<XrTime>((elapsedQpc * 1000000000LL) / freq);
             return m_lastPredictedDisplayTime + deltaNs;
         }
         return m_lastPredictedDisplayTime;
     }
 
-    LARGE_INTEGER qpc, freq;
+    LARGE_INTEGER qpc;
     QueryPerformanceCounter(&qpc);
-    QueryPerformanceFrequency(&freq);
-    return static_cast<XrTime>((qpc.QuadPart * 1000000000LL) / freq.QuadPart);
+    return static_cast<XrTime>((qpc.QuadPart * 1000000000LL) / freq);
 }
 
 OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
