@@ -250,6 +250,36 @@ static int ParseEyeAndOutputArgs(lua_State* L, uint32_t& eyeIndex) {
     return outIndex;
 }
 
+// The Injector runs its own statically linked Luau on the game's lua_State (ADR-0002). A table the
+// game created points at the game's empty-node sentinel, which the Injector's table code does not
+// recognise, so inserting a new key into it writes through the sentinel and crashes. Overwriting a
+// key that already exists never inserts, so a caller-supplied table is only filled in place when it
+// already holds every field written; otherwise a fresh Injector-made table is returned instead,
+// which the caller can keep and pass back on later calls.
+static bool HasAllFields(lua_State* L, int tableIndex, const char* const* names, size_t count) {
+    tableIndex = lua_absindex(L, tableIndex);
+    for (size_t i = 0; i < count; ++i) {
+        lua_rawgetfield(L, tableIndex, names[i]);
+        const bool present = lua_type(L, -1) != LUA_TNIL;
+        lua_pop(L, 1);
+        if (!present) return false;
+    }
+    return true;
+}
+
+static const char* const kPoseFields[] = {
+    "x", "y", "z", "pitch", "yaw", "roll", "qx", "qy", "qz", "qw",
+    "isValid", "isPositionTracked", "isOrientationTracked", "eye"
+};
+static constexpr size_t kHeadPoseFieldCount = 13;  // kPoseFields without the trailing "eye"
+static constexpr size_t kEyePoseFieldCount = 14;
+
+static const char* const kEyeProjectionFields[] = {
+    "fovY", "fovX", "xOffset", "yOffset", "tanLeft", "tanRight", "tanUp", "tanDown",
+    "angleLeft", "angleRight", "angleUp", "angleDown", "aspectRatio", "isValid", "eye"
+};
+static constexpr size_t kEyeProjectionFieldCount = 15;
+
 void VRBridge::PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex) {
     lua_createtable(L, 0, eyeIndex >= 0 ? 14 : 13);
     FillPoseTable(L, -1, pose, eyeIndex);
@@ -286,7 +316,7 @@ int VRBridge::Lua_GetHeadPose(lua_State* L) {
 
     uint32_t unusedEye = 0;
     int outIndex = ParseEyeAndOutputArgs(L, unusedEye);
-    if (outIndex != 0) {
+    if (outIndex != 0 && HasAllFields(L, outIndex, kPoseFields, kHeadPoseFieldCount)) {
         FillPoseTable(L, outIndex, pose);
         lua_pushvalue(L, outIndex);
     } else {
@@ -378,7 +408,7 @@ int VRBridge::Lua_GetEyeProjection(lua_State* L) {
 
     FS25VR_TRACE_THREAD("VRBridge.getEyeProjection");
     EyeProjection proj = self->GetEyeProjection(eyeIndex);
-    if (outIndex != 0) {
+    if (outIndex != 0 && HasAllFields(L, outIndex, kEyeProjectionFields, kEyeProjectionFieldCount)) {
         FillEyeProjectionTable(L, outIndex, proj, eyeIndex);
         lua_pushvalue(L, outIndex);
     } else {
@@ -489,7 +519,7 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
 
     FS25VR_TRACE_THREAD("VRBridge.getEyePose");
     HeadPose pose = self->GetEyePose(eyeIndex);
-    if (outIndex != 0) {
+    if (outIndex != 0 && HasAllFields(L, outIndex, kPoseFields, kEyePoseFieldCount)) {
         FillPoseTable(L, outIndex, pose, static_cast<int>(eyeIndex));
         lua_pushvalue(L, outIndex);
     } else {

@@ -585,6 +585,9 @@ function VRCompanion:fetchEyeProjection(eyeIndex)
             scratch[eyeIndex] = target
         end
         local fetched = VRBridge.getEyeProjection(eyeIndex, target)
+        -- VRBridge only fills a table in place once it holds every field; until then it returns its own
+        -- table. Keep that one so later calls reuse it.
+        if type(fetched) == "table" then scratch[eyeIndex] = fetched end
         if fetched and fetched.isValid then
             proj = fetched
         end
@@ -748,6 +751,11 @@ function VRCompanion:getResolvedHeadPose()
     end
     if bridge ~= nil and type(bridge.getHeadPose) == "function" then
         pose = bridge.getHeadPose(scratch)
+        -- See fetchEyeProjection: adopt the table VRBridge returns so later reads fill it in place.
+        if type(pose) == "table" then
+            scratch = pose
+            self.headPoseScratch = pose
+        end
     end
 
     -- Fallback to native engine TrackIR functions if VRBridge is not providing a valid pose
