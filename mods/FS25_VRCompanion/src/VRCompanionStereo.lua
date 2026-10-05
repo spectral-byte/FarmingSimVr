@@ -448,7 +448,24 @@ function VRCompanion:restoreCameraProjectionsFor2D()
     end
 end
 
-function VRCompanion:isPassThroughMode()
+-- The pass-through and head-tracking checks run several times per frame. While a
+-- frame scope is open (VRCompanion:update and the mission update hook open one),
+-- each check resolves once and later callers in that scope read the cached answer.
+-- Outside a scope the checks resolve on every call. Every scope opens with a clean
+-- cache, so a change is picked up no later than the next update.
+function VRCompanion:beginFrameChecks()
+    self.frameChecksActive = true
+    self.cachedPassThroughMode = nil
+    self.cachedHeadTrackingActive = nil
+end
+
+function VRCompanion:endFrameChecks()
+    self.frameChecksActive = false
+    self.cachedPassThroughMode = nil
+    self.cachedHeadTrackingActive = nil
+end
+
+function VRCompanion:resolvePassThroughMode()
     if self.passThroughMode ~= nil then
         return self.passThroughMode == true
     end
@@ -457,7 +474,7 @@ function VRCompanion:isPassThroughMode()
         return true
     end
     if type(bridge.isReady) == "function" then
-        local ok, ready = pcall(function() return bridge.isReady() end)
+        local ok, ready = pcall(bridge.isReady)
         if ok and not ready then
             return true
         end
@@ -468,18 +485,31 @@ function VRCompanion:isPassThroughMode()
     return false
 end
 
-function VRCompanion:setPassThroughMode(enabled)
-    self.passThroughMode = (enabled == true)
+function VRCompanion:isPassThroughMode()
+    if not self.frameChecksActive then
+        return self:resolvePassThroughMode()
+    end
+    local cached = self.cachedPassThroughMode
+    if cached == nil then
+        cached = self:resolvePassThroughMode()
+        self.cachedPassThroughMode = cached
+    end
+    return cached
 end
 
-function VRCompanion:isHeadTrackingActive()
+function VRCompanion:setPassThroughMode(enabled)
+    self.passThroughMode = (enabled == true)
+    self.cachedPassThroughMode = nil
+end
+
+function VRCompanion:resolveHeadTrackingActive()
     if self.headTrackingEnabled ~= nil and not self.headTrackingEnabled then
         return false
     end
     local gs = g_gameSettings or _G.g_gameSettings
     local gsClass = GameSettings or _G.GameSettings
     if gs ~= nil and type(gs.getValue) == "function" and gsClass ~= nil and gsClass.SETTING ~= nil and gsClass.SETTING.IS_HEAD_TRACKING_ENABLED ~= nil then
-        local ok, enabled = pcall(function() return gs:getValue(gsClass.SETTING.IS_HEAD_TRACKING_ENABLED) end)
+        local ok, enabled = pcall(gs.getValue, gs, gsClass.SETTING.IS_HEAD_TRACKING_ENABLED)
         if ok and enabled == false then
             return false
         end
@@ -493,10 +523,22 @@ function VRCompanion:isHeadTrackingActive()
     return true
 end
 
-function VRCompanion:setHeadTrackingEnabled(enabled)
-    self.headTrackingEnabled = (enabled == true)
+function VRCompanion:isHeadTrackingActive()
+    if not self.frameChecksActive then
+        return self:resolveHeadTrackingActive()
+    end
+    local cached = self.cachedHeadTrackingActive
+    if cached == nil then
+        cached = self:resolveHeadTrackingActive()
+        self.cachedHeadTrackingActive = cached
+    end
+    return cached
 end
 
+function VRCompanion:setHeadTrackingEnabled(enabled)
+    self.headTrackingEnabled = (enabled == true)
+    self.cachedHeadTrackingActive = nil
+end
 function VRCompanion:applyCameraProjection(camNode, eyeIndex)
     if camNode == nil or camNode == 0 then
         return

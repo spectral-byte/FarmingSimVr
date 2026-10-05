@@ -458,10 +458,20 @@ function VRCompanion:hookPlayerCamera()
     end
 end
 
+local function finishMissionUpdate(self, ...)
+    self:endFrameChecks()
+    return ...
+end
+
 function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     if self.inMissionUpdate then
         return origUpdateFn(missionSelf, dt, ...)
     end
+    self:beginFrameChecks()
+    return finishMissionUpdate(self, self:runMissionUpdate(missionSelf, dt, origUpdateFn, ...))
+end
+
+function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
     local isSequentialDualPass = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS)
         and not self.is2DViewActive
@@ -602,6 +612,7 @@ end
 
 function VRCompanion:update(dt)
     self.frameTicks = (self.frameTicks or 0) + 1
+    self:beginFrameChecks()
 
     -- Synchronize 2D view active state with native VRBridge if changed externally
     if VRBridge ~= nil and type(VRBridge.getIs2DViewActive) == "function" then
@@ -658,6 +669,8 @@ function VRCompanion:update(dt)
             self:onVehicleTransition(oldVeh, curVehicle)
         end
     end
+
+    self:endFrameChecks()
 end
 
 function VRCompanion:deleteMap()
