@@ -4,10 +4,6 @@
 
 namespace fs25vr {
 
-SystemDxgi& SystemDxgi::Instance() {
-    static SystemDxgi instance;
-    return instance;
-}
 
 SystemDxgi::SystemDxgi() {
     LoadSystemDxgi();

@@ -1,9 +1,13 @@
 #include "mirror_window_controller.h"
 #include "openxr/openxr_manager.h"
 #include "core/logger.h"
+#include "core/dll_lifecycle.h"
+#include "core/injector_runtime.h"
 #include <dxgi.h>
 #include <algorithm>
 #include <cmath>
+
+#pragma comment(lib, "comctl32.lib")
 
 namespace fs25vr {
 
@@ -22,35 +26,22 @@ static HWND GetRootWindow(HWND hWnd) {
     return hAncestor ? hAncestor : hWnd;
 }
 
-static MirrorWindowController* s_activeController = nullptr;
-
 } // anonymous namespace
 
-MirrorWindowController& MirrorWindowController::Instance() {
-    static MirrorWindowController instance;
-    return instance;
-}
-
-MirrorWindowController* MirrorWindowController::GetActiveController() {
-    return s_activeController;
-}
-
-void MirrorWindowController::SetActiveController(MirrorWindowController* controller) {
-    s_activeController = controller;
+MirrorWindowController* MirrorWindowController::ForHook(FunctionDetour MirrorWindowController::*detour) {
+    InjectorRuntime* runtime = InjectorRuntime::ForHook([detour](InjectorRuntime& r) {
+        return (r.GetWindowController().*detour).IsInstalled();
+    });
+    return runtime ? &runtime->GetWindowController() : nullptr;
 }
 
 MirrorWindowController::MirrorWindowController(std::function<bool()> isVrActive)
     : m_isVrActive(std::move(isVrActive)) {
-    if (!s_activeController) {
-        s_activeController = this;
-    }
 }
 
 MirrorWindowController::~MirrorWindowController() {
+    if (IsProcessTerminating()) return;
     DetachAll();
-    if (s_activeController == this) {
-        s_activeController = nullptr;
-    }
 }
 
 bool MirrorWindowController::IsActive() const {
@@ -123,6 +114,10 @@ bool MirrorWindowController::DetachWindowSubclass() {
 }
 
 bool MirrorWindowController::InstallDetours() {
+    if (!m_ownedByRuntime) {
+        LogWarn("MirrorWindowController: Not owned by a live InjectorRuntime; Win32 detours not installed.");
+        return false;
+    }
     HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
     if (!hUser32) {
         return false;
@@ -496,9 +491,6 @@ void MirrorWindowController::UpdateMenuCursorState(IDXGISwapChain* swapChain, Op
 LRESULT CALLBACK MirrorWindowController::MirrorWindowSubclassProc(
     HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     auto* controller = reinterpret_cast<MirrorWindowController*>(dwRefData);
-    if (!controller) {
-        controller = s_activeController ? s_activeController : &MirrorWindowController::Instance();
-    }
 
     switch (uMsg) {
         case WM_ENTERSIZEMOVE: {
@@ -639,7 +631,7 @@ LRESULT CALLBACK MirrorWindowController::MirrorWindowSubclassProc(
 }
 
 BOOL WINAPI MirrorWindowController::Intercept_GetClientRect(HWND hWnd, LPRECT lpRect) {
-    MirrorWindowController* ctrl = s_activeController ? s_activeController : &MirrorWindowController::Instance();
+    MirrorWindowController* ctrl = ForHook(&MirrorWindowController::m_detourGetClientRect);
     auto orig = reinterpret_cast<BOOL(WINAPI*)(HWND, LPRECT)>(
         ctrl ? ctrl->m_detourGetClientRect.GetOriginal() : nullptr
     );
@@ -661,7 +653,7 @@ BOOL WINAPI MirrorWindowController::Intercept_GetClientRect(HWND hWnd, LPRECT lp
 }
 
 BOOL WINAPI MirrorWindowController::Intercept_ScreenToClient(HWND hWnd, LPPOINT lpPoint) {
-    MirrorWindowController* ctrl = s_activeController ? s_activeController : &MirrorWindowController::Instance();
+    MirrorWindowController* ctrl = ForHook(&MirrorWindowController::m_detourScreenToClient);
     auto orig = reinterpret_cast<BOOL(WINAPI*)(HWND, LPPOINT)>(
         ctrl ? ctrl->m_detourScreenToClient.GetOriginal() : nullptr
     );
@@ -695,7 +687,7 @@ BOOL WINAPI MirrorWindowController::Intercept_ScreenToClient(HWND hWnd, LPPOINT 
 }
 
 BOOL WINAPI MirrorWindowController::Intercept_SetCursorPos(int X, int Y) {
-    MirrorWindowController* ctrl = s_activeController ? s_activeController : &MirrorWindowController::Instance();
+    MirrorWindowController* ctrl = ForHook(&MirrorWindowController::m_detourSetCursorPos);
     auto orig = reinterpret_cast<BOOL(WINAPI*)(int, int)>(
         ctrl ? ctrl->m_detourSetCursorPos.GetOriginal() : nullptr
     );
@@ -719,7 +711,7 @@ BOOL WINAPI MirrorWindowController::Intercept_SetCursorPos(int X, int Y) {
 }
 
 BOOL WINAPI MirrorWindowController::Intercept_ClipCursor(const RECT* lpRect) {
-    MirrorWindowController* ctrl = s_activeController ? s_activeController : &MirrorWindowController::Instance();
+    MirrorWindowController* ctrl = ForHook(&MirrorWindowController::m_detourClipCursor);
     auto orig = reinterpret_cast<BOOL(WINAPI*)(const RECT*)>(
         ctrl ? ctrl->m_detourClipCursor.GetOriginal() : nullptr
     );

@@ -1,7 +1,11 @@
 #include "luau_interceptor.h"
 #include "core/logger.h"
+#include "core/dll_lifecycle.h"
+#include "core/injector_runtime.h"
+#include "lua.h"
 #include <windows.h>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -10,20 +14,41 @@
 
 namespace fs25vr {
 
-namespace {
-static LuauInterceptor* s_activeInterceptor = nullptr;
-} // anonymous namespace
+// The Injector calls its own Luau VM on the game's lua_State, so its struct layouts must match the engine's.
+// The host's layout cannot be read from the binary; these pin the Injector's side to stock 0.662 defaults,
+// which the in-game check (ADR-0002 amendment) confirmed the engine uses.
+static_assert(LUA_VECTOR_SIZE == 3, "TValue layout differs from the engine's");
+static_assert(LUA_EXTRA_SIZE == 1, "TValue layout differs from the engine's");
+static_assert(LUA_UTAG_LIMIT == 128 && LUA_LUTAG_LIMIT == 128, "global_State layout differs from the engine's");
+static_assert(LUA_SIZECLASSES == 40 && LUA_MEMORY_CATEGORIES == 256, "global_State layout differs from the engine's");
 
-LuauInterceptor& LuauInterceptor::Instance() {
-    static LuauInterceptor instance;
-    return instance;
+bool HostEmbedsMatchingLuau(const uint8_t* rdataBase, size_t rdataSize) {
+    if (!rdataBase) return false;
+
+    // One pass over the section, trying each marker only where a NUL-delimited string starts.
+    constexpr size_t markerCount = std::size(kHostLuauFingerprint);
+    bool found[markerCount] = {};
+    size_t remaining = markerCount;
+    for (size_t i = 0; i < rdataSize && remaining > 0; ++i) {
+        if (rdataBase[i] == 0 || (i != 0 && rdataBase[i - 1] != 0)) continue;
+        for (size_t m = 0; m < markerCount; ++m) {
+            if (found[m]) continue;
+            const size_t needleLen = std::strlen(kHostLuauFingerprint[m]) + 1;
+            if (needleLen <= rdataSize - i && std::memcmp(rdataBase + i, kHostLuauFingerprint[m], needleLen) == 0) {
+                found[m] = true;
+                --remaining;
+            }
+        }
+    }
+    return remaining == 0;
 }
 
 LuauInterceptor::LuauInterceptor(std::shared_ptr<VRBridge> bridge)
-    : m_bridge(bridge ? std::move(bridge) : std::shared_ptr<VRBridge>(&VRBridge::Instance(), [](auto*) {})) {
+    : m_bridge(std::move(bridge)) {
 }
 
 LuauInterceptor::~LuauInterceptor() {
+    if (IsProcessTerminating()) return;
     Detach();
 }
 
@@ -33,20 +58,21 @@ bool LuauInterceptor::Attach(void* targetQueryFunction) {
         return false;
     }
 
+    if (!m_ownedByRuntime) {
+        LogWarn("LuauInterceptor::Attach: Not owned by a live InjectorRuntime; detour not installed.");
+        return false;
+    }
+
     if (m_detour.IsInstalled()) {
         LogWarn("LuauInterceptor::Attach: Already attached, detaching first.");
         Detach();
     }
 
-    s_activeInterceptor = this;
     bool success = m_detour.Install(targetQueryFunction, reinterpret_cast<void*>(&LuauInterceptor::DetourEntryPoint));
     if (success) {
         LogInfo("LuauInterceptor: Successfully attached detour to head-tracking availability query.");
     } else {
         LogError("LuauInterceptor: Failed to attach detour to target function.");
-        if (s_activeInterceptor == this) {
-            s_activeInterceptor = nullptr;
-        }
     }
     return success;
 }
@@ -107,6 +133,19 @@ bool LuauInterceptor::AttachToEngine() {
         return false;
     }
 
+    return AttachToHostSections(rdataBase, rdataSize, textBase, textSize);
+}
+
+bool LuauInterceptor::AttachToHostSections(const uint8_t* rdataBase, size_t rdataSize, const uint8_t* textBase, size_t textSize) {
+    // The Injector calls its own statically linked Luau VM on the game's lua_State, which is only safe
+    // when the engine embeds the same release. Refuse before any detour can reach VRBridge injection.
+    if (!HostEmbedsMatchingLuau(rdataBase, rdataSize)) {
+        LogError(std::string("LuauInterceptor: Host Luau does not match the linked Luau ") + kExpectedLuauVersion +
+                 " (fingerprint not found in .rdata). Skipping VRBridge injection to avoid corrupting game memory.");
+        return false;
+    }
+    LogInfo(std::string("LuauInterceptor: Host Luau matches the linked Luau ") + kExpectedLuauVersion + ".");
+
     static const char* const targetSymbols[] = {
         "isHeadTrackingAvailable",
         "getHeadTrackingTranslation",
@@ -148,7 +187,7 @@ bool LuauInterceptor::AttachToEngine() {
         return Attach(candidateQueryFunction);
     }
 
-    LogInfo("LuauInterceptor: Query function scan complete. Interception channel armed.");
+    LogWarn("LuauInterceptor: No head-tracking query function found in host; detour not installed.");
     return false;
 }
 
@@ -238,9 +277,6 @@ void LuauInterceptor::Detach() {
         m_detour.Uninstall();
         LogInfo("LuauInterceptor: Detached from target function.");
     }
-    if (s_activeInterceptor == this) {
-        s_activeInterceptor = nullptr;
-    }
     m_activeState = nullptr;
     m_bridgeInjected = false;
 }
@@ -263,10 +299,10 @@ int LuauInterceptor::HandleQuery(lua_State* L) {
 }
 
 int LuauInterceptor::DetourEntryPoint(lua_State* L) {
-    if (s_activeInterceptor) {
-        return s_activeInterceptor->HandleQuery(L);
-    }
-    return Instance().HandleQuery(L);
+    InjectorRuntime* runtime = InjectorRuntime::ForHook([](InjectorRuntime& r) {
+        return r.GetLuauInterceptor().GetDetour().IsInstalled();
+    });
+    return runtime ? runtime->GetLuauInterceptor().HandleQuery(L) : 0;
 }
 
 } // namespace fs25vr

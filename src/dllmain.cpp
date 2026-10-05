@@ -1,19 +1,13 @@
 #include <windows.h>
-#include "core/logger.h"
-#include "ngx/ngx_interceptor.h"
+#include "core/dll_lifecycle.h"
 
-BOOL WINAPI DllMain(HINSTANCE /*hinstDLL*/, DWORD fdwReason, LPVOID /*lpReserved*/) {
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved) {
     switch (fdwReason) {
         case DLL_PROCESS_ATTACH:
-            DisableThreadLibraryCalls(static_cast<HMODULE>(NULL));
-            fs25vr::LogInfo("Farming Simulator 25 VR Injector attached to process.");
-            fs25vr::NgxInterceptor::Instance().InstallModuleLoadHooks();
-            fs25vr::NgxInterceptor::Instance().CheckAndAttachLoadedModule();
+            fs25vr::OnProcessAttach(static_cast<HMODULE>(hinstDLL));
             break;
         case DLL_PROCESS_DETACH:
-            fs25vr::LogInfo("Farming Simulator 25 VR Injector detaching from process.");
-            fs25vr::NgxInterceptor::Instance().DetachAll();
-            fs25vr::Logger::Instance().Flush();
+            fs25vr::OnProcessDetach(lpReserved);
             break;
         default:
             break;

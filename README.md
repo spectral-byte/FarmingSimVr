@@ -1,7 +1,7 @@
 # Farming Simulator 25 VR (FS25 VR)
 
-[![Tests](https://img.shields.io/badge/tests-322%20passed-brightgreen.svg)]()
-[![OpenXR](https://img.shields.io/badge/OpenXR-1.1-blue.svg)]()
+[![CI](https://github.com/jacoch17/FarmingSimVr/actions/workflows/ci.yml/badge.svg)](https://github.com/jacoch17/FarmingSimVr/actions/workflows/ci.yml)
+[![OpenXR](https://img.shields.io/badge/OpenXR-1.0-blue.svg)]()
 [![DirectX](https://img.shields.io/badge/Direct3D-12-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey.svg)]()
 [![Release](https://img.shields.io/badge/release-v1.0.0-success.svg)](https://github.com/jacoch17/FarmingSimVr/releases)
@@ -64,11 +64,11 @@ FS25 VR is built as a hybrid two-tier architecture:
 ## Key Features
 
 - **Stereo Presentation Modes**:
-  - **Sequential Dual-Pass (SDP)**: Renders left and right eye perspectives sequentially within a single logical compositor frame. The right sub-pass clamps engine delta time to zero ($\Delta t = 0$), freezing simulation, physics, and foliage wind while eliminating in-engine TAA ghosting and DLSS history smearing. Recommended for high-end systems (RTX 3080/4080/4090).
-  - **Alternate Frame Rendering (AFR)**: Alternates left and right eye perspectives on sequential engine frames for lightweight GPU load on midrange graphics cards.
+  - **Sequential Dual-Pass (SDP)**: Renders left and right eye perspectives sequentially within a single logical compositor frame. The right sub-pass clamps engine delta time to zero ($\Delta t = 0$), freezing simulation, physics, and foliage wind while eliminating in-engine TAA ghosting and DLSS history smearing. Default mode; recommended for high-end systems (RTX 3080/4080/4090).
+  - **Alternate Frame Rendering (AFR)**: Alternates left and right eye perspectives on sequential engine frames for lightweight GPU load on midrange graphics cards. Opt-in via `vrRenderingMode afr`.
   - Dynamically switchable via console command or configuration settings with seamless discontinuity flushing.
 - **6DOF Head Tracking**: Positional and rotational tracking for both on-foot locomotion and vehicle cockpits with collinear translation and decoupled look yaw rotation.
-- **Oblique Perspective Projection**: Asymmetric projection matrices computed per eye directly from headset display optics and FOV.
+- **Symmetric Projection (default) with opt-in Oblique Frustum**: The Injector submits an aspect-matched symmetric FOV and the Companion Mod applies no projection offset by default. Per-eye asymmetric offsets computed from headset optics are available via `vrObliqueProjection true` or `<allowObliqueProjection>true</allowObliqueProjection>` in `settings.xml` (see ADR-0005).
 - **Temporal Upscaler Virtualization**:
   - Isolated left and right `NVSDK_NGX_Handle` instances.
   - Context-aware motion vector scaling ($1.0\times$ in Dual-Pass, $2.0\times$ in AFR).
@@ -152,9 +152,9 @@ VR settings are automatically persisted to:
 Press the tilde key (`` ` `` / `~`) to open the in-engine developer console:
 
 - `vrRenderingMode <afr|dualpass|toggle>`: Switch between Sequential Dual-Pass and Alternate Frame Rendering.
-- `vrHudInset <horizontal> <vertical>`: Adjust normalized HUD margin insets (default: `0.30 0.22`).
-- `vrHudUiScale <scale>`: Adjust HUD element size scaling (default: `0.82`).
-- `vrHudConvergence <meters>`: Set stereoscopic depth convergence distance for 2D UI (default: `1.8`).
+- `vrObliqueProjection <true|false|toggle>`: Enable per-eye Oblique Frustum projection (default: `false`, symmetric).
+- `vrHudInsets <horizontal> <vertical> [scale] [top]`: Adjust normalized HUD margin insets and element scale (default: `0.30 0.22 0.82 0.22`).
+- HUD convergence depth is set via `<hudConvergenceDepth>` in `settings.xml` (default: `1.8`).
 - `vrSnapTurnAngle <degrees>`: Set snap turn rotational angle step (default: `90`).
 
 ---
@@ -182,7 +182,7 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 # Build Injector DLL and Test Executable
 ninja -C build dxgi fs25_vr_tests
 
-# Run automated unit and integration tests (322 tests)
+# Run automated unit and integration tests
 ctest --test-dir build --output-on-failure
 ```
 
@@ -201,28 +201,32 @@ tar.exe -a -cf ..\..\build\FS25_VRCompanion.zip modDesc.xml icon_vr.png src/*.lu
 
 ## Architecture Decision Records (ADRs)
 
-For in-depth technical documentation, refer to the architecture records in [`docs/adr/`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/):
+For in-depth technical documentation, refer to the architecture records in [`docs/adr/`](docs/adr/):
 
-- [`ADR-0001`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0001-hybrid-injector-and-companion-mod-architecture.md): Hybrid Injector and In-Engine Companion Mod via VRBridge
-- [`ADR-0002`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0002-in-process-luau-state-interception.md): In-Process Luau State Interception & VRBridge Table Injection
-- [`ADR-0003`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0003-afr-frame-pacing-and-telemetry-probe.md): Alternate Frame Rendering (AFR) Pacing & Telemetry Probe
-- [`ADR-0004`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0004-graceful-openxr-pass-through-fallback.md): Graceful OpenXR Pass-Through Fallback
-- [`ADR-0005`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0005-oblique-frustum-projection-via-vrbridge.md): Oblique Frustum Projection via VRBridge
-- [`ADR-0006`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0006-openxr-floating-quad-layer-for-menus.md): OpenXR Floating Quad Layer for Menus
-- [`ADR-0007`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0007-in-game-gui-menu-detection-and-quad-layer-switching.md): In-Game GUI Menu Detection and Quad Layer Switching
-- [`ADR-0008`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0008-dynamic-quad-centering-and-background-camera-tracking.md): Dynamic Quad Centering and Background 6DOF Camera Tracking
-- [`ADR-0009`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0009-openxr-alpha-blended-mouse-cursor-layer.md): OpenXR Alpha-Blended Mouse Cursor Quad Layer for Menus
-- [`ADR-0010`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0010-in-engine-vr-hud-inset-and-convergence-parity.md): In-Engine VR HUD Inset and Convergence Parity
-- [`ADR-0011`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0011-openxr-reference-space-recentering.md): OpenXR Reference Space Recentering via poseInReferenceSpace
-- [`ADR-0012`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0012-in-engine-snap-turn-locomotion.md): In-Engine Snap Turn Locomotion
-- [`ADR-0013`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0013-in-engine-2d-floating-window-view-toggle.md): In-Engine 2D Floating Window View Toggle
-- [`ADR-0014`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0014-desktop-mirror-window-resolution-decoupling.md): Desktop Mirror Window Resolution Decoupling
-- [`ADR-0015`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0015-sequential-dual-pass-stereo-presentation-pipeline.md): Sequential Dual-Pass Stereo Presentation Pipeline
-- [`ADR-0016`](file:///c:/Users/jacob/Documents/FarmingSimVr/docs/adr/0016-dual-feature-context-virtualization-for-temporal-upscalers.md): Dual Feature Context Virtualization for Temporal Upscalers
+- [`ADR-0001`](docs/adr/0001-hybrid-injector-and-companion-mod-architecture.md): Hybrid Injector and In-Engine Companion Mod via VRBridge
+- [`ADR-0002`](docs/adr/0002-in-process-luau-state-interception.md): In-Process Luau State Interception & VRBridge Table Injection
+- [`ADR-0003`](docs/adr/0003-afr-frame-pacing-and-telemetry-probe.md): Alternate Frame Rendering (AFR) Pacing & Telemetry Probe (probe superseded by ADR-0017)
+- [`ADR-0004`](docs/adr/0004-graceful-openxr-pass-through-fallback.md): Graceful OpenXR Pass-Through Fallback
+- [`ADR-0005`](docs/adr/0005-oblique-frustum-projection-via-vrbridge.md): Oblique Frustum Projection via VRBridge
+- [`ADR-0006`](docs/adr/0006-openxr-floating-quad-layer-for-menus.md): OpenXR Floating Quad Layer for Menus
+- [`ADR-0007`](docs/adr/0007-in-game-gui-menu-detection-and-quad-layer-switching.md): In-Game GUI Menu Detection and Quad Layer Switching
+- [`ADR-0008`](docs/adr/0008-dynamic-quad-centering-and-background-camera-tracking.md): Dynamic Quad Centering and Background 6DOF Camera Tracking
+- [`ADR-0009`](docs/adr/0009-openxr-alpha-blended-mouse-cursor-layer.md): OpenXR Alpha-Blended Mouse Cursor Quad Layer for Menus
+- [`ADR-0010`](docs/adr/0010-in-engine-vr-hud-inset-and-convergence-parity.md): In-Engine VR HUD Inset and Convergence Parity
+- [`ADR-0011`](docs/adr/0011-openxr-reference-space-recentering.md): OpenXR Reference Space Recentering via poseInReferenceSpace
+- [`ADR-0012`](docs/adr/0012-in-engine-snap-turn-locomotion.md): In-Engine Snap Turn Locomotion
+- [`ADR-0013`](docs/adr/0013-in-engine-2d-floating-window-view-toggle.md): In-Engine 2D Floating Window View Toggle
+- [`ADR-0014`](docs/adr/0014-desktop-mirror-window-resolution-decoupling.md): Desktop Mirror Window Resolution Decoupling
+- [`ADR-0015`](docs/adr/0015-sequential-dual-pass-stereo-presentation-pipeline.md): Sequential Dual-Pass Stereo Presentation Pipeline
+- [`ADR-0016`](docs/adr/0016-dual-feature-context-virtualization-for-temporal-upscalers.md): Dual Feature Context Virtualization for Temporal Upscalers
+- [`ADR-0017`](docs/adr/0017-retire-the-d3d12-telemetry-probe.md): Retire the D3D12 Telemetry Probe
+- [`ADR-0018`](docs/adr/0018-lua-and-present-share-one-thread.md): Companion Mod Calls and Present Run on One Thread
 
 ---
 
 ## License & Credits
 
-Developed by the **FS25 VR Team**. Built with Khronos OpenXR, Luau, and GoogleTest.  
+Copyright (C) 2026 TBD.  
+Developed by the **FS25 VR Team** and licensed under the [GNU General Public License v3.0](LICENSE). Built with Khronos OpenXR, Luau, MinHook, and GoogleTest.  
+Release bundles include `THIRD_PARTY_NOTICES.txt` with the licenses of the libraries linked into `dxgi.dll`.  
 Farming Simulator 25 is a trademark of GIANTS Software GmbH.

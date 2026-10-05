@@ -5,13 +5,23 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $builtDll = Join-Path $repoRoot "build\dxgi.dll"
 $companionDir = Join-Path $repoRoot "mods\FS25_VRCompanion"
 $releaseDir = Join-Path $repoRoot "build\release"
-$bundleDir = Join-Path $releaseDir "FS25_VR_v1.0.0"
+$modDescPath = Join-Path $companionDir "modDesc.xml"
+$licensePath = Join-Path $repoRoot "LICENSE"
 
 Write-Host "Packaging FS25 VR Release..."
 
 if (-not (Test-Path $builtDll)) {
     Write-Error "build\dxgi.dll not found. Build project first (ninja -C build dxgi)."
 }
+
+# Read the release version from modDesc
+[xml]$modDesc = Get-Content $modDescPath -Raw
+$version = $modDesc.modDesc.version
+if ([string]::IsNullOrWhiteSpace($version)) {
+    Write-Error "No <version> element found in $modDescPath."
+}
+$bundleName = "FS25_VR_v$version"
+$bundleDir = Join-Path $releaseDir $bundleName
 
 # Clean and recreate staging directories
 if (Test-Path $releaseDir) {
@@ -25,10 +35,44 @@ Copy-Item $builtDll "$bundleDir\x64\dxgi.dll" -Force
 Copy-Item $builtDll "$releaseDir\dxgi.dll" -Force
 Write-Host "[Package] Staged dxgi.dll"
 
+# dxgi.dll statically links these dependencies; their licenses require shipping the notices.
+# Fetched sources live wherever the build was configured to put them (CI uses -DFETCHCONTENT_BASE_DIR=.deps).
+$depsDir = Join-Path $repoRoot "build\_deps"
+$cmakeCache = Join-Path $repoRoot "build\CMakeCache.txt"
+if (Test-Path $cmakeCache) {
+    $baseDirLine = Select-String -Path $cmakeCache -Pattern '^FETCHCONTENT_BASE_DIR:[A-Z]+=(.+)$' | Select-Object -First 1
+    if ($baseDirLine) {
+        $depsDir = $baseDirLine.Matches[0].Groups[1].Value.Trim()
+    }
+}
+$notices = @(
+    @{ Name = "MinHook";            File = "minhook-src\LICENSE.txt" },
+    @{ Name = "Luau";               File = "luau-src\LICENSE.txt" },
+    @{ Name = "Lua (used by Luau)"; File = "luau-src\lua_LICENSE.txt" },
+    @{ Name = "OpenXR SDK";         File = "openxr-src\LICENSE" }
+)
+$noticeText = foreach ($notice in $notices) {
+    $path = Join-Path $depsDir $notice.File
+    if (-not (Test-Path $path)) {
+        Write-Error "$path not found. Configure the build first (cmake -B build) so dependencies are fetched."
+    }
+    "=" * 80
+    "  $($notice.Name)"
+    "=" * 80
+    Get-Content $path -Raw
+    ""
+}
+Set-Content -Path "$bundleDir\THIRD_PARTY_NOTICES.txt" -Value $noticeText -Encoding utf8
+Write-Host "[Package] Wrote THIRD_PARTY_NOTICES.txt"
+
+# GPL-3.0: every distributed copy (the bundle and the standalone mod zip) carries the license.
+Copy-Item $licensePath "$bundleDir\LICENSE" -Force
+Write-Host "[Package] Staged LICENSE"
+
 # Package Companion Mod
 Push-Location $companionDir
 try {
-    tar.exe -a -cf "$bundleDir\mods\FS25_VRCompanion.zip" modDesc.xml icon_vr.png src/*.lua
+    tar.exe -a -cf "$bundleDir\mods\FS25_VRCompanion.zip" modDesc.xml icon_vr.png src/*.lua -C $repoRoot LICENSE
     Copy-Item "$bundleDir\mods\FS25_VRCompanion.zip" "$releaseDir\FS25_VRCompanion.zip" -Force
     Write-Host "[Package] Packaged FS25_VRCompanion.zip"
 } finally {
@@ -38,7 +82,7 @@ try {
 # Write README.txt
 $readmeContent = @"
 ================================================================================
-  Farming Simulator 25 VR (FS25 VR) - Version 1.0.0
+  Farming Simulator 25 VR (FS25 VR) - Version $version
   Virtual Reality for GIANTS Engine 10 under Direct3D 12
 ================================================================================
 
@@ -107,6 +151,12 @@ UNINSTALLATION
 - Delete 'dxgi.dll' from the game's 'x64' folder.
 - Delete 'FS25_VRCompanion.zip' from your 'mods' folder.
 
+LICENSE
+--------------------------------------------------------------------------------
+Copyright (C) 2026 TBD.
+FS25 VR is free software licensed under the GNU General Public License v3.0;
+see LICENSE. Bundled third-party library licenses are in THIRD_PARTY_NOTICES.txt.
+
 For full documentation and source code, visit:
 https://github.com/jacoch17/FarmingSimVr
 "@
@@ -114,10 +164,10 @@ https://github.com/jacoch17/FarmingSimVr
 Set-Content -Path "$bundleDir\README.txt" -Value $readmeContent -Encoding utf8
 
 # Create master bundle zip
-$zipBundle = Join-Path $releaseDir "FS25_VR_v1.0.0.zip"
+$zipBundle = Join-Path $releaseDir "$bundleName.zip"
 Push-Location $bundleDir
 try {
-    tar.exe -a -cf $zipBundle x64/dxgi.dll mods/FS25_VRCompanion.zip README.txt
+    tar.exe -a -cf $zipBundle x64/dxgi.dll mods/FS25_VRCompanion.zip README.txt LICENSE THIRD_PARTY_NOTICES.txt
     Write-Host "[Package] Created $zipBundle"
 } finally {
     Pop-Location

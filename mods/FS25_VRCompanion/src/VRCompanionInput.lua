@@ -327,7 +327,7 @@ function VRCompanion:consoleCommandSetHudInsets(insetXStr, insetYStr, scaleStr, 
         return string.format("Usage: vrHudInsets <insetX> <insetY> [scale] [topInset] (current: insetX=%.2f, insetY=%.2f, topInset=%.2f, scale=%.2f)",
             self.hudInsetX or self.DEFAULT_HUD_INSET_X,
             self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
-            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
+            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP,
             self.hudUiScaleMultiplier or self.DEFAULT_HUD_UI_SCALE)
     end
     self:configureHudInsets(ix, iy, sc or self.hudUiScaleMultiplier, it or self.hudInsetTop or iy)
@@ -337,7 +337,7 @@ function VRCompanion:consoleCommandSetHudInsets(insetXStr, insetYStr, scaleStr, 
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
             mission:showBlinkingWarning(string.format("VR HUD Insets: X=%.2f, Y=%.2f, Top=%.2f, Scale=%.2fx (Saved)",
-                self.hudInsetX, self.hudInsetY, self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y, self.effectiveUiScale), 2500)
+                self.hudInsetX, self.hudInsetY, self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP, self.effectiveUiScale), 2500)
         end)
     end
     return string.format("VR HUD insets updated and saved: Left=%.2f, Right=%.2f, Bottom=%.2f, Top=%.2f, Scale=%.2fx",
@@ -348,8 +348,8 @@ function VRCompanion:consoleCommandSetHudTopInset(topInsetStr)
     local topVal = tonumber(topInsetStr)
     if topVal == nil then
         return string.format("Usage: vrHudTopInset <topInset> (0.0 to 0.50, current: %.2f, topAnchor: %.2f)",
-            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
-            self.hudAnchorTop or (1.0 - (self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y)))
+            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP,
+            self.hudAnchorTop or (1.0 - (self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP)))
     end
     local clampedTop = self:clamp(topVal, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
     self.hudInsetTop = clampedTop
@@ -525,7 +525,7 @@ end
 function VRCompanion:consoleCommandSetDlssMvScale(scaleXStr, scaleYStr)
     local sx = tonumber(scaleXStr)
     if sx == nil then
-        return "Usage: vrDlssMvScale <scaleX> [scaleY] (e.g. 0.0 to eliminate stereoscopic smearing, 1.0 for default)"
+        return "Usage: vrDlssMvScale <scaleX> [scaleY] (default 2.0 under AFR; 1.0 disables eye-stride compensation)"
     end
     local sy = tonumber(scaleYStr) or sx
     local bridge = VRBridge or (_G and _G.VRBridge)
@@ -602,6 +602,38 @@ function VRCompanion:consoleCommandSetRenderingMode(modeStr)
     return string.format("Stereo Presentation Mode set to: %s (%s, Saved)", tostring(newMode), modeLabel)
 end
 
+function VRCompanion:consoleCommandSetObliqueProjection(enabledStr)
+    local cur = (self.allowObliqueProjection == true)
+    if enabledStr == nil or enabledStr == "" or string.lower(tostring(enabledStr)) == "status" then
+        return string.format("Current Oblique Frustum projection: %s. Usage: vrObliqueProjection <true|false|toggle>",
+            cur and "Enabled" or "Disabled (symmetric)")
+    end
+
+    local low = string.lower(tostring(enabledStr))
+    local enabled
+    if low == "toggle" then
+        enabled = not cur
+    elseif low == "true" or low == "1" or low == "on" then
+        enabled = true
+    elseif low == "false" or low == "0" or low == "off" then
+        enabled = false
+    else
+        return "Usage: vrObliqueProjection <true|false|toggle>"
+    end
+
+    self.allowObliqueProjection = enabled
+    self:saveConfiguration()
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR Oblique Frustum: %s (Saved)",
+                enabled and "Enabled" or "Disabled"), 2500)
+        end)
+    end
+    print(string.format("[FS25_VR] Oblique Frustum projection set to: %s", tostring(enabled)))
+    return string.format("Oblique Frustum projection set to: %s (Saved)", tostring(enabled))
+end
+
 -- Export to Input subsystem table
 VRCompanion.Input.registerActionEvents = function(self, ...) return VRCompanion.registerActionEvents(VRCompanion, ...) end
 VRCompanion.Input.isKeySnapLeft = function(self, ...) return VRCompanion.isKeySnapLeft(VRCompanion, ...) end
@@ -624,5 +656,6 @@ VRCompanion.Input.consoleCommandSetDlssMvScale = function(self, ...) return VRCo
 VRCompanion.Input.consoleCommandSetDlssSharpness = function(self, ...) return VRCompanion.consoleCommandSetDlssSharpness(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetDlssPreset = function(self, ...) return VRCompanion.consoleCommandSetDlssPreset(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetRenderingMode = function(self, ...) return VRCompanion.consoleCommandSetRenderingMode(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetObliqueProjection = function(self, ...) return VRCompanion.consoleCommandSetObliqueProjection(VRCompanion, ...) end
 
 return VRCompanion.Input

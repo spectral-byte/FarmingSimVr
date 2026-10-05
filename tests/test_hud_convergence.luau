@@ -9,12 +9,8 @@ _G.g_hudAnchorRight = 1.0
 _G.g_hudAnchorBottom = 0.0
 _G.g_hudAnchorTop = 1.0
 
--- Load VRCompanion.lua
-local fs = require("@lune/fs")
-local content = fs.readFile("mods/FS25_VRCompanion/src/VRCompanion.lua")
-local chunk = loadstring(content, "VRCompanion.lua")
-assert(chunk, "Failed to compile VRCompanion.lua")
-chunk()
+-- Load the Companion Mod module files in modDesc order, exactly as the engine does
+loadCompanionMod()
 
 local passed = 0
 local failed = 0
@@ -434,16 +430,16 @@ end)
 test("MapLifecycleLoadsCustomDepthAndRestoresZeroOffsetOnUnload", function()
     -- Mock XML with custom depth
     _G.mockXmlData = {
-        ["modDesc.vrSettings.hudInsetHorizontal"] = 0.20,
-        ["modDesc.vrSettings.hudInsetVertical"] = 0.16,
-        ["modDesc.vrSettings.hudUiScale"] = 0.88,
-        ["modDesc.vrSettings.hudConvergenceDepth"] = 2.0
+        ["vrSettings.hudInsetHorizontal"] = 0.20,
+        ["vrSettings.hudInsetVertical"] = 0.16,
+        ["vrSettings.hudUiScale"] = 0.88,
+        ["vrSettings.hudConvergenceDepth"] = 2.0
     }
     _G.loadXMLFile = function(tag, path) return 123 end
     _G.getXMLFloat = function(xmlFile, key) return _G.mockXmlData[key] end
     _G.delete = function(xmlFile) end
 
-    local insets = VRCompanion:loadConfiguration("mockModDesc.xml")
+    local insets = VRCompanion:loadConfiguration("mockSettings.xml")
     assert(math.abs(VRCompanion.hudConvergenceDepth - 2.0) < 0.0001, "Loaded convergence depth must be 2.0")
     assert(math.abs(insets.convergenceDepth - 2.0) < 0.0001, "getHudInsets().convergenceDepth must be 2.0")
 

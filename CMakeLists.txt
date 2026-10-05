@@ -38,31 +38,40 @@ FetchContent_MakeAvailable(googletest)
 # Fetch Luau for in-process Luau VM interaction and TDD
 set(LUAU_BUILD_CLI OFF CACHE BOOL "Do not build Luau CLI" FORCE)
 set(LUAU_BUILD_TESTS OFF CACHE BOOL "Do not build Luau tests" FORCE)
+# Must match the Luau FS25 embeds; bumping it also means updating the host fingerprint (ADR-0002 amendment).
+set(FS25VR_LUAU_TAG 0.662)
 FetchContent_Declare(
     luau
     GIT_REPOSITORY https://github.com/luau-lang/luau.git
-    GIT_TAG 0.650
+    GIT_TAG ${FS25VR_LUAU_TAG}
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(luau)
 
-enable_testing()
-
-include_directories(
-    src
-    ${openxr_SOURCE_DIR}/include
-    ${luau_SOURCE_DIR}/VM/include
-    ${luau_SOURCE_DIR}/Compiler/include
-    ${luau_SOURCE_DIR}/Common/include
+# Fetch MinHook for inline hooking (pinned release)
+FetchContent_Declare(
+    minhook
+    GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
+    GIT_TAG v1.3.4
+    GIT_SHALLOW TRUE
 )
+FetchContent_MakeAvailable(minhook)
+
+enable_testing()
 
 # Core source files
 set(CORE_SOURCES
     src/core/logger.cpp
     src/core/logger.h
+    src/core/thread_trace.cpp
+    src/core/thread_trace.h
     src/core/math_utils.h
     src/core/detour.cpp
     src/core/detour.h
+    src/core/injector_runtime.cpp
+    src/core/injector_runtime.h
+    src/core/dll_lifecycle.cpp
+    src/core/dll_lifecycle.h
     src/luau/vr_bridge.cpp
     src/luau/vr_bridge.h
     src/luau/luau_interceptor.cpp
@@ -78,42 +87,51 @@ set(CORE_SOURCES
     src/proxy/mirror_window_controller.cpp
     src/proxy/dxgi_proxy.cpp
     src/proxy/dxgi_proxy.h
-    src/telemetry/graphics_telemetry_probe.h
-    src/telemetry/graphics_telemetry_probe.cpp
-    src/telemetry/d3d12_interceptor.h
-    src/telemetry/d3d12_interceptor.cpp
     src/ngx/ngx_defs.h
     src/ngx/virtual_ngx_handle.h
     src/ngx/ngx_interceptor.h
     src/ngx/ngx_interceptor.cpp
 )
 
-# DXGI Proxy DLL target
-add_library(dxgi SHARED
-    ${CORE_SOURCES}
-    src/dllmain.cpp
-    src/proxy/dxgi_exports.def
+# Core static library: compiled once, shared by the Injector DLL and the tests
+add_library(fs25_vr_core STATIC ${CORE_SOURCES})
+
+target_include_directories(fs25_vr_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(dxgi PRIVATE
+target_link_libraries(fs25_vr_core PUBLIC
     openxr_loader
+    minhook
     Luau.VM
     d3d12.lib
     comctl32.lib
 )
 
-target_compile_definitions(dxgi PRIVATE
+target_compile_definitions(fs25_vr_core PUBLIC
     XR_USE_GRAPHICS_API_D3D12
     NOMINMAX
     WIN32_LEAN_AND_MEAN
 )
 
+# DXGI Proxy DLL target
+add_library(dxgi SHARED
+    src/dllmain.cpp
+    src/proxy/dxgi_exports.def
+)
+
+target_link_libraries(dxgi PRIVATE fs25_vr_core)
+
+# Stand-in nvngx.dll for tests (exports the NGX D3D12 entry points)
+add_library(fake_nvngx SHARED tests/fake_nvngx.cpp)
+set_target_properties(fake_nvngx PROPERTIES OUTPUT_NAME nvngx)
+
 # Test executable target
 add_executable(fs25_vr_tests
-    ${CORE_SOURCES}
-    tests/test_main.cpp
+    tests/test_dll_lifecycle.cpp
     tests/test_math_utils.cpp
     tests/test_logger.cpp
+    tests/test_thread_trace.cpp
     tests/test_openxr_cursor_overlay.cpp
     tests/test_openxr_manager.cpp
     tests/test_mirror_window_controller.cpp
@@ -122,8 +140,6 @@ add_executable(fs25_vr_tests
     tests/test_vr_bridge.cpp
     tests/test_luau_interceptor.cpp
     tests/test_companion_mod.cpp
-    tests/test_graphics_telemetry_probe.cpp
-    tests/test_d3d12_instrumentation.cpp
     tests/test_virtual_ngx_handle.cpp
     tests/test_dlss_evaluation.cpp
     tests/test_ngx_interceptor.cpp
@@ -132,21 +148,21 @@ add_executable(fs25_vr_tests
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
+    fs25_vr_core
     GTest::gtest_main
-    openxr_loader
-    Luau.VM
     Luau.Compiler
     dxgi.lib
-    d3d12.lib
-    comctl32.lib
 )
 
+# The binary-load test loads the freshly built dxgi.dll next to the test executable
+add_dependencies(fs25_vr_tests dxgi)
+
 target_compile_definitions(fs25_vr_tests PRIVATE
-    XR_USE_GRAPHICS_API_D3D12
-    NOMINMAX
-    WIN32_LEAN_AND_MEAN
     PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    FAKE_NVNGX_PATH="$<TARGET_FILE:fake_nvngx>"
+    FS25VR_LUAU_TAG="${FS25VR_LUAU_TAG}"
 )
+add_dependencies(fs25_vr_tests fake_nvngx)
 
 include(GoogleTest)
 gtest_discover_tests(fs25_vr_tests DISCOVERY_TIMEOUT 30)

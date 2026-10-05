@@ -1,5 +1,6 @@
 #include "openxr_manager.h"
 #include "core/logger.h"
+#include "core/dll_lifecycle.h"
 #include <vector>
 #include <cstring>
 #include <sstream>
@@ -28,16 +29,14 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
     return static_cast<XrTime>((qpc.QuadPart * 1000000000LL) / freq.QuadPart);
 }
 
-OpenXrManager& OpenXrManager::Instance() {
-    static OpenXrManager instance;
-    return instance;
-}
-
 OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
-    : m_dispatch(dispatch ? std::move(dispatch) : std::make_shared<NativeOpenXrDispatch>()) {
+    : m_dispatch(std::move(dispatch)) {
 }
 
 OpenXrManager::~OpenXrManager() {
+    // At termination the runtime DLL may already be detached and a GPU fence wait could hang:
+    // leave the session and instance to the OS (see IsProcessTerminating).
+    if (IsProcessTerminating()) return;
     Shutdown();
     m_copyFenceEvent.Close();
 }
@@ -45,14 +44,14 @@ OpenXrManager::~OpenXrManager() {
 bool OpenXrManager::CheckD3D12ExtensionSupport() {
     uint32_t extensionCount = 0;
     XrResult res = m_dispatch->EnumerateInstanceExtensionProperties(nullptr, 0, &extensionCount, nullptr);
-    if (res != XR_SUCCESS || extensionCount == 0) {
+    if (XR_FAILED(res) || extensionCount == 0) {
         LogWarn("Failed to enumerate OpenXR extensions or no extensions found.");
         return false;
     }
 
     std::vector<XrExtensionProperties> extensions(extensionCount, {XR_TYPE_EXTENSION_PROPERTIES, nullptr});
     res = m_dispatch->EnumerateInstanceExtensionProperties(nullptr, extensionCount, &extensionCount, extensions.data());
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         LogWarn("Failed to retrieve OpenXR extension properties.");
         return false;
     }
@@ -93,7 +92,7 @@ bool OpenXrManager::Initialize() {
     createInfo.enabledExtensionNames = enabledExtensions;
 
     XrResult res = m_dispatch->CreateInstance(&createInfo, &m_instance);
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         std::stringstream ss;
         ss << "xrCreateInstance failed (result " << res << "). Silently entering Pass-Through Mode.";
         LogInfo(ss.str());
@@ -102,7 +101,7 @@ bool OpenXrManager::Initialize() {
     }
 
     XrInstanceProperties instanceProps{XR_TYPE_INSTANCE_PROPERTIES};
-    if (m_dispatch->GetInstanceProperties(m_instance, &instanceProps) == XR_SUCCESS) {
+    if ((XR_SUCCEEDED(m_dispatch->GetInstanceProperties(m_instance, &instanceProps)))) {
         m_runtimeInfo.runtimeName = instanceProps.runtimeName;
         m_runtimeInfo.runtimeVersionMajor = XR_VERSION_MAJOR(instanceProps.runtimeVersion);
         m_runtimeInfo.runtimeVersionMinor = XR_VERSION_MINOR(instanceProps.runtimeVersion);
@@ -122,7 +121,7 @@ bool OpenXrManager::Initialize() {
     getInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
 
     res = m_dispatch->GetSystem(m_instance, &getInfo, &m_runtimeInfo.systemId);
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         std::stringstream ss;
         ss << "OpenXR HMD system unavailable (result " << res << "). Silently entering Pass-Through Mode.";
         LogInfo(ss.str());
@@ -134,7 +133,7 @@ bool OpenXrManager::Initialize() {
     }
 
     XrSystemProperties systemProps{XR_TYPE_SYSTEM_PROPERTIES};
-    if (m_dispatch->GetSystemProperties(m_instance, m_runtimeInfo.systemId, &systemProps) == XR_SUCCESS) {
+    if ((XR_SUCCEEDED(m_dispatch->GetSystemProperties(m_instance, m_runtimeInfo.systemId, &systemProps)))) {
         m_runtimeInfo.systemName = systemProps.systemName;
         m_runtimeInfo.maxSwapchainImageWidth = systemProps.graphicsProperties.maxSwapchainImageWidth;
         m_runtimeInfo.maxSwapchainImageHeight = systemProps.graphicsProperties.maxSwapchainImageHeight;
@@ -156,12 +155,12 @@ bool OpenXrManager::Initialize() {
     uint32_t viewConfigCount = 0;
     res = m_dispatch->EnumerateViewConfigurationViews(
         m_instance, m_runtimeInfo.systemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &viewConfigCount, nullptr);
-    if (res == XR_SUCCESS && viewConfigCount > 0) {
+    if (XR_SUCCEEDED(res) && viewConfigCount > 0) {
         m_viewConfigViews.assign(viewConfigCount, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
         res = m_dispatch->EnumerateViewConfigurationViews(
             m_instance, m_runtimeInfo.systemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
             viewConfigCount, &viewConfigCount, m_viewConfigViews.data());
-        if (res == XR_SUCCESS && !m_viewConfigViews.empty()) {
+        if (XR_SUCCEEDED(res) && !m_viewConfigViews.empty()) {
             m_runtimeInfo.recommendedEyeWidth = m_viewConfigViews[0].recommendedImageRectWidth;
             m_runtimeInfo.recommendedEyeHeight = m_viewConfigViews[0].recommendedImageRectHeight;
 
@@ -178,7 +177,7 @@ bool OpenXrManager::Initialize() {
 
     XrGraphicsRequirementsD3D12KHR graphicsRequirements{XR_TYPE_GRAPHICS_REQUIREMENTS_D3D12_KHR};
     res = m_dispatch->GetD3D12GraphicsRequirementsKHR(m_instance, m_runtimeInfo.systemId, &graphicsRequirements);
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         std::stringstream ss;
         ss << "Failed to query OpenXR D3D12 graphics requirements (result " << res << "). Silently entering Pass-Through Mode.";
         LogInfo(ss.str());
@@ -232,9 +231,10 @@ void OpenXrManager::Shutdown() {
     }
     m_state = OpenXrState::Uninitialized;
     m_sessionRunning = false;
-    m_hasRecenter = false;
-    m_useSimulatedPose = false;
-    m_useSimulatedProjections = false;
+    m_sessionState = XR_SESSION_STATE_UNKNOWN;
+    m_beginSessionFailures = 0;
+    m_frameBegun = false;
+    ClearRenderPoses();
     m_eyeProjections[0] = {};
     m_eyeProjections[1] = {};
     m_viewConfigViews.clear();
@@ -268,24 +268,146 @@ bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queu
     sessionInfo.systemId = m_runtimeInfo.systemId;
 
     XrResult res = m_dispatch->CreateSession(m_instance, &sessionInfo, &m_session);
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         LogError("OpenXrManager::CreateSession failed with result " + std::to_string(res));
         return false;
     }
-    LogInfo("OpenXrManager: Session created successfully.");
+    m_sessionState = XR_SESSION_STATE_IDLE;
+    LogInfo("OpenXrManager: Session created successfully; waiting for the runtime to report READY.");
+    return true;
+}
 
+void OpenXrManager::PollEvents() {
+    if (m_instance == XR_NULL_HANDLE || m_state != OpenXrState::Active) {
+        return;
+    }
+
+    // Bounded drain so a misbehaving runtime can never stall the present path.
+    for (int i = 0; i < 64; ++i) {
+        XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+        XrResult res = m_dispatch->PollEvent(m_instance, &event);
+        if (XR_FAILED(res)) {
+            LogWarn("OpenXrManager::PollEvents: xrPollEvent failed (result " + std::to_string(res) + ")");
+            if (res == XR_ERROR_INSTANCE_LOST) {
+                ReleaseAndEnterPassThrough("instance lost");
+            }
+            return;
+        }
+        if (res == XR_EVENT_UNAVAILABLE) {
+            break;
+        }
+
+        switch (event.type) {
+        case XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED: {
+            const auto* changed = reinterpret_cast<const XrEventDataSessionStateChanged*>(&event);
+            HandleSessionStateChanged(changed->state);
+            break;
+        }
+        case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
+            ReleaseAndEnterPassThrough("instance loss pending");
+            break;
+        default:
+            break;
+        }
+
+        if (m_state != OpenXrState::Active) {
+            return;
+        }
+    }
+
+    // READY is delivered only once. If xrBeginSession failed then, keep retrying until it succeeds
+    // or the runtime moves the session on.
+    if (m_sessionState == XR_SESSION_STATE_READY && !m_sessionRunning) {
+        BeginRunningSession();
+    }
+}
+
+bool OpenXrManager::EnterPassThroughIfLost(XrResult res) {
+    // A crashed or restarted runtime may fail frame calls with *_LOST without ever queueing a
+    // LOSS_PENDING event; treat it the same way.
+    if (res == XR_ERROR_SESSION_LOST) {
+        ReleaseAndEnterPassThrough("session lost");
+        return true;
+    }
+    if (res == XR_ERROR_INSTANCE_LOST) {
+        ReleaseAndEnterPassThrough("instance lost");
+        return true;
+    }
+    return false;
+}
+
+void OpenXrManager::HandleSessionStateChanged(XrSessionState state) {
+    LogInfo("OpenXrManager: Session state " + std::to_string(m_sessionState) + " -> " + std::to_string(state));
+    m_sessionState = state;
+
+    switch (state) {
+    case XR_SESSION_STATE_READY:
+        BeginRunningSession();
+        break;
+    case XR_SESSION_STATE_STOPPING:
+        EndRunningSession();
+        break;
+    case XR_SESSION_STATE_EXITING:
+        ReleaseAndEnterPassThrough("session exiting");
+        break;
+    case XR_SESSION_STATE_LOSS_PENDING:
+        ReleaseAndEnterPassThrough("session loss pending");
+        break;
+    default:
+        break;
+    }
+}
+
+void OpenXrManager::BeginRunningSession() {
+    if (m_session == XR_NULL_HANDLE || m_sessionRunning) {
+        return;
+    }
     XrSessionBeginInfo beginInfo{XR_TYPE_SESSION_BEGIN_INFO};
     beginInfo.next = nullptr;
     beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-    res = m_dispatch->BeginSession(m_session, &beginInfo);
-    if (res != XR_SUCCESS) {
-        LogError("OpenXrManager::CreateSession: BeginSession failed with result " + std::to_string(res));
-        m_sessionRunning = false;
-        return false;
+    XrResult res = m_dispatch->BeginSession(m_session, &beginInfo);
+    if (XR_FAILED(res)) {
+        // Retried once per poll while READY; log the first failure and then periodically.
+        if (m_beginSessionFailures++ % 300 == 0) {
+            LogError("OpenXrManager: BeginSession failed (result " + std::to_string(res) + ", attempt " +
+                     std::to_string(m_beginSessionFailures) + ")");
+        }
+        EnterPassThroughIfLost(res);
+        return;
     }
+    m_beginSessionFailures = 0;
     m_sessionRunning = true;
     LogInfo("OpenXrManager: Session begun successfully.");
-    return true;
+}
+
+void OpenXrManager::EndRunningSession() {
+    if (m_session == XR_NULL_HANDLE || !m_sessionRunning) {
+        return;
+    }
+    // Any frame still in flight is abandoned; the runtime discards it when the session ends.
+    m_frameBegun = false;
+    m_lastPolledTime = 0;
+    m_lastLocatedViewsTime = 0;
+    m_eyeSwapchains[0].hasCopiedFrame = false;
+    m_eyeSwapchains[1].hasCopiedFrame = false;
+    ClearRenderPoses();
+
+    XrResult res = m_dispatch->EndSession(m_session);
+    if (XR_FAILED(res)) {
+        LogError("OpenXrManager: EndSession failed (result " + std::to_string(res) + ")");
+    }
+    m_sessionRunning = false;
+    LogInfo("OpenXrManager: Session ended; VR frame submission paused until the runtime reports READY.");
+}
+
+void OpenXrManager::ReleaseAndEnterPassThrough(const char* reason) {
+    LogInfo(std::string("OpenXrManager: Releasing OpenXR resources (") + reason + "). Continuing in Pass-Through Mode.");
+    m_frameBegun = false;
+    // Keeps Shutdown from calling xrEndSession, which is valid only once the runtime has moved the
+    // session to STOPPING; xrDestroySession is valid in any state and ends it.
+    m_sessionRunning = false;
+    Shutdown();
+    m_state = OpenXrState::PassThrough;
 }
 
 bool OpenXrManager::CreateTrackingSpaces() {
@@ -300,7 +422,7 @@ bool OpenXrManager::CreateTrackingSpaces() {
         baseSpaceInfo.poseInReferenceSpace.position = {0.0f, 0.0f, 0.0f};
 
         XrResult res = m_dispatch->CreateReferenceSpace(m_session, &baseSpaceInfo, &m_baseLocalSpace);
-        if (res != XR_SUCCESS) {
+        if (XR_FAILED(res)) {
             LogError("OpenXrManager: Failed to create base local reference space (result " + std::to_string(res) + ")");
             return false;
         }
@@ -313,7 +435,7 @@ bool OpenXrManager::CreateTrackingSpaces() {
         localSpaceInfo.poseInReferenceSpace.position = {0.0f, 0.0f, 0.0f};
 
         XrResult res = m_dispatch->CreateReferenceSpace(m_session, &localSpaceInfo, &m_localSpace);
-        if (res != XR_SUCCESS) {
+        if (XR_FAILED(res)) {
             LogError("OpenXrManager: Failed to create local reference space (result " + std::to_string(res) + ")");
             return false;
         }
@@ -326,7 +448,7 @@ bool OpenXrManager::CreateTrackingSpaces() {
         viewSpaceInfo.poseInReferenceSpace.position = {0.0f, 0.0f, 0.0f};
 
         XrResult res = m_dispatch->CreateReferenceSpace(m_session, &viewSpaceInfo, &m_viewSpace);
-        if (res != XR_SUCCESS) {
+        if (XR_FAILED(res)) {
             LogError("OpenXrManager: Failed to create view reference space (result " + std::to_string(res) + ")");
             return false;
         }
@@ -367,107 +489,78 @@ HeadPose OpenXrManager::ComputeEyePose(const HeadPose& headPose, float ipd, uint
 }
 
 HeadPose OpenXrManager::PollHeadPose(XrTime time) {
-    if (!m_useSimulatedPose) {
-        if (m_session == XR_NULL_HANDLE || m_localSpace == XR_NULL_HANDLE || m_viewSpace == XR_NULL_HANDLE) {
-            return m_lastPose;
-        }
-
-        if (time == 0) {
-            if (m_frameBegun && m_frameState.predictedDisplayTime != 0) {
-                time = m_frameState.predictedDisplayTime;
-            } else {
-                time = GetCurrentXrTime();
-            }
-        }
-
-        if (time != 0 && time == m_lastPolledTime && m_lastPose.isValid) {
-            return m_lastPose;
-        }
-
-        if (m_baseLocalSpace != XR_NULL_HANDLE) {
-            XrSpaceLocation baseLocation{XR_TYPE_SPACE_LOCATION};
-            XrResult resBase = m_dispatch->LocateSpace(m_viewSpace, m_baseLocalSpace, time, &baseLocation);
-            if (resBase == XR_SUCCESS) {
-                bool posValid = (baseLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
-                bool oriValid = (baseLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
-
-                m_rawPose.position = Vector3(baseLocation.pose.position.x, baseLocation.pose.position.y, baseLocation.pose.position.z);
-                m_rawPose.orientation = Quaternion(baseLocation.pose.orientation.x, baseLocation.pose.orientation.y, baseLocation.pose.orientation.z, baseLocation.pose.orientation.w);
-                m_rawPose.rotation = QuaternionToEuler(m_rawPose.orientation);
-
-                m_rawPose.positionTracked = (baseLocation.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
-                m_rawPose.orientationTracked = (baseLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
-                m_rawPose.isValid = posValid && oriValid;
-            }
-        }
-
-        XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
-        XrResult res = m_dispatch->LocateSpace(m_viewSpace, m_localSpace, time, &location);
-        if (res != XR_SUCCESS) {
-            static uint32_t s_locateFailCount = 0;
-            if (++s_locateFailCount % 300 == 1) {
-                LogWarn("OpenXrManager::PollHeadPose: LocateSpace failed (result " + std::to_string(res) + ")");
-            }
-            return m_lastPose;
-        }
-
-        bool posValid = (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
-        bool oriValid = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
-
-        m_lastPose.position = Vector3(location.pose.position.x, location.pose.position.y, location.pose.position.z);
-        m_lastPose.orientation = Quaternion(location.pose.orientation.x, location.pose.orientation.y, location.pose.orientation.z, location.pose.orientation.w);
-        m_lastPose.rotation = QuaternionToEuler(m_lastPose.orientation);
-
-        m_lastPose.positionTracked = (location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
-        m_lastPose.orientationTracked = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
-        m_lastPose.isValid = posValid && oriValid;
-
-        if (m_baseLocalSpace == XR_NULL_HANDLE) {
-            m_rawPose = m_lastPose;
-        }
-
-        m_lastPolledTime = time;
+    if (m_session == XR_NULL_HANDLE || m_localSpace == XR_NULL_HANDLE || m_viewSpace == XR_NULL_HANDLE) {
         return m_lastPose;
     }
 
-    HeadPose recentered = m_rawPose;
-    if (m_hasRecenter) {
-        float dx = m_rawPose.position.x - m_recenterOffset.position.x;
-        float dy = m_rawPose.position.y - m_recenterOffset.position.y;
-        float dz = m_rawPose.position.z - m_recenterOffset.position.z;
-
-        float cosY = std::cos(-m_recenterOffset.yaw);
-        float sinY = std::sin(-m_recenterOffset.yaw);
-
-        recentered.position.x = dx * cosY - dz * sinY;
-        recentered.position.y = dy;
-        recentered.position.z = dx * sinY + dz * cosY;
-
-        float halfNegYaw = -m_recenterOffset.yaw * 0.5f;
-        Quaternion qYawInv(0.0f, std::sin(halfNegYaw), 0.0f, std::cos(halfNegYaw));
-        recentered.orientation = qYawInv * m_rawPose.orientation;
-        recentered.rotation = QuaternionToEuler(recentered.orientation);
+    if (time == 0) {
+        if (m_frameBegun && m_frameState.predictedDisplayTime != 0) {
+            time = m_frameState.predictedDisplayTime;
+        } else {
+            time = GetCurrentXrTime();
+        }
     }
 
-    m_lastPose = recentered;
+    if (time != 0 && time == m_lastPolledTime && m_lastPose.isValid) {
+        return m_lastPose;
+    }
+
+    if (m_baseLocalSpace != XR_NULL_HANDLE) {
+        XrSpaceLocation baseLocation{XR_TYPE_SPACE_LOCATION};
+        XrResult resBase = m_dispatch->LocateSpace(m_viewSpace, m_baseLocalSpace, time, &baseLocation);
+        if (XR_SUCCEEDED(resBase)) {
+            bool posValid = (baseLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+            bool oriValid = (baseLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
+
+            m_rawPose.position = Vector3(baseLocation.pose.position.x, baseLocation.pose.position.y, baseLocation.pose.position.z);
+            m_rawPose.orientation = Quaternion(baseLocation.pose.orientation.x, baseLocation.pose.orientation.y, baseLocation.pose.orientation.z, baseLocation.pose.orientation.w);
+            m_rawPose.rotation = QuaternionToEuler(m_rawPose.orientation);
+
+            m_rawPose.positionTracked = (baseLocation.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
+            m_rawPose.orientationTracked = (baseLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
+            m_rawPose.isValid = posValid && oriValid;
+        }
+    }
+
+    XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+    XrResult res = m_dispatch->LocateSpace(m_viewSpace, m_localSpace, time, &location);
+    if (XR_FAILED(res)) {
+        static uint32_t s_locateFailCount = 0;
+        if (++s_locateFailCount % 300 == 1) {
+            LogWarn("OpenXrManager::PollHeadPose: LocateSpace failed (result " + std::to_string(res) + ")");
+        }
+        return m_lastPose;
+    }
+
+    bool posValid = (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+    bool oriValid = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
+
+    m_lastPose.position = Vector3(location.pose.position.x, location.pose.position.y, location.pose.position.z);
+    m_lastPose.orientation = Quaternion(location.pose.orientation.x, location.pose.orientation.y, location.pose.orientation.z, location.pose.orientation.w);
+    m_lastPose.rotation = QuaternionToEuler(m_lastPose.orientation);
+
+    m_lastPose.positionTracked = (location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
+    m_lastPose.orientationTracked = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
+    m_lastPose.isValid = posValid && oriValid;
+
+    if (m_baseLocalSpace == XR_NULL_HANDLE) {
+        m_rawPose = m_lastPose;
+    }
+
+    m_lastPolledTime = time;
     return m_lastPose;
 }
 
 void OpenXrManager::Recenter() {
+    ClearRenderPoses();
     Vector3 recenterPos = m_rawPose.position;
-    float recenterYaw = m_rawPose.rotation.yaw;
-    if (std::abs(recenterYaw) < 1e-6f && (std::abs(m_rawPose.orientation.x) > 1e-6f ||
-                                         std::abs(m_rawPose.orientation.y) > 1e-6f ||
-                                         std::abs(m_rawPose.orientation.z) > 1e-6f ||
-                                         std::abs(m_rawPose.orientation.w - 1.0f) > 1e-6f)) {
-        recenterYaw = QuaternionToEuler(m_rawPose.orientation).yaw;
-    }
+    float recenterYaw = m_rawPose.rotation.yaw;  // every poll derives rotation from the quaternion
 
-    if (!m_useSimulatedPose && m_session != XR_NULL_HANDLE && m_baseLocalSpace != XR_NULL_HANDLE && m_viewSpace != XR_NULL_HANDLE) {
+    if (m_session != XR_NULL_HANDLE && m_baseLocalSpace != XR_NULL_HANDLE && m_viewSpace != XR_NULL_HANDLE) {
         XrTime time = (m_frameState.predictedDisplayTime != 0) ? m_frameState.predictedDisplayTime : GetCurrentXrTime();
         XrSpaceLocation baseLoc{XR_TYPE_SPACE_LOCATION};
         XrResult res = m_dispatch->LocateSpace(m_viewSpace, m_baseLocalSpace, time, &baseLoc);
-        if (res == XR_SUCCESS &&
+        if (XR_SUCCEEDED(res) &&
             (baseLoc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) &&
             (baseLoc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) {
             recenterPos = Vector3(baseLoc.pose.position.x, baseLoc.pose.position.y, baseLoc.pose.position.z);
@@ -497,43 +590,14 @@ void OpenXrManager::Recenter() {
         localSpaceInfo.poseInReferenceSpace.position = {recenterPos.x, recenterPos.y, recenterPos.z};
 
         XrResult res = m_dispatch->CreateReferenceSpace(m_session, &localSpaceInfo, &m_localSpace);
-        if (res != XR_SUCCESS) {
+        if (XR_FAILED(res)) {
             LogError("OpenXrManager::Recenter: Failed to recreate local reference space (result " + std::to_string(res) + ")");
         }
     }
 
-    m_recenterOffset.position = recenterPos;
-    m_recenterOffset.yaw = recenterYaw;
-    m_hasRecenter = true;
     m_lastPolledTime = 0;
     AlignMenuQuadToHeadPose();
     LogInfo("OpenXrManager: Head pose recentered.");
-}
-
-void OpenXrManager::SetSimulatedPose(const HeadPose& pose) {
-    m_simulatedPose = pose;
-    m_useSimulatedPose = true;
-    m_rawPose = m_simulatedPose;
-
-    bool hasRotation = (m_rawPose.rotation.pitch != 0.0f || m_rawPose.rotation.yaw != 0.0f || m_rawPose.rotation.roll != 0.0f);
-    bool hasNonIdentityOrientation = (m_rawPose.orientation.x != 0.0f || m_rawPose.orientation.y != 0.0f ||
-                                      m_rawPose.orientation.z != 0.0f || m_rawPose.orientation.w != 1.0f);
-
-    if (hasNonIdentityOrientation && !hasRotation) {
-        m_rawPose.rotation = QuaternionToEuler(m_rawPose.orientation);
-        m_simulatedPose.rotation = m_rawPose.rotation;
-    } else if (hasRotation && !hasNonIdentityOrientation) {
-        float halfYaw = m_rawPose.rotation.yaw * 0.5f;
-        float halfPitch = m_rawPose.rotation.pitch * 0.5f;
-        float halfRoll = m_rawPose.rotation.roll * 0.5f;
-        Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
-        Quaternion qPitch(std::sin(halfPitch), 0.0f, 0.0f, std::cos(halfPitch));
-        Quaternion qRoll(0.0f, 0.0f, std::sin(halfRoll), std::cos(halfRoll));
-        m_rawPose.orientation = qYaw * qPitch * qRoll;
-        m_simulatedPose.orientation = m_rawPose.orientation;
-    }
-
-    m_lastPose = m_simulatedPose;
 }
 
 EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov) {
@@ -577,12 +641,6 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
         return false;
     }
 
-    if (m_useSimulatedProjections) {
-        m_eyeProjections[0] = m_simulatedProjections[0];
-        m_eyeProjections[1] = m_simulatedProjections[1];
-        return true;
-    }
-
     if (time == 0) {
         if (m_frameState.predictedDisplayTime != 0) {
             time = m_frameState.predictedDisplayTime;
@@ -605,7 +663,7 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
     XrView views[2] = { {XR_TYPE_VIEW, nullptr}, {XR_TYPE_VIEW, nullptr} };
 
     XrResult res = m_dispatch->LocateViews(m_session, &locateInfo, &viewState, 2, &viewCount, views);
-    if (res == XR_SUCCESS && viewCount >= 2) {
+    if (XR_SUCCEEDED(res) && viewCount >= 2) {
         m_eyeProjections[0] = ComputeProjectionFromFov(views[0].fov);
         m_eyeProjections[1] = ComputeProjectionFromFov(views[1].fov);
         float dx = views[1].pose.position.x - views[0].pose.position.x;
@@ -636,10 +694,6 @@ EyeProjection OpenXrManager::PollEyeProjection(uint32_t eyeIndex, XrTime time) {
         eyeIndex = 0;
     }
 
-    if (m_useSimulatedProjections) {
-        return m_simulatedProjections[eyeIndex];
-    }
-
     if (m_state != OpenXrState::Active || m_session == XR_NULL_HANDLE) {
         return m_eyeProjections[eyeIndex];
     }
@@ -650,17 +704,7 @@ EyeProjection OpenXrManager::PollEyeProjection(uint32_t eyeIndex, XrTime time) {
 
 const EyeProjection& OpenXrManager::GetEyeProjection(uint32_t eyeIndex) const {
     if (eyeIndex >= 2) eyeIndex = 0;
-    if (m_useSimulatedProjections) {
-        return m_simulatedProjections[eyeIndex];
-    }
     return m_eyeProjections[eyeIndex];
-}
-
-void OpenXrManager::SetSimulatedProjection(uint32_t eyeIndex, const EyeProjection& proj) {
-    if (eyeIndex >= 2) eyeIndex = 0;
-    m_simulatedProjections[eyeIndex] = proj;
-    m_useSimulatedProjections = true;
-    m_eyeProjections[eyeIndex] = proj;
 }
 
 uint32_t OpenXrManager::GetRecommendedEyeWidth(uint32_t eyeIndex) const {
@@ -686,6 +730,72 @@ void OpenXrManager::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQu
     }
 }
 
+DXGI_FORMAT OpenXrManager::SelectCompatibleSwapchainFormat(DXGI_FORMAT backBufferFormat, const std::vector<int64_t>& supported) {
+    // Candidates in preference order: exact match, then same-family variants.
+    DXGI_FORMAT candidates[3] = { backBufferFormat, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN };
+    switch (backBufferFormat) {
+    case DXGI_FORMAT_R8G8B8A8_UNORM:      candidates[1] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; break;
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: candidates[1] = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+    case DXGI_FORMAT_B8G8R8A8_UNORM:      candidates[1] = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB; break;
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: candidates[1] = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+        candidates[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+        candidates[1] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        break;
+    case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+        candidates[0] = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        candidates[1] = DXGI_FORMAT_B8G8R8A8_UNORM;
+        break;
+    default: break;
+    }
+    for (DXGI_FORMAT candidate : candidates) {
+        if (candidate == DXGI_FORMAT_UNKNOWN) continue;
+        for (int64_t sf : supported) {
+            if (sf == static_cast<int64_t>(candidate)) return candidate;
+        }
+    }
+    return DXGI_FORMAT_UNKNOWN;
+}
+
+DXGI_FORMAT OpenXrManager::NegotiateEyeSwapchainFormat(DXGI_FORMAT backBufferFormat) {
+    // The eye image is filled by a straight copy from the back buffer, so the negotiated
+    // format must be copy-compatible with it. Never fall back to an incompatible format.
+    std::vector<int64_t> supportedFormats;
+    uint32_t formatCount = 0;
+    XrResult res = m_dispatch->EnumerateSwapchainFormats(m_session, 0, &formatCount, nullptr);
+    if (XR_SUCCEEDED(res) && formatCount > 0) {
+        supportedFormats.resize(formatCount);
+        res = m_dispatch->EnumerateSwapchainFormats(m_session, formatCount, &formatCount, supportedFormats.data());
+        supportedFormats.resize(XR_SUCCEEDED(res) ? formatCount : 0);
+    }
+    if (supportedFormats.empty()) {
+        // A failed query says nothing about compatibility; let swapchain creation decide.
+        LogWarn("OpenXrManager: Could not enumerate swapchain formats (result " + std::to_string(res) +
+                "); requesting back buffer format " + std::to_string(backBufferFormat) + " unchanged.");
+        return backBufferFormat;
+    }
+    return SelectCompatibleSwapchainFormat(backBufferFormat, supportedFormats);
+}
+
+void OpenXrManager::EnterPassThroughForIncompatibleFormat(DXGI_FORMAT backBufferFormat) {
+    LogError("OpenXrManager: OpenXR runtime offers no swapchain format compatible with back buffer format " +
+             std::to_string(backBufferFormat) + ".");
+    // Pass-Through Mode means no OpenXR session, so destroy the session and release everything
+    // rather than leave a begun session with no frames ever submitted.
+    ReleaseAndEnterPassThrough("no copy-compatible swapchain format");
+}
+
+bool OpenXrManager::EnsureBackBufferFormatSupported(DXGI_FORMAT backBufferFormat) {
+    if (m_session == XR_NULL_HANDLE || m_state != OpenXrState::Active) {
+        return m_state == OpenXrState::Active;
+    }
+    if (NegotiateEyeSwapchainFormat(backBufferFormat) == DXGI_FORMAT_UNKNOWN) {
+        EnterPassThroughForIncompatibleFormat(backBufferFormat);
+        return false;
+    }
+    return true;
+}
+
 bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FORMAT format) {
     if (m_session == XR_NULL_HANDLE || m_state != OpenXrState::Active) {
         return false;
@@ -694,55 +804,13 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
         return true;
     }
 
-    DXGI_FORMAT selectedFormat = format;
-
-    uint32_t formatCount = 0;
-    if (m_dispatch->EnumerateSwapchainFormats(m_session, 0, &formatCount, nullptr) == XR_SUCCESS && formatCount > 0) {
-        std::vector<int64_t> supportedFormats(formatCount);
-        if (m_dispatch->EnumerateSwapchainFormats(m_session, formatCount, &formatCount, supportedFormats.data()) == XR_SUCCESS) {
-            bool directlySupported = false;
-            for (int64_t sf : supportedFormats) {
-                if (sf == static_cast<int64_t>(format)) {
-                    directlySupported = true;
-                    break;
-                }
-            }
-
-            if (!directlySupported && !supportedFormats.empty()) {
-                bool foundVariant = false;
-                int64_t variant = 0;
-                if (format == DXGI_FORMAT_R8G8B8A8_UNORM) variant = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-                else if (format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) variant = DXGI_FORMAT_R8G8B8A8_UNORM;
-                else if (format == DXGI_FORMAT_B8G8R8A8_UNORM) variant = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
-                else if (format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) variant = DXGI_FORMAT_B8G8R8A8_UNORM;
-
-                for (int64_t sf : supportedFormats) {
-                    if (variant != 0 && sf == variant) {
-                        selectedFormat = static_cast<DXGI_FORMAT>(sf);
-                        foundVariant = true;
-                        break;
-                    }
-                }
-
-                if (!foundVariant) {
-                    for (int64_t sf : supportedFormats) {
-                        if (sf == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || sf == DXGI_FORMAT_R8G8B8A8_UNORM ||
-                            sf == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || sf == DXGI_FORMAT_B8G8R8A8_UNORM ||
-                            sf == DXGI_FORMAT_R10G10B10A2_UNORM || sf == DXGI_FORMAT_R16G16B16A16_FLOAT) {
-                            selectedFormat = static_cast<DXGI_FORMAT>(sf);
-                            foundVariant = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (!foundVariant && !supportedFormats.empty()) {
-                    selectedFormat = static_cast<DXGI_FORMAT>(supportedFormats.front());
-                }
-
-                LogInfo("OpenXrManager: Format " + std::to_string(format) + " not directly supported. Negotiated swapchain format: " + std::to_string(selectedFormat));
-            }
-        }
+    DXGI_FORMAT selectedFormat = NegotiateEyeSwapchainFormat(format);
+    if (selectedFormat == DXGI_FORMAT_UNKNOWN) {
+        EnterPassThroughForIncompatibleFormat(format);
+        return false;
+    }
+    if (selectedFormat != format) {
+        LogInfo("OpenXrManager: Format " + std::to_string(format) + " not directly supported. Negotiated swapchain format: " + std::to_string(selectedFormat));
     }
 
     for (uint32_t i = 0; i < 2; ++i) {
@@ -762,7 +830,7 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
         createInfo.mipCount = 1;
 
         XrResult res = m_dispatch->CreateSwapchain(m_session, &createInfo, &m_eyeSwapchains[i].handle);
-        if (res != XR_SUCCESS) {
+        if (XR_FAILED(res)) {
             LogError("OpenXrManager::CreateEyeSwapchains failed for eye " + std::to_string(i) + " (result " + std::to_string(res) + ")");
             DestroyEyeSwapchains();
             return false;
@@ -852,6 +920,21 @@ void OpenXrManager::DestroyCursorSwapchain() {
     m_cursorOverlay.DestroySwapchain(m_dispatch);
 }
 
+void OpenXrManager::RecordRenderPose(uint32_t eyeIndex, const HeadPose& pose) {
+    if (eyeIndex >= 2 || !pose.isValid) {
+        return;
+    }
+    m_renderPoses[eyeIndex] = pose;
+    m_hasRenderPose[eyeIndex] = true;
+}
+
+void OpenXrManager::ClearRenderPoses() {
+    // A record not consumed by its frame's copy (shouldRender false, a skipped copy, a recenter)
+    // belongs to an older frame or tracking space; never let a later frame submit it.
+    m_hasRenderPose[0] = false;
+    m_hasRenderPose[1] = false;
+}
+
 bool OpenXrManager::BeginFrame() {
     if (m_session == XR_NULL_HANDLE) {
         return false;
@@ -860,26 +943,18 @@ bool OpenXrManager::BeginFrame() {
         return true;
     }
 
-    if (!m_sessionRunning) {
-        XrSessionBeginInfo beginInfo{XR_TYPE_SESSION_BEGIN_INFO};
-        beginInfo.next = nullptr;
-        beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-        XrResult beginRes = m_dispatch->BeginSession(m_session, &beginInfo);
-        if (beginRes == XR_SUCCESS) {
-            m_sessionRunning = true;
-            LogInfo("OpenXrManager::BeginFrame: Session begun successfully.");
-        } else {
-            LogError("OpenXrManager::BeginFrame: BeginSession failed (result " + std::to_string(beginRes) + ")");
-            return false;
-        }
+    PollEvents();
+    if (m_session == XR_NULL_HANDLE || !m_sessionRunning) {
+        return false;
     }
 
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
     m_frameState = {XR_TYPE_FRAME_STATE};
     m_frameState.shouldRender = XR_TRUE;
     XrResult res = m_dispatch->WaitFrame(m_session, &waitInfo, &m_frameState);
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         LogError("OpenXrManager::BeginFrame: WaitFrame failed (result " + std::to_string(res) + ")");
+        EnterPassThroughIfLost(res);
         return false;
     }
 
@@ -892,8 +967,9 @@ bool OpenXrManager::BeginFrame() {
 
     XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
     res = m_dispatch->BeginFrame(m_session, &beginInfo);
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         LogError("OpenXrManager::BeginFrame: BeginFrame failed (result " + std::to_string(res) + ")");
+        EnterPassThroughIfLost(res);
         return false;
     }
 
@@ -922,10 +998,12 @@ bool OpenXrManager::EndFrame() {
 
     XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
     m_frameBegun = false;
+    ClearRenderPoses();
     m_lastPolledTime = 0;
     m_lastLocatedViewsTime = 0;
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         LogError("OpenXrManager::EndFrame: EndFrame failed (result " + std::to_string(res) + ")");
+        EnterPassThroughIfLost(res);
         return false;
     }
     return true;
@@ -951,8 +1029,14 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
         return true;
     }
 
-    // Cache the captured head pose at the moment this eye's frame is copied
-    m_capturedEyePoses[eyeIndex] = m_lastPose;
+    // Submit the eye with the pose the engine rendered it with (recorded when VRBridge handed
+    // it to the Companion Mod). Fall back to the pose polled at frame begin if none was recorded.
+    if (m_hasRenderPose[eyeIndex]) {
+        m_capturedEyePoses[eyeIndex] = m_renderPoses[eyeIndex];
+        m_hasRenderPose[eyeIndex] = false;
+    } else {
+        m_capturedEyePoses[eyeIndex] = m_lastPose;
+    }
 
     XrSwapchain swapchain = m_eyeSwapchains[eyeIndex].handle;
     if (swapchain == XR_NULL_HANDLE) {
@@ -962,7 +1046,7 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
     XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     uint32_t imageIndex = 0;
     XrResult res = m_dispatch->AcquireSwapchainImage(swapchain, &acquireInfo, &imageIndex);
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         LogError("OpenXrManager::CopyBackBufferToEye: AcquireSwapchainImage failed (result " + std::to_string(res) + ")");
         return false;
     }
@@ -970,7 +1054,7 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
     XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
     waitInfo.timeout = XR_INFINITE_DURATION;
     res = m_dispatch->WaitSwapchainImage(swapchain, &waitInfo);
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         LogError("OpenXrManager::CopyBackBufferToEye: WaitSwapchainImage failed (result " + std::to_string(res) + ")");
         XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
         m_dispatch->ReleaseSwapchainImage(swapchain, &releaseInfo);
@@ -1033,7 +1117,9 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
                 barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
                 barriers[1].Transition.pResource = destTexture;
-                barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+                // OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be
+                // returned to RENDER_TARGET before release.
+                barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
                 barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
                 barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
@@ -1094,7 +1180,7 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
     XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     res = m_dispatch->ReleaseSwapchainImage(swapchain, &releaseInfo);
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         LogError("OpenXrManager::CopyBackBufferToEye: ReleaseSwapchainImage failed (result " + std::to_string(res) + ")");
         return false;
     }
@@ -1194,10 +1280,12 @@ bool OpenXrManager::SubmitFramePair() {
 
     XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
     m_frameBegun = false;
+    ClearRenderPoses();
     m_lastPolledTime = 0;
     m_lastLocatedViewsTime = 0;
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         LogError("OpenXrManager::SubmitFramePair: EndFrame failed (result " + std::to_string(res) + ")");
+        EnterPassThroughIfLost(res);
         return false;
     }
 
@@ -1333,10 +1421,12 @@ bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df*
 
     XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
     m_frameBegun = false;
+    ClearRenderPoses();
     m_lastPolledTime = 0;
     m_lastLocatedViewsTime = 0;
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         LogError("OpenXrManager::SubmitMenuQuad: EndFrame failed (result " + std::to_string(res) + ")");
+        EnterPassThroughIfLost(res);
         return false;
     }
 

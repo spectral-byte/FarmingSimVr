@@ -3,6 +3,7 @@
 #include "lualib.h"
 #include "luacode.h"
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include <string_view>
 
@@ -31,6 +32,10 @@ void LuauTestRunner::InitializeEnvironment() {
     // Register loadstring
     lua_pushcfunction(L_, &LuauLoadString, "loadstring");
     lua_setglobal(L_, "loadstring");
+
+    // Register loadCompanionMod (loads module files in modDesc order, as the engine does)
+    lua_pushcfunction(L_, &LuauLoadCompanionMod, "loadCompanionMod");
+    lua_setglobal(L_, "loadCompanionMod");
 
     // Register require (supporting @lune/fs)
     lua_pushlightuserdata(L_, this);
@@ -124,7 +129,7 @@ int LuauTestRunner::LuauTracebackHandler(lua_State* L) {
     return 1;
 }
 
-std::filesystem::path LuauTestRunner::ResolvePath(const std::string& relativePath) const {
+std::filesystem::path ResolveProjectPath(const std::string& relativePath) {
     std::filesystem::path p(relativePath);
     if (std::filesystem::exists(p)) {
         return p;
@@ -142,6 +147,70 @@ std::filesystem::path LuauTestRunner::ResolvePath(const std::string& relativePat
     return {};
 }
 
+std::filesystem::path LuauTestRunner::ResolvePath(const std::string& relativePath) const {
+    return ResolveProjectPath(relativePath);
+}
+
+std::vector<std::string> ParseModDescSourceFiles(const std::string& modDescXml) {
+    std::vector<std::string> files;
+    static const std::regex re(R"re(<sourceFile\s+filename\s*=\s*"([^"]+)")re");
+    for (auto it = std::sregex_iterator(modDescXml.begin(), modDescXml.end(), re);
+         it != std::sregex_iterator(); ++it) {
+        files.push_back((*it)[1].str());
+    }
+    return files;
+}
+
+int LoadCompanionMod(lua_State* L, std::string* errorOut) {
+    auto fail = [&](int status, const std::string& msg) {
+        if (errorOut) *errorOut = msg;
+        lua_pushstring(L, msg.c_str());
+        return status;
+    };
+    // Resolve the mod root once so every file comes from the same checkout
+    const std::string modDescRel = std::string(kCompanionModDir) + "modDesc.xml";
+    const auto modDescPath = ResolveProjectPath(modDescRel);
+    if (modDescPath.empty()) return fail(-1, "Companion Mod not found: " + modDescRel);
+    const auto modRoot = modDescPath.parent_path();
+    for (const auto& rel : CompanionModLoadOrder()) {
+        const std::string repoRel = std::string(kCompanionModDir) + rel;
+        const auto path = modRoot / rel;
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) return fail(-1, "Companion Mod file not readable: " + repoRel);
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        const std::string code = buffer.str();
+        if (code.empty()) return fail(-1, "Companion Mod file is empty: " + repoRel);
+
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(code.c_str(), code.length(), nullptr, &bytecodeSize);
+        if (!bytecode) return fail(-1, "luau_compile failed for " + repoRel);
+        const std::string chunkName = "=" + path.filename().string();
+        int loadResult = luau_load(L, chunkName.c_str(), bytecode, bytecodeSize, 0);
+        free(bytecode);
+        if (loadResult != 0) {
+            std::string err = lua_tostring(L, -1) ? lua_tostring(L, -1) : "load error";
+            lua_pop(L, 1);
+            return fail(loadResult, repoRel + ": " + err);
+        }
+        int status = lua_pcall(L, 0, 0, 0);
+        if (status != 0) {
+            std::string err = lua_tostring(L, -1) ? lua_tostring(L, -1) : "runtime error";
+            lua_pop(L, 1);
+            return fail(status, repoRel + ": " + err);
+        }
+    }
+    return 0;
+}
+
+int LuauTestRunner::LuauLoadCompanionMod(lua_State* L) {
+    std::string err;
+    if (LoadCompanionMod(L, &err) != 0) {
+        lua_pop(L, 1);
+        luaL_error(L, "loadCompanionMod failed: %s", err.c_str());
+    }
+    return 0;
+}
 std::string LuauTestRunner::ReadFile(const std::string& relativePath) const {
     auto path = ResolvePath(relativePath);
     if (path.empty()) return "";

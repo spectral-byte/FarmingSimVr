@@ -30,3 +30,8 @@ scratch/
 *.exp
 *.zip
 *.obj
+.deps/
+
+# Proprietary / third-party reference scripts (keep local copies only, never commit)
+/dataS/
+/reference/

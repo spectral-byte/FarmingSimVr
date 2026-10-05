@@ -8,7 +8,6 @@ VRCompanion = VRCompanion or {}
 VRCompanion.Core = VRCompanion.Core or {}
 
 VRCompanion.name = VRCompanion.name or g_currentModName or "FS25_VRCompanion"
-VRCompanion.modDirectory = VRCompanion.modDirectory or g_currentModDirectory or ""
 VRCompanion.version = VRCompanion.version or "1.0.0.0"
 
 VRCompanion.handshakeComplete = (VRCompanion.handshakeComplete ~= nil) and VRCompanion.handshakeComplete or false
@@ -82,7 +81,7 @@ function VRCompanion:loadMap(name)
                 tostring(ready)))
         end
     else
-        self.renderingMode = self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS
+        self.renderingMode = self.DEFAULT_RENDERING_MODE
         print("[FS25_VR] VRBridge not detected. Running in standard 2D Pass-Through Mode.")
     end
 
@@ -95,14 +94,10 @@ function VRCompanion:loadMap(name)
         print("[FS25_VR] Engine stereo rendering toggle 'setStereoRendering' not found in Luau environment.")
     end
 
-    -- 3. Query initial telemetry probe status if available
-    if VRBridge ~= nil and type(VRBridge.getStereoTelemetry) == "function" then
-        local telemetry = VRBridge.getStereoTelemetry()
-        self.lastReportedVerdict = telemetry.verdict
-        print(string.format("[FS25_VR] Telemetry Probe initialized (Frame: %d, Verdict: %s, Max Viewports: %d).",
-            telemetry.frameIndex or 0,
-            tostring(telemetry.verdict or "unknown"),
-            telemetry.maxViewports or 0))
+    -- 3. Report the stereo requirement (fixed since the telemetry probe was retired, ADR-0017)
+    if VRBridge ~= nil then
+        print(string.format("[FS25_VR] Stereo presentation: AFR fallback required: %s.",
+            tostring(self:requiresAfrFallback())))
     end
 
     -- 3b. Ensure engine head tracking setting is enabled
@@ -172,6 +167,7 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrDlssSharpness", "Set DLSS sharpness override: vrDlssSharpness <sharpness 0.0-1.0>", "consoleCommandSetDlssSharpness", self)
         addConsoleCommand("vrDlssPreset", "Set DLSS preset hint: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L>", "consoleCommandSetDlssPreset", self)
         addConsoleCommand("vrRenderingMode", "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", "consoleCommandSetRenderingMode", self)
+        addConsoleCommand("vrObliqueProjection", "Toggle Oblique Frustum projection: vrObliqueProjection <true|false|toggle>", "consoleCommandSetObliqueProjection", self)
     end
 
     if self.showHudLoadNotification == true then
@@ -590,7 +586,7 @@ function VRCompanion:unhookMissionUpdate()
     local m00 = Mission00 or (_G and _G.Mission00)
     if self.origMission00Update ~= nil and m00 ~= nil then
         m00.update = self.origMission00Update
-        m00.update = nil
+        self.origMission00Update = nil
     end
 
     local mission = g_currentMission or (_G and _G.g_currentMission)
@@ -662,24 +658,6 @@ function VRCompanion:update(dt)
             self:onVehicleTransition(oldVeh, curVehicle)
         end
     end
-
-    if (self.lastReportedVerdict == nil or self.lastReportedVerdict == "Inconclusive") and self.frameTicks < 300 and VRBridge ~= nil and type(VRBridge.getStereoTelemetry) == "function" then
-        local telemetry = VRBridge.getStereoTelemetry()
-        if telemetry then
-            if telemetry.verdict ~= self.lastReportedVerdict then
-                self.lastReportedVerdict = telemetry.verdict
-                print(string.format("[FS25_VR] Telemetry Probe Resolution: %s (Max Viewports: %d, AFR Fallback: %s)",
-                    tostring(telemetry.verdict),
-                    telemetry.maxViewports or 0,
-                    tostring(telemetry.afrFallback)))
-            elseif self.frameTicks == 1 then
-                print(string.format("[FS25_VR] Telemetry Probe active (Frame: %d, Passes: %d, Verdict: %s)",
-                    telemetry.frameIndex or 0,
-                    telemetry.passCount or 0,
-                    tostring(telemetry.verdict or "unknown")))
-            end
-        end
-    end
 end
 
 function VRCompanion:deleteMap()
@@ -738,7 +716,6 @@ function VRCompanion:deleteMap()
 
     self.inMissionUpdate = false
     self.handshakeComplete = false
-    self.lastReportedVerdict = nil
     self.frameTicks = 0
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
@@ -850,6 +827,7 @@ function VRCompanion:deleteMap()
         removeConsoleCommand("vr2DView")
         removeConsoleCommand("vrToggleView")
         removeConsoleCommand("vrRenderingMode")
+        removeConsoleCommand("vrObliqueProjection")
     end
 end
 

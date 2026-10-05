@@ -2,13 +2,15 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 #include "lua.h"
 #include "lualib.h"
 #include "openxr/openxr_manager.h"
-#include "telemetry/graphics_telemetry_probe.h"
 
 namespace fs25vr {
+
+class NgxInterceptor;
 
 enum class VRRenderingMode : uint32_t {
     AFR = 0,
@@ -18,12 +20,9 @@ enum class VRRenderingMode : uint32_t {
 
 class VRBridge {
 public:
-    static constexpr int kExposedFieldCount = 30; // 1 version property + 29 exposed functions
-
-    static VRBridge& Instance();
-
-    explicit VRBridge(std::shared_ptr<OpenXrManager> openXrManager = nullptr,
-                      std::shared_ptr<GraphicsTelemetryProbe> telemetryProbe = nullptr);
+    // The composition root (InjectorRuntime) supplies both subsystems; a null one is absent.
+    VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
+             std::shared_ptr<NgxInterceptor> ngxInterceptor);
 
     bool Inject(lua_State* L);
     bool IsInjected(lua_State* L);
@@ -33,17 +32,28 @@ public:
     bool PerformHandshake();
     bool IsCompanionActive() const { return m_handshakeCompleted; }
     void SetCompanionActive(bool active) { m_handshakeCompleted = active; }
-    std::shared_ptr<GraphicsTelemetryProbe> GetTelemetryProbe() const { return m_telemetryProbe; }
     std::shared_ptr<OpenXrManager> GetOpenXrManager() const { return m_openXrManager; }
+    std::shared_ptr<NgxInterceptor> GetNgxInterceptor() const { return m_ngxInterceptor; }
 
     HeadPose GetHeadPose();
+    HeadPose GetHeadPoseForEye(uint32_t eyeIndex);
     void Recenter();
     EyeProjection GetEyeProjection(uint32_t eyeIndex = 0);
 
-    bool RequiresAfrFallback() const;
+    // GIANTS Engine 10 under D3D12 renders one viewport and one scene pass (ADR-0015, ADR-0017),
+    // so AFR or SDP is always required.
+    bool RequiresAfrFallback() const { return true; }
 
     VRRenderingMode GetRenderingMode() const { return m_renderingMode.load(); }
     void SetRenderingMode(VRRenderingMode mode);
+
+    // Stereo Presentation Mode changes requested while the compositor is active are only queued here.
+    // The DXGI proxy latches them at a completed compositor frame boundary (ADR-0015).
+    void SetPendingRenderingMode(VRRenderingMode mode) { m_pendingRenderingMode.store(static_cast<int>(mode)); }
+    std::optional<VRRenderingMode> GetPendingRenderingMode() const;
+    void ClearPendingRenderingMode() { m_pendingRenderingMode.store(kNoPendingMode); }
+    // Applies the queued mode, if any. Returns true when a mode was latched.
+    bool LatchPendingRenderingMode();
     bool IsSequentialDualPass() const { return m_renderingMode.load() == VRRenderingMode::SequentialDualPass; }
 
     uint32_t GetSubPassIndex() const { return m_subPassIndex.load(); }
@@ -112,16 +122,65 @@ public:
     static int Lua_Index(lua_State* L);
 
     static void PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, uint32_t eyeIndex);
+    // Builds a pose table; eyeIndex < 0 omits the "eye" field (head pose).
+    static void PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex = -1);
+
+    struct LuaFunctionEntry {
+        const char* name;
+        lua_CFunction fn;
+    };
+
+    // Single source of truth for the Lua-visible functions registered by Inject().
+    static constexpr LuaFunctionEntry kFunctionTable[] = {
+        {"isReady", &Lua_IsReady},
+        {"handshake", &Lua_Handshake},
+        {"isCompanionActive", &Lua_IsCompanionActive},
+        {"onMapUnload", &Lua_OnMapUnload},
+        {"getStereoTelemetry", &Lua_GetStereoTelemetry},
+        {"isStereoActive", &Lua_IsStereoActive},
+        {"getRequiresAfrFallback", &Lua_RequiresAfrFallback},
+        {"getHeadPose", &Lua_GetHeadPose},
+        {"recenter", &Lua_Recenter},
+        {"getEyeProjection", &Lua_GetEyeProjection},
+        {"getFrameParity", &Lua_GetFrameParity},
+        {"getFrameIndex", &Lua_GetFrameIndex},
+        {"getIpd", &Lua_GetIpd},
+        {"getEyePose", &Lua_GetEyePose},
+        {"setMenuVisible", &Lua_SetMenuVisible},
+        {"getIsMenuVisible", &Lua_GetIsMenuVisible},
+        {"alignMenuQuad", &Lua_AlignMenuQuad},
+        {"set2DViewActive", &Lua_Set2DViewActive},
+        {"getIs2DViewActive", &Lua_GetIs2DViewActive},
+        {"getRenderingMode", &Lua_GetRenderingMode},
+        {"setRenderingMode", &Lua_SetRenderingMode},
+        {"getSubPassIndex", &Lua_GetSubPassIndex},
+        {"setSubPassIndex", &Lua_SetSubPassIndex},
+        {"advanceSubPass", &Lua_AdvanceSubPass},
+        {"resetTemporalHistory", &Lua_ResetTemporalHistory},
+        {"signalDiscontinuity", &Lua_SignalDiscontinuity},
+        {"setDlssMvScale", &Lua_SetDlssMvScale},
+        {"setDlssSharpness", &Lua_SetDlssSharpness},
+        {"setDlssPreset", &Lua_SetDlssPreset},
+    };
+
+    // 1 version property + one field per table entry.
+    static constexpr int kExposedFieldCount =
+        1 + static_cast<int>(sizeof(kFunctionTable) / sizeof(kFunctionTable[0]));
 
 private:
+    // The bridge bound as upvalue 1 of every registered function; raises a Lua error if it is missing.
+    static VRBridge& FromUpvalue(lua_State* L);
+
     std::shared_ptr<OpenXrManager> m_openXrManager;
-    std::shared_ptr<GraphicsTelemetryProbe> m_telemetryProbe;
+    std::shared_ptr<NgxInterceptor> m_ngxInterceptor;
     std::string m_version = "1.0.0";
     bool m_handshakeCompleted = false;
     bool m_menuVisible = false;
     bool m_2dViewActive = false;
 
     std::atomic<VRRenderingMode> m_renderingMode{VRRenderingMode::SequentialDualPass};
+    static constexpr int kNoPendingMode = -1;
+    std::atomic<int> m_pendingRenderingMode{kNoPendingMode};
     std::atomic<uint32_t> m_subPassIndex{0}; // 0 = Left Eye, 1 = Right Eye
 
     uint32_t m_frameParity = 0; // 0 = Left (2k), 1 = Right (2k+1)

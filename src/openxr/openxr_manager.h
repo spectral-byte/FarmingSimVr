@@ -77,9 +77,7 @@ struct EyeProjection {
 
 class OpenXrManager {
 public:
-    static OpenXrManager& Instance();
-
-    explicit OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch = nullptr);
+    explicit OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch);
     ~OpenXrManager();
 
     bool Initialize();
@@ -89,7 +87,6 @@ public:
     bool CreateTrackingSpaces();
     HeadPose PollHeadPose(XrTime time = 0);
     void Recenter();
-    void SetSimulatedPose(const HeadPose& pose);
     const HeadPose& GetLastPose() const { return m_lastPose; }
     const HeadPose& GetRawPose() const { return m_rawPose; }
 
@@ -97,7 +94,6 @@ public:
     bool LocateActiveViews(XrTime time = 0);
     XrTime GetCurrentXrTime() const;
     const EyeProjection& GetEyeProjection(uint32_t eyeIndex = 0) const;
-    void SetSimulatedProjection(uint32_t eyeIndex, const EyeProjection& proj);
     static EyeProjection ComputeProjectionFromFov(const XrFovf& fov);
 
     uint32_t GetRecommendedEyeWidth(uint32_t eyeIndex = 0) const;
@@ -109,6 +105,14 @@ public:
     ID3D12CommandQueue* GetD3D12CommandQueue() const { return m_queue; }
 
     bool CreateEyeSwapchains(uint32_t width = 0, uint32_t height = 0, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    // Picks the supported swapchain format that a plain copy from a back buffer of
+    // `backBufferFormat` can target (same format family; UNORM/sRGB variants allowed).
+    // Returns DXGI_FORMAT_UNKNOWN when none is compatible.
+    static DXGI_FORMAT SelectCompatibleSwapchainFormat(DXGI_FORMAT backBufferFormat, const std::vector<int64_t>& supported);
+    // Called when the game creates its swap chain, before any DXGI overrides are applied. Releases
+    // OpenXR and enters Pass-Through Mode if no eye-swapchain format is copy-compatible with the
+    // back buffer. Returns whether VR is still active.
+    bool EnsureBackBufferFormatSupported(DXGI_FORMAT backBufferFormat);
     void DestroyEyeSwapchains();
     bool HasEyeSwapchains() const { return m_hasEyeSwapchains; }
     const EyeSwapchain& GetEyeSwapchain(uint32_t eyeIndex = 0) const;
@@ -171,6 +175,14 @@ public:
     XrSpace GetViewSpace() const { return m_viewSpace; }
     bool HasSession() const { return m_session != XR_NULL_HANDLE; }
     bool IsSessionRunning() const { return m_sessionRunning; }
+    XrSessionState GetSessionState() const { return m_sessionState; }
+
+    // Drains the runtime event queue and drives the session lifecycle: begin on READY,
+    // end on STOPPING, release resources and enter Pass-Through Mode on EXITING,
+    // LOSS_PENDING or instance loss. BeginFrame polls too; a caller that must see the lifecycle
+    // settled before it reaches BeginFrame (DxgiProxy::OnPresent) calls this first. A second poll
+    // in the same frame finds an empty queue.
+    void PollEvents();
     bool HasTrackingSpaces() const {
         return m_localSpace != XR_NULL_HANDLE &&
                m_baseLocalSpace != XR_NULL_HANDLE &&
@@ -182,16 +194,19 @@ public:
     static Vector3 ComputeEyePosition(const HeadPose& headPose, float ipd, uint32_t eyeIndex);
     static HeadPose ComputeEyePose(const HeadPose& headPose, float ipd, uint32_t eyeIndex);
 
+    // Records the head pose handed to the Companion Mod for this eye's render. The next
+    // CopyBackBufferToEye for that eye uses it (instead of the pose polled at frame begin)
+    // as the pose the eye is submitted with. Consumed by the copy.
+    void RecordRenderPose(uint32_t eyeIndex, const HeadPose& pose);
+    bool HasRecordedRenderPose(uint32_t eyeIndex) const {
+        return eyeIndex < 2 && m_hasRenderPose[eyeIndex];
+    }
+
     const HeadPose& GetCapturedEyePose(uint32_t eyeIndex = 0) const {
         return m_capturedEyePoses[eyeIndex >= 2 ? 0 : eyeIndex];
     }
 
 private:
-    struct RecenterOffset {
-        Vector3 position{ 0.0f, 0.0f, 0.0f };
-        float yaw = 0.0f;
-    };
-
     std::shared_ptr<IOpenXrDispatch> m_dispatch;
     OpenXrState m_state = OpenXrState::Uninitialized;
     XrInstance m_instance = XR_NULL_HANDLE;
@@ -199,6 +214,8 @@ private:
 
     XrSession m_session = XR_NULL_HANDLE;
     bool m_sessionRunning = false;
+    XrSessionState m_sessionState = XR_SESSION_STATE_UNKNOWN;
+    uint32_t m_beginSessionFailures = 0;
     XrSpace m_baseLocalSpace = XR_NULL_HANDLE;
     XrSpace m_localSpace = XR_NULL_HANDLE;
     XrSpace m_viewSpace = XR_NULL_HANDLE;
@@ -237,20 +254,25 @@ private:
     HeadPose m_rawPose;
     HeadPose m_lastPose;
     HeadPose m_capturedEyePoses[2]{};
-    RecenterOffset m_recenterOffset;
-    bool m_hasRecenter = false;
-    bool m_useSimulatedPose = false;
-    HeadPose m_simulatedPose;
+    HeadPose m_renderPoses[2]{};
+    bool m_hasRenderPose[2]{false, false};
+    void ClearRenderPoses();
 
     EyeProjection m_eyeProjections[2];
-    EyeProjection m_simulatedProjections[2];
-    bool m_useSimulatedProjections = false;
 
     std::vector<XrViewConfigurationView> m_viewConfigViews;
 
+    void HandleSessionStateChanged(XrSessionState state);
+    void BeginRunningSession();
+    void EndRunningSession();
+    void ReleaseAndEnterPassThrough(const char* reason);
+    bool EnterPassThroughIfLost(XrResult res);
     bool CheckD3D12ExtensionSupport();
     bool EnumerateSwapchainImagesHelper(EyeSwapchain& sc);
     bool EnsureCursorTextureUploaded();
+    // Copy-compatible eye format, the back buffer format if the runtime query failed, or UNKNOWN.
+    DXGI_FORMAT NegotiateEyeSwapchainFormat(DXGI_FORMAT backBufferFormat);
+    void EnterPassThroughForIncompatibleFormat(DXGI_FORMAT backBufferFormat);
 };
 
 } // namespace fs25vr

@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include "fake_openxr_events.h"
+#include "fake_openxr_runtime.h"
 #include "ngx/ngx_defs.h"
 #include "ngx/virtual_ngx_handle.h"
 #include "ngx/ngx_interceptor.h"
@@ -100,6 +102,11 @@ __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockEvaluateFeature(
 
 class DlssEvaluationTest : public ::testing::Test {
 protected:
+    // The interceptor reads this bridge; it has no global bridge to fall back to.
+    std::shared_ptr<NgxInterceptor> m_ngxShared = std::make_shared<NgxInterceptor>();
+    NgxInterceptor& m_ngx = *m_ngxShared;
+    VRBridge m_bridge{nullptr, m_ngxShared};
+
     void SetUp() override {
         s_mockCreateCount = 0;
         s_mockReleaseCount = 0;
@@ -113,27 +120,31 @@ protected:
         s_evaluatedMvScaleY.clear();
         s_createdParams.clear();
 
-        NgxInterceptor::Instance().DetachAll();
-        NgxInterceptor::Instance().SetDxgiProxy(nullptr);
-        NgxInterceptor::Instance().SetOpenXrManager(nullptr);
-        NgxInterceptor::Instance().SetVRBridge(nullptr);
-        VRBridge::Instance().SetRenderingMode(VRRenderingMode::AFR);
-        VRBridge::Instance().SetSubPassIndex(0);
-        VRBridge::Instance().Set2DViewActive(false);
-        VRBridge::Instance().SetMenuVisible(false);
-        VRBridge::Instance().SetFrameParity(0);
+        m_ngx.DetachAll();
+        m_ngx.SetDxgiProxy(nullptr);
+        m_ngx.SetOpenXrManager(nullptr);
+        m_ngx.SetVRBridge(nullptr);
+        m_bridge.SetRenderingMode(VRRenderingMode::AFR);
+        m_bridge.SetSubPassIndex(0);
+        m_bridge.Set2DViewActive(false);
+        m_bridge.SetMenuVisible(false);
+        m_bridge.SetFrameParity(0);
+        // Stereo presentation (and with it AFR eye alternation) starts at the Companion Mod handshake.
+        m_bridge.SetCompanionActive(true);
+        m_ngx.SetVRBridge(&m_bridge);
     }
 
     void TearDown() override {
-        NgxInterceptor::Instance().DetachAll();
-        NgxInterceptor::Instance().SetDxgiProxy(nullptr);
-        NgxInterceptor::Instance().SetOpenXrManager(nullptr);
-        NgxInterceptor::Instance().SetVRBridge(nullptr);
-        VRBridge::Instance().SetRenderingMode(VRRenderingMode::SequentialDualPass);
-        VRBridge::Instance().SetSubPassIndex(0);
-        VRBridge::Instance().Set2DViewActive(false);
-        VRBridge::Instance().SetMenuVisible(false);
-        VRBridge::Instance().SetFrameParity(0);
+        m_ngx.DetachAll();
+        m_ngx.SetDxgiProxy(nullptr);
+        m_ngx.SetOpenXrManager(nullptr);
+        m_ngx.SetVRBridge(nullptr);
+        m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+        m_bridge.SetSubPassIndex(0);
+        m_bridge.Set2DViewActive(false);
+        m_bridge.SetMenuVisible(false);
+        m_bridge.SetFrameParity(0);
+        m_bridge.SetCompanionActive(false);
         s_evaluatedMvScaleX.clear();
         s_evaluatedMvScaleY.clear();
         s_createdParams.clear();
@@ -141,7 +152,7 @@ protected:
 };
 
 TEST_F(DlssEvaluationTest, DynamicDetourInstalledAndUnboxesVirtualHandle) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     bool attached = interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
     ASSERT_TRUE(attached);
     EXPECT_TRUE(interceptor.IsAttached());
@@ -185,7 +196,7 @@ TEST_F(DlssEvaluationTest, DynamicDetourInstalledAndUnboxesVirtualHandle) {
 }
 
 TEST_F(DlssEvaluationTest, AfrModeAlternatesLeftAndRightHandlesBasedOnFrameParity) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
     NgxParameterImpl params;
@@ -202,7 +213,7 @@ TEST_F(DlssEvaluationTest, AfrModeAlternatesLeftAndRightHandlesBasedOnFrameParit
     ASSERT_NE(vHandle->hRight, nullptr);
     ASSERT_NE(vHandle->hLeft, vHandle->hRight);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     bridge.Set2DViewActive(false);
     bridge.SetMenuVisible(false);
 
@@ -236,7 +247,7 @@ TEST_F(DlssEvaluationTest, AfrModeAlternatesLeftAndRightHandlesBasedOnFrameParit
 }
 
 TEST_F(DlssEvaluationTest, SingleContextBypassRoutesExclusivelyToLeftHandleIn2DAndMenuModes) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
     NgxParameterImpl params;
@@ -250,7 +261,7 @@ TEST_F(DlssEvaluationTest, SingleContextBypassRoutesExclusivelyToLeftHandleIn2DA
     VirtualNgxHandle* vHandle = interceptor.GetVirtualHandle(virtualHandle);
     ASSERT_NE(vHandle, nullptr);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     auto dummyCmdList = reinterpret_cast<ID3D12GraphicsCommandList*>(0x9999);
 
     // Case 1: 2D Floating Window Mode is active (Is2DViewActive = true)
@@ -303,7 +314,7 @@ TEST_F(DlssEvaluationTest, SingleContextBypassRoutesExclusivelyToLeftHandleIn2DA
 }
 
 TEST_F(DlssEvaluationTest, EndToEndAfrAnd2DFloatingWindowModeCyclesParameterAndCommandListForwarding) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
     NgxParameterImpl createParams;
@@ -317,7 +328,7 @@ TEST_F(DlssEvaluationTest, EndToEndAfrAnd2DFloatingWindowModeCyclesParameterAndC
     VirtualNgxHandle* vHandle = interceptor.GetVirtualHandle(virtualHandle);
     ASSERT_NE(vHandle, nullptr);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
 
     // Prepare simulated frames
     struct FrameConfig {
@@ -402,7 +413,7 @@ TEST_F(DlssEvaluationTest, EndToEndAfrAnd2DFloatingWindowModeCyclesParameterAndC
 }
 
 TEST_F(DlssEvaluationTest, CustomVrBridgeDependencyInjectionSupported) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
     NgxParameterImpl params;
@@ -413,13 +424,13 @@ TEST_F(DlssEvaluationTest, CustomVrBridgeDependencyInjectionSupported) {
     VirtualNgxHandle* vHandle = interceptor.GetVirtualHandle(virtualHandle);
     ASSERT_NE(vHandle, nullptr);
 
-    // Global bridge is configured in 3D AFR parity 0
-    VRBridge::Instance().Set2DViewActive(false);
-    VRBridge::Instance().SetMenuVisible(false);
-    VRBridge::Instance().SetFrameParity(0);
+    // Fixture bridge is configured in 3D AFR parity 0
+    m_bridge.Set2DViewActive(false);
+    m_bridge.SetMenuVisible(false);
+    m_bridge.SetFrameParity(0);
 
     // Create a local isolated VRBridge configured in 2D Floating Window Mode
-    VRBridge customBridge;
+    VRBridge customBridge(nullptr, nullptr);
     customBridge.SetRenderingMode(VRRenderingMode::AFR);
     customBridge.Set2DViewActive(true);
     customBridge.SetFrameParity(1);
@@ -439,15 +450,15 @@ TEST_F(DlssEvaluationTest, CustomVrBridgeDependencyInjectionSupported) {
     ASSERT_EQ(s_evaluatedHandles.size(), 2u);
     EXPECT_EQ(s_evaluatedHandles[1], vHandle->hRight);
 
-    // Reset injection -> falls back to global instance
+    // Reset injection -> no bridge, and no global fallback
     interceptor.SetVRBridge(nullptr);
-    EXPECT_EQ(interceptor.GetVRBridge(), &VRBridge::Instance());
+    EXPECT_EQ(interceptor.GetVRBridge(), nullptr);
 
     MockReleaseFeature(virtualHandle);
 }
 
 TEST_F(DlssEvaluationTest, DiscontinuityFlushInjectsResetForExactlyOneFrameAcrossBothContextsInAfr) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
     NgxParameterImpl params;
@@ -455,7 +466,7 @@ TEST_F(DlssEvaluationTest, DiscontinuityFlushInjectsResetForExactlyOneFrameAcros
     MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle);
     ASSERT_NE(virtualHandle, nullptr);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     bridge.Set2DViewActive(false);
     bridge.SetMenuVisible(false);
 
@@ -509,7 +520,7 @@ TEST_F(DlssEvaluationTest, DiscontinuityFlushInjectsResetForExactlyOneFrameAcros
 }
 
 TEST_F(DlssEvaluationTest, DiscontinuityFlushInSingleContextBypassInjectsResetForExactlyOneFrameOnLeftContext) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
     NgxParameterImpl params;
@@ -517,7 +528,7 @@ TEST_F(DlssEvaluationTest, DiscontinuityFlushInSingleContextBypassInjectsResetFo
     MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle);
     ASSERT_NE(virtualHandle, nullptr);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     // 2D Floating Window Mode is active
     bridge.Set2DViewActive(true);
     bridge.ConsumeDiscontinuity(0);
@@ -542,7 +553,7 @@ TEST_F(DlssEvaluationTest, DiscontinuityFlushInSingleContextBypassInjectsResetFo
 }
 
 TEST_F(DlssEvaluationTest, ViewTransitionAndLocomotionPropagatesResetToDlssEvaluate) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
     NgxParameterImpl params;
@@ -550,7 +561,7 @@ TEST_F(DlssEvaluationTest, ViewTransitionAndLocomotionPropagatesResetToDlssEvalu
     MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle);
     ASSERT_NE(virtualHandle, nullptr);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     bridge.Set2DViewActive(false);
     bridge.SetMenuVisible(false);
     bridge.ConsumeDiscontinuity(0);
@@ -638,12 +649,13 @@ TEST_F(DlssEvaluationTest, DeriveDlssRenderResolutionScalesAcrossAllQualityModes
 }
 
 TEST_F(DlssEvaluationTest, DecoupledTargetResolutionOverridesCreateFeatureParameters) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
-    auto systemDxgi = std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {});
-    DxgiProxy proxy(systemDxgi, nullptr);
-    proxy.SetTargetRenderResolution(3840, 2160);
+    auto systemDxgi = std::make_shared<SystemDxgi>();
+    FakeTrackedHeadset headset;  // Pass-Through proxies are ignored, so the proxy needs an active session
+    DxgiProxy proxy(systemDxgi, headset.manager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+    proxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
     interceptor.SetDxgiProxy(&proxy);
 
     uint32_t targetW = 0, targetH = 0;
@@ -693,12 +705,13 @@ TEST_F(DlssEvaluationTest, DecoupledTargetResolutionOverridesCreateFeatureParame
 }
 
 TEST_F(DlssEvaluationTest, DecoupledResolutionEnforcedDuringEvaluateFeature) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
-    auto systemDxgi = std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {});
-    DxgiProxy proxy(systemDxgi, nullptr);
-    proxy.SetTargetRenderResolution(3840, 2160);
+    auto systemDxgi = std::make_shared<SystemDxgi>();
+    FakeTrackedHeadset headset;  // Pass-Through proxies are ignored, so the proxy needs an active session
+    DxgiProxy proxy(systemDxgi, headset.manager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+    proxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
     interceptor.SetDxgiProxy(&proxy);
 
     NgxParameterImpl createParams;
@@ -803,8 +816,12 @@ public:
         }
         return XR_SUCCESS;
     }
+    // Fake runtime event queue; a created session reports READY like a real runtime would.
+    FakeOpenXrEventQueue events;
+    XrResult PollEvent(XrInstance, XrEventDataBuffer* eventData) override { return events.Poll(eventData); }
     XrResult CreateSession(XrInstance, const XrSessionCreateInfo*, XrSession* session) override {
         if (session) *session = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xCAFE0001));
+        events.PushSessionState(XR_SESSION_STATE_READY);
         return XR_SUCCESS;
     }
     XrResult BeginSession(XrSession, const XrSessionBeginInfo*) override { return XR_SUCCESS; }
@@ -876,7 +893,7 @@ public:
 };
 
 TEST_F(DlssEvaluationTest, ResolutionNegotiationMatchesOpenXrRecommendedEyeDimensions1To1) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
     auto mockDispatch = std::make_shared<MockDlssOpenXrDispatch>();
@@ -887,8 +904,8 @@ TEST_F(DlssEvaluationTest, ResolutionNegotiationMatchesOpenXrRecommendedEyeDimen
     ASSERT_TRUE(openXrManager->Initialize());
     ASSERT_TRUE(openXrManager->IsActive());
 
-    auto systemDxgi = std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {});
-    DxgiProxy proxy(systemDxgi, openXrManager);
+    auto systemDxgi = std::make_shared<SystemDxgi>();
+    DxgiProxy proxy(systemDxgi, openXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
     interceptor.SetDxgiProxy(&proxy);
 
     // Verify proxy queries OpenXR recommended eye dimensions
@@ -939,7 +956,7 @@ TEST_F(DlssEvaluationTest, ResolutionNegotiationMatchesOpenXrRecommendedEyeDimen
 }
 
 TEST_F(DlssEvaluationTest, TargetResolutionPrefersSwapchainRenderResolutionOverOpenXrRecommendedView) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
     auto mockDispatch = std::make_shared<MockDlssOpenXrDispatch>();
@@ -950,9 +967,9 @@ TEST_F(DlssEvaluationTest, TargetResolutionPrefersSwapchainRenderResolutionOverO
     ASSERT_TRUE(openXrManager->Initialize());
     ASSERT_TRUE(openXrManager->IsActive());
 
-    auto systemDxgi = std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {});
-    DxgiProxy proxy(systemDxgi, openXrManager);
-    proxy.SetTargetRenderResolution(1920, 1080);
+    auto systemDxgi = std::make_shared<SystemDxgi>();
+    DxgiProxy proxy(systemDxgi, openXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+    proxy.GetWindowController().SetTargetRenderResolution(1920, 1080);
     interceptor.SetDxgiProxy(&proxy);
 
     // Target render resolution (1920x1080) MUST take precedence over supersampled HMD view (4940x4136)
@@ -1012,7 +1029,7 @@ TEST_F(DlssEvaluationTest, ExposureAndTonemapperParametersMirroredAcrossBothHand
 }
 
 TEST_F(DlssEvaluationTest, DlssPresetAndSharpnessOverridesAppliedDuringEvaluateFeature) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(MockCreateFeature, MockReleaseFeature, MockEvaluateFeature);
     interceptor.SetDlssPresetOverride(NVSDK_NGX_DLSS_Hint_Render_Preset_K);
     interceptor.SetSharpnessOverride(0.35f);
@@ -1042,7 +1059,7 @@ TEST_F(DlssEvaluationTest, DlssPresetAndSharpnessOverridesAppliedDuringEvaluateF
 }
 
 TEST_F(DlssEvaluationTest, PreservesExplicitCallerSharpnessAndPreset) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(MockCreateFeature, MockReleaseFeature, MockEvaluateFeature);
     interceptor.SetDlssPresetOverride(NVSDK_NGX_DLSS_Hint_Render_Preset_K);
     interceptor.SetSharpnessOverride(0.35f, false);
@@ -1074,7 +1091,7 @@ TEST_F(DlssEvaluationTest, PreservesExplicitCallerSharpnessAndPreset) {
 }
 
 TEST_F(DlssEvaluationTest, MotionVectorScaleMultiplierAppliedDuringEvaluate) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(MockCreateFeature, MockReleaseFeature, MockEvaluateFeature);
     interceptor.SetMvScaleMultiplier(0.5f, 1.0f);
 
@@ -1108,11 +1125,192 @@ TEST_F(DlssEvaluationTest, MotionVectorScaleMultiplierAppliedDuringEvaluate) {
     MockReleaseFeature(virtualHandle);
 }
 
+TEST_F(DlssEvaluationTest, AfrDefaultsMotionVectorScaleTo2xWithoutOverride) {
+    auto& interceptor = m_ngx;
+    interceptor.AttachDirect(MockCreateFeature, MockReleaseFeature, &MockEvaluateFeature);
+    interceptor.SetVRBridge(&m_bridge);
+    ASSERT_EQ(m_bridge.GetRenderingMode(), VRRenderingMode::AFR);
+
+    NgxParameterImpl createParams;
+    createParams.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    createParams.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(interceptor.Intercept_CreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &createParams, &virtualHandle), NVSDK_NGX_Result_Success);
+
+    NgxParameterImpl evalParams;
+    evalParams.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    evalParams.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    evalParams.Set(NVSDK_NGX_Parameter_MV_Scale_X, 0.5f);
+    evalParams.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 0.25f);
+
+    ASSERT_EQ(interceptor.Intercept_EvaluateFeature(nullptr, virtualHandle, &evalParams, nullptr), NVSDK_NGX_Result_Success);
+
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
+    ASSERT_EQ(s_evaluatedMvScaleY.size(), 1u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], 1.0f);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[0], 0.5f);
+
+    float restoredX = 0.0f, restoredY = 0.0f;
+    EXPECT_EQ(evalParams.Get(NVSDK_NGX_Parameter_MV_Scale_X, &restoredX), NVSDK_NGX_Result_Success);
+    EXPECT_EQ(evalParams.Get(NVSDK_NGX_Parameter_MV_Scale_Y, &restoredY), NVSDK_NGX_Result_Success);
+    EXPECT_FLOAT_EQ(restoredX, 0.5f);
+    EXPECT_FLOAT_EQ(restoredY, 0.25f);
+
+    MockReleaseFeature(virtualHandle);
+}
+
+TEST_F(DlssEvaluationTest, AfrDefaultScaleDoesNotCompoundOnReusedParametersWithoutMvScale) {
+    auto& interceptor = m_ngx;
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    auto& bridge = m_bridge;
+    interceptor.SetVRBridge(&bridge);
+
+    // The game never sets MV.Scale and reuses the same parameter block every frame
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
+
+    for (uint32_t frame = 0; frame < 3; ++frame) {
+        bridge.SetFrameParity(frame % 2);
+        EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+    }
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 3u);
+    for (size_t i = 0; i < 3; ++i) {
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[i], NgxInterceptor::kDefaultAfrMvScale);
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[i], NgxInterceptor::kDefaultAfrMvScale);
+    }
+
+    // Switching to SDP on the same block must evaluate at 1.0x, not a leftover 2.0x
+    bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    bridge.SetSubPassIndex(0);
+    EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 4u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[3], 1.0f);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[3], 1.0f);
+
+    MockReleaseFeature(virtualHandle);
+}
+
+TEST_F(DlssEvaluationTest, SingleContextBypassEvaluatesAt1xUnderAfr) {
+    auto& interceptor = m_ngx;
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    auto& bridge = m_bridge;
+    interceptor.SetVRBridge(&bridge);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_X, 0.5f);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 0.5f);
+
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
+
+    // 2D Floating Window and GUI menu frames are monoscopic and one frame apart
+    bridge.Set2DViewActive(true);
+    EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+    bridge.Set2DViewActive(false);
+    bridge.SetMenuVisible(true);
+    EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 2u);
+    for (size_t i = 0; i < 2; ++i) {
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[i], 0.5f);
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[i], 0.5f);
+    }
+
+    MockReleaseFeature(virtualHandle);
+}
+
+TEST_F(DlssEvaluationTest, AfrEvaluatesAt1xBeforeCompanionHandshake) {
+    auto& interceptor = m_ngx;
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    auto& bridge = m_bridge;
+    interceptor.SetVRBridge(&bridge);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_X, 0.5f);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 0.5f);
+
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
+
+    // Main menu before the handshake: presented as a quad layer, so parity never advances and
+    // every evaluation of the context is one frame apart, even with AFR selected.
+    bridge.SetCompanionActive(false);
+    ASSERT_EQ(bridge.GetRenderingMode(), VRRenderingMode::AFR);
+    for (int frame = 0; frame < 2; ++frame) {
+        EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+    }
+
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 2u);
+    for (size_t i = 0; i < 2; ++i) {
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[i], 0.5f);
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[i], 0.5f);
+    }
+
+    MockReleaseFeature(virtualHandle);
+}
+
+TEST_F(DlssEvaluationTest, AfrEvaluatesAt1xForHandleNotSplitPerEye) {
+    auto& interceptor = m_ngx;
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    interceptor.SetVRBridge(&m_bridge);
+    ASSERT_EQ(m_bridge.GetRenderingMode(), VRRenderingMode::AFR);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_X, 0.5f);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 0.5f);
+
+    // A handle the interceptor did not virtualize is a single context evaluated every frame.
+    NVSDK_NGX_Handle plainHandle{};
+    plainHandle.Id = 7;
+    m_bridge.SetFrameParity(1);
+    EXPECT_EQ(interceptor.Intercept_EvaluateFeature(nullptr, &plainHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+
+    ASSERT_EQ(s_evaluatedHandles.size(), 1u);
+    EXPECT_EQ(s_evaluatedHandles[0], &plainHandle);
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], 0.5f);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[0], 0.5f);
+}
+
+TEST_F(DlssEvaluationTest, SequentialDualPassEvaluatesAt1xByDefault) {
+    auto& interceptor = m_ngx;
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    auto& bridge = m_bridge;
+    interceptor.SetVRBridge(&bridge);
+    bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_X, 0.5f);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 0.5f);
+
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
+    bridge.SetSubPassIndex(0);
+    EXPECT_EQ(MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr), NVSDK_NGX_Result_Success);
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], 0.5f);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[0], 0.5f);
+
+    MockReleaseFeature(virtualHandle);
+}
+
 TEST_F(DlssEvaluationTest, SequentialDualPassSubPassRoutingRoutesLeftAndRightWithinSameFrame) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     interceptor.SetVRBridge(&bridge);
     bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
 
@@ -1143,10 +1341,10 @@ TEST_F(DlssEvaluationTest, SequentialDualPassSubPassRoutingRoutesLeftAndRightWit
 }
 
 TEST_F(DlssEvaluationTest, SequentialDualPassLocksMotionVectorScaleTo1xRegardlessOfSetting) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     interceptor.SetVRBridge(&bridge);
     bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
 
@@ -1190,10 +1388,10 @@ TEST_F(DlssEvaluationTest, SequentialDualPassLocksMotionVectorScaleTo1xRegardles
 }
 
 TEST_F(DlssEvaluationTest, SequentialDualPassModeTransitionAssertsResetForOneFrameAcrossBothContexts) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     interceptor.SetVRBridge(&bridge);
 
     // Start in AFR mode

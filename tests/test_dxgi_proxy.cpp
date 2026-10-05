@@ -1,13 +1,37 @@
 #include <gtest/gtest.h>
 #include "proxy/dxgi_proxy.h"
+#include "core/dll_lifecycle.h"
+#include "core/injector_runtime.h"
 #include "proxy/system_dxgi.h"
 #include "openxr/openxr_manager.h"
+#include "fake_openxr_events.h"
+#include "fake_openxr_tracking.h"
+#include "ngx/ngx_interceptor.h"
 #include <wrl/client.h>
+#include <array>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <unordered_set>
 
 using Microsoft::WRL::ComPtr;
 
+// A passthrough export, defined in dxgi_proxy.cpp and exported through dxgi_exports.def.
+extern "C" DWORD WINAPI Proxy_PIXGetCaptureState();
+
 namespace fs25vr {
+
+// Detours are installed only by a proxy a live runtime owns, and hook entry points resolve their
+// subsystem through the live runtimes, so tests that drive them build their proxy through one. Each
+// runtime gets its own window controller and Luau interceptor.
+static std::unique_ptr<InjectorRuntime> MakeRuntime(
+    std::shared_ptr<OpenXrManager> openXrManager,
+    std::shared_ptr<VRBridge> vrBridge = nullptr) {
+    InjectorRuntime::Dependencies deps;
+    deps.openXrManager = std::move(openXrManager);
+    deps.vrBridge = std::move(vrBridge);
+    return std::make_unique<InjectorRuntime>(std::move(deps));
+}
 
 class MockFailingOpenXrDispatch : public IOpenXrDispatch {
 public:
@@ -44,7 +68,7 @@ public:
 };
 
 TEST(DxgiProxyTest, ResolvesSystemDxgiExports) {
-    auto& systemDxgi = SystemDxgi::Instance();
+    SystemDxgi systemDxgi;
     ASSERT_TRUE(systemDxgi.LoadSystemDxgi());
 
     const char* exportNames[] = {
@@ -79,9 +103,9 @@ TEST(DxgiProxyTest, ResolvesSystemDxgiExports) {
 TEST(DxgiProxyTest, ForwardsCreateDXGIFactory1SilentlyInPassThrough) {
     auto mockDispatch = std::make_shared<MockFailingOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
-    auto systemDxgi = std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {});
+    auto systemDxgi = std::make_shared<SystemDxgi>();
 
-    DxgiProxy proxy(systemDxgi, openXrManager);
+    DxgiProxy proxy(systemDxgi, openXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
 
     ComPtr<IDXGIFactory1> factory;
     HRESULT hr = proxy.CreateDXGIFactory1(IID_PPV_ARGS(&factory));
@@ -97,9 +121,9 @@ TEST(DxgiProxyTest, ForwardsCreateDXGIFactory1SilentlyInPassThrough) {
 TEST(DxgiProxyTest, ForwardsCreateDXGIFactory2SilentlyInPassThrough) {
     auto mockDispatch = std::make_shared<MockFailingOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
-    auto systemDxgi = std::shared_ptr<ISystemDxgi>(&SystemDxgi::Instance(), [](auto*) {});
+    auto systemDxgi = std::make_shared<SystemDxgi>();
 
-    DxgiProxy proxy(systemDxgi, openXrManager);
+    DxgiProxy proxy(systemDxgi, openXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
 
     ComPtr<IDXGIFactory2> factory;
     HRESULT hr = proxy.CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
@@ -202,44 +226,41 @@ public:
         }
         return XR_SUCCESS;
     }
+    // Fake runtime event queue; a created session reports READY like a real runtime would.
+    FakeOpenXrEventQueue events;
+    XrResult PollEvent(XrInstance, XrEventDataBuffer* eventData) override { return events.Poll(eventData); }
     XrResult CreateSession(XrInstance, const XrSessionCreateInfo*, XrSession* session) override {
         if (session) *session = reinterpret_cast<XrSession>(static_cast<uintptr_t>(0xCAFE0001));
+        events.PushSessionState(XR_SESSION_STATE_READY);
         return XR_SUCCESS;
     }
     XrResult BeginSession(XrSession, const XrSessionBeginInfo*) override { return XR_SUCCESS; }
     XrResult EndSession(XrSession) override { return XR_SUCCESS; }
     XrResult DestroySession(XrSession) override { return XR_SUCCESS; }
-    XrResult CreateReferenceSpace(XrSession, const XrReferenceSpaceCreateInfo*, XrSpace* space) override {
-        static uintptr_t s_space = 0x50ACE001;
-        if (space) *space = reinterpret_cast<XrSpace>(s_space++);
+    // Head at (0, 1.5, 0) with the eyes 64 mm apart, both with the same asymmetric FOV; tests
+    // move the head and change FOVs through tracking.
+    FakeOpenXrTracking tracking = MakeDefaultTracking();
+    static FakeOpenXrTracking MakeDefaultTracking() {
+        FakeOpenXrTracking tracking;
+        tracking.head.pose.position = { 0.0f, 1.5f, 0.0f };
+        for (uint32_t i = 0; i < 2; ++i) {
+            tracking.SetEyeFov(i, { -0.90f, 0.80f, 0.85f, -0.85f });
+            tracking.views[i].pose.position = { (i == 0 ? -0.032f : 0.032f), 1.5f, 0.0f };
+        }
+        return tracking;
+    }
+    XrResult CreateReferenceSpace(XrSession, const XrReferenceSpaceCreateInfo* createInfo, XrSpace* space) override {
+        return tracking.CreateReferenceSpace(createInfo, space);
+    }
+    XrResult DestroySpace(XrSpace space) override {
+        tracking.DestroySpace(space);
         return XR_SUCCESS;
     }
-    XrResult DestroySpace(XrSpace) override { return XR_SUCCESS; }
-    XrResult LocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation* location) override {
-        if (location) {
-            location->locationFlags = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT |
-                                      XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
-            location->pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
-            location->pose.position = { 0.0f, 1.5f, 0.0f };
-        }
-        return XR_SUCCESS;
+    XrResult LocateSpace(XrSpace, XrSpace baseSpace, XrTime, XrSpaceLocation* location) override {
+        return tracking.LocateSpace(baseSpace, location);
     }
     XrResult LocateViews(XrSession, const XrViewLocateInfo*, XrViewState* viewState, uint32_t viewCapacityInput, uint32_t* viewCountOutput, XrView* views) override {
-        if (viewCountOutput) *viewCountOutput = 2;
-        if (viewState) {
-            viewState->viewStateFlags = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_TRACKED_BIT |
-                                        XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_POSITION_TRACKED_BIT;
-        }
-        if (viewCapacityInput >= 2 && views) {
-            for (uint32_t i = 0; i < 2; ++i) {
-                views[i].type = XR_TYPE_VIEW;
-                views[i].next = nullptr;
-                views[i].pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
-                views[i].pose.position = { (i == 0 ? -0.032f : 0.032f), 1.5f, 0.0f };
-                views[i].fov = { -0.90f, 0.80f, 0.85f, -0.85f };
-            }
-        }
-        return XR_SUCCESS;
+        return tracking.LocateViews(viewState, viewCapacityInput, viewCountOutput, views);
     }
     XrResult EnumerateSwapchainFormats(XrSession, uint32_t formatCapacityInput, uint32_t* formatCountOutput, int64_t* formats) override {
         if (formatCountOutput) *formatCountOutput = 1;
@@ -367,6 +388,8 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE MockPresent(IDXGISwapChain*, UINT
     s_mockPresentCalls += c;
     return S_OK;
 }
+// What one real MockPresent call adds to s_mockPresentCalls.
+constexpr int kMockPresentIncrement = 3;
 
 static int s_mockCreateSwapChainCalls = 0;
 __declspec(noinline) HRESULT STDMETHODCALLTYPE MockCreateSwapChain(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**) {
@@ -470,7 +493,7 @@ TEST(DxgiProxyTest, OnPresentCopiesLeftEyeOnFrame0AndRightEyeOnFrame1WithPairSub
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     vrBridge->PerformHandshake();
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
@@ -491,6 +514,129 @@ TEST(DxgiProxyTest, OnPresentCopiesLeftEyeOnFrame0AndRightEyeOnFrame1WithPairSub
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u); // parity advanced back to 0
 }
 
+TEST(InjectorRuntimeTest, WiresSubsystemsWithFakesAndDrivesPresentEndToEnd) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+
+    InjectorRuntime::Dependencies deps;
+    deps.openXrManager = openXrManager;
+    deps.vrBridge = vrBridge;
+    deps.luauInterceptor = std::make_shared<LuauInterceptor>(vrBridge);
+    deps.windowController = std::make_shared<MirrorWindowController>();
+    deps.ngxInterceptor = std::make_shared<NgxInterceptor>();
+    auto ngx = deps.ngxInterceptor;
+    DxgiProxy* runtimeProxy = nullptr;
+
+    {
+        InjectorRuntime runtime(std::move(deps));
+        runtimeProxy = &runtime.GetDxgiProxy();
+
+        // One object owns and wires every subsystem.
+        EXPECT_EQ(&runtime.GetOpenXrManager(), openXrManager.get());
+        EXPECT_EQ(&runtime.GetVrBridge(), vrBridge.get());
+        EXPECT_EQ(runtime.GetDxgiProxy().GetOpenXrManager(), openXrManager.get());
+        EXPECT_EQ(runtime.GetDxgiProxy().GetVrBridge(), vrBridge.get());
+        EXPECT_EQ(runtime.GetDxgiProxy().GetLuauInterceptor(), &runtime.GetLuauInterceptor());
+        EXPECT_EQ(&runtime.GetDxgiProxy().GetWindowController(), &runtime.GetWindowController());
+        EXPECT_EQ(ngx->GetVRBridge(), vrBridge.get());
+        EXPECT_EQ(ngx->GetOpenXrManager(), openXrManager.get());
+        EXPECT_EQ(ngx->GetDxgiProxy(), &runtime.GetDxgiProxy());
+
+        // Drive an AFR present pair through the runtime-owned proxy.
+        runtime.GetDxgiProxy().OnPresent(nullptr, 0, 0);
+        EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+        EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+        runtime.GetDxgiProxy().OnPresent(nullptr, 0, 0);
+        EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+        EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
+    }
+
+    // The runtime does not leave the NGX interceptor pointing at freed subsystems.
+    EXPECT_NE(ngx->GetDxgiProxy(), runtimeProxy);
+    EXPECT_NE(ngx->GetVRBridge(), vrBridge.get());
+    EXPECT_NE(ngx->GetOpenXrManager(), openXrManager.get());
+}
+
+TEST(InjectorRuntimeTest, ProductionRuntimeCreatesAndWiresEverySubsystem) {
+    InjectorRuntime& runtime = InjectorRuntime::Instance();
+    NgxInterceptor& ngx = runtime.GetNgxInterceptor();
+    EXPECT_EQ(ngx.GetDxgiProxy(), &runtime.GetDxgiProxy());
+    EXPECT_EQ(ngx.GetVRBridge(), &runtime.GetVrBridge());
+    EXPECT_EQ(ngx.GetOpenXrManager(), &runtime.GetOpenXrManager());
+    EXPECT_EQ(runtime.GetDxgiProxy().GetVrBridge(), &runtime.GetVrBridge());
+    EXPECT_EQ(runtime.GetDxgiProxy().GetOpenXrManager(), &runtime.GetOpenXrManager());
+    EXPECT_EQ(runtime.GetDxgiProxy().GetSystemDxgi(), &runtime.GetSystemDxgi());
+    EXPECT_EQ(runtime.GetVrBridge().GetOpenXrManager().get(), &runtime.GetOpenXrManager());
+}
+
+TEST(InjectorRuntimeTest, NgxInterceptorIgnoresAnInactiveProxyInPassThrough) {
+    // In Pass-Through the NGX hooks must not take the proxy's mirror target resolution, or DLSS would be
+    // created at that size instead of the game's own output size.
+    InjectorRuntime& runtime = InjectorRuntime::Instance();
+    DxgiProxy& proxy = runtime.GetDxgiProxy();
+    ASSERT_FALSE(proxy.IsActive());
+    proxy.GetWindowController().SetTargetRenderResolution(1280, 720);
+
+    uint32_t width = 123, height = 456;
+    runtime.GetNgxInterceptor().GetTargetUpscalingDimensions(width, height);
+    EXPECT_EQ(width, 0u);
+    EXPECT_EQ(height, 0u);
+
+    proxy.GetWindowController().SetTargetRenderResolution(0, 0);
+}
+
+TEST(InjectorRuntimeTest, UnwiredNgxInterceptorFindsNoSubsystemsThroughSingletons) {
+    NgxInterceptor ngx;
+    EXPECT_EQ(ngx.GetVRBridge(), nullptr);
+    EXPECT_EQ(ngx.GetDxgiProxy(), nullptr);
+    EXPECT_EQ(ngx.GetOpenXrManager(), nullptr);
+    EXPECT_FALSE(ngx.IsSingleContextBypassActive());
+    EXPECT_EQ(ngx.GetActiveDualPassEyeIndex(), 0u);
+}
+
+TEST(InjectorRuntimeTest, RuntimeWithoutInjectedNgxCreatesAndWiresItsOwn) {
+    auto openXrManager = std::make_shared<OpenXrManager>(std::make_shared<MockActiveOpenXrDispatch>());
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+
+    InjectorRuntime::Dependencies deps;
+    deps.openXrManager = openXrManager;
+    deps.vrBridge = vrBridge;
+    InjectorRuntime runtime(std::move(deps));
+
+    NgxInterceptor& ngx = runtime.GetNgxInterceptor();
+    EXPECT_EQ(ngx.GetVRBridge(), vrBridge.get());
+    EXPECT_EQ(ngx.GetOpenXrManager(), openXrManager.get());
+    EXPECT_EQ(ngx.GetDxgiProxy(), &runtime.GetDxgiProxy());
+}
+
+TEST(InjectorRuntimeTest, DestructorTakesNoNgxLockWhileProcessTerminates) {
+    // A thread killed at termination may own the NGX mutex; the destructor must not touch it.
+    auto ngx = std::make_shared<NgxInterceptor>();
+    InjectorRuntime::Dependencies deps;
+    deps.openXrManager = std::make_shared<OpenXrManager>(std::make_shared<MockActiveOpenXrDispatch>());
+    deps.ngxInterceptor = ngx;
+    DxgiProxy* runtimeProxy = nullptr;
+    {
+        InjectorRuntime runtime(std::move(deps));
+        runtimeProxy = &runtime.GetDxgiProxy();
+        OnProcessDetach(reinterpret_cast<LPVOID>(1));  // non-null lpReserved: process terminating
+    }
+    ResetProcessTerminatingForTesting();
+
+    // The wiring was left untouched, so the destructor never reached the locking setters.
+    EXPECT_EQ(ngx->GetDxgiProxy(), runtimeProxy);
+    ngx->SetDxgiProxy(nullptr);
+    ngx->SetVRBridge(nullptr);
+    ngx->SetOpenXrManager(nullptr);
+}
+
 TEST(DxgiProxyTest, SequentialDualPassSubPass0SuppressesPresentAndAdvancesSubPass) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
@@ -502,7 +648,7 @@ TEST(DxgiProxyTest, SequentialDualPassSubPass0SuppressesPresentAndAdvancesSubPas
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
@@ -535,7 +681,7 @@ TEST(DxgiProxyTest, SequentialDualPassSubPass1SubmitsPairAndExecutesPresent) {
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     // Sub-Pass 0 (Left Eye)
     EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
@@ -566,7 +712,8 @@ TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    auto proxyRuntime = MakeRuntime(openXrManager, vrBridge);
+    DxgiProxy& proxy = proxyRuntime->GetDxgiProxy();
 
     std::vector<void*> vtable(30, nullptr);
     vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
@@ -611,15 +758,15 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     // Sub-Pass 0
     EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 1u);
 
     // Mode change requested during Sub-Pass 0
-    proxy.SetPendingRenderingMode(VRRenderingMode::AFR);
-    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::AFR);
+    vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
+    EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::AFR);
     // Mode must NOT have changed yet because compositor frame is mid-pair
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
 
@@ -629,7 +776,7 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
 
     // Completed frame boundary: pending mode is latched atomically
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
-    EXPECT_FALSE(proxy.GetPendingRenderingMode().has_value());
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 }
@@ -645,11 +792,11 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::AFR);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     // Queue pending mode change to SequentialDualPass
-    proxy.SetPendingRenderingMode(VRRenderingMode::SequentialDualPass);
-    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
+    vrBridge->SetPendingRenderingMode(VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
 
     // AFR Frame 0 (parity = 0, Left Eye): does NOT complete pair
@@ -658,7 +805,7 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
     EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
     // Mode must NOT be latched yet!
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
-    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::SequentialDualPass);
 
     // AFR Frame 1 (parity = 1, Right Eye): completes pair and calls SubmitFramePair()
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
@@ -666,7 +813,7 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryF
 
     // Completed frame boundary: pending mode is latched atomically
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
-    EXPECT_FALSE(proxy.GetPendingRenderingMode().has_value());
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 
@@ -687,7 +834,8 @@ TEST(DxgiProxyTest, LuauSetRenderingModeQueuesPendingModeWhenProxyActiveAndLatch
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    auto proxyRuntime = MakeRuntime(openXrManager, vrBridge);
+    DxgiProxy& proxy = proxyRuntime->GetDxgiProxy();
 
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
@@ -704,8 +852,8 @@ TEST(DxgiProxyTest, LuauSetRenderingModeQueuesPendingModeWhenProxyActiveAndLatch
     ASSERT_EQ(lua_pcall(L, 1, 0, 0), 0);
     lua_pop(L, 1); // pop VRBridge
 
-    // Mode is queued into DxgiProxy::m_pendingRenderingMode and NOT latched mid-pair
-    EXPECT_EQ(proxy.GetPendingRenderingMode(), VRRenderingMode::AFR);
+    // Mode is queued in VRBridge and NOT latched mid-pair
+    EXPECT_EQ(vrBridge->GetPendingRenderingMode(), VRRenderingMode::AFR);
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::SequentialDualPass);
 
     // Sub-Pass 1 (Right Eye) completes the pair
@@ -714,7 +862,7 @@ TEST(DxgiProxyTest, LuauSetRenderingModeQueuesPendingModeWhenProxyActiveAndLatch
 
     // Latched strictly on completed compositor frame boundary
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
-    EXPECT_FALSE(proxy.GetPendingRenderingMode().has_value());
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
 
     lua_close(L);
 }
@@ -731,7 +879,8 @@ TEST(DxgiProxyTest, AttachSwapChainHooksPresentAndInvokesOnPresent) {
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::AFR);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    auto proxyRuntime = MakeRuntime(openXrManager, vrBridge);
+    DxgiProxy& proxy = proxyRuntime->GetDxgiProxy();
 
     std::vector<void*> vtable(30, nullptr);
     vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
@@ -761,6 +910,183 @@ TEST(DxgiProxyTest, AttachSwapChainHooksPresentAndInvokesOnPresent) {
     EXPECT_FALSE(proxy.IsSwapChainAttached());
 }
 
+TEST(DxgiProxyTest, PresentHookActsForTheRuntimeThatInstalledItAndIsRemovedWithIt) {
+    s_mockPresentCalls = 0;
+    auto makeActive = []() {
+        auto openXr = std::make_shared<OpenXrManager>(std::make_shared<MockActiveOpenXrDispatch>());
+        EXPECT_TRUE(openXr->Initialize());
+        EXPECT_TRUE(openXr->CreateSession());
+        EXPECT_TRUE(openXr->CreateTrackingSpaces());
+        EXPECT_TRUE(openXr->CreateEyeSwapchains(1920, 1080));
+        return openXr;
+    };
+    auto installerXr = makeActive();
+    auto installerBridge = std::make_shared<VRBridge>(installerXr, nullptr);
+    installerBridge->PerformHandshake();
+    installerBridge->SetRenderingMode(VRRenderingMode::AFR);
+    auto installer = MakeRuntime(installerXr, installerBridge);
+
+    std::vector<void*> vtable(30, nullptr);
+    vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
+    vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+    vtable[2] = reinterpret_cast<void*>(&MockRelease);
+    vtable[7] = reinterpret_cast<void*>(&MockGetDevice);
+    vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
+    vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
+    vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    MockComObject mockSwapChain{ vtable.data() };
+    auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
+    ASSERT_TRUE(installer->GetDxgiProxy().AttachSwapChain(pSwapChain));
+
+    // A newer runtime that installed nothing must not take over the installer's hook.
+    auto newerXr = makeActive();
+    auto newerBridge = std::make_shared<VRBridge>(newerXr, nullptr);
+    newerBridge->PerformHandshake();
+    newerBridge->SetRenderingMode(VRRenderingMode::AFR);
+    auto newer = MakeRuntime(newerXr, newerBridge);
+    ASSERT_EQ(InjectorRuntime::Current(), newer.get());
+
+    auto pfnPresent = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(vtable[kPresentVTableSlot]);
+    EXPECT_EQ(pfnPresent(pSwapChain, 1, 0), S_OK);
+    EXPECT_EQ(s_mockPresentCalls, kMockPresentIncrement) << "Present must reach the real function through the installer's original";
+    EXPECT_EQ(installerBridge->GetFrameParity(), 1u);
+    EXPECT_EQ(newerBridge->GetFrameParity(), 0u);
+
+    // Destroying the installer removes its detour before it leaves the registry.
+    installer.reset();
+    EXPECT_EQ(pfnPresent(pSwapChain, 1, 0), S_OK);
+    EXPECT_EQ(s_mockPresentCalls, 2 * kMockPresentIncrement);
+    EXPECT_EQ(newerBridge->GetFrameParity(), 0u) << "an unhooked Present must not reach any proxy";
+}
+
+TEST(DxgiProxyTest, StandaloneProxyInstallsNoDetours) {
+    s_mockPresentCalls = 0;
+    auto openXr = std::make_shared<OpenXrManager>(std::make_shared<MockActiveOpenXrDispatch>());
+    ASSERT_TRUE(openXr->Initialize());
+    ASSERT_TRUE(openXr->CreateSession());
+    DxgiProxy proxy(nullptr, openXr, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+
+    std::vector<void*> vtable(30, nullptr);
+    vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
+    vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+    vtable[2] = reinterpret_cast<void*>(&MockRelease);
+    vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
+    vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    MockComObject mockSwapChain{ vtable.data() };
+    auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
+
+    // No runtime owns this proxy, so a hook could not find its original: it must not detour.
+    EXPECT_FALSE(proxy.AttachSwapChain(pSwapChain));
+    EXPECT_FALSE(proxy.IsSwapChainAttached());
+    auto pfnPresent = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(vtable[kPresentVTableSlot]);
+    EXPECT_EQ(pfnPresent(pSwapChain, 1, 0), S_OK);
+    EXPECT_EQ(s_mockPresentCalls, kMockPresentIncrement);
+}
+
+TEST(DxgiProxyTest, ProxyWithNullCollaboratorsForwardsSafely) {
+    DxgiProxy proxy(nullptr, nullptr, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+    EXPECT_EQ(proxy.GetOpenXrManager(), nullptr);
+    EXPECT_EQ(proxy.GetSystemDxgi(), nullptr);
+    EXPECT_EQ(proxy.GetLuauInterceptor(), nullptr);
+    EXPECT_EQ(proxy.GetVrBridge(), nullptr);
+    EXPECT_FALSE(proxy.IsActive());
+
+    // No NGX interceptor, OpenXR manager or system DXGI: initialization is skipped, the call fails cleanly.
+    void* factory = nullptr;
+    EXPECT_EQ(proxy.CreateDXGIFactory(__uuidof(IDXGIFactory), &factory), E_FAIL);
+    EXPECT_EQ(factory, nullptr);
+
+    NgxInterceptor ngx;
+    ngx.SetDxgiProxy(&proxy);
+    EXPECT_EQ(ngx.GetOpenXrManager(), nullptr);
+    ngx.SetDxgiProxy(nullptr);
+}
+
+TEST(InjectorRuntimeTest, CurrentIsTheNewestLiveRuntimeWhateverTheDestructionOrder) {
+    auto make = []() {
+        InjectorRuntime::Dependencies deps;
+        deps.openXrManager = std::make_shared<OpenXrManager>(std::make_shared<MockFailingOpenXrDispatch>());
+        return std::make_unique<InjectorRuntime>(std::move(deps));
+    };
+    InjectorRuntime* before = InjectorRuntime::Current();
+
+    auto a = make();
+    auto b = make();
+    auto c = make();
+    EXPECT_EQ(InjectorRuntime::Current(), c.get());
+
+    b.reset();  // not the newest: Current() is unchanged
+    EXPECT_EQ(InjectorRuntime::Current(), c.get());
+
+    c.reset();  // falls back to a, never to the destroyed b
+    EXPECT_EQ(InjectorRuntime::Current(), a.get());
+
+    a.reset();
+    EXPECT_EQ(InjectorRuntime::Current(), before);
+}
+
+TEST(InjectorRuntimeTest, AdoptsTheCollaboratorsOfASuppliedVrBridge) {
+    auto openXrManager = std::make_shared<OpenXrManager>(std::make_shared<MockFailingOpenXrDispatch>());
+    auto ngx = std::make_shared<NgxInterceptor>();
+    InjectorRuntime::Dependencies deps;
+    deps.vrBridge = std::make_shared<VRBridge>(openXrManager, ngx);
+    InjectorRuntime runtime(std::move(deps));
+
+    // The bridge's DLSS tuning and the hooks must reach the same interceptor and OpenXR manager.
+    EXPECT_EQ(&runtime.GetOpenXrManager(), openXrManager.get());
+    EXPECT_EQ(&runtime.GetNgxInterceptor(), ngx.get());
+    EXPECT_EQ(ngx->GetDxgiProxy(), &runtime.GetDxgiProxy());
+}
+
+// These need a process with no live runtime, but other tests leave InjectorRuntime::Instance() alive
+// in the shared test process. EXPECT_EXIT runs each body in a fresh child process instead; the child
+// reports each failed check on stderr and exits with the number of failures.
+#define FS25VR_CHILD_CHECK(cond) \
+    do { if (!(cond)) { std::fprintf(stderr, "check failed: %s\n", #cond); failures++; } } while (0)
+
+static int PassthroughExportsLeaveNoRuntimeChild() {
+    int failures = 0;
+    FS25VR_CHILD_CHECK(InjectorRuntime::Current() == nullptr);
+    Proxy_PIXGetCaptureState();
+    FS25VR_CHILD_CHECK(InjectorRuntime::Current() == nullptr);
+    return failures;
+}
+
+static int HookEntryPointsFailSafeChild() {
+    int failures = 0;
+    FS25VR_CHILD_CHECK(InjectorRuntime::Current() == nullptr);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_Present(nullptr, 0, 0) == S_OK);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_Present1(nullptr, 0, 0, nullptr) == S_OK);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_ResizeBuffers(nullptr, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0) == E_FAIL);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_ResizeBuffers1(nullptr, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0, nullptr, nullptr) == E_FAIL);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_CreateSwapChain(nullptr, nullptr, nullptr, nullptr) == E_FAIL);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr) == E_FAIL);
+    FS25VR_CHILD_CHECK(LuauInterceptor::DetourEntryPoint(nullptr) == 0);
+
+    // The Win32 hooks fall through to the real, undetoured functions.
+    HWND wnd = CreateWindowA("STATIC", "NoRuntimeWnd", WS_OVERLAPPEDWINDOW, 10, 10, 640, 480, nullptr, nullptr, nullptr, nullptr);
+    FS25VR_CHILD_CHECK(wnd != nullptr);
+    if (wnd) {
+        RECT rc{};
+        FS25VR_CHILD_CHECK(MirrorWindowController::Intercept_GetClientRect(wnd, &rc));
+        POINT pt{ 100, 100 };
+        FS25VR_CHILD_CHECK(MirrorWindowController::Intercept_ScreenToClient(wnd, &pt));
+        FS25VR_CHILD_CHECK(MirrorWindowController::Intercept_ClipCursor(nullptr));
+        DestroyWindow(wnd);
+    }
+    return failures;
+}
+
+#undef FS25VR_CHILD_CHECK
+
+TEST(InjectorRuntimeTest, PassthroughExportsDoNotConstructTheRuntime) {
+    EXPECT_EXIT(std::exit(PassthroughExportsLeaveNoRuntimeChild()), ::testing::ExitedWithCode(0), "");
+}
+
+TEST(InjectorRuntimeTest, HookEntryPointsFailSafeWithNoLiveRuntime) {
+    EXPECT_EXIT(std::exit(HookEntryPointsFailSafeChild()), ::testing::ExitedWithCode(0), "");
+}
+
 TEST(DxgiProxyTest, AttachFactoryHooksCreateSwapChain) {
     s_mockCreateSwapChainCalls = 0;
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
@@ -769,7 +1095,8 @@ TEST(DxgiProxyTest, AttachFactoryHooksCreateSwapChain) {
     ASSERT_TRUE(openXrManager->CreateSession());
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    auto proxyRuntime = MakeRuntime(openXrManager, vrBridge);
+    DxgiProxy& proxy = proxyRuntime->GetDxgiProxy();
 
     std::vector<void*> vtable(30, nullptr);
     vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
@@ -793,7 +1120,7 @@ TEST(DxgiProxyTest, AttachFactoryHooksCreateSwapChain) {
     EXPECT_FALSE(proxy.IsFactoryAttached());
 }
 
-TEST(DxgiProxyTest, OnPresentGatesAfrPacingBehindTelemetryProbe) {
+TEST(DxgiProxyTest, OnPresentPacesAfrFromTheFirstFrame) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
     ASSERT_TRUE(openXrManager->Initialize());
@@ -801,53 +1128,10 @@ TEST(DxgiProxyTest, OnPresentGatesAfrPacingBehindTelemetryProbe) {
     ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
-    auto probe = std::make_shared<GraphicsTelemetryProbe>();
-    // Case 1: Native stereo detected -> probe->RequiresAfrFallback() is false, HasNativeStereoDetected() is true
-    D3D12_VIEWPORT vps[2]{
-        { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
-        { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
-    };
-    D3D12_RECT scissors[2]{
-        { 0, 0, 1920, 1080 },
-        { 1920, 0, 3840, 1080 }
-    };
-    probe->RecordViewports(2, vps);
-    probe->RecordScissorRects(2, scissors);
-    probe->OnFrameBoundary();
-
-    ASSERT_TRUE(probe->HasNativeStereoDetected());
-    ASSERT_FALSE(probe->RequiresAfrFallback());
-
-    auto vrBridge = std::make_shared<VRBridge>(openXrManager, probe);
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     vrBridge->PerformHandshake();
     vrBridge->SetRenderingMode(VRRenderingMode::AFR);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, probe, nullptr, vrBridge);
-
-    // In native stereo mode, OnPresent submits rendered stereo frames directly on every frame without suppression
-    proxy.OnPresent(nullptr, 0, 0);
-    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
-    EXPECT_FALSE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
-    EXPECT_FALSE(openXrManager->GetEyeSwapchain(1).hasCopiedFrame);
-    EXPECT_EQ(vrBridge->GetFrameIndex(), 1u);
-
-    proxy.OnPresent(nullptr, 0, 0);
-    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 2u);
-    EXPECT_EQ(vrBridge->GetFrameIndex(), 2u);
-
-    // Case 2: Monoscopic pipeline -> probe->RequiresAfrFallback() is true
-    probe->Reset();
-    D3D12_VIEWPORT monoVp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
-    D3D12_RECT monoScissor{ 0, 0, 1920, 1080 };
-    for (int i = 0; i < 5; ++i) {
-        probe->RecordViewports(1, &monoVp);
-        probe->RecordScissorRects(1, &monoScissor);
-        probe->OnFrameBoundary();
-    }
-    ASSERT_TRUE(probe->RequiresAfrFallback());
-
-    openXrManager->ResetSubmittedFramePairCount();
-    vrBridge->SetFrameIndex(0);
-    vrBridge->SetFrameParity(0);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     // First frame (parity 0): copies eye 0 and advances parity to 1
     proxy.OnPresent(nullptr, 0, 0);
@@ -864,24 +1148,9 @@ TEST(DxgiProxyTest, OnPresentGatesAfrPacingBehindTelemetryProbe) {
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
     EXPECT_EQ(vrBridge->GetFrameIndex(), 2u);
-
-    // Case 3: Inconclusive / probing frames -> presentation remains active and uninterrupted via AFR pacing
-    probe->Reset();
-    openXrManager->ResetSubmittedFramePairCount();
-    vrBridge->SetFrameIndex(0);
-    vrBridge->SetFrameParity(0);
-    EXPECT_EQ(probe->GetStereoVerdict(), StereoVerdict::Inconclusive);
-
-    proxy.OnPresent(nullptr, 0, 0);
-    EXPECT_TRUE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
-    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
-
-    proxy.OnPresent(nullptr, 0, 0);
-    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
-    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
 }
 
-TEST(DxgiProxyTest, EnforcesStrictOpenXrLifecycleAndContinuousPresentationAcrossTelemetryStates) {
+TEST(DxgiProxyTest, EnforcesStrictOpenXrLifecycleAcrossAfrPresentation) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     mockDispatch->enforceCallOrder = true;
 
@@ -891,57 +1160,21 @@ TEST(DxgiProxyTest, EnforcesStrictOpenXrLifecycleAndContinuousPresentationAcross
     ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
-    auto probe = std::make_shared<GraphicsTelemetryProbe>();
-    auto vrBridge = std::make_shared<VRBridge>(openXrManager, probe);
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
     vrBridge->PerformHandshake();
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, probe, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
-    // 1. Inconclusive probing frames: verify AFR pairs submit without call order error
+    // AFR pairs submit without call order error from the very first frame
     proxy.OnPresent(nullptr, 0, 0);
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_FALSE(openXrManager->IsFrameBegun());
 
-    // 2. Monoscopic probe verdict (AFR fallback)
-    for (int i = 0; i < 5; ++i) {
-        D3D12_VIEWPORT monoVp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
-        D3D12_RECT monoScissor{ 0, 0, 1920, 1080 };
-        probe->RecordViewports(1, &monoVp);
-        probe->RecordScissorRects(1, &monoScissor);
-        probe->OnFrameBoundary();
-    }
-    ASSERT_TRUE(probe->RequiresAfrFallback());
-
     proxy.OnPresent(nullptr, 0, 0);
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 2u);
-    EXPECT_FALSE(openXrManager->IsFrameBegun());
-
-    // 3. Native stereo verdict
-    probe->Reset();
-    D3D12_VIEWPORT vps[2]{
-        { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
-        { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
-    };
-    D3D12_RECT scissors[2]{
-        { 0, 0, 1920, 1080 },
-        { 1920, 0, 3840, 1080 }
-    };
-    probe->RecordViewports(2, vps);
-    probe->RecordScissorRects(2, scissors);
-    probe->OnFrameBoundary();
-    ASSERT_TRUE(probe->HasNativeStereoDetected());
-
-    proxy.OnPresent(nullptr, 0, 0);
-    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
-    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 3u);
-    EXPECT_FALSE(openXrManager->IsFrameBegun());
-
-    proxy.OnPresent(nullptr, 0, 0);
-    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
-    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 4u);
     EXPECT_FALSE(openXrManager->IsFrameBegun());
 }
 
@@ -989,7 +1222,7 @@ TEST(DxgiProxyTest, ConsolidatesDeviceAndQueueExtractionFromCommandQueue) {
     EXPECT_EQ(extractedQueue.Get(), env.GetQueue());
     EXPECT_EQ(extractedDevice.Get(), env.GetDevice());
 
-    DxgiProxy proxy;
+    DxgiProxy proxy(nullptr, nullptr, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
     EXPECT_TRUE(proxy.ResolveD3D12DeviceAndQueue(env.GetQueueUnknown()));
     EXPECT_EQ(proxy.GetD3D12CommandQueue(), env.GetQueue());
     EXPECT_EQ(proxy.GetD3D12Device(), env.GetDevice());
@@ -1006,7 +1239,7 @@ TEST(DxgiProxyTest, ConsolidatesDeviceAndQueueExtractionFromDevice) {
     EXPECT_EQ(extractedDevice.Get(), env.GetDevice());
     EXPECT_EQ(extractedQueue.Get(), nullptr);
 
-    DxgiProxy proxy;
+    DxgiProxy proxy(nullptr, nullptr, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
     EXPECT_TRUE(proxy.ResolveD3D12DeviceAndQueue(env.GetDeviceUnknown()));
     EXPECT_EQ(proxy.GetD3D12Device(), env.GetDevice());
     EXPECT_EQ(proxy.GetD3D12CommandQueue(), nullptr);
@@ -1034,7 +1267,8 @@ TEST(DxgiProxyTest, ConsolidatesDeviceAndQueueExtractionFromSwapChain) {
 TEST(DxgiProxyTest, CreateSwapChainInterceptorsConsolidateDeviceAndQueueExtraction) {
     MockD3D12Environment env;
 
-    DxgiProxy proxy;
+    auto proxyRuntime = MakeRuntime(nullptr);
+    DxgiProxy& proxy = proxyRuntime->GetDxgiProxy();
     DxgiProxy::Intercept_CreateSwapChain(nullptr, env.GetQueueUnknown(), nullptr, nullptr);
     EXPECT_EQ(proxy.GetD3D12CommandQueue(), env.GetQueue());
     EXPECT_EQ(proxy.GetD3D12Device(), env.GetDevice());
@@ -1046,6 +1280,35 @@ TEST(DxgiProxyTest, CreateSwapChainInterceptorsConsolidateDeviceAndQueueExtracti
     DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, env.GetQueueUnknown(), nullptr, nullptr, nullptr, nullptr, nullptr);
     EXPECT_EQ(proxy.GetD3D12CommandQueue(), env.GetQueue());
     EXPECT_EQ(proxy.GetD3D12Device(), env.GetDevice());
+}
+
+__declspec(noinline) void STDMETHODCALLTYPE MockExecuteCommandLists(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*) {
+    static volatile int calls = 0;
+    calls = calls + 1;
+}
+
+TEST(DxgiProxyTest, ResolvingTheD3D12QueueInstallsNoCommandQueueHooks) {
+    // ADR-0017: the Injector installs only DXGI hooks; the game's command queue is never detoured.
+    constexpr size_t kExecuteCommandListsSlot = 10;
+    MockD3D12Environment env;
+    env.queueVTable[kExecuteCommandListsSlot] = reinterpret_cast<void*>(&MockExecuteCommandLists);
+
+    const void* slotBefore = env.queueVTable[kExecuteCommandListsSlot];
+    std::array<uint8_t, 16> codeBefore{};
+    std::memcpy(codeBefore.data(), slotBefore, codeBefore.size());
+
+    auto proxyRuntime = MakeRuntime(nullptr);
+    DxgiProxy& proxy = proxyRuntime->GetDxgiProxy();
+    DxgiProxy::Intercept_CreateSwapChain(nullptr, env.GetQueueUnknown(), nullptr, nullptr);
+    ASSERT_EQ(proxy.GetD3D12CommandQueue(), env.GetQueue());
+    proxy.SetD3D12DeviceAndQueue(env.GetDevice(), env.GetQueue());
+
+    std::array<uint8_t, 16> codeAfter{};
+    std::memcpy(codeAfter.data(), env.queueVTable[kExecuteCommandListsSlot], codeAfter.size());
+    EXPECT_EQ(env.queueVTable[kExecuteCommandListsSlot], slotBefore) << "queue vtable must not be patched";
+    EXPECT_EQ(codeAfter, codeBefore) << "ExecuteCommandLists must not be detoured";
+
+    proxy.SetD3D12DeviceAndQueue(nullptr, nullptr);
 }
 
 __declspec(noinline) HRESULT STDMETHODCALLTYPE MockGetDescZeroDimensions(IDXGISwapChain*, DXGI_SWAP_CHAIN_DESC* pDesc) {
@@ -1076,7 +1339,7 @@ TEST(DxgiProxyTest, ConfiguresBackbufferMatchedOpenXrEyeSwapchainDimensionsOnPre
     EXPECT_FALSE(openXrManager->HasEyeSwapchains());
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     std::vector<void*> scVTable(30, nullptr);
     scVTable[0] = reinterpret_cast<void*>(&MockSwapChainQI);
@@ -1115,7 +1378,7 @@ TEST(DxgiProxyTest, FallsBackToRecommendedDimensionsWhenBackbufferDimensionsUnav
     EXPECT_FALSE(openXrManager->HasEyeSwapchains());
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     std::vector<void*> scVTable(30, nullptr);
     scVTable[0] = reinterpret_cast<void*>(&MockSwapChainQI);
@@ -1154,7 +1417,7 @@ TEST(DxgiProxyTest, FallsBackToDefaultDimensionsWhenBothBackbufferAndRecommended
     EXPECT_FALSE(openXrManager->HasEyeSwapchains());
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     std::vector<void*> scVTable(30, nullptr);
     scVTable[0] = reinterpret_cast<void*>(&MockSwapChainQI);
@@ -1187,7 +1450,7 @@ TEST(DxgiProxyTest, OnPresentSubmitsFloatingQuadLayerWhenNoCompanionHandshake) {
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     EXPECT_FALSE(vrBridge->IsCompanionActive());
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 0u);
@@ -1223,7 +1486,7 @@ TEST(DxgiProxyTest, OnPresentSubmitsQuadContinuouslyWithoutAfrPacing) {
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     // 4 frames in menu mode -> 4 quad submissions, frame parity never advances to 1
     for (int i = 0; i < 4; ++i) {
@@ -1232,6 +1495,162 @@ TEST(DxgiProxyTest, OnPresentSubmitsQuadContinuouslyWithoutAfrPacing) {
         EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
     }
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+}
+
+TEST(DxgiProxyTest, OnPresentPollsEventsPausesVrWhileStoppedAndResumesOnReady) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+
+    // READY is consumed by the first present, which then submits a quad frame.
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_TRUE(openXrManager->IsSessionRunning());
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+
+    // STOPPING: no VR submissions, but the game keeps presenting to the mirror window.
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_FALSE(openXrManager->IsSessionRunning());
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+
+    // READY again: VR resumes.
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_TRUE(openXrManager->IsSessionRunning());
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 2u);
+}
+
+TEST(DxgiProxyTest, KeepsGameSyncIntervalWhileSessionIsPaused) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+
+    // Before READY nothing calls xrWaitFrame, so the game's vsync must stay in effect.
+    EXPECT_EQ(proxy.EffectiveSyncInterval(1), 1u);
+
+    proxy.OnPresent(nullptr, 1, 0);
+    ASSERT_TRUE(openXrManager->IsSessionRunning());
+    EXPECT_EQ(proxy.EffectiveSyncInterval(1), 0u);
+
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    proxy.OnPresent(nullptr, 1, 0);
+    ASSERT_FALSE(openXrManager->IsSessionRunning());
+    EXPECT_EQ(proxy.EffectiveSyncInterval(1), 1u);
+
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    proxy.OnPresent(nullptr, 1, 0);
+    EXPECT_EQ(proxy.EffectiveSyncInterval(1), 0u);
+}
+
+TEST(DxgiProxyTest, AfrResumesWithLeftEyeAfterSessionPause) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::AFR);
+
+    // Pause right after the left eye of a pair.
+    proxy.OnPresent(nullptr, 0, 0);
+    ASSERT_EQ(vrBridge->GetFrameParity(), 1u);
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
+
+    // Resume: the first frame is a fresh left eye, not the right half of the abandoned pair.
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+    EXPECT_EQ(vrBridge->GetFrameParity(), 1u);
+
+    proxy.OnPresent(nullptr, 0, 0);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+}
+
+TEST(DxgiProxyTest, PendingRenderingModeLatchesWhileSessionIsPaused) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+
+    proxy.OnPresent(nullptr, 0, 0);  // consumes READY
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    proxy.OnPresent(nullptr, 0, 0);
+    ASSERT_FALSE(openXrManager->IsSessionRunning());
+
+    // Headset asleep: no eye pair will be submitted, so the change must not wait for one.
+    vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+}
+
+TEST(DxgiProxyTest, PendingRenderingModeLatchesOnMenuQuadFrame) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    vrBridge->SetMenuVisible(true);
+
+    vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
+}
+
+TEST(DxgiProxyTest, OnPresentContinuesInPassThroughAfterLossPending) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    ASSERT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_TRUE(openXrManager->IsPassThrough());
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_FALSE(proxy.IsPresentSuppressed());
 }
 
 TEST(DxgiProxyTest, SeamlesslyTransitionsBetweenQuadAndStereoOnCompanionHandshakeAndUnload) {
@@ -1243,7 +1662,7 @@ TEST(DxgiProxyTest, SeamlesslyTransitionsBetweenQuadAndStereoOnCompanionHandshak
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     // 1. Menu mode: 2 frames submit 2 quad layers
     proxy.OnPresent(nullptr, 0, 0);
@@ -1283,7 +1702,7 @@ TEST(DxgiProxyTest, DynamicallySwitchesBetweenProjectionAndQuadWhenInGameMenuTog
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     // Active companion handshake
     vrBridge->PerformHandshake();
@@ -1346,7 +1765,7 @@ TEST(DxgiProxyTest, MidPairMenuTransitionDoesNotDeadlockSwapchainsOrLeakFrames) 
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     vrBridge->PerformHandshake();
     ASSERT_TRUE(vrBridge->IsCompanionActive());
@@ -1389,7 +1808,7 @@ TEST(DxgiProxyTest, TwoDViewModeSwitchesPresentationBetweenFramePairsAndQuadLaye
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     // Active companion handshake
     vrBridge->PerformHandshake();
@@ -1453,7 +1872,7 @@ TEST(DxgiProxyTest, MidPair2DViewTransitionDoesNotDeadlockSwapchainsOrLeakFrames
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     vrBridge->PerformHandshake();
     ASSERT_TRUE(vrBridge->IsCompanionActive());
@@ -1496,7 +1915,7 @@ TEST(DxgiProxyTest, TransitionInto2DFloatingWindowModeTriggersQuadAlignment) {
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     vrBridge->PerformHandshake();
     ASSERT_TRUE(vrBridge->IsCompanionActive());
@@ -1511,7 +1930,7 @@ TEST(DxgiProxyTest, TransitionInto2DFloatingWindowModeTriggersQuadAlignment) {
     simPose.position = Vector3(2.0f, 1.7f, 3.0f);
     simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    mockDispatch->tracking.SetHeadPose(simPose);
 
     // Trigger VR View Toggle Action to activate 2D Floating Window Mode
     vrBridge->Set2DViewActive(true);
@@ -1533,7 +1952,7 @@ TEST(DxgiProxyTest, TwoDViewModePersistentAcrossInGameMenuTransitions) {
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     vrBridge->PerformHandshake();
     ASSERT_TRUE(vrBridge->IsCompanionActive());
@@ -1572,14 +1991,14 @@ TEST(DxgiProxyTest, TransitionIntoMenuModeTriggersQuadAlignment) {
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     // Set head pose with offset and yaw
     HeadPose simPose;
     simPose.position = Vector3(1.0f, 1.6f, -2.0f);
     simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    mockDispatch->tracking.SetHeadPose(simPose);
 
     // Initial frame in pre-game menu: should align menu quad to simPose
     proxy.OnPresent(nullptr, 0, 0);
@@ -1599,7 +2018,7 @@ TEST(DxgiProxyTest, OnPresentInitializesCursorSwapchainInMenuMode) {
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     EXPECT_FALSE(openXrManager->HasCursorSwapchain());
 
@@ -1618,18 +2037,18 @@ TEST(DxgiProxyTest, UpdateMenuCursorStateHandlesNullHwndSafely) {
     ASSERT_TRUE(openXrManager->CreateSession());
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     // Should not crash with null swapchain / null HWND
-    EXPECT_NO_THROW(proxy.UpdateMenuCursorState(nullptr));
+    EXPECT_NO_THROW(proxy.GetWindowController().UpdateMenuCursorState(nullptr, openXrManager.get()));
     EXPECT_FALSE(openXrManager->GetMenuCursorState().visible);
 }
 
 TEST(DxgiProxyTest, ScreenToNormalizedClientHandlesNullOrInvalidHwndSafely) {
     float normX = 0.0f, normY = 0.0f;
     POINT pt{ 100, 100 };
-    EXPECT_FALSE(DxgiProxy::ScreenToNormalizedClient(nullptr, pt, normX, normY));
-    EXPECT_FALSE(DxgiProxy::ScreenToNormalizedClient(reinterpret_cast<HWND>(static_cast<uintptr_t>(0xDEADBEEF)), pt, normX, normY));
+    EXPECT_FALSE(MirrorWindowController::ScreenToNormalizedClient(nullptr, pt, normX, normY));
+    EXPECT_FALSE(MirrorWindowController::ScreenToNormalizedClient(reinterpret_cast<HWND>(static_cast<uintptr_t>(0xDEADBEEF)), pt, normX, normY));
 }
 
 TEST(DxgiProxyTest, ScreenToNormalizedClientNormalizesAndClipsBounds) {
@@ -1639,13 +2058,13 @@ TEST(DxgiProxyTest, ScreenToNormalizedClientNormalizesAndClipsBounds) {
     float normX = -1.0f, normY = -1.0f;
     // Point inside window (client center: screen x=200, y=200)
     POINT centerPt{ 200, 200 };
-    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, centerPt, normX, normY));
+    EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, centerPt, normX, normY));
     EXPECT_NEAR(normX, 0.5f, 0.05f);
     EXPECT_NEAR(normY, 0.5f, 0.05f);
 
     // Point outside client bounds (screen x=50, y=50)
     POINT outsidePt{ 50, 50 };
-    EXPECT_FALSE(DxgiProxy::ScreenToNormalizedClient(testWnd, outsidePt, normX, normY));
+    EXPECT_FALSE(MirrorWindowController::ScreenToNormalizedClient(testWnd, outsidePt, normX, normY));
 
     DestroyWindow(testWnd);
 }
@@ -1659,7 +2078,7 @@ TEST(DxgiProxyTest, OnPresentSubmitsCursorQuadWhenCursorShowing) {
     ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
 
     auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, nullptr, vrBridge);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
 
     // Initial frame creates cursor swapchain
     proxy.OnPresent(nullptr, 0, 0);
@@ -1681,7 +2100,7 @@ TEST(DxgiProxyTest, OnPresentSubmitsCursorQuadWhenCursorShowing) {
 TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_Standard16x9Displays) {
     // 1080p borderless
     RECT work1080{ 0, 0, 1920, 1080 };
-    RECT res1080 = DxgiProxy::ComputeClampedMirrorWindowRect(work1080, WS_POPUP, 0, false);
+    RECT res1080 = MirrorWindowController::ComputeClampedMirrorWindowRect(work1080, WS_POPUP, 0, false);
     EXPECT_EQ(res1080.left, 0);
     EXPECT_EQ(res1080.top, 0);
     EXPECT_EQ(res1080.right, 1920);
@@ -1689,7 +2108,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_Standard16x9Displays) {
 
     // 1440p borderless
     RECT work1440{ 0, 0, 2560, 1440 };
-    RECT res1440 = DxgiProxy::ComputeClampedMirrorWindowRect(work1440, WS_POPUP, 0, false);
+    RECT res1440 = MirrorWindowController::ComputeClampedMirrorWindowRect(work1440, WS_POPUP, 0, false);
     EXPECT_EQ(res1440.left, 0);
     EXPECT_EQ(res1440.top, 0);
     EXPECT_EQ(res1440.right, 2560);
@@ -1697,7 +2116,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_Standard16x9Displays) {
 
     // 4K borderless
     RECT work4k{ 0, 0, 3840, 2160 };
-    RECT res4k = DxgiProxy::ComputeClampedMirrorWindowRect(work4k, WS_POPUP, 0, false);
+    RECT res4k = MirrorWindowController::ComputeClampedMirrorWindowRect(work4k, WS_POPUP, 0, false);
     EXPECT_EQ(res4k.left, 0);
     EXPECT_EQ(res4k.top, 0);
     EXPECT_EQ(res4k.right, 3840);
@@ -1705,7 +2124,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_Standard16x9Displays) {
 
     // 720p borderless
     RECT work720{ 0, 0, 1280, 720 };
-    RECT res720 = DxgiProxy::ComputeClampedMirrorWindowRect(work720, WS_POPUP, 0, false);
+    RECT res720 = MirrorWindowController::ComputeClampedMirrorWindowRect(work720, WS_POPUP, 0, false);
     EXPECT_EQ(res720.left, 0);
     EXPECT_EQ(res720.top, 0);
     EXPECT_EQ(res720.right, 1280);
@@ -1725,7 +2144,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_WindowedStylesPreserveBorders
     };
 
     for (const auto& workArea : workAreas) {
-        RECT res = DxgiProxy::ComputeClampedMirrorWindowRect(workArea, WS_OVERLAPPEDWINDOW, 0, false);
+        RECT res = MirrorWindowController::ComputeClampedMirrorWindowRect(workArea, WS_OVERLAPPEDWINDOW, 0, false);
         int workW = workArea.right - workArea.left;
         int workH = workArea.bottom - workArea.top;
         int outerW = res.right - res.left;
@@ -1755,7 +2174,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_WindowedStylesPreserveBorders
 TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_UltrawideAndSuperUltrawideDisplays) {
     // 21:9 2560x1080 borderless
     RECT work2560x1080{ 0, 0, 2560, 1080 };
-    RECT res2560 = DxgiProxy::ComputeClampedMirrorWindowRect(work2560x1080, WS_POPUP, 0, false);
+    RECT res2560 = MirrorWindowController::ComputeClampedMirrorWindowRect(work2560x1080, WS_POPUP, 0, false);
     EXPECT_EQ(res2560.left, 320);
     EXPECT_EQ(res2560.top, 0);
     EXPECT_EQ(res2560.right, 2240);
@@ -1765,7 +2184,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_UltrawideAndSuperUltrawideDis
 
     // 21:9 3440x1440 borderless
     RECT work3440x1440{ 0, 0, 3440, 1440 };
-    RECT res3440 = DxgiProxy::ComputeClampedMirrorWindowRect(work3440x1440, WS_POPUP, 0, false);
+    RECT res3440 = MirrorWindowController::ComputeClampedMirrorWindowRect(work3440x1440, WS_POPUP, 0, false);
     EXPECT_EQ(res3440.left, 440);
     EXPECT_EQ(res3440.top, 0);
     EXPECT_EQ(res3440.right, 3000);
@@ -1775,7 +2194,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_UltrawideAndSuperUltrawideDis
 
     // 32:9 5120x1440 super-ultrawide borderless
     RECT work5120x1440{ 0, 0, 5120, 1440 };
-    RECT res5120 = DxgiProxy::ComputeClampedMirrorWindowRect(work5120x1440, WS_POPUP, 0, false);
+    RECT res5120 = MirrorWindowController::ComputeClampedMirrorWindowRect(work5120x1440, WS_POPUP, 0, false);
     EXPECT_EQ(res5120.left, 1280);
     EXPECT_EQ(res5120.top, 0);
     EXPECT_EQ(res5120.right, 3840);
@@ -1787,7 +2206,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_UltrawideAndSuperUltrawideDis
 TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_PortraitAndTallDisplays) {
     // 9:16 1080x1920 borderless
     RECT work1080x1920{ 0, 0, 1080, 1920 };
-    RECT res1080 = DxgiProxy::ComputeClampedMirrorWindowRect(work1080x1920, WS_POPUP, 0, false);
+    RECT res1080 = MirrorWindowController::ComputeClampedMirrorWindowRect(work1080x1920, WS_POPUP, 0, false);
     EXPECT_EQ(res1080.left, 0);
     EXPECT_EQ(res1080.right, 1080);
     int expectedH1080 = (1080 * 9) / 16; // 607
@@ -1797,7 +2216,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_PortraitAndTallDisplays) {
 
     // 9:16 1440x2560 borderless
     RECT work1440x2560{ 0, 0, 1440, 2560 };
-    RECT res1440 = DxgiProxy::ComputeClampedMirrorWindowRect(work1440x2560, WS_POPUP, 0, false);
+    RECT res1440 = MirrorWindowController::ComputeClampedMirrorWindowRect(work1440x2560, WS_POPUP, 0, false);
     EXPECT_EQ(res1440.left, 0);
     EXPECT_EQ(res1440.right, 1440);
     int expectedH1440 = (1440 * 9) / 16; // 810
@@ -1812,7 +2231,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_PortraitAndTallDisplays) {
     int frameH = frameRect.bottom - frameRect.top;
 
     RECT workPortraitWindowed{ 0, 0, 1080, 1880 };
-    RECT resWindowed = DxgiProxy::ComputeClampedMirrorWindowRect(workPortraitWindowed, WS_OVERLAPPEDWINDOW, 0, false);
+    RECT resWindowed = MirrorWindowController::ComputeClampedMirrorWindowRect(workPortraitWindowed, WS_OVERLAPPEDWINDOW, 0, false);
     int outerW = resWindowed.right - resWindowed.left;
     int outerH = resWindowed.bottom - resWindowed.top;
 
@@ -1833,7 +2252,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_PortraitAndTallDisplays) {
 TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_MultiMonitorOffsetOrigins) {
     // Secondary 1080p monitor positioned to the right of primary
     RECT workRight{ 1920, 0, 3840, 1080 };
-    RECT resRight = DxgiProxy::ComputeClampedMirrorWindowRect(workRight, WS_POPUP, 0, false);
+    RECT resRight = MirrorWindowController::ComputeClampedMirrorWindowRect(workRight, WS_POPUP, 0, false);
     EXPECT_EQ(resRight.left, 1920);
     EXPECT_EQ(resRight.top, 0);
     EXPECT_EQ(resRight.right, 3840);
@@ -1841,7 +2260,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_MultiMonitorOffsetOrigins) {
 
     // Secondary 1440p monitor positioned to the left and shifted down
     RECT workLeft{ -2560, 100, 0, 1540 };
-    RECT resLeft = DxgiProxy::ComputeClampedMirrorWindowRect(workLeft, WS_POPUP, 0, false);
+    RECT resLeft = MirrorWindowController::ComputeClampedMirrorWindowRect(workLeft, WS_POPUP, 0, false);
     EXPECT_EQ(resLeft.left, -2560);
     EXPECT_EQ(resLeft.top, 100);
     EXPECT_EQ(resLeft.right, 0);
@@ -1849,7 +2268,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_MultiMonitorOffsetOrigins) {
 
     // Secondary ultrawide 21:9 monitor on negative coordinates
     RECT workLeftUltrawide{ -3440, 0, 0, 1440 };
-    RECT resLeftUW = DxgiProxy::ComputeClampedMirrorWindowRect(workLeftUltrawide, WS_POPUP, 0, false);
+    RECT resLeftUW = MirrorWindowController::ComputeClampedMirrorWindowRect(workLeftUltrawide, WS_POPUP, 0, false);
     EXPECT_EQ(resLeftUW.left, -3000);
     EXPECT_EQ(resLeftUW.right, -440);
     EXPECT_EQ(resLeftUW.top, 0);
@@ -1861,32 +2280,32 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_MultiMonitorOffsetOrigins) {
 TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_DegenerateAndHwndOverload) {
     // Zero or inverted work area
     RECT zeroWork{ 100, 100, 100, 100 };
-    RECT resZero = DxgiProxy::ComputeClampedMirrorWindowRect(zeroWork, WS_POPUP, 0, false);
+    RECT resZero = MirrorWindowController::ComputeClampedMirrorWindowRect(zeroWork, WS_POPUP, 0, false);
     EXPECT_EQ(resZero.left, 100);
     EXPECT_EQ(resZero.right, 100);
 
     RECT invertedWork{ 200, 200, 100, 100 };
-    RECT resInverted = DxgiProxy::ComputeClampedMirrorWindowRect(invertedWork, WS_POPUP, 0, false);
+    RECT resInverted = MirrorWindowController::ComputeClampedMirrorWindowRect(invertedWork, WS_POPUP, 0, false);
     EXPECT_EQ(resInverted.left, 200);
     EXPECT_EQ(resInverted.right, 100);
 
     // Work area smaller than non-client frame borders
     RECT tinyWork{ 0, 0, 10, 10 };
-    RECT resTiny = DxgiProxy::ComputeClampedMirrorWindowRect(tinyWork, WS_OVERLAPPEDWINDOW, 0, false);
+    RECT resTiny = MirrorWindowController::ComputeClampedMirrorWindowRect(tinyWork, WS_OVERLAPPEDWINDOW, 0, false);
     EXPECT_EQ(resTiny.left, 0);
     EXPECT_EQ(resTiny.top, 0);
     EXPECT_EQ(resTiny.right, 10);
     EXPECT_EQ(resTiny.bottom, 10);
 
     // HWND overload: null and invalid handles return zero RECT
-    RECT nullRes = DxgiProxy::ComputeClampedMirrorWindowRect(static_cast<HWND>(nullptr));
+    RECT nullRes = MirrorWindowController::ComputeClampedMirrorWindowRect(static_cast<HWND>(nullptr));
     EXPECT_EQ(nullRes.left, 0);
     EXPECT_EQ(nullRes.top, 0);
     EXPECT_EQ(nullRes.right, 0);
     EXPECT_EQ(nullRes.bottom, 0);
 
     HWND invalidHwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(0xDEADBEEF));
-    RECT invalidRes = DxgiProxy::ComputeClampedMirrorWindowRect(invalidHwnd);
+    RECT invalidRes = MirrorWindowController::ComputeClampedMirrorWindowRect(invalidHwnd);
     EXPECT_EQ(invalidRes.left, 0);
     EXPECT_EQ(invalidRes.top, 0);
     EXPECT_EQ(invalidRes.right, 0);
@@ -1901,7 +2320,7 @@ TEST(DxgiProxyTest, ComputeClampedMirrorWindowRect_DegenerateAndHwndOverload) {
     MONITORINFO mi{ sizeof(MONITORINFO) };
     ASSERT_TRUE(GetMonitorInfo(hMon, &mi));
 
-    RECT hwndRes = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+    RECT hwndRes = MirrorWindowController::ComputeClampedMirrorWindowRect(testWnd);
     int outerW = hwndRes.right - hwndRes.left;
     int outerH = hwndRes.bottom - hwndRes.top;
     int workW = mi.rcWork.right - mi.rcWork.left;
@@ -1929,11 +2348,11 @@ TEST(DxgiProxyTest, WindowSubclassAttachesInActiveVrModeAndRemainsInertInPassThr
         EXPECT_TRUE(ptOpenXrManager->IsPassThrough());
         EXPECT_FALSE(ptOpenXrManager->IsActive());
 
-        DxgiProxy ptProxy(nullptr, ptOpenXrManager);
-        ptProxy.SetGameHwnd(testWnd);
+        DxgiProxy ptProxy(nullptr, ptOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+        ptProxy.GetWindowController().SetGameHwnd(testWnd);
 
-        EXPECT_FALSE(ptProxy.IsWindowSubclassed());
-        EXPECT_FALSE(ptProxy.AttachWindowSubclass(testWnd));
+        EXPECT_FALSE(ptProxy.GetWindowController().IsWindowSubclassed());
+        EXPECT_FALSE(ptProxy.GetWindowController().AttachWindowSubclass(testWnd));
     }
 
     // 2. Active VR Mode: attaches subclass cleanly
@@ -1944,14 +2363,14 @@ TEST(DxgiProxyTest, WindowSubclassAttachesInActiveVrModeAndRemainsInertInPassThr
         ASSERT_TRUE(activeOpenXrManager->CreateSession());
         EXPECT_TRUE(activeOpenXrManager->IsActive());
 
-        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-        activeProxy.SetGameHwnd(testWnd);
+        DxgiProxy activeProxy(nullptr, activeOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+        activeProxy.GetWindowController().SetGameHwnd(testWnd);
 
-        EXPECT_TRUE(activeProxy.IsWindowSubclassed());
-        EXPECT_EQ(activeProxy.GetGameHwnd(), testWnd);
+        EXPECT_TRUE(activeProxy.GetWindowController().IsWindowSubclassed());
+        EXPECT_EQ(activeProxy.GetWindowController().GetGameHwnd(), testWnd);
 
         activeProxy.DetachAll();
-        EXPECT_FALSE(activeProxy.IsWindowSubclassed());
+        EXPECT_FALSE(activeProxy.GetWindowController().IsWindowSubclassed());
     }
 
     DestroyWindow(testWnd);
@@ -1966,11 +2385,11 @@ TEST(DxgiProxyTest, SubclassInterceptsWindowPosChangingAndClampsDimensions) {
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-    activeProxy.SetGameHwnd(testWnd);
-    ASSERT_TRUE(activeProxy.IsWindowSubclassed());
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+    activeProxy.GetWindowController().SetGameHwnd(testWnd);
+    ASSERT_TRUE(activeProxy.GetWindowController().IsWindowSubclassed());
 
-    RECT expectedClamped = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+    RECT expectedClamped = MirrorWindowController::ComputeClampedMirrorWindowRect(testWnd);
     int maxW = expectedClamped.right - expectedClamped.left;
     int maxH = expectedClamped.bottom - expectedClamped.top;
     ASSERT_GT(maxW, 0);
@@ -2027,16 +2446,17 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndAppliesInitialPrePresentation
         ASSERT_TRUE(activeOpenXrManager->Initialize());
         ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+        auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
+        DxgiProxy& activeProxy = activeProxyRuntime->GetDxgiProxy();
 
-        RECT expectedClamped = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+        RECT expectedClamped = MirrorWindowController::ComputeClampedMirrorWindowRect(testWnd);
         int expectedW = expectedClamped.right - expectedClamped.left;
         int expectedH = expectedClamped.bottom - expectedClamped.top;
 
         DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, testWnd, nullptr, nullptr, nullptr, nullptr);
 
-        EXPECT_TRUE(activeProxy.IsWindowSubclassed());
-        EXPECT_EQ(activeProxy.GetGameHwnd(), testWnd);
+        EXPECT_TRUE(activeProxy.GetWindowController().IsWindowSubclassed());
+        EXPECT_EQ(activeProxy.GetWindowController().GetGameHwnd(), testWnd);
 
         RECT currentRect{};
         GetWindowRect(testWnd, &currentRect);
@@ -2059,11 +2479,12 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndAppliesInitialPrePresentation
         ASSERT_TRUE(ptOpenXrManager->Initialize());
         EXPECT_TRUE(ptOpenXrManager->IsPassThrough());
 
-        DxgiProxy ptProxy(nullptr, ptOpenXrManager);
+        auto ptProxyRuntime = MakeRuntime(ptOpenXrManager);
+        DxgiProxy& ptProxy = ptProxyRuntime->GetDxgiProxy();
 
         DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, ptWnd, nullptr, nullptr, nullptr, nullptr);
 
-        EXPECT_FALSE(ptProxy.IsWindowSubclassed());
+        EXPECT_FALSE(ptProxy.GetWindowController().IsWindowSubclassed());
 
         RECT ptRect{};
         GetWindowRect(ptWnd, &ptRect);
@@ -2085,13 +2506,13 @@ TEST(DxgiProxyTest, SubclassLifecycleTeardownOnNcDestroyAndDetachAll) {
         ASSERT_TRUE(activeOpenXrManager->Initialize());
         ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-        activeProxy.SetGameHwnd(testWnd1);
-        EXPECT_TRUE(activeProxy.IsWindowSubclassed());
+        DxgiProxy activeProxy(nullptr, activeOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+        activeProxy.GetWindowController().SetGameHwnd(testWnd1);
+        EXPECT_TRUE(activeProxy.GetWindowController().IsWindowSubclassed());
 
         DestroyWindow(testWnd1);
-        EXPECT_FALSE(activeProxy.IsWindowSubclassed());
-        EXPECT_EQ(activeProxy.GetGameHwnd(), nullptr);
+        EXPECT_FALSE(activeProxy.GetWindowController().IsWindowSubclassed());
+        EXPECT_EQ(activeProxy.GetWindowController().GetGameHwnd(), nullptr);
     }
 
     // 2. DetachAll cleanly unhooks subclass before window destruction
@@ -2103,15 +2524,60 @@ TEST(DxgiProxyTest, SubclassLifecycleTeardownOnNcDestroyAndDetachAll) {
         ASSERT_TRUE(activeOpenXrManager->Initialize());
         ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-        activeProxy.SetGameHwnd(testWnd2);
-        EXPECT_TRUE(activeProxy.IsWindowSubclassed());
+        DxgiProxy activeProxy(nullptr, activeOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+        activeProxy.GetWindowController().SetGameHwnd(testWnd2);
+        EXPECT_TRUE(activeProxy.GetWindowController().IsWindowSubclassed());
 
         activeProxy.DetachAll();
-        EXPECT_FALSE(activeProxy.IsWindowSubclassed());
+        EXPECT_FALSE(activeProxy.GetWindowController().IsWindowSubclassed());
 
         DestroyWindow(testWnd2);
     }
+}
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndLeavesSwapChainUntouchedWhenFormatUnsupported) {
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();  // offers R8G8B8A8_UNORM only
+    auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+    DxgiProxy& proxy = proxyRuntime->GetDxgiProxy();
+
+    DXGI_SWAP_CHAIN_DESC1 desc{};
+    desc.Width = 3840;
+    desc.Height = 2160;
+    desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    desc.Scaling = DXGI_SCALING_NONE;
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
+    fullscreenDesc.Windowed = FALSE;
+
+    DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, &desc, &fullscreenDesc, nullptr, nullptr);
+
+    EXPECT_TRUE(openXrManager->IsPassThrough());
+    EXPECT_FALSE(openXrManager->HasSession());
+    EXPECT_EQ(desc.Scaling, DXGI_SCALING_NONE);
+    EXPECT_TRUE(fullscreenDesc.Windowed == FALSE);
+    EXPECT_EQ(proxy.GetWindowController().GetTargetRenderWidth(), 0u);
+}
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainLeavesSwapChainUntouchedWhenFormatUnsupported) {
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();  // offers R8G8B8A8_UNORM only
+    auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+
+    DXGI_SWAP_CHAIN_DESC desc{};
+    desc.BufferDesc.Width = 3840;
+    desc.BufferDesc.Height = 2160;
+    desc.BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+    desc.Windowed = FALSE;
+
+    DxgiProxy::Intercept_CreateSwapChain(nullptr, nullptr, &desc, nullptr);
+
+    EXPECT_TRUE(openXrManager->IsPassThrough());
+    EXPECT_FALSE(openXrManager->HasSession());
+    EXPECT_TRUE(desc.Windowed == FALSE);
 }
 
 TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiveVrMode) {
@@ -2123,7 +2589,7 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiv
         ASSERT_TRUE(activeOpenXrManager->CreateSession());
         EXPECT_TRUE(activeOpenXrManager->IsActive());
 
-        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+        auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
 
         DXGI_SWAP_CHAIN_DESC1 desc{};
         desc.Width = 3840;
@@ -2148,7 +2614,7 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiv
         EXPECT_TRUE(ptOpenXrManager->IsPassThrough());
         EXPECT_FALSE(ptOpenXrManager->IsActive());
 
-        DxgiProxy ptProxy(nullptr, ptOpenXrManager);
+        auto ptProxyRuntime = MakeRuntime(ptOpenXrManager);
 
         DXGI_SWAP_CHAIN_DESC1 desc{};
         desc.Width = 1920;
@@ -2168,7 +2634,7 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiv
         ASSERT_TRUE(activeOpenXrManager->Initialize());
         ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-        DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+        auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
         EXPECT_NO_THROW(DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr));
     }
 }
@@ -2182,12 +2648,13 @@ TEST(DxgiProxyTest, ClampedWindowRestoresFullNormalizedMouseRangeAcrossEdges) {
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
+    auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
+    DxgiProxy& activeProxy = activeProxyRuntime->GetDxgiProxy();
 
     // Initial clamp applies and subclasses the window to fit the monitor work area
-    EXPECT_TRUE(activeProxy.ApplyInitialWindowClamp(testWnd));
-    activeProxy.SetGameHwnd(testWnd);
-    EXPECT_TRUE(activeProxy.IsWindowSubclassed());
+    EXPECT_TRUE(activeProxy.GetWindowController().ApplyInitialWindowClamp(testWnd));
+    activeProxy.GetWindowController().SetGameHwnd(testWnd);
+    EXPECT_TRUE(activeProxy.GetWindowController().IsWindowSubclassed());
 
     RECT clientRect{};
     ASSERT_TRUE(GetClientRect(testWnd, &clientRect));
@@ -2223,27 +2690,27 @@ TEST(DxgiProxyTest, ClampedWindowRestoresFullNormalizedMouseRangeAcrossEdges) {
     float normX = 0.0f, normY = 0.0f;
 
     // Top-Left corner maps to (0.0, 0.0)
-    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, topLeft, normX, normY));
+    EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, topLeft, normX, normY));
     EXPECT_FLOAT_EQ(normX, 0.0f);
     EXPECT_FLOAT_EQ(normY, 0.0f);
 
     // Top-Right corner maps to (1.0, 0.0)
-    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, topRight, normX, normY));
+    EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, topRight, normX, normY));
     EXPECT_FLOAT_EQ(normX, 1.0f);
     EXPECT_FLOAT_EQ(normY, 0.0f);
 
     // Bottom-Left corner maps to (0.0, 1.0)
-    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, bottomLeft, normX, normY));
+    EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, bottomLeft, normX, normY));
     EXPECT_FLOAT_EQ(normX, 0.0f);
     EXPECT_FLOAT_EQ(normY, 1.0f);
 
     // Bottom-Right corner maps to (1.0, 1.0)
-    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, bottomRight, normX, normY));
+    EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, bottomRight, normX, normY));
     EXPECT_FLOAT_EQ(normX, 1.0f);
     EXPECT_FLOAT_EQ(normY, 1.0f);
 
     // Center maps to (0.5, 0.5)
-    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, centerPoint, normX, normY));
+    EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, centerPoint, normX, normY));
     EXPECT_NEAR(normX, 0.5f, 0.005f);
     EXPECT_NEAR(normY, 0.5f, 0.005f);
 
@@ -2329,13 +2796,13 @@ TEST(DxgiProxyTest, OnPresentEnforcesClampedMirrorWindowDimensionsWhenOversized)
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-    activeProxy.SetGameHwnd(testWnd);
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+    activeProxy.GetWindowController().SetGameHwnd(testWnd);
 
     // Initial state: window was deliberately set oversized (e.g. 5000x4000) at (80, 90)
     SetWindowPos(testWnd, nullptr, 80, 90, 5000, 4000, SWP_NOZORDER | SWP_NOACTIVATE);
 
-    RECT expectedClamped = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+    RECT expectedClamped = MirrorWindowController::ComputeClampedMirrorWindowRect(testWnd);
     int maxW = expectedClamped.right - expectedClamped.left;
     int maxH = expectedClamped.bottom - expectedClamped.top;
 
@@ -2373,10 +2840,10 @@ TEST(DxgiProxyTest, SubclassHandlesGetMinMaxInfoAndCapsDimensions) {
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-    activeProxy.AttachWindowSubclass(testWnd);
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+    activeProxy.GetWindowController().AttachWindowSubclass(testWnd);
 
-    RECT expectedClamped = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+    RECT expectedClamped = MirrorWindowController::ComputeClampedMirrorWindowRect(testWnd);
     int maxW = expectedClamped.right - expectedClamped.left;
     int maxH = expectedClamped.bottom - expectedClamped.top;
 
@@ -2407,39 +2874,39 @@ TEST(DxgiProxyTest, SubclassSuppressesEnforcementDuringModalMoveAndSize) {
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-    activeProxy.SetGameHwnd(testWnd);
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+    activeProxy.GetWindowController().SetGameHwnd(testWnd);
 
     // Initial state: not in size/move
-    EXPECT_FALSE(activeProxy.IsInSizeMove());
+    EXPECT_FALSE(activeProxy.GetWindowController().IsInSizeMove());
 
     // Initial clamp
     activeProxy.OnPresent(nullptr, 0, 0);
 
     // User starts dragging/moving window (WM_ENTERSIZEMOVE)
     SendMessageA(testWnd, WM_ENTERSIZEMOVE, 0, 0);
-    EXPECT_TRUE(activeProxy.IsInSizeMove());
+    EXPECT_TRUE(activeProxy.GetWindowController().IsInSizeMove());
 
     // OnPresent returns immediately during modal move/size and does not alter window
     activeProxy.OnPresent(nullptr, 0, 0);
-    EXPECT_TRUE(activeProxy.IsInSizeMove());
+    EXPECT_TRUE(activeProxy.GetWindowController().IsInSizeMove());
 
     // User finishes dragging/moving window (WM_EXITSIZEMOVE)
     SendMessageA(testWnd, WM_EXITSIZEMOVE, 0, 0);
-    EXPECT_FALSE(activeProxy.IsInSizeMove());
+    EXPECT_FALSE(activeProxy.GetWindowController().IsInSizeMove());
 
     // Next frame present enforces clamping cleanly
     activeProxy.OnPresent(nullptr, 0, 0);
     RECT postDragRect{};
     GetWindowRect(testWnd, &postDragRect);
-    RECT expectedClamped = DxgiProxy::ComputeClampedMirrorWindowRect(testWnd);
+    RECT expectedClamped = MirrorWindowController::ComputeClampedMirrorWindowRect(testWnd);
     int maxW = expectedClamped.right - expectedClamped.left;
     int maxH = expectedClamped.bottom - expectedClamped.top;
     EXPECT_EQ(postDragRect.right - postDragRect.left, maxW);
     EXPECT_EQ(postDragRect.bottom - postDragRect.top, maxH);
 
     activeProxy.DetachAll();
-    EXPECT_FALSE(activeProxy.IsInSizeMove());
+    EXPECT_FALSE(activeProxy.GetWindowController().IsInSizeMove());
     DestroyWindow(testWnd);
 }
 
@@ -2491,9 +2958,9 @@ TEST(DxgiProxyTest, SubclassPreservesTargetRenderResolutionOnWmSizeAndWindowPosC
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-    activeProxy.SetTargetRenderResolution(3840, 2160);
-    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+    activeProxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
+    EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
 
     // Send a WM_SIZE with smaller physical dimensions (e.g. 1920x1080)
     SendMessageA(testWnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(1920, 1080));
@@ -2529,13 +2996,14 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-    activeProxy.SetTargetRenderResolution(3840, 2160);
-    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
-    EXPECT_TRUE(activeProxy.IsDetourGetClientRectInstalled());
-    EXPECT_TRUE(activeProxy.IsDetourScreenToClientInstalled());
-    EXPECT_TRUE(activeProxy.IsDetourSetCursorPosInstalled());
-    EXPECT_TRUE(activeProxy.IsDetourClipCursorInstalled());
+    auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
+    DxgiProxy& activeProxy = activeProxyRuntime->GetDxgiProxy();
+    activeProxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
+    EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
+    EXPECT_TRUE(activeProxy.GetWindowController().IsDetourGetClientRectInstalled());
+    EXPECT_TRUE(activeProxy.GetWindowController().IsDetourScreenToClientInstalled());
+    EXPECT_TRUE(activeProxy.GetWindowController().IsDetourSetCursorPosInstalled());
+    EXPECT_TRUE(activeProxy.GetWindowController().IsDetourClipCursorInstalled());
 
     // When the game queries GetClientRect in active VR, it must see 3840x2160
     RECT clientRc{};
@@ -2560,7 +3028,7 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     // Physical window client dimensions
     RECT realPhysRc{};
     // Detach temporarily to inspect physical size
-    activeProxy.DetachWindowSubclass();
+    activeProxy.GetWindowController().DetachWindowSubclass();
     EXPECT_TRUE(GetClientRect(testWnd, &realPhysRc));
     int physW = realPhysRc.right - realPhysRc.left;
     int physH = realPhysRc.bottom - realPhysRc.top;
@@ -2568,7 +3036,7 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     ASSERT_GT(physH, 0);
 
     // Reattach subclass and detours
-    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+    EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
 
     // ScreenToClient maps bottom-right of the physical window to target render extent (3840, 2160)
     POINT ptBottomRight{ physW, physH };
@@ -2581,15 +3049,15 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
     POINT screenPt{ physW, physH };
     EXPECT_TRUE(ClientToScreen(testWnd, &screenPt));
     float normX = 0.0f, normY = 0.0f;
-    EXPECT_TRUE(DxgiProxy::ScreenToNormalizedClient(testWnd, screenPt, normX, normY));
+    EXPECT_TRUE(MirrorWindowController::ScreenToNormalizedClient(testWnd, screenPt, normX, normY));
     EXPECT_FLOAT_EQ(normX, 1.0f);
     EXPECT_FLOAT_EQ(normY, 1.0f);
 
     activeProxy.DetachAll();
-    EXPECT_FALSE(activeProxy.IsDetourGetClientRectInstalled());
-    EXPECT_FALSE(activeProxy.IsDetourScreenToClientInstalled());
-    EXPECT_FALSE(activeProxy.IsDetourSetCursorPosInstalled());
-    EXPECT_FALSE(activeProxy.IsDetourClipCursorInstalled());
+    EXPECT_FALSE(activeProxy.GetWindowController().IsDetourGetClientRectInstalled());
+    EXPECT_FALSE(activeProxy.GetWindowController().IsDetourScreenToClientInstalled());
+    EXPECT_FALSE(activeProxy.GetWindowController().IsDetourSetCursorPosInstalled());
+    EXPECT_FALSE(activeProxy.GetWindowController().IsDetourClipCursorInstalled());
 
     // After detach, GetClientRect returns physical dimensions again
     RECT restoredRc{};
@@ -2601,8 +3069,12 @@ TEST(DxgiProxyTest, GetClientRectAndScreenToClientReportTargetRenderResolutionIn
 }
 
 TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) {
-    // Replicate Desktop Mirror Window geometry (clamped on ultrawide/4K display)
-    HWND testWnd = CreateWindowA("STATIC", "MouseLookCenterWnd", WS_OVERLAPPEDWINDOW, 100, 100, 1000, 800, nullptr, nullptr, nullptr, nullptr);
+    // Replicate Desktop Mirror Window geometry (clamped on ultrawide/4K display).
+    // The window must lie fully on screen (CI runners are 1024x768) or the OS clamps
+    // ClipCursor to the desktop and the hooked clip rect can't be verified exactly.
+    HWND testWnd = CreateWindowA("STATIC", "MouseLookCenterWnd", WS_OVERLAPPEDWINDOW,
+        GetSystemMetrics(SM_XVIRTUALSCREEN) + 50, GetSystemMetrics(SM_YVIRTUALSCREEN) + 50, 800, 600,
+        nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(testWnd != nullptr);
 
     auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
@@ -2610,18 +3082,19 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-    activeProxy.SetTargetRenderResolution(3840, 2160);
-    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
-    EXPECT_TRUE(activeProxy.IsDetourSetCursorPosInstalled());
-    EXPECT_TRUE(activeProxy.IsDetourClipCursorInstalled());
+    auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
+    DxgiProxy& activeProxy = activeProxyRuntime->GetDxgiProxy();
+    activeProxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
+    EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
+    EXPECT_TRUE(activeProxy.GetWindowController().IsDetourSetCursorPosInstalled());
+    EXPECT_TRUE(activeProxy.GetWindowController().IsDetourClipCursorInstalled());
 
     // Query physical client rect using InternalWindowQueryScope
     RECT physRc{};
     {
-        activeProxy.DetachWindowSubclass();
+        activeProxy.GetWindowController().DetachWindowSubclass();
         EXPECT_TRUE(GetClientRect(testWnd, &physRc));
-        EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+        EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
     }
     int physW = physRc.right - physRc.left;
     int physH = physRc.bottom - physRc.top;
@@ -2637,7 +3110,7 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     POINT warpVirtualCenter{ physTopLeft.x + 1920, physTopLeft.y + 1080 };
     int computedPhysX = 0;
     int computedPhysY = 0;
-    EXPECT_TRUE(DxgiProxy::ScaleVirtualCursorToPhysical(testWnd, warpVirtualCenter.x, warpVirtualCenter.y, computedPhysX, computedPhysY));
+    EXPECT_TRUE(activeProxy.GetWindowController().ScaleVirtualCursorToPhysical(testWnd, warpVirtualCenter.x, warpVirtualCenter.y, computedPhysX, computedPhysY));
     EXPECT_NEAR(computedPhysX, expectedPhysCenterX, 1);
     EXPECT_NEAR(computedPhysY, expectedPhysCenterY, 1);
 
@@ -2649,7 +3122,7 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     // 2. Verify virtual clip rectangle constraining calculation:
     RECT virtualClipRc{ physTopLeft.x, physTopLeft.y, physTopLeft.x + 3840, physTopLeft.y + 2160 };
     RECT constrainedClipRc{};
-    EXPECT_TRUE(DxgiProxy::ConstrainVirtualClipRectToPhysical(testWnd, &virtualClipRc, constrainedClipRc));
+    EXPECT_TRUE(activeProxy.GetWindowController().ConstrainVirtualClipRectToPhysical(testWnd, &virtualClipRc, constrainedClipRc));
     EXPECT_EQ(constrainedClipRc.left, physTopLeft.x);
     EXPECT_EQ(constrainedClipRc.top, physTopLeft.y);
     EXPECT_EQ(constrainedClipRc.right, physTopLeft.x + physW);
@@ -2699,8 +3172,8 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     EXPECT_NEAR(rightDelta, leftDelta, 1);
 
     activeProxy.DetachAll();
-    EXPECT_FALSE(activeProxy.IsDetourSetCursorPosInstalled());
-    EXPECT_FALSE(activeProxy.IsDetourClipCursorInstalled());
+    EXPECT_FALSE(activeProxy.GetWindowController().IsDetourSetCursorPosInstalled());
+    EXPECT_FALSE(activeProxy.GetWindowController().IsDetourClipCursorInstalled());
     DestroyWindow(testWnd);
 }
 
@@ -2716,17 +3189,17 @@ TEST(DxgiProxyTest, SubclassScalesMouseMessagesAcrossFullTargetResolution) {
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-    activeProxy.SetTargetRenderResolution(3840, 2160);
-    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+    DxgiProxy activeProxy(nullptr, activeOpenXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+    activeProxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
+    EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
 
     // Get physical dimensions
-    activeProxy.DetachWindowSubclass();
+    activeProxy.GetWindowController().DetachWindowSubclass();
     RECT physRc{};
     GetClientRect(testWnd, &physRc);
     int physW = physRc.right - physRc.left;
     int physH = physRc.bottom - physRc.top;
-    EXPECT_TRUE(activeProxy.AttachWindowSubclass(testWnd));
+    EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
 
     // Send mouse move at (physW, physH) (bottom-right of physical window)
     SendMessageA(testWnd, WM_MOUSEMOVE, 0, MAKELPARAM(static_cast<WORD>(physW), static_cast<WORD>(physH)));
@@ -2754,8 +3227,9 @@ TEST(DxgiProxyTest, AttachSwapChainDetoursResizeBuffersAndOverridesTargetResolut
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    DxgiProxy activeProxy(nullptr, activeOpenXrManager);
-    activeProxy.SetTargetRenderResolution(3840, 2160);
+    auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
+    DxgiProxy& activeProxy = activeProxyRuntime->GetDxgiProxy();
+    activeProxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
 
     std::vector<void*> scVTable(50, nullptr);
     scVTable[0] = reinterpret_cast<void*>(&MockSwapChainQI);

@@ -142,6 +142,14 @@ public:
     virtual XrResult EndFrame(
         XrSession session,
         const XrFrameEndInfo* frameEndInfo) = 0;
+
+    // Dequeues the next runtime event, or returns XR_EVENT_UNAVAILABLE when the queue is empty.
+    // Defaults to an empty queue so dispatches that never report events need no override.
+    virtual XrResult PollEvent(
+        XrInstance /*instance*/,
+        XrEventDataBuffer* /*eventData*/) {
+        return XR_EVENT_UNAVAILABLE;
+    }
 };
 
 class NativeOpenXrDispatch : public IOpenXrDispatch {
@@ -205,8 +213,8 @@ public:
             instance,
             "xrGetD3D12GraphicsRequirementsKHR",
             reinterpret_cast<PFN_xrVoidFunction*>(&pfnGetD3D12GraphicsRequirements));
-        if (res != XR_SUCCESS || !pfnGetD3D12GraphicsRequirements) {
-            return res != XR_SUCCESS ? res : XR_ERROR_FUNCTION_UNSUPPORTED;
+        if (XR_FAILED(res) || !pfnGetD3D12GraphicsRequirements) {
+            return XR_FAILED(res) ? res : XR_ERROR_FUNCTION_UNSUPPORTED;
         }
         return pfnGetD3D12GraphicsRequirements(instance, systemId, graphicsRequirements);
     }
@@ -328,6 +336,12 @@ public:
         XrSession session,
         const XrFrameEndInfo* frameEndInfo) override {
         return xrEndFrame(session, frameEndInfo);
+    }
+
+    XrResult PollEvent(
+        XrInstance instance,
+        XrEventDataBuffer* eventData) override {
+        return xrPollEvent(instance, eventData);
     }
 };
 

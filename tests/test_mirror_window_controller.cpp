@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "proxy/mirror_window_controller.h"
+#include "core/injector_runtime.h"
 #include <windows.h>
 #include <commctrl.h>
 
@@ -43,7 +44,13 @@ TEST(MirrorWindowControllerTest, SubclassLifecycleAttachesWhenActiveAndDetachesC
     ASSERT_TRUE(testWnd != nullptr);
 
     bool vrActive = false;
-    MirrorWindowController controller([&vrActive]() { return vrActive; });
+    auto controllerPtr = std::make_shared<MirrorWindowController>();
+    InjectorRuntime::Dependencies deps;
+    deps.windowController = controllerPtr;
+    InjectorRuntime runtime(std::move(deps));
+    MirrorWindowController& controller = *controllerPtr;
+    // The runtime's proxy points the controller at its own VR state; drive it from this test instead.
+    controller.SetIsVrActiveCallback([&vrActive]() { return vrActive; });
 
     // Inert in pass-through (vrActive = false)
     EXPECT_FALSE(controller.AttachWindowSubclass(testWnd));
@@ -67,6 +74,26 @@ TEST(MirrorWindowControllerTest, SubclassLifecycleAttachesWhenActiveAndDetachesC
     EXPECT_FALSE(controller.IsDetourSetCursorPosInstalled());
     EXPECT_FALSE(controller.IsDetourClipCursorInstalled());
 
+    DestroyWindow(testWnd);
+}
+
+TEST(MirrorWindowControllerTest, StandaloneControllerSubclassesButInstallsNoWin32Detours) {
+    HWND testWnd = CreateWindowA("STATIC", "TestStandaloneWnd", WS_OVERLAPPEDWINDOW, 10, 10, 800, 600, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(testWnd != nullptr);
+
+    // No runtime owns this controller, so no hook could find its originals: it must not detour user32.
+    MirrorWindowController controller([]() { return true; });
+    EXPECT_TRUE(controller.AttachWindowSubclass(testWnd));
+    EXPECT_TRUE(controller.IsWindowSubclassed());
+    EXPECT_FALSE(controller.IsDetourGetClientRectInstalled());
+    EXPECT_FALSE(controller.IsDetourScreenToClientInstalled());
+    EXPECT_FALSE(controller.IsDetourSetCursorPosInstalled());
+    EXPECT_FALSE(controller.IsDetourClipCursorInstalled());
+
+    RECT rc{};
+    EXPECT_TRUE(GetClientRect(testWnd, &rc));
+
+    controller.DetachAll();
     DestroyWindow(testWnd);
 }
 

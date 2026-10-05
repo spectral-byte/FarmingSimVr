@@ -88,6 +88,11 @@ NVSDK_NGX_Result STDMETHODCALLTYPE MockEvaluate(
 
 class NgxInterceptorTest : public ::testing::Test {
 protected:
+    std::shared_ptr<NgxInterceptor> m_ngxShared = std::make_shared<NgxInterceptor>();
+    NgxInterceptor& m_ngx = *m_ngxShared;
+    std::shared_ptr<VRBridge> m_bridgeShared = std::make_shared<VRBridge>(std::make_shared<OpenXrManager>(std::make_shared<NativeOpenXrDispatch>()), m_ngxShared);
+    VRBridge& m_bridge = *m_bridgeShared;
+
     void SetUp() override {
         s_createCount = 0;
         s_releaseCount = 0;
@@ -99,29 +104,29 @@ protected:
         s_evalPresets.clear();
         s_evalSharpness.clear();
 
-        NgxInterceptor::Instance().DetachAll();
-        NgxInterceptor::Instance().SetVRBridge(nullptr);
-        VRBridge::Instance().SetRenderingMode(VRRenderingMode::AFR);
-        VRBridge::Instance().SetSubPassIndex(0);
-        VRBridge::Instance().SetFrameParity(0);
-        VRBridge::Instance().Set2DViewActive(false);
-        VRBridge::Instance().SetMenuVisible(false);
+        m_ngx.DetachAll();
+        m_ngx.SetVRBridge(nullptr);
+        m_bridge.SetRenderingMode(VRRenderingMode::AFR);
+        m_bridge.SetSubPassIndex(0);
+        m_bridge.SetFrameParity(0);
+        m_bridge.Set2DViewActive(false);
+        m_bridge.SetMenuVisible(false);
     }
 
     void TearDown() override {
-        NgxInterceptor::Instance().DetachAll();
-        NgxInterceptor::Instance().SetVRBridge(nullptr);
-        VRBridge::Instance().SetRenderingMode(VRRenderingMode::AFR);
-        VRBridge::Instance().SetSubPassIndex(0);
-        VRBridge::Instance().SetFrameParity(0);
-        VRBridge::Instance().Set2DViewActive(false);
-        VRBridge::Instance().SetMenuVisible(false);
+        m_ngx.DetachAll();
+        m_ngx.SetVRBridge(nullptr);
+        m_bridge.SetRenderingMode(VRRenderingMode::AFR);
+        m_bridge.SetSubPassIndex(0);
+        m_bridge.SetFrameParity(0);
+        m_bridge.Set2DViewActive(false);
+        m_bridge.SetMenuVisible(false);
     }
 };
 
 TEST_F(NgxInterceptorTest, GetActiveDualPassEyeIndexReflectsSubPassIndex) {
-    auto& interceptor = NgxInterceptor::Instance();
-    auto& bridge = VRBridge::Instance();
+    auto& interceptor = m_ngx;
+    auto& bridge = m_bridge;
     interceptor.SetVRBridge(&bridge);
 
     bridge.SetSubPassIndex(0);
@@ -135,10 +140,10 @@ TEST_F(NgxInterceptorTest, GetActiveDualPassEyeIndexReflectsSubPassIndex) {
 }
 
 TEST_F(NgxInterceptorTest, SubPassRoutingInSequentialDualPassRoutesLeftAndRight) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreate, &MockRelease, &MockEvaluate);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     interceptor.SetVRBridge(&bridge);
     bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
 
@@ -181,10 +186,10 @@ TEST_F(NgxInterceptorTest, SubPassRoutingInSequentialDualPassRoutesLeftAndRight)
 }
 
 TEST_F(NgxInterceptorTest, MotionVectorScaleClampedTo1xInDualPassRegardlessOfSetting) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreate, &MockRelease, &MockEvaluate);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     interceptor.SetVRBridge(&bridge);
     bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
 
@@ -228,10 +233,10 @@ TEST_F(NgxInterceptorTest, MotionVectorScaleClampedTo1xInDualPassRegardlessOfSet
 }
 
 TEST_F(NgxInterceptorTest, ModeTransitionLatchesResetForOneFrameAcrossBothHandles) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreate, &MockRelease, &MockEvaluate);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     interceptor.SetVRBridge(&bridge);
 
     // Start in AFR mode
@@ -305,11 +310,26 @@ TEST_F(NgxInterceptorTest, ModeTransitionLatchesResetForOneFrameAcrossBothHandle
     MockRelease(virtualHandle);
 }
 
+TEST_F(NgxInterceptorTest, DetachAllResetsDlssTuningOverridesToDefaults) {
+    auto& interceptor = m_ngx;
+    interceptor.SetDlssPresetOverride(NVSDK_NGX_DLSS_Hint_Render_Preset_K + 1);
+    interceptor.SetSharpnessOverride(0.65f, false);
+    interceptor.SetMvScaleMultiplier(0.5f, 0.75f);
+
+    interceptor.DetachAll();
+
+    EXPECT_EQ(interceptor.GetDlssPresetOverride(), NVSDK_NGX_DLSS_Hint_Render_Preset_K);
+    EXPECT_FLOAT_EQ(interceptor.GetSharpnessOverride(), 0.50f);
+    EXPECT_TRUE(interceptor.IsForceSharpnessOverride());
+    EXPECT_FLOAT_EQ(interceptor.GetMvScaleMultiplierX(), NgxInterceptor::kDefaultAfrMvScale);
+    EXPECT_FLOAT_EQ(interceptor.GetMvScaleMultiplierY(), NgxInterceptor::kDefaultAfrMvScale);
+}
+
 TEST_F(NgxInterceptorTest, SharpnessAndPresetOverridesAppliedToBothContextsInDualPass) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreate, &MockRelease, &MockEvaluate);
 
-    auto& bridge = VRBridge::Instance();
+    auto& bridge = m_bridge;
     interceptor.SetVRBridge(&bridge);
     bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
 
@@ -341,6 +361,56 @@ TEST_F(NgxInterceptorTest, SharpnessAndPresetOverridesAppliedToBothContextsInDua
     EXPECT_FLOAT_EQ(s_evalSharpness[1], 0.42f);
 
     MockRelease(virtualHandle);
+}
+
+TEST_F(NgxInterceptorTest, EntryPointsFailSafeWhenNoInterceptorOwnsTheDetours) {
+    // Nothing is attached, so no interceptor owns the feature detours: each entry point fails rather
+    // than reaching for some other interceptor or reporting work it did not do.
+    ASSERT_FALSE(m_ngx.IsAttached());
+    NgxParameterImpl params;
+    NVSDK_NGX_Handle handle{};
+    NVSDK_NGX_Handle* outHandle = &handle;
+    NVSDK_NGX_Parameter* outParams = nullptr;
+
+    EXPECT_EQ(NgxInterceptor::Intercept_CreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &outHandle),
+              NVSDK_NGX_Result_Fail);
+    EXPECT_EQ(outHandle, nullptr);
+    EXPECT_EQ(NgxInterceptor::Intercept_ReleaseFeature(&handle), NVSDK_NGX_Result_Fail);
+    EXPECT_EQ(NgxInterceptor::Intercept_EvaluateFeature(nullptr, &handle, &params, nullptr), NVSDK_NGX_Result_Fail);
+    EXPECT_EQ(NgxInterceptor::Intercept_AllocateParameters(&outParams), NVSDK_NGX_Result_Fail);
+    EXPECT_EQ(NgxInterceptor::Intercept_GetCapabilityParameters(&outParams), NVSDK_NGX_Result_Fail);
+    EXPECT_EQ(outParams, nullptr);
+    EXPECT_EQ(NgxInterceptor::Intercept_DestroyParameters(&params), NVSDK_NGX_Result_Fail);
+    EXPECT_EQ(s_createCount + s_releaseCount + s_evaluateCount, 0);
+}
+
+TEST_F(NgxInterceptorTest, SecondInterceptorCannotTakeOverLiveModuleLoadHooks) {
+    ASSERT_TRUE(m_ngx.InstallModuleLoadHooks());
+
+    // Taking over the host would leave the live LoadLibrary detours without a trampoline, and they
+    // would recurse into the hooked LoadLibrary until the stack overflowed.
+    NgxInterceptor other;
+    EXPECT_FALSE(other.InstallModuleLoadHooks());
+    EXPECT_FALSE(other.AreModuleHooksInstalled());
+
+    HMODULE kernel32 = LoadLibraryW(L"kernel32.dll");
+    EXPECT_NE(kernel32, nullptr);
+    if (kernel32) FreeLibrary(kernel32);
+
+    // Once the owner lets go, another interceptor may install them.
+    m_ngx.UninstallModuleLoadHooks();
+    EXPECT_TRUE(other.InstallModuleLoadHooks());
+    other.DetachAll();
+}
+
+TEST_F(NgxInterceptorTest, DetachLiveHooksUnwindsWhicheverInterceptorOwnsThem) {
+    ASSERT_TRUE(m_ngx.InstallModuleLoadHooks());
+    ASSERT_TRUE(m_ngx.AttachDirect(&MockCreate, &MockRelease, &MockEvaluate));
+
+    NgxInterceptor::DetachLiveHooks();
+
+    EXPECT_FALSE(m_ngx.AreModuleHooksInstalled());
+    EXPECT_FALSE(m_ngx.IsAttached());
 }
 
 } // namespace

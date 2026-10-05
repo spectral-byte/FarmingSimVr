@@ -1,6 +1,9 @@
 #include "logger.h"
 #include <windows.h>
+#include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
 #include <iostream>
@@ -12,8 +15,71 @@ Logger& Logger::Instance() {
     return instance;
 }
 
-Logger::Logger() : m_filepath("fs25_vr.log") {
-    SetLogFile(m_filepath);
+// Set FS25VR_LOG_LEVEL=debug in the game's environment to enable Debug messages.
+constexpr const char* kLogLevelEnvVar = "FS25VR_LOG_LEVEL";
+
+Logger::Logger() {
+    m_minLevel = LevelFromEnvironment();
+    SetLogFile(DefaultLogPath());
+}
+
+LogLevel Logger::LevelFromEnvironment() {
+    char level[32];
+    DWORD len = GetEnvironmentVariableA(kLogLevelEnvVar, level, sizeof(level));
+    if (len == 0 || len >= sizeof(level)) {
+        return LogLevel::Info;
+    }
+    return ParseLevel(level);
+}
+
+std::filesystem::path Logger::DefaultLogPath() {
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(&Logger::DefaultLogPath), &module)) {
+        // Can't resolve our own module; nullptr makes the lookup below fall back to the exe's directory.
+        module = nullptr;
+    }
+    // Grow the buffer until the path fits, so long install paths aren't truncated.
+    std::wstring modulePath(MAX_PATH, L'\0');
+    while (true) {
+        DWORD len = GetModuleFileNameW(module, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+        if (len == 0) {
+            return L"fs25_vr.log";
+        }
+        if (len < modulePath.size()) {
+            modulePath.resize(len);
+            break;
+        }
+        modulePath.resize(modulePath.size() * 2);
+    }
+    return std::filesystem::path(modulePath).parent_path() / L"fs25_vr.log";
+}
+
+std::filesystem::path Logger::BackupPathFor(const std::filesystem::path& filepath) {
+    std::filesystem::path backup = filepath;
+    backup += L".bak";
+    return backup;
+}
+
+LogLevel Logger::ParseLevel(const char* name) {
+    if (!name) {
+        return LogLevel::Info;
+    }
+    std::string s(name);
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (s == "debug") return LogLevel::Debug;
+    if (s == "warning" || s == "warn") return LogLevel::Warning;
+    if (s == "error") return LogLevel::Error;
+    return LogLevel::Info;
+}
+
+void Logger::SetMinLevel(LogLevel level) {
+    m_minLevel = level;
+}
+
+LogLevel Logger::GetMinLevel() const {
+    return m_minLevel;
 }
 
 Logger::~Logger() {
@@ -23,14 +89,27 @@ Logger::~Logger() {
     }
 }
 
-void Logger::SetLogFile(const std::string& filepath) {
+void Logger::SetLogFile(const std::filesystem::path& filepath) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_fileStream.is_open()) {
         m_fileStream.close();
     }
     m_filepath = filepath;
-    if (!m_filepath.empty()) {
-        m_fileStream.open(m_filepath, std::ios::out | std::ios::app);
+    if (m_filepath.empty()) {
+        return;
+    }
+    std::ios::openmode mode = std::ios::out | std::ios::trunc;
+    std::error_code ec;
+    if (std::filesystem::exists(m_filepath, ec)) {
+        // A single replacing move: if the old log is still held open (e.g. by a hung previous
+        // session) this fails without touching either file, and we append rather than lose it.
+        if (!MoveFileExW(m_filepath.c_str(), BackupPathFor(m_filepath).c_str(), MOVEFILE_REPLACE_EXISTING)) {
+            mode = std::ios::out | std::ios::app;
+        }
+    }
+    m_fileStream.open(m_filepath, mode);
+    if (!m_fileStream.is_open()) {
+        OutputDebugStringW((L"[fs25_vr] Could not open log file " + m_filepath.wstring() + L"\n").c_str());
     }
 }
 
@@ -52,6 +131,9 @@ const char* Logger::LogLevelToString(LogLevel level) {
 }
 
 void Logger::Log(LogLevel level, const std::string& message) {
+    if (level < m_minLevel) {
+        return;
+    }
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;

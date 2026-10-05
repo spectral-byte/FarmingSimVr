@@ -7,10 +7,10 @@ VRCompanion = VRCompanion or {}
 VRCompanion.Config = VRCompanion.Config or {}
 
 -- VR HUD Inset and UI Scale Constants
-VRCompanion.DEFAULT_HUD_INSET_X = 0.20
-VRCompanion.DEFAULT_HUD_INSET_Y = 0.16
-VRCompanion.DEFAULT_HUD_INSET_TOP = nil
-VRCompanion.DEFAULT_HUD_UI_SCALE = 0.88
+VRCompanion.DEFAULT_HUD_INSET_X = 0.30
+VRCompanion.DEFAULT_HUD_INSET_Y = 0.22
+VRCompanion.DEFAULT_HUD_INSET_TOP = 0.22
+VRCompanion.DEFAULT_HUD_UI_SCALE = 0.82
 
 VRCompanion.MIN_HUD_INSET_X = 0.0
 VRCompanion.MAX_HUD_INSET_X = 0.40
@@ -36,17 +36,21 @@ VRCompanion.CONVERGENCE_SMOOTH_SPEED = 12.0
 
 -- VR Fill Level Element Positioning
 VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE = true
-VRCompanion.fillLevelUnderVehicle = true
+VRCompanion.fillLevelUnderVehicle = VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE
 VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP = 0.004
 VRCompanion.hudFillLevelGap = VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP
 
 -- VR HUD Notifications
 VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION = false
-VRCompanion.showHudLoadNotification = false
+VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
 
 -- Recenter VR Tracking Space Configuration
 VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE = true
-VRCompanion.recenterVrTrackingSpace = true
+VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
+
+-- Oblique Frustum (ADR-0005): symmetric projection by default; per-eye asymmetric offsets are opt-in
+VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION = false
+VRCompanion.allowObliqueProjection = VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION
 
 VRCompanion.RECENTER_MODES = {
     BOTH = "Both",
@@ -146,13 +150,14 @@ function VRCompanion:saveConfiguration(xmlPath)
     if ok and xmlFile ~= 0 and xmlFile ~= nil then
         setXmlFloatFn(xmlFile, "vrSettings.hudInsetHorizontal", self.hudInsetX or self.DEFAULT_HUD_INSET_X)
         setXmlFloatFn(xmlFile, "vrSettings.hudInsetVertical", self.hudInsetY or self.DEFAULT_HUD_INSET_Y)
-        setXmlFloatFn(xmlFile, "vrSettings.hudInsetTop", self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_Y)
+        setXmlFloatFn(xmlFile, "vrSettings.hudInsetTop", self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP)
         setXmlFloatFn(xmlFile, "vrSettings.hudUiScale", self.hudUiScaleMultiplier or self.DEFAULT_HUD_UI_SCALE)
         setXmlFloatFn(xmlFile, "vrSettings.hudConvergenceDepth", self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH)
         if type(setXmlBoolFn) == "function" then
             setXmlBoolFn(xmlFile, "vrSettings.fillLevelUnderVehicle", self.fillLevelUnderVehicle == true)
             setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
             setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
+            setXmlBoolFn(xmlFile, "vrSettings.allowObliqueProjection", self.allowObliqueProjection == true)
         end
         if type(setXmlStringFn) == "function" then
             local modeStr = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "DualPass" or "AFR"
@@ -175,7 +180,8 @@ function VRCompanion:loadConfiguration(xmlPath)
     local insetX = self.DEFAULT_HUD_INSET_X
     local insetY = self.DEFAULT_HUD_INSET_Y
     local scale = self.DEFAULT_HUD_UI_SCALE
-    local insetTop = nil
+    local insetTop = self.DEFAULT_HUD_INSET_TOP
+    local renderingModeLoaded = false
 
     local loadXmlFn = loadXMLFile or _G.loadXMLFile
     local getXmlFloatFn = getXMLFloat or _G.getXMLFloat
@@ -188,34 +194,25 @@ function VRCompanion:loadConfiguration(xmlPath)
             local ok, xmlFile = pcall(loadXmlFn, "VRCompanionConfig", filePath)
             if ok and xmlFile ~= 0 and xmlFile ~= nil then
                 local loadedX = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudInsetHorizontal", "vrSettings.hudInsetHorizontal#value",
-                    "modDesc.vrSettings.hudInsetHorizontal", "modDesc.vrSettings.hudInsetHorizontal#value")
+                    "vrSettings.hudInsetHorizontal")
                 if loadedX ~= nil then insetX = loadedX end
 
                 local loadedY = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudInsetVertical", "vrSettings.hudInsetVertical#value",
-                    "modDesc.vrSettings.hudInsetVertical", "modDesc.vrSettings.hudInsetVertical#value")
+                    "vrSettings.hudInsetVertical")
                 if loadedY ~= nil then insetY = loadedY end
 
                 local loadedInsetTop = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudInsetTop", "vrSettings.hudInsetTop#value",
-                    "vrSettings.hudTopInset", "vrSettings.hudTopInset#value",
-                    "vrSettings.hudInsetVerticalTop", "vrSettings.hudInsetVerticalTop#value",
-                    "modDesc.vrSettings.hudInsetTop", "modDesc.vrSettings.hudInsetTop#value",
-                    "modDesc.vrSettings.hudTopInset", "modDesc.vrSettings.hudTopInset#value",
-                    "modDesc.vrSettings.hudInsetVerticalTop", "modDesc.vrSettings.hudInsetVerticalTop#value")
+                    "vrSettings.hudInsetTop")
                 if loadedInsetTop ~= nil then
                     insetTop = self:clamp(loadedInsetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
                 end
 
                 local loadedScale = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudUiScale", "vrSettings.hudUiScale#value",
-                    "modDesc.vrSettings.hudUiScale", "modDesc.vrSettings.hudUiScale#value")
+                    "vrSettings.hudUiScale")
                 if loadedScale ~= nil then scale = loadedScale end
 
                 local loadedDepth = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudConvergenceDepth", "vrSettings.hudConvergenceDepth#value",
-                    "modDesc.vrSettings.hudConvergenceDepth", "modDesc.vrSettings.hudConvergenceDepth#value")
+                    "vrSettings.hudConvergenceDepth")
                 if loadedDepth ~= nil then
                     self.hudConvergenceDepth = loadedDepth
                 else
@@ -223,15 +220,13 @@ function VRCompanion:loadConfiguration(xmlPath)
                 end
 
                 local loadedFillUnder = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
-                    "vrSettings.fillLevelUnderVehicle", "vrSettings.fillLevelUnderVehicle#value",
-                    "modDesc.vrSettings.fillLevelUnderVehicle", "modDesc.vrSettings.fillLevelUnderVehicle#value")
+                    "vrSettings.fillLevelUnderVehicle")
                 if loadedFillUnder ~= nil then
                     self.fillLevelUnderVehicle = loadedFillUnder
                 end
 
                 local loadedGap = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudFillLevelGap", "vrSettings.hudFillLevelGap#value",
-                    "modDesc.vrSettings.hudFillLevelGap", "modDesc.vrSettings.hudFillLevelGap#value")
+                    "vrSettings.hudFillLevelGap")
                 if loadedGap ~= nil then
                     self.hudFillLevelGap = self:clamp(loadedGap, 0.0, 0.05)
                 else
@@ -239,37 +234,34 @@ function VRCompanion:loadConfiguration(xmlPath)
                 end
 
                 local loadedShowNotification = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
-                    "vrSettings.showHudLoadNotification", "vrSettings.showHudLoadNotification#value",
-                    "vrSettings.showHudLoadAlert", "vrSettings.showHudLoadAlert#value",
-                    "vrSettings.showLoadNotification", "vrSettings.showLoadNotification#value",
-                    "modDesc.vrSettings.showHudLoadNotification", "modDesc.vrSettings.showHudLoadNotification#value",
-                    "modDesc.vrSettings.showHudLoadAlert", "modDesc.vrSettings.showHudLoadAlert#value")
+                    "vrSettings.showHudLoadNotification")
                 if loadedShowNotification ~= nil then
                     self.showHudLoadNotification = loadedShowNotification
                 end
 
                 local loadedRecenterTracking = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
-                    "vrSettings.recenterVrTrackingSpace", "vrSettings.recenterVrTrackingSpace#value",
-                    "vrSettings.recenterTracking", "vrSettings.recenterTracking#value",
-                    "modDesc.vrSettings.recenterVrTrackingSpace", "modDesc.vrSettings.recenterVrTrackingSpace#value",
-                    "modDesc.vrSettings.recenterTracking", "modDesc.vrSettings.recenterTracking#value")
+                    "vrSettings.recenterVrTrackingSpace")
                 if loadedRecenterTracking ~= nil then
                     self.recenterVrTrackingSpace = loadedRecenterTracking
                 end
 
+                local loadedAllowOblique = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
+                    "vrSettings.allowObliqueProjection")
+                if loadedAllowOblique ~= nil then
+                    self.allowObliqueProjection = loadedAllowOblique
+                end
+
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.snapTurnAngle", "vrSettings.snapTurnAngle#value",
-                    "modDesc.vrSettings.snapTurnAngle", "modDesc.vrSettings.snapTurnAngle#value")
+                    "vrSettings.snapTurnAngle")
                 if loadedSnapAngle ~= nil and loadedSnapAngle > 0 then
                     self.snapTurnAngle = math.rad(loadedSnapAngle)
                 end
 
                 local loadedMode = readXmlString(getXmlStringFn, xmlFile,
-                    "vrSettings.renderingMode", "vrSettings.renderingMode#value",
-                    "renderingMode", "renderingMode#value",
-                    "modDesc.vrSettings.renderingMode", "modDesc.vrSettings.renderingMode#value")
+                    "vrSettings.renderingMode")
                 if loadedMode ~= nil and loadedMode ~= "" then
                     self:setRenderingMode(loadedMode, false)
+                    renderingModeLoaded = true
                 end
 
                 if type(deleteXmlFn) == "function" then
@@ -281,18 +273,13 @@ function VRCompanion:loadConfiguration(xmlPath)
         return false
     end
 
+    -- Defaults are the DEFAULT_* constants; the user settings file is the only XML source.
+    local userPath = nil
+    local loadedUser = false
     if xmlPath ~= nil then
         readSettingsFromXml(xmlPath)
     else
-        -- 1. Read base defaults from modDesc.xml
-        local modDir = self.modDirectory or _G.g_currentModDirectory or ""
-        if modDir ~= "" then
-            readSettingsFromXml(modDir .. "modDesc.xml")
-        end
-
-        -- 2. Read user override from modSettings/FS25_VRCompanion/settings.xml if present
-        local userPath = self:getUserSettingsPath()
-        local loadedUser = false
+        userPath = self:getUserSettingsPath()
         if userPath ~= nil then
             loadedUser = readSettingsFromXml(userPath)
             if loadedUser then
@@ -300,12 +287,20 @@ function VRCompanion:loadConfiguration(xmlPath)
             end
         end
 
-        -- 3. If user settings file doesn't exist, create it with current values
-        if not loadedUser and userPath ~= nil then
-            self:saveConfiguration(userPath)
+        -- No saved Stereo Presentation Mode and none chosen this session: apply the default through
+        -- setRenderingMode so it reaches VRBridge and is marked explicit (otherwise a parity-only
+        -- bridge reads as AFR).
+        if not renderingModeLoaded and not self.renderingModeExplicit then
+            self:setRenderingMode(self.DEFAULT_RENDERING_MODE, false)
         end
     end
 
+    if self.hudConvergenceDepth == nil then
+        self.hudConvergenceDepth = self.DEFAULT_CONVERGENCE_DEPTH
+    end
+    if self.hudFillLevelGap == nil then
+        self.hudFillLevelGap = self.DEFAULT_HUD_FILL_LEVEL_GAP
+    end
     if self.fillLevelUnderVehicle == nil then
         self.fillLevelUnderVehicle = self.DEFAULT_FILL_LEVEL_UNDER_VEHICLE
     end
@@ -315,11 +310,20 @@ function VRCompanion:loadConfiguration(xmlPath)
     if self.recenterVrTrackingSpace == nil then
         self.recenterVrTrackingSpace = self.DEFAULT_RECENTER_VR_TRACKING_SPACE
     end
+    if self.allowObliqueProjection == nil then
+        self.allowObliqueProjection = self.DEFAULT_ALLOW_OBLIQUE_PROJECTION
+    end
     if self.snapTurnAngle == nil then
         self.snapTurnAngle = self.DEFAULT_SNAP_TURN_ANGLE
     end
 
     self:configureHudInsets(insetX, insetY, scale, insetTop)
+
+    -- First run: create the user settings file from the values just applied
+    if not loadedUser and userPath ~= nil then
+        self:saveConfiguration(userPath)
+    end
+
     return self:getHudInsets()
 end
 

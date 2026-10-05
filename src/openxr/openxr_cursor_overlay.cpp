@@ -117,9 +117,9 @@ bool OpenXrCursorOverlay::CreateSwapchain(XrSession session, std::shared_ptr<IOp
 
     DXGI_FORMAT selectedFormat = format;
     uint32_t formatCount = 0;
-    if (dispatch->EnumerateSwapchainFormats(session, 0, &formatCount, nullptr) == XR_SUCCESS && formatCount > 0) {
+    if (XR_SUCCEEDED(dispatch->EnumerateSwapchainFormats(session, 0, &formatCount, nullptr)) && formatCount > 0) {
         std::vector<int64_t> supportedFormats(formatCount);
-        if (dispatch->EnumerateSwapchainFormats(session, formatCount, &formatCount, supportedFormats.data()) == XR_SUCCESS) {
+        if (XR_SUCCEEDED(dispatch->EnumerateSwapchainFormats(session, formatCount, &formatCount, supportedFormats.data()))) {
             bool formatSupported = false;
             for (int64_t sf : supportedFormats) {
                 if (sf == format) {
@@ -149,7 +149,7 @@ bool OpenXrCursorOverlay::CreateSwapchain(XrSession session, std::shared_ptr<IOp
     createInfo.mipCount = 1;
 
     XrResult res = dispatch->CreateSwapchain(session, &createInfo, &m_swapchain.handle);
-    if (res != XR_SUCCESS) {
+    if (XR_FAILED(res)) {
         LogError("OpenXrCursorOverlay::CreateSwapchain: CreateSwapchain failed (result " + std::to_string(res) + ")");
         return false;
     }
@@ -186,12 +186,12 @@ void OpenXrCursorOverlay::DestroySwapchain(std::shared_ptr<IOpenXrDispatch> disp
 bool OpenXrCursorOverlay::EnumerateSwapchainImages(std::shared_ptr<IOpenXrDispatch> dispatch) {
     if (m_swapchain.handle == XR_NULL_HANDLE || !dispatch) return false;
     uint32_t imgCount = 0;
-    if (dispatch->EnumerateSwapchainImages(m_swapchain.handle, 0, &imgCount, nullptr) != XR_SUCCESS || imgCount == 0) {
+    if (XR_FAILED(dispatch->EnumerateSwapchainImages(m_swapchain.handle, 0, &imgCount, nullptr)) || imgCount == 0) {
         return false;
     }
     m_swapchain.images.resize(imgCount, { XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR });
-    return dispatch->EnumerateSwapchainImages(m_swapchain.handle, imgCount, &imgCount,
-        reinterpret_cast<XrSwapchainImageBaseHeader*>(m_swapchain.images.data())) == XR_SUCCESS;
+    return XR_SUCCEEDED(dispatch->EnumerateSwapchainImages(m_swapchain.handle, imgCount, &imgCount,
+        reinterpret_cast<XrSwapchainImageBaseHeader*>(m_swapchain.images.data())));
 }
 
 bool OpenXrCursorOverlay::UploadTexture(ID3D12Device* device, ID3D12CommandQueue* queue, std::shared_ptr<IOpenXrDispatch> dispatch) {
@@ -211,13 +211,13 @@ bool OpenXrCursorOverlay::UploadTexture(ID3D12Device* device, ID3D12CommandQueue
 
     XrSwapchainImageAcquireInfo acqInfo{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
     uint32_t imgIdx = 0;
-    if (dispatch->AcquireSwapchainImage(m_swapchain.handle, &acqInfo, &imgIdx) != XR_SUCCESS) {
+    if (XR_FAILED(dispatch->AcquireSwapchainImage(m_swapchain.handle, &acqInfo, &imgIdx))) {
         return false;
     }
 
     XrSwapchainImageWaitInfo waitInfo{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
     waitInfo.timeout = XR_INFINITE_DURATION;
-    if (dispatch->WaitSwapchainImage(m_swapchain.handle, &waitInfo) != XR_SUCCESS) {
+    if (XR_FAILED(dispatch->WaitSwapchainImage(m_swapchain.handle, &waitInfo))) {
         return false;
     }
 
@@ -268,7 +268,9 @@ bool OpenXrCursorOverlay::UploadTexture(ID3D12Device* device, ID3D12CommandQueue
                 D3D12_RESOURCE_BARRIER barrier{};
                 barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
                 barrier.Transition.pResource = destRes;
-                barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+                // OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be
+                // returned to RENDER_TARGET before release.
+                barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
                 barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
                 barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
                 cmdList->ResourceBarrier(1, &barrier);

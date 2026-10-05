@@ -18,12 +18,8 @@ function _G.getCamera()
     return _G.currentCamera
 end
 
--- Load VRCompanion.lua
-local fs = require("@lune/fs")
-local content = fs.readFile("mods/FS25_VRCompanion/src/VRCompanion.lua")
-local chunk = loadstring(content, "VRCompanion.lua")
-assert(chunk, "Failed to compile VRCompanion.lua")
-chunk()
+-- Load the Companion Mod module files in modDesc order, exactly as the engine does
+loadCompanionMod()
 
 local passed = 0
 local failed = 0
@@ -163,6 +159,30 @@ test("HooksAndUnhooksMissionUpdate", function()
     assert(origCalled == 2, "original mission update must be called directly after unhook")
 
     _G.FSBaseMission = nil
+end)
+
+test("UnhookRestoresMission00UpdateAndAllowsRehookOnNextMapLoad", function()
+    local origCalled = 0
+    local function origUpdate(self, dt)
+        origCalled = origCalled + 1
+    end
+    _G.Mission00 = { update = origUpdate }
+
+    VRCompanion:hookMissionUpdate()
+    assert(_G.Mission00.update ~= origUpdate, "Mission00.update must be wrapped after hook")
+
+    VRCompanion:unhookMissionUpdate()
+    assert(_G.Mission00.update == origUpdate, "Mission00.update must be restored after unhook")
+    assert(VRCompanion.origMission00Update == nil, "origMission00Update must be cleared after unhook")
+
+    -- Next map load in the same session must hook Mission00 again
+    VRCompanion:hookMissionUpdate()
+    assert(VRCompanion.missionUpdateHooked == true, "Mission00 must be re-hooked after an unhook")
+    _G.Mission00:update(16)
+    assert(origCalled == 1, "re-hooked Mission00.update must still call the original")
+
+    VRCompanion:unhookMissionUpdate()
+    _G.Mission00 = nil
 end)
 
 -- Slice 5: Sub-Pass 0 real dt & cameraNodeLeft, Sub-Pass 1 dt=0 & cameraNodeRight

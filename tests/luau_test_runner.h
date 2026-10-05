@@ -6,6 +6,33 @@
 
 struct lua_State;
 
+// Companion Mod harness: the module files are the only implementation, loaded in modDesc order.
+// CompanionModLoadOrder() must mirror <extraSourceFiles> in modDesc.xml (guarded by a test).
+inline const std::vector<std::string>& CompanionModLoadOrder() {
+    static const std::vector<std::string> order = {
+        "src/VRCompanionConfig.lua",
+        "src/VRCompanionCore.lua",
+        "src/VRCompanionStereo.lua",
+        "src/VRCompanionLocomotion.lua",
+        "src/VRCompanionHud.lua",
+        "src/VRCompanionInput.lua",
+        "src/VRCompanion.lua",
+    };
+    return order;
+}
+
+inline constexpr const char* kCompanionModDir = "mods/FS25_VRCompanion/";
+
+// Extracts <sourceFile filename="..."/> entries (in document order) from modDesc.xml content.
+std::vector<std::string> ParseModDescSourceFiles(const std::string& modDescXml);
+
+// Resolves a repo-relative path against cwd, PROJECT_ROOT_DIR, or parent dir. Empty if not found.
+std::filesystem::path ResolveProjectPath(const std::string& relativePath);
+
+// Loads every Companion Mod file in CompanionModLoadOrder() into L, exactly as the engine does.
+// Returns 0 on success; otherwise a non-zero status with the error pushed on the stack and in errorOut.
+int LoadCompanionMod(lua_State* L, std::string* errorOut = nullptr);
+
 struct LuauExecutionResult {
     bool success = false;
     int exitCode = 0;
@@ -39,5 +66,6 @@ private:
     static int LuauLoadString(lua_State* L);
     static int LuauRequire(lua_State* L);
     static int LuauFsReadFile(lua_State* L);
+    static int LuauLoadCompanionMod(lua_State* L);
     static int LuauTracebackHandler(lua_State* L);
 };

@@ -14,8 +14,6 @@ namespace fs25vr {
 
 class NgxInterceptor {
 public:
-    static NgxInterceptor& Instance();
-
     NgxInterceptor();
     ~NgxInterceptor();
 
@@ -35,7 +33,9 @@ public:
     // Inspect exports of a loaded module (nvngx.dll) and install detours
     bool AttachModule(HMODULE hNgxModule);
 
-    // VRBridge dependency injection for testing and runtime synchronization
+    // Dependencies are wired by InjectorRuntime (or by a test). The interceptor never falls back to a
+    // global singleton: an unset dependency reads as null and its feature degrades gracefully.
+    // VRBridge dependency for mode, menu and discontinuity state
     class VRBridge* GetVRBridge() const;
     void SetVRBridge(class VRBridge* bridge);
 
@@ -59,6 +59,9 @@ public:
 
     // Detach all hooks including module load hooks and clear registries
     void DetachAll();
+
+    // DetachAll on whichever interceptors own the live detours, whoever owns those interceptors.
+    static void DetachLiveHooks();
 
     bool IsAttached() const;
     bool AreModuleHooksInstalled() const;
@@ -124,15 +127,23 @@ public:
     static bool MatchesNgxName(LPCWSTR lpLibFileName);
     static bool MatchesNgxName(LPCSTR lpLibFileName);
 
-    // Getters for original function pointers
-    PFN_NVSDK_NGX_D3D12_CreateFeature GetOriginalCreateFeature() const { return m_origCreateFeature; }
-    PFN_NVSDK_NGX_D3D12_ReleaseFeature GetOriginalReleaseFeature() const { return m_origReleaseFeature; }
-    PFN_NVSDK_NGX_D3D12_EvaluateFeature GetOriginalEvaluateFeature() const { return m_origEvaluateFeature; }
-    PFN_NVSDK_NGX_D3D12_AllocateParameters GetOriginalAllocateParameters() const { return m_origAllocateParameters; }
-    PFN_NVSDK_NGX_D3D12_GetCapabilityParameters GetOriginalGetCapabilityParameters() const { return m_origGetCapabilityParameters; }
-    PFN_NVSDK_NGX_D3D12_DestroyParameters GetOriginalDestroyParameters() const { return m_origDestroyParameters; }
+    // Getters for original function pointers. They read the detour's trampoline, which FunctionDetour
+    // publishes before the patch goes live, so a call racing the install already sees it.
+    PFN_NVSDK_NGX_D3D12_CreateFeature GetOriginalCreateFeature() const { return Original<PFN_NVSDK_NGX_D3D12_CreateFeature>(m_detourCreateFeature); }
+    PFN_NVSDK_NGX_D3D12_ReleaseFeature GetOriginalReleaseFeature() const { return Original<PFN_NVSDK_NGX_D3D12_ReleaseFeature>(m_detourReleaseFeature); }
+    PFN_NVSDK_NGX_D3D12_EvaluateFeature GetOriginalEvaluateFeature() const { return Original<PFN_NVSDK_NGX_D3D12_EvaluateFeature>(m_detourEvaluateFeature); }
+    PFN_NVSDK_NGX_D3D12_AllocateParameters GetOriginalAllocateParameters() const { return Original<PFN_NVSDK_NGX_D3D12_AllocateParameters>(m_detourAllocateParameters); }
+    PFN_NVSDK_NGX_D3D12_GetCapabilityParameters GetOriginalGetCapabilityParameters() const { return Original<PFN_NVSDK_NGX_D3D12_GetCapabilityParameters>(m_detourGetCapabilityParameters); }
+    PFN_NVSDK_NGX_D3D12_DestroyParameters GetOriginalDestroyParameters() const { return Original<PFN_NVSDK_NGX_D3D12_DestroyParameters>(m_detourDestroyParameters); }
 
     // DLSS tuning overrides & motion vector scaling
+    static constexpr int kDefaultDlssPresetOverride = NVSDK_NGX_DLSS_Hint_Render_Preset_K;
+    static constexpr float kDefaultSharpnessOverride = 0.50f;
+    static constexpr bool kDefaultForceSharpnessOverride = true;
+    // Eye-Stride Motion Vector compensation under AFR (ADR-0015). Overridable
+    // via SetMvScaleMultiplier; SDP always evaluates at 1.0x.
+    static constexpr float kDefaultAfrMvScale = 2.0f;
+
     int GetDlssPresetOverride() const { return m_dlssPresetOverride; }
     void SetDlssPresetOverride(int preset) { m_dlssPresetOverride = preset; }
     float GetSharpnessOverride() const { return m_sharpnessOverride; }
@@ -149,6 +160,14 @@ public:
     }
 
 private:
+    template <typename PFN>
+    static PFN Original(const FunctionDetour& detour) { return reinterpret_cast<PFN>(detour.GetOriginal()); }
+
+    // The interceptor whose detours are live, or null when none is. Published before the detours are
+    // installed and cleared after they are removed, so a live detour always finds its host.
+    static NgxInterceptor* FeatureHost();
+    static NgxInterceptor* LoadHookHost();
+
     bool AttachDirectInternal(
         PFN_NVSDK_NGX_D3D12_CreateFeature pfnCreate,
         PFN_NVSDK_NGX_D3D12_ReleaseFeature pfnRelease,
@@ -166,11 +185,11 @@ private:
     class DxgiProxy* m_dxgiProxy = nullptr;
     class OpenXrManager* m_openXrManager = nullptr;
 
-    int m_dlssPresetOverride = NVSDK_NGX_DLSS_Hint_Render_Preset_K;
-    float m_sharpnessOverride = 0.50f;
-    bool m_forceSharpnessOverride = true;
-    float m_mvScaleMultiplierX = 0.0f;
-    float m_mvScaleMultiplierY = 0.0f;
+    int m_dlssPresetOverride = kDefaultDlssPresetOverride;
+    float m_sharpnessOverride = kDefaultSharpnessOverride;
+    bool m_forceSharpnessOverride = kDefaultForceSharpnessOverride;
+    float m_mvScaleMultiplierX = kDefaultAfrMvScale;
+    float m_mvScaleMultiplierY = kDefaultAfrMvScale;
     std::atomic<uint64_t> m_evalCount{0};
 
     std::atomic<int> m_lastRenderingMode{-1};
@@ -195,20 +214,6 @@ private:
     FunctionDetour m_detourLoadLibraryExW;
     FunctionDetour m_detourLoadLibraryA;
     FunctionDetour m_detourLoadLibraryExA;
-
-    // Original NGX pointers
-    PFN_NVSDK_NGX_D3D12_CreateFeature m_origCreateFeature = nullptr;
-    PFN_NVSDK_NGX_D3D12_ReleaseFeature m_origReleaseFeature = nullptr;
-    PFN_NVSDK_NGX_D3D12_EvaluateFeature m_origEvaluateFeature = nullptr;
-    PFN_NVSDK_NGX_D3D12_AllocateParameters m_origAllocateParameters = nullptr;
-    PFN_NVSDK_NGX_D3D12_GetCapabilityParameters m_origGetCapabilityParameters = nullptr;
-    PFN_NVSDK_NGX_D3D12_DestroyParameters m_origDestroyParameters = nullptr;
-
-    // Original LoadLibrary pointers
-    HMODULE (WINAPI *m_origLoadLibraryW)(LPCWSTR) = nullptr;
-    HMODULE (WINAPI *m_origLoadLibraryExW)(LPCWSTR, HANDLE, DWORD) = nullptr;
-    HMODULE (WINAPI *m_origLoadLibraryA)(LPCSTR) = nullptr;
-    HMODULE (WINAPI *m_origLoadLibraryExA)(LPCSTR, HANDLE, DWORD) = nullptr;
 };
 
 } // namespace fs25vr

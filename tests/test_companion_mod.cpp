@@ -1,7 +1,13 @@
 #include <gtest/gtest.h>
 #include "luau/vr_bridge.h"
+#include "fake_openxr_runtime.h"
 #include "luacode.h"
+#include "luau_test_runner.h"
+#include <algorithm>
 #include <fstream>
+#include <map>
+#include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -37,6 +43,15 @@ std::string ReadFile(const std::string& path) {
     return buffer.str();
 }
 
+// Loads the shipped module files in modDesc order (exactly as the engine does).
+int LoadCompanionModChecked(lua_State* L) {
+    std::string err;
+    int status = LoadCompanionMod(L, &err);
+    if (status != 0) {
+        fprintf(stderr, "\n[Companion Mod load error]: %s\n", err.c_str());
+    }
+    return status;
+}
 int RunLuauChunk(lua_State* L, const std::string& code, const char* chunkName) {
     size_t bytecodeSize = 0;
     char* bytecode = luau_compile(code.c_str(), code.length(), nullptr, &bytecodeSize);
@@ -199,6 +214,18 @@ protected:
             return 0;
         }, "setFrameParity", 1);
         lua_setfield(L, -2, "setFrameParity");
+
+        // With an active OpenXR session a mode change is queued until the DXGI proxy latches it at a
+        // completed frame boundary. These tests have no proxy, so Luau latches it explicitly.
+        lua_pushlightuserdata(L, &bridge);
+        lua_pushcclosure(L, [](lua_State* state) -> int {
+            auto* b = static_cast<fs25vr::VRBridge*>(lua_touserdata(state, lua_upvalueindex(1)));
+            if (b) {
+                b->LatchPendingRenderingMode();
+            }
+            return 0;
+        }, "latchPendingRenderingMode", 1);
+        lua_setfield(L, -2, "latchPendingRenderingMode");
         lua_pop(L, 1);
     }
 };
@@ -214,14 +241,95 @@ TEST_F(CompanionModTest, MetadataDescriptorIsValid) {
     EXPECT_NE(modDescContent.find("VRCompanion.lua"), std::string::npos);
 }
 
+TEST_F(CompanionModTest, HarnessLoadOrderMatchesModDescExtraSourceFiles) {
+    std::string modDescContent = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
+    ASSERT_FALSE(modDescContent.empty());
+
+    std::vector<std::string> listed = ParseModDescSourceFiles(modDescContent);
+    ASSERT_FALSE(listed.empty());
+    EXPECT_EQ(listed, CompanionModLoadOrder())
+        << "Test harness load order diverged from <extraSourceFiles> in modDesc.xml";
+}
+
+TEST_F(CompanionModTest, EveryModDescSourceFileExistsAndEntryScriptIsLast) {
+    std::vector<std::string> listed = ParseModDescSourceFiles(ReadFile("mods/FS25_VRCompanion/modDesc.xml"));
+    ASSERT_FALSE(listed.empty());
+    for (const auto& file : listed) {
+        EXPECT_FALSE(ReadFile(std::string("mods/FS25_VRCompanion/") + file).empty()) << file;
+    }
+    EXPECT_EQ(listed.back(), "src/VRCompanion.lua");
+}
+
+TEST_F(CompanionModTest, EntryScriptContainsOnlyModRegistration) {
+    std::string entry = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
+    ASSERT_FALSE(entry.empty());
+    EXPECT_EQ(entry.find("function"), std::string::npos) << "Entry script must not define functions";
+    EXPECT_EQ(entry.find("VRCompanion."), std::string::npos) << "Entry script must not define members";
+    EXPECT_NE(entry.find("addModEventListener(VRCompanion)"), std::string::npos);
+}
+
+TEST_F(CompanionModTest, EveryCompanionModFunctionIsDefinedInExactlyOneFile) {
+    std::regex defRe(R"(^\s*(?:local\s+)?function\s+([A-Za-z_][\w\.]*[:\.]?[A-Za-z_]\w*)\s*\(|^\s*(VRCompanion[\w\.]*)\s*=\s*function\s*\()");
+    std::map<std::string, std::string> definedIn;
+    std::vector<std::string> duplicates;
+    for (const auto& file : CompanionModLoadOrder()) {
+        std::istringstream lines(ReadFile(std::string("mods/FS25_VRCompanion/") + file));
+        std::string line;
+        while (std::getline(lines, line)) {
+            std::smatch m;
+            if (!std::regex_search(line, m, defRe)) continue;
+            std::string name = m[1].matched ? m[1].str() : m[2].str();
+            std::replace(name.begin(), name.end(), ':', '.');
+            if (name.rfind("VRCompanion", 0) != 0) continue;
+            auto [it, inserted] = definedIn.emplace(name, file);
+            if (!inserted) {
+                duplicates.push_back(name + " (" + it->second + " and " + file + ")");
+            }
+        }
+    }
+    EXPECT_GT(definedIn.size(), 100u);
+    for (const auto& d : duplicates) ADD_FAILURE() << "Defined in more than one file: " << d;
+}
+
+TEST_F(CompanionModTest, PackagedModZipContainsModDescIconAndEveryModuleFile) {
+    std::string script = ReadFile("scripts/package_release.ps1");
+    ASSERT_FALSE(script.empty());
+    // Packaging globs src/*.lua; every modDesc-listed file must live directly in src/.
+    EXPECT_NE(script.find("src/*.lua"), std::string::npos);
+    EXPECT_NE(script.find("modDesc.xml"), std::string::npos);
+    EXPECT_NE(script.find("icon_vr.png"), std::string::npos);
+    for (const auto& file : ParseModDescSourceFiles(ReadFile("mods/FS25_VRCompanion/modDesc.xml"))) {
+        EXPECT_EQ(file.rfind("src/", 0), 0u) << file;
+        EXPECT_EQ(file.find('/', 4), std::string::npos) << file;
+        EXPECT_EQ(file.substr(file.size() - 4), ".lua") << file;
+    }
+}
+
+TEST_F(CompanionModTest, ReleaseBundleAndModZipShipTheGplLicense) {
+    // GPL-3.0 requires conveying a copy of the license with every distributed copy;
+    // the mod zip is also published on its own, so it carries LICENSE too.
+    std::string script = ReadFile("scripts/package_release.ps1");
+    ASSERT_FALSE(script.empty());
+    std::istringstream lines(script);
+    std::string line;
+    bool modZipShipsLicense = false;
+    bool bundleZipShipsLicense = false;
+    while (std::getline(lines, line)) {
+        if (line.find("tar.exe") == std::string::npos) continue;
+        bool hasLicense = line.find("LICENSE") != std::string::npos;
+        if (line.find("FS25_VRCompanion.zip\" modDesc.xml") != std::string::npos) modZipShipsLicense = hasLicense;
+        if (line.find("$zipBundle") != std::string::npos) bundleZipShipsLicense = hasLicense;
+    }
+    EXPECT_TRUE(modZipShipsLicense);
+    EXPECT_TRUE(bundleZipShipsLicense);
+}
+
 TEST_F(CompanionModTest, PerformsHandshakeWhenVRBridgePresent) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
 
-    int loadStatus = RunLuauChunk(L, scriptContent, "=VRCompanion.lua");
+    int loadStatus = LoadCompanionModChecked(L);
     ASSERT_EQ(loadStatus, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
 
     // Simulate engine triggering loadMap
@@ -243,10 +351,8 @@ TEST_F(CompanionModTest, PerformsHandshakeWhenVRBridgePresent) {
 }
 
 TEST_F(CompanionModTest, FallsBackGracefullyInPassThroughModeWhenVRBridgeAbsent) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
 
-    int loadStatus = RunLuauChunk(L, scriptContent, "=VRCompanion.lua");
+    int loadStatus = LoadCompanionModChecked(L);
     ASSERT_EQ(loadStatus, 0);
 
     // Call loadMap without VRBridge present
@@ -276,10 +382,8 @@ TEST_F(CompanionModTest, HandlesFailedHandshakeGracefully) {
         }
     )", "=setupFailingVRBridge");
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
 
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
 
     RunLuauChunk(L, "assert(VRCompanion.handshakeComplete == false)", "=assertNoHandshake");
@@ -306,9 +410,7 @@ TEST_F(CompanionModTest, InvokesEngineStereoRenderingTogglesDuringMapExecution) 
         end
     )", "=setupStereoGlobals");
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Call loadMap
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
@@ -348,33 +450,40 @@ TEST_F(CompanionModTest, InvokesEngineStereoRenderingTogglesDuringMapExecution) 
     EXPECT_TRUE(foundRestoreLog);
 }
 
-TEST_F(CompanionModTest, LogsStereoTelemetryProbeResolutionDuringMapUpdate) {
-    fs25vr::VRBridge bridge;
+TEST_F(CompanionModTest, RequiresAfrFallbackFromTheFirstFrameWithoutPollingTelemetry) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
 
-    // Call update(16.6)
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:update(16.6)", "=updateCall"), 0);
+    // The fixed verdict (ADR-0017) holds before the first update, with no probe to wait for.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion:requiresAfrFallback() == true, "AFR fallback must be required before the first frame")
+    )luau", "=assertBeforeUpdate"), 0);
 
-    // Verify telemetry log or status
-    bool foundTelemetryLog = false;
+    bool foundStereoLog = false;
     for (const auto& msg : s_capturedLogs) {
-        if (msg.find("Telemetry Probe") != std::string::npos || msg.find("telemetry") != std::string::npos) {
-            foundTelemetryLog = true;
+        if (msg.find("Stereo presentation: AFR fallback required: true") != std::string::npos) {
+            foundStereoLog = true;
             break;
         }
     }
-    EXPECT_TRUE(foundTelemetryLog);
+    EXPECT_TRUE(foundStereoLog);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        for _ = 1, 5 do VRCompanion:update(16.6) end
+        assert(VRCompanion:requiresAfrFallback() == true, "AFR fallback must stay required across updates")
+    )luau", "=updateCalls"), 0);
+
+    // No retired telemetry probe is reported, at load or while updating.
+    for (const auto& msg : s_capturedLogs) {
+        EXPECT_EQ(msg.find("Telemetry Probe"), std::string::npos) << msg;
+    }
 }
 
 TEST_F(CompanionModTest, HandlesMissingStereoRenderingTogglesGracefully) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Without setting setStereoRendering, loadMap should not throw
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0);
@@ -396,25 +505,24 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresRecenterActionAndInputBinding
     EXPECT_NE(modDescContent.find("<action name=\"VR_RECENTER\""), std::string::npos);
     EXPECT_NE(modDescContent.find("<actionBinding action=\"VR_RECENTER\""), std::string::npos);
     EXPECT_NE(modDescContent.find("KEY_numPad5"), std::string::npos);
-    EXPECT_NE(modDescContent.find("<recenterVrTrackingSpace>true</recenterVrTrackingSpace>"), std::string::npos);
+    EXPECT_EQ(modDescContent.find("<vrSettings>"), std::string::npos) << "Setting defaults live in the DEFAULT_* constants, not modDesc.xml";
     EXPECT_NE(modDescContent.find("setting_recenterVrTrackingSpace"), std::string::npos);
 }
 
 TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBinding) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.15f, 0.05f, -0.10f);
     simPose.rotation = fs25vr::EulerAngles(0.20f, -0.30f, 0.02f);
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup mock engine scene graph functions
     ASSERT_EQ(RunLuauChunk(L, R"(
@@ -475,20 +583,19 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
 }
 
 TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.04f, -0.03f, 0.02f);
     simPose.rotation = fs25vr::EulerAngles(0.12f, 0.18f, -0.01f);
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup player camera mock
     ASSERT_EQ(RunLuauChunk(L, R"(
@@ -531,19 +638,18 @@ TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking
 }
 
 TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirmation) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.5f, 0.2f, -0.3f);
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetIpd(0.0f);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup mock scene graph, active vehicle camera, and player camera
     ASSERT_EQ(RunLuauChunk(L, R"(
@@ -622,20 +728,19 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
 }
 
 TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCamera) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    headset.SetEyeFov(0, leftFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup engine camera mocks via shared helper
     SetupCameraMockGlobals(L);
@@ -663,20 +768,19 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCame
 }
 
 TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamera) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    headset.SetEyeFov(0, leftFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup player camera mocks via shared helper
     SetupCameraMockGlobals(L);
@@ -703,20 +807,19 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamer
 }
 
 TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDisparity) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    headset.SetEyeFov(0, leftFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -738,21 +841,90 @@ TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDispa
     )luau", "=verifyCenteredProjection"), 0);
 }
 
-TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+TEST_F(CompanionModTest, ObliqueProjectionConsoleCommandTogglesPersistsAndAppliesOffsets) {
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    headset.SetEyeFov(0, leftFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    SetupCameraMockGlobals(L);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        local removedCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName, target = target }
+        end
+        _G.removeConsoleCommand = function(cmd)
+            removedCommands[cmd] = true
+        end
+
+        local savedBools = {}
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function(xml, key, val) savedBools[key] = val end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrObliqueProjection"] ~= nil, "vrObliqueProjection console command must be registered on map load")
+        assert(registeredCommands["vrObliqueProjection"].funcName == "consoleCommandSetObliqueProjection",
+            "registered callback must be consoleCommandSetObliqueProjection")
+
+        -- Defaults to symmetric projection
+        assert(VRCompanion.allowObliqueProjection == false, "oblique projection must default to off")
+        local statusRes = VRCompanion:consoleCommandSetObliqueProjection("status")
+        assert(string.find(statusRes, "Disabled") ~= nil, "status must report disabled by default")
+
+        local invalidRes = VRCompanion:consoleCommandSetObliqueProjection("maybe")
+        assert(string.find(invalidRes, "Usage: vrObliqueProjection") ~= nil, "invalid input must return usage")
+        assert(VRCompanion.allowObliqueProjection == false, "invalid input must not change the setting")
+
+        local cam = { isInside = true, cameraNode = 301, origTransX = 0, origTransY = 1.5, origTransZ = 0 }
+
+        -- Enabling applies per-eye asymmetric offsets and persists to settings.xml
+        VRCompanion:consoleCommandSetObliqueProjection("true")
+        assert(VRCompanion.allowObliqueProjection == true, "true must enable oblique projection")
+        assert(savedBools["vrSettings.allowObliqueProjection"] == true, "enabled preference must persist to settings.xml")
+        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+        assert(math.abs(_G.cameraProjectionOffsets[301].x) > 0.001, "enabled oblique projection must apply a horizontal offset")
+
+        -- Toggling back restores the centered projection and persists
+        VRCompanion:consoleCommandSetObliqueProjection("toggle")
+        assert(VRCompanion.allowObliqueProjection == false, "toggle must disable oblique projection")
+        assert(savedBools["vrSettings.allowObliqueProjection"] == false, "disabled preference must persist to settings.xml")
+        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+        assert(math.abs(_G.cameraProjectionOffsets[301].x) < 0.0001, "disabled oblique projection must center the projection")
+
+        VRCompanion:deleteMap()
+        assert(removedCommands["vrObliqueProjection"] == true, "deleteMap must unregister vrObliqueProjection")
+    )luau", "=testObliqueProjectionConsoleCommand"), 0);
+}
+
+TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
+    headset.SetEyeFov(0, leftFov);
+
+    fs25vr::HeadPose simPose;
+    simPose.isValid = true;
+    headset.SetHeadPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup camera mocks via shared helper
     SetupCameraMockGlobals(L);
@@ -786,26 +958,25 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
 }
 
 TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSequentialFramesInCab) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
     XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
-    oxr->SetSimulatedProjection(1, fs25vr::OpenXrManager::ComputeProjectionFromFov(rightFov));
+    headset.SetEyeFov(0, leftFov);
+    headset.SetEyeFov(1, rightFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     bridge.SetIpd(0.064f); // 64mm IPD -> +/- 0.032m
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -856,26 +1027,25 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
 }
 
 TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSequentialFramesOnFoot) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
     XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
-    oxr->SetSimulatedProjection(1, fs25vr::OpenXrManager::ComputeProjectionFromFov(rightFov));
+    headset.SetEyeFov(0, leftFov);
+    headset.SetEyeFov(1, rightFov);
 
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     bridge.SetIpd(0.064f);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -926,86 +1096,19 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     )luau", "=verifyFrame1OnFoot"), 0);
 }
 
-TEST_F(CompanionModTest, SkipsAfrAlternationWhenRequiresAfrFallbackIsFalse) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
-    XrFovf fov{ -0.90f, 0.90f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(fov));
-
-    fs25vr::HeadPose simPose;
-    simPose.isValid = true;
-    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
-
-    auto probe = std::make_shared<fs25vr::GraphicsTelemetryProbe>();
-    // Configure probe with native stereo detected
-    D3D12_VIEWPORT vps[2]{
-        { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
-        { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
-    };
-    D3D12_RECT scissors[2]{
-        { 0, 0, 1920, 1080 },
-        { 1920, 0, 3840, 1080 }
-    };
-    probe->RecordViewports(2, vps);
-    probe->RecordScissorRects(2, scissors);
-    probe->OnFrameBoundary();
-
-    ASSERT_TRUE(probe->HasNativeStereoDetected());
-    ASSERT_FALSE(probe->RequiresAfrFallback());
-
-    fs25vr::VRBridge bridge(oxr, probe);
-    bridge.SetIpd(0.064f);
-    ASSERT_TRUE(bridge.Inject(L));
-
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
-
-    SetupCameraMockGlobals(L);
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        _G.cameraTranslations = {}
-        function setTranslation(node, x, y, z)
-            _G.cameraTranslations[node] = { x = x, y = y, z = z }
-        end
-        function setRotation(node, rx, ry, rz)
-        end
-
-        _G.mockVehicleCam = {
-            isInside = true,
-            cameraNode = 301,
-            origTransX = 0, origTransY = 1.5, origTransZ = 0
-        }
-    )luau", "=setupNativeStereoVehicleMocks"), 0);
-
-    // Frame 0: should NOT shift by IPD offset
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateNativeFrame0"), 0);
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(math.abs(_G.cameraTranslations[301].x) < 0.001, "translation x must remain centered when native stereo detected")
-    )luau", "=verifyNativeFrame0"), 0);
-
-    // Advance frame parity
-    bridge.AdvanceFrame();
-    // Frame 1: should still NOT shift by IPD offset
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateNativeFrame1"), 0);
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(math.abs(_G.cameraTranslations[301].x) < 0.001, "translation x must remain centered on next frame when native stereo detected")
-    )luau", "=verifyNativeFrame1"), 0);
-}
-
 TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFTracking) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.1f, 0.2f, 0.3f);
     simPose.rotation = fs25vr::EulerAngles(0.05f, 0.10f, 0.02f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1062,9 +1165,7 @@ TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFT
 }
 
 TEST_F(CompanionModTest, FallsBackToEngineTrackIRWhenVRBridgePoseUnavailable) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1112,9 +1213,7 @@ TEST_F(CompanionModTest, UnloadMapNotifiesVRBridgeAndRevertsCompanionActiveState
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     EXPECT_FALSE(bridge.IsCompanionActive());
 
@@ -1141,9 +1240,7 @@ TEST_F(CompanionModTest, PollsGuiVisibilityDuringUpdateAndNotifiesVRBridge) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Mock g_gui with getIsGuiVisible method
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1205,9 +1302,7 @@ TEST_F(CompanionModTest, SuppressesAfrEyeOffsetAndAlternationWhenMenuVisible) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_gui = {
@@ -1232,9 +1327,7 @@ TEST_F(CompanionModTest, HandlesMissingOrFailingGuiGracefullyWithoutError) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // 1. g_gui is nil
     ASSERT_EQ(RunLuauChunk(L, "_G.g_gui = nil", "=nilGui"), 0);
@@ -1256,9 +1349,7 @@ TEST_F(CompanionModTest, UnloadMapResetsMenuVisibilityState) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_gui = {
@@ -1281,19 +1372,18 @@ TEST_F(CompanionModTest, UnloadMapResetsMenuVisibilityState) {
 }
 
 TEST_F(CompanionModTest, ActiveGuiAppliesHeadPoseTrackingToActiveCameraNode) {
-    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::FakeTrackedHeadset headset;
+    auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.2f, 0.1f, -0.05f);
     simPose.rotation = fs25vr::EulerAngles(0.05f, 0.15f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Setup showroom / background menu camera mocks
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1350,19 +1440,18 @@ TEST_F(CompanionModTest, ActiveGuiAppliesHeadPoseTrackingToActiveCameraNode) {
 }
 
 TEST_F(CompanionModTest, ActiveGuiRestoresCameraTransformWhenMenuClosed) {
-    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::FakeTrackedHeadset headset;
+    auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.5f, 0.2f, -0.1f);
     simPose.rotation = fs25vr::EulerAngles(0.1f, 0.2f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.activeCamNode = 888
@@ -1405,18 +1494,17 @@ TEST_F(CompanionModTest, ActiveGuiRestoresCameraTransformWhenMenuClosed) {
 }
 
 TEST_F(CompanionModTest, ActiveGuiPreserves2DMouseAndControllerInteractions) {
-    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::FakeTrackedHeadset headset;
+    auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.1f, 0.0f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.activeCamNode = 101
@@ -1453,18 +1541,17 @@ TEST_F(CompanionModTest, ActiveGuiPreserves2DMouseAndControllerInteractions) {
 }
 
 TEST_F(CompanionModTest, RecenterActionRealignsMenuQuadWhenInMenu) {
-    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::FakeTrackedHeadset headset;
+    auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(1.0f, 1.5f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_gui = {
@@ -1492,19 +1579,18 @@ TEST_F(CompanionModTest, RecenterActionRealignsMenuQuadWhenInMenu) {
 }
 
 TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -1683,21 +1769,19 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear)
 }
 
 TEST_F(CompanionModTest, DefinesAndCalculatesDefaultAndCustomVRHudInsets) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.20, "DEFAULT_HUD_INSET_X must be 0.20")
-        assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.16, "DEFAULT_HUD_INSET_Y must be 0.16")
-        assert(VRCompanion.DEFAULT_HUD_UI_SCALE == 0.88, "DEFAULT_HUD_UI_SCALE must be 0.88")
+        assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.30, "DEFAULT_HUD_INSET_X must be 0.30")
+        assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.22, "DEFAULT_HUD_INSET_Y must be 0.22")
+        assert(VRCompanion.DEFAULT_HUD_UI_SCALE == 0.82, "DEFAULT_HUD_UI_SCALE must be 0.82")
 
         local left, right, bottom, top, scale = VRCompanion:calculateHudAnchors()
-        assert(math.abs(left - 0.20) < 0.0001, "left anchor default must be 0.20")
-        assert(math.abs(right - 0.80) < 0.0001, "right anchor default must be 0.80")
-        assert(math.abs(bottom - 0.16) < 0.0001, "bottom anchor default must be 0.16")
-        assert(math.abs(top - 0.84) < 0.0001, "top anchor default must be 0.84")
-        assert(math.abs(scale - 0.88) < 0.0001, "scale multiplier default must be 0.88")
+        assert(math.abs(left - 0.30) < 0.0001, "left anchor default must be 0.30")
+        assert(math.abs(right - 0.70) < 0.0001, "right anchor default must be 0.70")
+        assert(math.abs(bottom - 0.22) < 0.0001, "bottom anchor default must be 0.22")
+        assert(math.abs(top - 0.78) < 0.0001, "top anchor default must be 0.78")
+        assert(math.abs(scale - 0.82) < 0.0001, "scale multiplier default must be 0.82")
 
         local cLeft, cRight, cBottom, cTop, cScale = VRCompanion:calculateHudAnchors(0.12, 0.08, 0.95)
         assert(math.abs(cLeft - 0.12) < 0.0001, "custom left anchor must be 0.12")
@@ -1709,9 +1793,7 @@ TEST_F(CompanionModTest, DefinesAndCalculatesDefaultAndCustomVRHudInsets) {
 }
 
 TEST_F(CompanionModTest, ClampsVRHudInsetsAndScaleWithinSafeBoundaries) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local minL, minR, minB, minT, minS = VRCompanion:calculateHudAnchors(-0.5, -0.5, 0.1)
@@ -1731,9 +1813,7 @@ TEST_F(CompanionModTest, ClampsVRHudInsetsAndScaleWithinSafeBoundaries) {
 }
 
 TEST_F(CompanionModTest, ExposesConfigurationWithGracefulFallbackToDefaults) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:configureHudInsets(0.22, 0.14, 0.92)
@@ -1749,18 +1829,16 @@ TEST_F(CompanionModTest, ExposesConfigurationWithGracefulFallbackToDefaults) {
         VRCompanion.hudInsetY = nil
         VRCompanion.hudUiScaleMultiplier = nil
         local fb = VRCompanion:loadConfiguration("missing_file.xml")
-        assert(math.abs(fb.left - 0.20) < 0.0001, "fallback left must be default 0.20")
-        assert(math.abs(fb.right - 0.80) < 0.0001, "fallback right must be default 0.80")
-        assert(math.abs(fb.bottom - 0.16) < 0.0001, "fallback bottom must be default 0.16")
-        assert(math.abs(fb.top - 0.84) < 0.0001, "fallback top must be default 0.84")
-        assert(math.abs(fb.scaleMultiplier - 0.88) < 0.0001, "fallback scale must be default 0.88")
+        assert(math.abs(fb.left - 0.30) < 0.0001, "fallback left must be default 0.30")
+        assert(math.abs(fb.right - 0.70) < 0.0001, "fallback right must be default 0.70")
+        assert(math.abs(fb.bottom - 0.22) < 0.0001, "fallback bottom must be default 0.22")
+        assert(math.abs(fb.top - 0.78) < 0.0001, "fallback top must be default 0.78")
+        assert(math.abs(fb.scaleMultiplier - 0.82) < 0.0001, "fallback scale must be default 0.82")
     )luau", "=verifyConfigApi"), 0);
 }
 
 TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_hudAnchorLeft = 0.0
@@ -1797,15 +1875,15 @@ TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad
         VRCompanion:loadMap('testMap')
 
         -- Global anchors contracted
-        assert(math.abs(_G.g_hudAnchorLeft - 0.20) < 0.0001, "g_hudAnchorLeft must be 0.20")
-        assert(math.abs(_G.g_hudAnchorRight - 0.80) < 0.0001, "g_hudAnchorRight must be 0.80")
-        assert(math.abs(_G.g_hudAnchorBottom - 0.16) < 0.0001, "g_hudAnchorBottom must be 0.16")
-        assert(math.abs(_G.g_hudAnchorTop - 0.84) < 0.0001, "g_hudAnchorTop must be 0.84")
+        assert(math.abs(_G.g_hudAnchorLeft - 0.30) < 0.0001, "g_hudAnchorLeft must be 0.30")
+        assert(math.abs(_G.g_hudAnchorRight - 0.70) < 0.0001, "g_hudAnchorRight must be 0.70")
+        assert(math.abs(_G.g_hudAnchorBottom - 0.22) < 0.0001, "g_hudAnchorBottom must be 0.22")
+        assert(math.abs(_G.g_hudAnchorTop - 0.78) < 0.0001, "g_hudAnchorTop must be 0.78")
 
-        -- UI scale multiplier applied (0.88x)
-        assert(math.abs(VRCompanion.effectiveUiScale - 0.88) < 0.0001, "effectiveUiScale must be 0.88")
+        -- UI scale multiplier applied (0.82x)
+        assert(math.abs(VRCompanion.effectiveUiScale - 0.82) < 0.0001, "effectiveUiScale must be 0.82")
         assert(displays.speedMeter.setScaleCalled == true, "SpeedMeterDisplay.setScale must be called")
-        assert(displays.speedMeter.scale == 0.88, "SpeedMeterDisplay scale must be 0.88")
+        assert(displays.speedMeter.scale == 0.82, "SpeedMeterDisplay scale must be 0.82")
 
         -- All standard displays repositioned
         assert(displays.speedMeter.storeScaledValuesCalled == true, "speedMeter storeScaledValues called")
@@ -1815,18 +1893,16 @@ TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad
         assert(displays.ingameMap.storeScaledValuesCalled == true, "ingameMap storeScaledValues called")
 
         -- Display positioning coordinates
-        assert(displays.speedMeter.position.x == 0.80 and displays.speedMeter.position.y == 0.16, "speedMeter bottom-right")
-        assert(displays.inputHelp.position.x == 0.20 and displays.inputHelp.position.y == 0.84, "inputHelp top-left")
-        assert(displays.gameInfo.position.x == 0.80 and displays.gameInfo.position.y == 0.84, "gameInfo top-right")
-        assert(displays.contextAction.position.x == 0.20 and displays.contextAction.position.y == 0.16, "contextAction bottom-left")
-        assert(displays.ingameMap.position.x == 0.20 and displays.ingameMap.position.y == 0.16, "ingameMap bottom-left")
+        assert(displays.speedMeter.position.x == 0.70 and displays.speedMeter.position.y == 0.22, "speedMeter bottom-right")
+        assert(displays.inputHelp.position.x == 0.30 and displays.inputHelp.position.y == 0.78, "inputHelp top-left")
+        assert(displays.gameInfo.position.x == 0.70 and displays.gameInfo.position.y == 0.78, "gameInfo top-right")
+        assert(displays.contextAction.position.x == 0.30 and displays.contextAction.position.y == 0.22, "contextAction bottom-left")
+        assert(displays.ingameMap.position.x == 0.30 and displays.ingameMap.position.y == 0.22, "ingameMap bottom-left")
     )luau", "=verifyDisplaysUponMapLoad"), 0);
 }
 
 TEST_F(CompanionModTest, RestoresStandard2DHudCornerAnchorsOnMapUnload) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_hudAnchorLeft = 0.0
@@ -1836,7 +1912,7 @@ TEST_F(CompanionModTest, RestoresStandard2DHudCornerAnchorsOnMapUnload) {
         _G.g_currentMission = { hud = {} }
 
         VRCompanion:loadMap('testMap')
-        assert(math.abs(_G.g_hudAnchorLeft - 0.20) < 0.0001, "g_hudAnchorLeft must be 0.20 when loaded")
+        assert(math.abs(_G.g_hudAnchorLeft - 0.30) < 0.0001, "g_hudAnchorLeft must be 0.30 when loaded")
 
         VRCompanion:deleteMap()
         assert(math.abs(_G.g_hudAnchorLeft - 0.0) < 0.0001, "g_hudAnchorLeft restored to 0.0")
@@ -1856,9 +1932,7 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresHudToggleActionAndBindings) {
 }
 
 TEST_F(CompanionModTest, HudStateMachineDefinesThreeStageStatesAndCyclesCyclically) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.HUD_STATE_HIDDEN == 0, "HUD_STATE_HIDDEN must be 0")
@@ -1896,9 +1970,7 @@ TEST_F(CompanionModTest, HudStateMachineDefinesThreeStageStatesAndCyclesCyclical
 }
 
 TEST_F(CompanionModTest, AppliesHudStatesCorrectlyAcrossDisplays) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local hud = {
@@ -1938,9 +2010,7 @@ TEST_F(CompanionModTest, AppliesHudStatesCorrectlyAcrossDisplays) {
 }
 
 TEST_F(CompanionModTest, IsDisplayVisibleFiltersComponentsAcrossAllThreeStates) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local displays = {
@@ -1984,9 +2054,7 @@ TEST_F(CompanionModTest, IsDisplayVisibleFiltersComponentsAcrossAllThreeStates) 
 }
 
 TEST_F(CompanionModTest, HooksNativeEngineHudDisplaysAndSuppressesFilteredComponentsOnDraw) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local draws = {
@@ -2100,9 +2168,7 @@ TEST_F(CompanionModTest, HooksNativeEngineHudDisplaysAndSuppressesFilteredCompon
 }
 
 TEST_F(CompanionModTest, UnhookHudRestoresOriginalFunctionsCleanly) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local origCalled = false
@@ -2123,9 +2189,7 @@ TEST_F(CompanionModTest, UnhookHudRestoresOriginalFunctionsCleanly) {
 }
 
 TEST_F(CompanionModTest, LoadMapDefaultsToHiddenAndRegistersHudToggleAction) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredActions = {}
@@ -2172,9 +2236,7 @@ TEST_F(CompanionModTest, LoadMapDefaultsToHiddenAndRegistersHudToggleAction) {
 }
 
 TEST_F(CompanionModTest, GuiMenuTransitionsPreserveUserSelectedHudState) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local mockHud = {
@@ -2220,9 +2282,7 @@ TEST_F(CompanionModTest, GuiMenuTransitionsPreserveUserSelectedHudState) {
 }
 
 TEST_F(CompanionModTest, ComputesPhysicalIpdScaledDisparityAtTargetConvergenceDepth) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         -- 1. Default IPD (0.064m) at target depth (~1.8m) yields 0.012 disparity
@@ -2263,15 +2323,13 @@ TEST_F(CompanionModTest, ComputesPhysicalIpdScaledDisparityAtTargetConvergenceDe
 }
 
 TEST_F(CompanionModTest, AlternatesPositiveDisparityOnLeftParityAndNegativeOnRightParity) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::NativeOpenXrDispatch>());
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Set simulated IPD on native OpenXR manager: 64mm
     oxr->SetIpd(0.064f);
@@ -2303,14 +2361,12 @@ TEST_F(CompanionModTest, AlternatesPositiveDisparityOnLeftParityAndNegativeOnRig
 }
 
 TEST_F(CompanionModTest, UpdatesConvergenceEveryFrameWithoutCoordinateDriftAcrossTenThousandCycles) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::NativeOpenXrDispatch>());
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     oxr->SetIpd(0.064f);
 
@@ -2337,14 +2393,12 @@ TEST_F(CompanionModTest, UpdatesConvergenceEveryFrameWithoutCoordinateDriftAcros
 }
 
 TEST_F(CompanionModTest, RevertsConvergenceOffsetSmoothlyToZeroInPassThroughOrDisabledTracking) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::NativeOpenXrDispatch>());
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     oxr->SetIpd(0.064f);
 
@@ -2399,9 +2453,7 @@ TEST_F(CompanionModTest, RevertsConvergenceOffsetSmoothlyToZeroInPassThroughOrDi
 }
 
 TEST_F(CompanionModTest, RecenterModeDefaultsToBothWithVrTrackingSpaceEnabled) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE == true, "Default recenterVrTrackingSpace constant must be true")
@@ -2411,18 +2463,17 @@ TEST_F(CompanionModTest, RecenterModeDefaultsToBothWithVrTrackingSpaceEnabled) {
 }
 
 TEST_F(CompanionModTest, RecenterActionInBothModeZeroesCameraYawAndCallsBridgeRecenter) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.4f, 0.1f, -0.2f);
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local mockInsideCam = {
@@ -2455,18 +2506,17 @@ TEST_F(CompanionModTest, RecenterActionInBothModeZeroesCameraYawAndCallsBridgeRe
 }
 
 TEST_F(CompanionModTest, RecenterActionInVehicleOnlyModeZeroesCameraYawAndBypassesBridgeRecenter) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.4f, 0.1f, -0.2f);
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local mockInsideCam = {
@@ -2500,9 +2550,7 @@ TEST_F(CompanionModTest, RecenterActionInVehicleOnlyModeZeroesCameraYawAndBypass
 }
 
 TEST_F(CompanionModTest, LoadsRecenterVrTrackingSpaceFromXml) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local mockXmlStore = {
@@ -2539,9 +2587,7 @@ TEST_F(CompanionModTest, LoadsRecenterVrTrackingSpaceFromXml) {
 }
 
 TEST_F(CompanionModTest, SavesRecenterVrTrackingSpaceToXml) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local savedBools = {}
@@ -2568,9 +2614,7 @@ TEST_F(CompanionModTest, SavesRecenterVrTrackingSpaceToXml) {
 }
 
 TEST_F(CompanionModTest, ConsoleCommandRecenterModeInspectsTogglesAndPersistsMode) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local savedXml = false
@@ -2616,9 +2660,7 @@ TEST_F(CompanionModTest, ConsoleCommandRecenterModeInspectsTogglesAndPersistsMod
 }
 
 TEST_F(CompanionModTest, RegistersAndUnregistersRecenterModeConsoleCommands) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredCommands = {}
@@ -2646,9 +2688,7 @@ TEST_F(CompanionModTest, RegistersAndUnregistersRecenterModeConsoleCommands) {
 }
 
 TEST_F(CompanionModTest, SnapTurnDefaultsAndConfigurableTurnAngle) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.DEFAULT_SNAP_TURN_ANGLE ~= nil, "DEFAULT_SNAP_TURN_ANGLE must be defined")
@@ -2665,9 +2705,7 @@ TEST_F(CompanionModTest, SnapTurnDefaultsAndConfigurableTurnAngle) {
 }
 
 TEST_F(CompanionModTest, SnapTurnDebounceCooldownEnforcesMinimum250ms) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -2703,9 +2741,7 @@ TEST_F(CompanionModTest, SnapTurnDebounceCooldownEnforcesMinimum250ms) {
 }
 
 TEST_F(CompanionModTest, InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNode) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -2753,9 +2789,7 @@ TEST_F(CompanionModTest, InCabSnapTurnAdjustsCameraRotYAndUpdatesHeadTrackingNod
 }
 
 TEST_F(CompanionModTest, RecenterResetsSnappedCameraRotYToNeutralForwardWindshield) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -2803,9 +2837,7 @@ TEST_F(CompanionModTest, RecenterResetsSnappedCameraRotYToNeutralForwardWindshie
 }
 
 TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerSnapTurnsAndRejectsHeldKeyRepeat) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -2850,9 +2882,7 @@ TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerSnapTurnsAndRejectsHeld
 }
 
 TEST_F(CompanionModTest, OnFootSnapTurnAdjustsPlayerCharacterYawNode) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -2909,9 +2939,7 @@ TEST_F(CompanionModTest, OnFootSnapTurnAdjustsPlayerCharacterYawNode) {
 }
 
 TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookRemainCollinearAfterSnapTurnWithoutDrift) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -3047,9 +3075,7 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookRemainCollinearAfte
 }
 
 TEST_F(CompanionModTest, OnFootSnapTurnSuppressedWhenGuiMenuVisible) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:resetSnapTurnDebounce()
@@ -3116,9 +3142,7 @@ TEST_F(CompanionModTest, OnFootSnapTurnSuppressedWhenGuiMenuVisible) {
 }
 
 TEST_F(CompanionModTest, SnapTurnInEngineActionEventsRegistration) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredEvents = {}
@@ -3146,9 +3170,7 @@ TEST_F(CompanionModTest, SnapTurnInEngineActionEventsRegistration) {
 }
 
 TEST_F(CompanionModTest, SnapTurnXmlConfigurationLoadingAndSaving) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local savedValues = {}
@@ -3179,9 +3201,7 @@ TEST_F(CompanionModTest, SnapTurnXmlConfigurationLoadingAndSaving) {
 }
 
 TEST_F(CompanionModTest, SnapTurnConsoleCommand) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion.snapTurnAngle = math.pi * 0.5
@@ -3198,12 +3218,10 @@ TEST_F(CompanionModTest, SnapTurnConsoleCommand) {
 }
 
 TEST_F(CompanionModTest, Is2DViewActiveDefaultsToFalseAndSynchronizesWithVRBridge) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.is2DViewActive == false, "is2DViewActive must default to false")
@@ -3231,19 +3249,18 @@ TEST_F(CompanionModTest, Is2DViewActiveDefaultsToFalseAndSynchronizesWithVRBridg
 }
 
 TEST_F(CompanionModTest, InCabVehicleCameraBypasses6DOFTrackingIn2DMode) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.15f, 0.05f, -0.10f);
     simPose.rotation = fs25vr::EulerAngles(0.12f, 0.25f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -3302,19 +3319,18 @@ TEST_F(CompanionModTest, InCabVehicleCameraBypasses6DOFTrackingIn2DMode) {
 }
 
 TEST_F(CompanionModTest, OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMouseLook) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.1f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.2f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -3364,16 +3380,15 @@ TEST_F(CompanionModTest, OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMous
 }
 
 TEST_F(CompanionModTest, CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMode) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
+    headset.SetEyeFov(0, leftFov);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -3403,14 +3418,12 @@ TEST_F(CompanionModTest, CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMo
 }
 
 TEST_F(CompanionModTest, HudConvergenceDisparityZeroedAndFullFrameAnchorsAppliedIn2DMode) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::NativeOpenXrDispatch>());
     fs25vr::VRBridge bridge(oxr, nullptr);
     bridge.SetIpd(0.064f);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion.handshakeComplete = true
@@ -3452,12 +3465,10 @@ TEST_F(CompanionModTest, HudConvergenceDisparityZeroedAndFullFrameAnchorsApplied
 }
 
 TEST_F(CompanionModTest, ModeIsStickyAcrossInGameGuiMenus) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local menuVisible = false
@@ -3488,12 +3499,10 @@ TEST_F(CompanionModTest, ModeIsStickyAcrossInGameGuiMenus) {
 }
 
 TEST_F(CompanionModTest, FreshMapLoadAlwaysInitializesIn3DVrMode) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         -- Force 2D mode before map load
@@ -3512,12 +3521,10 @@ TEST_F(CompanionModTest, FreshMapLoadAlwaysInitializesIn3DVrMode) {
 }
 
 TEST_F(CompanionModTest, SnapTurnSuppressedWhen2DViewActive) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local mockVehCam = {
@@ -3546,12 +3553,10 @@ TEST_F(CompanionModTest, SnapTurnSuppressedWhen2DViewActive) {
 }
 
 TEST_F(CompanionModTest, ConsoleCommandsManage2DViewMode) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:set2DViewActive(false)
@@ -3587,9 +3592,7 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresToggleViewActionAndBindings) 
 }
 
 TEST_F(CompanionModTest, ToggleViewInEngineActionEventsRegistration) {
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredEvents = {}
@@ -3620,12 +3623,10 @@ TEST_F(CompanionModTest, ToggleViewInEngineActionEventsRegistration) {
 }
 
 TEST_F(CompanionModTest, ToggleViewActionTogglesModeWithDebounceAndSilentExecution) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local warningCalls = 0
@@ -3661,12 +3662,10 @@ TEST_F(CompanionModTest, ToggleViewActionTogglesModeWithDebounceAndSilentExecuti
 }
 
 TEST_F(CompanionModTest, RecenterIn2DModeRealignsFloatingQuadWithoutResettingVehicleOrientation) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local alignMenuQuadCalls = 0
@@ -3711,12 +3710,10 @@ TEST_F(CompanionModTest, RecenterIn2DModeRealignsFloatingQuadWithoutResettingVeh
 }
 
 TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerToggleViewAndDebounceHeldRepeat) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:set2DViewActive(false)
@@ -3762,12 +3759,10 @@ TEST_F(CompanionModTest, KeyEventHardwareShortcutsTriggerToggleViewAndDebounceHe
 }
 
 TEST_F(CompanionModTest, ImplementsGetAndSetRenderingMode) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.RENDERING_MODE_AFR == "AFR", "RENDERING_MODE_AFR must be 'AFR'")
@@ -3799,14 +3794,12 @@ TEST_F(CompanionModTest, ImplementsGetAndSetRenderingMode) {
 }
 
 TEST_F(CompanionModTest, QueriesNativeRenderingModeOnInitializationAndHandshake) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     // Pre-configure native state to Sequential Dual-Pass
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Initial map load should handshake and query native rendering mode
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMap"), 0);
@@ -3830,12 +3823,10 @@ TEST_F(CompanionModTest, QueriesNativeRenderingModeOnInitializationAndHandshake)
 }
 
 TEST_F(CompanionModTest, RenderingModePersistenceAcrossMapUnload) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // First map load
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMap1"), 0);
@@ -3860,12 +3851,10 @@ TEST_F(CompanionModTest, RenderingModePersistenceAcrossMapUnload) {
 }
 
 TEST_F(CompanionModTest, DualPassMissionUpdatePacingAndCameraSelection) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.currentCamera = 0
@@ -3918,13 +3907,11 @@ TEST_F(CompanionModTest, DualPassMissionUpdatePacingAndCameraSelection) {
 }
 
 TEST_F(CompanionModTest, DualPassHudConvergenceLockedToSubPassEyeIndex) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    auto oxr = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::NativeOpenXrDispatch>());
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     oxr->SetIpd(0.064f);
 
@@ -3966,12 +3953,10 @@ TEST_F(CompanionModTest, DualPassHudConvergenceLockedToSubPassEyeIndex) {
 
 TEST_F(CompanionModTest, DualEyeCameraNodesAndCyclopeanAudioListenerInitializedOnMapLoad) {
     SetupCameraMockGlobals(L);
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -3998,25 +3983,25 @@ TEST_F(CompanionModTest, DualEyeCameraNodesAndCyclopeanAudioListenerInitializedO
 
 TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrameParity) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
         VRCompanion:setRenderingMode("AFR")
+        VRBridge.latchPendingRenderingMode() -- test stand-in for the proxy's frame-boundary latch
         VRCompanion:set2DViewActive(false)
         VRCompanion.handshakeComplete = true
 
@@ -4057,21 +4042,20 @@ TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrame
 
 TEST_F(CompanionModTest, DualCameraNodesRetainIndependentTransformHistoryAcrossAfrCycles) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -4125,25 +4109,25 @@ TEST_F(CompanionModTest, DualCameraNodesRetainIndependentTransformHistoryAcrossA
 
 TEST_F(CompanionModTest, CyclopeanAudioListenerBoundAtNeutralHeadMidpointWithoutInterEyeJitter) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
         VRCompanion:setRenderingMode("AFR")
+        VRBridge.latchPendingRenderingMode() -- test stand-in for the proxy's frame-boundary latch
         VRCompanion:set2DViewActive(false)
         VRCompanion.handshakeComplete = true
 
@@ -4182,21 +4166,20 @@ TEST_F(CompanionModTest, CyclopeanAudioListenerBoundAtNeutralHeadMidpointWithout
 
 TEST_F(CompanionModTest, MonoscopicAnd2DModeBypassesDualCameraSwitching) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -4224,12 +4207,10 @@ TEST_F(CompanionModTest, MonoscopicAnd2DModeBypassesDualCameraSwitching) {
 }
 
 TEST_F(CompanionModTest, DualPassSimulationFrozenWithIdenticalVehicleAndWorldCoordinates) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.currentCamera = 0
@@ -4299,12 +4280,10 @@ TEST_F(CompanionModTest, DualPassSimulationFrozenWithIdenticalVehicleAndWorldCoo
 
 TEST_F(CompanionModTest, DeleteMapCleansUpDualCameraNodesAndCyclopeanAudioListener) {
     SetupCameraMockGlobals(L);
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -4321,12 +4300,10 @@ TEST_F(CompanionModTest, DeleteMapCleansUpDualCameraNodesAndCyclopeanAudioListen
 
 TEST_F(CompanionModTest, CompanionModFlagsDiscontinuityOnSnapTurnRecenterAnd2DViewToggle) {
     SetupCameraMockGlobals(L);
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     // Initial state: clear any initialization discontinuities
     bridge.ConsumeDiscontinuity(0);
@@ -4377,12 +4354,10 @@ TEST_F(CompanionModTest, CompanionModFlagsDiscontinuityOnSnapTurnRecenterAnd2DVi
 }
 
 TEST_F(CompanionModTest, RenderingModeXmlPersistenceRoundtripAndLoad) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local savedStrings = {}
@@ -4439,12 +4414,10 @@ TEST_F(CompanionModTest, RenderingModeXmlPersistenceRoundtripAndLoad) {
 }
 
 TEST_F(CompanionModTest, RenderingModeConsoleCommandAndNotificationAlert) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredCommands = {}
@@ -4523,26 +4496,25 @@ TEST_F(CompanionModTest, RenderingModeConsoleCommandAndNotificationAlert) {
 
 TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDrivingAndOnFoot) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
     XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
-    oxr->SetSimulatedProjection(1, fs25vr::OpenXrManager::ComputeProjectionFromFov(rightFov));
+    headset.SetEyeFov(0, leftFov);
+    headset.SetEyeFov(1, rightFov);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     RegisterTestSetFrameParity(bridge);
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")
@@ -4573,6 +4545,7 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
         assert(leftCam ~= nil and rightCam ~= nil and audioNode ~= nil)
 
         VRCompanion:setRenderingMode("AFR")
+        VRBridge.latchPendingRenderingMode() -- test stand-in for the proxy's frame-boundary latch
 
         -- PHASE 1: Vehicle driving in AFR mode
         VRBridge.setFrameParity(0)
@@ -4591,6 +4564,7 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
 
         -- PHASE 2: Live switch to Sequential Dual-Pass via console command while driving
         VRCompanion:consoleCommandSetRenderingMode("dualpass")
+        VRBridge.latchPendingRenderingMode() -- test stand-in for the proxy's frame-boundary latch
         assert(VRCompanion:getRenderingMode() == "SequentialDualPass", "Mode must be SequentialDualPass")
         assert(VRBridge.getRenderingMode() == "SequentialDualPass")
         VRBridge.setFrameParity(0)
@@ -4648,6 +4622,7 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
 
         -- PHASE 4: Live toggle back to AFR while on-foot
         VRCompanion:consoleCommandSetRenderingMode("toggle")
+        VRBridge.latchPendingRenderingMode() -- test stand-in for the proxy's frame-boundary latch
         assert(VRCompanion:getRenderingMode() == "AFR", "Mode must toggle back to AFR")
         assert(VRBridge.getRenderingMode() == "AFR")
 
@@ -4665,12 +4640,10 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
 
 TEST_F(CompanionModTest, VehicleSpeedAndFerryDtZeroGuardsPreventDivideByZeroException) {
     SetupCameraMockGlobals(L);
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local vehSpeedCallCount = 0
@@ -4734,12 +4707,10 @@ TEST_F(CompanionModTest, VehicleSpeedAndFerryDtZeroGuardsPreventDivideByZeroExce
 
 TEST_F(CompanionModTest, CameraManagerActiveCameraBindingEliminatesEngineWarnings) {
     SetupCameraMockGlobals(L);
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local rawSetCameraCalled = 0
@@ -4772,20 +4743,19 @@ TEST_F(CompanionModTest, CameraManagerActiveCameraBindingEliminatesEngineWarning
 
 TEST_F(CompanionModTest, SequentialDualPassSubPass1ExplicitlySynchronizesRightEyeCamera) {
     SetupCameraMockGlobals(L);
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.isValid = true;
     simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    std::string scriptContent = ReadFile("mods/FS25_VRCompanion/src/VRCompanion.lua");
-    ASSERT_FALSE(scriptContent.empty());
-    ASSERT_EQ(RunLuauChunk(L, scriptContent, "=VRCompanion.lua"), 0);
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         VRCompanion:loadMap("testMap")

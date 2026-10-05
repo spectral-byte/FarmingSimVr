@@ -104,6 +104,8 @@ __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockGetCapabilityParamet
 
 class VirtualNgxHandleTest : public ::testing::Test {
 protected:
+    NgxInterceptor m_ngx;
+protected:
     void SetUp() override {
         s_mockCreateCallCount = 0;
         s_mockReleaseCallCount = 0;
@@ -115,11 +117,11 @@ protected:
         s_capturedParamsPerCreate.clear();
         s_mockFailRightCreation = false;
 
-        NgxInterceptor::Instance().DetachAll();
+        m_ngx.DetachAll();
     }
 
     void TearDown() override {
-        NgxInterceptor::Instance().DetachAll();
+        m_ngx.DetachAll();
     }
 };
 
@@ -181,7 +183,7 @@ TEST_F(VirtualNgxHandleTest, ParameterStorageCloningAndConversions) {
 }
 
 TEST_F(VirtualNgxHandleTest, VirtualHandleAllocationAndWrapping) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     bool attached = interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature);
     ASSERT_TRUE(attached);
     EXPECT_TRUE(interceptor.IsAttached());
@@ -219,7 +221,7 @@ TEST_F(VirtualNgxHandleTest, VirtualHandleAllocationAndWrapping) {
 }
 
 TEST_F(VirtualNgxHandleTest, CreationParametersMirroredAcrossBothHandles) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature);
 
     NgxParameterImpl params;
@@ -275,7 +277,7 @@ TEST_F(VirtualNgxHandleTest, CreationParametersMirroredAcrossBothHandles) {
 }
 
 TEST_F(VirtualNgxHandleTest, VirtualHandleReleaseCleansUpBothHandlesWithoutLeaks) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature);
 
     NgxParameterImpl params;
@@ -309,7 +311,7 @@ TEST_F(VirtualNgxHandleTest, VirtualHandleReleaseCleansUpBothHandlesWithoutLeaks
 }
 
 TEST_F(VirtualNgxHandleTest, NullAndInvalidHandleHandling) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature);
 
     // Releasing null handle must return invalid parameter error
@@ -338,7 +340,7 @@ TEST_F(VirtualNgxHandleTest, NullAndInvalidHandleHandling) {
 }
 
 TEST_F(VirtualNgxHandleTest, RightHandleCreationFailureRollsBackLeft) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature);
 
     s_mockFailRightCreation = true;
@@ -366,7 +368,7 @@ TEST_F(VirtualNgxHandleTest, RightHandleCreationFailureRollsBackLeft) {
 }
 
 TEST_F(VirtualNgxHandleTest, ModuleLoadDetectionAndNameMatching) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
 
     EXPECT_FALSE(interceptor.AreModuleHooksInstalled());
     bool installed = interceptor.InstallModuleLoadHooks();
@@ -434,7 +436,7 @@ TEST_F(VirtualNgxHandleTest, MatchesNgxNameFiltering) {
 }
 
 TEST_F(VirtualNgxHandleTest, ParameterDetoursAndNativeMirroringOnFeatureCreation) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     bool attached = interceptor.AttachDirect(
         &MockCreateFeature,
         &MockReleaseFeature,
@@ -483,7 +485,7 @@ TEST_F(VirtualNgxHandleTest, ParameterDetoursAndNativeMirroringOnFeatureCreation
 }
 
 TEST_F(VirtualNgxHandleTest, ParameterDetoursFallbackWhenOriginalsUnavailable) {
-    auto& interceptor = NgxInterceptor::Instance();
+    auto& interceptor = m_ngx;
     // Attach only Create and Release; alloc/destroy/caps are null
     bool attached = interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature);
     ASSERT_TRUE(attached);

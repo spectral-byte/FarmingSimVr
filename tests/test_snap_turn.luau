@@ -9,12 +9,9 @@ _G.g_hudAnchorRight = 1.0
 _G.g_hudAnchorBottom = 0.0
 _G.g_hudAnchorTop = 1.0
 
--- Load VRCompanion.lua
+-- Load the Companion Mod module files in modDesc order, exactly as the engine does
+loadCompanionMod()
 local fs = require("@lune/fs")
-local content = fs.readFile("mods/FS25_VRCompanion/src/VRCompanion.lua")
-local chunk = loadstring(content, "VRCompanion.lua")
-assert(chunk, "Failed to compile VRCompanion.lua")
-chunk()
 
 local passed = 0
 local failed = 0
@@ -1215,15 +1212,15 @@ test("SavesAndLoadsSnapTurnAngleConfiguration", function()
     assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(45.0)) < 0.0001,
         string.format("Must load 45 deg (%.4f rad) from settings.xml, got %.4f", math.rad(45.0), VRCompanion:getSnapTurnAngle()))
 
-    -- 4. Test loading from modDesc.xml with modDesc.vrSettings.snapTurnAngle (e.g. 30 degrees)
+    -- 4. A modDesc.vrSettings key is not a settings source: the angle must stay at the previous value
     _G.getXMLFloat = function(xmlFile, key)
         if key == "modDesc.vrSettings.snapTurnAngle" then return 30.0 end
         return nil
     end
 
-    VRCompanion:loadConfiguration("mockModDesc.xml")
-    assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(30.0)) < 0.0001,
-        string.format("Must load 30 deg (%.4f rad) from modDesc.xml, got %.4f", math.rad(30.0), VRCompanion:getSnapTurnAngle()))
+    VRCompanion:loadConfiguration("mockSettings.xml")
+    assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(45.0)) < 0.0001,
+        "modDesc.vrSettings.snapTurnAngle must not be read as a settings key")
 
     -- Clean up mocks
     _G.getUserProfileAppPath = nil
@@ -1364,9 +1361,8 @@ test("ModDescDeclaresSnapTurnActionsBindingsL10nAndSettings", function()
     assert(string.find(modDescContent, "VR%-Blickdrehung rechts") ~= nil, "Must have German translation for snap turn right")
     assert(string.find(modDescContent, "VR%-Blickdrehungswinkel") ~= nil, "Must have German translation for snap turn angle setting")
 
-    -- 4. vrSettings default <snapTurnAngle>90</snapTurnAngle>
-    assert(string.find(modDescContent, "<snapTurnAngle>90</snapTurnAngle>") ~= nil,
-        "modDesc.xml <vrSettings> must contain <snapTurnAngle>90</snapTurnAngle>")
+    -- 4. Defaults live in the DEFAULT_* constants, not in modDesc.xml (Issue #83)
+    assert(string.find(modDescContent, "<vrSettings>", 1, true) == nil, "modDesc.xml must not define a <vrSettings> default block")
 end)
 
 print(string.format("Summary: %d passed, %d failed", passed, failed))

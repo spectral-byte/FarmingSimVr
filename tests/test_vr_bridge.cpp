@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "luau/vr_bridge.h"
+#include "fake_openxr_runtime.h"
 #include "ngx/ngx_interceptor.h"
 #include "luacode.h"
 #include <string>
@@ -39,8 +40,19 @@ protected:
     }
 };
 
+TEST_F(VrBridgeTest, BridgeFunctionWithoutItsBridgeUpvalueRaisesLuaError) {
+    // Pushed without the bridge upvalue that Inject supplies: there is no singleton to fall back to.
+    lua_pushcfunction(L, &fs25vr::VRBridge::Lua_IsReady, "isReady");
+
+    ASSERT_NE(lua_pcall(L, 0, 1, 0), LUA_OK);
+    const char* message = lua_tostring(L, -1);
+    ASSERT_NE(message, nullptr);
+    EXPECT_NE(std::string(message).find("bridge upvalue is missing"), std::string::npos) << message;
+    lua_pop(L, 1);
+}
+
 TEST_F(VrBridgeTest, InjectsGlobalTableWithoutStackCorruption) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
 
     int initialTop = lua_gettop(L);
     EXPECT_FALSE(bridge.IsInjected(L));
@@ -59,7 +71,7 @@ TEST_F(VrBridgeTest, InjectsGlobalTableWithoutStackCorruption) {
 }
 
 TEST_F(VrBridgeTest, ExposesVersionAndIsReadyAndHandshakeToLuauScript) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string script = R"(
@@ -84,14 +96,9 @@ TEST_F(VrBridgeTest, ExposesVersionAndIsReadyAndHandshakeToLuauScript) {
     }
 }
 
-TEST_F(VrBridgeTest, ExposesStereoTelemetryAndStereoStatusToLuauScript) {
-    auto probe = std::make_shared<fs25vr::GraphicsTelemetryProbe>();
-    fs25vr::VRBridge bridge(nullptr, probe);
+TEST_F(VrBridgeTest, ReportsFixedStereoTelemetryVerdictToLuauScript) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
-
-    D3D12_VIEWPORT vp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
-    probe->RecordViewports(1, &vp);
-    probe->OnFrameBoundary();
 
     std::string script = R"(
         assert(type(VRBridge.getStereoTelemetry) == "function", "getStereoTelemetry must be a function")
@@ -99,16 +106,15 @@ TEST_F(VrBridgeTest, ExposesStereoTelemetryAndStereoStatusToLuauScript) {
 
         local t = VRBridge.getStereoTelemetry()
         assert(type(t) == "table", "getStereoTelemetry must return a table")
-        assert(t.frameIndex == 1, "frameIndex must be 1")
-        assert(t.maxViewports == 1, "maxViewports must be 1")
-        assert(t.passCount == 1, "passCount must be 1")
-        assert(type(t.nativeStereo) == "boolean", "nativeStereo must be boolean")
-        assert(type(t.afrFallback) == "boolean", "afrFallback must be boolean")
-        assert(type(t.verdict) == "string", "verdict must be string")
+        assert(type(t.frameIndex) == "number", "frameIndex must be a number")
+        assert(type(t.maxViewports) == "number", "maxViewports must be a number")
+        assert(type(t.passCount) == "number", "passCount must be a number")
+        assert(t.nativeStereo == false, "nativeStereo must be false")
+        assert(t.afrFallback == true, "afrFallback must be true")
+        assert(t.verdict == "AfrFallbackRequired", "verdict must be AfrFallbackRequired from the first frame")
         assert(type(t.summary) == "string", "summary must be string")
 
-        local active = VRBridge.isStereoActive()
-        assert(type(active) == "boolean", "isStereoActive must return boolean")
+        assert(VRBridge.isStereoActive() == false, "isStereoActive must be false")
     )";
 
     int status = RunLuauString(L, script);
@@ -119,15 +125,15 @@ TEST_F(VrBridgeTest, ExposesStereoTelemetryAndStereoStatusToLuauScript) {
 }
 
 TEST_F(VrBridgeTest, ExposesHeadPoseToLuauScript) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.12f, -0.05f, 0.88f);
     simPose.rotation = fs25vr::EulerAngles(0.25f, -0.15f, 0.05f);
-    simPose.orientation = fs25vr::Quaternion(0.12f, -0.07f, 0.02f, 0.99f);
     simPose.isValid = true;
     simPose.positionTracked = true;
     simPose.orientationTracked = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -157,14 +163,15 @@ TEST_F(VrBridgeTest, ExposesHeadPoseToLuauScript) {
 }
 
 TEST_F(VrBridgeTest, RecenterViaLuauResetsTranslationalOffsets) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(1.5f, 0.5f, -2.0f);
     simPose.rotation = fs25vr::EulerAngles(0.1f, 0.3f, 0.0f);
     simPose.isValid = true;
     simPose.positionTracked = true;
     simPose.orientationTracked = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -188,13 +195,14 @@ TEST_F(VrBridgeTest, RecenterViaLuauResetsTranslationalOffsets) {
 }
 
 TEST_F(VrBridgeTest, ExposesEyeProjectionAndPrunesAliasesInLuauScript) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
 
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
     XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
 
-    oxr->SetSimulatedProjection(0, fs25vr::OpenXrManager::ComputeProjectionFromFov(leftFov));
-    oxr->SetSimulatedProjection(1, fs25vr::OpenXrManager::ComputeProjectionFromFov(rightFov));
+    headset.SetEyeFov(0, leftFov);
+    headset.SetEyeFov(1, rightFov);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -255,7 +263,7 @@ TEST_F(VrBridgeTest, ExposesEyeProjectionAndPrunesAliasesInLuauScript) {
 }
 
 TEST_F(VrBridgeTest, ExposesFrameParityAndFrameIndexAndIpdToLuau) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     ASSERT_TRUE(bridge.Inject(L));
 
@@ -323,13 +331,14 @@ TEST_F(VrBridgeTest, ExposesFrameParityAndFrameIndexAndIpdToLuau) {
 }
 
 TEST_F(VrBridgeTest, ExposesEyePoseWithInterpupillaryShiftToLuau) {
-    auto oxr = std::make_shared<fs25vr::OpenXrManager>();
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.0f, 1.7f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.orientation = fs25vr::Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     simPose.isValid = true;
-    oxr->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
     oxr->SetIpd(0.064f);
 
     fs25vr::VRBridge bridge(oxr, nullptr);
@@ -363,55 +372,19 @@ TEST_F(VrBridgeTest, ExposesEyePoseWithInterpupillaryShiftToLuau) {
     }
 }
 
-TEST_F(VrBridgeTest, RequiresAfrFallbackReflectsTelemetryProbeVerdict) {
-    auto probe = std::make_shared<fs25vr::GraphicsTelemetryProbe>();
-    fs25vr::VRBridge bridge(nullptr, probe);
+TEST_F(VrBridgeTest, RequiresAfrFallbackIsTrueFromTheFirstFrame) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    // Initially 0 frames, Inconclusive -> RequiresAfrFallback() is false
-    EXPECT_FALSE(bridge.RequiresAfrFallback());
-
-    // Record 5 monoscopic frames
-    D3D12_VIEWPORT vp{ 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f };
-    D3D12_RECT scissor{ 0, 0, 1920, 1080 };
-    for (int i = 0; i < 5; ++i) {
-        probe->RecordViewports(1, &vp);
-        probe->RecordScissorRects(1, &scissor);
-        probe->OnFrameBoundary();
-    }
-
-    EXPECT_TRUE(probe->RequiresAfrFallback());
     EXPECT_TRUE(bridge.RequiresAfrFallback());
     ASSERT_EQ(RunLuauString(L, R"luau(
-        assert(VRBridge.requiresAfrFallback == true, "must be true when AFR fallback required")
-        assert(VRBridge.getRequiresAfrFallback() == true, "must return true when AFR fallback required")
-    )luau"), 0);
-
-    // Reset probe and simulate native stereo pass
-    probe->Reset();
-    D3D12_VIEWPORT vps[2]{
-        { 0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f },
-        { 1920.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, 1.0f }
-    };
-    D3D12_RECT scissors[2]{
-        { 0, 0, 1920, 1080 },
-        { 1920, 0, 3840, 1080 }
-    };
-    probe->RecordViewports(2, vps);
-    probe->RecordScissorRects(2, scissors);
-    probe->OnFrameBoundary();
-
-    EXPECT_TRUE(probe->HasNativeStereoDetected());
-    EXPECT_FALSE(probe->RequiresAfrFallback());
-    EXPECT_FALSE(bridge.RequiresAfrFallback());
-    ASSERT_EQ(RunLuauString(L, R"luau(
-        assert(VRBridge.requiresAfrFallback == false, "must be false when native stereo detected")
-        assert(VRBridge.getRequiresAfrFallback() == false, "must return false when native stereo detected")
+        assert(VRBridge.requiresAfrFallback == true, "requiresAfrFallback must be true")
+        assert(VRBridge.getRequiresAfrFallback() == true, "getRequiresAfrFallback() must return true")
     )luau"), 0);
 }
 
 TEST_F(VrBridgeTest, ExposesCompanionActiveStatusAndHandlesMapUnload) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     EXPECT_FALSE(bridge.IsCompanionActive());
@@ -442,7 +415,7 @@ TEST_F(VrBridgeTest, ExposesCompanionActiveStatusAndHandlesMapUnload) {
 }
 
 TEST_F(VrBridgeTest, ExposesMenuVisibilityAndSynchronizesStateBetweenLuauAndCpp) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     ASSERT_TRUE(bridge.Inject(L));
 
@@ -484,7 +457,7 @@ TEST_F(VrBridgeTest, ExposesMenuVisibilityAndSynchronizesStateBetweenLuauAndCpp)
 }
 
 TEST_F(VrBridgeTest, MapUnloadResetsMenuVisibilityToFalse) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     bridge.SetMenuVisible(true);
@@ -500,12 +473,14 @@ TEST_F(VrBridgeTest, MapUnloadResetsMenuVisibilityToFalse) {
 }
 
 TEST_F(VrBridgeTest, SetMenuVisibleTrueTriggersQuadAlignmentOnOpenXrManager) {
-    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::FakeTrackedHeadset headset;
+    auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(2.0f, 1.8f, -1.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 1.5707963f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
+    openXrManager->PollHeadPose();  // the engine polls the head pose every frame
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -525,12 +500,13 @@ TEST_F(VrBridgeTest, SetMenuVisibleTrueTriggersQuadAlignmentOnOpenXrManager) {
 }
 
 TEST_F(VrBridgeTest, ExposesAlignMenuQuadToLuau) {
-    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::FakeTrackedHeadset headset;
+    auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.0f, 1.5f, 0.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -546,7 +522,7 @@ TEST_F(VrBridgeTest, ExposesAlignMenuQuadToLuau) {
 }
 
 TEST_F(VrBridgeTest, Exposes2DViewActiveMethodsAndPropertyToLuauScript) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
     ASSERT_TRUE(bridge.Inject(L));
 
@@ -589,7 +565,7 @@ TEST_F(VrBridgeTest, Exposes2DViewActiveMethodsAndPropertyToLuauScript) {
 }
 
 TEST_F(VrBridgeTest, MapUnloadResets2DViewActiveToFalse) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     bridge.Set2DViewActive(true);
@@ -605,12 +581,14 @@ TEST_F(VrBridgeTest, MapUnloadResets2DViewActiveToFalse) {
 }
 
 TEST_F(VrBridgeTest, Set2DViewActiveTrueTriggersQuadAlignmentOnOpenXrManager) {
-    auto openXrManager = std::make_shared<fs25vr::OpenXrManager>(nullptr);
+    fs25vr::FakeTrackedHeadset headset;
+    auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(1.0f, 1.7f, 2.0f);
     simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
-    openXrManager->SetSimulatedPose(simPose);
+    headset.SetHeadPose(simPose);
+    openXrManager->PollHeadPose();  // the engine polls the head pose every frame
 
     fs25vr::VRBridge bridge(openXrManager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -630,14 +608,14 @@ TEST_F(VrBridgeTest, Set2DViewActiveTrueTriggersQuadAlignmentOnOpenXrManager) {
 }
 
 TEST_F(VrBridgeTest, DefaultRenderingModeIsSequentialDualPassAndThreadSafe) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::SequentialDualPass);
     EXPECT_TRUE(bridge.IsSequentialDualPass());
     EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
 }
 
 TEST_F(VrBridgeTest, ModeTransitionsSwitchStateAndResetSubPassAndParity) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
 
     // Advance to parity 1 and sub-pass 1
     bridge.SetFrameParity(1);
@@ -668,7 +646,7 @@ TEST_F(VrBridgeTest, ModeTransitionsSwitchStateAndResetSubPassAndParity) {
 }
 
 TEST_F(VrBridgeTest, SubPassCyclingAndFrameBoundaryResets) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     EXPECT_EQ(bridge.GetSubPassIndex(), 0u);
 
     // Sub-pass cycling (0 -> 1 -> 0 -> 1)
@@ -696,7 +674,7 @@ TEST_F(VrBridgeTest, SubPassCyclingAndFrameBoundaryResets) {
 }
 
 TEST_F(VrBridgeTest, ExposesRenderingModeAndSubPassToLuauScript) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string script = R"luau(
@@ -751,7 +729,7 @@ TEST_F(VrBridgeTest, ExposesRenderingModeAndSubPassToLuauScript) {
 }
 
 TEST_F(VrBridgeTest, HandshakeNegotiationAndModePersistence) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string script = R"luau(
@@ -785,7 +763,7 @@ TEST_F(VrBridgeTest, HandshakeNegotiationAndModePersistence) {
 }
 
 TEST_F(VrBridgeTest, SetsAndAdvancesSubPassIndexInLuau) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string script = R"luau(
@@ -824,7 +802,7 @@ TEST_F(VrBridgeTest, SetsAndAdvancesSubPassIndexInLuau) {
 }
 
 TEST_F(VrBridgeTest, DiscontinuitySignallingExposedToLuauAndFlagsBothContexts) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     EXPECT_FALSE(bridge.HasPendingDiscontinuity(0));
@@ -866,7 +844,7 @@ TEST_F(VrBridgeTest, DiscontinuitySignallingExposedToLuauAndFlagsBothContexts) {
 }
 
 TEST_F(VrBridgeTest, ViewTransitionsAndRecenterFlagDiscontinuity) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
 
     // Recenter flags discontinuity
     bridge.Recenter();
@@ -901,7 +879,8 @@ TEST_F(VrBridgeTest, ViewTransitionsAndRecenterFlagDiscontinuity) {
 }
 
 TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
-    fs25vr::VRBridge bridge;
+    auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
+    fs25vr::VRBridge bridge(nullptr, ngx);
     ASSERT_TRUE(bridge.Inject(L));
 
     const std::string testScript = R"(
@@ -916,14 +895,71 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
     )";
 
     EXPECT_EQ(RunLuauString(L, testScript), 0);
-    EXPECT_FLOAT_EQ(fs25vr::NgxInterceptor::Instance().GetMvScaleMultiplierX(), 0.5f);
-    EXPECT_FLOAT_EQ(fs25vr::NgxInterceptor::Instance().GetMvScaleMultiplierY(), 0.75f);
-    EXPECT_FLOAT_EQ(fs25vr::NgxInterceptor::Instance().GetSharpnessOverride(), 0.65f);
-    EXPECT_EQ(fs25vr::NgxInterceptor::Instance().GetDlssPresetOverride(), 11);
+    EXPECT_FLOAT_EQ(ngx->GetMvScaleMultiplierX(), 0.5f);
+    EXPECT_FLOAT_EQ(ngx->GetMvScaleMultiplierY(), 0.75f);
+    EXPECT_FLOAT_EQ(ngx->GetSharpnessOverride(), 0.65f);
+    EXPECT_EQ(ngx->GetDlssPresetOverride(), 11);
+}
+
+TEST_F(VrBridgeTest, DlssTuningFunctionsReportFailureWithoutNgxInterceptor) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    const std::string testScript = R"(
+        assert(VRBridge.setDlssMvScale(0.5) == false, "setDlssMvScale must fail without NGX")
+        assert(VRBridge.setDlssSharpness(0.65) == false, "setDlssSharpness must fail without NGX")
+        assert(VRBridge.setDlssPreset(11) == false, "setDlssPreset must fail without NGX")
+    )";
+    EXPECT_EQ(RunLuauString(L, testScript), 0);
+}
+
+TEST_F(VrBridgeTest, SetRenderingModeIsImmediateWhileOpenXrIsInactive) {
+    auto openXr = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::FakeOpenXrRuntime>());
+    ASSERT_FALSE(openXr->IsActive());
+    fs25vr::VRBridge bridge(openXr, nullptr);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_EQ(RunLuauString(L, "VRBridge.setRenderingMode('AFR')"), 0);
+
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::AFR);
+    EXPECT_FALSE(bridge.GetPendingRenderingMode().has_value());
+}
+
+TEST_F(VrBridgeTest, SetRenderingModeIsQueuedWhileOpenXrIsActiveUntilLatched) {
+    fs25vr::FakeTrackedHeadset headset;
+    ASSERT_TRUE(headset.manager->IsActive());
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_EQ(RunLuauString(L, "VRBridge.setRenderingMode('AFR')"), 0);
+
+    // Not applied mid frame pair: only queued until the compositor frame boundary.
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(bridge.GetPendingRenderingMode(), fs25vr::VRRenderingMode::AFR);
+
+    EXPECT_TRUE(bridge.LatchPendingRenderingMode());
+    EXPECT_EQ(bridge.GetRenderingMode(), fs25vr::VRRenderingMode::AFR);
+    EXPECT_FALSE(bridge.GetPendingRenderingMode().has_value());
+    EXPECT_FALSE(bridge.LatchPendingRenderingMode());
+}
+
+TEST_F(VrBridgeTest, LatestQueuedRenderingModeWinsAndClearDropsIt) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
+
+    bridge.SetPendingRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    bridge.SetPendingRenderingMode(fs25vr::VRRenderingMode::AFR);
+    EXPECT_EQ(bridge.GetPendingRenderingMode(), fs25vr::VRRenderingMode::AFR);
+
+    bridge.ClearPendingRenderingMode();
+    EXPECT_FALSE(bridge.GetPendingRenderingMode().has_value());
+    EXPECT_FALSE(bridge.LatchPendingRenderingMode());
 }
 
 TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
-    fs25vr::VRBridge bridge;
+    fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
     // VRBridge should expose exactly kExposedFieldCount fields (1 version string + 29 functions)
