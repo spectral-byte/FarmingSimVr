@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 namespace fs25vr {
 
 // Inline function hook backed by MinHook. MinHook is initialized exactly once
@@ -28,7 +30,12 @@ private:
     void* m_target = nullptr;
     void* m_detour = nullptr;
     void* m_original = nullptr;
-    bool m_installed = false;
+    // Read lock-free from hook entry points on game threads while Install/Uninstall write it.
+    std::atomic<bool> m_installed{false};
 };
+
+// Makes the next Uninstall behave as if MH_RemoveHook failed, leaving MinHook holding a
+// disabled hook for that target.
+void FailNextHookRemovalForTesting();
 
 } // namespace fs25vr

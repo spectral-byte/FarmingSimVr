@@ -198,3 +198,43 @@ TEST_F(DetourTest, TargetCanBeHookedAgainAfterUninstall) {
         EXPECT_EQ(AddNumbers(2, 3), 5);
     }
 }
+
+TEST_F(DetourTest, TargetCanBeHookedAgainAfterFailedRemoval) {
+    {
+        fs25vr::FunctionDetour first;
+        ASSERT_TRUE(first.Install(reinterpret_cast<void*>(&AddNumbers),
+                                  reinterpret_cast<void*>(&DetourAddNumbers)));
+        fs25vr::FailNextHookRemovalForTesting();
+        EXPECT_FALSE(first.Uninstall());
+        EXPECT_FALSE(first.IsInstalled());
+        EXPECT_EQ(AddNumbers(2, 3), 5);  // disabled, though MinHook still holds the hook
+    }
+
+    // A different FunctionDetour, as after a reattach or a re-created runtime.
+    fs25vr::FunctionDetour second;
+    ASSERT_TRUE(second.Install(reinterpret_cast<void*>(&AddNumbers),
+                               reinterpret_cast<void*>(&DetourAddNumbers)));
+    s_originalAddNumbers = reinterpret_cast<int(*)(int, int)>(second.GetOriginal());
+    EXPECT_EQ(AddNumbers(2, 3), 13);
+    EXPECT_TRUE(second.Uninstall());
+    EXPECT_EQ(AddNumbers(2, 3), 5);
+}
+
+TEST_F(DetourTest, SecondDetourOnLiveTargetIsRefused) {
+    fs25vr::FunctionDetour owner;
+    ASSERT_TRUE(owner.Install(reinterpret_cast<void*>(&AddNumbers),
+                              reinterpret_cast<void*>(&DetourAddNumbers)));
+    s_originalAddNumbers = reinterpret_cast<int(*)(int, int)>(owner.GetOriginal());
+
+    fs25vr::FunctionDetour intruder;
+    EXPECT_FALSE(intruder.Install(reinterpret_cast<void*>(&AddNumbers),
+                                  reinterpret_cast<void*>(&DetourAddNumbers)));
+    EXPECT_FALSE(intruder.IsInstalled());
+
+    // The owner's hook and trampoline are untouched.
+    EXPECT_TRUE(owner.IsInstalled());
+    EXPECT_EQ(owner.GetOriginal(), reinterpret_cast<void*>(s_originalAddNumbers));
+    EXPECT_EQ(AddNumbers(2, 3), 13);
+    EXPECT_TRUE(owner.Uninstall());
+    EXPECT_EQ(AddNumbers(2, 3), 5);
+}
