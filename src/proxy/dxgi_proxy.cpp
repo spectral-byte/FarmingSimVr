@@ -310,6 +310,8 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
     m_lastPresentSuppressed = false;
 
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
+        // Not Active: no eye pair can be in flight, so a queued mode change must not be lost.
+        LatchPendingRenderingMode();
         return true;
     }
 
@@ -317,6 +319,8 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
     // drop the Injector into Pass-Through Mode (EXITING, LOSS_PENDING, instance loss).
     m_openXrManager->PollEvents();
     if (!m_openXrManager->IsActive()) {
+        // Dropped to Pass-Through after a mode was queued; the released eye pair is abandoned.
+        LatchPendingRenderingMode();
         m_lastPresentSuppressed = false;
         return true;
     }
@@ -495,6 +499,8 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
             }
         }
     }
+    // No eye swapchains (creation failed or Pass-Through): no eye pair can be in flight.
+    LatchPendingRenderingMode();
     m_lastPresentSuppressed = false;
     return true;
 }
