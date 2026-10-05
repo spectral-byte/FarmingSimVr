@@ -539,7 +539,13 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex)
         return
     end
 
-    local proj = VRBridge.getEyeProjection(eyeIndex or 0)
+    -- Reuse one projection table across frames: VRBridge fills it in place instead of allocating.
+    local projScratch = self.eyeProjectionScratch
+    if projScratch == nil then
+        projScratch = {}
+        self.eyeProjectionScratch = projScratch
+    end
+    local proj = VRBridge.getEyeProjection(eyeIndex or 0, projScratch)
     if not proj or not proj.isValid then
         return
     end
@@ -620,8 +626,14 @@ end
 function VRCompanion:getResolvedHeadPose()
     local pose = nil
     local bridge = VRBridge or (_G and _G.VRBridge)
+    -- Reuse one pose table across frames: VRBridge fills it in place instead of allocating.
+    local scratch = self.headPoseScratch
+    if scratch == nil then
+        scratch = {}
+        self.headPoseScratch = scratch
+    end
     if bridge ~= nil and type(bridge.getHeadPose) == "function" then
-        pose = bridge.getHeadPose()
+        pose = bridge.getHeadPose(scratch)
     end
 
     -- Fallback to native engine TrackIR functions if VRBridge is not providing a valid pose
@@ -635,15 +647,16 @@ function VRCompanion:getResolvedHeadPose()
             pitch, yaw, roll = getHeadTrackingRotation()
         end
         if pitch ~= nil then
-            pose = {
-                x = tx or 0,
-                y = ty or 0,
-                z = tz or 0,
-                pitch = pitch or 0,
-                yaw = yaw or 0,
-                roll = roll or 0,
-                isValid = true
-            }
+            pose = scratch
+            pose.x = tx or 0
+            pose.y = ty or 0
+            pose.z = tz or 0
+            pose.pitch = pitch or 0
+            pose.yaw = yaw or 0
+            pose.roll = roll or 0
+            -- TrackIR supplies no quaternion: clear any identity left over from a VRBridge fill.
+            pose.qx, pose.qy, pose.qz, pose.qw = nil, nil, nil, nil
+            pose.isValid = true
         end
     end
 

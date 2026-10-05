@@ -410,42 +410,59 @@ function VRCompanion:updateHudConvergence(dt)
     _G.g_hudAnchorBottom = baseBottom
     _G.g_hudAnchorTop = baseTop
 
-    local mission = g_currentMission or _G.g_currentMission
-    local hud = (mission ~= nil) and mission.hud or nil
-    if hud ~= nil then
-        local sm = hud.speedMeter or hud.speedMeterDisplay
-        local fl = self:getFillLevelsDisplay(hud)
-        local targetSmBottom = baseBottom
-
-        if fl ~= nil and self.fillLevelUnderVehicle then
-            local _, fillBottom, liftedSmBottom = self:positionFillLevelsUnderVehicle(fl, offset)
-            if liftedSmBottom ~= nil then
-                targetSmBottom = liftedSmBottom
-            end
-        end
-
-        if sm ~= nil and type(sm.setPosition) == "function" then
-            pcall(sm.setPosition, sm, shiftedRight, targetSmBottom)
-        end
-        local ih = hud.inputHelp or hud.inputHelpDisplay
-        if ih ~= nil and type(ih.setPosition) == "function" then
-            pcall(ih.setPosition, ih, shiftedLeft, baseTop)
-        end
-        local gi = hud.gameInfo or hud.gameInfoDisplay
-        if gi ~= nil and type(gi.setPosition) == "function" then
-            pcall(gi.setPosition, gi, shiftedRight, baseTop)
-        end
-        local ca = hud.contextAction or hud.contextActionDisplay
-        if ca ~= nil and type(ca.setPosition) == "function" then
-            pcall(ca.setPosition, ca, 0.5 + offset, baseBottom)
-        end
-        local im = hud.ingameMap or hud.ingameMapDisplay
-        if im ~= nil and type(im.setPosition) == "function" then
-            pcall(im.setPosition, im, shiftedLeft, baseBottom)
-        end
+    -- Anchors and convergence state above always update; moving the elements
+    -- themselves is wasted work while the HUD is Hidden. setHudState repositions
+    -- them against this state when the HUD becomes visible.
+    if self:getHudState() ~= self.HUD_STATE_HIDDEN then
+        self:repositionHudForConvergence()
     end
 
     return shiftedLeft, shiftedRight, offset
+end
+
+-- Moves every HUD element to its convergence-offset position using the current
+-- anchor and convergence state.
+function VRCompanion:repositionHudForConvergence()
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    if hud == nil then return end
+
+    local offset = self.currentConvergenceOffset or 0.0
+    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
+    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_TOP)
+    local shiftedLeft = self.hudAnchorLeft
+    local shiftedRight = self.hudAnchorRight
+
+    local sm = hud.speedMeter or hud.speedMeterDisplay
+    local fl = self:getFillLevelsDisplay(hud)
+    local targetSmBottom = baseBottom
+
+    if fl ~= nil and self.fillLevelUnderVehicle then
+        local _, _, liftedSmBottom = self:positionFillLevelsUnderVehicle(fl, offset)
+        if liftedSmBottom ~= nil then
+            targetSmBottom = liftedSmBottom
+        end
+    end
+
+    if sm ~= nil and type(sm.setPosition) == "function" then
+        pcall(sm.setPosition, sm, shiftedRight, targetSmBottom)
+    end
+    local ih = hud.inputHelp or hud.inputHelpDisplay
+    if ih ~= nil and type(ih.setPosition) == "function" then
+        pcall(ih.setPosition, ih, shiftedLeft, baseTop)
+    end
+    local gi = hud.gameInfo or hud.gameInfoDisplay
+    if gi ~= nil and type(gi.setPosition) == "function" then
+        pcall(gi.setPosition, gi, shiftedRight, baseTop)
+    end
+    local ca = hud.contextAction or hud.contextActionDisplay
+    if ca ~= nil and type(ca.setPosition) == "function" then
+        pcall(ca.setPosition, ca, 0.5 + offset, baseBottom)
+    end
+    local im = hud.ingameMap or hud.ingameMapDisplay
+    if im ~= nil and type(im.setPosition) == "function" then
+        pcall(im.setPosition, im, shiftedLeft, baseBottom)
+    end
 end
 
 function VRCompanion:getHudState()
@@ -531,6 +548,11 @@ function VRCompanion:setHudState(newState)
     local state = self:clamp(newState or self.HUD_STATE_HIDDEN, self.HUD_STATE_HIDDEN, self.HUD_STATE_FULL)
     self.hudState = state
     self:applyHudState(state)
+    -- Hidden updates skip repositioning, so place the elements now with the
+    -- current convergence offset. 2D Floating Window Mode keeps its own anchors.
+    if state ~= self.HUD_STATE_HIDDEN and not self.is2DViewActive then
+        self:repositionHudForConvergence()
+    end
     return self.hudState
 end
 
@@ -850,7 +872,7 @@ function VRCompanion:hookHud()
                 hookMethod(cls, "draw", function(displaySelf, ...)
                     if displayName == "FillLevelsDisplay" then
                         self.activeFillLevelsDisplay = displaySelf
-                        if self.fillLevelUnderVehicle then
+                        if self.fillLevelUnderVehicle and self:getHudState() ~= self.HUD_STATE_HIDDEN then
                             self:positionFillLevelsUnderVehicle(displaySelf)
                         end
                         if not self.hasLoggedFillLevelsDisplayInfo then
@@ -970,7 +992,8 @@ VRCompanion.Hud.getConvergenceOffset = function(self, ...) return VRCompanion.ge
 VRCompanion.Hud.getFillLevelsDisplay = function(self, ...) return VRCompanion.getFillLevelsDisplay(VRCompanion, ...) end
 VRCompanion.Hud.positionFillLevelsUnderVehicle = function(self, ...) return VRCompanion.positionFillLevelsUnderVehicle(VRCompanion, ...) end
 VRCompanion.Hud.updateHudConvergence = function(self, ...) return VRCompanion.updateHudConvergence(VRCompanion, ...) end
-VRCompanion.Hud.getHudState = function(self, ...) return VRCompanion.getHudState(VRCompanion, ...) end
+VRCompanion.Hud.repositionHudForConvergence = function(self, ...) return VRCompanion.repositionHudForConvergence(VRCompanion, ...) end
+VRCompanion.Hud.getHudState =function(self, ...) return VRCompanion.getHudState(VRCompanion, ...) end
 VRCompanion.Hud.isDisplayVisible = function(self, ...) return VRCompanion.isDisplayVisible(VRCompanion, ...) end
 VRCompanion.Hud.applyHudState = function(self, ...) return VRCompanion.applyHudState(VRCompanion, ...) end
 VRCompanion.Hud.setHudState = function(self, ...) return VRCompanion.setHudState(VRCompanion, ...) end

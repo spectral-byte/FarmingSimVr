@@ -4,6 +4,7 @@
 #include "openxr_cursor_overlay.h"
 #include "core/math_utils.h"
 #include "core/raii_utils.h"
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -26,6 +27,8 @@ struct OpenXrRuntimeInfo {
     XrSystemId systemId = XR_NULL_SYSTEM_ID;
     std::string systemName;
     bool d3d12ExtensionSupported = false;
+    // The runtime offers XR_KHR_win32_convert_performance_counter_time and it was enabled.
+    bool win32TimeConversionEnabled = false;
 
     uint32_t recommendedEyeWidth = 0;
     uint32_t recommendedEyeHeight = 0;
@@ -92,7 +95,20 @@ public:
 
     EyeProjection PollEyeProjection(uint32_t eyeIndex = 0, XrTime time = 0);
     bool LocateActiveViews(XrTime time = 0);
+    // "Now" in the runtime's time base. Extrapolates from the last predicted display time once
+    // frames run; before the first frame converts the performance counter through the runtime
+    // (XR_KHR_win32_convert_performance_counter_time) or, without it, counts up from an anchor.
     XrTime GetCurrentXrTime() const;
+
+    struct PerformanceCounterSample {
+        int64_t counter = 0;
+        int64_t frequency = 0;
+    };
+    using PerformanceCounterSource = std::function<PerformanceCounterSample()>;
+    // Replaces the QueryPerformanceCounter/Frequency reads (tests drive a fake clock).
+    void SetPerformanceCounterSource(PerformanceCounterSource source);
+    // counter / frequency in nanoseconds without overflowing for any int64 counter.
+    static int64_t PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency);
     const EyeProjection& GetEyeProjection(uint32_t eyeIndex = 0) const;
     static EyeProjection ComputeProjectionFromFov(const XrFovf& fov);
 
@@ -248,6 +264,14 @@ private:
     XrFrameState m_frameState{XR_TYPE_FRAME_STATE};
     XrTime m_lastPredictedDisplayTime = 0;
     int64_t m_lastPredictedQpc = 0;
+    PerformanceCounterSource m_counterSource;
+    bool m_win32TimeConversionAvailable = false;
+    PerformanceCounterSample ReadPerformanceCounter() const;
+    // Pre-frame fallback state (no runtime conversion): counter value at the first query, and the
+    // last value returned so the result never goes backwards.
+    mutable bool m_hasFallbackAnchor = false;
+    mutable int64_t m_fallbackAnchorCounter = 0;
+    mutable XrTime m_lastFallbackTime = 0;
     XrTime m_lastPolledTime = 0;
     XrTime m_lastLocatedViewsTime = 0;
 

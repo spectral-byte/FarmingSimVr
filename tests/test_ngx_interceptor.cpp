@@ -19,7 +19,7 @@ static std::vector<float> s_evalMvScaleY;
 static std::vector<int> s_evalPresets;
 static std::vector<float> s_evalSharpness;
 
-NVSDK_NGX_Result STDMETHODCALLTYPE MockCreate(
+__declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockCreate(
     ID3D12GraphicsCommandList* /*InCmdList*/,
     NVSDK_NGX_Feature /*InFeatureID*/,
     NVSDK_NGX_Parameter* /*InParameters*/,
@@ -32,7 +32,7 @@ NVSDK_NGX_Result STDMETHODCALLTYPE MockCreate(
     return NVSDK_NGX_Result_Success;
 }
 
-NVSDK_NGX_Result STDMETHODCALLTYPE MockRelease(
+__declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockRelease(
     NVSDK_NGX_Handle* InHandle
 ) {
     s_releaseCount++;
@@ -40,7 +40,7 @@ NVSDK_NGX_Result STDMETHODCALLTYPE MockRelease(
     return NVSDK_NGX_Result_Success;
 }
 
-NVSDK_NGX_Result STDMETHODCALLTYPE MockEvaluate(
+__declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockEvaluate(
     ID3D12GraphicsCommandList* /*InCmdList*/,
     const NVSDK_NGX_Handle* InFeatureHandle,
     const NVSDK_NGX_Parameter* InParameters,

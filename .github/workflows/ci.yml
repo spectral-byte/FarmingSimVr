@@ -48,6 +48,12 @@ jobs:
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
           -DFETCHCONTENT_BASE_DIR="${{ github.workspace }}/.deps"
 
+      # The shipped configuration compiles with full inlining (/Ob2); fail if the
+      # cache says otherwise (e.g. CMake's default /Ob1 crept back in).
+      - name: Verify full inlining
+        shell: pwsh
+        run: scripts/check_build_config.ps1 build
+
       - name: Build (Injector DLL and tests)
         run: cmake --build build --target dxgi fs25_vr_tests
 
