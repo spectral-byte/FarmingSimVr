@@ -36,7 +36,15 @@ Copy-Item $builtDll "$releaseDir\dxgi.dll" -Force
 Write-Host "[Package] Staged dxgi.dll"
 
 # dxgi.dll statically links these dependencies; their licenses require shipping the notices.
+# Fetched sources live wherever the build was configured to put them (CI uses -DFETCHCONTENT_BASE_DIR=.deps).
 $depsDir = Join-Path $repoRoot "build\_deps"
+$cmakeCache = Join-Path $repoRoot "build\CMakeCache.txt"
+if (Test-Path $cmakeCache) {
+    $baseDirLine = Select-String -Path $cmakeCache -Pattern '^FETCHCONTENT_BASE_DIR:[A-Z]+=(.+)$' | Select-Object -First 1
+    if ($baseDirLine) {
+        $depsDir = $baseDirLine.Matches[0].Groups[1].Value.Trim()
+    }
+}
 $notices = @(
     @{ Name = "MinHook";            File = "minhook-src\LICENSE.txt" },
     @{ Name = "Luau";               File = "luau-src\LICENSE.txt" },

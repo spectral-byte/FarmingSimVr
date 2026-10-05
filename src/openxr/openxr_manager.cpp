@@ -1,5 +1,6 @@
 #include "openxr_manager.h"
 #include "core/logger.h"
+#include "core/dll_lifecycle.h"
 #include <vector>
 #include <cstring>
 #include <sstream>
@@ -33,6 +34,9 @@ OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
 }
 
 OpenXrManager::~OpenXrManager() {
+    // At termination the runtime DLL may already be detached and a GPU fence wait could hang:
+    // leave the session and instance to the OS (see IsProcessTerminating).
+    if (IsProcessTerminating()) return;
     Shutdown();
     m_copyFenceEvent.Close();
 }

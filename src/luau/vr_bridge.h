@@ -168,6 +168,9 @@ public:
         1 + static_cast<int>(sizeof(kFunctionTable) / sizeof(kFunctionTable[0]));
 
 private:
+    // The bridge bound as upvalue 1 of every registered function; raises a Lua error if it is missing.
+    static VRBridge& FromUpvalue(lua_State* L);
+
     std::shared_ptr<OpenXrManager> m_openXrManager;
     std::shared_ptr<NgxInterceptor> m_ngxInterceptor;
     std::string m_version = "1.0.0";

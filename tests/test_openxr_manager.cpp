@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "openxr/openxr_manager.h"
+#include "core/dll_lifecycle.h"
 #include "fake_openxr_tracking.h"
 #include "luau/vr_bridge.h"
 #include "fake_openxr_events.h"
@@ -968,6 +969,22 @@ TEST(OpenXrManagerTest, StaysInPassThroughWhenNoCompatibleSwapchainFormat) {
     EXPECT_FALSE(manager.HasSession());
     EXPECT_TRUE(mockDispatch->destroySessionCalled);
     EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
+}
+
+TEST(OpenXrManagerTest, DestructorAfterTerminationDetachLeavesRuntimeAlone) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    {
+        OpenXrManager manager(mockDispatch);
+        ASSERT_TRUE(manager.Initialize());
+        ASSERT_TRUE(manager.CreateSession());
+        OnProcessDetach(reinterpret_cast<LPVOID>(1));  // non-null lpReserved: process terminating
+    }  // ~OpenXrManager runs here, as the CRT's static destructors do after DllMain returns.
+    ResetProcessTerminatingForTesting();
+
+    // The runtime DLL may already be gone at termination: no session or instance teardown calls.
+    EXPECT_FALSE(mockDispatch->destroySessionCalled);
+    EXPECT_FALSE(mockDispatch->destroyInstanceCalled);
 }
 
 TEST(OpenXrManagerTest, FailedFormatQueryRequestsBackBufferFormatInsteadOfPassThrough) {

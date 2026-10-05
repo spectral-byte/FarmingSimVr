@@ -55,7 +55,8 @@ jobs:
         run: ctest --test-dir build --output-on-failure --timeout 120
 
       # ctest runs each test in its own process; a single-process run catches
-      # state leaking between tests through the singletons.
+      # state leaking between tests through process-wide state (the hook
+      # registries and InjectorRuntime::Instance()).
       - name: Test (single process)
         run: build\fs25_vr_tests.exe --gtest_brief=1
 

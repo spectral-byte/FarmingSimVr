@@ -22,6 +22,11 @@ static bool ParseRenderingMode(const char* s, VRRenderingMode& outMode) {
     return false;
 }
 
+VRBridge& VRBridge::FromUpvalue(lua_State* L) {
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");  // does not return
+    return *self;
+}
 
 VRBridge::VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
                    std::shared_ptr<NgxInterceptor> ngxInterceptor)
@@ -94,16 +99,14 @@ bool VRBridge::PerformHandshake() {
 }
 
 int VRBridge::Lua_IsReady(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     lua_pushboolean(L, self->IsReady() ? 1 : 0);
     return 1;
 }
 
 int VRBridge::Lua_Handshake(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     // Handshake negotiation: allow Luau to optionally specify a preferred mode
     if (lua_gettop(L) >= 1) {
@@ -143,16 +146,14 @@ int VRBridge::Lua_Handshake(lua_State* L) {
 }
 
 int VRBridge::Lua_IsCompanionActive(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     lua_pushboolean(L, self->IsCompanionActive() ? 1 : 0);
     return 1;
 }
 
 int VRBridge::Lua_OnMapUnload(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     FS25VR_TRACE_THREAD("VRBridge.onMapUnload");
     self->SetCompanionActive(false);
@@ -167,8 +168,7 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
 int VRBridge::Lua_GetStereoTelemetry(lua_State* L) {
     // Fixed verdict: the telemetry probe was retired (ADR-0017); ADR-0015 records that
     // GIANTS Engine 10 under D3D12 always needs AFR or SDP.
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
     const bool afrFallback = self->RequiresAfrFallback();
 
     lua_createtable(L, 0, 7);
@@ -199,8 +199,7 @@ int VRBridge::Lua_GetStereoTelemetry(lua_State* L) {
 }
 
 int VRBridge::Lua_IsStereoActive(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
     lua_pushboolean(L, self->RequiresAfrFallback() ? 0 : 1);
     return 1;
 }
@@ -248,8 +247,7 @@ void VRBridge::PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex) {
     }
 }
 int VRBridge::Lua_GetHeadPose(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     FS25VR_TRACE_THREAD("VRBridge.getHeadPose");
     HeadPose pose = self->GetHeadPose();
@@ -259,8 +257,7 @@ int VRBridge::Lua_GetHeadPose(lua_State* L) {
 }
 
 int VRBridge::Lua_Recenter(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     FS25VR_TRACE_THREAD("VRBridge.recenter");
     self->Recenter();
@@ -328,8 +325,7 @@ void VRBridge::PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, u
 }
 
 int VRBridge::Lua_GetEyeProjection(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     uint32_t eyeIndex = self->GetFrameParity();
     if (lua_gettop(L) >= 1) {
@@ -423,36 +419,31 @@ HeadPose VRBridge::GetEyePose(uint32_t eyeIndex) {
 }
 
 int VRBridge::Lua_RequiresAfrFallback(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
     lua_pushboolean(L, self->RequiresAfrFallback() ? 1 : 0);
     return 1;
 }
 
 int VRBridge::Lua_GetFrameParity(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
     lua_pushinteger(L, self->GetFrameParity());
     return 1;
 }
 
 int VRBridge::Lua_GetFrameIndex(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
     lua_pushinteger(L, static_cast<int>(self->GetFrameIndex()));
     return 1;
 }
 
 int VRBridge::Lua_GetIpd(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
     lua_pushnumber(L, self->GetIpd());
     return 1;
 }
 
 int VRBridge::Lua_GetEyePose(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     uint32_t eyeIndex = 0;
     if (lua_gettop(L) >= 1) {
@@ -496,8 +487,7 @@ void VRBridge::AlignMenuQuad() {
 }
 
 int VRBridge::Lua_AlignMenuQuad(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     FS25VR_TRACE_THREAD("VRBridge.alignMenuQuad");
     self->AlignMenuQuad();
@@ -505,8 +495,7 @@ int VRBridge::Lua_AlignMenuQuad(lua_State* L) {
 }
 
 int VRBridge::Lua_SetMenuVisible(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     bool visible = false;
     if (lua_gettop(L) >= 1) {
@@ -518,8 +507,7 @@ int VRBridge::Lua_SetMenuVisible(lua_State* L) {
 }
 
 int VRBridge::Lua_GetIsMenuVisible(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     lua_pushboolean(L, self->IsMenuVisible() ? 1 : 0);
     return 1;
@@ -543,8 +531,7 @@ void VRBridge::Set2DViewActive(bool active) {
 }
 
 int VRBridge::Lua_Set2DViewActive(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     bool active = false;
     if (lua_gettop(L) >= 1) {
@@ -556,16 +543,14 @@ int VRBridge::Lua_Set2DViewActive(lua_State* L) {
 }
 
 int VRBridge::Lua_GetIs2DViewActive(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     lua_pushboolean(L, self->Is2DViewActive() ? 1 : 0);
     return 1;
 }
 
 int VRBridge::Lua_GetRenderingMode(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     VRRenderingMode mode = self->GetRenderingMode();
     const char* str = (mode == VRRenderingMode::SequentialDualPass) ? "SequentialDualPass" : "AFR";
@@ -585,8 +570,7 @@ int VRBridge::Lua_GetRenderingMode(lua_State* L) {
 }
 
 int VRBridge::Lua_SetRenderingMode(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     FS25VR_TRACE_THREAD("VRBridge.setRenderingMode");
     if (lua_gettop(L) >= 1) {
@@ -625,16 +609,14 @@ int VRBridge::Lua_SetRenderingMode(lua_State* L) {
 }
 
 int VRBridge::Lua_GetSubPassIndex(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     lua_pushinteger(L, static_cast<int>(self->GetSubPassIndex()));
     return 1;
 }
 
 int VRBridge::Lua_SetSubPassIndex(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     if (lua_gettop(L) >= 1 && lua_isnumber(L, 1)) {
         self->SetSubPassIndex(static_cast<uint32_t>(lua_tointeger(L, 1)));
@@ -643,8 +625,7 @@ int VRBridge::Lua_SetSubPassIndex(lua_State* L) {
 }
 
 int VRBridge::Lua_AdvanceSubPass(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     uint32_t next = self->AdvanceSubPass();
     lua_pushinteger(L, static_cast<int>(next));
@@ -652,8 +633,7 @@ int VRBridge::Lua_AdvanceSubPass(lua_State* L) {
 }
 
 int VRBridge::Lua_Index(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     if (lua_isstring(L, 2)) {
         const char* key = lua_tostring(L, 2);
@@ -728,16 +708,14 @@ bool VRBridge::ConsumeDiscontinuity(uint32_t contextIndex) {
 }
 
 int VRBridge::Lua_ResetTemporalHistory(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     self->SignalDiscontinuity();
     return 0;
 }
 
 int VRBridge::Lua_SignalDiscontinuity(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");
+    VRBridge* self = &FromUpvalue(L);
 
     self->SignalDiscontinuity();
     return 0;
@@ -746,8 +724,9 @@ int VRBridge::Lua_SignalDiscontinuity(lua_State* L) {
 int VRBridge::Lua_SetDlssMvScale(lua_State* L) {
     double scaleX = luaL_checknumber(L, 1);
     double scaleY = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : scaleX;
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self || !self->m_ngxInterceptor) {
+    VRBridge* self = &FromUpvalue(L);
+    // No NGX interceptor wired: DLSS tuning is unavailable, which the Companion Mod can report.
+    if (!self->m_ngxInterceptor) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -758,8 +737,9 @@ int VRBridge::Lua_SetDlssMvScale(lua_State* L) {
 
 int VRBridge::Lua_SetDlssSharpness(lua_State* L) {
     double sharp = luaL_checknumber(L, 1);
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self || !self->m_ngxInterceptor) {
+    VRBridge* self = &FromUpvalue(L);
+    // No NGX interceptor wired: DLSS tuning is unavailable, which the Companion Mod can report.
+    if (!self->m_ngxInterceptor) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -770,8 +750,9 @@ int VRBridge::Lua_SetDlssSharpness(lua_State* L) {
 
 int VRBridge::Lua_SetDlssPreset(lua_State* L) {
     int preset = static_cast<int>(luaL_checkinteger(L, 1));
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (!self || !self->m_ngxInterceptor) {
+    VRBridge* self = &FromUpvalue(L);
+    // No NGX interceptor wired: DLSS tuning is unavailable, which the Companion Mod can report.
+    if (!self->m_ngxInterceptor) {
         lua_pushboolean(L, 0);
         return 1;
     }

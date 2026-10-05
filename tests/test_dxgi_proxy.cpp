@@ -9,6 +9,8 @@
 #include "ngx/ngx_interceptor.h"
 #include <wrl/client.h>
 #include <array>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_set>
 
@@ -1036,35 +1038,53 @@ TEST(InjectorRuntimeTest, AdoptsTheCollaboratorsOfASuppliedVrBridge) {
     EXPECT_EQ(ngx->GetDxgiProxy(), &runtime.GetDxgiProxy());
 }
 
-TEST(InjectorRuntimeTest, PassthroughExportsDoNotConstructTheRuntime) {
-    if (InjectorRuntime::Current() != nullptr) {
-        GTEST_SKIP() << "A runtime outlives this test in the shared test process; ctest runs it in isolation.";
-    }
+// These need a process with no live runtime, but other tests leave InjectorRuntime::Instance() alive
+// in the shared test process. EXPECT_EXIT runs each body in a fresh child process instead; the child
+// reports each failed check on stderr and exits with the number of failures.
+#define FS25VR_CHILD_CHECK(cond) \
+    do { if (!(cond)) { std::fprintf(stderr, "check failed: %s\n", #cond); failures++; } } while (0)
+
+static int PassthroughExportsLeaveNoRuntimeChild() {
+    int failures = 0;
+    FS25VR_CHILD_CHECK(InjectorRuntime::Current() == nullptr);
     Proxy_PIXGetCaptureState();
-    EXPECT_EQ(InjectorRuntime::Current(), nullptr);
+    FS25VR_CHILD_CHECK(InjectorRuntime::Current() == nullptr);
+    return failures;
 }
 
-TEST(InjectorRuntimeTest, HookEntryPointsFailSafeWithNoLiveRuntime) {
-    if (InjectorRuntime::Current() != nullptr) {
-        GTEST_SKIP() << "A runtime outlives this test in the shared test process; ctest runs it in isolation.";
-    }
-    EXPECT_EQ(DxgiProxy::Intercept_Present(nullptr, 0, 0), S_OK);
-    EXPECT_EQ(DxgiProxy::Intercept_Present1(nullptr, 0, 0, nullptr), S_OK);
-    EXPECT_EQ(DxgiProxy::Intercept_ResizeBuffers(nullptr, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0), E_FAIL);
-    EXPECT_EQ(DxgiProxy::Intercept_ResizeBuffers1(nullptr, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0, nullptr, nullptr), E_FAIL);
-    EXPECT_EQ(DxgiProxy::Intercept_CreateSwapChain(nullptr, nullptr, nullptr, nullptr), E_FAIL);
-    EXPECT_EQ(DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr), E_FAIL);
-    EXPECT_EQ(LuauInterceptor::DetourEntryPoint(nullptr), 0);
+static int HookEntryPointsFailSafeChild() {
+    int failures = 0;
+    FS25VR_CHILD_CHECK(InjectorRuntime::Current() == nullptr);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_Present(nullptr, 0, 0) == S_OK);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_Present1(nullptr, 0, 0, nullptr) == S_OK);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_ResizeBuffers(nullptr, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0) == E_FAIL);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_ResizeBuffers1(nullptr, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0, nullptr, nullptr) == E_FAIL);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_CreateSwapChain(nullptr, nullptr, nullptr, nullptr) == E_FAIL);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr) == E_FAIL);
+    FS25VR_CHILD_CHECK(LuauInterceptor::DetourEntryPoint(nullptr) == 0);
 
     // The Win32 hooks fall through to the real, undetoured functions.
     HWND wnd = CreateWindowA("STATIC", "NoRuntimeWnd", WS_OVERLAPPEDWINDOW, 10, 10, 640, 480, nullptr, nullptr, nullptr, nullptr);
-    ASSERT_TRUE(wnd != nullptr);
-    RECT rc{};
-    EXPECT_TRUE(MirrorWindowController::Intercept_GetClientRect(wnd, &rc));
-    POINT pt{ 100, 100 };
-    EXPECT_TRUE(MirrorWindowController::Intercept_ScreenToClient(wnd, &pt));
-    EXPECT_TRUE(MirrorWindowController::Intercept_ClipCursor(nullptr));
-    DestroyWindow(wnd);
+    FS25VR_CHILD_CHECK(wnd != nullptr);
+    if (wnd) {
+        RECT rc{};
+        FS25VR_CHILD_CHECK(MirrorWindowController::Intercept_GetClientRect(wnd, &rc));
+        POINT pt{ 100, 100 };
+        FS25VR_CHILD_CHECK(MirrorWindowController::Intercept_ScreenToClient(wnd, &pt));
+        FS25VR_CHILD_CHECK(MirrorWindowController::Intercept_ClipCursor(nullptr));
+        DestroyWindow(wnd);
+    }
+    return failures;
+}
+
+#undef FS25VR_CHILD_CHECK
+
+TEST(InjectorRuntimeTest, PassthroughExportsDoNotConstructTheRuntime) {
+    EXPECT_EXIT(std::exit(PassthroughExportsLeaveNoRuntimeChild()), ::testing::ExitedWithCode(0), "");
+}
+
+TEST(InjectorRuntimeTest, HookEntryPointsFailSafeWithNoLiveRuntime) {
+    EXPECT_EXIT(std::exit(HookEntryPointsFailSafeChild()), ::testing::ExitedWithCode(0), "");
 }
 
 TEST(DxgiProxyTest, AttachFactoryHooksCreateSwapChain) {
@@ -1563,6 +1583,53 @@ TEST(DxgiProxyTest, AfrResumesWithLeftEyeAfterSessionPause) {
 
     proxy.OnPresent(nullptr, 0, 0);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
+}
+
+TEST(DxgiProxyTest, PendingRenderingModeLatchesWhileSessionIsPaused) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+
+    proxy.OnPresent(nullptr, 0, 0);  // consumes READY
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    proxy.OnPresent(nullptr, 0, 0);
+    ASSERT_FALSE(openXrManager->IsSessionRunning());
+
+    // Headset asleep: no eye pair will be submitted, so the change must not wait for one.
+    vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
+    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 0u);
+}
+
+TEST(DxgiProxyTest, PendingRenderingModeLatchesOnMenuQuadFrame) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    vrBridge->SetMenuVisible(true);
+
+    vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
 }
 
 TEST(DxgiProxyTest, OnPresentContinuesInPassThroughAfterLossPending) {

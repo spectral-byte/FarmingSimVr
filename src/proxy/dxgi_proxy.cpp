@@ -404,6 +404,8 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
                 m_vrBridge->ResetSubPass();
             }
         }
+        // No eye pair is in flight, so a queued Stereo Presentation Mode change is safe to apply now.
+        LatchPendingRenderingMode();
         m_wasInQuadMode = false;
         m_lastPresentSuppressed = false;
         return true;
@@ -432,6 +434,8 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
             // Active during pre-game / Main Menu, in-game GUI menus (ESC pause menu, shop, etc.),
             // or in 2D Floating Window Mode.
             m_openXrManager->SubmitMenuQuad();
+            // The quad frame is a completed compositor frame and no eye pair is in flight.
+            LatchPendingRenderingMode();
             m_lastPresentSuppressed = false;
             return true;
         } else {
