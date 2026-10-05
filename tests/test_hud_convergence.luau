@@ -223,6 +223,7 @@ test("RepositionsActiveHudDisplaysWithFrameConvergenceDisparity", function()
             speedMeter = mockSpeedMeter
         }
     }
+    VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
     -- Frame 0 (Parity 0 -> right aligned anchor shifts by +0.012: 0.80 + 0.012 = 0.812)
     curParity = 0
@@ -273,6 +274,7 @@ test("ConvergenceDisparitySynchronizesSpeedMeterAndFillLevelsUnderVehicleAcrossP
             fillLevels = mockFill
         }
     }
+    VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
     -- Frame 0: Left Eye (Parity 0 -> right anchor = 0.65 + 0.012 = 0.662)
     curParity = 0
@@ -292,6 +294,122 @@ test("ConvergenceDisparitySynchronizesSpeedMeterAndFillLevelsUnderVehicleAcrossP
 
     _G.g_currentMission = nil
     _G.VRBridge = nil
+end)
+
+-- Hidden HUD: no repositioning, but convergence state keeps updating
+local function makeCountingHud()
+    local calls = { count = 0 }
+    local function mk(name)
+        return {
+            name = name, width = 0.08, height = 0.03, position = nil,
+            setPosition = function(self, x, y) calls.count = calls.count + 1; self.position = { x = x, y = y } end,
+            setScale = function() calls.count = calls.count + 1 end,
+            storeOriginalPosition = function() calls.count = calls.count + 1 end,
+            reposition = function() calls.count = calls.count + 1 end,
+            updatePosition = function() calls.count = calls.count + 1 end
+        }
+    end
+    local hud = {
+        speedMeter = mk("SpeedMeterDisplay"),
+        fillLevels = mk("FillLevelsDisplay"),
+        inputHelp = mk("InputHelpDisplay"),
+        gameInfo = mk("GameInfoDisplay"),
+        contextAction = mk("ContextActionDisplay"),
+        ingameMap = mk("IngameMap")
+    }
+    hud.fillLevels.bgLeft = mk("bgLeft")
+    hud.fillLevels.bar = mk("bar")
+    return hud, calls
+end
+
+local function setupHiddenHudScene(parity)
+    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    VRCompanion.fillLevelUnderVehicle = true
+    VRCompanion.is2DViewActive = false
+    VRCompanion.activeFillLevelsDisplay = nil
+    _G.VRBridge = {
+        getFrameParity = function() return parity.value end,
+        getIpd = function() return 0.064 end,
+        isReady = function() return true end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+    local hud, calls = makeCountingHud()
+    _G.g_currentMission = { hud = hud }
+    return hud, calls
+end
+
+local function teardownHiddenHudScene()
+    VRCompanion.fillLevelUnderVehicle = false
+    VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+    VRCompanion.activeFillLevelsDisplay = nil
+    _G.g_currentMission = nil
+    _G.VRBridge = nil
+end
+
+test("HiddenHudMakesNoRepositionCallsButStillUpdatesConvergenceState", function()
+    local parity = { value = 0 }
+    local hud, calls = setupHiddenHudScene(parity)
+    VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+
+    for f = 1, 4 do
+        parity.value = f % 2
+        local left, right, offset = VRCompanion:updateHudConvergence(16)
+        assert(left ~= nil and right ~= nil and offset ~= nil, "Hidden update must still return anchors and offset")
+    end
+    assert(calls.count == 0, string.format("Hidden update made %d HUD reposition calls", calls.count))
+    assert(hud.speedMeter.position == nil and hud.fillLevels.position == nil, "No element may be moved while Hidden")
+
+    parity.value = 0
+    VRCompanion:updateHudConvergence(16)
+    assert(math.abs(_G.g_hudAnchorLeft - VRCompanion.hudAnchorLeft) < 0.0000001 and VRCompanion.hudAnchorLeft ~= 0.20, "Anchors must keep converging while Hidden")
+    assert(VRCompanion.currentConvergenceOffset ~= 0.0, "Convergence offset must keep updating while Hidden")
+    teardownHiddenHudScene()
+end)
+
+test("SwitchingFromHiddenPositionsElementsWithCurrentConvergenceOffset", function()
+    local parity = { value = 0 }
+    local hud, calls = setupHiddenHudScene(parity)
+    VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+    VRCompanion:updateHudConvergence()
+    assert(calls.count == 0)
+    local offset = VRCompanion.currentConvergenceOffset
+    assert(math.abs(offset - 0.012) < 0.0001)
+
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+    assert(hud.inputHelp.position ~= nil and hud.speedMeter.position ~= nil and hud.ingameMap.position ~= nil
+        and hud.gameInfo.position ~= nil and hud.contextAction.position ~= nil and hud.fillLevels.position ~= nil,
+        "Every element must be positioned immediately on leaving Hidden")
+    assert(math.abs(hud.inputHelp.position.x - 0.212) < 0.0001, "InputHelp must use shifted left anchor")
+    assert(math.abs(hud.gameInfo.position.x - 0.812) < 0.0001, "GameInfo must use shifted right anchor")
+    assert(math.abs(hud.contextAction.position.x - 0.512) < 0.0001, "ContextAction must carry the offset")
+    assert(math.abs(hud.ingameMap.position.x - 0.212) < 0.0001, "Map must use shifted left anchor")
+    assert(math.abs(hud.fillLevels.position.x - (0.812 - 0.08)) < 0.0001, "Fill levels must carry the offset")
+
+    -- Streamlined path too
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+    parity.value = 1
+    VRCompanion:updateHudConvergence()
+    hud.speedMeter.position = nil
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
+    assert(hud.speedMeter.position ~= nil and math.abs(hud.speedMeter.position.x - 0.788) < 0.0001, "Streamlined must position with the current (-) offset")
+    teardownHiddenHudScene()
+end)
+
+test("VisibleStatesKeepRepositioningEveryUpdate", function()
+    local parity = { value = 0 }
+    local hud, calls = setupHiddenHudScene(parity)
+    VRCompanion.hudState = VRCompanion.HUD_STATE_STREAMLINED
+    VRCompanion:updateHudConvergence()
+    assert(calls.count > 0, "Streamlined update must reposition")
+    local after = calls.count
+    parity.value = 1
+    VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
+    VRCompanion:updateHudConvergence()
+    assert(calls.count > after, "Full update must reposition")
+    assert(math.abs(hud.speedMeter.position.x - 0.788) < 0.0001)
+    teardownHiddenHudScene()
 end)
 
 -- Slice 4: Pass-Through mode and disabled head tracking smooth reversion to zero

@@ -11,6 +11,15 @@ if(MSVC)
     add_compile_options(/W4 /utf-8 /permissive-)
 endif()
 
+# Shipped configuration: RelWithDebInfo with full inlining (/Ob2) and a PDB.
+# CMake's MSVC default is /Ob1, which only inlines functions marked inline. Set before
+# FetchContent so the statically linked dependencies (Luau, MinHook, OpenXR) match.
+# CI and scripts/package_release.ps1 verify this value in CMakeCache.txt.
+if(MSVC)
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/Zi /O2 /Ob2 /DNDEBUG" CACHE STRING "RelWithDebInfo C++ flags (full inlining)" FORCE)
+    set(CMAKE_C_FLAGS_RELWITHDEBINFO "/Zi /O2 /Ob2 /DNDEBUG" CACHE STRING "RelWithDebInfo C flags (full inlining)" FORCE)
+endif()
+
 include(FetchContent)
 
 # Fetch OpenXR-SDK

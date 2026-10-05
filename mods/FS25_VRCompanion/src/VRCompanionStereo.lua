@@ -511,18 +511,31 @@ function VRCompanion:fetchEyeProjection(eyeIndex)
     end
     eyeIndex = eyeIndex or 0
     local cache = self.eyeProjectionCache
-    if cache ~= nil and cache.eye == eyeIndex then
+    if cache ~= nil and cache.active and cache.eye == eyeIndex then
         return cache.proj
     end
 
     local proj = false
     if VRBridge and type(VRBridge.getEyeProjection) == "function" then
-        local fetched = VRBridge.getEyeProjection(eyeIndex)
+        -- One reusable table per eye: VRBridge fills it in place instead of allocating, and the
+        -- cached projection of one eye is not overwritten by a fetch for the other.
+        local scratch = self.eyeProjectionScratch
+        if scratch == nil then
+            scratch = {}
+            self.eyeProjectionScratch = scratch
+        end
+        local target = scratch[eyeIndex]
+        if target == nil then
+            target = {}
+            scratch[eyeIndex] = target
+        end
+        local fetched = VRBridge.getEyeProjection(eyeIndex, target)
         if fetched and fetched.isValid then
             proj = fetched
         end
     end
-    if cache ~= nil then
+    -- Only a valid projection is reused, so one that becomes valid mid sub-pass is picked up.
+    if cache ~= nil and cache.active and proj then
         cache.eye = eyeIndex
         cache.proj = proj
     end
@@ -530,11 +543,23 @@ function VRCompanion:fetchEyeProjection(eyeIndex)
 end
 
 function VRCompanion:beginEyeProjectionScope()
-    self.eyeProjectionCache = {}
+    local cache = self.eyeProjectionCache
+    if cache == nil then
+        cache = {}
+        self.eyeProjectionCache = cache
+    end
+    cache.active = true
+    cache.eye = nil
+    cache.proj = nil
 end
 
 function VRCompanion:endEyeProjectionScope()
-    self.eyeProjectionCache = nil
+    local cache = self.eyeProjectionCache
+    if cache ~= nil then
+        cache.active = false
+        cache.eye = nil
+        cache.proj = nil
+    end
 end
 
 function VRCompanion:applyCameraProjection(camNode, eyeIndex, proj)
@@ -660,8 +685,14 @@ end
 function VRCompanion:getResolvedHeadPose()
     local pose = nil
     local bridge = VRBridge or (_G and _G.VRBridge)
+    -- Reuse one pose table across frames: VRBridge fills it in place instead of allocating.
+    local scratch = self.headPoseScratch
+    if scratch == nil then
+        scratch = {}
+        self.headPoseScratch = scratch
+    end
     if bridge ~= nil and type(bridge.getHeadPose) == "function" then
-        pose = bridge.getHeadPose()
+        pose = bridge.getHeadPose(scratch)
     end
 
     -- Fallback to native engine TrackIR functions if VRBridge is not providing a valid pose
@@ -675,15 +706,16 @@ function VRCompanion:getResolvedHeadPose()
             pitch, yaw, roll = getHeadTrackingRotation()
         end
         if pitch ~= nil then
-            pose = {
-                x = tx or 0,
-                y = ty or 0,
-                z = tz or 0,
-                pitch = pitch or 0,
-                yaw = yaw or 0,
-                roll = roll or 0,
-                isValid = true
-            }
+            pose = scratch
+            pose.x = tx or 0
+            pose.y = ty or 0
+            pose.z = tz or 0
+            pose.pitch = pitch or 0
+            pose.yaw = yaw or 0
+            pose.roll = roll or 0
+            -- TrackIR supplies no quaternion: clear any identity left over from a VRBridge fill.
+            pose.qx, pose.qy, pose.qz, pose.qw = nil, nil, nil, nil
+            pose.isValid = true
         end
     end
 
@@ -937,7 +969,10 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     else
         local targetNode = self.cameraNodeLeft or cam.cameraNode
         if targetNode ~= nil and targetNode ~= 0 then
-            self:applyCameraProjection(targetNode, 0, eyeProj)
+            -- This branch always shows the left eye; reuse eyeProj only when it was fetched for eye 0.
+            local leftProj = nil
+            if eyeIndex == 0 then leftProj = eyeProj end
+            self:applyCameraProjection(targetNode, 0, leftProj)
             if type(setTranslationFn) == "function" then
                 setTranslationFn(targetNode, cabTransX, cabTransY, cabTransZ)
             end
@@ -1113,7 +1148,10 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     else
         local targetNode = self.cameraNodeLeft or activeCamNode
         if targetNode ~= nil and targetNode ~= 0 then
-            self:applyCameraProjection(targetNode, 0, eyeProj)
+            -- This branch always shows the left eye; reuse eyeProj only when it was fetched for eye 0.
+            local leftProj = nil
+            if eyeIndex == 0 then leftProj = eyeProj end
+            self:applyCameraProjection(targetNode, 0, leftProj)
             if type(setTranslation) == "function" then
                 setTranslation(targetNode, finalTx, finalTy, finalTz)
             end
