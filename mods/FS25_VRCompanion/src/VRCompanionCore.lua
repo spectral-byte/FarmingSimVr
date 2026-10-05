@@ -10,6 +10,10 @@ VRCompanion.Core = VRCompanion.Core or {}
 VRCompanion.name = VRCompanion.name or g_currentModName or "FS25_VRCompanion"
 VRCompanion.version = VRCompanion.version or "1.0.0.0"
 
+-- Slow retry cadence (in update ticks) for re-running the dt=0 guard install so a late
+-- Ferry class or newly spawned vehicles are picked up without scanning _G every frame.
+VRCompanion.VEHICLE_SPEED_HOOK_RETRY_TICKS = 180
+
 VRCompanion.handshakeComplete = (VRCompanion.handshakeComplete ~= nil) and VRCompanion.handshakeComplete or false
 VRCompanion.frameTicks = VRCompanion.frameTicks or 0
 VRCompanion.lastControlledVehicle = VRCompanion.lastControlledVehicle or nil
@@ -633,8 +637,13 @@ function VRCompanion:update(dt)
     if not self.missionUpdateHooked then
         self:hookMissionUpdate()
     end
-    if not self.vehicleSpeedHooked or self.origFerryUpdatePosition == nil then
+    -- Install dt=0 guards once, then only retry (to catch a late Ferry class or newly
+    -- spawned vehicles) on a slow cadence or on a vehicle transition, never every frame.
+    local speedHookRetryDue = self.vehicleSpeedHooked
+        and (self.frameTicks - (self.lastVehicleSpeedHookTick or 0)) >= self.VEHICLE_SPEED_HOOK_RETRY_TICKS
+    if not self.vehicleSpeedHooked or speedHookRetryDue then
         self:hookVehicleSpeed()
+        self.lastVehicleSpeedHookTick = self.frameTicks
     end
 
     -- Update physical IPD-scaled HUD convergence parity across alternating AFR frames
@@ -654,6 +663,9 @@ function VRCompanion:update(dt)
     if self.lastControlledVehicle ~= curVehicle then
         local oldVeh = self.lastControlledVehicle
         self.lastControlledVehicle = curVehicle
+        -- A new vehicle may have just been spawned/entered: re-run the guard install.
+        self:hookVehicleSpeed()
+        self.lastVehicleSpeedHookTick = self.frameTicks
         if type(self.onVehicleTransition) == "function" then
             self:onVehicleTransition(oldVeh, curVehicle)
         end
