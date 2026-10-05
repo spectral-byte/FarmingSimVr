@@ -1555,6 +1555,27 @@ TEST(DxgiProxyTest, KeepsGameSyncIntervalWhileSessionIsPaused) {
     EXPECT_EQ(proxy.EffectiveSyncInterval(1), 0u);
 }
 
+TEST(DxgiProxyTest, KeepsGameSyncIntervalWhileSessionRunsWithoutEyeSwapchains) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    // CreateEyeSwapchains is deliberately skipped: it failed, so OnPresent never calls xrWaitFrame.
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+
+    proxy.OnPresent(nullptr, 1, 0);
+    ASSERT_TRUE(openXrManager->IsSessionRunning());
+    ASSERT_FALSE(openXrManager->HasEyeSwapchains());
+    EXPECT_EQ(proxy.EffectiveSyncInterval(1), 1u);
+
+    // Once eye swapchains exist, xrWaitFrame paces frames again.
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+    EXPECT_EQ(proxy.EffectiveSyncInterval(1), 0u);
+}
+
 TEST(DxgiProxyTest, AfrResumesWithLeftEyeAfterSessionPause) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);

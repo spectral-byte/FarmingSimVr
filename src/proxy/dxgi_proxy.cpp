@@ -500,9 +500,11 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
 }
 
 UINT DxgiProxy::EffectiveSyncInterval(UINT gameSyncInterval) const {
-    // xrWaitFrame paces frames only while the session runs. While it is paused (headset asleep,
-    // not yet READY) keep the game's own vsync so the Desktop Mirror Window does not run uncapped.
-    bool xrPacing = m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning();
+    // xrWaitFrame paces frames only while the session runs and eye swapchains exist (OnPresent calls it
+    // only then). While it is paused (headset asleep, not yet READY) or swapchain creation failed, keep
+    // the game's own vsync so the Desktop Mirror Window does not run uncapped.
+    bool xrPacing = m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning() &&
+                    m_openXrManager->HasEyeSwapchains();
     return xrPacing ? 0 : gameSyncInterval;
 }
 
