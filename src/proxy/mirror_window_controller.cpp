@@ -638,15 +638,16 @@ BOOL WINAPI MirrorWindowController::Intercept_GetClientRect(HWND hWnd, LPRECT lp
     if (t_isInternalWindowQuery) {
         return orig ? orig(hWnd, lpRect) : ::GetClientRect(hWnd, lpRect);
     }
-    if (ctrl && ctrl->IsActive() && ctrl->m_gameHwnd && lpRect) {
+    // Cheap conditions first: the root-window walk only runs once VR is active and a target
+    // render resolution is set.
+    if (ctrl && lpRect && ctrl->IsActive() && ctrl->m_gameHwnd
+        && ctrl->m_targetRenderWidth > 0 && ctrl->m_targetRenderHeight > 0) {
         if (hWnd == ctrl->m_gameHwnd || GetRootWindow(hWnd) == ctrl->m_gameHwnd) {
-            if (ctrl->m_targetRenderWidth > 0 && ctrl->m_targetRenderHeight > 0) {
-                lpRect->left = 0;
-                lpRect->top = 0;
-                lpRect->right = static_cast<LONG>(ctrl->m_targetRenderWidth);
-                lpRect->bottom = static_cast<LONG>(ctrl->m_targetRenderHeight);
-                return TRUE;
-            }
+            lpRect->left = 0;
+            lpRect->top = 0;
+            lpRect->right = static_cast<LONG>(ctrl->m_targetRenderWidth);
+            lpRect->bottom = static_cast<LONG>(ctrl->m_targetRenderHeight);
+            return TRUE;
         }
     }
     return orig ? orig(hWnd, lpRect) : ::GetClientRect(hWnd, lpRect);

@@ -176,11 +176,15 @@ Press the tilde key (`` ` `` / `~`) to open the in-engine developer console:
 git clone https://github.com/jacoch17/FarmingSimVr.git
 cd FarmingSimVr
 
-# Configure CMake with Ninja
+# Configure CMake with Ninja. RelWithDebInfo is the shipped configuration: full
+# inlining (/Ob2, set in CMakeLists.txt) plus a dxgi.pdb for symbols.
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
 # Build Injector DLL and Test Executable
 ninja -C build dxgi fs25_vr_tests
+
+# Confirm the build tree uses the shipped configuration (also run by CI and the packaging script)
+.\scripts\check_build_config.ps1 build
 
 # Run automated unit and integration tests
 ctest --test-dir build --output-on-failure

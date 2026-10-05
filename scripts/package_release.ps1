@@ -10,6 +10,9 @@ $licensePath = Join-Path $repoRoot "LICENSE"
 
 Write-Host "Packaging FS25 VR Release..."
 
+# Only ship the optimised configuration (RelWithDebInfo, /Ob2).
+& (Join-Path $PSScriptRoot "check_build_config.ps1") (Join-Path $repoRoot "build")
+
 if (-not (Test-Path $builtDll)) {
     Write-Error "build\dxgi.dll not found. Build project first (ninja -C build dxgi)."
 }
@@ -33,6 +36,8 @@ New-Item -ItemType Directory -Path "$bundleDir\mods" -Force | Out-Null
 # Copy Injector DLL
 Copy-Item $builtDll "$bundleDir\x64\dxgi.dll" -Force
 Copy-Item $builtDll "$releaseDir\dxgi.dll" -Force
+$builtPdb = Join-Path $repoRoot "build\dxgi.pdb"
+if (Test-Path $builtPdb) { Copy-Item $builtPdb "$releaseDir\dxgi.pdb" -Force }
 Write-Host "[Package] Staged dxgi.dll"
 
 # dxgi.dll statically links these dependencies; their licenses require shipping the notices.

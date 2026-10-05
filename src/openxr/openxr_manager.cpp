@@ -10,6 +10,16 @@
 
 namespace fs25vr {
 
+// The performance counter frequency is fixed at boot, so it is queried once.
+static int64_t QpcFrequency() {
+    static const int64_t freq = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return static_cast<int64_t>(f.QuadPart);
+    }();
+    return freq;
+}
+
 int64_t OpenXrManager::PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency) {
     if (frequency <= 0) return 0;
     // Split into whole seconds and a sub-second remainder: counter * 1e9 overflows int64 after
@@ -25,10 +35,9 @@ void OpenXrManager::SetPerformanceCounterSource(PerformanceCounterSource source)
 
 OpenXrManager::PerformanceCounterSample OpenXrManager::ReadPerformanceCounter() const {
     if (m_counterSource) return m_counterSource();
-    LARGE_INTEGER qpc, freq;
+    LARGE_INTEGER qpc;
     QueryPerformanceCounter(&qpc);
-    QueryPerformanceFrequency(&freq);
-    return { qpc.QuadPart, freq.QuadPart };
+    return { qpc.QuadPart, QpcFrequency() };
 }
 
 XrTime OpenXrManager::GetCurrentXrTime() const {
