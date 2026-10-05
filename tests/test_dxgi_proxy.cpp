@@ -3008,7 +3008,7 @@ LRESULT CALLBACK TestSubclassObserverProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 static UINT s_lastResizeBuffersWidth = 0;
 static UINT s_lastResizeBuffersHeight = 0;
 
-HRESULT STDMETHODCALLTYPE MockResizeBuffersImpl(IDXGISwapChain*, UINT, UINT Width, UINT Height, DXGI_FORMAT, UINT) {
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockResizeBuffersImpl(IDXGISwapChain*, UINT, UINT Width, UINT Height, DXGI_FORMAT, UINT) {
     s_lastResizeBuffersWidth = Width;
     s_lastResizeBuffersHeight = Height;
     return S_OK;
