@@ -256,7 +256,9 @@ public:
         tracking.DestroySpace(space);
         return XR_SUCCESS;
     }
-    XrResult LocateSpace(XrSpace, XrSpace baseSpace, XrTime, XrSpaceLocation* location) override {
+    std::vector<XrTime> locateSpaceTimes;
+    XrResult LocateSpace(XrSpace, XrSpace baseSpace, XrTime time, XrSpaceLocation* location) override {
+        locateSpaceTimes.push_back(time);
         return tracking.LocateSpace(baseSpace, location);
     }
     XrResult LocateViews(XrSession, const XrViewLocateInfo*, XrViewState* viewState, uint32_t viewCapacityInput, uint32_t* viewCountOutput, XrView* views) override {
@@ -331,7 +333,7 @@ public:
         if (enforceCallOrder) isFrameWaiting = true;
         if (frameState) {
             frameState->type = XR_TYPE_FRAME_STATE;
-            frameState->predictedDisplayTime = 1000000;
+            frameState->predictedDisplayTime = 1000000 + static_cast<XrTime>(waitFrameCalls - 1) * 11111111;
             frameState->predictedDisplayPeriod = 11111111;
             frameState->shouldRender = XR_TRUE;
         }
@@ -700,6 +702,79 @@ TEST(DxgiProxyTest, SequentialDualPassSubPass1SubmitsPairAndExecutesPresent) {
     EXPECT_EQ(vrBridge->GetSubPassIndex(), 0u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u);
     EXPECT_EQ(vrBridge->GetFrameIndex(), 1u); // Exactly 1 logical frame boundary completed
+}
+
+// Drives eye pairs through OnPresent/OnPresentReturned the way the Present detour does. For each
+// pair the head is at x = pairIndex when the frame begins and has moved on by the time the
+// Companion Mod asks for either eye's pose; both eyes must still get the pose located at the
+// pair's predicted display time.
+static void ExpectBothEyesLocatedAtThePairsDisplayTime(VRRenderingMode mode) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    mockDispatch->enforceCallOrder = true;
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(mode);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+    openXrManager->PollEvents();  // READY: the session runs
+    ASSERT_TRUE(openXrManager->IsSessionRunning());
+
+    // A Present returned: the first pair's frame is waited on and begun before the engine updates.
+    mockDispatch->tracking.head.pose.position = { 1.0f, 1.5f, 0.0f };
+    proxy.OnPresentReturned();
+
+    for (uint32_t pair = 1; pair <= 3; ++pair) {
+        ASSERT_TRUE(openXrManager->IsFrameBegun());
+
+        for (uint32_t eye = 0; eye < 2; ++eye) {
+            mockDispatch->tracking.head.pose.position = { 100.0f + eye, 1.5f, 0.0f };
+            HeadPose pose = vrBridge->GetHeadPose();  // the eye of the pair now being rendered
+            EXPECT_NEAR(pose.position.x, static_cast<float>(pair), 1e-4f) << "pair " << pair << " eye " << eye;
+            ASSERT_TRUE(openXrManager->IsFrameBegun());
+            proxy.OnPresent(nullptr, 0, 0);
+            // After the pair's second Present the next frame begins with the head at pair + 1.
+            mockDispatch->tracking.head.pose.position = { static_cast<float>(pair + 1), 1.5f, 0.0f };
+            proxy.OnPresentReturned();
+            if (eye == 0) {
+                EXPECT_TRUE(openXrManager->IsFrameBegun()) << "the pair's frame stays begun until it is submitted";
+            }
+        }
+        EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), pair);
+    }
+
+    // Every pose lookup used a frame's predicted display time, never a time derived from "now".
+    for (XrTime time : mockDispatch->locateSpaceTimes) {
+        EXPECT_EQ((time - 1000000) % 11111111, 0) << "time " << time;
+    }
+    EXPECT_EQ(mockDispatch->waitFrameCalls, 4u);  // 3 pairs + the frame begun after the last submit
+    EXPECT_EQ(mockDispatch->callOrderErrors, 0u);
+}
+
+TEST(DxgiProxyTest, SequentialDualPassBothEyesAreLocatedAtThePairsDisplayTime) {
+    ExpectBothEyesLocatedAtThePairsDisplayTime(VRRenderingMode::SequentialDualPass);
+}
+
+TEST(DxgiProxyTest, AfrBothEyesAreLocatedAtThePairsDisplayTime) {
+    ExpectBothEyesLocatedAtThePairsDisplayTime(VRRenderingMode::AFR);
+}
+
+TEST(DxgiProxyTest, OnPresentReturnedDoesNotBeginAFrameWithoutARunningSessionAndSwapchains) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+
+    proxy.OnPresentReturned();  // no eye swapchains yet
+
+    EXPECT_FALSE(openXrManager->IsFrameBegun());
+    EXPECT_EQ(mockDispatch->waitFrameCalls, 0u);
 }
 
 TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
