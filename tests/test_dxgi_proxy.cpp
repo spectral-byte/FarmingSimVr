@@ -269,7 +269,9 @@ public:
         }
         return XR_SUCCESS;
     }
+    bool failCreateSwapchain = false;
     XrResult CreateSwapchain(XrSession, const XrSwapchainCreateInfo*, XrSwapchain* swapchain) override {
+        if (failCreateSwapchain) return XR_ERROR_RUNTIME_FAILURE;
         static uintptr_t s_chain = 0x54AC0001;
         if (swapchain) *swapchain = reinterpret_cast<XrSwapchain>(s_chain++);
         return XR_SUCCESS;
@@ -1628,6 +1630,53 @@ TEST(DxgiProxyTest, PendingRenderingModeLatchesOnMenuQuadFrame) {
     vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
     EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
     EXPECT_EQ(openXrManager->GetSubmittedQuadFrameCount(), 1u);
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
+}
+
+TEST(DxgiProxyTest, PendingRenderingModeLatchesWhenNoEyeSwapchainsExist) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    mockDispatch->failCreateSwapchain = true;
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    EXPECT_FALSE(openXrManager->CreateEyeSwapchains(1920, 1080));
+    ASSERT_FALSE(openXrManager->HasEyeSwapchains());
+    ASSERT_TRUE(openXrManager->IsActive());
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+
+    // No eye pair can ever be in flight, so the queued change must not wait for a pair boundary.
+    vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
+    EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
+}
+
+TEST(DxgiProxyTest, PendingRenderingModeLatchesWhenDroppingToPassThrough) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+
+    // Left eye of a pair is in flight, then the mode is queued and the runtime ends the session.
+    proxy.OnPresent(nullptr, 0, 0);
+    ASSERT_EQ(vrBridge->GetSubPassIndex(), 1u);
+    vrBridge->SetPendingRenderingMode(VRRenderingMode::AFR);
+    mockDispatch->events.PushSessionState(XR_SESSION_STATE_EXITING);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    ASSERT_TRUE(openXrManager->IsPassThrough());
     EXPECT_FALSE(vrBridge->GetPendingRenderingMode().has_value());
     EXPECT_EQ(vrBridge->GetRenderingMode(), VRRenderingMode::AFR);
 }
