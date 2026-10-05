@@ -211,6 +211,9 @@ end
 
 function VRCompanion:bindRenderingCamera(targetCam)
     if targetCam == nil then return end
+    -- During a Sequential Dual-Pass sub-pass the mission update owns the single bind
+    -- of the eye's camera; camera updates inside the sub-pass only position nodes.
+    if self.deferRenderingCameraBind then return end
     local bound = false
     local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
     if camMgr ~= nil and type(camMgr.setActiveCamera) == "function" then
@@ -497,7 +500,44 @@ function VRCompanion:setHeadTrackingEnabled(enabled)
     self.headTrackingEnabled = (enabled == true)
 end
 
-function VRCompanion:applyCameraProjection(camNode, eyeIndex)
+-- Returns the valid eye projection from VRBridge, or false when none is available
+-- (no bridge, 2D Floating Window Mode, or an invalid projection). While a sub-pass
+-- scope is open (see beginEyeProjectionScope) the result for an eye is reused, so
+-- one Sequential Dual-Pass sub-pass reads VRBridge once however many camera
+-- updates it triggers.
+function VRCompanion:fetchEyeProjection(eyeIndex)
+    if self.is2DViewActive then
+        return false
+    end
+    eyeIndex = eyeIndex or 0
+    local cache = self.eyeProjectionCache
+    if cache ~= nil and cache.eye == eyeIndex then
+        return cache.proj
+    end
+
+    local proj = false
+    if VRBridge and type(VRBridge.getEyeProjection) == "function" then
+        local fetched = VRBridge.getEyeProjection(eyeIndex)
+        if fetched and fetched.isValid then
+            proj = fetched
+        end
+    end
+    if cache ~= nil then
+        cache.eye = eyeIndex
+        cache.proj = proj
+    end
+    return proj
+end
+
+function VRCompanion:beginEyeProjectionScope()
+    self.eyeProjectionCache = {}
+end
+
+function VRCompanion:endEyeProjectionScope()
+    self.eyeProjectionCache = nil
+end
+
+function VRCompanion:applyCameraProjection(camNode, eyeIndex, proj)
     if camNode == nil or camNode == 0 then
         return
     end
@@ -535,12 +575,12 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex)
         return
     end
 
-    if not VRBridge or type(VRBridge.getEyeProjection) ~= "function" then
-        return
+    -- A caller applying one eye's projection to several nodes fetches it once and passes it in.
+    -- false means "already fetched, nothing usable"; nil means "fetch it now".
+    if proj == nil then
+        proj = self:fetchEyeProjection(eyeIndex or 0)
     end
-
-    local proj = VRBridge.getEyeProjection(eyeIndex or 0)
-    if not proj or not proj.isValid then
+    if not proj then
         return
     end
 
@@ -680,7 +720,8 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     local afrFallback = self:requiresAfrFallback()
     local eyeIndex = self:getActiveEyeIndex(afrFallback)
 
-    self:applyCameraProjection(cam.cameraNode, eyeIndex)
+    local eyeProj = self:fetchEyeProjection(eyeIndex)
+    self:applyCameraProjection(cam.cameraNode, eyeIndex, eyeProj)
 
     if cam.origRotY == nil then
         cam.origRotY = cam.rotY or 0
@@ -883,7 +924,7 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         local activeEyeCam = isRightEye and self.cameraNodeRight or self.cameraNodeLeft
 
         if activeEyeCam ~= nil and activeEyeCam ~= 0 then
-            self:applyCameraProjection(activeEyeCam, eyeIndex)
+            self:applyCameraProjection(activeEyeCam, eyeIndex, eyeProj)
             if type(setTranslationFn) == "function" then
                 setTranslationFn(activeEyeCam, cabTransX, cabTransY, cabTransZ)
             end
@@ -896,7 +937,7 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     else
         local targetNode = self.cameraNodeLeft or cam.cameraNode
         if targetNode ~= nil and targetNode ~= 0 then
-            self:applyCameraProjection(targetNode, 0)
+            self:applyCameraProjection(targetNode, 0, eyeProj)
             if type(setTranslationFn) == "function" then
                 setTranslationFn(targetNode, cabTransX, cabTransY, cabTransZ)
             end
@@ -944,7 +985,8 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     local afrFallback = self:requiresAfrFallback()
     local eyeIndex = self:getActiveEyeIndex(afrFallback)
 
-    self:applyCameraProjection(activeCamNode, eyeIndex)
+    local eyeProj = self:fetchEyeProjection(eyeIndex)
+    self:applyCameraProjection(activeCamNode, eyeIndex, eyeProj)
 
     -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely.
     -- Standard on-foot camera rotation is driven via mouse/thumbstick.
@@ -1058,7 +1100,7 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
         local activeEyeCam = isRightEye and self.cameraNodeRight or self.cameraNodeLeft
 
         if activeEyeCam ~= nil and activeEyeCam ~= 0 then
-            self:applyCameraProjection(activeEyeCam, eyeIndex)
+            self:applyCameraProjection(activeEyeCam, eyeIndex, eyeProj)
             if type(setTranslation) == "function" then
                 setTranslation(activeEyeCam, finalTx, finalTy, finalTz)
             end
@@ -1071,7 +1113,7 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     else
         local targetNode = self.cameraNodeLeft or activeCamNode
         if targetNode ~= nil and targetNode ~= 0 then
-            self:applyCameraProjection(targetNode, 0)
+            self:applyCameraProjection(targetNode, 0, eyeProj)
             if type(setTranslation) == "function" then
                 setTranslation(targetNode, finalTx, finalTy, finalTz)
             end
@@ -1207,7 +1249,12 @@ function VRCompanion:updateMenuBackgroundCamera(dt)
     local yaw = pose.yaw or 0
     local roll = pose.roll or 0
 
-    local lastOffset = self.menuCameraOffsets[camNode] or { tx = 0, ty = 0, tz = 0, rx = 0, ry = 0, rz = 0 }
+    -- One record per camera node, allocated on first use and updated in place afterwards
+    local lastOffset = self.menuCameraOffsets[camNode]
+    if lastOffset == nil then
+        lastOffset = { tx = 0, ty = 0, tz = 0, rx = 0, ry = 0, rz = 0 }
+        self.menuCameraOffsets[camNode] = lastOffset
+    end
 
     local curX, curY, curZ = 0, 0, 0
     if type(getTranslation) == "function" then
@@ -1236,10 +1283,8 @@ function VRCompanion:updateMenuBackgroundCamera(dt)
     local finalRotY = baseRy + yaw
     local finalRotZ = baseRz + roll
 
-    self.menuCameraOffsets[camNode] = {
-        tx = tx, ty = ty, tz = tz,
-        rx = pitch, ry = yaw, rz = roll
-    }
+    lastOffset.tx, lastOffset.ty, lastOffset.tz = tx, ty, tz
+    lastOffset.rx, lastOffset.ry, lastOffset.rz = pitch, yaw, roll
 
     if type(setTranslation) == "function" then
         pcall(setTranslation, camNode, finalTx, finalTy, finalTz)
