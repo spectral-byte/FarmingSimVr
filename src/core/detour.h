@@ -34,4 +34,8 @@ private:
     std::atomic<bool> m_installed{false};
 };
 
+// Makes the next Uninstall behave as if MH_RemoveHook failed, leaving MinHook holding a
+// disabled hook for that target.
+void FailNextHookRemovalForTesting();
+
 } // namespace fs25vr
