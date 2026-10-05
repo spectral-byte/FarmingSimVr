@@ -397,6 +397,8 @@ function VRCompanion:hookVehicleSpeed()
     end
 
     self.vehicleSpeedHooked = true
+    -- Recorded here so the install from loadMap also restarts the slow retry cadence.
+    self.lastVehicleSpeedHookTick = self.frameTicks or 0
 end
 
 function VRCompanion:unhookVehicleSpeed()
@@ -643,7 +645,6 @@ function VRCompanion:update(dt)
         and (self.frameTicks - (self.lastVehicleSpeedHookTick or 0)) >= self.VEHICLE_SPEED_HOOK_RETRY_TICKS
     if not self.vehicleSpeedHooked or speedHookRetryDue then
         self:hookVehicleSpeed()
-        self.lastVehicleSpeedHookTick = self.frameTicks
     end
 
     -- Update physical IPD-scaled HUD convergence parity across alternating AFR frames
@@ -665,7 +666,6 @@ function VRCompanion:update(dt)
         self.lastControlledVehicle = curVehicle
         -- A new vehicle may have just been spawned/entered: re-run the guard install.
         self:hookVehicleSpeed()
-        self.lastVehicleSpeedHookTick = self.frameTicks
         if type(self.onVehicleTransition) == "function" then
             self:onVehicleTransition(oldVeh, curVehicle)
         end
@@ -729,6 +729,7 @@ function VRCompanion:deleteMap()
     self.inMissionUpdate = false
     self.handshakeComplete = false
     self.frameTicks = 0
+    self.lastVehicleSpeedHookTick = 0
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
     self.activePlayerCamera = nil

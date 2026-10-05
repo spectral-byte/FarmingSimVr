@@ -811,6 +811,55 @@ test("LateFerryAndLateVehicleAreGuardedWithinBoundedUpdates", function()
     _G.g_currentMission = nil
 end)
 
+test("LateFerryIsGuardedWithinBoundedUpdatesAfterMapReload", function()
+    _G.Vehicle = { updateVehicleSpeed = function(self, dt) return 1 end }
+    _G.Ferry = nil
+    VRCompanion:unhookVehicleSpeed()
+    _G.g_currentMission = { vehicles = {} }
+
+    -- A long first session, then back to the menu and into another save.
+    VRCompanion.frameTicks = 100000
+    VRCompanion:update(16.6)
+    VRCompanion:deleteMap()
+    _G.g_currentMission = { vehicles = {} }
+    VRCompanion:hookVehicleSpeed() -- what loadMap does
+
+    local origFerry = function(self, dt)
+        if dt == 0 then error("div by zero") end
+    end
+    _G.Ferry = { updatePosition = origFerry }
+    for _ = 1, 600 do VRCompanion:update(16.6) end
+    assert(_G.Ferry.updatePosition ~= origFerry, "late Ferry must get guarded within bounded updates after a reload")
+
+    VRCompanion:unhookVehicleSpeed()
+    _G.Vehicle = nil
+    _G.Ferry = nil
+    _G.g_currentMission = nil
+end)
+
+test("EnteringANewVehicleGuardsItWithoutWaitingForTheRetry", function()
+    _G.Vehicle = { updateVehicleSpeed = function(self, dt) return 1 end }
+    _G.Ferry = nil
+    VRCompanion:unhookVehicleSpeed()
+    _G.g_currentMission = { vehicles = {} }
+    for _ = 1, 3 do VRCompanion:update(16.6) end
+
+    local vehCalls = 0
+    local veh = { updateVehicleSpeed = function(self, dt) vehCalls = vehCalls + 1 end }
+    local origVeh = veh.updateVehicleSpeed
+    _G.g_currentMission.vehicles[1] = veh
+    _G.g_currentMission.controlledVehicle = veh
+    VRCompanion:update(16.6)
+    assert(veh.updateVehicleSpeed ~= origVeh, "an entered vehicle must be guarded on the transition update")
+    veh:updateVehicleSpeed(0.0)
+    assert(vehCalls == 0)
+
+    VRCompanion:unhookVehicleSpeed()
+    VRCompanion.lastControlledVehicle = nil
+    _G.Vehicle = nil
+    _G.g_currentMission = nil
+end)
+
 -- Slice 13: Base Camera Stereoscopic Translation in Dual-Pass and AFR Modes
 test("BaseCameraTranslatesStereoscopicallyInDualPassMode", function()
     local setTransCalls = {}
