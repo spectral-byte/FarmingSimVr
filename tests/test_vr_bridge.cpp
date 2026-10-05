@@ -372,6 +372,98 @@ TEST_F(VrBridgeTest, ExposesEyePoseWithInterpupillaryShiftToLuau) {
     }
 }
 
+TEST_F(VrBridgeTest, FillsCallerSuppliedTablesInPlaceForPoseAndProjection) {
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
+    fs25vr::HeadPose simPose;
+    simPose.position = fs25vr::Vector3(0.12f, 1.7f, 0.88f);
+    simPose.rotation = fs25vr::EulerAngles(0.25f, -0.15f, 0.05f);
+    simPose.orientation = fs25vr::Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    simPose.isValid = true;
+    simPose.positionTracked = true;
+    simPose.orientationTracked = true;
+    headset.SetHeadPose(simPose);
+    headset.SetEyeFov(0, XrFovf{ -0.90f, 0.80f, 0.85f, -0.85f });
+    headset.SetEyeFov(1, XrFovf{ -0.80f, 0.90f, 0.85f, -0.85f });
+    oxr->SetIpd(0.064f);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        local function sameFields(filled, fresh, what)
+            local n = 0
+            for k, v in pairs(fresh) do
+                n = n + 1
+                assert(filled[k] == v or (type(v) == "number" and math.abs(filled[k] - v) < 1e-6),
+                    what .. " field mismatch: " .. tostring(k))
+            end
+            for k in pairs(filled) do
+                assert(fresh[k] ~= nil, what .. " has extra field: " .. tostring(k))
+            end
+            return n
+        end
+
+        -- getHeadPose
+        local out = {}
+        local ret = VRBridge.getHeadPose(out)
+        assert(ret == out, "getHeadPose must return the supplied table")
+        assert(sameFields(out, VRBridge.getHeadPose(), "headPose") == 13, "head pose has 13 fields")
+
+        -- getEyePose: index, string, default, and either argument order
+        local eyeOut = {}
+        assert(VRBridge.getEyePose(1, eyeOut) == eyeOut, "getEyePose(1, out) returns out")
+        assert(eyeOut.eye == 1, "eye index honoured alongside output table")
+        sameFields(eyeOut, VRBridge.getEyePose(1), "eyePose right")
+        assert(VRBridge.getEyePose("left", eyeOut) == eyeOut)
+        assert(eyeOut.eye == 0, "string eye honoured alongside output table")
+        sameFields(eyeOut, VRBridge.getEyePose("left"), "eyePose left")
+        assert(VRBridge.getEyePose(eyeOut, "right") == eyeOut)
+        assert(eyeOut.eye == 1, "output table may precede the eye argument")
+        assert(VRBridge.getEyePose(eyeOut) == eyeOut)
+        assert(eyeOut.eye == 0, "table-only call selects the default eye")
+
+        -- getEyeProjection
+        local proj = {}
+        assert(VRBridge.getEyeProjection(1, proj) == proj, "getEyeProjection(1, out) returns out")
+        assert(proj.eye == 1, "eye index honoured alongside output table")
+        assert(sameFields(proj, VRBridge.getEyeProjection(1), "projection right") == 15)
+        assert(VRBridge.getEyeProjection("left", proj) == proj)
+        assert(proj.eye == 0, "string eye honoured alongside output table")
+        sameFields(proj, VRBridge.getEyeProjection("left"), "projection left")
+        assert(VRBridge.getEyeProjection(proj, "right") == proj)
+        assert(proj.eye == 1)
+        assert(VRBridge.getEyeProjection(proj) == proj)
+        assert(proj.eye == 0, "table-only call selects the default eye")
+
+        -- Refilling the same table overwrites previous values (no staleness)
+        local reused = {}
+        VRBridge.getEyeProjection(0, reused)
+        local leftX = reused.xOffset
+        VRBridge.getEyeProjection(1, reused)
+        assert(reused.xOffset ~= leftX, "refill must overwrite the previous eye's values")
+    )luau"), 0);
+}
+
+TEST_F(VrBridgeTest, SuppliedTablePoseStillRecordedAsTheEyeRenderPose) {
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
+    fs25vr::HeadPose simPose;
+    simPose.position = fs25vr::Vector3(0.0f, 1.7f, 0.0f);
+    simPose.orientation = fs25vr::Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    simPose.isValid = true;
+    headset.SetHeadPose(simPose);
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        local t = {}
+        VRBridge.getEyePose(1, t)
+    )luau"), 0);
+    EXPECT_FALSE(oxr->HasRecordedRenderPose(0));
+    EXPECT_TRUE(oxr->HasRecordedRenderPose(1));
+}
 TEST_F(VrBridgeTest, RequiresAfrFallbackIsTrueFromTheFirstFrame) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));

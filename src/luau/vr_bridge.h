@@ -124,6 +124,9 @@ public:
     static void PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, uint32_t eyeIndex);
     // Builds a pose table; eyeIndex < 0 omits the "eye" field (head pose).
     static void PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex = -1);
+    // In-place variants: write the same fields into the existing table at tableIndex (no allocation).
+    static void FillPoseTable(lua_State* L, int tableIndex, const HeadPose& pose, int eyeIndex = -1);
+    static void FillEyeProjectionTable(lua_State* L, int tableIndex, const EyeProjection& proj, uint32_t eyeIndex);
 
     struct LuaFunctionEntry {
         const char* name;
