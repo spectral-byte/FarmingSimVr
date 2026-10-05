@@ -8,6 +8,10 @@
 #define XR_USE_GRAPHICS_API_D3D12
 #endif
 
+#ifndef XR_USE_PLATFORM_WIN32
+#define XR_USE_PLATFORM_WIN32
+#endif
+
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include <memory>
@@ -149,6 +153,15 @@ public:
         XrInstance /*instance*/,
         XrEventDataBuffer* /*eventData*/) {
         return XR_EVENT_UNAVAILABLE;
+    }
+
+    // xrConvertWin32PerformanceCounterToTimeKHR (XR_KHR_win32_convert_performance_counter_time).
+    // Defaults to unsupported so dispatches that do not offer the extension need no override.
+    virtual XrResult ConvertWin32PerformanceCounterToTime(
+        XrInstance /*instance*/,
+        const LARGE_INTEGER* /*performanceCounter*/,
+        XrTime* /*time*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
 };
 
@@ -342,6 +355,21 @@ public:
         XrInstance instance,
         XrEventDataBuffer* eventData) override {
         return xrPollEvent(instance, eventData);
+    }
+
+    XrResult ConvertWin32PerformanceCounterToTime(
+        XrInstance instance,
+        const LARGE_INTEGER* performanceCounter,
+        XrTime* time) override {
+        PFN_xrConvertWin32PerformanceCounterToTimeKHR pfnConvert = nullptr;
+        XrResult res = xrGetInstanceProcAddr(
+            instance,
+            "xrConvertWin32PerformanceCounterToTimeKHR",
+            reinterpret_cast<PFN_xrVoidFunction*>(&pfnConvert));
+        if (XR_FAILED(res) || !pfnConvert) {
+            return XR_FAILED(res) ? res : XR_ERROR_FUNCTION_UNSUPPORTED;
+        }
+        return pfnConvert(instance, performanceCounter, time);
     }
 };
 

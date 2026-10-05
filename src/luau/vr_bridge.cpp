@@ -226,8 +226,38 @@ void VRBridge::Recenter() {
     LogInfo("VRBridge: Recenter triggered.");
 }
 
+// Scans the call arguments for an optional eye selector (index or "left"/"right") and an optional
+// caller-supplied output table. Position-independent so the table can never be mistaken for the eye.
+// Returns the stack index of the output table, or 0 when none was supplied.
+static int ParseEyeAndOutputArgs(lua_State* L, uint32_t& eyeIndex) {
+    int outIndex = 0;
+    const int argc = lua_gettop(L);
+    bool eyeSeen = false;
+    for (int i = 1; i <= argc; ++i) {
+        if (lua_type(L, i) == LUA_TTABLE) {
+            if (outIndex == 0) outIndex = i;
+        } else if (!eyeSeen) {
+            if (lua_isnumber(L, i)) {
+                eyeIndex = (lua_tointeger(L, i) == 1) ? 1 : 0;
+                eyeSeen = true;
+            } else if (lua_isstring(L, i)) {
+                const char* s = lua_tostring(L, i);
+                eyeIndex = (s && (_stricmp(s, "right") == 0 || _stricmp(s, "r") == 0)) ? 1 : 0;
+                eyeSeen = true;
+            }
+        }
+    }
+    return outIndex;
+}
+
 void VRBridge::PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex) {
     lua_createtable(L, 0, eyeIndex >= 0 ? 14 : 13);
+    FillPoseTable(L, -1, pose, eyeIndex);
+}
+
+void VRBridge::FillPoseTable(lua_State* L, int tableIndex, const HeadPose& pose, int eyeIndex) {
+    tableIndex = lua_absindex(L, tableIndex);
+    lua_pushvalue(L, tableIndex);  // fields below are written to the table at -2 after each push
 
     lua_pushnumber(L, pose.position.x); lua_setfield(L, -2, "x");
     lua_pushnumber(L, pose.position.y); lua_setfield(L, -2, "y");
@@ -245,14 +275,23 @@ void VRBridge::PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex) {
     if (eyeIndex >= 0) {
         lua_pushinteger(L, eyeIndex); lua_setfield(L, -2, "eye");
     }
+    lua_pop(L, 1);
 }
+
 int VRBridge::Lua_GetHeadPose(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     FS25VR_TRACE_THREAD("VRBridge.getHeadPose");
     HeadPose pose = self->GetHeadPose();
 
-    PushPoseTable(L, pose);
+    uint32_t unusedEye = 0;
+    int outIndex = ParseEyeAndOutputArgs(L, unusedEye);
+    if (outIndex != 0) {
+        FillPoseTable(L, outIndex, pose);
+        lua_pushvalue(L, outIndex);
+    } else {
+        PushPoseTable(L, pose);
+    }
     return 1;
 }
 
@@ -277,6 +316,12 @@ EyeProjection VRBridge::GetEyeProjection(uint32_t eyeIndex) {
 
 void VRBridge::PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, uint32_t eyeIndex) {
     lua_createtable(L, 0, 15);
+    FillEyeProjectionTable(L, -1, proj, eyeIndex);
+}
+
+void VRBridge::FillEyeProjectionTable(lua_State* L, int tableIndex, const EyeProjection& proj, uint32_t eyeIndex) {
+    tableIndex = lua_absindex(L, tableIndex);
+    lua_pushvalue(L, tableIndex);  // fields below are written to the table at -2 after each push
 
     lua_pushnumber(L, proj.fovY);
     lua_setfield(L, -2, "fovY");
@@ -322,29 +367,23 @@ void VRBridge::PushEyeProjectionTable(lua_State* L, const EyeProjection& proj, u
 
     lua_pushinteger(L, static_cast<int>(eyeIndex));
     lua_setfield(L, -2, "eye");
+    lua_pop(L, 1);
 }
 
 int VRBridge::Lua_GetEyeProjection(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     uint32_t eyeIndex = self->GetFrameParity();
-    if (lua_gettop(L) >= 1) {
-        if (lua_isnumber(L, 1)) {
-            int idx = lua_tointeger(L, 1);
-            eyeIndex = (idx == 1) ? 1 : 0;
-        } else if (lua_isstring(L, 1)) {
-            const char* str = lua_tostring(L, 1);
-            if (str && (_stricmp(str, "right") == 0 || _stricmp(str, "r") == 0)) {
-                eyeIndex = 1;
-            } else {
-                eyeIndex = 0;
-            }
-        }
-    }
+    int outIndex = ParseEyeAndOutputArgs(L, eyeIndex);
 
     FS25VR_TRACE_THREAD("VRBridge.getEyeProjection");
     EyeProjection proj = self->GetEyeProjection(eyeIndex);
-    PushEyeProjectionTable(L, proj, eyeIndex);
+    if (outIndex != 0) {
+        FillEyeProjectionTable(L, outIndex, proj, eyeIndex);
+        lua_pushvalue(L, outIndex);
+    } else {
+        PushEyeProjectionTable(L, proj, eyeIndex);
+    }
     return 1;
 }
 
@@ -446,20 +485,16 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     uint32_t eyeIndex = 0;
-    if (lua_gettop(L) >= 1) {
-        if (lua_isnumber(L, 1)) {
-            eyeIndex = (lua_tointeger(L, 1) == 1) ? 1 : 0;
-        } else if (lua_isstring(L, 1)) {
-            const char* s = lua_tostring(L, 1);
-            if (s && (_stricmp(s, "right") == 0 || _stricmp(s, "r") == 0)) {
-                eyeIndex = 1;
-            }
-        }
-    }
+    int outIndex = ParseEyeAndOutputArgs(L, eyeIndex);
 
     FS25VR_TRACE_THREAD("VRBridge.getEyePose");
     HeadPose pose = self->GetEyePose(eyeIndex);
-    PushPoseTable(L, pose, static_cast<int>(eyeIndex));
+    if (outIndex != 0) {
+        FillPoseTable(L, outIndex, pose, static_cast<int>(eyeIndex));
+        lua_pushvalue(L, outIndex);
+    } else {
+        PushPoseTable(L, pose, static_cast<int>(eyeIndex));
+    }
     return 1;
 }
 

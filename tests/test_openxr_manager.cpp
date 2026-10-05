@@ -1,4 +1,4 @@
-#include <gtest/gtest.h>
+﻿#include <gtest/gtest.h>
 #include "openxr/openxr_manager.h"
 #include "core/dll_lifecycle.h"
 #include "fake_openxr_tracking.h"
@@ -28,6 +28,20 @@ public:
 
     bool createInstanceCalled = false;
     bool destroyInstanceCalled = false;
+
+    std::vector<std::string> lastEnabledExtensions;
+    // Runtime time = counter + offset, standing in for the runtime-defined epoch.
+    int64_t convertedTimeOffset = 7000000000000LL;
+    uint32_t convertCalls = 0;
+    int64_t lastConvertedCounter = 0;
+
+    XrResult ConvertWin32PerformanceCounterToTime(
+        XrInstance /*instance*/, const LARGE_INTEGER* counter, XrTime* time) override {
+        ++convertCalls;
+        lastConvertedCounter = counter->QuadPart;
+        *time = counter->QuadPart + convertedTimeOffset;
+        return XR_SUCCESS;
+    }
 
     XrResult EnumerateInstanceExtensionProperties(
         const char* /*layerName*/,
@@ -61,9 +75,13 @@ public:
     }
 
     XrResult CreateInstance(
-        const XrInstanceCreateInfo* /*createInfo*/,
+        const XrInstanceCreateInfo* createInfo,
         XrInstance* instance) override {
         createInstanceCalled = true;
+        lastEnabledExtensions.clear();
+        for (uint32_t i = 0; i < createInfo->enabledExtensionCount; ++i) {
+            lastEnabledExtensions.push_back(createInfo->enabledExtensionNames[i]);
+        }
         if (createInstanceResult != XR_SUCCESS) {
             return createInstanceResult;
         }
@@ -547,6 +565,83 @@ TEST(OpenXrManagerTest, InitializesActiveWhenHmdPresent) {
     manager.Shutdown();
     EXPECT_TRUE(mockDispatch->destroyInstanceCalled);
     EXPECT_EQ(manager.GetState(), OpenXrState::Uninitialized);
+}
+
+namespace {
+constexpr int64_t kTenMhz = 10000000;
+constexpr int64_t kDaysOfUptimeCounter = 5LL * 24 * 3600 * kTenMhz;  // 5 days at 10 MHz
+
+bool Contains(const std::vector<std::string>& v, const char* name) {
+    return std::find(v.begin(), v.end(), name) != v.end();
+}
+}  // namespace
+
+TEST(OpenXrManagerTest, PerformanceCounterToNanosecondsDoesNotOverflowForDaysOfUptime) {
+    // counter * 1e9 would be ~4.3e22 here, far beyond int64.
+    EXPECT_EQ(OpenXrManager::PerformanceCounterToNanoseconds(kDaysOfUptimeCounter, kTenMhz),
+              5LL * 24 * 3600 * 1000000000LL);
+    EXPECT_EQ(OpenXrManager::PerformanceCounterToNanoseconds(kDaysOfUptimeCounter + 5, kTenMhz),
+              5LL * 24 * 3600 * 1000000000LL + 500);
+}
+
+TEST(OpenXrManagerTest, EnablesTimeConversionExtensionWhenRuntimeOffersIt) {
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME,
+                                      XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME };
+    OpenXrManager manager(dispatch);
+    int64_t counter = kDaysOfUptimeCounter;
+    manager.SetPerformanceCounterSource([&] { return OpenXrManager::PerformanceCounterSample{ counter, kTenMhz }; });
+    ASSERT_TRUE(manager.Initialize());
+
+    EXPECT_TRUE(Contains(dispatch->lastEnabledExtensions, XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME));
+    EXPECT_TRUE(manager.GetRuntimeInfo().win32TimeConversionEnabled);
+
+    // Pre-frame time comes from the runtime conversion of the raw counter.
+    EXPECT_EQ(manager.GetCurrentXrTime(), kDaysOfUptimeCounter + dispatch->convertedTimeOffset);
+    EXPECT_EQ(dispatch->lastConvertedCounter, kDaysOfUptimeCounter);
+    EXPECT_EQ(dispatch->convertCalls, 1u);
+}
+
+TEST(OpenXrManagerTest, InitializeSucceedsWithoutTimeConversionExtensionAndFallbackIsSaneAndMonotonic) {
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(dispatch);
+    int64_t counter = kDaysOfUptimeCounter;
+    manager.SetPerformanceCounterSource([&] { return OpenXrManager::PerformanceCounterSample{ counter, kTenMhz }; });
+
+    ASSERT_TRUE(manager.Initialize());
+    EXPECT_TRUE(manager.IsActive());
+    EXPECT_FALSE(Contains(dispatch->lastEnabledExtensions, XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME));
+    EXPECT_FALSE(manager.GetRuntimeInfo().win32TimeConversionEnabled);
+
+    XrTime t0 = manager.GetCurrentXrTime();
+    EXPECT_GT(t0, 0);
+    counter += kTenMhz / 2;  // half a second later
+    XrTime t1 = manager.GetCurrentXrTime();
+    EXPECT_EQ(t1 - t0, 500000000LL);
+    counter -= kTenMhz;  // a clock that steps back must not make time go backwards
+    EXPECT_GE(manager.GetCurrentXrTime(), t1);
+    EXPECT_EQ(dispatch->convertCalls, 0u);
+}
+
+TEST(OpenXrManagerTest, ExtrapolatesFromLastPredictedDisplayTimeOnceFramesRun) {
+    auto dispatch = std::make_shared<MockOpenXrDispatch>();
+    dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME,
+                                      XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME };
+    OpenXrManager manager(dispatch);
+    int64_t counter = kDaysOfUptimeCounter;
+    manager.SetPerformanceCounterSource([&] { return OpenXrManager::PerformanceCounterSample{ counter, kTenMhz }; });
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    manager.PollEvents();
+    ASSERT_TRUE(manager.BeginFrame());
+
+    XrTime predicted = 1000000;  // the mock WaitFrame's predictedDisplayTime
+    ASSERT_NE(predicted, 0);
+    counter += kTenMhz;  // one second after the wait
+    EXPECT_EQ(manager.GetCurrentXrTime(), predicted + 1000000000LL);
+    EXPECT_EQ(dispatch->convertCalls, 0u);
 }
 
 TEST(OpenXrManagerTest, CreateTrackingSpacesCreatesBothBaseAndLocalSpaces) {
