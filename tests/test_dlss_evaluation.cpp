@@ -1,4 +1,4 @@
-﻿#include <gtest/gtest.h>
+#include <gtest/gtest.h>
 #include "fake_openxr_events.h"
 #include "fake_openxr_runtime.h"
 #include "ngx/ngx_defs.h"
@@ -1540,9 +1540,17 @@ public:
     ID3D12Resource* output = reinterpret_cast<ID3D12Resource*>(0xBEEF);
     bool fail = false;
     std::string failureReason = "unsupported motion vector format";
+    std::vector<MvSelfCheckRequest> selfChecks; // one per Record that carried a request
+    std::vector<MvSelfCheckReport> pendingReports;
+    std::vector<MvSelfCheckReport> PollSelfCheck() override {
+        std::vector<MvSelfCheckReport> out;
+        out.swap(pendingReports);
+        return out;
+    }
     MvPassResult Record(const MvPassInputs& inputs) override {
         ++recordCount;
         lastInputs = inputs;
+        if (inputs.selfCheck) selfChecks.push_back(*inputs.selfCheck);
         MvPassResult r;
         if (fail) { r.failureReason = failureReason; return r; }
         r.ok = true;
@@ -1699,6 +1707,12 @@ TEST(MvPassShaderTest, PassThroughShaderCompilesWithTheSystemCompiler) {
     EXPECT_GT(bytecode.size(), 100u);
 }
 
+TEST(MvPassShaderTest, SelfCheckShaderCompilesWithTheSystemCompiler) {
+    std::string bytecode, error;
+    ASSERT_TRUE(MvPassCompileShader(bytecode, error, "selfcheck")) << error;
+    EXPECT_GT(bytecode.size(), 100u);
+}
+
 TEST(MvPassFormatTest, AcceptsTheEnginesFormatsAndRejectsOthers) {
     EXPECT_EQ(MvPassMotionVectorViewFormat(DXGI_FORMAT_R16G16_FLOAT), DXGI_FORMAT_R16G16_FLOAT);
     EXPECT_EQ(MvPassMotionVectorViewFormat(DXGI_FORMAT_R16G16_TYPELESS), DXGI_FORMAT_R16G16_FLOAT);
@@ -1775,6 +1789,132 @@ TEST_F(DlssEvaluationTest, DiagnosticTraceReportsTheResolvedCamerasAndWhichAreMi
     EXPECT_NE(log.find("SameEyeRel=(dx=0.0000"), std::string::npos) << log;
 
     MockReleaseFeature(virtualHandle);
+}
+
+// ---- Motion vector self-check (#34) ----
+
+class MvSelfCheckTest : public MvPassEvaluationTest {
+protected:
+    std::filesystem::path m_logPath;
+    void SetUp() override {
+        MvPassEvaluationTest::SetUp();
+        m_logPath = std::filesystem::temp_directory_path() / "fs25vr_mv_selfcheck_test.log";
+        Logger::Instance().SetLogFile(m_logPath);
+    }
+    void TearDown() override {
+        MvPassEvaluationTest::TearDown();
+        Logger::Instance().SetLogFile(Logger::DefaultLogPath());
+        std::filesystem::remove(m_logPath);
+    }
+    std::string Log() {
+        Logger::Instance().Flush();
+        return ReadWholeFile(m_logPath);
+    }
+    // Sequential Dual-Pass, MvFix on, the left eye rendering after the right eye 0.064 m away.
+    void SetUpSdp(bool withRecords) {
+        SetUpPass();
+        m_ngx.SetMvFixEnabled(true);
+        m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+        if (withRecords) {
+            CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+            ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
+            cameras.AdvanceFrame();
+            ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
+        }
+        m_bridge.SetSubPassIndex(0);
+    }
+};
+
+TEST_F(MvSelfCheckTest, RequestCarriesTheResolvedCamerasAndTheScaleDlssReceives) {
+    SetUpSdp(true);
+    m_params.Set(NVSDK_NGX_Parameter_MV_Scale_X, 2.0f);
+    m_params.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 2.0f);
+    m_ngx.ArmDiagnostics(4);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    ASSERT_NE(m_pass, nullptr);
+    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
+    ASSERT_NE(m_pass->lastInputs.selfCheck, nullptr);
+    const MvSelfCheckRequest& r = m_pass->selfChecks[0];
+    EXPECT_EQ(r.eye, 0u);
+    EXPECT_FLOAT_EQ(r.mvScaleX, 2.0f);
+    EXPECT_FLOAT_EQ(r.mvScaleY, 2.0f);
+    // fovY 1.0 rad: tan(0.5), the same for both cameras; near and far from the record.
+    EXPECT_NEAR(r.current.tanHalfFovY, std::tan(0.5f), 1e-6f);
+    EXPECT_NEAR(r.previous.tanHalfFovY, std::tan(0.5f), 1e-6f);
+    EXPECT_FLOAT_EQ(r.current.nearClip, 0.15f);
+    EXPECT_FLOAT_EQ(r.current.farClip, 2000.0f);
+    // The previous rendered frame's camera is the right eye 0.064 m to the right: a point is 0.064 m
+    // further left seen from it (p_prev = p - t).
+    EXPECT_NEAR(r.toPrevious.c[0], -0.064f, 1e-5f);
+    EXPECT_NEAR(r.toPrevious.m[0][0], 1.0f, 1e-6f);
+    // The pass still hands DLSS its own texture and the game's vectors come back.
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_pass->output);
+    EXPECT_EQ(ParamMv(), m_engineMv);
+}
+
+TEST_F(MvSelfCheckTest, NoRequestWhileDiagnosticsAreNotArmed) {
+    SetUpSdp(true);
+    m_ngx.ArmDiagnostics(0);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_EQ(m_pass->recordCount, 1);
+    EXPECT_TRUE(m_pass->selfChecks.empty());
+    EXPECT_EQ(m_pass->lastInputs.selfCheck, nullptr);
+}
+
+TEST_F(MvSelfCheckTest, MissingCameraRecordSkipsThePredictionAndSaysSo) {
+    SetUpSdp(false);
+    m_ngx.ArmDiagnostics(4);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_EQ(m_pass->recordCount, 1); // the pass itself still runs: the output stays a copy
+    EXPECT_TRUE(m_pass->selfChecks.empty());
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_pass->output);
+    const std::string log = Log();
+    EXPECT_NE(log.find("MvCheck skipped"), std::string::npos) << log;
+    EXPECT_NE(log.find("missing camera record"), std::string::npos) << log;
+}
+
+TEST_F(MvSelfCheckTest, ARecordForTheCurrentFrameButNotThePreviousOneAlsoSkips) {
+    SetUpPass();
+    m_ngx.SetMvFixEnabled(true);
+    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    ASSERT_TRUE(m_bridge.GetCameraRecords().Report(DiagCamera(0, 10.0)));
+    m_bridge.SetSubPassIndex(0);
+    m_ngx.ArmDiagnostics(4);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_TRUE(m_pass->selfChecks.empty());
+    EXPECT_NE(Log().find("missing camera record"), std::string::npos);
+}
+
+TEST_F(MvSelfCheckTest, ReadBackResultsAreLoggedPerEyeWithBothConventionsAndTheSkippedFraction) {
+    SetUpSdp(true);
+    m_ngx.ArmDiagnostics(4);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    // The pass reads a result back a few evaluations later; the next evaluation logs it.
+    MvSelfCheckReport report;
+    report.eye = 1;
+    report.evalIndex = 7;
+    report.stats.total = 1024;
+    report.stats.valid = 768;
+    report.stats.skipped = 256;
+    report.stats.skippedFraction = 0.25;
+    report.stats.meanToPrevious = 0.8;
+    report.stats.medianToPrevious = 0.25;
+    report.stats.meanToCurrent = 12.5;
+    report.stats.medianToCurrent = 11.0;
+    m_pass->pendingReports.push_back(report);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    const std::string log = Log();
+    EXPECT_NE(log.find("MvCheck Eye=1 Eval #7"), std::string::npos) << log;
+    EXPECT_NE(log.find("previous-minus-current: mean=0.800 median=0.250"), std::string::npos) << log;
+    EXPECT_NE(log.find("current-minus-previous: mean=12.500 median=11.000"), std::string::npos) << log;
+    EXPECT_NE(log.find("skipped=25.0%"), std::string::npos) << log;
+    EXPECT_NE(log.find("Best=previous-minus-current"), std::string::npos) << log;
 }
 
 } // namespace

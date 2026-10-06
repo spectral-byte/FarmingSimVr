@@ -5,17 +5,41 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
+#include "mv_reprojection.h"
 
 namespace fs25vr {
 
 // The motion vector pass recorded on the game's command list just ahead of an upscaler evaluation.
 // It reads the engine's depth and motion vectors and writes motion vectors into a texture the
 // Injector owns. The GPU work sits behind this interface so the interceptor is testable with a fake.
+// Asks the pass to predict the engine's motion vectors for static geometry from depth and the camera
+// records and to score the engine's vectors against the prediction. The prediction is only measured:
+// the pass output stays a copy of the engine's vectors. The pass fills in the render aspect itself.
+struct MvSelfCheckRequest {
+    uint32_t eye = 0;
+    uint64_t evalIndex = 0;
+    float mvScaleX = 1.0f; // the scale DLSS receives with the vectors
+    float mvScaleY = 1.0f;
+    mvreproj::Projection current;
+    mvreproj::Projection previous;           // the previous rendered frame's camera
+    mvreproj::RelativeTransform toPrevious;  // current camera space -> previous camera space
+};
+
+// A self-check read back some frames after it was recorded.
+struct MvSelfCheckReport {
+    uint32_t eye = 0;
+    uint64_t evalIndex = 0;
+    mvreproj::SelfCheckStats stats;
+};
+
 struct MvPassInputs {
     ID3D12GraphicsCommandList* cmdList = nullptr;
     // The engine's resources, read in the state the upscaler already requires (never transitioned).
     ID3D12Resource* depth = nullptr;
     ID3D12Resource* motionVectors = nullptr;
+    // Optional: also record a self-check for this evaluation.
+    const MvSelfCheckRequest* selfCheck = nullptr;
 };
 
 struct MvPassResult {
@@ -31,6 +55,9 @@ class IMotionVectorPass {
 public:
     virtual ~IMotionVectorPass() = default;
     virtual MvPassResult Record(const MvPassInputs& inputs) = 0;
+    // Self-checks whose results have been read back since the last call. The readback lags the recording
+    // by a few evaluations (no fence on the game's queue).
+    virtual std::vector<MvSelfCheckReport> PollSelfCheck() { return {}; }
 };
 
 // Creates the pass the first time an evaluation needs it. May return null, which disables the pass.
@@ -45,7 +72,7 @@ DXGI_FORMAT MvPassDepthViewFormat(DXGI_FORMAT resourceFormat);
 const char* MvPassShaderSource();
 // Compile the shader with the system's d3dcompiler_47.dll. Returns true and fills bytecode on success;
 // otherwise fills error with the reason.
-bool MvPassCompileShader(std::string& bytecode, std::string& error);
+bool MvPassCompileShader(std::string& bytecode, std::string& error, const char* entryPoint = "main");
 
 // The real D3D12 implementation. Resources are created lazily from the command list's device.
 std::unique_ptr<IMotionVectorPass> CreateD3D12MotionVectorPass();

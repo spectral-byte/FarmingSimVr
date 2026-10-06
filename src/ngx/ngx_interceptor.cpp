@@ -488,7 +488,9 @@ void NgxInterceptor::DisableMvFix(const std::string& reason) {
              ". DLSS continues on the engine's motion vectors.");
 }
 
-ID3D12Resource* NgxInterceptor::RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv) {
+ID3D12Resource* NgxInterceptor::RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv,
+                                             const MvSelfCheckRequest* request,
+                                             std::vector<MvSelfCheckReport>* reports) {
     std::unique_lock<std::mutex> lock(m_mvFixMutex);
     if (m_mvFixDisabled.load()) return nullptr;
     if (!m_mvPass) {
@@ -503,13 +505,62 @@ ID3D12Resource* NgxInterceptor::RecordMvPass(ID3D12GraphicsCommandList* cmdList,
     inputs.cmdList = cmdList;
     inputs.depth = depth;
     inputs.motionVectors = mv;
+    inputs.selfCheck = request;
     MvPassResult result = m_mvPass->Record(inputs);
     if (!result.ok || !result.output) {
         lock.unlock();
         DisableMvFix(result.failureReason.empty() ? std::string("the pass reported a failure") : result.failureReason);
         return nullptr;
     }
+    if (reports) *reports = m_mvPass->PollSelfCheck();
     return result.output;
+}
+
+bool NgxInterceptor::BuildSelfCheckRequest(uint32_t eye, uint64_t evalIndex, float mvScaleX, float mvScaleY,
+                                           MvSelfCheckRequest& request, std::string& skipReason) const {
+    VRBridge* bridge = GetVRBridge();
+    if (!bridge) {
+        skipReason = "no VR bridge";
+        return false;
+    }
+    const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(eye);
+    if (!resolved.current || !resolved.previousFrame || !resolved.previousFrameRelative) {
+        skipReason = "missing camera record (" + DescribeResolvedCameras(resolved) + ")";
+        return false;
+    }
+    if (!(resolved.current->fovY > 0.0f) || !(resolved.previousFrame->fovY > 0.0f) ||
+        !(resolved.current->nearClip > 0.0f) || !(resolved.current->farClip > resolved.current->nearClip)) {
+        skipReason = "unusable camera projection in the record";
+        return false;
+    }
+    request.eye = eye;
+    request.evalIndex = evalIndex;
+    request.mvScaleX = mvScaleX;
+    request.mvScaleY = mvScaleY;
+    request.current.tanHalfFovY = std::tan(resolved.current->fovY * 0.5f);
+    request.current.nearClip = resolved.current->nearClip;
+    request.current.farClip = resolved.current->farClip;
+    request.previous.tanHalfFovY = std::tan(resolved.previousFrame->fovY * 0.5f);
+    request.previous.nearClip = resolved.previousFrame->nearClip;
+    request.previous.farClip = resolved.previousFrame->farClip;
+    request.toPrevious = mvreproj::MakeRelativeTransform(*resolved.previousFrameRelative);
+    return true;
+}
+
+void NgxInterceptor::LogSelfCheckReport(const MvSelfCheckReport& report) const {
+    const mvreproj::SelfCheckStats& s = report.stats;
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(3)
+       << "NgxInterceptor: [Diag] MvCheck Eye=" << report.eye << " Eval #" << report.evalIndex
+       << " Samples=" << s.total << " Valid=" << s.valid
+       << " skipped=" << std::setprecision(1) << s.skippedFraction * 100.0 << "% (sky or off-screen)"
+       << std::setprecision(3)
+       << " " << mvreproj::ConventionName(mvreproj::Convention::ToPrevious) << ": mean=" << s.meanToPrevious
+       << " median=" << s.medianToPrevious << " px"
+       << " " << mvreproj::ConventionName(mvreproj::Convention::ToCurrent) << ": mean=" << s.meanToCurrent
+       << " median=" << s.medianToCurrent << " px"
+       << " Best=" << mvreproj::ConventionName(mvreproj::BetterConvention(s));
+    LogInfo(ss.str());
 }
 
 void NgxInterceptor::DetachLiveHooks() {
@@ -1136,7 +1187,25 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         mutableParams->Get(NVSDK_NGX_Parameter_Depth, &depth);
         mutableParams->Get(NVSDK_NGX_Parameter_MotionVectors, &mv);
         if (depth && mv) {
-            ID3D12Resource* corrected = interceptor.RecordMvPass(InCmdList, depth, mv);
+            // Self-check (vrDlssDiag window only): predict the engine's vectors from depth and the camera
+            // records and score them. Measured only; the pass output stays a copy of the engine's vectors.
+            MvSelfCheckRequest checkRequest;
+            const MvSelfCheckRequest* check = nullptr;
+            if (interceptor.m_diagRemaining.load() > 0) {
+                const uint64_t evalIndex = interceptor.m_evalCount.load();
+                const uint32_t checkEye = bridge ? bridge->GetActiveEye() : 0;
+                std::string skipReason;
+                if (interceptor.BuildSelfCheckRequest(checkEye, evalIndex, prevScaleX * scaleMulX, prevScaleY * scaleMulY,
+                                                      checkRequest, skipReason)) {
+                    check = &checkRequest;
+                } else {
+                    LogInfo("NgxInterceptor: [Diag] MvCheck skipped Eval #" + std::to_string(evalIndex) + " Eye=" +
+                            std::to_string(checkEye) + ": " + skipReason);
+                }
+            }
+            std::vector<MvSelfCheckReport> reports;
+            ID3D12Resource* corrected = interceptor.RecordMvPass(InCmdList, depth, mv, check, &reports);
+            for (const MvSelfCheckReport& report : reports) interceptor.LogSelfCheckReport(report);
             if (corrected) {
                 prevMv = mv;
                 mutableParams->Set(NVSDK_NGX_Parameter_MotionVectors, corrected);

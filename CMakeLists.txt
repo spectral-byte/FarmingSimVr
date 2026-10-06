@@ -104,6 +104,8 @@ set(CORE_SOURCES
     src/ngx/ngx_interceptor.cpp
     src/ngx/mv_pass.h
     src/ngx/mv_pass.cpp
+    src/ngx/mv_reprojection.h
+    src/ngx/mv_reprojection.cpp
 )
 
 # Core static library: compiled once, shared by the Injector DLL and the tests
@@ -144,6 +146,7 @@ add_executable(fs25_vr_tests
     tests/test_dll_lifecycle.cpp
     tests/test_math_utils.cpp
     tests/test_camera_records.cpp
+    tests/test_mv_reprojection.cpp
     tests/test_logger.cpp
     tests/test_thread_trace.cpp
     tests/test_openxr_cursor_overlay.cpp
