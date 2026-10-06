@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <windows.h>
 
 namespace fs25vr {
@@ -158,6 +159,30 @@ public:
         m_mvScaleMultiplierX = scaleX;
         m_mvScaleMultiplierY = scaleY;
     }
+    // Diagnostic multiplier for per-eye contexts under SDP (1.0 by default, independent of the AFR one).
+    float GetSdpMvScaleMultiplierX() const { return m_sdpMvScaleMultiplierX; }
+    float GetSdpMvScaleMultiplierY() const { return m_sdpMvScaleMultiplierY; }
+    void SetSdpMvScaleMultiplier(float scaleX, float scaleY) {
+        m_sdpMvScaleMultiplierX = scaleX;
+        m_sdpMvScaleMultiplierY = scaleY;
+    }
+
+    // Evaluation diagnostics: while armed, every EvaluateFeature logs a trace line and feeds a
+    // per-context jitter summary, logged when the countdown reaches zero. Armed automatically when a
+    // feature is virtualized or the Stereo Presentation Mode changes, and on demand (vrDlssDiag).
+    static constexpr uint32_t kDefaultDiagEvaluations = 128;
+    static constexpr uint32_t kMaxDiagEvaluations = 4096;
+    void ArmDiagnostics(uint32_t evaluations = kDefaultDiagEvaluations);
+    uint32_t GetDiagEvaluationsRemaining() const { return m_diagRemaining.load(); }
+
+    struct JitterSummary {
+        uint32_t evaluations = 0;
+        uint32_t resets = 0;
+        uint32_t distinctOffsets = 0;
+        float minX = 0.0f, maxX = 0.0f, minY = 0.0f, maxY = 0.0f;
+    };
+    // Summary of the jitter offsets context contextIndex received in the current diagnostic window.
+    JitterSummary GetDiagJitterSummary(uint32_t contextIndex) const;
 
 private:
     template <typename PFN>
@@ -190,6 +215,8 @@ private:
     bool m_forceSharpnessOverride = kDefaultForceSharpnessOverride;
     float m_mvScaleMultiplierX = kDefaultAfrMvScale;
     float m_mvScaleMultiplierY = kDefaultAfrMvScale;
+    float m_sdpMvScaleMultiplierX = 1.0f;
+    float m_sdpMvScaleMultiplierY = 1.0f;
     std::atomic<uint64_t> m_evalCount{0};
 
     std::atomic<int> m_lastRenderingMode{-1};
@@ -197,6 +224,23 @@ private:
     std::atomic<bool> m_internalDiscontinuityPendingRight{false};
 
     std::atomic<uint32_t> m_nextVirtualId{1000};
+
+    struct DiagSample {
+        float jitterX = 0.0f;
+        float jitterY = 0.0f;
+        bool reset = false;
+    };
+    void RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex, const NVSDK_NGX_Parameter* params,
+                           bool reset, bool isDualPass);
+    void LogDiagSummary();
+    static JitterSummary Summarize(const std::vector<DiagSample>& samples);
+
+    std::atomic<uint32_t> m_diagRemaining{0};
+    mutable std::mutex m_diagMutex;
+    std::vector<DiagSample> m_diagSamples[2];
+    int m_diagLastContext = -1;
+    uint32_t m_diagContextRun = 0;
+    uint32_t m_diagLongestContextRun = 0;
 
     std::unordered_map<NVSDK_NGX_Handle*, std::unique_ptr<VirtualNgxHandle>> m_virtualHandles;
     std::unordered_map<NVSDK_NGX_Parameter*, std::unique_ptr<NgxParameterImpl>> m_trackedParameters;

@@ -93,6 +93,7 @@ bool VRBridge::IsReady() const {
 bool VRBridge::PerformHandshake() {
     m_handshakeCompleted = true;
     m_subPassIndex.store(0);
+    m_dualPassPairIndex.store(0);
     SetFrameParity(0);
     LogInfo("[VRBridge] Native-to-Luau handshake completed successfully. SubPassIndex and FrameParity aligned to 0.");
     return true;
@@ -428,6 +429,9 @@ void VRBridge::ResetSubPassAndParity() {
 
 void VRBridge::AdvanceFrame() {
     m_frameIndex++;
+    if (m_renderingMode.load() == VRRenderingMode::SequentialDualPass) {
+        m_dualPassPairIndex.fetch_add(1);
+    }
     ResetSubPassAndParity();
 }
 
@@ -439,6 +443,7 @@ void VRBridge::SetFrameIndex(uint64_t index) {
 void VRBridge::SetRenderingMode(VRRenderingMode mode) {
     m_renderingMode.store(mode);
     m_subPassIndex.store(0);
+    m_dualPassPairIndex.store(0);
     SetFrameParity(0);
     LogInfo(std::string("VRBridge: Rendering mode set to: ") +
             (mode == VRRenderingMode::SequentialDualPass ? "SequentialDualPass" : "AFR"));
@@ -697,6 +702,13 @@ int VRBridge::Lua_AdvanceSubPass(lua_State* L) {
     return 1;
 }
 
+int VRBridge::Lua_GetActiveEye(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    lua_pushinteger(L, static_cast<int>(self->GetActiveEye()));
+    return 1;
+}
+
 int VRBridge::Lua_Index(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
@@ -822,6 +834,34 @@ int VRBridge::Lua_SetDlssPreset(lua_State* L) {
         return 1;
     }
     self->m_ngxInterceptor->SetDlssPresetOverride(preset);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int VRBridge::Lua_SetDlssSdpMvScale(lua_State* L) {
+    double scaleX = luaL_checknumber(L, 1);
+    double scaleY = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : scaleX;
+    VRBridge* self = &FromUpvalue(L);
+    // No NGX interceptor wired: DLSS tuning is unavailable, which the Companion Mod can report.
+    if (!self->m_ngxInterceptor) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    self->m_ngxInterceptor->SetSdpMvScaleMultiplier(static_cast<float>(scaleX), static_cast<float>(scaleY));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int VRBridge::Lua_DlssDiag(lua_State* L) {
+    int evaluations = lua_isnumber(L, 1) ? static_cast<int>(lua_tointeger(L, 1))
+                                         : static_cast<int>(NgxInterceptor::kDefaultDiagEvaluations);
+    VRBridge* self = &FromUpvalue(L);
+    // No NGX interceptor wired: there are no DLSS evaluations to trace.
+    if (!self->m_ngxInterceptor || evaluations <= 0) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    self->m_ngxInterceptor->ArmDiagnostics(static_cast<uint32_t>(evaluations));
     lua_pushboolean(L, 1);
     return 1;
 }

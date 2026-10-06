@@ -5,6 +5,7 @@
 #include "proxy/dxgi_proxy.h"
 #include "openxr/openxr_manager.h"
 #include <cwctype>
+#include <cmath>
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
@@ -16,6 +17,33 @@ namespace {
 // resolve the interceptor that installed them here instead of reaching for the singleton.
 std::atomic<NgxInterceptor*> s_featureHost{nullptr};
 std::atomic<NgxInterceptor*> s_loadHookHost{nullptr};
+
+// NVSDK_NGX_DLSS_Feature_Flags bits, named for the creation diagnostics.
+constexpr struct { int bit; const char* name; } kDlssCreateFlagNames[] = {
+    {1 << 0, "IsHDR"},
+    {1 << 1, "MVLowRes"},
+    {1 << 2, "MVJittered"},
+    {1 << 3, "DepthInverted"},
+    {1 << 5, "DoSharpening"},
+    {1 << 6, "AutoExposure"},
+    {1 << 7, "AlphaUpscaling"},
+};
+
+std::string DescribeDlssCreateFlags(int flags) {
+    std::string names;
+    for (const auto& flag : kDlssCreateFlagNames) {
+        if (flags & flag.bit) {
+            if (!names.empty()) names += "|";
+            names += flag.name;
+        }
+    }
+    return names.empty() ? "none" : names;
+}
+
+// Jitter offsets closer than this are the same sample position.
+constexpr float kJitterMatchTolerance = 1e-4f;
+// Distinct offsets listed per context in the summary; the count covers all of them.
+constexpr size_t kMaxListedJitterOffsets = 16;
 } // namespace
 
 NgxInterceptor* NgxInterceptor::FeatureHost() {
@@ -398,9 +426,12 @@ void NgxInterceptor::DetachAll() {
     m_forceSharpnessOverride = kDefaultForceSharpnessOverride;
     m_mvScaleMultiplierX = kDefaultAfrMvScale;
     m_mvScaleMultiplierY = kDefaultAfrMvScale;
+    m_sdpMvScaleMultiplierX = 1.0f;
+    m_sdpMvScaleMultiplierY = 1.0f;
     m_lastRenderingMode.store(-1);
     m_internalDiscontinuityPendingLeft.store(false);
     m_internalDiscontinuityPendingRight.store(false);
+    m_diagRemaining.store(0);
 }
 
 void NgxInterceptor::DetachLiveHooks() {
@@ -426,7 +457,133 @@ bool NgxInterceptor::IsSingleContextBypassActive() const {
 
 uint32_t NgxInterceptor::GetActiveDualPassEyeIndex() const {
     VRBridge* bridge = GetVRBridge();
-    return bridge ? bridge->GetSubPassIndex() : 0;
+    return bridge ? bridge->GetActiveEye() : 0;
+}
+
+void NgxInterceptor::ArmDiagnostics(uint32_t evaluations) {
+    evaluations = (std::min)(evaluations, kMaxDiagEvaluations);
+    {
+        std::lock_guard<std::mutex> lock(m_diagMutex);
+        m_diagSamples[0].clear();
+        m_diagSamples[1].clear();
+        m_diagLastContext = -1;
+        m_diagContextRun = 0;
+        m_diagLongestContextRun = 0;
+    }
+    m_diagRemaining.store(evaluations);
+    LogInfo("NgxInterceptor: [Diag] Armed for " + std::to_string(evaluations) + " evaluations.");
+}
+
+NgxInterceptor::JitterSummary NgxInterceptor::Summarize(const std::vector<DiagSample>& samples) {
+    JitterSummary summary;
+    std::vector<std::pair<float, float>> distinct;
+    for (const auto& s : samples) {
+        if (summary.evaluations == 0) {
+            summary.minX = summary.maxX = s.jitterX;
+            summary.minY = summary.maxY = s.jitterY;
+        }
+        summary.evaluations++;
+        if (s.reset) summary.resets++;
+        summary.minX = (std::min)(summary.minX, s.jitterX);
+        summary.maxX = (std::max)(summary.maxX, s.jitterX);
+        summary.minY = (std::min)(summary.minY, s.jitterY);
+        summary.maxY = (std::max)(summary.maxY, s.jitterY);
+        bool seen = std::any_of(distinct.begin(), distinct.end(), [&](const auto& d) {
+            return std::fabs(d.first - s.jitterX) < kJitterMatchTolerance &&
+                   std::fabs(d.second - s.jitterY) < kJitterMatchTolerance;
+        });
+        if (!seen) distinct.emplace_back(s.jitterX, s.jitterY);
+    }
+    summary.distinctOffsets = static_cast<uint32_t>(distinct.size());
+    return summary;
+}
+
+NgxInterceptor::JitterSummary NgxInterceptor::GetDiagJitterSummary(uint32_t contextIndex) const {
+    std::lock_guard<std::mutex> lock(m_diagMutex);
+    return Summarize(m_diagSamples[contextIndex == 1 ? 1 : 0]);
+}
+
+void NgxInterceptor::RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex,
+                                       const NVSDK_NGX_Parameter* params, bool reset, bool isDualPass) {
+    uint32_t remaining = m_diagRemaining.load();
+    while (remaining > 0 && !m_diagRemaining.compare_exchange_weak(remaining, remaining - 1)) {}
+    if (remaining == 0) return;
+
+    float jitX = 0.0f, jitY = 0.0f, mvX = 1.0f, mvY = 1.0f;
+    unsigned int renderW = 0, renderH = 0;
+    if (params) {
+        // The engine may request a reset itself, not only our Discontinuity Flush.
+        int resetParam = 0;
+        if (NVSDK_NGX_SUCCEED(params->Get(NVSDK_NGX_Parameter_Reset, &resetParam)) && resetParam != 0) {
+            reset = true;
+        }
+        params->Get(NVSDK_NGX_Parameter_Jitter_Offset_X, &jitX);
+        params->Get(NVSDK_NGX_Parameter_Jitter_Offset_Y, &jitY);
+        params->Get(NVSDK_NGX_Parameter_MV_Scale_X, &mvX);
+        params->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &mvY);
+        if (NVSDK_NGX_FAILED(params->Get(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, &renderW)) ||
+            NVSDK_NGX_FAILED(params->Get(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, &renderH))) {
+            params->Get(NVSDK_NGX_Parameter_Width, &renderW);
+            params->Get(NVSDK_NGX_Parameter_Height, &renderH);
+        }
+    }
+
+    VRBridge* bridge = GetVRBridge();
+    uint32_t ctx = (contextIndex == 1) ? 1 : 0;
+    {
+        std::lock_guard<std::mutex> lock(m_diagMutex);
+        m_diagSamples[ctx].push_back({jitX, jitY, reset});
+        m_diagContextRun = (m_diagLastContext == static_cast<int>(ctx)) ? m_diagContextRun + 1 : 1;
+        m_diagLongestContextRun = (std::max)(m_diagLongestContextRun, m_diagContextRun);
+        m_diagLastContext = static_cast<int>(ctx);
+    }
+
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(4)
+       << "NgxInterceptor: [Diag] Eval #" << evalIndex << " Ctx=" << ctx
+       << " Mode=" << (isDualPass ? "SDP" : "AFR")
+       << " SubPass=" << (bridge ? bridge->GetSubPassIndex() : 0)
+       << " Eye=" << (bridge ? bridge->GetActiveEye() : 0)
+       << " Jitter=(" << jitX << ", " << jitY << ")"
+       << " MVScale=(" << mvX << ", " << mvY << ")"
+       << " Reset=" << (reset ? 1 : 0)
+       << " Render=" << renderW << "x" << renderH
+       << " Thread=" << GetCurrentThreadId();
+    LogInfo(ss.str());
+
+    if (remaining == 1) {
+        LogDiagSummary();
+    }
+}
+
+void NgxInterceptor::LogDiagSummary() {
+    std::lock_guard<std::mutex> lock(m_diagMutex);
+    for (uint32_t ctx = 0; ctx < 2; ++ctx) {
+        const auto& samples = m_diagSamples[ctx];
+        JitterSummary summary = Summarize(samples);
+
+        std::stringstream ss;
+        ss << std::fixed << std::setprecision(4)
+           << "NgxInterceptor: [Diag] Summary Ctx=" << ctx << " Evals=" << summary.evaluations
+           << " Resets=" << summary.resets << " DistinctJitter=" << summary.distinctOffsets
+           << " JitterX=[" << summary.minX << ", " << summary.maxX << "]"
+           << " JitterY=[" << summary.minY << ", " << summary.maxY << "] Offsets:";
+        std::vector<std::pair<float, float>> listed;
+        for (const auto& s : samples) {
+            if (listed.size() >= kMaxListedJitterOffsets) break;
+            bool seen = std::any_of(listed.begin(), listed.end(), [&](const auto& d) {
+                return std::fabs(d.first - s.jitterX) < kJitterMatchTolerance &&
+                       std::fabs(d.second - s.jitterY) < kJitterMatchTolerance;
+            });
+            if (!seen) {
+                listed.emplace_back(s.jitterX, s.jitterY);
+                ss << " (" << s.jitterX << ", " << s.jitterY << ")";
+            }
+        }
+        LogInfo(ss.str());
+    }
+    LogInfo("NgxInterceptor: [Diag] Longest same-context run=" + std::to_string(m_diagLongestContextRun) +
+            " (1 means the contexts strictly alternated).");
 }
 
 void NgxInterceptor::TriggerDiscontinuityFlush() {
@@ -686,6 +843,22 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
        << ", Target=" << effectiveTargetW << "x" << effectiveTargetH
        << ", Render=" << renderRes.renderWidth << "x" << renderRes.renderHeight << ")";
     LogInfo(ss.str());
+
+    int createFlags = 0;
+    bool hasCreateFlags = NVSDK_NGX_SUCCEED(InParameters->Get(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, &createFlags));
+    unsigned int inW = 0, inH = 0, outW = 0, outH = 0;
+    InParameters->Get(NVSDK_NGX_Parameter_Width, &inW);
+    InParameters->Get(NVSDK_NGX_Parameter_Height, &inH);
+    InParameters->Get(NVSDK_NGX_Parameter_OutWidth, &outW);
+    InParameters->Get(NVSDK_NGX_Parameter_OutHeight, &outH);
+    std::stringstream diag;
+    diag << "NgxInterceptor: [Diag] Create flags=" << (hasCreateFlags ? DescribeDlssCreateFlags(createFlags) : "absent")
+         << " (0x" << std::hex << createFlags << std::dec << ")"
+         << " PerfQuality=" << perfQualityInt
+         << " Engine dims=" << inW << "x" << inH << " -> " << outW << "x" << outH
+         << " RightCloneHasFlags=" << (clonedParams->HasParam(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags) ? 1 : 0);
+    LogInfo(diag.str());
+    interceptor.ArmDiagnostics();
     return NVSDK_NGX_Result_Success;
 }
 
@@ -765,6 +938,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     int lastMode = interceptor.m_lastRenderingMode.exchange(currentMode);
     if (lastMode != -1 && lastMode != currentMode) {
         interceptor.TriggerDiscontinuityFlush();
+        interceptor.ArmDiagnostics();
     }
 
     bool isDualPass = (bridge && bridge->GetRenderingMode() == VRRenderingMode::SequentialDualPass);
@@ -781,8 +955,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
             target = vHandle->hLeft;
             contextIndex = 0;
         } else {
-            uint32_t eyeIndex = isDualPass ? bridge->GetSubPassIndex()
-                                           : (bridge ? bridge->GetFrameParity() : 0);
+            uint32_t eyeIndex = bridge ? bridge->GetActiveEye() : 0;
             target = (eyeIndex == 1 && vHandle->hRight) ? vHandle->hRight : vHandle->hLeft;
             contextIndex = (eyeIndex == 1 && vHandle->hRight) ? 1 : 0;
             alternatesEyeContexts = (vHandle->hRight != nullptr);
@@ -841,12 +1014,20 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
 
     // Eye-stride compensation only applies when consecutive evaluations of a context are two
     // frames apart: AFR alternating a virtual handle's two eye contexts during stereo presentation,
-    // which starts at the Companion Mod handshake. SDP, the monoscopic single-context bypass, a
-    // handle that was not split per eye, and pre-handshake (quad layer) frames are 1.0x.
+    // which starts at the Companion Mod handshake. SDP per-eye contexts use their own diagnostic
+    // multiplier (1.0x unless set). The monoscopic single-context bypass, a handle that was not split
+    // per eye, and pre-handshake (quad layer) frames are 1.0x.
     bool eyeStride = !isDualPass && alternatesEyeContexts && bridge && bridge->IsCompanionActive();
+    bool dualPassEyeContexts = isDualPass && alternatesEyeContexts && bridge && bridge->IsCompanionActive();
     float prevScaleX = 1.0f, prevScaleY = 1.0f;
-    float scaleMulX = eyeStride ? interceptor.GetMvScaleMultiplierX() : 1.0f;
-    float scaleMulY = eyeStride ? interceptor.GetMvScaleMultiplierY() : 1.0f;
+    float scaleMulX = 1.0f, scaleMulY = 1.0f;
+    if (eyeStride) {
+        scaleMulX = interceptor.GetMvScaleMultiplierX();
+        scaleMulY = interceptor.GetMvScaleMultiplierY();
+    } else if (dualPassEyeContexts) {
+        scaleMulX = interceptor.GetSdpMvScaleMultiplierX();
+        scaleMulY = interceptor.GetSdpMvScaleMultiplierY();
+    }
     bool wroteScale = false;
     if (mutableParams) {
         // An absent MV scale means 1.0 to DLSS, which is also what we restore it to.
@@ -862,6 +1043,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     }
 
     uint64_t currentEval = interceptor.m_evalCount.fetch_add(1);
+    interceptor.RecordDiagnostics(currentEval, contextIndex, InParameters, needReset, isDualPass);
     if ((currentEval == 0 || (currentEval % 300 == 0)) && InParameters) {
         unsigned int inW = 0, inH = 0, outW = 0, outH = 0;
         InParameters->Get(NVSDK_NGX_Parameter_Width, &inW);

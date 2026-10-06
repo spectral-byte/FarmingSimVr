@@ -24,6 +24,10 @@ _Avoid_: Alternate eye rendering, frame interlacing
 A stereoscopic rendering technique where left and right eye perspectives are rendered sequentially within the same logical frame tick and submitted synchronously to the VR compositor.
 _Avoid_: Dual rendering, double pass, simultaneous pass, split-frame stereo
 
+**Eye Order Alternation**:
+The Sequential Dual-Pass rule that swaps which eye renders in the first sub-pass every four pairs, so each eye receives the engine's full per-frame jitter pattern rather than one half of it.
+_Avoid_: Eye swap, sub-pass flip, eye shuffle
+
 **Stereo Presentation Mode**:
 The selectable operational pipeline governing how stereoscopic views are rendered and paced (Alternate Frame Rendering or Sequential Dual-Pass).
 _Avoid_: 3D mode, render method, stereo toggle, vr mode

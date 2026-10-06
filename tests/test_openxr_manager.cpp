@@ -2409,6 +2409,37 @@ TEST(OpenXrManagerTest, SequentialDualPassSubmitsEachEyeWithPoseItWasRenderedWit
     EXPECT_NEAR(v1.pose.position.z, 5.0f, 0.001f);
 }
 
+TEST(OpenXrManagerTest, SequentialDualPassWithSwappedEyeOrderSubmitsEachEyeWithItsRenderPose) {
+    RenderPoseFixture f(VRRenderingMode::SequentialDualPass);
+    for (uint64_t i = 0; i < VRBridge::kEyeOrderSwapPairs; ++i) {
+        f.bridge->AdvanceFrame();
+    }
+    ASSERT_TRUE(f.bridge->IsEyeOrderSwapped());
+
+    // Sub-pass 0 renders the right eye: its pose is recorded for eye 1.
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(0.0f, 1.6f, 0.0f));
+    f.bridge->GetHeadPose();
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(5.0f, 1.6f, 5.0f));
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(f.bridge->GetActiveEye(), nullptr));
+
+    // Sub-pass 1 renders the left eye from the display-time pose; a later poll moves the fallback.
+    f.bridge->SetSubPassIndex(1);
+    ASSERT_EQ(f.bridge->GetActiveEye(), 0u);
+    f.bridge->GetHeadPose();
+    f.dispatch->tracking.SetHeadPose(MakeRenderTestPose(9.0f, 9.0f, 9.0f));
+    f.manager->PollHeadPose(2000000);
+    ASSERT_TRUE(f.manager->CopyBackBufferToEye(f.bridge->GetActiveEye(), nullptr));
+    ASSERT_TRUE(f.manager->SubmitFramePair());
+
+    ASSERT_EQ(f.dispatch->lastSubmittedProjectionViews.size(), 2u);
+    const auto& v0 = f.dispatch->lastSubmittedProjectionViews[0];
+    const auto& v1 = f.dispatch->lastSubmittedProjectionViews[1];
+    EXPECT_NEAR(v1.pose.position.x, 0.032f, 0.001f);
+    EXPECT_NEAR(v1.pose.position.z, 0.0f, 0.001f);
+    EXPECT_NEAR(v0.pose.position.x, 5.0f - 0.032f, 0.001f);
+    EXPECT_NEAR(v0.pose.position.z, 5.0f, 0.001f);
+}
+
 TEST(OpenXrManagerTest, AfrSubmitsEachEyeWithPoseItWasRenderedWith) {
     RenderPoseFixture f(VRRenderingMode::AFR);
     ASSERT_EQ(f.bridge->GetFrameParity(), 0u);

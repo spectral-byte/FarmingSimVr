@@ -987,6 +987,9 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
         assert(VRBridge.setDlssMvScale(0.5, 0.75) == true, "setDlssMvScale dual arg failed")
         assert(VRBridge.setDlssSharpness(0.65) == true, "setDlssSharpness failed")
         assert(VRBridge.setDlssPreset(11) == true, "setDlssPreset failed")
+        assert(VRBridge.dlssDiag(0) == false, "dlssDiag must reject a zero count")
+        assert(VRBridge.dlssDiag(32) == true, "dlssDiag failed")
+        assert(VRBridge.setDlssSdpMvScale(0.0, 0.25) == true, "setDlssSdpMvScale failed")
     )";
 
     EXPECT_EQ(RunLuauString(L, testScript), 0);
@@ -994,6 +997,73 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
     EXPECT_FLOAT_EQ(ngx->GetMvScaleMultiplierY(), 0.75f);
     EXPECT_FLOAT_EQ(ngx->GetSharpnessOverride(), 0.65f);
     EXPECT_EQ(ngx->GetDlssPresetOverride(), 11);
+    EXPECT_EQ(ngx->GetDiagEvaluationsRemaining(), 32u);
+    EXPECT_FLOAT_EQ(ngx->GetSdpMvScaleMultiplierX(), 0.0f);
+    EXPECT_FLOAT_EQ(ngx->GetSdpMvScaleMultiplierY(), 0.25f);
+}
+
+TEST_F(VrBridgeTest, DualPassEyeOrderSwapsEveryFourPairs) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    for (uint64_t pair = 0; pair < 16; ++pair) {
+        uint32_t firstEye = ((pair / fs25vr::VRBridge::kEyeOrderSwapPairs) % 2 == 0) ? 0u : 1u;
+        bridge.SetSubPassIndex(0);
+        EXPECT_EQ(bridge.GetActiveEye(), firstEye) << "pair " << pair;
+        EXPECT_EQ(bridge.GetFrameParity(), firstEye) << "pair " << pair;
+        bridge.SetSubPassIndex(1);
+        EXPECT_EQ(bridge.GetActiveEye(), firstEye ^ 1u) << "pair " << pair;
+        if (pair == 5) {
+            ASSERT_EQ(RunLuauString(L, R"luau(
+                assert(VRBridge.getSubPassIndex() == 1, "sub-pass must be 1")
+                assert(VRBridge.getActiveEye() == 0, "the swapped order renders the left eye second")
+            )luau"), 0);
+        }
+        bridge.AdvanceFrame();
+    }
+
+    // A mode change restarts the order with the left eye first.
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(bridge.GetDualPassPairIndex(), 0u);
+    EXPECT_EQ(bridge.GetActiveEye(), 0u);
+}
+
+TEST_F(VrBridgeTest, DualPassEyeOrderStratifiesEachEyesHorizontalJitter) {
+    // The engine's horizontal jitter is the base-2 radical inverse of a counter that advances once per
+    // rendered frame. Whatever the counter's phase, every 16 frames must give each eye one sample in
+    // each eighth of the pixel (a fixed L-then-R order gives each eye only one half).
+    auto radicalInverseBase2 = [](uint64_t i) {
+        double result = 0.0, f = 0.5;
+        for (; i > 0; i >>= 1, f *= 0.5) {
+            if (i & 1) result += f;
+        }
+        return result;
+    };
+
+    for (uint64_t pairPhase = 0; pairPhase < 2 * fs25vr::VRBridge::kEyeOrderSwapPairs; ++pairPhase) {
+        for (uint64_t jitterPhase = 0; jitterPhase < 16; ++jitterPhase) {
+            fs25vr::VRBridge bridge(nullptr, nullptr);
+            bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+            for (uint64_t pair = 0; pair < pairPhase; ++pair) {
+                bridge.AdvanceFrame();
+            }
+
+            uint32_t cellsHit[2] = {0, 0};
+            uint64_t jitterIndex = jitterPhase;
+            for (uint64_t pair = 0; pair < 8; ++pair) {
+                for (uint32_t subPass = 0; subPass < 2; ++subPass) {
+                    bridge.SetSubPassIndex(subPass);
+                    uint32_t cell = static_cast<uint32_t>(radicalInverseBase2(jitterIndex++) * 8.0);
+                    cellsHit[bridge.GetActiveEye()] |= (1u << cell);
+                }
+                bridge.AdvanceFrame();
+            }
+            EXPECT_EQ(cellsHit[0], 0xFFu) << "left eye, pair phase " << pairPhase << ", jitter phase " << jitterPhase;
+            EXPECT_EQ(cellsHit[1], 0xFFu) << "right eye, pair phase " << pairPhase << ", jitter phase " << jitterPhase;
+        }
+    }
 }
 
 TEST_F(VrBridgeTest, DlssTuningFunctionsReportFailureWithoutNgxInterceptor) {
@@ -1004,6 +1074,7 @@ TEST_F(VrBridgeTest, DlssTuningFunctionsReportFailureWithoutNgxInterceptor) {
         assert(VRBridge.setDlssMvScale(0.5) == false, "setDlssMvScale must fail without NGX")
         assert(VRBridge.setDlssSharpness(0.65) == false, "setDlssSharpness must fail without NGX")
         assert(VRBridge.setDlssPreset(11) == false, "setDlssPreset must fail without NGX")
+        assert(VRBridge.dlssDiag(32) == false, "dlssDiag must fail without NGX")
     )";
     EXPECT_EQ(RunLuauString(L, testScript), 0);
 }
@@ -1057,7 +1128,7 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    // VRBridge should expose exactly kExposedFieldCount fields (1 version string + 29 functions)
+    // VRBridge should expose exactly kExposedFieldCount fields (1 version string + 32 functions)
     const char* expectedKeys[] = {
         "version",
         "isReady",
@@ -1084,11 +1155,14 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "getSubPassIndex",
         "setSubPassIndex",
         "advanceSubPass",
+        "getActiveEye",
         "resetTemporalHistory",
         "signalDiscontinuity",
         "setDlssMvScale",
         "setDlssSharpness",
-        "setDlssPreset"
+        "setDlssPreset",
+        "dlssDiag",
+        "setDlssSdpMvScale"
     };
 
     lua_getglobal(L, "VRBridge");

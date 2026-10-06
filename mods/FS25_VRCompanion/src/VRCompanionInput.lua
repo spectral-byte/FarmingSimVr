@@ -434,6 +434,36 @@ function VRCompanion:consoleCommandSetDlssPreset(presetStr)
     end
 end
 
+function VRCompanion:consoleCommandSetDlssSdpMvScale(scaleXStr, scaleYStr)
+    local sx = tonumber(scaleXStr)
+    if sx == nil then
+        return "Usage: vrDlssSdpMvScale <scaleX> [scaleY] (default 1.0; 0 ignores motion vectors)"
+    end
+    local sy = tonumber(scaleYStr) or sx
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.setDlssSdpMvScale) == "function" then
+        bridge.setDlssSdpMvScale(sx, sy)
+        print(string.format("[FS25_VR] DLSS Sequential Dual-Pass motion vector scale set to: X=%.2f, Y=%.2f", sx, sy))
+        return string.format("DLSS Sequential Dual-Pass motion vector scale set to: X=%.2f, Y=%.2f", sx, sy)
+    else
+        return "VRBridge.setDlssSdpMvScale is not available."
+    end
+end
+
+function VRCompanion:consoleCommandDlssDiag(countStr)
+    local count = tonumber(countStr) or 128
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.dlssDiag) == "function" then
+        if bridge.dlssDiag(count) then
+            print(string.format("[FS25_VR] Tracing the next %d DLSS evaluations to fs25_vr.log", count))
+            return string.format("Tracing the next %d DLSS evaluations to fs25_vr.log", count)
+        end
+        return "DLSS diagnostics unavailable (no NGX interceptor or invalid count)."
+    else
+        return "VRBridge.dlssDiag is not available."
+    end
+end
+
 function VRCompanion:consoleCommandSetRenderingMode(modeStr)
     local curMode = self:getRenderingMode()
     if modeStr == nil or modeStr == "" or string.lower(tostring(modeStr)) == "status" then
@@ -515,6 +545,8 @@ VRCompanion.Input.consoleCommandToggleView = function(self, ...) return VRCompan
 VRCompanion.Input.consoleCommandSetDlssMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssMvScale(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetDlssSharpness = function(self, ...) return VRCompanion.consoleCommandSetDlssSharpness(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetDlssPreset = function(self, ...) return VRCompanion.consoleCommandSetDlssPreset(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetDlssSdpMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssSdpMvScale(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssDiag = function(self, ...) return VRCompanion.consoleCommandDlssDiag(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetRenderingMode = function(self, ...) return VRCompanion.consoleCommandSetRenderingMode(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetObliqueProjection = function(self, ...) return VRCompanion.consoleCommandSetObliqueProjection(VRCompanion, ...) end
 

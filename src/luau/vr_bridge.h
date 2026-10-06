@@ -63,12 +63,23 @@ public:
     }
     void ResetSubPass() { m_subPassIndex.store(0); }
 
-    uint32_t GetFrameParity() const {
+    // The engine steps its TAA/upscaler jitter once per rendered frame, so a fixed L-then-R order hands
+    // each eye only one parity of the sequence (half a pixel of horizontal jitter). SDP swaps which eye
+    // renders in sub-pass 0 every kEyeOrderSwapPairs pairs, which stratifies each eye's horizontal
+    // jitter over every 16 frames whatever the engine's sequence phase.
+    static constexpr uint64_t kEyeOrderSwapPairs = 4;
+    uint64_t GetDualPassPairIndex() const { return m_dualPassPairIndex.load(); }
+    bool IsEyeOrderSwapped() const { return ((m_dualPassPairIndex.load() / kEyeOrderSwapPairs) & 1) != 0; }
+
+    // The eye the current frame renders: the sub-pass mapped through the eye order under SDP,
+    // the frame parity under AFR.
+    uint32_t GetActiveEye() const {
         if (m_renderingMode.load() == VRRenderingMode::SequentialDualPass) {
-            return m_subPassIndex.load();
+            return m_subPassIndex.load() ^ (IsEyeOrderSwapped() ? 1u : 0u);
         }
         return m_frameParity;
     }
+    uint32_t GetFrameParity() const { return GetActiveEye(); }
     uint64_t GetFrameIndex() const { return m_frameIndex; }
     void AdvanceFrame();
     void SetFrameParity(uint32_t parity);
@@ -108,12 +119,15 @@ public:
     static int Lua_SetDlssMvScale(lua_State* L);
     static int Lua_SetDlssSharpness(lua_State* L);
     static int Lua_SetDlssPreset(lua_State* L);
+    static int Lua_DlssDiag(lua_State* L);
+    static int Lua_SetDlssSdpMvScale(lua_State* L);
 
     static int Lua_GetRenderingMode(lua_State* L);
     static int Lua_SetRenderingMode(lua_State* L);
     static int Lua_GetSubPassIndex(lua_State* L);
     static int Lua_SetSubPassIndex(lua_State* L);
     static int Lua_AdvanceSubPass(lua_State* L);
+    static int Lua_GetActiveEye(lua_State* L);
 
     static int Lua_GetFrameParity(lua_State* L);
     static int Lua_GetFrameIndex(lua_State* L);
@@ -159,11 +173,14 @@ public:
         {"getSubPassIndex", &Lua_GetSubPassIndex},
         {"setSubPassIndex", &Lua_SetSubPassIndex},
         {"advanceSubPass", &Lua_AdvanceSubPass},
+        {"getActiveEye", &Lua_GetActiveEye},
         {"resetTemporalHistory", &Lua_ResetTemporalHistory},
         {"signalDiscontinuity", &Lua_SignalDiscontinuity},
         {"setDlssMvScale", &Lua_SetDlssMvScale},
         {"setDlssSharpness", &Lua_SetDlssSharpness},
         {"setDlssPreset", &Lua_SetDlssPreset},
+        {"dlssDiag", &Lua_DlssDiag},
+        {"setDlssSdpMvScale", &Lua_SetDlssSdpMvScale},
     };
 
     // 1 version property + one field per table entry.
@@ -184,7 +201,8 @@ private:
     std::atomic<VRRenderingMode> m_renderingMode{VRRenderingMode::SequentialDualPass};
     static constexpr int kNoPendingMode = -1;
     std::atomic<int> m_pendingRenderingMode{kNoPendingMode};
-    std::atomic<uint32_t> m_subPassIndex{0}; // 0 = Left Eye, 1 = Right Eye
+    std::atomic<uint32_t> m_subPassIndex{0}; // 0 = first sub-pass of the pair (advances simulation), 1 = second
+    std::atomic<uint64_t> m_dualPassPairIndex{0}; // SDP pairs completed since the mode or handshake began
 
     uint32_t m_frameParity = 0; // 0 = Left (2k), 1 = Right (2k+1)
     uint64_t m_frameIndex = 0;

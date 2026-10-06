@@ -141,6 +141,16 @@ function VRCompanion:advanceSubPass()
     return self:setSubPassIndex(nextPass)
 end
 
+-- The eye the current Sequential Dual-Pass sub-pass renders. The Injector alternates which eye
+-- goes first between pairs, so the sub-pass index alone does not name the eye.
+function VRCompanion:getDualPassEye()
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.getActiveEye) == "function" then
+        return (bridge.getActiveEye() % 2 == 1) and 1 or 0
+    end
+    return (self:getSubPassIndex() % 2 == 1) and 1 or 0
+end
+
 function VRCompanion:getStereoCameraNodes(activeCam)
     local cam = activeCam
     if cam == nil then
@@ -806,7 +816,7 @@ end
 function VRCompanion:getActiveEyeIndex(afrFallback)
     if not self.isMenuVisible and not self.is2DViewActive then
         if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then
-            return (self:getSubPassIndex() % 2 == 1) and 1 or 0
+            return self:getDualPassEye()
         end
         if afrFallback then
             local parity = self:getFrameParity()
@@ -1446,6 +1456,7 @@ end
 VRCompanion.Stereo.getRenderingMode = function(self, ...) return VRCompanion.getRenderingMode(VRCompanion, ...) end
 VRCompanion.Stereo.setRenderingMode = function(self, ...) return VRCompanion.setRenderingMode(VRCompanion, ...) end
 VRCompanion.Stereo.getSubPassIndex = function(self, ...) return VRCompanion.getSubPassIndex(VRCompanion, ...) end
+VRCompanion.Stereo.getDualPassEye = function(self, ...) return VRCompanion.getDualPassEye(VRCompanion, ...) end
 VRCompanion.Stereo.setSubPassIndex = function(self, ...) return VRCompanion.setSubPassIndex(VRCompanion, ...) end
 VRCompanion.Stereo.advanceSubPass = function(self, ...) return VRCompanion.advanceSubPass(VRCompanion, ...) end
 VRCompanion.Stereo.getStereoCameraNodes = function(self, ...) return VRCompanion.getStereoCameraNodes(VRCompanion, ...) end

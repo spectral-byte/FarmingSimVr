@@ -124,19 +124,27 @@ protected:
     }
 };
 
-TEST_F(NgxInterceptorTest, GetActiveDualPassEyeIndexReflectsSubPassIndex) {
+TEST_F(NgxInterceptorTest, GetActiveDualPassEyeIndexFollowsTheAlternatingEyeOrder) {
     auto& interceptor = m_ngx;
     auto& bridge = m_bridge;
     interceptor.SetVRBridge(&bridge);
+    bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
 
     bridge.SetSubPassIndex(0);
     EXPECT_EQ(interceptor.GetActiveDualPassEyeIndex(), 0u);
-
     bridge.SetSubPassIndex(1);
     EXPECT_EQ(interceptor.GetActiveDualPassEyeIndex(), 1u);
 
+    // After kEyeOrderSwapPairs completed pairs the right eye renders first.
+    for (uint64_t i = 0; i < VRBridge::kEyeOrderSwapPairs; ++i) {
+        bridge.AdvanceFrame();
+    }
     bridge.SetSubPassIndex(0);
+    EXPECT_EQ(interceptor.GetActiveDualPassEyeIndex(), 1u);
+    bridge.SetSubPassIndex(1);
     EXPECT_EQ(interceptor.GetActiveDualPassEyeIndex(), 0u);
+
+    bridge.SetRenderingMode(VRRenderingMode::AFR);
 }
 
 TEST_F(NgxInterceptorTest, SubPassRoutingInSequentialDualPassRoutesLeftAndRight) {

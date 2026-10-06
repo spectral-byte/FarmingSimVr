@@ -1442,5 +1442,83 @@ TEST_F(DlssEvaluationTest, SequentialDualPassModeTransitionAssertsResetForOneFra
     MockReleaseFeature(virtualHandle);
 }
 
+TEST_F(DlssEvaluationTest, SequentialDualPassAppliesItsOwnMotionVectorScaleOverride) {
+    auto& interceptor = m_ngx;
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    interceptor.SetSdpMvScaleMultiplier(0.0f, 0.5f);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_X, 2.0f);
+    params.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 2.0f);
+
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
+
+    for (uint32_t subPass = 0; subPass < 2; ++subPass) {
+        m_bridge.SetSubPassIndex(subPass);
+        MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr);
+    }
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 2u);
+    for (size_t i = 0; i < 2; ++i) {
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[i], 0.0f);
+        EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[i], 1.0f);
+    }
+
+    // The engine's own scale is restored after each evaluation.
+    float restoredX = 0.0f;
+    params.Get(NVSDK_NGX_Parameter_MV_Scale_X, &restoredX);
+    EXPECT_FLOAT_EQ(restoredX, 2.0f);
+
+    // The menu's single-context bypass is not affected.
+    m_bridge.SetMenuVisible(true);
+    MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX.back(), 2.0f);
+
+    MockReleaseFeature(virtualHandle);
+}
+
+TEST_F(DlssEvaluationTest, DiagnosticsSummarizeJitterPerEyeContextUntilCountdownEnds) {
+    auto& interceptor = m_ngx;
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
+    // Virtualizing a feature arms the default trace window.
+    EXPECT_EQ(interceptor.GetDiagEvaluationsRemaining(), NgxInterceptor::kDefaultDiagEvaluations);
+
+    interceptor.ArmDiagnostics(6);
+    // An engine jitter sequence of period 4 split across alternating eyes: each eye sees 2 offsets.
+    const float jitterX[] = {0.25f, -0.25f, -0.125f, 0.375f};
+    for (int i = 0; i < 8; ++i) {
+        m_bridge.SetSubPassIndex(static_cast<uint32_t>(i % 2));
+        params.Set(NVSDK_NGX_Parameter_Jitter_Offset_X, jitterX[i % 4]);
+        params.Set(NVSDK_NGX_Parameter_Jitter_Offset_Y, 0.0f);
+        MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr);
+    }
+
+    // The window closes after 6 evaluations; the last 2 are not recorded.
+    EXPECT_EQ(interceptor.GetDiagEvaluationsRemaining(), 0u);
+    NgxInterceptor::JitterSummary left = interceptor.GetDiagJitterSummary(0);
+    NgxInterceptor::JitterSummary right = interceptor.GetDiagJitterSummary(1);
+    EXPECT_EQ(left.evaluations, 3u);
+    EXPECT_EQ(right.evaluations, 3u);
+    EXPECT_EQ(left.distinctOffsets, 2u);
+    EXPECT_EQ(right.distinctOffsets, 2u);
+    EXPECT_FLOAT_EQ(left.minX, -0.125f);
+    EXPECT_FLOAT_EQ(left.maxX, 0.25f);
+    EXPECT_FLOAT_EQ(right.minX, -0.25f);
+    EXPECT_FLOAT_EQ(right.maxX, 0.375f);
+
+    MockReleaseFeature(virtualHandle);
+}
+
 } // namespace
 } // namespace fs25vr

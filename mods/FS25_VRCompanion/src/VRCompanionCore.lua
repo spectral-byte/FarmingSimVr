@@ -170,6 +170,8 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrDlssMvScale", "Set DLSS motion vector scale multiplier: vrDlssMvScale <scaleX> [scaleY]", "consoleCommandSetDlssMvScale", self)
         addConsoleCommand("vrDlssSharpness", "Set DLSS sharpness override: vrDlssSharpness <sharpness 0.0-1.0>", "consoleCommandSetDlssSharpness", self)
         addConsoleCommand("vrDlssPreset", "Set DLSS preset hint: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L>", "consoleCommandSetDlssPreset", self)
+        addConsoleCommand("vrDlssSdpMvScale", "Set DLSS motion vector scale under Sequential Dual-Pass: vrDlssSdpMvScale <scaleX> [scaleY]", "consoleCommandSetDlssSdpMvScale", self)
+        addConsoleCommand("vrDlssDiag","Trace DLSS evaluations to fs25_vr.log: vrDlssDiag [evaluations]", "consoleCommandDlssDiag", self)
         addConsoleCommand("vrRenderingMode", "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", "consoleCommandSetRenderingMode", self)
         addConsoleCommand("vrObliqueProjection", "Toggle Oblique Frustum projection: vrObliqueProjection <true|false|toggle>", "consoleCommandSetObliqueProjection", self)
     end
@@ -531,6 +533,9 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     end
 
     local subPass = self:getSubPassIndex() % 2
+    -- Sub-pass 0 advances the simulation and sub-pass 1 replays it frozen; which eye each
+    -- sub-pass renders alternates between pairs (see getDualPassEye).
+    local eye = self:getDualPassEye()
 
     -- One eye projection fetch and one rendering camera bind per sub-pass: camera
     -- updates inside the sub-pass share the cached projection and leave the bind to
@@ -538,22 +543,22 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     self:beginEyeProjectionScope()
     self.deferRenderingCameraBind = true
 
+    local camLeft, camRight = self:getStereoCameraNodes()
+    local targetCam = (eye == 1) and camRight or camLeft
+
     if subPass == 1 then
-        -- Sub-Pass 1 (Right Eye): Freeze simulation at timestamp T.
+        -- Sub-Pass 1: Freeze simulation at timestamp T.
         self.accumulatedPass1Dt = (self.accumulatedPass1Dt or 0.0) + rawDt
         if self.accumulatedPass1Dt > 200.0 then
             self.accumulatedPass1Dt = 200.0
         end
 
-        local camLeft, camRight = self:getStereoCameraNodes()
-        local targetCam = camRight
-
         if targetCam ~= nil then
-            self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, 1)
+            self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, eye)
         end
 
-        -- Synchronize right eye camera transforms without running engine simulation
-        self:finishSubPass(subPass, 1, targetCam)
+        -- Synchronize the eye's camera transforms without running engine simulation
+        self:finishSubPass(subPass, eye, targetCam)
         if type(self.updateHudConvergence) == "function" then
             self:updateHudConvergence(0.0)
         end
@@ -568,13 +573,9 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         effectiveDt = 200.0
     end
 
-    -- Sub-Pass 0: cameraNodeLeft is bound as active rendering camera
-    local camLeft, camRight = self:getStereoCameraNodes()
-    local targetCam = camLeft
-
     -- Update camera projection for active eye
     if targetCam ~= nil then
-        self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, 0)
+        self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, eye)
     end
 
     -- Run mission update with accumulated real dt under reentrancy guard and pcall protection
@@ -590,7 +591,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         res = nil
     end
 
-    self:finishSubPass(subPass, 0, targetCam)
+    self:finishSubPass(subPass, eye, targetCam)
     if type(self.updateHudConvergence) == "function" then
         self:updateHudConvergence(effectiveDt)
     end

@@ -3813,6 +3813,70 @@ TEST_F(CompanionModTest, DualPassMissionUpdatePacingAndCameraSelection) {
     )luau", "=testDualPassPacing"), 0);
 }
 
+TEST_F(CompanionModTest, DualPassSwappedEyeOrderBindsRightCameraOnTheSimulatingSubPass) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.currentCamera = 0
+        function _G.setCamera(cam)
+            _G.currentCamera = cam
+        end
+        function _G.getCamera()
+            return _G.currentCamera
+        end
+
+        _G.capturedDt = nil
+        _G.FSBaseMission = {
+            update = function(self, dt)
+                _G.capturedDt = dt
+            end
+        }
+
+        VRCompanion:loadMap("mapUS")
+        VRCompanion.handshakeComplete = true
+        VRCompanion.passThroughMode = false
+        VRCompanion.headTrackingEnabled = true
+        VRCompanion:setRenderingMode("DualPass")
+        VRCompanion.is2DViewActive = false
+        VRCompanion.isMenuVisible = false
+        VRCompanion.cameraNodeLeft = 5001
+        VRCompanion.cameraNodeRight = 5002
+        VRCompanion.currentConvergenceDisparity = 0.012
+    )luau", "=testSwappedEyeOrderSetup"), 0);
+
+    // The Injector completes kEyeOrderSwapPairs pairs; the right eye now renders first.
+    for (uint64_t i = 0; i < fs25vr::VRBridge::kEyeOrderSwapPairs; ++i) {
+        bridge.AdvanceFrame();
+    }
+    ASSERT_TRUE(bridge.IsEyeOrderSwapped());
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        -- Sub-Pass 0 still advances the simulation, now rendering the right eye.
+        VRBridge.setSubPassIndex(0)
+        _G.FSBaseMission:update(16.666)
+        assert(_G.capturedDt ~= nil and math.abs(_G.capturedDt - 16.666) < 0.001, "Sub-Pass 0 must receive real dt")
+        assert(_G.currentCamera == 5002, "swapped Sub-Pass 0 must bind cameraNodeRight (5002)")
+        assert(VRCompanion:getActiveEyeIndex() == 1, "swapped Sub-Pass 0 must report the right eye")
+        assert(math.abs(VRCompanion:getConvergenceOffset(nil, 0.012) - (-0.012)) < 0.0001,
+            "swapped Sub-Pass 0 must use the right eye's HUD convergence offset")
+
+        -- Sub-Pass 1 still freezes the simulation, now rendering the left eye.
+        _G.capturedDt = nil
+        VRBridge.setSubPassIndex(1)
+        _G.FSBaseMission:update(16.666)
+        assert(_G.capturedDt == nil, "Sub-Pass 1 must freeze simulation")
+        assert(_G.currentCamera == 5001, "swapped Sub-Pass 1 must bind cameraNodeLeft (5001)")
+        assert(math.abs(VRCompanion:getConvergenceOffset(nil, 0.012) - 0.012) < 0.0001,
+            "swapped Sub-Pass 1 must use the left eye's HUD convergence offset")
+
+        VRCompanion:deleteMap()
+        _G.FSBaseMission = nil
+    )luau", "=testSwappedEyeOrder"), 0);
+}
+
 TEST_F(CompanionModTest, DualPassHudConvergenceLockedToSubPassEyeIndex) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::NativeOpenXrDispatch>());
     fs25vr::VRBridge bridge(oxr, nullptr);
