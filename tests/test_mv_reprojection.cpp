@@ -281,3 +281,172 @@ TEST(MvReprojectionTest, SummaryOfNothingValidHasNoVerdict) {
     EXPECT_EQ(empty.total, 0u);
     EXPECT_EQ(BetterConvention(empty), Convention::None);
 }
+
+// ---- Per-eye correction (#35) ----
+// Scene: pixel (150, 25) of the 200x100 render, centre (150.5, 25.5), 2 m deep: camera-space point
+// (2.02, 0.98, -2). Seen from a camera 1 m to the right it lands at pixel (125.5, 25.5), 25 pixels to the
+// left, so a static point's engine vector (previous frame = right eye, 1 m aside) is (-25, 0).
+
+namespace {
+
+RelativeTransform Aside(double x) {
+    CameraRecord current;
+    current.orientation[3] = 1.0;
+    CameraRecord other = current;
+    other.position[0] = x;
+    return MakeRelativeTransform(ComputeRelativeCamera(current, other));
+}
+
+CameraRecord Cam(uint32_t eye, double x) {
+    CameraRecord r;
+    r.eye = eye;
+    r.position[0] = x;
+    r.fovY = 1.0f;
+    r.nearClip = 0.15f;
+    r.farClip = 2000.0f;
+    return r;
+}
+
+struct Corrected {
+    bool applied;
+    float x, y;
+};
+
+Corrected Correct(float mvX, float mvY, float scale, const RelativeTransform& toPrev, const RelativeTransform& toSame,
+                  float depth = 0.45f, uint32_t px = 150, uint32_t py = 25) {
+    Corrected c = {};
+    c.applied = CorrectMotionVector(px, py, depth, mvX, mvY, scale, scale, 200, 100, TestProjection(),
+                                    TestProjection(), TestProjection(), toPrev, toSame, c.x, c.y);
+    return c;
+}
+
+} // namespace
+
+TEST(MvCorrectionTest, AStaticPointWithTheHeadStillCorrectsToZeroMotionAgainstTheSameEyesPreviousFrame) {
+    // Previous frame = the other eye 1 m aside; the same eye's previous camera is where it is now.
+    Corrected c = Correct(-25.0f, 0.0f, 1.0f, Aside(1.0), Aside(0.0));
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 0.0f, 1e-2f);
+    EXPECT_NEAR(c.y, 0.0f, 1e-2f);
+}
+
+TEST(MvCorrectionTest, TheEnginesObjectMotionSurvivesTheCorrection) {
+    Corrected c = Correct(-25.0f + 3.0f, -2.0f, 1.0f, Aside(1.0), Aside(0.0));
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 3.0f, 1e-2f);
+    EXPECT_NEAR(c.y, -2.0f, 1e-2f);
+}
+
+TEST(MvCorrectionTest, AMovedHeadLandsOnTheSameEyesPreviousCameraNotThePreviousFrames) {
+    // The same eye's previous camera was 0.5 m to the left: the point (2.02, 0.98, -2) is (2.52, 0.98, -2)
+    // from it, pixel x = (2.52 / 4 + 1) / 2 * 200 = 163, a displacement of +12.5 from 150.5.
+    Corrected c = Correct(-25.0f, 0.0f, 1.0f, Aside(1.0), Aside(-0.5));
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 12.5f, 1e-2f);
+    EXPECT_NEAR(c.y, 0.0f, 1e-2f);
+}
+
+TEST(MvCorrectionTest, TheVectorIsInTheUnitsOfTheScaleDlssWillApply) {
+    // At scale 2 the stored vector is half the pixel displacement, and so is the stored correction.
+    Corrected c = Correct(-12.5f, 0.0f, 2.0f, Aside(1.0), Aside(-0.5));
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 6.25f, 1e-2f);
+}
+
+TEST(MvCorrectionTest, TheSkyIsCorrectedForCameraRotationThroughTheFarPlane) {
+    // Depth 0 is the far plane, 11 m. The same eye's previous camera is yawed 45 degrees: a near-centre
+    // sky pixel moves about +50 pixels (the 2 m centre case above gives exactly +50). Pixel (99, 49)
+    // has centre (99.5, 49.5): the point (-0.11, 0.11, -11) lands at pixel x 149.0.
+    CameraRecord current;
+    current.orientation[3] = 1.0;
+    CameraRecord other = current;
+    const double half = 3.14159265358979323846 / 8.0;
+    other.orientation[1] = std::sin(half);
+    other.orientation[3] = std::cos(half);
+    RelativeTransform yawed = MakeRelativeTransform(ComputeRelativeCamera(current, other));
+    Corrected c = Correct(0.0f, 0.0f, 1.0f, Identity(), yawed, 0.0f, 99, 49);
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 49.5f, 0.2f);
+}
+
+TEST(MvCorrectionTest, APointBehindTheSameEyesPreviousCameraKeepsTheEnginesVector) {
+    // A same-eye previous camera 5 m ahead has the 2 m point behind it: no correction is possible.
+    RelativeTransform ahead = Identity();
+    ahead.c[2] = 5.0f; // p_other = p + (0, 0, 5): z = +3, behind the camera
+    Corrected c = Correct(-25.0f, 1.5f, 1.0f, Identity(), ahead);
+    EXPECT_FALSE(c.applied);
+    EXPECT_FLOAT_EQ(c.x, -25.0f);
+    EXPECT_FLOAT_EQ(c.y, 1.5f);
+}
+
+TEST(MvCorrectionTest, AZeroScaleCannotBeCorrectedAndKeepsTheEnginesVector) {
+    Corrected c = Correct(-25.0f, 0.0f, 0.0f, Aside(1.0), Aside(0.0));
+    EXPECT_FALSE(c.applied);
+    EXPECT_FLOAT_EQ(c.x, -25.0f);
+}
+
+TEST(MvCorrectionTest, CorrectedVectorsPassTheSelfCheckWithSubPixelErrorAgainstTheSameEyesCamera) {
+    // The self-check against the same eye's previous camera, fed the corrected vector, is sub-pixel;
+    // fed the uncorrected one it is off by the camera offset.
+    RelativeTransform toPrev = Aside(1.0);
+    RelativeTransform toSame = Aside(-0.5);
+    // Engine vector of a static point: previous-frame displacement.
+    SampleResult engine = EvaluateSample(150, 25, 0.45f, -25.0f, 0.0f, 1.0f, 1.0f, 200, 100, TestProjection(),
+                                         TestProjection(), toSame);
+    EXPECT_GT(engine.errToPrevious, 10.0f);
+    Corrected c = Correct(-25.0f, 0.0f, 1.0f, toPrev, toSame);
+    SampleResult corrected = EvaluateSample(150, 25, 0.45f, c.x, c.y, 1.0f, 1.0f, 200, 100, TestProjection(),
+                                            TestProjection(), toSame);
+    EXPECT_LT(corrected.errToPrevious, 0.5f);
+}
+
+TEST(MvCorrectionPlanTest, ACameraTripleCorrectsAgainstBothPreviousCameras) {
+    CameraRecordStore store;
+    ASSERT_TRUE(store.Report(Cam(0, 9.9)));   // frame 0, left
+    store.AdvanceFrame();
+    ASSERT_TRUE(store.Report(Cam(1, 10.064))); // frame 1, right
+    store.AdvanceFrame();
+    ASSERT_TRUE(store.Report(Cam(0, 10.0)));  // frame 2, left (current)
+    CorrectionPlan plan = PlanCorrection(store.Resolve(0));
+    ASSERT_EQ(plan.decision, CorrectionDecision::Correct);
+    EXPECT_NEAR(plan.current.tanHalfFovY, std::tan(0.5f), 1e-6f);
+    EXPECT_NEAR(plan.toPreviousFrame.c[0], -0.064f, 1e-5f);
+    EXPECT_NEAR(plan.toSameEye.c[0], 0.1f, 1e-5f);
+}
+
+TEST(MvCorrectionPlanTest, AnEyeOrderSwapNeedsNoCorrectionBecauseThePreviousFrameIsTheSameEye) {
+    CameraRecordStore store;
+    ASSERT_TRUE(store.Report(Cam(0, 10.0)));
+    store.AdvanceFrame();
+    ASSERT_TRUE(store.Report(Cam(1, 10.064)));
+    store.AdvanceFrame();
+    ASSERT_TRUE(store.Report(Cam(1, 10.064))); // the right eye renders twice in a row
+    CorrectionPlan plan = PlanCorrection(store.Resolve(1));
+    EXPECT_EQ(plan.decision, CorrectionDecision::PreviousFrameIsSameEye);
+}
+
+TEST(MvCorrectionPlanTest, MissingRecordsPassTheEnginesVectorsThrough) {
+    CameraRecordStore store;
+    EXPECT_EQ(PlanCorrection(store.Resolve(0)).decision, CorrectionDecision::MissingRecords);
+
+    ASSERT_TRUE(store.Report(Cam(0, 10.0))); // only the current camera
+    EXPECT_EQ(PlanCorrection(store.Resolve(0)).decision, CorrectionDecision::MissingRecords);
+
+    CameraRecordStore start; // first frames: the other eye rendered before, this eye has no previous camera
+    ASSERT_TRUE(start.Report(Cam(1, 10.064)));
+    start.AdvanceFrame();
+    ASSERT_TRUE(start.Report(Cam(0, 10.0)));
+    EXPECT_EQ(PlanCorrection(start.Resolve(0)).decision, CorrectionDecision::MissingRecords);
+}
+
+TEST(MvCorrectionPlanTest, AnUnusableProjectionPassesThrough) {
+    CameraRecordStore store;
+    ASSERT_TRUE(store.Report(Cam(0, 9.9)));
+    store.AdvanceFrame();
+    ASSERT_TRUE(store.Report(Cam(1, 10.064)));
+    store.AdvanceFrame();
+    CameraRecord bad = Cam(0, 10.0);
+    bad.fovY = 0.0f;
+    ASSERT_TRUE(store.Report(bad));
+    EXPECT_EQ(PlanCorrection(store.Resolve(0)).decision, CorrectionDecision::UnusableProjection);
+}

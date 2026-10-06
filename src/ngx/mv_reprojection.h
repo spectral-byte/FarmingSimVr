@@ -86,4 +86,44 @@ enum class Convention { None, ToPrevious, ToCurrent };
 Convention BetterConvention(const SelfCheckStats& stats);
 const char* ConventionName(Convention c);
 
+
+// ---- Per-eye correction (Sequential Dual-Pass) ----
+//
+// The engine's motion vector points at where the pixel was in the previous *rendered* frame, which under
+// Sequential Dual-Pass is the other eye's frame. A per-eye upscaler history is one same-eye frame back,
+// so the vector is re-aimed: unproject the pixel through the current camera, then add
+//   project(same eye's previous camera, W) - project(previous rendered frame's camera, W)
+// (pixels) to it. The camera part is replaced; the engine's object motion stays.
+
+// Camera-space position of the pixel at continuous coordinates with a given view-space depth (metres).
+void UnprojectAtViewDepth(float px, float py, float viewDepth, float width, float height, const Projection& proj,
+                          float out[3]);
+
+// Corrects one pixel's engine vector (in the units DLSS receives it: the stored value times the scale).
+// outX/outY receive the corrected stored vector. Returns false and leaves the engine's vector untouched
+// when no correction is possible (a scale of zero, or the point behind either camera). The sky corrects
+// like a point on the far plane, which carries the camera rotation.
+bool CorrectMotionVector(uint32_t x, uint32_t y, float depth, float mvX, float mvY, float scaleX, float scaleY,
+                         uint32_t width, uint32_t height, const Projection& current, const Projection& previousFrame,
+                         const Projection& sameEye, const RelativeTransform& toPreviousFrame,
+                         const RelativeTransform& toSameEye, float& outX, float& outY);
+
+enum class CorrectionDecision {
+    Correct,                 // all three cameras known: re-aim the vector
+    PreviousFrameIsSameEye,  // eye order swap: the engine's vector already targets the same eye
+    MissingRecords,          // a camera record is absent (loading, menus): pass the engine's vector through
+    UnusableProjection,      // a record with a zero FOV or clip range: pass through
+};
+
+struct CorrectionPlan {
+    CorrectionDecision decision = CorrectionDecision::MissingRecords;
+    Projection current;
+    Projection previousFrame;
+    Projection sameEye;
+    RelativeTransform toPreviousFrame; // current camera space -> previous rendered frame's camera space
+    RelativeTransform toSameEye;       // current camera space -> same eye's previous camera space
+};
+
+CorrectionPlan PlanCorrection(const ResolvedCameras& resolved);
+const char* CorrectionDecisionName(CorrectionDecision d);
 } // namespace fs25vr::mvreproj

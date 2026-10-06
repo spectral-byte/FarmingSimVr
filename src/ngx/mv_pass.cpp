@@ -46,8 +46,11 @@ DXGI_FORMAT MvPassDepthViewFormat(DXGI_FORMAT resourceFormat) {
 }
 
 const char* MvPassShaderSource() {
-    // "main" is the pass-through: the output is the engine's motion vector, unchanged. Depth is bound
-    // already so the later correction (which unprojects from it) needs no new plumbing.
+    // "main" is the pass-through: the output is the engine's motion vector, unchanged.
+    // "correct" mirrors mv_reprojection.cpp (CorrectMotionVector): it unprojects the pixel from reverse-Z
+    // depth through the current camera and adds project(same eye's previous camera) - project(previous
+    // rendered frame's camera), in pixels divided by the MV scale, to the engine's vector. The sky is a
+    // point on the far plane. Where a projection is impossible the engine's vector is copied.
     // "selfcheck" mirrors mv_reprojection.cpp (EvaluateSample): per sample on a sparse grid it unprojects
     // the pixel from reverse-Z depth through the current camera, projects it through the previous rendered
     // frame's camera and writes the error of the engine's vector (times the MV scale DLSS receives)
@@ -55,18 +58,41 @@ const char* MvPassShaderSource() {
     return R"hlsl(
 Texture2D<float>  gDepth   : register(t0);
 Texture2D<float2> gMv      : register(t1);
+Texture2D<float2> gMvCorrected : register(t2);
 RWTexture2D<float2> gOut   : register(u0);
 RWStructuredBuffer<uint4> gResults : register(u1);
 
 cbuffer Constants : register(b0)
 {
-    uint4  gA;  // width, height, unused, sequence
+    uint4  gA;  // width, height, self-check reads the corrected output (1), sequence
     float4 gB;  // mvScaleX, mvScaleY, tanHalfFovY (current), aspect
     float4 gC;  // near, far, grid dimension, tanHalfFovY (previous)
     float4 gR0; // rows of p_prev = R * p + c: xyz = R row, w = c
     float4 gR1;
     float4 gR2;
+    float4 gS0; // rows of p_same = S * p + c: the same eye's previous camera
+    float4 gS1;
+    float4 gS2;
+    float4 gD;  // tanHalfFovY (same eye's previous camera)
 };
+
+float3 Transform(float4 r0, float4 r1, float4 r2, float3 p)
+{
+    return float3(dot(r0.xyz, p) + r0.w, dot(r1.xyz, p) + r1.w, dot(r2.xyz, p) + r2.w);
+}
+
+// Pixel coordinates of a camera-space point; false when it is not in front of the camera.
+bool ProjectPixel(float3 q, float tanHalfFovY, out float2 pixel)
+{
+    float w = (float)gA.x;
+    float h = (float)gA.y;
+    float zq = -q.z;
+    pixel = float2(0.0, 0.0);
+    if (!(zq > 1e-6))
+        return false;
+    pixel = float2((q.x / (zq * tanHalfFovY * gB.w) * 0.5 + 0.5) * w, (0.5 - q.y / (zq * tanHalfFovY) * 0.5) * h);
+    return true;
+}
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID)
@@ -74,6 +100,31 @@ void main(uint3 id : SV_DispatchThreadID)
     if (id.x >= gA.x || id.y >= gA.y)
         return;
     gOut[id.xy] = gMv.Load(int3(id.xy, 0));
+}
+
+[numthreads(8, 8, 1)]
+void correct(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= gA.x || id.y >= gA.y)
+        return;
+    float2 mv = gMv.Load(int3(id.xy, 0));
+    float depth = max(gDepth.Load(int3(id.xy, 0)), 0.0);
+    float n = gC.x;
+    float f = gC.y;
+    float z = n * f / (n + depth * (f - n));
+    float cx = (float)id.x + 0.5;
+    float cy = (float)id.y + 0.5;
+    float w = (float)gA.x;
+    float h = (float)gA.y;
+    float3 p = float3((2.0 * cx / w - 1.0) * gB.z * gB.w * z, (1.0 - 2.0 * cy / h) * gB.z * z, -z);
+    float2 prevPixel;
+    float2 samePixel;
+    bool ok = abs(gB.x) > 1e-6 && abs(gB.y) > 1e-6;
+    ok = ok && ProjectPixel(Transform(gR0, gR1, gR2, p), gC.w, prevPixel);
+    ok = ok && ProjectPixel(Transform(gS0, gS1, gS2, p), gD.x, samePixel);
+    if (ok)
+        mv += (samePixel - prevPixel) / gB.xy;
+    gOut[id.xy] = mv;
 }
 
 [numthreads(8, 8, 1)]
@@ -118,7 +169,7 @@ void selfcheck(uint3 id : SV_DispatchThreadID)
         }
         else
         {
-            float2 mv = gMv.Load(int3(px, py, 0)) * gB.xy;
+            float2 mv = (gA.z != 0 ? gMvCorrected.Load(int3(px, py, 0)) : gMv.Load(int3(px, py, 0))) * gB.xy;
             float2 d = float2(ppx - cx, ppy - cy);
             result.x = asuint(length(mv - d));
             result.y = asuint(length(mv + d));
@@ -166,20 +217,29 @@ bool MvPassCompileShader(std::string& bytecode, std::string& error, const char* 
 namespace {
 
 constexpr UINT kSlotCount = 64;       // descriptor sets in flight: two eyes per frame, a few frames deep
-constexpr UINT kDescriptorsPerSlot = 4; // depth SRV, motion vector SRV, output UAV, self-check results UAV
+constexpr UINT kDescriptorsPerSlot = 5; // depth SRV, motion vector SRV, corrected SRV, output UAV, self-check results UAV
 constexpr UINT kSelfCheckGrid = 32;     // samples per side of the self-check grid
 constexpr UINT kSelfCheckSamples = kSelfCheckGrid * kSelfCheckGrid;
 constexpr UINT kReadbackSlots = 8;      // self-checks in flight before a readback buffer is reused
 constexpr uint64_t kReadbackDelayCalls = 6;   // Records after which a self-check is read back (a few frames)
 constexpr uint64_t kReadbackGiveUpCalls = 64; // a readback that never shows the expected stamp is dropped
-// Root constants, laid out as the shader's cbuffer (24 dwords).
+// Root constants, laid out as the shader's cbuffer (40 dwords).
 struct PassConstants {
-    uint32_t a[4];    // width, height, unused, sequence
+    uint32_t a[4];    // width, height, self-check reads the corrected output, sequence
     float b[4];       // mvScaleX, mvScaleY, tanHalfFovY (current), aspect
     float c[4];       // near, far, grid, tanHalfFovY (previous)
     float r[3][4];    // p_prev = R * p + c per row
+    float s[3][4];    // p_same = S * p + c per row
+    float d[4];       // tanHalfFovY (same eye's previous camera)
 };
-static_assert(sizeof(PassConstants) == 24 * sizeof(uint32_t), "root constants are 24 dwords");
+static_assert(sizeof(PassConstants) == 40 * sizeof(uint32_t), "root constants are 40 dwords");
+
+void FillTransform(float (&rows)[3][4], const mvreproj::RelativeTransform& t) {
+    for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 3; ++col) rows[row][col] = t.m[row][col];
+        rows[row][3] = t.c[row];
+    }
+}
 constexpr uint64_t kRetireCalls = 64; // a replaced output stays alive this many Records for in-flight frames
 constexpr D3D12_RESOURCE_STATES kUpscalerInputState =
     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -263,6 +323,8 @@ public:
         srv.Format = mvFormat;
         device->CreateShaderResourceView(in.motionVectors, &srv, cpu);
         cpu.ptr += inc;
+        device->CreateShaderResourceView(m_output.Get(), &srv, cpu); // corrected vectors, read by the self-check
+        cpu.ptr += inc;
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
         uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         uav.Format = mvFormat;
@@ -282,11 +344,13 @@ public:
         ID3D12DescriptorHeap* heaps[] = {m_heap.Get()};
         cl->SetDescriptorHeaps(1, heaps);
         cl->SetComputeRootSignature(m_rootSignature.Get());
-        cl->SetPipelineState(m_pso.Get());
+        const bool correcting = in.correction != nullptr;
+        cl->SetPipelineState(correcting ? m_correctPso.Get() : m_pso.Get());
         cl->SetComputeRootDescriptorTable(0, gpu);
         PassConstants constants = {};
         constants.a[0] = width;
         constants.a[1] = height;
+        if (correcting) FillCorrectionConstants(constants, *in.correction, width, height);
         cl->SetComputeRoot32BitConstants(1, sizeof(constants) / sizeof(uint32_t), &constants, 0);
         cl->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
         Transition(cl, m_output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kUpscalerInputState);
@@ -294,7 +358,7 @@ public:
 
         // The self-check only measures: it reads the engine's depth and vectors and writes the results
         // buffer, which is copied to a readback buffer that is read a few evaluations later.
-        if (in.selfCheck && EnsureReadbackBuffers()) RecordSelfCheck(cl, *in.selfCheck, width, height, gpu);
+        if (in.selfCheck && EnsureReadbackBuffers()) RecordSelfCheck(cl, *in.selfCheck, width, height, gpu, correcting);
 
         MvPassResult ok;
         ok.ok = true;
@@ -371,8 +435,21 @@ private:
         return true;
     }
 
+    static void FillCorrectionConstants(PassConstants& c, const MvCorrectionRequest& req, UINT width, UINT height) {
+        c.b[0] = req.mvScaleX;
+        c.b[1] = req.mvScaleY;
+        c.b[2] = req.current.tanHalfFovY;
+        c.b[3] = static_cast<float>(width) / static_cast<float>(height); // the render aspect
+        c.c[0] = req.current.nearClip;
+        c.c[1] = req.current.farClip;
+        c.c[3] = req.previousFrame.tanHalfFovY;
+        FillTransform(c.r, req.toPreviousFrame);
+        FillTransform(c.s, req.toSameEye);
+        c.d[0] = req.sameEye.tanHalfFovY;
+    }
+
     void RecordSelfCheck(ID3D12GraphicsCommandList* cl, const MvSelfCheckRequest& req, UINT width, UINT height,
-                         D3D12_GPU_DESCRIPTOR_HANDLE gpu) {
+                         D3D12_GPU_DESCRIPTOR_HANDLE gpu, bool readCorrected) {
         const UINT slot = static_cast<UINT>(m_checks % kReadbackSlots);
         ++m_checks;
         const uint32_t sequence = static_cast<uint32_t>(m_checks); // never 0: stale or empty reads never match
@@ -380,6 +457,7 @@ private:
         PassConstants c = {};
         c.a[0] = width;
         c.a[1] = height;
+        c.a[2] = readCorrected ? 1u : 0u; // the output is in the upscaler-input (shader resource) state here
         c.a[3] = sequence;
         c.b[0] = req.mvScaleX;
         c.b[1] = req.mvScaleY;
@@ -389,10 +467,7 @@ private:
         c.c[1] = req.current.farClip;
         c.c[2] = static_cast<float>(kSelfCheckGrid);
         c.c[3] = req.previous.tanHalfFovY;
-        for (int row = 0; row < 3; ++row) {
-            for (int col = 0; col < 3; ++col) c.r[row][col] = req.toPrevious.m[row][col];
-            c.r[row][3] = req.toPrevious.c[row];
-        }
+        FillTransform(c.r, req.toPrevious);
 
         cl->SetPipelineState(m_selfCheckPso.Get());
         cl->SetComputeRootDescriptorTable(0, gpu);
@@ -432,13 +507,13 @@ private:
 
         D3D12_DESCRIPTOR_RANGE ranges[2] = {};
         ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        ranges[0].NumDescriptors = 2;
+        ranges[0].NumDescriptors = 3;
         ranges[0].BaseShaderRegister = 0;
         ranges[0].OffsetInDescriptorsFromTableStart = 0;
         ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
         ranges[1].NumDescriptors = 2;
         ranges[1].BaseShaderRegister = 0;
-        ranges[1].OffsetInDescriptorsFromTableStart = 2;
+        ranges[1].OffsetInDescriptorsFromTableStart = 3;
         D3D12_ROOT_PARAMETER params[2] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[0].DescriptorTable.NumDescriptorRanges = 2;
@@ -472,6 +547,19 @@ private:
         hr = device->CreateComputePipelineState(&pso, IID_PPV_ARGS(&m_pso));
         if (FAILED(hr)) {
             reason = "compute pipeline creation failed (" + HrString(hr) + ")";
+            return false;
+        }
+
+        std::string correctBytecode;
+        if (!MvPassCompileShader(correctBytecode, error, "correct")) {
+            reason = error;
+            return false;
+        }
+        pso.CS.pShaderBytecode = correctBytecode.data();
+        pso.CS.BytecodeLength = correctBytecode.size();
+        hr = device->CreateComputePipelineState(&pso, IID_PPV_ARGS(&m_correctPso));
+        if (FAILED(hr)) {
+            reason = "correction pipeline creation failed (" + HrString(hr) + ")";
             return false;
         }
 
@@ -565,6 +653,7 @@ private:
     ComPtr<ID3D12Device> m_device;
     ComPtr<ID3D12RootSignature> m_rootSignature;
     ComPtr<ID3D12PipelineState> m_pso;
+    ComPtr<ID3D12PipelineState> m_correctPso;
     ComPtr<ID3D12PipelineState> m_selfCheckPso;
     ComPtr<ID3D12Resource> m_results;
     ComPtr<ID3D12Resource> m_readback[kReadbackSlots];

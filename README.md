@@ -64,9 +64,18 @@ FS25 VR is built as a hybrid two-tier architecture:
 ## Key Features
 
 - **Stereo Presentation Modes**:
-  - **Sequential Dual-Pass (SDP)**: Renders left and right eye perspectives sequentially within a single logical compositor frame. The second sub-pass clamps the Lua simulation delta time to zero ($\Delta t = 0$), so both eyes show the same game state, and which eye renders first alternates every four pairs so each eye's DLSS history gets the full jitter pattern. Use DLSS/DLAA: in-engine TAA and FSR3 keep one history shared across eyes and still ghost. Default mode; recommended for high-end systems (RTX 3080/4080/4090).
+  - **Sequential Dual-Pass (SDP)**: Renders left and right eye perspectives sequentially within a single logical compositor frame. The second sub-pass clamps the Lua simulation delta time to zero ($\Delta t = 0$), so both eyes show the same game state, and which eye renders first alternates every four pairs so each eye's DLSS history gets the full jitter pattern. Use DLSS/DLAA (see the support matrix below). Default mode; recommended for high-end systems (RTX 3080/4080/4090).
   - **Alternate Frame Rendering (AFR)**: Alternates left and right eye perspectives on sequential engine frames for lightweight GPU load on midrange graphics cards. Opt-in via `vrRenderingMode afr`.
   - Dynamically switchable via console command or configuration settings with seamless discontinuity flushing.
+  - **Upscaler support per Stereo Presentation Mode**:
+
+    | Upscaler | Sequential Dual-Pass | Alternate Frame Rendering |
+    |---|---|---|
+    | DLSS / DLAA | Supported. Per-eye history with per-eye motion vector correction (`vrDlssMvFix`, ADR-0020): sharp, no ghosting. The eye rendered in the second sub-pass may smear slightly on moving objects. | Supported. Per-eye history; `vrDlssMvScale` (2.0x default) compensates the two-frame stride. |
+    | FSR3 | Per-eye history (no cross-eye ghosting). Motion vector correction is not applied yet, so fine texture may look soft. | Per-eye history, uncorrected. |
+    | In-engine TAA | Not supported in VR: one history is shared across eyes and ghosts. Use DLSS/DLAA. | Not supported in VR (ghosts). |
+
+    `vrDlssMvFix on|off` switches the per-eye motion vector correction (off by default until verified in game).
 - **6DOF Head Tracking**: Positional and rotational tracking for both on-foot locomotion and vehicle cockpits with collinear translation and decoupled look yaw rotation.
 - **Symmetric Projection (default) with opt-in Oblique Frustum**: The Injector submits an aspect-matched symmetric FOV and the Companion Mod applies no projection offset by default. Per-eye asymmetric offsets computed from headset optics are available via `vrObliqueProjection true` or `<allowObliqueProjection>true</allowObliqueProjection>` in `settings.xml` (see ADR-0005).
 - **Temporal Upscaler Virtualization**:
@@ -225,6 +234,8 @@ For in-depth technical documentation, refer to the architecture records in [`doc
 - [`ADR-0016`](docs/adr/0016-dual-feature-context-virtualization-for-temporal-upscalers.md): Dual Feature Context Virtualization for Temporal Upscalers
 - [`ADR-0017`](docs/adr/0017-retire-the-d3d12-telemetry-probe.md): Retire the D3D12 Telemetry Probe
 - [`ADR-0018`](docs/adr/0018-lua-and-present-share-one-thread.md): Companion Mod Calls and Present Run on One Thread
+- [`ADR-0019`](docs/adr/0019-begin-the-openxr-frame-before-the-engine-update.md): Begin the OpenXR Frame Before the Engine Update
+- [`ADR-0020`](docs/adr/0020-per-eye-motion-vector-correction-for-temporal-upscalers.md): Per-Eye Motion Vector Correction for Temporal Upscalers
 
 ---
 

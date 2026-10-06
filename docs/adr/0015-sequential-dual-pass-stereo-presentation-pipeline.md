@@ -49,3 +49,6 @@ The engine advances its TAA/upscaler jitter once per rendered frame, using a Hal
 - The swap cadence restarts on a mode change or handshake.
 
 This amendment also corrects item 1 of the Context. The double-pumped engine still renders the eyes as consecutive frames through one pipeline, so **in-engine TAA and FSR3 keep a single history shared across eyes, and Sequential Dual-Pass does not remove their ghosting**. Only DLSS gets per-eye history (Dual Feature Context). A per-eye FidelityFX interceptor would be needed for FSR3, and native TAA has no API boundary to split.
+
+## Amendment: Per-Eye Motion Vector Correction
+The Dual Feature Context alone left DLAA/DLSS blurry under Sequential Dual-Pass, because the engine's motion vectors point at the other eye's frame, not the same eye's previous frame. The Injector now re-aims them before each per-eye evaluation, and item 3 above (motion vector scaling locked to $1.0\times$) no longer suffices on its own. The correction, the self-check and the known object-motion gap in the second sub-pass are recorded in [ADR-0020](0020-per-eye-motion-vector-correction-for-temporal-upscalers.md).
