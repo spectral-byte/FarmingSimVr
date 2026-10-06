@@ -4,6 +4,7 @@
 #include "luau/vr_bridge.h"
 #include "proxy/dxgi_proxy.h"
 #include "openxr/openxr_manager.h"
+#include "fidelityfx/fidelityfx_interceptor.h"
 #include <cwctype>
 #include <cmath>
 #include <algorithm>
@@ -324,7 +325,31 @@ bool NgxInterceptor::AttachModule(HMODULE hNgxModule) {
     return ok;
 }
 
+FidelityFxInterceptor* NgxInterceptor::GetFidelityFxInterceptor() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    return m_fidelityFx;
+}
+
+void NgxInterceptor::SetFidelityFxInterceptor(FidelityFxInterceptor* interceptor) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    m_fidelityFx = interceptor;
+}
+
+// LoadLibrary can be hooked only once per process and this interceptor owns those hooks, so a load of
+// the FidelityFX loader is routed to its interceptor from here.
+void NgxInterceptor::NotifyModuleLoaded(HMODULE hMod, LPCWSTR name) {
+    FidelityFxInterceptor* ffx = GetFidelityFxInterceptor();
+    if (ffx && FidelityFxInterceptor::MatchesLoaderName(name)) ffx->AttachModule(hMod);
+}
+
+void NgxInterceptor::NotifyModuleLoaded(HMODULE hMod, LPCSTR name) {
+    FidelityFxInterceptor* ffx = GetFidelityFxInterceptor();
+    if (ffx && FidelityFxInterceptor::MatchesLoaderName(name)) ffx->AttachModule(hMod);
+}
+
 void NgxInterceptor::CheckAndAttachLoadedModule() {
+    if (FidelityFxInterceptor* ffx = GetFidelityFxInterceptor()) ffx->CheckAndAttachLoadedModule();
+
     static const wchar_t* const s_candidates[] = {
         L"nvngx.dll",
         L"_nvngx.dll"
@@ -1274,6 +1299,8 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryW(LPCWSTR lpLibFileName) {
 
     if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
         interceptor->AttachModule(hMod);
+    } else if (interceptor && hMod) {
+        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
     }
     return hMod;
 }
@@ -1286,6 +1313,8 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExW(LPCWSTR lpLibFileName, H
 
     if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
         interceptor->AttachModule(hMod);
+    } else if (interceptor && hMod) {
+        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
     }
     return hMod;
 }
@@ -1298,6 +1327,8 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryA(LPCSTR lpLibFileName) {
 
     if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
         interceptor->AttachModule(hMod);
+    } else if (interceptor && hMod) {
+        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
     }
     return hMod;
 }
@@ -1310,6 +1341,8 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExA(LPCSTR lpLibFileName, HA
 
     if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
         interceptor->AttachModule(hMod);
+    } else if (interceptor && hMod) {
+        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
     }
     return hMod;
 }
