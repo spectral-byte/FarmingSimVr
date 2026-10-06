@@ -94,6 +94,91 @@ SampleResult EvaluateSample(uint32_t x, uint32_t y, float depth, float mvX, floa
     return result;
 }
 
+void UnprojectAtViewDepth(float px, float py, float viewDepth, float width, float height, const Projection& proj,
+                          float out[3]) {
+    const float ndcX = 2.0f * px / width - 1.0f;
+    const float ndcY = 1.0f - 2.0f * py / height;
+    out[0] = ndcX * proj.tanHalfFovY * proj.aspect * viewDepth;
+    out[1] = ndcY * proj.tanHalfFovY * viewDepth;
+    out[2] = -viewDepth;
+}
+
+bool CorrectMotionVector(uint32_t x, uint32_t y, float depth, float mvX, float mvY, float scaleX, float scaleY,
+                         uint32_t width, uint32_t height, const Projection& current, const Projection& previousFrame,
+                         const Projection& sameEye, const RelativeTransform& toPreviousFrame,
+                         const RelativeTransform& toSameEye, float& outX, float& outY) {
+    outX = mvX;
+    outY = mvY;
+    if (!(std::fabs(scaleX) > 1e-6f) || !(std::fabs(scaleY) > 1e-6f)) return false;
+    const float w = static_cast<float>(width);
+    const float h = static_cast<float>(height);
+    const float cx = static_cast<float>(x) + 0.5f;
+    const float cy = static_cast<float>(y) + 0.5f;
+
+    float p[3];
+    UnprojectAtViewDepth(cx, cy, ReverseZToViewDepth((std::max)(depth, 0.0f), current.nearClip, current.farClip), w, h,
+                         current, p);
+    float q[3];
+    float prevX = 0.0f, prevY = 0.0f, sameX = 0.0f, sameY = 0.0f;
+    ApplyRelativeTransform(toPreviousFrame, p, q);
+    if (!ProjectToPixel(q, w, h, previousFrame, prevX, prevY)) return false;
+    ApplyRelativeTransform(toSameEye, p, q);
+    if (!ProjectToPixel(q, w, h, sameEye, sameX, sameY)) return false;
+
+    outX = mvX + (sameX - prevX) / scaleX;
+    outY = mvY + (sameY - prevY) / scaleY;
+    return true;
+}
+
+namespace {
+
+bool UsableProjection(const CameraRecord& r) {
+    return r.fovY > 0.0f && r.nearClip > 0.0f && r.farClip > r.nearClip;
+}
+
+Projection ProjectionOf(const CameraRecord& r) {
+    Projection p;
+    p.tanHalfFovY = std::tan(r.fovY * 0.5f);
+    p.nearClip = r.nearClip;
+    p.farClip = r.farClip;
+    return p; // aspect is the render's, filled in by the pass
+}
+
+} // namespace
+
+CorrectionPlan PlanCorrection(const ResolvedCameras& resolved) {
+    CorrectionPlan plan;
+    if (!resolved.current) return plan;
+    if (resolved.PreviousFrameIsSameEye()) {
+        plan.decision = CorrectionDecision::PreviousFrameIsSameEye;
+        return plan;
+    }
+    if (!resolved.previousFrame || !resolved.sameEyePrevious || !resolved.previousFrameRelative ||
+        !resolved.sameEyeRelative) {
+        return plan;
+    }
+    if (!UsableProjection(*resolved.current) || !UsableProjection(*resolved.previousFrame) ||
+        !UsableProjection(*resolved.sameEyePrevious)) {
+        plan.decision = CorrectionDecision::UnusableProjection;
+        return plan;
+    }
+    plan.decision = CorrectionDecision::Correct;
+    plan.current = ProjectionOf(*resolved.current);
+    plan.previousFrame = ProjectionOf(*resolved.previousFrame);
+    plan.sameEye = ProjectionOf(*resolved.sameEyePrevious);
+    plan.toPreviousFrame = MakeRelativeTransform(*resolved.previousFrameRelative);
+    plan.toSameEye = MakeRelativeTransform(*resolved.sameEyeRelative);
+    return plan;
+}
+
+const char* CorrectionDecisionName(CorrectionDecision d) {
+    switch (d) {
+        case CorrectionDecision::Correct: return "correct";
+        case CorrectionDecision::PreviousFrameIsSameEye: return "previous-frame-is-same-eye";
+        case CorrectionDecision::UnusableProjection: return "unusable-projection";
+        default: return "missing-records";
+    }
+}
 uint32_t GridSampleCoordinate(uint32_t i, uint32_t n, uint32_t extent) {
     if (n == 0 || extent == 0) return 0;
     const double cell = (static_cast<double>(i) + 0.5) * static_cast<double>(extent) / static_cast<double>(n);

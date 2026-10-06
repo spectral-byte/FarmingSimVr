@@ -248,10 +248,14 @@ private:
     // that finished reading back since the previous call.
     ID3D12Resource* RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv,
                                  const MvSelfCheckRequest* request = nullptr,
-                                 std::vector<MvSelfCheckReport>* reports = nullptr);
+                                 std::vector<MvSelfCheckReport>* reports = nullptr,
+                                 const MvCorrectionRequest* correction = nullptr);
     // Builds the self-check request for this evaluation from the camera records, or says why it cannot.
+    // When corrected is set the evaluation's vectors are re-aimed at the same eye's previous camera, so the
+    // prediction targets that camera instead of the previous rendered frame's.
     bool BuildSelfCheckRequest(uint32_t eye, uint64_t evalIndex, float mvScaleX, float mvScaleY,
-                               MvSelfCheckRequest& request, std::string& skipReason) const;
+                               MvSelfCheckRequest& request, std::string& skipReason,
+                               const mvreproj::CorrectionPlan* corrected = nullptr) const;
     void LogSelfCheckReport(const MvSelfCheckReport& report) const;
     void DisableMvFix(const std::string& reason);
 

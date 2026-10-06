@@ -1541,6 +1541,7 @@ public:
     bool fail = false;
     std::string failureReason = "unsupported motion vector format";
     std::vector<MvSelfCheckRequest> selfChecks; // one per Record that carried a request
+    std::vector<MvCorrectionRequest> corrections; // one per Record that carried a correction
     std::vector<MvSelfCheckReport> pendingReports;
     std::vector<MvSelfCheckReport> PollSelfCheck() override {
         std::vector<MvSelfCheckReport> out;
@@ -1551,6 +1552,7 @@ public:
         ++recordCount;
         lastInputs = inputs;
         if (inputs.selfCheck) selfChecks.push_back(*inputs.selfCheck);
+        if (inputs.correction) corrections.push_back(*inputs.correction);
         MvPassResult r;
         if (fail) { r.failureReason = failureReason; return r; }
         r.ok = true;
@@ -1704,6 +1706,12 @@ TEST_F(MvPassEvaluationTest, MissingPassFromFactoryDisablesThePass) {
 TEST(MvPassShaderTest, PassThroughShaderCompilesWithTheSystemCompiler) {
     std::string bytecode, error;
     ASSERT_TRUE(MvPassCompileShader(bytecode, error)) << error;
+    EXPECT_GT(bytecode.size(), 100u);
+}
+
+TEST(MvPassShaderTest, CorrectionShaderCompilesWithTheSystemCompiler) {
+    std::string bytecode, error;
+    ASSERT_TRUE(MvPassCompileShader(bytecode, error, "correct")) << error;
     EXPECT_GT(bytecode.size(), 100u);
 }
 
@@ -1915,6 +1923,120 @@ TEST_F(MvSelfCheckTest, ReadBackResultsAreLoggedPerEyeWithBothConventionsAndTheS
     EXPECT_NE(log.find("current-minus-previous: mean=12.500 median=11.000"), std::string::npos) << log;
     EXPECT_NE(log.find("skipped=25.0%"), std::string::npos) << log;
     EXPECT_NE(log.find("Best=previous-minus-current"), std::string::npos) << log;
+}
+
+// ---- Per-eye motion vector correction (#35) ----
+
+class MvCorrectionEvaluationTest : public MvSelfCheckTest {
+protected:
+    // Frame 0: left eye at x = 9.9; frame 1: right eye 0.064 m aside; the current frame is the left eye
+    // again at x = 10, so the same eye's previous camera is 0.1 m to the left of the current one.
+    void ReportLeftRightLeft() {
+        CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+        ASSERT_TRUE(cameras.Report(DiagCamera(0, 9.9)));
+        cameras.AdvanceFrame();
+        ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
+        cameras.AdvanceFrame();
+        ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
+    }
+    void SetUpCorrection() {
+        SetUpPass();
+        m_ngx.SetMvFixEnabled(true);
+        m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+        m_bridge.SetSubPassIndex(0);
+    }
+};
+
+TEST_F(MvCorrectionEvaluationTest, TheRequestCarriesBothPreviousCamerasAndTheScaleDlssReceives) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    m_params.Set(NVSDK_NGX_Parameter_MV_Scale_X, 2.0f);
+    m_params.Set(NVSDK_NGX_Parameter_MV_Scale_Y, 2.0f);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    const MvCorrectionRequest& c = m_pass->corrections[0];
+    EXPECT_FLOAT_EQ(c.mvScaleX, 2.0f);
+    EXPECT_FLOAT_EQ(c.mvScaleY, 2.0f);
+    EXPECT_NEAR(c.current.tanHalfFovY, std::tan(0.5f), 1e-6f);
+    EXPECT_FLOAT_EQ(c.current.nearClip, 0.15f);
+    EXPECT_FLOAT_EQ(c.current.farClip, 2000.0f);
+    EXPECT_NEAR(c.toPreviousFrame.c[0], -0.064f, 1e-5f); // the right eye 0.064 m aside
+    EXPECT_NEAR(c.toSameEye.c[0], 0.1f, 1e-5f);          // the same eye 0.1 m to the left
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_pass->output);
+    EXPECT_EQ(ParamMv(), m_engineMv);
+}
+
+TEST_F(MvCorrectionEvaluationTest, AnEyeOrderSwapGetsNoCorrectionButStillRunsThePass) {
+    SetUpCorrection();
+    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+    ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064))); // the right eye twice in a row
+    m_bridge.SetSubPassIndex(1);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_EQ(m_pass->recordCount, 1);
+    EXPECT_TRUE(m_pass->corrections.empty());
+    EXPECT_EQ(m_pass->lastInputs.correction, nullptr);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_pass->output);
+}
+
+TEST_F(MvCorrectionEvaluationTest, FramesWithoutCameraRecordsPassTheEnginesVectorsThrough) {
+    SetUpCorrection();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr); // nothing reported (loading screen)
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_TRUE(m_pass->corrections.empty());
+
+    // Start of play: the other eye rendered before, this eye has no previous camera yet.
+    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_TRUE(m_pass->corrections.empty());
+    EXPECT_FALSE(m_ngx.IsMvFixDisabledForSession());
+}
+
+TEST_F(MvCorrectionEvaluationTest, ASelfCheckAlongsideTheCorrectionTargetsTheSameEyesPreviousCamera) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    m_ngx.ArmDiagnostics(4);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_NEAR(m_pass->selfChecks[0].toPrevious.c[0], 0.1f, 1e-5f); // not the right eye's -0.064
+    EXPECT_NE(Log().find("MvCorrection Eval #"), std::string::npos);
+}
+
+TEST_F(MvCorrectionEvaluationTest, ZeroMvScaleKeepsTheEnginesVectors) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    m_ngx.SetSdpMvScaleMultiplier(0.0f, 0.0f); // the old diagnostic: no motion at all
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_TRUE(m_pass->corrections.empty());
+}
+
+TEST_F(MvCorrectionEvaluationTest, SequentialDualPassScaleMultiplierIsPartOfTheScaleTheCorrectionDivides) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    m_ngx.SetSdpMvScaleMultiplier(0.5f, 0.5f);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_FLOAT_EQ(m_pass->corrections[0].mvScaleX, 0.5f);
+}
+
+TEST_F(MvCorrectionEvaluationTest, MvFixOffRestoresTheUncorrectedBehaviour) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    m_ngx.SetMvFixEnabled(false);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(m_factoryCalls, 0);
 }
 
 } // namespace

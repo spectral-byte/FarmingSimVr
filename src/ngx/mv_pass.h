@@ -33,6 +33,19 @@ struct MvSelfCheckReport {
     mvreproj::SelfCheckStats stats;
 };
 
+// Asks the pass to re-aim the engine's motion vectors from the previous rendered frame's camera at the
+// same eye's previous camera (see mv_reprojection.h). Absent (null) means the pass output is a plain
+// copy of the engine's vectors. The pass fills in the render aspect itself.
+struct MvCorrectionRequest {
+    float mvScaleX = 1.0f; // the scale DLSS receives with the vectors
+    float mvScaleY = 1.0f;
+    mvreproj::Projection current;
+    mvreproj::Projection previousFrame;
+    mvreproj::Projection sameEye;
+    mvreproj::RelativeTransform toPreviousFrame; // current camera space -> previous rendered frame's
+    mvreproj::RelativeTransform toSameEye;       // current camera space -> same eye's previous camera
+};
+
 struct MvPassInputs {
     ID3D12GraphicsCommandList* cmdList = nullptr;
     // The engine's resources, read in the state the upscaler already requires (never transitioned).
@@ -40,6 +53,8 @@ struct MvPassInputs {
     ID3D12Resource* motionVectors = nullptr;
     // Optional: also record a self-check for this evaluation.
     const MvSelfCheckRequest* selfCheck = nullptr;
+    // Optional: correct the vectors. A self-check recorded alongside then scores the corrected output.
+    const MvCorrectionRequest* correction = nullptr;
 };
 
 struct MvPassResult {
