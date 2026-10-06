@@ -10,6 +10,10 @@
 #include "openxr/openxr_manager.h"
 #include <vector>
 #include <memory>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include "core/logger.h"
 
 namespace fs25vr {
 namespace {
@@ -1520,5 +1524,69 @@ TEST_F(DlssEvaluationTest, DiagnosticsSummarizeJitterPerEyeContextUntilCountdown
     MockReleaseFeature(virtualHandle);
 }
 
+namespace {
+
+std::string ReadWholeFile(const std::filesystem::path& path) {
+    std::ifstream in(path);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+CameraRecord DiagCamera(uint32_t eye, double x) {
+    CameraRecord r;
+    r.eye = eye;
+    r.position[0] = x;
+    r.fovY = 1.0f;
+    r.nearClip = 0.15f;
+    r.farClip = 2000.0f;
+    return r;
+}
+
 } // namespace
+
+TEST_F(DlssEvaluationTest, DiagnosticTraceReportsTheResolvedCamerasAndWhichAreMissing) {
+    const auto logPath = std::filesystem::temp_directory_path() / "fs25vr_camera_diag_test.log";
+    Logger::Instance().SetLogFile(logPath);
+
+    auto& interceptor = m_ngx;
+    interceptor.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature);
+    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+
+    NgxParameterImpl params;
+    params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+    params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+    NVSDK_NGX_Handle* virtualHandle = nullptr;
+    ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &params, &virtualHandle), NVSDK_NGX_Result_Success);
+
+    // No camera has been reported (loading screen): the trace names every record as missing.
+    m_bridge.SetSubPassIndex(0);
+    interceptor.ArmDiagnostics(1);
+    MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr);
+
+    // The left eye renders frame 0, the right eye frame 1, the left eye again in frame 2, an IPD of
+    // 0.064 m apart (the head is still).
+    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+    ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
+    m_bridge.SetSubPassIndex(0);
+    interceptor.ArmDiagnostics(1);
+    MockEvaluateFeature(nullptr, virtualHandle, &params, nullptr);
+
+    Logger::Instance().Flush();
+    const std::string log = ReadWholeFile(logPath);
+    Logger::Instance().SetLogFile(Logger::DefaultLogPath());
+    std::filesystem::remove(logPath);
+
+    EXPECT_NE(log.find("Cur=missing Prev=missing SameEye=missing"), std::string::npos) << log;
+    EXPECT_NE(log.find("Cur=eye0@f2 Prev=eye1@f1 SameEye=eye0@f0"), std::string::npos) << log;
+    EXPECT_NE(log.find("PrevRel=(dx=0.0640"), std::string::npos) << log;
+    EXPECT_NE(log.find("SameEyeRel=(dx=0.0000"), std::string::npos) << log;
+
+    MockReleaseFeature(virtualHandle);
+}
+
+} // namespace
+
 } // namespace fs25vr
