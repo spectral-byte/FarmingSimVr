@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ngx_defs.h"
+#include "mv_pass.h"
 #include "virtual_ngx_handle.h"
 #include "core/detour.h"
 #include <atomic>
@@ -167,6 +168,19 @@ public:
         m_sdpMvScaleMultiplierY = scaleY;
     }
 
+    // Motion vector pass (vrDlssMvFix). While on, a compute pass recorded on the game's command list ahead
+    // of each per-eye DLSS evaluation produces the motion vectors DLSS receives for that one evaluation.
+    // Off by default until verified in game. A pass failure turns it off for the session (the engine's
+    // motion vectors are then used) and "on" no longer takes effect.
+    // Returns the resulting enabled state, so a request to turn it on after a failure reads false.
+    bool SetMvFixEnabled(bool enabled);
+    bool IsMvFixEnabled() const { return m_mvFixEnabled.load(); }
+    bool IsMvFixDisabledForSession() const { return m_mvFixDisabled.load(); }
+    std::string GetMvFixDisableReason() const;
+    // Replace how the pass is created (tests install a fake). Defaults to the D3D12 implementation.
+    void SetMotionVectorPassFactory(MotionVectorPassFactory factory);
+    const char* DescribeMvFixState() const;
+
     // Evaluation diagnostics: while armed, every EvaluateFeature logs a trace line and feeds a
     // per-context jitter summary, logged when the countdown reaches zero. Armed automatically when a
     // feature is virtualized or the Stereo Presentation Mode changes, and on demand (vrDlssDiag).
@@ -218,6 +232,18 @@ private:
     float m_sdpMvScaleMultiplierX = 1.0f;
     float m_sdpMvScaleMultiplierY = 1.0f;
     std::atomic<uint64_t> m_evalCount{0};
+
+    // Records the pass for this evaluation. Returns the texture to hand DLSS, or null to keep the
+    // engine's motion vectors (also after a failure, which disables the pass for the session).
+    ID3D12Resource* RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv);
+    void DisableMvFix(const std::string& reason);
+
+    std::atomic<bool> m_mvFixEnabled{false};
+    std::atomic<bool> m_mvFixDisabled{false};
+    mutable std::mutex m_mvFixMutex;
+    std::string m_mvFixDisableReason;
+    MotionVectorPassFactory m_mvPassFactory;
+    std::unique_ptr<IMotionVectorPass> m_mvPass;
 
     std::atomic<int> m_lastRenderingMode{-1};
     std::atomic<bool> m_internalDiscontinuityPendingLeft{false};

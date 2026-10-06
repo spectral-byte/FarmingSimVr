@@ -450,6 +450,29 @@ function VRCompanion:consoleCommandSetDlssSdpMvScale(scaleXStr, scaleYStr)
     end
 end
 
+function VRCompanion:consoleCommandDlssMvFix(arg)
+    local value = arg ~= nil and string.lower(tostring(arg)) or ""
+    local enable
+    if value == "on" or value == "true" or value == "1" then
+        enable = true
+    elseif value == "off" or value == "false" or value == "0" then
+        enable = false
+    else
+        return "Usage: vrDlssMvFix <on|off>"
+    end
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.setDlssMvFix) == "function" then
+        if bridge.setDlssMvFix(enable) then
+            local state = enable and "on" or "off"
+            print(string.format("[FS25_VR] DLSS motion vector pass (vrDlssMvFix) is %s", state))
+            return string.format("DLSS motion vector pass (vrDlssMvFix) is %s", state)
+        end
+        return "DLSS motion vector pass unavailable (no NGX interceptor, or it was disabled after a failure; see fs25_vr.log)."
+    else
+        return "VRBridge.setDlssMvFix is not available."
+    end
+end
+
 function VRCompanion:consoleCommandDlssDiag(countStr)
     local count = tonumber(countStr) or 128
     local bridge = VRBridge or (_G and _G.VRBridge)
@@ -546,6 +569,7 @@ VRCompanion.Input.consoleCommandSetDlssMvScale = function(self, ...) return VRCo
 VRCompanion.Input.consoleCommandSetDlssSharpness = function(self, ...) return VRCompanion.consoleCommandSetDlssSharpness(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetDlssPreset = function(self, ...) return VRCompanion.consoleCommandSetDlssPreset(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetDlssSdpMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssSdpMvScale(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssMvFix = function(self, ...) return VRCompanion.consoleCommandDlssMvFix(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandDlssDiag = function(self, ...) return VRCompanion.consoleCommandDlssDiag(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetRenderingMode = function(self, ...) return VRCompanion.consoleCommandSetRenderingMode(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetObliqueProjection = function(self, ...) return VRCompanion.consoleCommandSetObliqueProjection(VRCompanion, ...) end
