@@ -48,6 +48,14 @@ inline constexpr uint32_t FFX_UPSCALE_ENABLE_DEBUG_CHECKING = 1u << 7;
 inline constexpr uint32_t FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE = 1u << 8;
 inline constexpr uint32_t FFX_UPSCALE_ENABLE_DEBUG_VISUALIZATION = 1u << 9;
 
+// FfxApiResourceState (from memory of ffx_api_types.h; unverified against the SDK header). Only the
+// combined read state the motion vector pass leaves its texture in is needed: D3D12's
+// NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE.
+inline constexpr uint32_t FFX_API_RESOURCE_STATE_COMPUTE_READ = 1u << 1;
+inline constexpr uint32_t FFX_API_RESOURCE_STATE_PIXEL_READ = 1u << 2;
+inline constexpr uint32_t FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ =
+    FFX_API_RESOURCE_STATE_COMPUTE_READ | FFX_API_RESOURCE_STATE_PIXEL_READ;
+
 struct ffxApiDimensions2D {
     uint32_t width;
     uint32_t height;

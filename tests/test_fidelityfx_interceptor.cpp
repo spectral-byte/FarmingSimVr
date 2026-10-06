@@ -1,8 +1,12 @@
 #include <gtest/gtest.h>
 #include "fidelityfx/ffx_defs.h"
+#include "fidelityfx/ffx_mv_conventions.h"
 #include "fidelityfx/fidelityfx_interceptor.h"
 #include "luau/vr_bridge.h"
+#include "ngx/mv_pass.h"
 #include "ngx/ngx_interceptor.h"
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -28,6 +32,8 @@ std::vector<ffxContext> s_queried;
 std::vector<ffxContext> s_dispatched;
 std::vector<bool> s_dispatchReset;
 std::vector<const ffxDispatchDescHeader*> s_dispatchDescs;
+std::vector<void*> s_dispatchMotionVectors;       // the motion vector resource each upscale dispatch received
+std::vector<uint32_t> s_dispatchMotionVectorStates;
 int s_failCreateNumber = 0; // 1-based create call that fails, 0 for none
 int s_createCalls = 0;
 
@@ -68,7 +74,10 @@ __declspec(noinline) ffxReturnCode_t MockDispatch(ffxContext* context, const ffx
     s_dispatchDescs.push_back(desc);
     bool reset = false;
     if (desc->type == FFX_API_DISPATCH_DESC_TYPE_UPSCALE) {
-        reset = reinterpret_cast<const ffxDispatchDescUpscale*>(desc)->reset;
+        const auto* upscale = reinterpret_cast<const ffxDispatchDescUpscale*>(desc);
+        reset = upscale->reset;
+        s_dispatchMotionVectors.push_back(upscale->motionVectors.resource);
+        s_dispatchMotionVectorStates.push_back(upscale->motionVectors.state);
     }
     s_dispatchReset.push_back(reset);
     return FFX_API_RETURN_OK;
@@ -480,6 +489,400 @@ TEST_F(FidelityFxInterceptorTest, DispatchesOfOtherTypesOnAVirtualContextGoToThe
     ASSERT_EQ(s_dispatched.size(), 1u);
     EXPECT_EQ(s_dispatched[0], s_createdContexts[0]);
     EXPECT_EQ(s_dispatchDescs[0], &other);
+}
+
+// ---- Reading the dispatch's conventions (#38) ----
+
+constexpr uint32_t kSupportedCreateFlags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_DEPTH_INVERTED;
+
+TEST(FfxMvConventionsTest, ReadsTheMotionVectorScaleAndJitterFromTheDispatchDescription) {
+    auto desc = MakeUpscaleDispatchDesc(0.25f, -0.125f);
+    desc.motionVectorScale = {-2.0f, 3.0f};
+    FfxMvConventions c = ReadFfxMvConventions(kSupportedCreateFlags, desc);
+    EXPECT_EQ(c.unsupportedReason, nullptr);
+    EXPECT_FLOAT_EQ(c.mvScaleX, -2.0f);
+    EXPECT_FLOAT_EQ(c.mvScaleY, 3.0f);
+    EXPECT_FLOAT_EQ(c.jitterX, 0.25f);
+    EXPECT_FLOAT_EQ(c.jitterY, -0.125f);
+    EXPECT_TRUE(c.depthInverted);
+}
+
+TEST(FfxMvConventionsTest, ReadsTheProjectionFromTheDispatchCameraFields) {
+    auto desc = MakeUpscaleDispatchDesc();
+    desc.cameraNear = 0.1f;
+    desc.cameraFar = 1000.0f;
+    desc.cameraFovAngleVertical = 1.0f;
+    FfxMvConventions c = ReadFfxMvConventions(kSupportedCreateFlags, desc);
+    ASSERT_TRUE(c.hasProjection);
+    EXPECT_NEAR(c.tanHalfFovY, 0.5463025f, 1e-6f); // tan(0.5 rad)
+    EXPECT_FLOAT_EQ(c.nearClip, 0.1f);
+    EXPECT_FLOAT_EQ(c.farClip, 1000.0f);
+}
+
+TEST(FfxMvConventionsTest, ViewSpaceToMetersFactorScalesNearAndFar) {
+    auto desc = MakeUpscaleDispatchDesc();
+    desc.cameraNear = 0.1f;
+    desc.cameraFar = 1000.0f;
+    desc.cameraFovAngleVertical = 1.0f;
+    desc.viewSpaceToMetersFactor = 2.0f;
+    FfxMvConventions c = ReadFfxMvConventions(kSupportedCreateFlags, desc);
+    ASSERT_TRUE(c.hasProjection);
+    EXPECT_FLOAT_EQ(c.nearClip, 0.2f);
+    EXPECT_FLOAT_EQ(c.farClip, 2000.0f);
+}
+
+TEST(FfxMvConventionsTest, NearAndFarGivenSwappedForReverseDepthAreNormalised) {
+    auto desc = MakeUpscaleDispatchDesc();
+    desc.cameraNear = 1000.0f;
+    desc.cameraFar = 0.1f;
+    desc.cameraFovAngleVertical = 1.0f;
+    FfxMvConventions c = ReadFfxMvConventions(kSupportedCreateFlags, desc);
+    ASSERT_TRUE(c.hasProjection);
+    EXPECT_FLOAT_EQ(c.nearClip, 0.1f);
+    EXPECT_FLOAT_EQ(c.farClip, 1000.0f);
+}
+
+TEST(FfxMvConventionsTest, UnusableCameraFieldsLeaveTheProjectionToTheCameraRecord) {
+    auto desc = MakeUpscaleDispatchDesc(); // the camera fields are all zero
+    EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags, desc).hasProjection);
+    desc.cameraNear = 0.1f;
+    desc.cameraFar = std::numeric_limits<float>::max(); // an infinite far plane
+    desc.cameraFovAngleVertical = 1.0f;
+    EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags, desc).hasProjection);
+    desc.cameraFar = 1000.0f;
+    desc.cameraFovAngleVertical = 0.0f;
+    EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags, desc).hasProjection);
+}
+
+TEST(FfxMvConventionsTest, ConventionsTheCorrectionCannotHonourAreReportedAsUnsupported) {
+    auto desc = MakeUpscaleDispatchDesc();
+    EXPECT_NE(ReadFfxMvConventions(FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE, desc).unsupportedReason, nullptr)
+        << "forward-Z depth";
+    EXPECT_NE(ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE, desc).unsupportedReason, nullptr);
+    EXPECT_NE(ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS, desc)
+                  .unsupportedReason, nullptr);
+    EXPECT_NE(ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION, desc)
+                  .unsupportedReason, nullptr);
+    EXPECT_EQ(ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE, desc).unsupportedReason, nullptr);
+}
+
+// ---- Motion vector correction (#38) ----
+
+class FfxFakeMvPass : public IMotionVectorPass {
+public:
+    int recordCount = 0;
+    MvPassInputs lastInputs;
+    ID3D12Resource* output = reinterpret_cast<ID3D12Resource*>(0xBEEF);
+    bool fail = false;
+    std::vector<MvCorrectionRequest> corrections;
+    std::vector<MvSelfCheckRequest> selfChecks;
+    MvPassResult Record(const MvPassInputs& inputs) override {
+        ++recordCount;
+        lastInputs = inputs;
+        if (inputs.correction) corrections.push_back(*inputs.correction);
+        if (inputs.selfCheck) selfChecks.push_back(*inputs.selfCheck);
+        MvPassResult r;
+        if (fail) { r.failureReason = "unsupported motion vector format"; return r; }
+        r.ok = true;
+        r.output = output;
+        return r;
+    }
+};
+
+CameraRecord FfxCamera(uint32_t eye, double x) {
+    CameraRecord r;
+    r.eye = eye;
+    r.position[0] = x;
+    r.fovY = 1.0f;
+    r.nearClip = 0.15f;
+    r.farClip = 2000.0f;
+    return r;
+}
+
+class FfxMvCorrectionTest : public FidelityFxInterceptorTest {
+protected:
+    FfxFakeMvPass* m_pass = nullptr;
+    int m_factoryCalls = 0;
+    ffxContext m_context = nullptr;
+    ID3D12GraphicsCommandList* m_cmdList = reinterpret_cast<ID3D12GraphicsCommandList*>(0x1000);
+    ID3D12Resource* m_engineMv = reinterpret_cast<ID3D12Resource*>(0xAAA0);
+    ID3D12Resource* m_engineDepth = reinterpret_cast<ID3D12Resource*>(0xDDD0);
+
+    void SetUp() override {
+        FidelityFxInterceptorTest::SetUp();
+        s_dispatchMotionVectors.clear();
+        s_dispatchMotionVectorStates.clear();
+        m_ngxShared->SetMvFixEnabled(false);
+        AttachAll();
+        m_ffx.SetMotionVectorPassFactory([this](ID3D12GraphicsCommandList*) {
+            ++m_factoryCalls;
+            auto pass = std::make_unique<FfxFakeMvPass>();
+            m_pass = pass.get();
+            return std::unique_ptr<IMotionVectorPass>(std::move(pass));
+        });
+        m_context = CreateUpscaler();
+        m_ffx.ArmDiagnostics(0);
+    }
+    void TearDown() override {
+        m_ngxShared->SetMvFixEnabled(false);
+        FidelityFxInterceptorTest::TearDown();
+    }
+
+    // Sequential Dual-Pass, the left eye rendering after the right eye 0.064 m away, one frame after its own
+    // previous render: all three cameras resolve.
+    void SetUpSdpWithRecords() {
+        m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+        CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+        ASSERT_TRUE(cameras.Report(FfxCamera(0, 10.0)));
+        cameras.AdvanceFrame();
+        ASSERT_TRUE(cameras.Report(FfxCamera(1, 10.064)));
+        cameras.AdvanceFrame();
+        ASSERT_TRUE(cameras.Report(FfxCamera(0, 10.0)));
+        m_bridge.SetSubPassIndex(0);
+    }
+
+    ffxDispatchDescUpscale MakeDesc() {
+        auto desc = MakeUpscaleDispatchDesc();
+        desc.commandList = m_cmdList;
+        desc.depth.resource = m_engineDepth;
+        desc.motionVectors.resource = m_engineMv;
+        desc.motionVectors.state = 2;
+        desc.motionVectorScale = {2.0f, 2.0f};
+        desc.cameraNear = 0.2f;
+        desc.cameraFar = 3000.0f;
+        desc.cameraFovAngleVertical = 0.8f;
+        return desc;
+    }
+};
+
+TEST_F(FfxMvCorrectionTest, FsrReceivesTheInjectorsTextureAndTheGamesDescriptionIsRestored) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_EQ(m_pass->recordCount, 1);
+    EXPECT_EQ(m_pass->lastInputs.cmdList, m_cmdList);
+    EXPECT_EQ(m_pass->lastInputs.depth, m_engineDepth);
+    EXPECT_EQ(m_pass->lastInputs.motionVectors, m_engineMv);
+    ASSERT_EQ(s_dispatchMotionVectors.size(), 1u);
+    EXPECT_EQ(s_dispatchMotionVectors[0], m_pass->output);
+    EXPECT_EQ(s_dispatchMotionVectorStates[0], FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
+    // The game's description is back as it was.
+    EXPECT_EQ(desc.motionVectors.resource, m_engineMv);
+    EXPECT_EQ(desc.motionVectors.state, 2u);
+}
+
+TEST_F(FfxMvCorrectionTest, TheCorrectionUsesTheDispatchsScaleAndCameraFieldsNotTheRecords) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    desc.cameraFovAngleVertical = 0.8f; // the record says 1.0 rad
+    Dispatch(m_context, desc);
+
+    ASSERT_NE(m_pass, nullptr);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    const MvCorrectionRequest& r = m_pass->corrections[0];
+    EXPECT_FLOAT_EQ(r.mvScaleX, 2.0f);
+    EXPECT_FLOAT_EQ(r.mvScaleY, 2.0f);
+    EXPECT_NEAR(r.current.tanHalfFovY, std::tan(0.4f), 1e-6f);
+    EXPECT_FLOAT_EQ(r.current.nearClip, 0.2f);
+    EXPECT_FLOAT_EQ(r.current.farClip, 3000.0f);
+    // The previous cameras keep the records' projection; the rendered-previous camera is the right eye
+    // 0.064 m away, the same eye's previous camera is where the eye was.
+    EXPECT_NEAR(r.previousFrame.tanHalfFovY, std::tan(0.5f), 1e-6f);
+    EXPECT_NEAR(r.toPreviousFrame.c[0], -0.064f, 1e-5f);
+    EXPECT_NEAR(r.toSameEye.c[0], 0.0f, 1e-5f);
+}
+
+TEST_F(FfxMvCorrectionTest, WithoutDispatchCameraFieldsTheRecordsProjectionIsUsed) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    desc.cameraNear = desc.cameraFar = desc.cameraFovAngleVertical = 0.0f;
+    Dispatch(m_context, desc);
+    ASSERT_NE(m_pass, nullptr);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_NEAR(m_pass->corrections[0].current.tanHalfFovY, std::tan(0.5f), 1e-6f);
+    EXPECT_FLOAT_EQ(m_pass->corrections[0].current.nearClip, 0.15f);
+}
+
+TEST_F(FfxMvCorrectionTest, OffByDefaultAndSwitchableAtRuntimeWithTheDlssSwitch) {
+    SetUpSdpWithRecords();
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    ASSERT_EQ(s_dispatchMotionVectors.size(), 1u);
+    EXPECT_EQ(s_dispatchMotionVectors[0], m_engineMv);
+    EXPECT_EQ(m_factoryCalls, 0);
+
+    m_ngxShared->SetMvFixEnabled(true);
+    Dispatch(m_context, desc);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_pass->output);
+
+    m_ngxShared->SetMvFixEnabled(false);
+    Dispatch(m_context, desc);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(m_pass->recordCount, 1);
+}
+
+TEST_F(FfxMvCorrectionTest, MenusAndTwoDimensionalModeKeepTheEnginesMotionVectors) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    m_bridge.SetMenuVisible(true);
+    Dispatch(m_context, desc);
+    m_bridge.SetMenuVisible(false);
+    m_bridge.Set2DViewActive(true);
+    Dispatch(m_context, desc);
+    ASSERT_EQ(s_dispatchMotionVectors.size(), 2u);
+    EXPECT_EQ(s_dispatchMotionVectors[0], m_engineMv);
+    EXPECT_EQ(s_dispatchMotionVectors[1], m_engineMv);
+    EXPECT_EQ(m_factoryCalls, 0);
+}
+
+TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingKeepsTheEnginesMotionVectorsUntilItsCorrectionLands) {
+    SetUpSdpWithRecords();
+    m_bridge.SetRenderingMode(VRRenderingMode::AFR);
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(m_factoryCalls, 0);
+}
+
+TEST_F(FfxMvCorrectionTest, MissingCameraRecordsPassTheEnginesVectorsThroughACopyWithoutACorrection) {
+    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    m_bridge.GetCameraRecords().Clear();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_EQ(m_pass->recordCount, 1);
+    EXPECT_TRUE(m_pass->corrections.empty());
+    EXPECT_EQ(m_pass->lastInputs.correction, nullptr);
+}
+
+TEST_F(FfxMvCorrectionTest, AZeroMotionVectorScalePassesTheEnginesVectorsThrough) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    desc.motionVectorScale = {0.0f, 0.0f};
+    Dispatch(m_context, desc);
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_TRUE(m_pass->corrections.empty());
+}
+
+TEST_F(FfxMvCorrectionTest, AnEyeOrderSwapNeedsNoCorrection) {
+    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+    ASSERT_TRUE(cameras.Report(FfxCamera(1, 10.064)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(FfxCamera(1, 10.064))); // the right eye twice in a row
+    m_bridge.SetSubPassIndex(1);
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_TRUE(m_pass->corrections.empty());
+}
+
+TEST_F(FfxMvCorrectionTest, ConventionsThePassCannotHonourKeepTheEnginesVectorsAndSkipThePass) {
+    // A context created with display-resolution motion vectors.
+    ffxContext context = nullptr;
+    auto createDesc = MakeUpscaleCreateDesc(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS);
+    ASSERT_EQ(MockCreate(&context, &createDesc.header, nullptr), FFX_API_RETURN_OK);
+    m_ffx.ArmDiagnostics(0);
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(context, desc);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(m_factoryCalls, 0);
+}
+
+TEST_F(FfxMvCorrectionTest, DispatchWithoutCommandListOrInputsPassesThroughWithoutDisabling) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto noList = MakeDesc();
+    noList.commandList = nullptr;
+    Dispatch(m_context, noList);
+    auto noDepth = MakeDesc();
+    noDepth.depth.resource = nullptr;
+    Dispatch(m_context, noDepth);
+    EXPECT_EQ(s_dispatchMotionVectors[0], m_engineMv);
+    EXPECT_EQ(s_dispatchMotionVectors[1], m_engineMv);
+    EXPECT_FALSE(m_ffx.IsMvFixDisabledForSession());
+}
+
+TEST_F(FfxMvCorrectionTest, FailureDisablesThePassForTheSessionAndFsrKeepsTheEnginesVectors) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    ASSERT_NE(m_pass, nullptr);
+    m_pass->fail = true;
+
+    Dispatch(m_context, desc);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(desc.motionVectors.resource, m_engineMv);
+    EXPECT_TRUE(m_ffx.IsMvFixDisabledForSession());
+    EXPECT_EQ(m_ffx.GetMvFixDisableReason(), "unsupported motion vector format");
+
+    int calls = m_pass->recordCount;
+    Dispatch(m_context, desc);
+    EXPECT_EQ(m_pass->recordCount, calls);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
+}
+
+TEST_F(FfxMvCorrectionTest, MissingPassFromTheFactoryDisablesThePass) {
+    SetUpSdpWithRecords();
+    m_ffx.SetMotionVectorPassFactory([](ID3D12GraphicsCommandList*) { return std::unique_ptr<IMotionVectorPass>(); });
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
+    EXPECT_TRUE(m_ffx.IsMvFixDisabledForSession());
+}
+
+TEST_F(FfxMvCorrectionTest, ACorrectionComposesWithADiscontinuityResetAndBothAreRestored) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc); // latches the mode
+    m_ffx.TriggerDiscontinuityFlush();
+    Dispatch(m_context, desc);
+    EXPECT_TRUE(s_dispatchReset.back());
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_pass->output);
+    EXPECT_FALSE(desc.reset);
+    EXPECT_EQ(desc.motionVectors.resource, m_engineMv);
+}
+
+TEST_F(FfxMvCorrectionTest, ArmedDiagnosticsAskForASelfCheckOfTheCorrectedVectors) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.ArmDiagnostics(4);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+
+    ASSERT_NE(m_pass, nullptr);
+    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
+    const MvSelfCheckRequest& r = m_pass->selfChecks[0];
+    EXPECT_EQ(r.eye, 0u);
+    EXPECT_FLOAT_EQ(r.mvScaleX, 2.0f);
+    EXPECT_NEAR(r.current.tanHalfFovY, std::tan(0.4f), 1e-6f);
+    EXPECT_FLOAT_EQ(r.current.farClip, 3000.0f);
+    // The vectors scored are the corrected ones: they should land on the same eye's previous camera.
+    EXPECT_NEAR(r.toPrevious.c[0], 0.0f, 1e-5f);
+}
+
+TEST_F(FfxMvCorrectionTest, NoSelfCheckWhileDiagnosticsAreNotArmed) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_TRUE(m_pass->selfChecks.empty());
 }
 
 TEST_F(FidelityFxInterceptorTest, MatchesTheFidelityFxLoaderByFileName) {
