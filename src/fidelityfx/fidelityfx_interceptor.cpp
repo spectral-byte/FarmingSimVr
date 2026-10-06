@@ -154,6 +154,7 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
     if (plan.decision == mvreproj::CorrectionDecision::Correct) {
         if (std::fabs(conventions.mvScaleX) > 1e-6f && std::fabs(conventions.mvScaleY) > 1e-6f) {
             // The dispatch's own camera fields describe the camera that rendered this frame.
+            plan.current.infiniteDepth = conventions.depthInfinite;
             if (conventions.hasProjection) {
                 plan.current.tanHalfFovY = conventions.tanHalfFovY;
                 plan.current.nearClip = conventions.nearClip;
@@ -187,6 +188,7 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
                                     correction ? &plan : nullptr, checkRequest, skipReason)) {
             // The dispatch's own camera fields describe the camera that rendered this frame.
             if (correction) checkRequest.current = plan.current;
+            checkRequest.current.infiniteDepth = conventions.depthInfinite;
             check = &checkRequest;
         } else {
             LogInfo(FormatMvSelfCheckSkipped("FidelityFxInterceptor", "Dispatch", eye, dispatchIndex, skipReason));

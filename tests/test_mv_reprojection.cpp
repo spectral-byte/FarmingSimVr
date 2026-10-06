@@ -400,6 +400,125 @@ TEST(MvCorrectionTest, CorrectedVectorsPassTheSelfCheckWithSubPixelErrorAgainstT
     EXPECT_LT(corrected.errToPrevious, 0.5f);
 }
 
+// ---- Reverse-Z with an infinite far plane ----
+// View depth is near / d, d = 0 is infinitely far. With near = 1, depth 0.5 is 2 m, the same point as
+// depth 0.45 in the finite scene above (near 1, far 11), so the scene numbers carry over.
+
+namespace {
+
+Projection InfiniteProjection() {
+    Projection p = TestProjection();
+    p.farClip = 0.0f; // unused
+    p.infiniteDepth = true;
+    return p;
+}
+
+Corrected CorrectInfinite(float mvX, float mvY, const RelativeTransform& toPrev, const RelativeTransform& toSame,
+                          float depth = 0.5f, uint32_t px = 150, uint32_t py = 25) {
+    Corrected c = {};
+    c.applied = CorrectMotionVector(px, py, depth, mvX, mvY, 1.0f, 1.0f, 200, 100, InfiniteProjection(),
+                                    TestProjection(), TestProjection(), toPrev, toSame, c.x, c.y);
+    return c;
+}
+
+} // namespace
+
+TEST(MvInfiniteDepthTest, ViewDepthIsNearOverDepth) {
+    EXPECT_NEAR(ReverseZToViewDepth(1.0f, 1.0f, 0.0f, true), 1.0f, 1e-6f);
+    EXPECT_NEAR(ReverseZToViewDepth(0.5f, 1.0f, 0.0f, true), 2.0f, 1e-6f);
+    EXPECT_NEAR(ReverseZToViewDepth(0.25f, 0.2f, 0.0f, true), 0.8f, 1e-6f);
+}
+
+TEST(MvInfiniteDepthTest, FiniteDepthIsUnchangedByTheFlagBeingOff) {
+    // Worked above: d = 0.45 -> 2 m, d = 0 -> the 11 m far plane.
+    EXPECT_NEAR(ReverseZToViewDepth(0.45f, 1.0f, 11.0f, false), 2.0f, 1e-5f);
+    EXPECT_NEAR(ReverseZToViewDepth(0.0f, 1.0f, 11.0f, false), 11.0f, 1e-4f);
+}
+
+TEST(MvInfiniteDepthTest, AnInfiniteDepthDrivenPointLandsWhereTheFiniteOneDoes) {
+    float p[3];
+    ASSERT_TRUE(UnprojectPixel(150.0f, 25.0f, 0.5f, kW, kH, InfiniteProjection(), p));
+    EXPECT_NEAR(p[0], 2.0f, 1e-4f);
+    EXPECT_NEAR(p[1], 1.0f, 1e-4f);
+    EXPECT_NEAR(p[2], -2.0f, 1e-4f);
+    EXPECT_FALSE(UnprojectPixel(100.0f, 50.0f, 0.0f, kW, kH, InfiniteProjection(), p)) << "d = 0 is the sky";
+}
+
+TEST(MvInfiniteDepthTest, ASkyPixelHasAFiniteSkyDistanceInsteadOfADivisionByZero) {
+    const float z = ReverseZToViewDepth(0.0f, 1.0f, 0.0f, true);
+    EXPECT_TRUE(std::isfinite(z));
+    EXPECT_NEAR(z, kInfiniteSkyViewDepth, 1.0f);
+    // A tiny depth is clamped to the same distance rather than running off to 1e30.
+    EXPECT_NEAR(ReverseZToViewDepth(1e-20f, 1.0f, 0.0f, true), kInfiniteSkyViewDepth, 1.0f);
+}
+
+TEST(MvInfiniteDepthTest, AStaticPointCorrectsToZeroMotionLikeTheFiniteScene) {
+    Corrected c = CorrectInfinite(-25.0f, 0.0f, Aside(1.0), Aside(0.0));
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 0.0f, 1e-2f);
+    EXPECT_NEAR(c.y, 0.0f, 1e-2f);
+    Corrected moved = CorrectInfinite(-25.0f, 0.0f, Aside(1.0), Aside(-0.5));
+    ASSERT_TRUE(moved.applied);
+    EXPECT_NEAR(moved.x, 12.5f, 1e-2f);
+}
+
+TEST(MvInfiniteDepthTest, TheSkyCarriesRotationButNoTranslation) {
+    // Same yaw as the finite sky test: the sky direction is independent of distance, so +49.5.
+    CameraRecord current;
+    current.orientation[3] = 1.0;
+    CameraRecord other = current;
+    const double half = 3.14159265358979323846 / 8.0;
+    other.orientation[1] = std::sin(half);
+    other.orientation[3] = std::cos(half);
+    RelativeTransform yawed = MakeRelativeTransform(ComputeRelativeCamera(current, other));
+    Corrected c = CorrectInfinite(0.0f, 0.0f, Identity(), yawed, 0.0f, 99, 49);
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 49.5f, 0.2f);
+
+    // A same-eye camera 0.5 m aside moves the sky by nothing (infinitely far).
+    Corrected aside = CorrectInfinite(0.0f, 0.0f, Identity(), Aside(-0.5), 0.0f, 99, 49);
+    ASSERT_TRUE(aside.applied);
+    EXPECT_NEAR(aside.x, 0.0f, 1e-2f);
+    EXPECT_NEAR(aside.y, 0.0f, 1e-2f);
+}
+
+TEST(MvInfiniteDepthTest, TheSelfCheckScoresAnInfiniteDepthPointLikeTheFiniteOne) {
+    // Engine vector of the static point 1 m aside: (-25, 0).
+    SampleResult r = EvaluateSample(150, 25, 0.5f, -25.0f, 0.0f, 1.0f, 1.0f, 200, 100, InfiniteProjection(),
+                                    TestProjection(), Aside(1.0));
+    EXPECT_EQ(r.status, static_cast<uint32_t>(SampleStatus::Valid));
+    EXPECT_LT(r.errToPrevious, 0.5f);
+    SampleResult sky = EvaluateSample(100, 50, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 200, 100, InfiniteProjection(),
+                                      TestProjection(), Aside(1.0));
+    EXPECT_EQ(sky.status, static_cast<uint32_t>(SampleStatus::Sky));
+}
+
+// ---- A negative motion vector scale ----
+// FSR3's dispatch scale in game is (-width/2, +height/2): pixels = stored * scale, so the stored vector is
+// the pixel displacement divided by the (signed) scale, and the correction must carry the sign.
+
+TEST(MvCorrectionTest, ANegativeXScaleConvertsTheCorrectionWithItsSign) {
+    // Moved-head case at scale 1: the engine's -25 px becomes +12.5 px, a correction of +37.5 px. At scale
+    // (-2, 2) the stored engine vector for -25 px is +12.5 and the stored correction is 37.5 / -2 = -18.75,
+    // so -6.25 is stored: +12.5 px.
+    float x = 0, y = 0;
+    ASSERT_TRUE(CorrectMotionVector(150, 25, 0.45f, 12.5f, 0.0f, -2.0f, 2.0f, 200, 100, TestProjection(),
+                                    TestProjection(), TestProjection(), Aside(1.0), Aside(-0.5), x, y));
+    EXPECT_NEAR(x, -6.25f, 1e-2f);
+    EXPECT_NEAR(x * -2.0f, 12.5f, 2e-2f); // in pixels, as with a positive scale
+    EXPECT_NEAR(y, 0.0f, 1e-2f);
+}
+
+TEST(MvCorrectionTest, AStaticPointStillCorrectsToZeroUnderAMixedSignScale) {
+    // Scale (-100, +50) like -width/2, +height/2 of the 200x100 render. The engine's stored vector for the
+    // static point (-25 px, 0): x = -25 / -100 = 0.25.
+    float x = 9, y = 9;
+    ASSERT_TRUE(CorrectMotionVector(150, 25, 0.45f, 0.25f, 0.0f, -100.0f, 50.0f, 200, 100, TestProjection(),
+                                    TestProjection(), TestProjection(), Aside(1.0), Aside(0.0), x, y));
+    EXPECT_NEAR(x, 0.0f, 1e-4f);
+    EXPECT_NEAR(y, 0.0f, 1e-4f);
+}
+
 // ---- AFR (#36) ----
 // Under AFR the previous frame is the other eye and the same eye's previous frame is two frames back. The
 // simulation advances every frame, so the engine's object motion covers one frame where the same-eye

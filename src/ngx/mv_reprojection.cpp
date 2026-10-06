@@ -34,14 +34,19 @@ void ApplyRelativeTransform(const RelativeTransform& t, const float p[3], float 
     }
 }
 
-float ReverseZToViewDepth(float depth, float nearClip, float farClip) {
+float ReverseZToViewDepth(float depth, float nearClip, float farClip, bool infiniteDepth) {
+    if (infiniteDepth) {
+        // depth <= near / cap would exceed the cap (and 0 divides by zero): that is the sky.
+        if (!(depth > nearClip / kInfiniteSkyViewDepth)) return kInfiniteSkyViewDepth;
+        return nearClip / depth;
+    }
     return nearClip * farClip / (nearClip + depth * (farClip - nearClip));
 }
 
 bool UnprojectPixel(float px, float py, float depth, float width, float height,
                     const Projection& proj, float out[3]) {
     if (!(depth > 0.0f)) return false; // reverse-Z: 0 is the far plane (sky)
-    const float z = ReverseZToViewDepth(depth, proj.nearClip, proj.farClip);
+    const float z = ReverseZToViewDepth(depth, proj.nearClip, proj.farClip, proj.infiniteDepth);
     const float ndcX = 2.0f * px / width - 1.0f;
     const float ndcY = 1.0f - 2.0f * py / height;
     out[0] = ndcX * proj.tanHalfFovY * proj.aspect * z;
@@ -116,7 +121,9 @@ bool CorrectMotionVector(uint32_t x, uint32_t y, float depth, float mvX, float m
     const float cy = static_cast<float>(y) + 0.5f;
 
     float p[3];
-    UnprojectAtViewDepth(cx, cy, ReverseZToViewDepth((std::max)(depth, 0.0f), current.nearClip, current.farClip), w, h,
+    UnprojectAtViewDepth(cx, cy, ReverseZToViewDepth((std::max)(depth, 0.0f), current.nearClip, current.farClip,
+                                             current.infiniteDepth),
+                         w, h,
                          current, p);
     float q[3];
     float prevX = 0.0f, prevY = 0.0f, sameX = 0.0f, sameY = 0.0f;

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "ffx_defs.h"
 #include <algorithm>
@@ -35,11 +35,11 @@ inline FfxMvConventions ReadFfxMvConventions(uint32_t createFlags, const ffxDisp
     c.depthInverted = (createFlags & FFX_UPSCALE_ENABLE_DEPTH_INVERTED) != 0;
     c.depthInfinite = (createFlags & FFX_UPSCALE_ENABLE_DEPTH_INFINITE) != 0;
 
-    // The pass is built for the engine's reverse-Z depth, render-resolution vectors with no jitter in them.
+    // The pass is built for reverse-Z depth (finite or infinite far plane), render-resolution vectors with no
+    // jitter in them. The motion vector scale may be negative (the engine's vector can point the other way
+    // from FSR3's convention): the sign stays in the scale, which converts stored vectors to pixels.
     if (!c.depthInverted) {
         c.unsupportedReason = "FSR3 depth is not reverse-Z";
-    } else if (c.depthInfinite) {
-        c.unsupportedReason = "FSR3 depth has an infinite far plane";
     } else if (createFlags & FFX_UPSCALE_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS) {
         c.unsupportedReason = "FSR3 motion vectors are at display resolution";
     } else if (createFlags & FFX_UPSCALE_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION) {
@@ -55,8 +55,21 @@ inline FfxMvConventions ReadFfxMvConventions(uint32_t createFlags, const ffxDisp
     const float lo = (std::min)(a, b);
     const float hi = (std::max)(a, b);
     const float fov = desc.cameraFovAngleVertical;
-    if (std::isfinite(lo) && std::isfinite(hi) && lo > 0.0f && hi > lo && hi < kInfiniteFar &&
-        std::isfinite(fov) && fov > 0.0f && fov < 3.1415926f) {
+    const bool fovOk = std::isfinite(fov) && fov > 0.0f && fov < 3.1415926f;
+    if (c.depthInfinite) {
+        // Infinite far plane: only the near plane matters. Applications leave the other field as FLT_MAX, 0,
+        // or swap the near plane into it, so take the smallest positive finite one.
+        float nearPlane = 0.0f;
+        for (float v : {a, b}) {
+            if (std::isfinite(v) && v > 0.0f && v < kInfiniteFar && (nearPlane == 0.0f || v < nearPlane)) nearPlane = v;
+        }
+        if (nearPlane > 0.0f && fovOk) {
+            c.hasProjection = true;
+            c.tanHalfFovY = std::tan(fov * 0.5f);
+            c.nearClip = nearPlane * factor;
+            c.farClip = 0.0f;
+        }
+    } else if (std::isfinite(lo) && std::isfinite(hi) && lo > 0.0f && hi > lo && hi < kInfiniteFar && fovOk) {
         c.hasProjection = true;
         c.tanHalfFovY = std::tan(fov * 0.5f);
         c.nearClip = lo * factor;

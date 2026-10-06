@@ -21,7 +21,14 @@ struct Projection {
     float aspect = 1.0f; // render width / render height
     float nearClip = 0.1f;
     float farClip = 1000.0f;
+    // Reverse-Z with an infinite far plane (FSR3 DepthInfinite): view depth = nearClip / depth, depth 0 is
+    // infinitely far and farClip is unused. Only the camera that rendered the depth buffer reads it.
+    bool infiniteDepth = false;
 };
+
+// View depth given to a sky pixel (depth 0) under an infinite far plane: far enough that translation is
+// below a hundredth of a pixel, near enough for float32 to keep the rotation exact.
+constexpr float kInfiniteSkyViewDepth = 100000.0f;
 
 // Maps a point from the current camera's space into another camera's space: p_other = m * p + c.
 struct RelativeTransform {
@@ -34,8 +41,9 @@ struct RelativeTransform {
 RelativeTransform MakeRelativeTransform(const RelativeCamera& relative);
 void ApplyRelativeTransform(const RelativeTransform& t, const float p[3], float out[3]);
 
-// View-space distance in front of the camera for a reverse-Z depth value.
-float ReverseZToViewDepth(float depth, float nearClip, float farClip);
+// View-space distance in front of the camera for a reverse-Z depth value. With infiniteDepth the far plane
+// is at infinity (view depth = near / depth, capped at kInfiniteSkyViewDepth; depth 0 gives the cap).
+float ReverseZToViewDepth(float depth, float nearClip, float farClip, bool infiniteDepth = false);
 
 // Camera-space position of the pixel at continuous coordinates (px, py) with the given depth.
 // False for the sky (depth at or beyond the far plane).

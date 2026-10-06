@@ -75,8 +75,19 @@ cbuffer Constants : register(b0)
     float4 gS0; // rows of p_same = S * p + c: the same eye's previous camera
     float4 gS1;
     float4 gS2;
-    float4 gD;  // tanHalfFovY (same eye's previous camera), object motion factor
+    float4 gD;  // tanHalfFovY (same eye's previous camera), object motion factor, infinite far plane (1), unused
 };
+
+// View-space depth of a reverse-Z depth value (mirrors ReverseZToViewDepth). With an infinite far plane it
+// is near / depth, and 100000 (kInfiniteSkyViewDepth) for the sky.
+float ViewDepth(float depth)
+{
+    float n = gC.x;
+    float f = gC.y;
+    if (gD.z != 0.0)
+        return depth > n / 100000.0 ? n / depth : 100000.0;
+    return n * f / (n + depth * (f - n));
+}
 
 float3 Transform(float4 r0, float4 r1, float4 r2, float3 p)
 {
@@ -111,9 +122,7 @@ void correct(uint3 id : SV_DispatchThreadID)
         return;
     float2 mv = gMv.Load(int3(id.xy, 0));
     float depth = max(gDepth.Load(int3(id.xy, 0)), 0.0);
-    float n = gC.x;
-    float f = gC.y;
-    float z = n * f / (n + depth * (f - n));
+    float z = ViewDepth(depth);
     float cx = (float)id.x + 0.5;
     float cy = (float)id.y + 0.5;
     float w = (float)gA.x;
@@ -153,9 +162,7 @@ void selfcheck(uint3 id : SV_DispatchThreadID)
     }
     else
     {
-        float n = gC.x;
-        float f = gC.y;
-        float z = n * f / (n + depth * (f - n));
+        float z = ViewDepth(depth);
         float cx = (float)px + 0.5;
         float cy = (float)py + 0.5;
         float3 p = float3((2.0 * cx / w - 1.0) * gB.z * gB.w * z, (1.0 - 2.0 * cy / h) * gB.z * z, -z);
@@ -237,7 +244,7 @@ struct PassConstants {
     float c[4];       // near, far, grid, tanHalfFovY (previous)
     float r[3][4];    // p_prev = R * p + c per row
     float s[3][4];    // p_same = S * p + c per row
-    float d[4];       // tanHalfFovY (same eye's previous camera), object motion factor
+    float d[4];       // tanHalfFovY (same eye's previous camera), object motion factor, infinite far plane
 };
 static_assert(sizeof(PassConstants) == 40 * sizeof(uint32_t), "root constants are 40 dwords");
 
@@ -454,6 +461,7 @@ private:
         FillTransform(c.s, req.toSameEye);
         c.d[0] = req.sameEye.tanHalfFovY;
         c.d[1] = req.objectMotionFactor;
+        c.d[2] = req.current.infiniteDepth ? 1.0f : 0.0f;
     }
 
     void RecordSelfCheck(ID3D12GraphicsCommandList* cl, const MvSelfCheckRequest& req, UINT width, UINT height,
@@ -475,6 +483,7 @@ private:
         c.c[1] = req.current.farClip;
         c.c[2] = static_cast<float>(kSelfCheckGrid);
         c.c[3] = req.previous.tanHalfFovY;
+        c.d[2] = req.current.infiniteDepth ? 1.0f : 0.0f;
         FillTransform(c.r, req.toPrevious);
 
         cl->SetPipelineState(m_selfCheckPso.Get());

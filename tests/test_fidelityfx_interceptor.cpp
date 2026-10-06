@@ -554,11 +554,48 @@ TEST(FfxMvConventionsTest, UnusableCameraFieldsLeaveTheProjectionToTheCameraReco
     EXPECT_FALSE(ReadFfxMvConventions(kSupportedCreateFlags, desc).hasProjection);
 }
 
+TEST(FfxMvConventionsTest, InfiniteDepthTakesTheNearPlaneWhicheverFieldCarriesIt) {
+    constexpr uint32_t kInfiniteFlags = kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
+    auto desc = MakeUpscaleDispatchDesc();
+    desc.cameraFovAngleVertical = 1.0f;
+    desc.viewSpaceToMetersFactor = 2.0f;
+    // The far field is meaningless with an infinite far plane: FLT_MAX, zero, or the near plane swapped in.
+    desc.cameraNear = 0.1f;
+    desc.cameraFar = std::numeric_limits<float>::max();
+    FfxMvConventions c = ReadFfxMvConventions(kInfiniteFlags, desc);
+    EXPECT_TRUE(c.depthInfinite);
+    ASSERT_TRUE(c.hasProjection);
+    EXPECT_FLOAT_EQ(c.nearClip, 0.2f);
+    desc.cameraFar = 0.0f;
+    c = ReadFfxMvConventions(kInfiniteFlags, desc);
+    ASSERT_TRUE(c.hasProjection);
+    EXPECT_FLOAT_EQ(c.nearClip, 0.2f);
+    desc.cameraNear = std::numeric_limits<float>::max();
+    desc.cameraFar = 0.1f;
+    c = ReadFfxMvConventions(kInfiniteFlags, desc);
+    ASSERT_TRUE(c.hasProjection);
+    EXPECT_FLOAT_EQ(c.nearClip, 0.2f);
+    desc.cameraNear = desc.cameraFar = 0.0f;
+    EXPECT_FALSE(ReadFfxMvConventions(kInfiniteFlags, desc).hasProjection);
+}
+
+TEST(FfxMvConventionsTest, ANegativeXMotionVectorScaleIsReadWithItsSign) {
+    auto desc = MakeUpscaleDispatchDesc();
+    desc.motionVectorScale = {-3004.0f, 1690.0f}; // -width/2, +height/2 of a 6008x3380 render, as seen in game
+    FfxMvConventions c = ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE, desc);
+    EXPECT_EQ(c.unsupportedReason, nullptr);
+    EXPECT_FLOAT_EQ(c.mvScaleX, -3004.0f);
+    EXPECT_FLOAT_EQ(c.mvScaleY, 1690.0f);
+}
+
 TEST(FfxMvConventionsTest, ConventionsTheCorrectionCannotHonourAreReportedAsUnsupported) {
     auto desc = MakeUpscaleDispatchDesc();
     EXPECT_NE(ReadFfxMvConventions(FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE, desc).unsupportedReason, nullptr)
         << "forward-Z depth";
-    EXPECT_NE(ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE, desc).unsupportedReason, nullptr);
+    EXPECT_EQ(ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE, desc).unsupportedReason, nullptr)
+        << "reverse-Z with an infinite far plane is supported";
+    EXPECT_NE(ReadFfxMvConventions(FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_DEPTH_INFINITE, desc)
+                  .unsupportedReason, nullptr) << "forward-Z with an infinite far plane";
     EXPECT_NE(ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS, desc)
                   .unsupportedReason, nullptr);
     EXPECT_NE(ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION, desc)
@@ -848,6 +885,41 @@ TEST_F(FfxMvCorrectionTest, ConventionsThePassCannotHonourKeepTheEnginesVectorsA
     Dispatch(context, desc);
     EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
     EXPECT_EQ(m_factoryCalls, 0);
+}
+
+TEST_F(FfxMvCorrectionTest, InfiniteDepthContextsAreCorrectedAndTheRequestSaysSo) {
+    // The game's FSR3 flags: HDR | DepthInverted | DepthInfinite (0x19), with a negative x scale.
+    ffxContext context = nullptr;
+    auto createDesc = MakeUpscaleCreateDesc(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE);
+    ASSERT_EQ(MockCreate(&context, &createDesc.header, nullptr), FFX_API_RETURN_OK);
+    m_ffx.ArmDiagnostics(0);
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    desc.motionVectorScale = {-3004.0f, 1690.0f};
+    desc.cameraNear = 0.2f;
+    desc.cameraFar = std::numeric_limits<float>::max();
+    Dispatch(context, desc);
+
+    ASSERT_NE(m_pass, nullptr);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    const MvCorrectionRequest& r = m_pass->corrections[0];
+    EXPECT_TRUE(r.current.infiniteDepth);
+    EXPECT_FALSE(r.previousFrame.infiniteDepth);
+    EXPECT_FLOAT_EQ(r.mvScaleX, -3004.0f);
+    EXPECT_FLOAT_EQ(r.mvScaleY, 1690.0f);
+    EXPECT_FLOAT_EQ(r.current.nearClip, 0.2f);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_pass->output);
+}
+
+TEST_F(FfxMvCorrectionTest, FiniteDepthContextsDoNotRequestInfiniteDepth) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    ASSERT_NE(m_pass, nullptr);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_FALSE(m_pass->corrections[0].current.infiniteDepth);
 }
 
 TEST_F(FfxMvCorrectionTest, DispatchWithoutCommandListOrInputsPassesThroughWithoutDisabling) {
