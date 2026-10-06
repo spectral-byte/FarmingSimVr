@@ -1914,15 +1914,55 @@ TEST_F(MvSelfCheckTest, ReadBackResultsAreLoggedPerEyeWithBothConventionsAndTheS
     report.stats.medianToPrevious = 0.25;
     report.stats.meanToCurrent = 12.5;
     report.stats.medianToCurrent = 11.0;
+    report.stats.engineMean = 0.5;
+    report.stats.predictedMean = 45.25;
+    report.stats.k = 0.012;
+    report.stats.rawMean = 0.25;
+    report.stats.kRaw = -0.01;
+    report.stats.rawMinX = -0.5;
+    report.stats.rawMaxX = 0.75;
+    report.stats.rawMinY = -1.5;
+    report.stats.rawMaxY = 2.0;
+    report.mvFormat = 34; // DXGI_FORMAT_R16G16_FLOAT
     m_pass->pendingReports.push_back(report);
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
 
     const std::string log = Log();
+    EXPECT_NE(log.find("EngineMean=0.500 PredMean=45.250 k=0.012 RawMean=0.250 kRaw=-0.010"), std::string::npos) << log;
+    EXPECT_NE(log.find("MvCheck RawMv format=34 Eye=1 Eval #7 rawX=[-0.500, 0.750] rawY=[-1.500, 2.000]"),
+              std::string::npos) << log;
     EXPECT_NE(log.find("MvCheck Eye=1 Eval #7"), std::string::npos) << log;
     EXPECT_NE(log.find("previous-minus-current: mean=0.800 median=0.250"), std::string::npos) << log;
     EXPECT_NE(log.find("current-minus-previous: mean=12.500 median=11.000"), std::string::npos) << log;
     EXPECT_NE(log.find("skipped=25.0%"), std::string::npos) << log;
     EXPECT_NE(log.find("Best=previous-minus-current"), std::string::npos) << log;
+}
+
+TEST_F(MvSelfCheckTest, TheRawVectorRangeIsLoggedOncePerArming) {
+    SetUpSdp(true);
+    m_ngx.ArmDiagnostics(8);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    auto count = [&]() {
+        const std::string log = Log();
+        size_t n = 0;
+        for (size_t at = log.find("MvCheck RawMv"); at != std::string::npos; at = log.find("MvCheck RawMv", at + 1)) ++n;
+        return n;
+    };
+    MvSelfCheckReport report;
+    report.eye = 0;
+    report.evalIndex = 1;
+    m_pass->pendingReports.push_back(report);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    report.evalIndex = 2;
+    m_pass->pendingReports.push_back(report);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(count(), 1u);
+
+    m_ngx.ArmDiagnostics(8);
+    report.evalIndex = 3;
+    m_pass->pendingReports.push_back(report);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(count(), 2u);
 }
 
 // ---- Per-eye motion vector correction (#35) ----

@@ -32,6 +32,7 @@ struct MvSelfCheckReport {
     uint32_t eye = 0;
     uint64_t evalIndex = 0;
     mvreproj::SelfCheckStats stats;
+    uint32_t mvFormat = 0; // DXGI_FORMAT of the motion vector texture the self-check read
 };
 
 // Builds the self-check request for one evaluation from the raw camera records, or says why it cannot
@@ -46,6 +47,9 @@ bool BuildMvSelfCheckRequest(const ResolvedCameras& resolved, uint32_t eye, uint
 // The [Diag] log lines shared by the upscaler interceptors. logPrefix names the interceptor (for example
 // "NgxInterceptor"); unit names what it counts ("Eval" or "Dispatch").
 std::string FormatMvSelfCheckReport(const char* logPrefix, const char* unit, const MvSelfCheckReport& report);
+// The motion vector texture format and the range of raw engine values at the sampled grid points, logged
+// once per diagnostics arming to help identify the engine vector's units.
+std::string FormatMvRawRangeReport(const char* logPrefix, const char* unit, const MvSelfCheckReport& report);
 std::string FormatMvSelfCheckSkipped(const char* logPrefix, const char* unit, uint32_t eye, uint64_t index,
                                      const std::string& reason);
 

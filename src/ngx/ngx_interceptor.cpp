@@ -579,6 +579,7 @@ void NgxInterceptor::ArmDiagnostics(uint32_t evaluations) {
         m_diagContextRun = 0;
         m_diagLongestContextRun = 0;
     }
+    m_diagRawRangeLogged.store(false);
     m_diagRemaining.store(evaluations);
     LogInfo("NgxInterceptor: [Diag] Armed for " + std::to_string(evaluations) + " evaluations.");
 }
@@ -1230,7 +1231,12 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
             }
             std::vector<MvSelfCheckReport> reports;
             ID3D12Resource* corrected = interceptor.RecordMvPass(InCmdList, depth, mv, check, &reports, correction);
-            for (const MvSelfCheckReport& report : reports) LogInfo(FormatMvSelfCheckReport("NgxInterceptor", "Eval", report));
+            for (const MvSelfCheckReport& report : reports) {
+                if (!interceptor.m_diagRawRangeLogged.exchange(true)) {
+                    LogInfo(FormatMvRawRangeReport("NgxInterceptor", "Eval", report));
+                }
+                LogInfo(FormatMvSelfCheckReport("NgxInterceptor", "Eval", report));
+            }
             if (corrected) {
                 prevMv = mv;
                 mutableParams->Set(NVSDK_NGX_Parameter_MotionVectors, corrected);

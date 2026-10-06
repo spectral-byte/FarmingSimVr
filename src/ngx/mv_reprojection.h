@@ -62,7 +62,16 @@ struct SampleResult {
     float errToCurrent = 0.0f;  // pixels, vector taken as current - previous
     uint32_t status = 0;        // SampleStatus
     uint32_t sequence = 0;      // evaluation stamp the shader writes, to recognise stale readbacks
+    // Convention-agnostic accounting (valid samples only). Pixels unless noted.
+    float engineX = 0.0f;       // engine vector after the MV scale
+    float engineY = 0.0f;
+    float predictedX = 0.0f;    // predicted previous - current displacement
+    float predictedY = 0.0f;
+    float rawX = 0.0f;          // engine vector as stored, before the scale (raw units)
+    float rawY = 0.0f;
+    float padding[2] = {0.0f, 0.0f}; // keeps the element 3 x uint4 like the GPU buffer
 };
+static_assert(sizeof(SampleResult) == 48, "SampleResult mirrors the GPU results element (3 x uint4)");
 
 // Predicts the displacement of the static point seen at integer pixel (x, y) between the current camera
 // and the previous rendered frame's camera, and scores the engine vector (mvX, mvY) times (scaleX,
@@ -85,6 +94,14 @@ struct SelfCheckStats {
     double medianToPrevious = 0.0;
     double meanToCurrent = 0.0;
     double medianToCurrent = 0.0;
+    // Convention-agnostic accounting over valid samples; p is the predicted previous-minus-current
+    // displacement, e the engine vector after the scale, r the raw stored vector.
+    double engineMean = 0.0;    // mean |e| (px)
+    double predictedMean = 0.0; // mean |p| (px)
+    double k = 0.0;             // sum(e.p) / sum(p.p): 1 = engine matches, 0 = ignores the offset, <0 = opposite
+    double rawMean = 0.0;       // mean |r| (raw units)
+    double kRaw = 0.0;          // sum(r.p) / sum(p.p): far from 1 with k near 1 means a units mismatch
+    double rawMinX = 0.0, rawMaxX = 0.0, rawMinY = 0.0, rawMaxY = 0.0;
 };
 
 SelfCheckStats Summarize(const SampleResult* samples, size_t count);

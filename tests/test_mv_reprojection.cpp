@@ -282,6 +282,102 @@ TEST(MvReprojectionTest, SummaryOfNothingValidHasNoVerdict) {
     EXPECT_EQ(BetterConvention(empty), Convention::None);
 }
 
+// ---- Convention-agnostic accounting: is the engine vector the predicted displacement at all? ----
+
+namespace {
+
+// A valid sample whose predicted previous-minus-current displacement is (px, py) and whose engine vector
+// is (ex, ey) after the scale, from the raw stored value (rx, ry).
+SampleResult AccountedSample(float ex, float ey, float px, float py, float rx, float ry) {
+    SampleResult s = {};
+    s.status = static_cast<uint32_t>(SampleStatus::Valid);
+    s.engineX = ex;
+    s.engineY = ey;
+    s.predictedX = px;
+    s.predictedY = py;
+    s.rawX = rx;
+    s.rawY = ry;
+    return s;
+}
+
+} // namespace
+
+TEST(MvReprojectionTest, EvaluateSampleRecordsTheEnginePredictedAndRawVectors) {
+    CameraRecord current;
+    current.orientation[3] = 1.0;
+    CameraRecord other = current;
+    other.position[0] = 1.0;
+    RelativeTransform t = MakeRelativeTransform(ComputeRelativeCamera(current, other));
+
+    // Predicted displacement is exactly (-25, 0) (see the hand case above); raw (-12.5, 3) at scale 2.
+    SampleResult r = EvaluateSample(150, 25, DepthAtMetres2(), -12.5f, 3.0f, 2.0f, 2.0f, 200, 100,
+                                    TestProjection(), TestProjection(), t);
+    EXPECT_NEAR(r.predictedX, -25.0f, 1e-2f);
+    EXPECT_NEAR(r.predictedY, 0.0f, 1e-2f);
+    EXPECT_FLOAT_EQ(r.engineX, -25.0f);
+    EXPECT_FLOAT_EQ(r.engineY, 6.0f);
+    EXPECT_FLOAT_EQ(r.rawX, -12.5f);
+    EXPECT_FLOAT_EQ(r.rawY, 3.0f);
+}
+
+TEST(MvReprojectionTest, RegressionRatioIsOneWhenTheEngineVectorEqualsThePrediction) {
+    std::vector<SampleResult> s = {AccountedSample(-25, 0, -25, 0, -25, 0), AccountedSample(0, 10, 0, 10, 0, 10)};
+    SelfCheckStats stats = Summarize(s.data(), s.size());
+    EXPECT_NEAR(stats.k, 1.0, 1e-12);
+    EXPECT_NEAR(stats.engineMean, 17.5, 1e-9); // (25 + 10) / 2
+    EXPECT_NEAR(stats.predictedMean, 17.5, 1e-9);
+}
+
+TEST(MvReprojectionTest, RegressionRatioIsZeroWhenTheEngineVectorIgnoresTheCameraOffset) {
+    std::vector<SampleResult> s = {AccountedSample(0, 0, -25, 0, 0, 0), AccountedSample(0, 0, 0, 10, 0, 0)};
+    SelfCheckStats stats = Summarize(s.data(), s.size());
+    EXPECT_NEAR(stats.k, 0.0, 1e-12);
+    EXPECT_NEAR(stats.engineMean, 0.0, 1e-12);
+    EXPECT_NEAR(stats.predictedMean, 17.5, 1e-9);
+}
+
+TEST(MvReprojectionTest, RegressionRatioIsMinusOneWhenTheEngineVectorIsFlipped) {
+    std::vector<SampleResult> s = {AccountedSample(25, 0, -25, 0, 25, 0), AccountedSample(0, -10, 0, 10, 0, -10)};
+    EXPECT_NEAR(Summarize(s.data(), s.size()).k, -1.0, 1e-12);
+}
+
+TEST(MvReprojectionTest, RegressionRatioIsTheLeastSquaresSlopeForAPartialMatch) {
+    // e = 0.5 p on one sample and e = 1.5 p on another, same |p|: k = (0.5 + 1.5) * 625 / (2 * 625) = 1.
+    // A different weighting: p = 10 with e = 5 and p = 30 with e = 30: (50 + 900) / (100 + 900) = 0.95.
+    std::vector<SampleResult> s = {AccountedSample(5, 0, 10, 0, 5, 0), AccountedSample(30, 0, 30, 0, 30, 0)};
+    EXPECT_NEAR(Summarize(s.data(), s.size()).k, 0.95, 1e-12);
+}
+
+TEST(MvReprojectionTest, RawUnitsAreVisibleWhenTheStoredVectorIsNdcLikeAndScaledByHalfTheExtent) {
+    // The engine stores NDC-like values (0.25 for a 25 px move) and FSR3's scale (-w/2, h/2) turns them
+    // into pixels: the scaled vector matches (k = 1) but the raw one is nowhere near pixels (kRaw << 1).
+    std::vector<SampleResult> s = {AccountedSample(-25, 0, -25, 0, 0.25f, 0.0f)};
+    SelfCheckStats stats = Summarize(s.data(), s.size());
+    EXPECT_NEAR(stats.k, 1.0, 1e-12);
+    EXPECT_NEAR(stats.rawMean, 0.25, 1e-9);
+    // Σ(raw·p) / Σ(p·p) = (0.25 * -25) / 625.
+    EXPECT_NEAR(stats.kRaw, -0.01, 1e-9);
+    EXPECT_FLOAT_EQ(static_cast<float>(stats.rawMinX), 0.25f);
+    EXPECT_FLOAT_EQ(static_cast<float>(stats.rawMaxX), 0.25f);
+}
+
+TEST(MvReprojectionTest, RawRangeCoversValidSamplesOnlyAndAccountingSkipsSkippedOnes) {
+    std::vector<SampleResult> s = {AccountedSample(0, 0, 3, 4, -2, 7), AccountedSample(0, 0, 3, 4, 5, -1)};
+    SampleResult sky = AccountedSample(0, 0, 0, 0, 100, 100);
+    sky.status = static_cast<uint32_t>(SampleStatus::Sky);
+    s.push_back(sky);
+    SelfCheckStats stats = Summarize(s.data(), s.size());
+    EXPECT_DOUBLE_EQ(stats.rawMinX, -2.0);
+    EXPECT_DOUBLE_EQ(stats.rawMaxX, 5.0);
+    EXPECT_DOUBLE_EQ(stats.rawMinY, -1.0);
+    EXPECT_DOUBLE_EQ(stats.rawMaxY, 7.0);
+    EXPECT_NEAR(stats.predictedMean, 5.0, 1e-9);
+
+    SelfCheckStats none = Summarize(&sky, 1);
+    EXPECT_DOUBLE_EQ(none.k, 0.0); // no valid sample: zeros, not NaN
+    EXPECT_DOUBLE_EQ(none.rawMinX, 0.0);
+}
+
 // ---- Per-eye correction (#35) ----
 // Scene: pixel (150, 25) of the 200x100 render, centre (150.5, 25.5), 2 m deep: camera-space point
 // (2.02, 0.98, -2). Seen from a camera 1 m to the right it lands at pixel (125.5, 25.5), 25 pixels to the

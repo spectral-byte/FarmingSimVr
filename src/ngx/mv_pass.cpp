@@ -56,7 +56,9 @@ const char* MvPassShaderSource() {
     // "selfcheck" mirrors mv_reprojection.cpp (EvaluateSample): per sample on a sparse grid it unprojects
     // the pixel from reverse-Z depth through the current camera, projects it through the previous rendered
     // frame's camera and writes the error of the engine's vector (times the MV scale DLSS receives)
-    // against that prediction, under both sign conventions. It writes only to the results buffer.
+    // against that prediction, under both sign conventions, and also the scaled and raw engine vectors and the
+    // prediction themselves (summed on the CPU into mean magnitudes and least-squares ratios). It writes only
+    // to the results buffer.
     return R"hlsl(
 Texture2D<float>  gDepth   : register(t0);
 Texture2D<float2> gMv      : register(t1);
@@ -154,7 +156,11 @@ void selfcheck(uint3 id : SV_DispatchThreadID)
     uint px = min(gA.x - 1, (uint)(((float)id.x + 0.5) * w / (float)grid));
     uint py = min(gA.y - 1, (uint)(((float)id.y + 0.5) * h / (float)grid));
 
-    uint4 result = uint4(0, 0, 0, gA.w); // errToPrevious, errToCurrent, status, sequence
+    // Three uint4 per sample, mirroring mvreproj::SampleResult: errToPrevious, errToCurrent, status, sequence;
+    // engine vector (scaled), predicted displacement; raw engine vector, padding.
+    uint4 result = uint4(0, 0, 0, gA.w);
+    uint4 extra0 = uint4(0, 0, 0, 0);
+    uint4 extra1 = uint4(0, 0, 0, 0);
     float depth = gDepth.Load(int3(px, py, 0));
     if (!(depth > 0.0))
     {
@@ -183,13 +189,19 @@ void selfcheck(uint3 id : SV_DispatchThreadID)
         }
         else
         {
-            float2 mv = (gA.z != 0 ? gMvCorrected.Load(int3(px, py, 0)) : gMv.Load(int3(px, py, 0))) * gB.xy;
+            float2 raw = gA.z != 0 ? gMvCorrected.Load(int3(px, py, 0)) : gMv.Load(int3(px, py, 0));
+            float2 mv = raw * gB.xy;
             float2 d = float2(ppx - cx, ppy - cy);
             result.x = asuint(length(mv - d));
             result.y = asuint(length(mv + d));
+            extra0 = uint4(asuint(mv.x), asuint(mv.y), asuint(d.x), asuint(d.y));
+            extra1 = uint4(asuint(raw.x), asuint(raw.y), 0, 0);
         }
     }
-    gResults[id.y * grid + id.x] = result;
+    uint index = (id.y * grid + id.x) * 3;
+    gResults[index] = result;
+    gResults[index + 1] = extra0;
+    gResults[index + 2] = extra1;
 }
 )hlsl";
 }
@@ -347,7 +359,7 @@ public:
         D3D12_UNORDERED_ACCESS_VIEW_DESC resultsUav = {};
         resultsUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
         resultsUav.Format = DXGI_FORMAT_UNKNOWN;
-        resultsUav.Buffer.NumElements = kSelfCheckSamples;
+        resultsUav.Buffer.NumElements = kSelfCheckSamples * 3; // three uint4 per sample (sizeof(SampleResult))
         resultsUav.Buffer.StructureByteStride = 4 * sizeof(uint32_t);
         device->CreateUnorderedAccessView(m_results.Get(), nullptr, &resultsUav, cpu);
 
@@ -400,6 +412,7 @@ public:
                 report.eye = p.eye;
                 report.evalIndex = p.evalIndex;
                 report.stats = mvreproj::Summarize(samples, kSelfCheckSamples);
+                report.mvFormat = static_cast<uint32_t>(m_format);
                 reports.push_back(report);
                 p.active = false;
             } else if (m_calls > p.recordedAtCall + kReadbackGiveUpCalls) {
@@ -742,7 +755,19 @@ std::string FormatMvSelfCheckReport(const char* logPrefix, const char* unit, con
        << " median=" << s.medianToPrevious << " px"
        << " " << mvreproj::ConventionName(mvreproj::Convention::ToCurrent) << ": mean=" << s.meanToCurrent
        << " median=" << s.medianToCurrent << " px"
-       << " Best=" << mvreproj::ConventionName(mvreproj::BetterConvention(s));
+       << " Best=" << mvreproj::ConventionName(mvreproj::BetterConvention(s))
+       << " EngineMean=" << s.engineMean << " PredMean=" << s.predictedMean << " k=" << s.k
+       << " RawMean=" << s.rawMean << " kRaw=" << s.kRaw;
+    return ss.str();
+}
+
+std::string FormatMvRawRangeReport(const char* logPrefix, const char* unit, const MvSelfCheckReport& report) {
+    const mvreproj::SelfCheckStats& s = report.stats;
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(3)
+       << logPrefix << ": [Diag] MvCheck RawMv format=" << report.mvFormat << " Eye=" << report.eye << " " << unit
+       << " #" << report.evalIndex << " rawX=[" << s.rawMinX << ", " << s.rawMaxX << "] rawY=[" << s.rawMinY << ", "
+       << s.rawMaxY << "] (stored values before the scale, valid grid samples)";
     return ss.str();
 }
 

@@ -95,6 +95,12 @@ SampleResult EvaluateSample(uint32_t x, uint32_t y, float depth, float mvX, floa
     const float ey = mvY * scaleY;
     result.errToPrevious = std::sqrt((ex - dx) * (ex - dx) + (ey - dy) * (ey - dy));
     result.errToCurrent = std::sqrt((ex + dx) * (ex + dx) + (ey + dy) * (ey + dy));
+    result.engineX = ex;
+    result.engineY = ey;
+    result.predictedX = dx;
+    result.predictedY = dy;
+    result.rawX = mvX;
+    result.rawY = mvY;
     result.status = static_cast<uint32_t>(SampleStatus::Valid);
     return result;
 }
@@ -234,6 +240,40 @@ SelfCheckStats Summarize(const SampleResult* samples, size_t count) {
     stats.meanToCurrent = Mean(toCurrent);
     stats.medianToPrevious = Median(toPrevious);
     stats.medianToCurrent = Median(toCurrent);
+
+    double sumEngine = 0.0, sumPredicted = 0.0, sumRaw = 0.0, sumEP = 0.0, sumRP = 0.0, sumPP = 0.0;
+    bool first = true;
+    for (size_t i = 0; i < count; ++i) {
+        const SampleResult& s = samples[i];
+        if (s.status != static_cast<uint32_t>(SampleStatus::Valid)) continue;
+        const double ex = s.engineX, ey = s.engineY, px = s.predictedX, py = s.predictedY;
+        const double rx = s.rawX, ry = s.rawY;
+        sumEngine += std::sqrt(ex * ex + ey * ey);
+        sumPredicted += std::sqrt(px * px + py * py);
+        sumRaw += std::sqrt(rx * rx + ry * ry);
+        sumEP += ex * px + ey * py;
+        sumRP += rx * px + ry * py;
+        sumPP += px * px + py * py;
+        if (first) {
+            stats.rawMinX = stats.rawMaxX = rx;
+            stats.rawMinY = stats.rawMaxY = ry;
+            first = false;
+        } else {
+            stats.rawMinX = (std::min)(stats.rawMinX, rx);
+            stats.rawMaxX = (std::max)(stats.rawMaxX, rx);
+            stats.rawMinY = (std::min)(stats.rawMinY, ry);
+            stats.rawMaxY = (std::max)(stats.rawMaxY, ry);
+        }
+    }
+    if (stats.valid > 0) {
+        stats.engineMean = sumEngine / stats.valid;
+        stats.predictedMean = sumPredicted / stats.valid;
+        stats.rawMean = sumRaw / stats.valid;
+    }
+    if (sumPP > 0.0) {
+        stats.k = sumEP / sumPP;
+        stats.kRaw = sumRP / sumPP;
+    }
     return stats;
 }
 

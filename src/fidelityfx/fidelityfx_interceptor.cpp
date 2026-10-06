@@ -205,7 +205,12 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
     inputs.correction = correction;
     std::vector<MvSelfCheckReport> reports;
     ID3D12Resource* corrected = RecordMvPass(inputs, reports);
-    for (const MvSelfCheckReport& report : reports) LogInfo(FormatMvSelfCheckReport("FidelityFxInterceptor", "Dispatch", report));
+    for (const MvSelfCheckReport& report : reports) {
+        if (!m_diagRawRangeLogged.exchange(true)) {
+            LogInfo(FormatMvRawRangeReport("FidelityFxInterceptor", "Dispatch", report));
+        }
+        LogInfo(FormatMvSelfCheckReport("FidelityFxInterceptor", "Dispatch", report));
+    }
     if (!corrected) {
         state = "failed";
         return false;
@@ -387,6 +392,7 @@ void FidelityFxInterceptor::ArmDiagnostics(uint32_t dispatches) {
         m_diagContextRun = 0;
         m_diagLongestContextRun = 0;
     }
+    m_diagRawRangeLogged.store(false);
     m_diagRemaining.store(dispatches);
     LogInfo("FidelityFxInterceptor: [Diag] Armed for " + std::to_string(dispatches) + " dispatches.");
 }
