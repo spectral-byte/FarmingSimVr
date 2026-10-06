@@ -3877,6 +3877,120 @@ TEST_F(CompanionModTest, DualPassSwappedEyeOrderBindsRightCameraOnTheSimulatingS
     )luau", "=testSwappedEyeOrder"), 0);
 }
 
+namespace {
+// Engine camera queries for two eye camera nodes, 0.064 m apart along world X.
+constexpr const char* kCameraQueryMocks = R"luau(
+    _G.currentCamera = 0
+    function _G.setCamera(cam) _G.currentCamera = cam end
+    function _G.getCamera() return _G.currentCamera end
+    local worldPos = { [5001] = {4000000.5, 1.25, -2000000.75}, [5002] = {4000000.564, 1.25, -2000000.75} }
+    function _G.getWorldTranslation(node) local p = worldPos[node]; return p[1], p[2], p[3] end
+    function _G.getWorldQuaternion(node) return 0, 0.7071067811865476, 0, 0.7071067811865476 end
+    function _G.getFovY(node) return 1.25 end
+    function _G.getNearClip(node) return 0.15 end
+    function _G.getFarClip(node) return 2000 end
+    function _G.getProjectionOffset(node) return 0.01, -0.02 end
+    _G.FSBaseMission = { update = function(self, dt) end }
+
+    VRCompanion:loadMap("mapUS")
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+    VRCompanion:setRenderingMode("DualPass")
+    VRCompanion.is2DViewActive = false
+    VRCompanion.isMenuVisible = false
+    VRCompanion.cameraNodeLeft = 5001
+    VRCompanion.cameraNodeRight = 5002
+)luau";
+} // namespace
+
+TEST_F(CompanionModTest, DualPassSubPassesReportTheCameraOfTheEyeEachRendered) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, kCameraQueryMocks, "=cameraQueryMocks"), 0);
+
+    // Sub-pass 0 renders the left eye, sub-pass 1 the right eye; each reports once, stamped with
+    // the frame the Injector is rendering.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRBridge.setSubPassIndex(0)
+        _G.FSBaseMission:update(16.666)
+        VRBridge.setSubPassIndex(1)
+        _G.FSBaseMission:update(16.666)
+    )luau", "=reportBothSubPasses"), 0);
+
+    auto left = bridge.GetCameraRecords().Resolve(0);
+    auto right = bridge.GetCameraRecords().Resolve(1);
+    ASSERT_TRUE(left.current.has_value());
+    ASSERT_TRUE(right.current.has_value());
+    EXPECT_EQ(left.current->frame, bridge.GetCameraRecords().GetFrame());
+    EXPECT_DOUBLE_EQ(left.current->position[0], 4000000.5);
+    EXPECT_DOUBLE_EQ(left.current->position[2], -2000000.75);
+    EXPECT_DOUBLE_EQ(right.current->position[0], 4000000.564);
+    EXPECT_NEAR(left.current->orientation[1], 0.7071067811865476, 1e-12);
+    EXPECT_NEAR(left.current->orientation[3], 0.7071067811865476, 1e-12);
+    EXPECT_FLOAT_EQ(left.current->fovY, 1.25f);
+    EXPECT_FLOAT_EQ(left.current->nearClip, 0.15f);
+    EXPECT_FLOAT_EQ(left.current->farClip, 2000.0f);
+    EXPECT_FLOAT_EQ(left.current->projOffsetX, 0.01f);
+    EXPECT_FLOAT_EQ(left.current->projOffsetY, -0.02f);
+}
+
+TEST_F(CompanionModTest, DualPassCameraRecordsFollowTheEyeOrderSwapNotTheSubPassIndex) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, kCameraQueryMocks, "=cameraQueryMocks"), 0);
+
+    for (uint64_t i = 0; i < fs25vr::VRBridge::kEyeOrderSwapPairs; ++i) {
+        bridge.AdvanceFrame();
+    }
+    ASSERT_TRUE(bridge.IsEyeOrderSwapped());
+
+    // Swapped: sub-pass 0 renders the right eye, so only the right eye has a record afterwards.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRBridge.setSubPassIndex(0)
+        _G.FSBaseMission:update(16.666)
+    )luau", "=reportSwappedSubPass0"), 0);
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+    auto right = bridge.GetCameraRecords().Resolve(1);
+    ASSERT_TRUE(right.current.has_value());
+    EXPECT_DOUBLE_EQ(right.current->position[0], 4000000.564);
+}
+
+TEST_F(CompanionModTest, NoCameraRecordIsReportedOutsideStereoSubPasses) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, kCameraQueryMocks, "=cameraQueryMocks"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion.is2DViewActive = true
+        VRBridge.setSubPassIndex(0)
+        _G.FSBaseMission:update(16.666)
+        VRCompanion.is2DViewActive = false
+        VRCompanion.isMenuVisible = true
+        _G.FSBaseMission:update(16.666)
+    )luau", "=reportOutsideStereo"), 0);
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(1).current.has_value());
+}
+
+TEST_F(CompanionModTest, MissingEngineCameraQueriesNeverBreakTheSubPass) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, kCameraQueryMocks, "=cameraQueryMocks"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.getWorldQuaternion = nil
+        VRBridge.setSubPassIndex(0)
+        _G.FSBaseMission:update(16.666)
+        assert(_G.currentCamera == 5001, "the sub-pass must still bind its eye camera")
+    )luau", "=reportWithoutQuaternion"), 0);
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+}
+
 TEST_F(CompanionModTest, DualPassHudConvergenceLockedToSubPassEyeIndex) {
     auto oxr = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::NativeOpenXrDispatch>());
     fs25vr::VRBridge bridge(oxr, nullptr);

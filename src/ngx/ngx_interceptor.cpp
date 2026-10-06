@@ -549,6 +549,10 @@ void NgxInterceptor::RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex
        << " Reset=" << (reset ? 1 : 0)
        << " Render=" << renderW << "x" << renderH
        << " Thread=" << GetCurrentThreadId();
+    if (bridge) {
+        // The cameras the engine rendered this frame, the previous frame and this eye's last frame with.
+        ss << " " << DescribeResolvedCameras(bridge->GetCameraRecords().Resolve(bridge->GetActiveEye()));
+    }
     LogInfo(ss.str());
 
     if (remaining == 1) {

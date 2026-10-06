@@ -613,7 +613,45 @@ function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam)
     self:runSubPassStep(subPass, self.syncActiveEyeCamera, eyeIndex)
     self.deferRenderingCameraBind = false
     self:bindRenderingCamera(targetCam)
+    self:runSubPassStep(subPass, self.reportEyeCamera, eyeIndex, targetCam)
     self:endEyeProjectionScope()
+end
+
+-- Tells the Injector which camera this sub-pass rendered with: the bound eye camera's world
+-- transform and projection, keyed by the eye (the sub-pass index alone does not name it under Eye
+-- Order Alternation). The Injector stamps it with its rendered-frame counter. Any missing engine
+-- query skips the report, which the Injector then treats as a frame without a camera record.
+function VRCompanion:reportEyeCamera(eyeIndex, camNode)
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge == nil or type(bridge.reportCameraRecord) ~= "function" then return false end
+    if camNode == nil or camNode == 0 then return false end
+
+    local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
+    local getWorldQuaternionFn = getWorldQuaternion or (_G and _G.getWorldQuaternion)
+    local getFovYFn = getFovY or (_G and _G.getFovY)
+    local getNearClipFn = getNearClip or (_G and _G.getNearClip)
+    local getFarClipFn = getFarClip or (_G and _G.getFarClip)
+    local getProjectionOffsetFn = getProjectionOffset or (_G and _G.getProjectionOffset)
+    if type(getWorldTranslationFn) ~= "function" or type(getWorldQuaternionFn) ~= "function"
+        or type(getFovYFn) ~= "function" or type(getNearClipFn) ~= "function"
+        or type(getFarClipFn) ~= "function" then
+        return false
+    end
+
+    local x, y, z = getWorldTranslationFn(camNode)
+    local qx, qy, qz, qw = getWorldQuaternionFn(camNode)
+    local fovY = getFovYFn(camNode)
+    local nearClip = getNearClipFn(camNode)
+    local farClip = getFarClipFn(camNode)
+    if x == nil or qw == nil or fovY == nil or nearClip == nil or farClip == nil then return false end
+
+    local offsetX, offsetY = 0, 0
+    if type(getProjectionOffsetFn) == "function" then
+        offsetX, offsetY = getProjectionOffsetFn(camNode)
+    end
+
+    return bridge.reportCameraRecord(eyeIndex % 2, x, y, z, qx, qy, qz, qw, fovY, nearClip, farClip,
+        offsetX or 0, offsetY or 0)
 end
 function VRCompanion:hookMissionUpdate()
     if self.missionUpdateHooked then
