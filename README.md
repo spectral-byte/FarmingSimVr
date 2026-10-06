@@ -71,7 +71,7 @@ FS25 VR is built as a hybrid two-tier architecture:
 
     | Upscaler | Sequential Dual-Pass | Alternate Frame Rendering |
     |---|---|---|
-    | DLSS / DLAA | Supported. Per-eye history with per-eye motion vector correction (`vrDlssMvFix`, ADR-0020): sharp, no ghosting. The eye rendered in the second sub-pass may smear slightly on moving objects. | Supported. Per-eye history; `vrDlssMvScale` (2.0x default) compensates the two-frame stride. |
+    | DLSS / DLAA | Supported. Per-eye history with per-eye motion vector correction (`vrDlssMvFix`, ADR-0020): sharp, no ghosting. The eye rendered in the second sub-pass may smear slightly on moving objects. | Supported. Per-eye history with the same motion vector correction (`vrDlssMvFix`); object motion is scaled by the two-frame stride. `vrDlssMvScale` (2.0x default) applies only while the correction is off. |
     | FSR3 | Per-eye history (no cross-eye ghosting). Motion vector correction is not applied yet, so fine texture may look soft. | Per-eye history, uncorrected. |
     | In-engine TAA | Not supported in VR: one history is shared across eyes and ghosts. Use DLSS/DLAA. | Not supported in VR (ghosts). |
 
@@ -80,7 +80,7 @@ FS25 VR is built as a hybrid two-tier architecture:
 - **Symmetric Projection (default) with opt-in Oblique Frustum**: The Injector submits an aspect-matched symmetric FOV and the Companion Mod applies no projection offset by default. Per-eye asymmetric offsets computed from headset optics are available via `vrObliqueProjection true` or `<allowObliqueProjection>true</allowObliqueProjection>` in `settings.xml` (see ADR-0005).
 - **Temporal Upscaler Virtualization**:
   - Isolated left and right `NVSDK_NGX_Handle` instances.
-  - Context-aware motion vector scaling ($1.0\times$ in Dual-Pass, $2.0\times$ in AFR).
+  - Context-aware motion vector handling ($1.0\times$ in Dual-Pass; in AFR, the per-eye correction, or $2.0\times$ scaling while it is off).
   - Synchronous discontinuity reset on teleports, snap turns, and view transitions.
 - **Dynamic In-Engine VR HUD**:
   - Normalized viewport insets contract interface elements into the headset's optical sweet spot.

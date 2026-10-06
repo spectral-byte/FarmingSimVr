@@ -1027,6 +1027,109 @@ test("PlayerCameraUpdateFetchesEyeProjectionOnceAndBindsOnce", function()
     end
 end)
 
+-- Under AFR each frame renders one eye's camera; the Companion Mod reports it to the Injector like a
+-- Sequential Dual-Pass sub-pass does, so the motion vector correction has the cameras it needs.
+local function installCameraReportMocks(state)
+    state.reports = {}
+    _G.VRBridge.reportCameraRecord = function(eye, x, y, z, qx, qy, qz, qw, fovY, nearClip, farClip, offX, offY)
+        table.insert(state.reports, { eye = eye, x = x, qw = qw, fovY = fovY, nearClip = nearClip, farClip = farClip })
+        return true
+    end
+    _G.getWorldTranslation = function(node) return node, 1.5, -2.5 end
+    _G.getWorldQuaternion = function(node) return 0, 0, 0, 1 end
+    _G.getFovY = function(node) return 1.1 end
+    _G.getNearClip = function(node) return 0.15 end
+    _G.getFarClip = function(node) return 2000 end
+    _G.getProjectionOffset = function(node) return 0, 0 end
+end
+
+local function removeCameraReportMocks()
+    _G.getWorldTranslation = nil
+    _G.getWorldQuaternion = nil
+    _G.getFovY = nil
+    _G.getNearClip = nil
+    _G.getFarClip = nil
+    _G.getProjectionOffset = nil
+end
+
+test("AfrPlayerCameraUpdateReportsTheBoundEyeCameraKeyedByTheFrameParity", function()
+    local playerCam = { firstPersonCamera = 9601 }
+    for eye = 0, 1 do
+        local state = { mode = "AFR", parity = eye }
+        installProjectionCountingBridge(state)
+        installCameraReportMocks(state)
+        VRCompanion.cameraNodeLeft = 9602
+        VRCompanion.cameraNodeRight = 9603
+        VRCompanion:setRenderingMode("AFR")
+
+        VRCompanion:onPlayerCameraUpdate(playerCam, 0.016)
+
+        local expectedNode = (eye == 1) and 9603 or 9602
+        assert(#state.reports == 1, string.format("eye %d: expected 1 camera report, got %d", eye, #state.reports))
+        assert(state.reports[1].eye == eye, "the record must be keyed by the eye the frame rendered")
+        assert(state.reports[1].x == expectedNode, "the record must come from the bound eye camera node")
+        assert(math.abs(state.reports[1].fovY - 1.1) < 1e-9 and state.reports[1].farClip == 2000, "projection must be reported")
+        removeCameraReportMocks()
+        cleanupProjectionCountingBridge()
+    end
+end)
+
+test("AfrVehicleCameraUpdateReportsTheBoundEyeCameraKeyedByTheFrameParity", function()
+    local vehCam = { isInside = true, cameraNode = 9701, origRotY = 0, origRotX = 0, origRotZ = 0 }
+    for eye = 0, 1 do
+        local state = { mode = "AFR", parity = eye }
+        installProjectionCountingBridge(state)
+        installCameraReportMocks(state)
+        VRCompanion.cameraNodeLeft = 9702
+        VRCompanion.cameraNodeRight = 9703
+        VRCompanion:setRenderingMode("AFR")
+
+        VRCompanion:onVehicleCameraUpdate(vehCam, 0.016)
+
+        assert(#state.reports == 1, string.format("eye %d: expected 1 camera report, got %d", eye, #state.reports))
+        assert(state.reports[1].eye == eye, "the record must be keyed by the eye the frame rendered")
+        assert(state.reports[1].x == ((eye == 1) and 9703 or 9702), "the record must come from the bound eye camera node")
+        removeCameraReportMocks()
+        cleanupProjectionCountingBridge()
+    end
+end)
+
+test("AfrCameraReportNeverBreaksTheCameraUpdateWhenEngineQueriesFail", function()
+    local playerCam = { firstPersonCamera = 9801 }
+    local state = { mode = "AFR", parity = 0 }
+    installProjectionCountingBridge(state)
+    installCameraReportMocks(state)
+    _G.getWorldQuaternion = function() error("engine query failed") end
+    VRCompanion.cameraNodeLeft = 9802
+    VRCompanion.cameraNodeRight = 9803
+    VRCompanion:setRenderingMode("AFR")
+
+    local ok, err = pcall(function() VRCompanion:onPlayerCameraUpdate(playerCam, 0.016) end)
+    local binds = #state.binds
+    removeCameraReportMocks()
+    cleanupProjectionCountingBridge()
+    assert(ok, tostring(err))
+    assert(binds == 1, "the camera must still be bound")
+end)
+
+test("SequentialDualPassCameraUpdatesDoNotReportThroughTheAfrPath", function()
+    -- Sub-passes report once, from the mission update; the camera updates inside them must not add a second record.
+    local vehCam = { isInside = true, cameraNode = 9901, origRotY = 0, origRotX = 0, origRotZ = 0 }
+    local state = { mode = "SequentialDualPass", subPass = 0 }
+    installProjectionCountingBridge(state)
+    installCameraReportMocks(state)
+    VRCompanion.cameraNodeLeft = 9902
+    VRCompanion.cameraNodeRight = 9903
+    VRCompanion:setRenderingMode("DualPass")
+
+    VRCompanion:onVehicleCameraUpdate(vehCam, 0.016)
+
+    local reports = #state.reports
+    removeCameraReportMocks()
+    cleanupProjectionCountingBridge()
+    assert(reports == 0, "expected no AFR-path report under Sequential Dual-Pass, got " .. reports)
+end)
+
 test("SequentialDualPassSubPassFetchesEyeProjectionOnceAndBindsOnce", function()
     local vehCam = { isInside = true, cameraNode = 9301, origRotY = 0, origRotX = 0, origRotZ = 0 }
     local state = { mode = "SequentialDualPass", subPass = 0 }

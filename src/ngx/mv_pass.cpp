@@ -73,7 +73,7 @@ cbuffer Constants : register(b0)
     float4 gS0; // rows of p_same = S * p + c: the same eye's previous camera
     float4 gS1;
     float4 gS2;
-    float4 gD;  // tanHalfFovY (same eye's previous camera)
+    float4 gD;  // tanHalfFovY (same eye's previous camera), object motion factor
 };
 
 float3 Transform(float4 r0, float4 r1, float4 r2, float3 p)
@@ -123,7 +123,12 @@ void correct(uint3 id : SV_DispatchThreadID)
     ok = ok && ProjectPixel(Transform(gR0, gR1, gR2, p), gC.w, prevPixel);
     ok = ok && ProjectPixel(Transform(gS0, gS1, gS2, p), gD.x, samePixel);
     if (ok)
-        mv += (samePixel - prevPixel) / gB.xy;
+    {
+        // Camera part: re-aim from the previous frame's camera at the same eye's. Object part (the engine's
+        // vector less the static prediction toward the previous frame's camera) is scaled by gD.y.
+        float2 object = mv - (prevPixel - float2(cx, cy)) / gB.xy;
+        mv += (samePixel - prevPixel) / gB.xy + (gD.y - 1.0) * object;
+    }
     gOut[id.xy] = mv;
 }
 
@@ -230,7 +235,7 @@ struct PassConstants {
     float c[4];       // near, far, grid, tanHalfFovY (previous)
     float r[3][4];    // p_prev = R * p + c per row
     float s[3][4];    // p_same = S * p + c per row
-    float d[4];       // tanHalfFovY (same eye's previous camera)
+    float d[4];       // tanHalfFovY (same eye's previous camera), object motion factor
 };
 static_assert(sizeof(PassConstants) == 40 * sizeof(uint32_t), "root constants are 40 dwords");
 
@@ -446,6 +451,7 @@ private:
         FillTransform(c.r, req.toPreviousFrame);
         FillTransform(c.s, req.toSameEye);
         c.d[0] = req.sameEye.tanHalfFovY;
+        c.d[1] = req.objectMotionFactor;
     }
 
     void RecordSelfCheck(ID3D12GraphicsCommandList* cl, const MvSelfCheckRequest& req, UINT width, UINT height,

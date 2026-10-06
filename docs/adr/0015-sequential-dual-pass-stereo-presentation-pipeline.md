@@ -18,7 +18,7 @@ To eliminate ghosting and deliver pristine temporal reconstruction while preserv
    - On transition, `VRBridge` resets sub-pass and parity counters to 0, and `NgxInterceptor` asserts `NVSDK_NGX_Parameter_Reset = 1` for one frame across both DLSS contexts to discard stale history cleanly without texture smearing or black frames.
 
 3. **Context-Aware Motion Vector Scaling**:
-   - Under AFR, `NgxInterceptor` maintains $2.0\times$ motion vector scaling (or user-tuned `vrDlssMvScale`) to match the $2\Delta t$ alternating stride.
+   - Under AFR, `NgxInterceptor` maintains $2.0\times$ motion vector scaling (or user-tuned `vrDlssMvScale`) to match the $2\Delta t$ alternating stride. *Amended: this is now only the fallback while the motion vector correction is off or has disabled itself; see the amendment below.*
    - Under Sequential Dual-Pass, motion vector scaling is automatically locked to $1.0\times$, matching the engine's true $1\Delta t$ per-eye frame cadence.
 
 4. **Settings Persistence & In-Game Controls**:
@@ -52,3 +52,5 @@ This amendment also corrects item 1 of the Context. The double-pumped engine sti
 
 ## Amendment: Per-Eye Motion Vector Correction
 The Dual Feature Context alone left DLAA/DLSS blurry under Sequential Dual-Pass, because the engine's motion vectors point at the other eye's frame, not the same eye's previous frame. The Injector now re-aims them before each per-eye evaluation, and item 3 above (motion vector scaling locked to $1.0\times$) no longer suffices on its own. The correction, the self-check and the known object-motion gap in the second sub-pass are recorded in [ADR-0020](0020-per-eye-motion-vector-correction-for-temporal-upscalers.md).
+
+The same applies to the $2.0\times$ AFR scaling in item 3, which is superseded in the same way. The engine's motion vectors target the previous *rendered* frame, which under AFR is the other eye, so scaling them can never aim at the same eye's frame two frames back; it only lengthens a vector that points at the wrong place, which is the rotational overshoot and halos described in item 2. Under AFR the correction re-aims the camera component from the other eye's camera at the same eye's camera two frames back, and applies the eye-stride factor ($2.0$) to the engine's object-motion component only, because the simulation advances every AFR frame and the engine's object motion covers just one of the two frames. `vrDlssMvScale` now applies only while the correction is off (`vrDlssMvFix off`) or has disabled itself for the session; with the correction on it is ignored. With the correction off, AFR behaves exactly as before.

@@ -2030,6 +2030,134 @@ TEST_F(MvCorrectionEvaluationTest, SequentialDualPassScaleMultiplierIsPartOfTheS
     EXPECT_FLOAT_EQ(m_pass->corrections[0].mvScaleX, 0.5f);
 }
 
+// ---- AFR uses the correction instead of eye-stride scaling (#36) ----
+
+class MvCorrectionAfrEvaluationTest : public MvCorrectionEvaluationTest {
+protected:
+    // Alternate Frame Rendering, the left eye rendering the current frame after the right eye's.
+    void SetUpAfr() {
+        SetUpPass();
+        m_bridge.SetRenderingMode(VRRenderingMode::AFR);
+        m_bridge.SetFrameParity(0);
+    }
+};
+
+TEST_F(MvCorrectionAfrEvaluationTest, TheCorrectionResolvesTheOtherEyeAsPreviousFrameAndTheSameEyeTwoFramesBack) {
+    SetUpAfr();
+    m_ngx.SetMvFixEnabled(true);
+    ReportLeftRightLeft();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    const MvCorrectionRequest& c = m_pass->corrections[0];
+    EXPECT_NEAR(c.toPreviousFrame.c[0], -0.064f, 1e-5f); // the right eye, the frame before
+    EXPECT_NEAR(c.toSameEye.c[0], 0.1f, 1e-5f);          // the left eye two frames back
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_pass->output);
+    EXPECT_EQ(ParamMv(), m_engineMv);
+}
+
+TEST_F(MvCorrectionAfrEvaluationTest, OnlyTheObjectMotionComponentCarriesTheEyeStrideFactor) {
+    SetUpAfr();
+    m_ngx.SetMvFixEnabled(true);
+    ReportLeftRightLeft();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_FLOAT_EQ(m_pass->corrections[0].objectMotionFactor, 2.0f);
+    // DLSS is not handed the 2.0x scale: the correction replaces it.
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], 1.0f);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[0], 1.0f);
+    EXPECT_FLOAT_EQ(m_pass->corrections[0].mvScaleX, 1.0f);
+}
+
+TEST_F(MvCorrectionAfrEvaluationTest, TheStrideFactorIsAfrOnlySequentialDualPassKeepsObjectMotionAsIs) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_FLOAT_EQ(m_pass->corrections[0].objectMotionFactor, 1.0f);
+}
+
+TEST_F(MvCorrectionAfrEvaluationTest, VrDlssMvScaleIsIgnoredWhileTheCorrectionIsOn) {
+    SetUpAfr();
+    m_ngx.SetMvFixEnabled(true);
+    m_ngx.SetMvScaleMultiplier(3.0f, 3.0f);
+    ReportLeftRightLeft();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], 1.0f);
+    EXPECT_FLOAT_EQ(m_pass->corrections[0].objectMotionFactor, 2.0f); // the stride is not user-tunable
+}
+
+TEST_F(MvCorrectionAfrEvaluationTest, WithTheCorrectionOffAfrKeepsEyeStrideScalingExactlyAsBefore) {
+    SetUpAfr();
+    ReportLeftRightLeft(); // records or not, the pass is off
+    m_ngx.SetMvScaleMultiplier(2.5f, 2.5f);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], 2.5f);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[0], 2.5f);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(m_factoryCalls, 0);
+    float restored = 0.0f;
+    EXPECT_EQ(m_params.Get(NVSDK_NGX_Parameter_MV_Scale_X, &restored), NVSDK_NGX_Result_Success);
+    EXPECT_FLOAT_EQ(restored, 1.0f); // the multiplier is not left behind in the reused block
+}
+
+TEST_F(MvCorrectionAfrEvaluationTest, WhenThePassDisablesItselfAfrFallsBackToEyeStrideScaling) {
+    SetUpAfr();
+    m_ngx.SetMvFixEnabled(true);
+    ReportLeftRightLeft();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr); // the pass is created and works
+    ASSERT_NE(m_pass, nullptr);
+    m_pass->fail = true;
+
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr); // it fails on this evaluation
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 2u);
+    EXPECT_TRUE(m_ngx.IsMvFixDisabledForSession());
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[1], NgxInterceptor::kDefaultAfrMvScale);
+
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr); // and from then on
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 3u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[2], NgxInterceptor::kDefaultAfrMvScale);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleY[2], NgxInterceptor::kDefaultAfrMvScale);
+}
+
+TEST_F(MvCorrectionAfrEvaluationTest, FallbackScalingAlsoCoversEvaluationsWithoutDepthOrMotionVectors) {
+    SetUpAfr();
+    m_ngx.SetMvFixEnabled(true);
+    NgxParameterImpl noDepth;
+    noDepth.Set(NVSDK_NGX_Parameter_MotionVectors, m_engineMv);
+    MockEvaluateFeature(m_cmdList, m_handle, &noDepth, nullptr);
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], NgxInterceptor::kDefaultAfrMvScale);
+    EXPECT_FALSE(m_ngx.IsMvFixDisabledForSession());
+}
+
+TEST_F(MvCorrectionAfrEvaluationTest, FramesWithoutCameraRecordsPassTheEnginesVectorsThroughAtOneTimes) {
+    SetUpAfr();
+    m_ngx.SetMvFixEnabled(true);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr); // nothing reported
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_TRUE(m_pass->corrections.empty());
+    EXPECT_EQ(m_pass->recordCount, 1);
+    ASSERT_EQ(s_evaluatedMvScaleX.size(), 1u);
+    EXPECT_FLOAT_EQ(s_evaluatedMvScaleX[0], 1.0f);
+}
+
+TEST_F(MvCorrectionAfrEvaluationTest, ASelfCheckUnderAfrTargetsTheSameEyesCameraTwoFramesBack) {
+    SetUpAfr();
+    m_ngx.SetMvFixEnabled(true);
+    ReportLeftRightLeft();
+    m_ngx.ArmDiagnostics(4);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
+    EXPECT_NEAR(m_pass->selfChecks[0].toPrevious.c[0], 0.1f, 1e-5f);
+    EXPECT_FLOAT_EQ(m_pass->selfChecks[0].mvScaleX, 1.0f);
+}
+
 TEST_F(MvCorrectionEvaluationTest, MvFixOffRestoresTheUncorrectedBehaviour) {
     SetUpCorrection();
     ReportLeftRightLeft();

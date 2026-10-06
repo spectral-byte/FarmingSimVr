@@ -400,6 +400,97 @@ TEST(MvCorrectionTest, CorrectedVectorsPassTheSelfCheckWithSubPixelErrorAgainstT
     EXPECT_LT(corrected.errToPrevious, 0.5f);
 }
 
+// ---- AFR (#36) ----
+// Under AFR the previous frame is the other eye and the same eye's previous frame is two frames back. The
+// simulation advances every frame, so the engine's object motion covers one frame where the same-eye
+// history is two frames back: object motion takes the eye-stride factor, camera motion does not.
+
+namespace {
+
+Corrected CorrectAfr(float mvX, float mvY, float scale, const RelativeTransform& toPrev, const RelativeTransform& toSame,
+                     float objectFactor) {
+    Corrected c = {};
+    c.applied = CorrectMotionVector(150, 25, 0.45f, mvX, mvY, scale, scale, 200, 100, TestProjection(),
+                                    TestProjection(), TestProjection(), toPrev, toSame, c.x, c.y, objectFactor);
+    return c;
+}
+
+} // namespace
+
+TEST(MvCorrectionAfrTest, TheEyeStrideFactorIsTwoBecauseTheSameEyesHistoryIsTwoFramesBack) {
+    EXPECT_FLOAT_EQ(kAfrEyeStride, 2.0f);
+}
+
+TEST(MvCorrectionAfrTest, CameraMotionIsNotScaledByTheEyeStride) {
+    // A static point seen from a head that moved: the same eye's previous camera was 0.5 m to the left.
+    // The camera displacement already spans the right gap, so a factor of 2 changes nothing.
+    Corrected plain = CorrectAfr(-25.0f, 0.0f, 1.0f, Aside(1.0), Aside(-0.5), 1.0f);
+    Corrected afr = CorrectAfr(-25.0f, 0.0f, 1.0f, Aside(1.0), Aside(-0.5), kAfrEyeStride);
+    ASSERT_TRUE(afr.applied);
+    EXPECT_NEAR(afr.x, 12.5f, 1e-2f);
+    EXPECT_NEAR(afr.x, plain.x, 1e-3f);
+    EXPECT_NEAR(afr.y, plain.y, 1e-3f);
+}
+
+TEST(MvCorrectionAfrTest, ObjectMotionIsScaledByTheEyeStride) {
+    // Head still; the engine saw the point move by (3, -2) pixels over the one frame it covers. The same
+    // eye's previous frame is two frames back, so the motion to it is twice that.
+    Corrected c = CorrectAfr(-25.0f + 3.0f, -2.0f, 1.0f, Aside(1.0), Aside(0.0), kAfrEyeStride);
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 6.0f, 1e-2f);
+    EXPECT_NEAR(c.y, -4.0f, 1e-2f);
+}
+
+TEST(MvCorrectionAfrTest, CameraAndObjectMotionCombineEachWithItsOwnFactor) {
+    Corrected c = CorrectAfr(-25.0f + 3.0f, -2.0f, 1.0f, Aside(1.0), Aside(-0.5), kAfrEyeStride);
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 12.5f + 6.0f, 1e-2f);
+    EXPECT_NEAR(c.y, -4.0f, 1e-2f);
+}
+
+TEST(MvCorrectionAfrTest, TheObjectMotionFactorWorksInTheUnitsOfTheScaleDlssWillApply) {
+    // Scale 2: stored vector -12.5 + 1.5 (3 px of object motion). Stored result: 6.25 camera + 3 object.
+    Corrected c = CorrectAfr(-12.5f + 1.5f, 0.0f, 2.0f, Aside(1.0), Aside(-0.5), kAfrEyeStride);
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 6.25f + 3.0f, 1e-2f);
+}
+
+TEST(MvCorrectionAfrTest, AStaticPointStillScoresSubPixelAgainstTheSameEyesCameraWithTheFactorApplied) {
+    RelativeTransform toSame = Aside(-0.5);
+    Corrected c = CorrectAfr(-25.0f, 0.0f, 1.0f, Aside(1.0), toSame, kAfrEyeStride);
+    SampleResult scored = EvaluateSample(150, 25, 0.45f, c.x, c.y, 1.0f, 1.0f, 200, 100, TestProjection(),
+                                         TestProjection(), toSame);
+    EXPECT_LT(scored.errToPrevious, 0.5f);
+}
+
+TEST(MvCorrectionAfrTest, AfrFramesResolveTheOtherEyeAsPreviousFrameAndTheSameEyeTwoFramesBack) {
+    CameraRecordStore store;
+    ASSERT_TRUE(store.Report(Cam(0, 9.9)));    // frame 0: left
+    store.AdvanceFrame();
+    ASSERT_TRUE(store.Report(Cam(1, 10.064))); // frame 1: right
+    store.AdvanceFrame();
+    ASSERT_TRUE(store.Report(Cam(0, 10.0)));   // frame 2: left, the current frame
+    ResolvedCameras left = store.Resolve(0);
+    ASSERT_TRUE(left.previousFrame.has_value());
+    ASSERT_TRUE(left.sameEyePrevious.has_value());
+    EXPECT_EQ(left.previousFrame->eye, 1u);
+    EXPECT_EQ(left.previousFrame->frame, 1u);
+    EXPECT_EQ(left.sameEyePrevious->eye, 0u);
+    EXPECT_EQ(left.sameEyePrevious->frame, 0u);
+    EXPECT_FALSE(left.PreviousFrameIsSameEye());
+    EXPECT_EQ(PlanCorrection(left).decision, CorrectionDecision::Correct);
+
+    store.AdvanceFrame();
+    ASSERT_TRUE(store.Report(Cam(1, 10.07))); // frame 3: right
+    ResolvedCameras right = store.Resolve(1);
+    ASSERT_TRUE(right.previousFrame.has_value());
+    ASSERT_TRUE(right.sameEyePrevious.has_value());
+    EXPECT_EQ(right.previousFrame->eye, 0u);
+    EXPECT_EQ(right.previousFrame->frame, 2u);
+    EXPECT_EQ(right.sameEyePrevious->frame, 1u);
+    EXPECT_EQ(PlanCorrection(right).decision, CorrectionDecision::Correct);
+}
+
 TEST(MvCorrectionPlanTest, ACameraTripleCorrectsAgainstBothPreviousCameras) {
     CameraRecordStore store;
     ASSERT_TRUE(store.Report(Cam(0, 9.9)));   // frame 0, left

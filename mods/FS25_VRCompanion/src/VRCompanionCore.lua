@@ -654,6 +654,17 @@ function VRCompanion:reportEyeCamera(eyeIndex, camNode)
     return bridge.reportCameraRecord(eyeIndex % 2, x, y, z, qx, qy, qz, qw, fovY, nearClip, farClip,
         offsetX or 0, offsetY or 0)
 end
+
+-- Alternate Frame Rendering renders one eye per frame, bound by the camera updates rather than a
+-- sub-pass. Reports that eye's camera like a sub-pass does, so the Injector's motion vector correction
+-- can re-aim the engine's vectors at the same eye's camera two frames back. Sequential Dual-Pass
+-- reports from its mission update instead, so this stays silent there. An engine query failure costs a
+-- missing record, never the camera update.
+function VRCompanion:reportAfrEyeCamera(eyeIndex, camNode)
+    if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then return false end
+    local ok, reported = pcall(self.reportEyeCamera, self, eyeIndex, camNode)
+    return ok and reported == true
+end
 function VRCompanion:hookMissionUpdate()
     if self.missionUpdateHooked then
         return

@@ -1188,9 +1188,14 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     bool dualPassEyeContexts = isDualPass && alternatesEyeContexts && bridge && bridge->IsCompanionActive();
     float prevScaleX = 1.0f, prevScaleY = 1.0f;
     float scaleMulX = 1.0f, scaleMulY = 1.0f;
+    // Under AFR the eye-stride multiplier (vrDlssMvScale) is only the fallback for when the motion vector
+    // pass is off or has disabled itself. While the pass is available, the correction handles the stride
+    // itself (it scales the object-motion component only), so the multiplier is held back here and applied
+    // below only if the pass did not take over this evaluation.
+    float afrFallbackMulX = 1.0f, afrFallbackMulY = 1.0f;
     if (eyeStride) {
-        scaleMulX = interceptor.GetMvScaleMultiplierX();
-        scaleMulY = interceptor.GetMvScaleMultiplierY();
+        afrFallbackMulX = interceptor.GetMvScaleMultiplierX();
+        afrFallbackMulY = interceptor.GetMvScaleMultiplierY();
     } else if (dualPassEyeContexts) {
         scaleMulX = interceptor.GetSdpMvScaleMultiplierX();
         scaleMulY = interceptor.GetSdpMvScaleMultiplierY();
@@ -1202,11 +1207,16 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_MV_Scale_X, &scale))) prevScaleX = scale;
         scale = 1.0f;
         if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &scale))) prevScaleY = scale;
-        if (scaleMulX != 1.0f || scaleMulY != 1.0f) {
-            mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX * scaleMulX);
-            mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY * scaleMulY);
-            wroteScale = true;
-        }
+    }
+    const bool mvFixWillRun = interceptor.m_mvFixEnabled.load() && !interceptor.m_mvFixDisabled.load();
+    if (eyeStride && !mvFixWillRun) {
+        scaleMulX = afrFallbackMulX;
+        scaleMulY = afrFallbackMulY;
+    }
+    if (mutableParams && (scaleMulX != 1.0f || scaleMulY != 1.0f)) {
+        mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX * scaleMulX);
+        mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY * scaleMulY);
+        wroteScale = true;
     }
 
     // The motion vector pass: DLSS reads the Injector's texture for this one evaluation, then the game's
@@ -1241,6 +1251,9 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                     correctionRequest.sameEye = plan.sameEye;
                     correctionRequest.toPreviousFrame = plan.toPreviousFrame;
                     correctionRequest.toSameEye = plan.toSameEye;
+                    // AFR: the simulation advances every frame, so only the engine's object motion needs the
+                    // eye stride (the same eye's history is two frames back).
+                    correctionRequest.objectMotionFactor = eyeStride ? mvreproj::kAfrEyeStride : 1.0f;
                     correction = &correctionRequest;
                 } else {
                     correctionState = "zero-mv-scale";
@@ -1276,6 +1289,14 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                 swappedMv = true;
             }
         }
+    }
+
+    // AFR with the pass expected to run but not taking over (it failed on this evaluation, or the engine's
+    // depth or vectors were unavailable): fall back to eye-stride scaling.
+    if (eyeStride && mvFixWillRun && !swappedMv && mutableParams) {
+        mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX * afrFallbackMulX);
+        mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY * afrFallbackMulY);
+        wroteScale = true;
     }
 
     uint64_t currentEval = interceptor.m_evalCount.fetch_add(1);

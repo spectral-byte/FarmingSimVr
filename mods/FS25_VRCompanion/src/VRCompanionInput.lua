@@ -391,7 +391,7 @@ end
 function VRCompanion:consoleCommandSetDlssMvScale(scaleXStr, scaleYStr)
     local sx = tonumber(scaleXStr)
     if sx == nil then
-        return "Usage: vrDlssMvScale <scaleX> [scaleY] (default 2.0 under AFR; 1.0 disables eye-stride compensation)"
+        return "Usage: vrDlssMvScale <scaleX> [scaleY] (AFR fallback only, used while vrDlssMvFix is off or disabled; default 2.0; 1.0 disables eye-stride compensation)"
     end
     local sy = tonumber(scaleYStr) or sx
     local bridge = VRBridge or (_G and _G.VRBridge)

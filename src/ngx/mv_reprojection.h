@@ -103,10 +103,20 @@ void UnprojectAtViewDepth(float px, float py, float viewDepth, float width, floa
 // outX/outY receive the corrected stored vector. Returns false and leaves the engine's vector untouched
 // when no correction is possible (a scale of zero, or the point behind either camera). The sky corrects
 // like a point on the far plane, which carries the camera rotation.
+//
+// objectMotionFactor multiplies the engine's object-motion component (its vector minus the static-scene
+// prediction toward the previous rendered frame) and nothing else. Sequential Dual-Pass leaves it at 1:
+// the second sub-pass replays the same simulation time. Alternate Frame Rendering advances the simulation
+// every frame, so the engine's object motion spans one frame while the same eye's history is two frames
+// back: it passes kAfrEyeStride. The camera component spans the right gap by construction.
 bool CorrectMotionVector(uint32_t x, uint32_t y, float depth, float mvX, float mvY, float scaleX, float scaleY,
                          uint32_t width, uint32_t height, const Projection& current, const Projection& previousFrame,
                          const Projection& sameEye, const RelativeTransform& toPreviousFrame,
-                         const RelativeTransform& toSameEye, float& outX, float& outY);
+                         const RelativeTransform& toSameEye, float& outX, float& outY,
+                         float objectMotionFactor = 1.0f);
+
+// Frames between two evaluations of one eye's upscaler context under Alternate Frame Rendering.
+constexpr float kAfrEyeStride = 2.0f;
 
 enum class CorrectionDecision {
     Correct,                 // all three cameras known: re-aim the vector
