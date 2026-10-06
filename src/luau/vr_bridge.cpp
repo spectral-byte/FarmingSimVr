@@ -2,6 +2,7 @@
 #include "core/logger.h"
 #include "core/thread_trace.h"
 #include "ngx/ngx_interceptor.h"
+#include "fidelityfx/fidelityfx_interceptor.h"
 
 namespace fs25vr {
 
@@ -862,6 +863,10 @@ int VRBridge::Lua_DlssDiag(lua_State* L) {
         return 1;
     }
     self->m_ngxInterceptor->ArmDiagnostics(static_cast<uint32_t>(evaluations));
+    // FSR3 dispatches are traced through the same command.
+    if (FidelityFxInterceptor* ffx = self->m_ngxInterceptor->GetFidelityFxInterceptor()) {
+        ffx->ArmDiagnostics(static_cast<uint32_t>(evaluations));
+    }
     lua_pushboolean(L, 1);
     return 1;
 }

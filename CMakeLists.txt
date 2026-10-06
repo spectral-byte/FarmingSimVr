@@ -100,6 +100,9 @@ set(CORE_SOURCES
     src/ngx/virtual_ngx_handle.h
     src/ngx/ngx_interceptor.h
     src/ngx/ngx_interceptor.cpp
+    src/fidelityfx/ffx_defs.h
+    src/fidelityfx/fidelityfx_interceptor.h
+    src/fidelityfx/fidelityfx_interceptor.cpp
 )
 
 # Core static library: compiled once, shared by the Injector DLL and the tests
@@ -152,6 +155,7 @@ add_executable(fs25_vr_tests
     tests/test_virtual_ngx_handle.cpp
     tests/test_dlss_evaluation.cpp
     tests/test_ngx_interceptor.cpp
+    tests/test_fidelityfx_interceptor.cpp
     tests/luau_test_runner.cpp
     tests/test_luau_suites.cpp
 )

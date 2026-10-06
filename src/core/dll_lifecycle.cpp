@@ -1,6 +1,7 @@
 #include "dll_lifecycle.h"
 #include "logger.h"
 #include "ngx/ngx_interceptor.h"
+#include "fidelityfx/fidelityfx_interceptor.h"
 #include <atomic>
 
 namespace fs25vr {
@@ -23,6 +24,7 @@ void OnProcessDetach(LPVOID lpReserved) {
         // FreeLibrary: safe to unwind our own hooks. Unwind whichever interceptor owns the live
         // detours, not the newest runtime's, so no hook is left pointing into the unloaded DLL.
         NgxInterceptor::DetachLiveHooks();
+        FidelityFxInterceptor::DetachLiveHooks();
     }
     Logger::Instance().Flush();
 }
