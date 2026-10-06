@@ -120,6 +120,7 @@ public:
     static int Lua_SetDlssSharpness(lua_State* L);
     static int Lua_SetDlssPreset(lua_State* L);
     static int Lua_DlssDiag(lua_State* L);
+    static int Lua_SetDlssMvFix(lua_State* L);
     static int Lua_SetDlssSdpMvScale(lua_State* L);
 
     static int Lua_GetRenderingMode(lua_State* L);
@@ -181,6 +182,7 @@ public:
         {"setDlssPreset", &Lua_SetDlssPreset},
         {"dlssDiag", &Lua_DlssDiag},
         {"setDlssSdpMvScale", &Lua_SetDlssSdpMvScale},
+        {"setDlssMvFix", &Lua_SetDlssMvFix},
     };
 
     // 1 version property + one field per table entry.

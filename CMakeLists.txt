@@ -100,6 +100,8 @@ set(CORE_SOURCES
     src/ngx/virtual_ngx_handle.h
     src/ngx/ngx_interceptor.h
     src/ngx/ngx_interceptor.cpp
+    src/ngx/mv_pass.h
+    src/ngx/mv_pass.cpp
 )
 
 # Core static library: compiled once, shared by the Injector DLL and the tests

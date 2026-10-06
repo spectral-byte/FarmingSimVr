@@ -54,10 +54,16 @@ NgxInterceptor* NgxInterceptor::LoadHookHost() {
     return s_loadHookHost.load();
 }
 
-NgxInterceptor::NgxInterceptor() = default;
+NgxInterceptor::NgxInterceptor() {
+    m_mvPassFactory = [](ID3D12GraphicsCommandList*) { return CreateD3D12MotionVectorPass(); };
+}
 
 NgxInterceptor::~NgxInterceptor() {
-    if (IsProcessTerminating()) return;
+    if (IsProcessTerminating()) {
+        // Releasing GPU objects while the process is going down is not safe; the OS reclaims them.
+        (void)m_mvPass.release();
+        return;
+    }
     DetachAll();
 }
 
@@ -432,6 +438,78 @@ void NgxInterceptor::DetachAll() {
     m_internalDiscontinuityPendingLeft.store(false);
     m_internalDiscontinuityPendingRight.store(false);
     m_diagRemaining.store(0);
+    {
+        std::lock_guard<std::mutex> mvLock(m_mvFixMutex);
+        m_mvPass.reset();
+        m_mvFixDisableReason.clear();
+        m_mvPassFactory = [](ID3D12GraphicsCommandList*) { return CreateD3D12MotionVectorPass(); };
+    }
+    m_mvFixEnabled.store(false);
+    m_mvFixDisabled.store(false);
+}
+
+bool NgxInterceptor::SetMvFixEnabled(bool enabled) {
+    if (enabled && m_mvFixDisabled.load()) {
+        LogWarn("NgxInterceptor: vrDlssMvFix on ignored; the pass is disabled for this session (" + GetMvFixDisableReason() + ")");
+        return false;
+    }
+    bool previous = m_mvFixEnabled.exchange(enabled);
+    if (previous != enabled) {
+        LogInfo(std::string("NgxInterceptor: Motion vector pass (vrDlssMvFix) ") + (enabled ? "on" : "off"));
+    }
+    return enabled;
+}
+
+std::string NgxInterceptor::GetMvFixDisableReason() const {
+    std::lock_guard<std::mutex> lock(m_mvFixMutex);
+    return m_mvFixDisableReason;
+}
+
+void NgxInterceptor::SetMotionVectorPassFactory(MotionVectorPassFactory factory) {
+    std::lock_guard<std::mutex> lock(m_mvFixMutex);
+    m_mvPass.reset();
+    m_mvPassFactory = std::move(factory);
+}
+
+const char* NgxInterceptor::DescribeMvFixState() const {
+    if (m_mvFixDisabled.load()) return "failed";
+    return m_mvFixEnabled.load() ? "on" : "off";
+}
+
+void NgxInterceptor::DisableMvFix(const std::string& reason) {
+    {
+        std::lock_guard<std::mutex> lock(m_mvFixMutex);
+        if (m_mvFixDisabled.load()) return;
+        m_mvFixDisableReason = reason;
+    }
+    m_mvFixDisabled.store(true);
+    m_mvFixEnabled.store(false);
+    LogError("NgxInterceptor: Motion vector pass disabled for this session: " + reason +
+             ". DLSS continues on the engine's motion vectors.");
+}
+
+ID3D12Resource* NgxInterceptor::RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv) {
+    std::unique_lock<std::mutex> lock(m_mvFixMutex);
+    if (m_mvFixDisabled.load()) return nullptr;
+    if (!m_mvPass) {
+        if (m_mvPassFactory) m_mvPass = m_mvPassFactory(cmdList);
+        if (!m_mvPass) {
+            lock.unlock();
+            DisableMvFix("the motion vector pass could not be created");
+            return nullptr;
+        }
+    }
+    MvPassInputs inputs;
+    inputs.cmdList = cmdList;
+    inputs.depth = depth;
+    inputs.motionVectors = mv;
+    MvPassResult result = m_mvPass->Record(inputs);
+    if (!result.ok || !result.output) {
+        lock.unlock();
+        DisableMvFix(result.failureReason.empty() ? std::string("the pass reported a failure") : result.failureReason);
+        return nullptr;
+    }
+    return result.output;
 }
 
 void NgxInterceptor::DetachLiveHooks() {
@@ -546,6 +624,7 @@ void NgxInterceptor::RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex
        << " Eye=" << (bridge ? bridge->GetActiveEye() : 0)
        << " Jitter=(" << jitX << ", " << jitY << ")"
        << " MVScale=(" << mvX << ", " << mvY << ")"
+       << " MvFix=" << DescribeMvFixState()
        << " Reset=" << (reset ? 1 : 0)
        << " Render=" << renderW << "x" << renderH
        << " Thread=" << GetCurrentThreadId();
@@ -1042,6 +1121,26 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         }
     }
 
+    // The motion vector pass: DLSS reads the Injector's texture for this one evaluation, then the game's
+    // motion vectors are put back. Monoscopic presentation (menus, 2D Floating Window Mode) and handles
+    // that are not split per eye keep the engine's motion vectors.
+    ID3D12Resource* prevMv = nullptr;
+    bool swappedMv = false;
+    if (interceptor.m_mvFixEnabled.load() && alternatesEyeContexts && InCmdList && mutableParams) {
+        ID3D12Resource* depth = nullptr;
+        ID3D12Resource* mv = nullptr;
+        mutableParams->Get(NVSDK_NGX_Parameter_Depth, &depth);
+        mutableParams->Get(NVSDK_NGX_Parameter_MotionVectors, &mv);
+        if (depth && mv) {
+            ID3D12Resource* corrected = interceptor.RecordMvPass(InCmdList, depth, mv);
+            if (corrected) {
+                prevMv = mv;
+                mutableParams->Set(NVSDK_NGX_Parameter_MotionVectors, corrected);
+                swappedMv = true;
+            }
+        }
+    }
+
     uint64_t currentEval = interceptor.m_evalCount.fetch_add(1);
     interceptor.RecordDiagnostics(currentEval, contextIndex, InParameters, needReset, isDualPass);
     if ((currentEval == 0 || (currentEval % 300 == 0)) && InParameters) {
@@ -1078,6 +1177,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
            << " Target=" << target << " Dim=[" << inW << "x" << inH << " -> " << outW << "x" << outH << "]"
            << " MVScale=(" << mvX << ", " << mvY << ") [has=(" << hasMvX << "," << hasMvY << ")]"
            << " Jitter=(" << jitX << ", " << jitY << ") [has=(" << hasJitX << "," << hasJitY << ")]"
+           << " MvFix=" << interceptor.DescribeMvFixState()
            << " Sharp=" << sharp << " [has=" << hasSharp << "] Preset=" << curPreset << " Reset=" << (needReset ? 1 : 0)
            << " Res=[Col=" << pColor << " Depth=" << pDepth << " MV=" << pMv << " Out=" << pOut << "]";
         LogInfo(ss.str());
@@ -1091,6 +1191,10 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         } else {
             mutableParams->Set(NVSDK_NGX_Parameter_Reset, 0);
         }
+    }
+
+    if (swappedMv) {
+        mutableParams->Set(NVSDK_NGX_Parameter_MotionVectors, prevMv);
     }
 
     // Always undo our write so a reused parameter block never compounds the multiplier

@@ -990,6 +990,8 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
         assert(VRBridge.dlssDiag(0) == false, "dlssDiag must reject a zero count")
         assert(VRBridge.dlssDiag(32) == true, "dlssDiag failed")
         assert(VRBridge.setDlssSdpMvScale(0.0, 0.25) == true, "setDlssSdpMvScale failed")
+        assert(type(VRBridge.setDlssMvFix) == "function", "setDlssMvFix missing")
+        assert(VRBridge.setDlssMvFix(true) == true, "setDlssMvFix on failed")
     )";
 
     EXPECT_EQ(RunLuauString(L, testScript), 0);
@@ -1000,6 +1002,10 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
     EXPECT_EQ(ngx->GetDiagEvaluationsRemaining(), 32u);
     EXPECT_FLOAT_EQ(ngx->GetSdpMvScaleMultiplierX(), 0.0f);
     EXPECT_FLOAT_EQ(ngx->GetSdpMvScaleMultiplierY(), 0.25f);
+    EXPECT_TRUE(ngx->IsMvFixEnabled());
+
+    EXPECT_EQ(RunLuauString(L, "assert(VRBridge.setDlssMvFix(false) == true, \"setDlssMvFix off failed\")"), 0);
+    EXPECT_FALSE(ngx->IsMvFixEnabled());
 }
 
 TEST_F(VrBridgeTest, DualPassEyeOrderSwapsEveryFourPairs) {
@@ -1075,6 +1081,7 @@ TEST_F(VrBridgeTest, DlssTuningFunctionsReportFailureWithoutNgxInterceptor) {
         assert(VRBridge.setDlssSharpness(0.65) == false, "setDlssSharpness must fail without NGX")
         assert(VRBridge.setDlssPreset(11) == false, "setDlssPreset must fail without NGX")
         assert(VRBridge.dlssDiag(32) == false, "dlssDiag must fail without NGX")
+        assert(VRBridge.setDlssMvFix(true) == false, "setDlssMvFix must fail without NGX")
     )";
     EXPECT_EQ(RunLuauString(L, testScript), 0);
 }
@@ -1162,7 +1169,8 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "setDlssSharpness",
         "setDlssPreset",
         "dlssDiag",
-        "setDlssSdpMvScale"
+        "setDlssSdpMvScale",
+        "setDlssMvFix"
     };
 
     lua_getglobal(L, "VRBridge");

@@ -4,6 +4,7 @@
 #include "ngx/ngx_defs.h"
 #include "ngx/virtual_ngx_handle.h"
 #include "ngx/ngx_interceptor.h"
+#include "ngx/mv_pass.h"
 #include "luau/vr_bridge.h"
 #include "proxy/dxgi_proxy.h"
 #include "proxy/system_dxgi.h"
@@ -26,6 +27,7 @@ static std::vector<int> s_evaluatedResetValues;
 static std::vector<float> s_evaluatedMvScaleX;
 static std::vector<float> s_evaluatedMvScaleY;
 static std::vector<NVSDK_NGX_Parameter*> s_createdParams;
+static std::vector<ID3D12Resource*> s_evaluatedMotionVectors;
 
 __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockCreateFeature(
     ID3D12GraphicsCommandList* /*InCmdList*/,
@@ -83,6 +85,10 @@ __declspec(noinline) NVSDK_NGX_Result STDMETHODCALLTYPE MockEvaluateFeature(
         s_evaluatedResetValues.push_back(0);
     }
 
+    ID3D12Resource* mvRes = nullptr;
+    if (InParameters) InParameters->Get(NVSDK_NGX_Parameter_MotionVectors, &mvRes);
+    s_evaluatedMotionVectors.push_back(mvRes);
+
     float mvX = 1.0f;
     if (InParameters && NVSDK_NGX_SUCCEED(InParameters->Get(NVSDK_NGX_Parameter_MV_Scale_X, &mvX))) {
         s_evaluatedMvScaleX.push_back(mvX);
@@ -119,6 +125,7 @@ protected:
         s_evaluatedMvScaleX.clear();
         s_evaluatedMvScaleY.clear();
         s_createdParams.clear();
+        s_evaluatedMotionVectors.clear();
 
         m_ngx.DetachAll();
         m_ngx.SetDxgiProxy(nullptr);
@@ -1518,6 +1525,189 @@ TEST_F(DlssEvaluationTest, DiagnosticsSummarizeJitterPerEyeContextUntilCountdown
     EXPECT_FLOAT_EQ(right.maxX, 0.375f);
 
     MockReleaseFeature(virtualHandle);
+}
+
+// ---- Motion vector pass (vrDlssMvFix) ----
+
+class FakeMvPass : public IMotionVectorPass {
+public:
+    int recordCount = 0;
+    MvPassInputs lastInputs;
+    ID3D12Resource* output = reinterpret_cast<ID3D12Resource*>(0xBEEF);
+    bool fail = false;
+    std::string failureReason = "unsupported motion vector format";
+    MvPassResult Record(const MvPassInputs& inputs) override {
+        ++recordCount;
+        lastInputs = inputs;
+        MvPassResult r;
+        if (fail) { r.failureReason = failureReason; return r; }
+        r.ok = true;
+        r.output = output;
+        return r;
+    }
+};
+
+class MvPassEvaluationTest : public DlssEvaluationTest {
+protected:
+    FakeMvPass* m_pass = nullptr;
+    int m_factoryCalls = 0;
+    ID3D12GraphicsCommandList* m_cmdList = reinterpret_cast<ID3D12GraphicsCommandList*>(0x1000);
+    ID3D12Resource* m_engineMv = reinterpret_cast<ID3D12Resource*>(0xAAA0);
+    ID3D12Resource* m_engineDepth = reinterpret_cast<ID3D12Resource*>(0xDDD0);
+    NgxParameterImpl m_params;
+    NVSDK_NGX_Handle* m_handle = nullptr;
+
+    void SetUpPass() {
+        ASSERT_TRUE(m_ngx.AttachDirect(&MockCreateFeature, &MockReleaseFeature, &MockEvaluateFeature));
+        m_ngx.SetMotionVectorPassFactory([this](ID3D12GraphicsCommandList*) {
+            ++m_factoryCalls;
+            auto pass = std::make_unique<FakeMvPass>();
+            m_pass = pass.get();
+            return std::unique_ptr<IMotionVectorPass>(std::move(pass));
+        });
+        m_params.Set(NVSDK_NGX_Parameter_Width, 1920u);
+        m_params.Set(NVSDK_NGX_Parameter_Height, 1080u);
+        m_params.Set(NVSDK_NGX_Parameter_MotionVectors, m_engineMv);
+        m_params.Set(NVSDK_NGX_Parameter_Depth, m_engineDepth);
+        ASSERT_EQ(MockCreateFeature(nullptr, NVSDK_NGX_Feature_SuperSampling, &m_params, &m_handle), NVSDK_NGX_Result_Success);
+    }
+    void TearDown() override {
+        if (m_handle) MockReleaseFeature(m_handle);
+        DlssEvaluationTest::TearDown();
+    }
+    ID3D12Resource* ParamMv() {
+        ID3D12Resource* mv = nullptr;
+        m_params.Get(NVSDK_NGX_Parameter_MotionVectors, &mv);
+        return mv;
+    }
+};
+
+TEST_F(MvPassEvaluationTest, DlssReceivesTheInjectorsTextureAndTheGameParametersAreRestored) {
+    SetUpPass();
+    m_ngx.SetMvFixEnabled(true);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_EQ(m_pass->recordCount, 1);
+    EXPECT_EQ(m_pass->lastInputs.cmdList, m_cmdList);
+    EXPECT_EQ(m_pass->lastInputs.motionVectors, m_engineMv);
+    EXPECT_EQ(m_pass->lastInputs.depth, m_engineDepth);
+    ASSERT_EQ(s_evaluatedMotionVectors.size(), 1u);
+    EXPECT_EQ(s_evaluatedMotionVectors[0], m_pass->output);
+    // The engine's motion vectors are back in the parameter block afterwards.
+    EXPECT_EQ(ParamMv(), m_engineMv);
+}
+
+TEST_F(MvPassEvaluationTest, SequentialDualPassEyeContextsBothGetTheInjectorsTexture) {
+    SetUpPass();
+    m_ngx.SetMvFixEnabled(true);
+    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    for (uint32_t subPass = 0; subPass < 2; ++subPass) {
+        m_bridge.SetSubPassIndex(subPass);
+        MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    }
+    ASSERT_EQ(s_evaluatedMotionVectors.size(), 2u);
+    EXPECT_EQ(s_evaluatedMotionVectors[0], m_pass->output);
+    EXPECT_EQ(s_evaluatedMotionVectors[1], m_pass->output);
+    EXPECT_EQ(ParamMv(), m_engineMv);
+}
+
+TEST_F(MvPassEvaluationTest, OffByDefaultAndSwitchableAtRuntime) {
+    SetUpPass();
+    EXPECT_FALSE(m_ngx.IsMvFixEnabled());
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(m_factoryCalls, 0);
+
+    m_ngx.SetMvFixEnabled(true);
+    EXPECT_TRUE(m_ngx.IsMvFixEnabled());
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_pass->output);
+
+    m_ngx.SetMvFixEnabled(false);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(m_pass->recordCount, 1);
+}
+
+TEST_F(MvPassEvaluationTest, MenusAndTwoDimensionalViewKeepTheEnginesMotionVectors) {
+    SetUpPass();
+    m_ngx.SetMvFixEnabled(true);
+    m_bridge.SetMenuVisible(true);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    m_bridge.SetMenuVisible(false);
+    m_bridge.Set2DViewActive(true);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(s_evaluatedMotionVectors.size(), 2u);
+    EXPECT_EQ(s_evaluatedMotionVectors[0], m_engineMv);
+    EXPECT_EQ(s_evaluatedMotionVectors[1], m_engineMv);
+    EXPECT_EQ(m_factoryCalls, 0);
+}
+
+TEST_F(MvPassEvaluationTest, EvaluationWithoutCommandListOrInputsPassesThroughWithoutDisabling) {
+    SetUpPass();
+    m_ngx.SetMvFixEnabled(true);
+    MockEvaluateFeature(nullptr, m_handle, &m_params, nullptr);
+    NgxParameterImpl noDepth;
+    noDepth.Set(NVSDK_NGX_Parameter_MotionVectors, m_engineMv);
+    MockEvaluateFeature(m_cmdList, m_handle, &noDepth, nullptr);
+    EXPECT_EQ(s_evaluatedMotionVectors[0], m_engineMv);
+    EXPECT_EQ(s_evaluatedMotionVectors[1], m_engineMv);
+    EXPECT_FALSE(m_ngx.IsMvFixDisabledForSession());
+}
+
+TEST_F(MvPassEvaluationTest, FailureDisablesThePassForTheSessionAndDlssKeepsTheEnginesVectors) {
+    SetUpPass();
+    m_ngx.SetMvFixEnabled(true);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_NE(m_pass, nullptr);
+    m_pass->fail = true;
+    m_pass->failureReason = "unsupported motion vector format 99";
+
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
+    EXPECT_EQ(ParamMv(), m_engineMv);
+    EXPECT_TRUE(m_ngx.IsMvFixDisabledForSession());
+    EXPECT_FALSE(m_ngx.IsMvFixEnabled());
+    EXPECT_EQ(m_ngx.GetMvFixDisableReason(), "unsupported motion vector format 99");
+
+    // The pass is no longer asked, and "on" cannot bring it back.
+    int calls = m_pass->recordCount;
+    EXPECT_FALSE(m_ngx.SetMvFixEnabled(true));
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(m_pass->recordCount, calls);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
+}
+
+TEST_F(MvPassEvaluationTest, MissingPassFromFactoryDisablesThePass) {
+    SetUpPass();
+    m_ngx.SetMotionVectorPassFactory([](ID3D12GraphicsCommandList*) { return std::unique_ptr<IMotionVectorPass>(); });
+    m_ngx.SetMvFixEnabled(true);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
+    EXPECT_TRUE(m_ngx.IsMvFixDisabledForSession());
+    EXPECT_FALSE(m_ngx.GetMvFixDisableReason().empty());
+}
+
+TEST(MvPassShaderTest, PassThroughShaderCompilesWithTheSystemCompiler) {
+    std::string bytecode, error;
+    ASSERT_TRUE(MvPassCompileShader(bytecode, error)) << error;
+    EXPECT_GT(bytecode.size(), 100u);
+}
+
+TEST(MvPassFormatTest, AcceptsTheEnginesFormatsAndRejectsOthers) {
+    EXPECT_EQ(MvPassMotionVectorViewFormat(DXGI_FORMAT_R16G16_FLOAT), DXGI_FORMAT_R16G16_FLOAT);
+    EXPECT_EQ(MvPassMotionVectorViewFormat(DXGI_FORMAT_R16G16_TYPELESS), DXGI_FORMAT_R16G16_FLOAT);
+    EXPECT_EQ(MvPassMotionVectorViewFormat(DXGI_FORMAT_R32G32_FLOAT), DXGI_FORMAT_R32G32_FLOAT);
+    EXPECT_EQ(MvPassMotionVectorViewFormat(DXGI_FORMAT_R8G8B8A8_UNORM), DXGI_FORMAT_UNKNOWN);
+    EXPECT_EQ(MvPassMotionVectorViewFormat(DXGI_FORMAT_R16G16_SNORM), DXGI_FORMAT_UNKNOWN);
+
+    EXPECT_EQ(MvPassDepthViewFormat(DXGI_FORMAT_R32_FLOAT), DXGI_FORMAT_R32_FLOAT);
+    EXPECT_EQ(MvPassDepthViewFormat(DXGI_FORMAT_R32_TYPELESS), DXGI_FORMAT_R32_FLOAT);
+    EXPECT_EQ(MvPassDepthViewFormat(DXGI_FORMAT_D32_FLOAT), DXGI_FORMAT_R32_FLOAT);
+    EXPECT_EQ(MvPassDepthViewFormat(DXGI_FORMAT_R32G8X24_TYPELESS), DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS);
+    EXPECT_EQ(MvPassDepthViewFormat(DXGI_FORMAT_R24G8_TYPELESS), DXGI_FORMAT_R24_UNORM_X8_TYPELESS);
+    EXPECT_EQ(MvPassDepthViewFormat(DXGI_FORMAT_R8G8B8A8_UNORM), DXGI_FORMAT_UNKNOWN);
 }
 
 } // namespace
