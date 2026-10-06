@@ -480,6 +480,12 @@ function VRCompanion:clearFrameChecks()
     self.cachedHeadTrackingActive = nil
 end
 
+-- Closes every open scope at once (the outermost scope ending, however it ended).
+function VRCompanion:resetFrameChecks()
+    self.frameCheckDepth = 0
+    self:clearFrameChecks()
+end
+
 function VRCompanion:resolvePassThroughMode()
     if self.passThroughMode ~= nil then
         return self.passThroughMode == true
@@ -744,16 +750,15 @@ function VRCompanion:getResolvedHeadPose()
     local pose = nil
     local bridge = VRBridge or (_G and _G.VRBridge)
     -- Reuse one pose table across frames: VRBridge fills it in place instead of allocating.
-    local scratch = self.headPoseScratch
-    if scratch == nil then
-        scratch = {}
-        self.headPoseScratch = scratch
-    end
     if bridge ~= nil and type(bridge.getHeadPose) == "function" then
+        local scratch = self.headPoseScratch
+        if scratch == nil then
+            scratch = {}
+            self.headPoseScratch = scratch
+        end
         pose = bridge.getHeadPose(scratch)
         -- See fetchEyeProjection: adopt the table VRBridge returns so later reads fill it in place.
         if type(pose) == "table" then
-            scratch = pose
             self.headPoseScratch = pose
         end
     end
@@ -769,15 +774,20 @@ function VRCompanion:getResolvedHeadPose()
             pitch, yaw, roll = getHeadTrackingRotation()
         end
         if pitch ~= nil then
-            pose = scratch
+            -- A separate reusable table: writing TrackIR values (which carry no quaternion) into
+            -- the VRBridge table would leave it incomplete, and VRBridge would then allocate a
+            -- fresh one on every call instead of filling it in place.
+            pose = self.trackIrPoseScratch
+            if pose == nil then
+                pose = {}
+                self.trackIrPoseScratch = pose
+            end
             pose.x = tx or 0
             pose.y = ty or 0
             pose.z = tz or 0
             pose.pitch = pitch or 0
             pose.yaw = yaw or 0
             pose.roll = roll or 0
-            -- TrackIR supplies no quaternion: clear any identity left over from a VRBridge fill.
-            pose.qx, pose.qy, pose.qz, pose.qw = nil, nil, nil, nil
             pose.isValid = true
         end
     end

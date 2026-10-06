@@ -777,6 +777,26 @@ TEST(DxgiProxyTest, OnPresentReturnedDoesNotBeginAFrameWithoutARunningSessionAnd
     EXPECT_EQ(mockDispatch->waitFrameCalls, 0u);
 }
 
+TEST(DxgiProxyTest, OnPresentReturnedDoesNotBeginAFrameAfterAFailedPresent) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+    openXrManager->PollEvents();  // READY: the session runs
+    ASSERT_TRUE(openXrManager->IsSessionRunning());
+
+    proxy.OnPresentReturned(DXGI_ERROR_DEVICE_REMOVED);
+    EXPECT_FALSE(openXrManager->IsFrameBegun());
+    EXPECT_EQ(mockDispatch->waitFrameCalls, 0u);
+
+    proxy.OnPresentReturned(DXGI_STATUS_OCCLUDED);  // a success code: the next frame begins
+    EXPECT_TRUE(openXrManager->IsFrameBegun());
+    EXPECT_EQ(mockDispatch->waitFrameCalls, 1u);
+}
+
 TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
     s_mockPresentCalls = 0;
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();

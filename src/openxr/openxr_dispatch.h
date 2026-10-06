@@ -15,6 +15,7 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include <memory>
+#include <mutex>
 #include <vector>
 #include <string>
 
@@ -183,6 +184,14 @@ public:
 
     XrResult DestroyInstance(
         XrInstance instance) override {
+        {
+            // A later instance may reuse the handle value; resolve the conversion function again.
+            std::lock_guard<std::mutex> lock(m_convertMutex);
+            if (instance == m_convertInstance) {
+                m_convertInstance = XR_NULL_HANDLE;
+                m_pfnConvert = nullptr;
+            }
+        }
         return xrDestroyInstance(instance);
     }
 
@@ -362,15 +371,32 @@ public:
         const LARGE_INTEGER* performanceCounter,
         XrTime* time) override {
         PFN_xrConvertWin32PerformanceCounterToTimeKHR pfnConvert = nullptr;
-        XrResult res = xrGetInstanceProcAddr(
-            instance,
-            "xrConvertWin32PerformanceCounterToTimeKHR",
-            reinterpret_cast<PFN_xrVoidFunction*>(&pfnConvert));
+        XrResult res = XR_SUCCESS;
+        {
+            // Resolved once per instance: the lookup goes through the loader.
+            std::lock_guard<std::mutex> lock(m_convertMutex);
+            if (instance != m_convertInstance) {
+                m_convertInstance = instance;
+                m_pfnConvert = nullptr;
+                m_convertLookupResult = xrGetInstanceProcAddr(
+                    instance,
+                    "xrConvertWin32PerformanceCounterToTimeKHR",
+                    reinterpret_cast<PFN_xrVoidFunction*>(&m_pfnConvert));
+            }
+            pfnConvert = m_pfnConvert;
+            res = m_convertLookupResult;
+        }
         if (XR_FAILED(res) || !pfnConvert) {
             return XR_FAILED(res) ? res : XR_ERROR_FUNCTION_UNSUPPORTED;
         }
         return pfnConvert(instance, performanceCounter, time);
     }
+
+private:
+    std::mutex m_convertMutex;
+    XrInstance m_convertInstance = XR_NULL_HANDLE;
+    PFN_xrConvertWin32PerformanceCounterToTimeKHR m_pfnConvert = nullptr;
+    XrResult m_convertLookupResult = XR_SUCCESS;
 };
 
 } // namespace fs25vr

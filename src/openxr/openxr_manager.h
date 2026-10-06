@@ -97,7 +97,8 @@ public:
     bool LocateActiveViews(XrTime time = 0);
     // "Now" in the runtime's time base. Extrapolates from the last predicted display time once
     // frames run; before the first frame converts the performance counter through the runtime
-    // (XR_KHR_win32_convert_performance_counter_time) or, without it, counts up from an anchor.
+    // (XR_KHR_win32_convert_performance_counter_time) or, without it, converts the counter to
+    // nanoseconds directly.
     XrTime GetCurrentXrTime() const;
 
     struct PerformanceCounterSample {
@@ -267,11 +268,6 @@ private:
     PerformanceCounterSource m_counterSource;
     bool m_win32TimeConversionAvailable = false;
     PerformanceCounterSample ReadPerformanceCounter() const;
-    // Pre-frame fallback state (no runtime conversion): counter value at the first query, and the
-    // last value returned so the result never goes backwards.
-    mutable bool m_hasFallbackAnchor = false;
-    mutable int64_t m_fallbackAnchorCounter = 0;
-    mutable XrTime m_lastFallbackTime = 0;
     XrTime m_lastPolledTime = 0;
     XrTime m_lastLocatedViewsTime = 0;
 

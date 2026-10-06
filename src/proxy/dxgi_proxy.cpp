@@ -505,7 +505,10 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
     return true;
 }
 
-void DxgiProxy::OnPresentReturned() {
+void DxgiProxy::OnPresentReturned(HRESULT presentResult) {
+    // A failed Present (device removed or reset) leaves the next frame to the lazy begin in
+    // CopyBackBufferToEye rather than blocking in xrWaitFrame ahead of device-lost handling.
+    if (FAILED(presentResult)) return;
     if (m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning() &&
         m_openXrManager->HasEyeSwapchains()) {
         m_openXrManager->BeginFrame();  // returns at once when a frame is already begun
@@ -537,7 +540,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UIN
         proxy->m_detourPresent.GetOriginal()
     );
     HRESULT hr = orig ? orig(self, proxy->EffectiveSyncInterval(syncInterval), flags) : S_OK;
-    proxy->OnPresentReturned();
+    proxy->OnPresentReturned(hr);
     return hr;
 }
 
@@ -553,7 +556,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
         proxy->m_detourPresent1.GetOriginal()
     );
     HRESULT hr = orig ? orig(self, proxy->EffectiveSyncInterval(syncInterval), flags, params) : S_OK;
-    proxy->OnPresentReturned();
+    proxy->OnPresentReturned(hr);
     return hr;
 }
 

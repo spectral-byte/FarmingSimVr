@@ -464,22 +464,51 @@ function VRCompanion:hookPlayerCamera()
     end
 end
 
--- Closes a frame-check scope however the wrapped call ended, then passes on its
--- results or rethrows its error, so an error never leaves a scope open.
-local function endFrameChecksAfter(self, ok, ...)
+local traceback = (debug ~= nil) and debug.traceback or nil
+
+-- Appends the traceback from where an error was raised, so rethrowing it from the
+-- outermost frame-check scope does not hide its origin.
+local function withRaiseTraceback(err)
+    if traceback ~= nil and type(err) == "string" then
+        return traceback(err, 2)
+    end
+    return err
+end
+
+-- Closes a nested frame-check scope after a normal return. An error skips this; the
+-- outermost scope then closes every scope opened inside it.
+local function endNestedFrameChecks(self, ...)
     self:endFrameChecks()
+    return ...
+end
+
+-- Closes the outermost frame-check scope however the call ended, then passes on its
+-- results or rethrows its error, so an error never leaves a scope open.
+local function endOutermostFrameChecks(self, ok, ...)
+    self:resetFrameChecks()
     if not ok then
         error((...), 0)
     end
     return ...
 end
 
+-- Runs fn(self, ...) inside a frame-check scope. Only the outermost scope runs fn
+-- protected, so the game's own mission update is not wrapped twice when the game
+-- runs VRCompanion:update inside it.
+local function runWithFrameChecks(self, fn, ...)
+    local outermost = (self.frameCheckDepth or 0) == 0
+    self:beginFrameChecks()
+    if outermost then
+        return endOutermostFrameChecks(self, xpcall(fn, withRaiseTraceback, self, ...))
+    end
+    return endNestedFrameChecks(self, fn(self, ...))
+end
+
 function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     if self.inMissionUpdate then
         return origUpdateFn(missionSelf, dt, ...)
     end
-    self:beginFrameChecks()
-    return endFrameChecksAfter(self, pcall(self.runMissionUpdate, self, missionSelf, dt, origUpdateFn, ...))
+    return runWithFrameChecks(self, self.runMissionUpdate, missionSelf, dt, origUpdateFn, ...)
 end
 
 function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
@@ -643,8 +672,7 @@ function VRCompanion:unhookMissionUpdate()
 end
 
 function VRCompanion:update(dt)
-    self:beginFrameChecks()
-    return endFrameChecksAfter(self, pcall(self.runUpdate, self, dt))
+    return runWithFrameChecks(self, self.runUpdate, dt)
 end
 
 function VRCompanion:runUpdate(dt)

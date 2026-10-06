@@ -614,13 +614,13 @@ TEST(OpenXrManagerTest, InitializeSucceedsWithoutTimeConversionExtensionAndFallb
     EXPECT_FALSE(Contains(dispatch->lastEnabledExtensions, XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME));
     EXPECT_FALSE(manager.GetRuntimeInfo().win32TimeConversionEnabled);
 
+    // The counter in nanoseconds, the time base of runtimes that back XrTime with it.
     XrTime t0 = manager.GetCurrentXrTime();
+    EXPECT_EQ(t0, OpenXrManager::PerformanceCounterToNanoseconds(kDaysOfUptimeCounter, kTenMhz));
     EXPECT_GT(t0, 0);
     counter += kTenMhz / 2;  // half a second later
     XrTime t1 = manager.GetCurrentXrTime();
     EXPECT_EQ(t1 - t0, 500000000LL);
-    counter -= kTenMhz;  // a clock that steps back must not make time go backwards
-    EXPECT_GE(manager.GetCurrentXrTime(), t1);
     EXPECT_EQ(dispatch->convertCalls, 0u);
 }
 

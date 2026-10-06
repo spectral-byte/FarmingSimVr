@@ -62,17 +62,9 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
         }
     }
 
-    // No runtime conversion: count up from the counter value at the first query, so the result
-    // is monotonic and cannot overflow. It is not in the runtime's time base.
-    constexpr XrTime kFallbackBaseTime = 1000000000LL;  // 1 s, keeps the time positive
-    if (!m_hasFallbackAnchor) {
-        m_hasFallbackAnchor = true;
-        m_fallbackAnchorCounter = now.counter;
-    }
-    XrTime fallback = kFallbackBaseTime + PerformanceCounterToNanoseconds(now.counter - m_fallbackAnchorCounter, now.frequency);
-    if (fallback < m_lastFallbackTime) fallback = m_lastFallbackTime;
-    m_lastFallbackTime = fallback;
-    return fallback;
+    // No runtime conversion: the counter in nanoseconds, computed without overflow. Runtimes that
+    // back XrTime with the performance counter share this time base, and the counter is monotonic.
+    return PerformanceCounterToNanoseconds(now.counter, now.frequency);
 }
 
 OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)

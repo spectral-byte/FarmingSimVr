@@ -27,8 +27,18 @@ _G.MathUtil = {
     end
 }
 
--- Mock VRBridge that honours the output-table argument exactly like the native binding.
-local poseTablesSeen = {}
+-- Mock VRBridge that honours the output-table argument like the native binding: a supplied
+-- head pose table is filled in place only when it already holds every field, otherwise a
+-- fresh table is returned.
+local POSE_FIELDS = { "x", "y", "z", "pitch", "yaw", "roll", "qx", "qy", "qz", "qw",
+    "isValid", "isPositionTracked", "isOrientationTracked" }
+local function hasAllFields(t, fields)
+    for _, k in ipairs(fields) do
+        if t[k] == nil then return false end
+    end
+    return true
+end
+local poseTablesReturned = {}
 local projTablesSeen = {}
 local poseCalls, projCalls = 0, 0
 local mockVRBridge = {
@@ -37,11 +47,15 @@ local mockVRBridge = {
     handshake = function() return { success = true, version = "1.0.0.0", mode = "OpenXR" } end,
     getHeadPose = function(out)
         poseCalls = poseCalls + 1
-        out = out or {}
-        poseTablesSeen[out] = true
+        if type(out) ~= "table" or not hasAllFields(out, POSE_FIELDS) then
+            out = {}
+        end
+        poseTablesReturned[out] = true
         out.x, out.y, out.z = 0.1, 0.05, -0.1
         out.pitch, out.yaw, out.roll = 0.15, 0.2, 0.0
+        out.qx, out.qy, out.qz, out.qw = 0.0, 0.0, 0.0, 1.0
         out.isValid = true
+        out.isPositionTracked, out.isOrientationTracked = true, true
         return out
     end,
     getEyeProjection = function(eye, out)
@@ -97,7 +111,7 @@ test("HeadPoseReadsReuseOneTableAcrossCalls", function()
     assert(poseCalls - before == 3, "getHeadPose must be read each time")
     assert(first == second and second == third, "head pose table identity must be stable")
     assert(first.isValid == true and math.abs(first.pitch - 0.15) < 1e-6, "pose must carry bridge values")
-    assert(count(poseTablesSeen) == 1, "bridge must only ever be handed one pose table")
+    assert(count(poseTablesReturned) == 1, "bridge must only ever return one pose table")
 end)
 
 test("EyeProjectionReadsReuseOneTableAcrossCalls", function()
@@ -119,26 +133,37 @@ test("PerFrameVehicleCameraUpdatesReuseBothTables", function()
     for _ = 1, 5 do
         VRCompanion:onVehicleCameraUpdate(cam, 16.6)
     end
-    assert(count(poseTablesSeen) == 1, "pose table must be reused across updates")
+    assert(count(poseTablesReturned) == 1, "pose table must be reused across updates")
     assert(count(projTablesSeen) <= 2, "projection tables (one per eye) must be reused across updates")
 end)
 
-test("TrackIrFallbackKeepsReusedTableAndDropsStaleQuaternion", function()
+test("TrackIrFallbackReusesItsTableAndKeepsTheBridgeTableComplete", function()
     -- Bridge pose invalid: fall back to TrackIR, which has no quaternion.
     local original = mockVRBridge.getHeadPose
+    local bridgeValid = false
     mockVRBridge.getHeadPose = function(out)
-        out.isValid = false
-        out.qx, out.qy, out.qz, out.qw = 0.5, 0.5, 0.5, 0.5
-        return out
+        local ret = original(out)
+        ret.isValid = bridgeValid
+        return ret
     end
     _G.isHeadTrackingAvailable = function() return true end
     _G.getHeadTrackingTranslation = function() return 1, 2, 3 end
     _G.getHeadTrackingRotation = function() return 0.1, 0.2, 0.3 end
 
-    local pose = VRCompanion:getResolvedHeadPose()
-    assert(pose == VRCompanion.headPoseScratch, "fallback must reuse the scratch table")
-    assert(pose.isValid == true and pose.x == 1 and pose.yaw == 0.2, "fallback values applied")
-    assert(pose.qx == nil and pose.qw == nil, "stale bridge quaternion must be cleared")
+    VRCompanion:getResolvedHeadPose()
+    local returnedBefore = count(poseTablesReturned)
+    local first = VRCompanion:getResolvedHeadPose()
+    for _ = 1, 5 do
+        assert(VRCompanion:getResolvedHeadPose() == first, "fallback pose table identity must be stable")
+    end
+    assert(count(poseTablesReturned) == returnedBefore, "the fallback must not make VRBridge allocate a fresh pose table")
+    assert(first ~= VRCompanion.headPoseScratch, "TrackIR values must not be written into the VRBridge table")
+    assert(first.isValid == true and first.x == 1 and first.yaw == 0.2, "fallback values applied")
+    assert(first.qx == nil and first.qw == nil, "the TrackIR pose carries no quaternion")
+
+    bridgeValid = true
+    local bridgePose = VRCompanion:getResolvedHeadPose()
+    assert(bridgePose == VRCompanion.headPoseScratch and bridgePose.qw == 1.0, "a valid bridge pose is used again")
 
     mockVRBridge.getHeadPose = original
     _G.isHeadTrackingAvailable = nil

@@ -8,7 +8,7 @@ The Injector used to wait on and begin an OpenXR frame lazily, at the first eye 
 - The next frame is begun after the pair's `xrEndFrame`, so the loop is the canonical OpenXR `wait, begin, render, end` loop. In steady state the time per pair is unchanged: the wait moves from before eye 0's copy to the end of the previous `Present`.
 - The wait happens after the physical DXGI present, so the Desktop Mirror Window flip is not delayed by it (ADR-0014). Sync interval stays 0 while xrWaitFrame paces frames.
 - Quad (menu / 2D Floating Window) frames use the same rule: the quad copy and `SubmitMenuQuad` consume the frame begun after the previous `Present`.
-- Lazy `BeginFrame` in `CopyBackBufferToEye` stays as the fallback for the very first `Present`, and whenever a frame could not be begun early (session not yet running, `xrWaitFrame` failure). Poses requested with no frame begun still use `GetCurrentXrTime`.
+- Lazy `BeginFrame` in `CopyBackBufferToEye` stays as the fallback for the very first `Present`, and whenever a frame could not be begun early (session not yet running, `xrWaitFrame` failure, or a failed real `Present` such as a removed device, which skips the early begin). Poses requested with no frame begun still use `GetCurrentXrTime`.
 - Mode switches (ADR-0015) still latch only at `SubmitFramePair`/quad boundaries. The frame begun afterwards is mode-agnostic.
 - Session stop, loss and Recenter already reset or re-locate a begun frame; an early-begun frame goes through the same paths as a lazily begun one.
 

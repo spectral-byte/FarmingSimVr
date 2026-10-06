@@ -852,6 +852,33 @@ test("AnErrorDuringAnUpdateClosesTheFrameCheckScope", function()
     assert(seen == true, "checks outside an update must resolve fresh after an error")
 end)
 
+test("AnErrorInANestedUpdateKeepsItsRaiseSiteAndClosesEveryScope", function()
+    installCountingMocks()
+    local real = VRCompanion.updateHudConvergence
+    local function failingHudUpdate()
+        error("nested hud update failed")
+    end
+    VRCompanion.updateHudConvergence = failingHudUpdate
+
+    local missionOk, missionErr
+    local ok, err = pcall(withHookedMissionUpdate, function(self, dt) VRCompanion:update(dt) end, function()
+        missionOk, missionErr = pcall(function() _G.FSBaseMission:update(16) end)
+    end)
+    VRCompanion.updateHudConvergence = real
+    local depth = VRCompanion.frameCheckDepth or 0
+    clearCountingMocks()
+
+    assert(ok, tostring(err))
+    missionErr = tostring(missionErr)
+    assert(missionOk == false and string.find(missionErr, "nested hud update failed", 1, true) ~= nil,
+        "the error must still reach the game: " .. missionErr)
+    if debug ~= nil and debug.traceback ~= nil then
+        assert(string.find(missionErr, "failingHudUpdate", 1, true) ~= nil,
+            "the rethrown error must carry the traceback from where it was raised: " .. missionErr)
+    end
+    assert(depth == 0, "an error in a nested scope must not leave a scope open, depth=" .. tostring(depth))
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 if failed > 0 then
     error(string.format("%d tests failed", failed))
