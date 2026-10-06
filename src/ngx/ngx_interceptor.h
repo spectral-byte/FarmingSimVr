@@ -244,7 +244,15 @@ private:
 
     // Records the pass for this evaluation. Returns the texture to hand DLSS, or null to keep the
     // engine's motion vectors (also after a failure, which disables the pass for the session).
-    ID3D12Resource* RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv);
+    // When request is set the pass also records a self-check; reports, when set, receives the self-checks
+    // that finished reading back since the previous call.
+    ID3D12Resource* RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv,
+                                 const MvSelfCheckRequest* request = nullptr,
+                                 std::vector<MvSelfCheckReport>* reports = nullptr);
+    // Builds the self-check request for this evaluation from the camera records, or says why it cannot.
+    bool BuildSelfCheckRequest(uint32_t eye, uint64_t evalIndex, float mvScaleX, float mvScaleY,
+                               MvSelfCheckRequest& request, std::string& skipReason) const;
+    void LogSelfCheckReport(const MvSelfCheckReport& report) const;
     void DisableMvFix(const std::string& reason);
 
     std::atomic<bool> m_mvFixEnabled{false};
