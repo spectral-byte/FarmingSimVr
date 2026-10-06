@@ -160,7 +160,9 @@ function VRCompanion:saveConfiguration(xmlPath)
             setXmlBoolFn(xmlFile, "vrSettings.allowObliqueProjection", self.allowObliqueProjection == true)
         end
         if type(setXmlStringFn) == "function" then
-            local modeStr = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "DualPass" or "AFR"
+            -- Persist the mode last requested, not VRBridge's: while the compositor is active the bridge
+            -- only queues a change until the next frame boundary, so it still reports the old mode here.
+            local modeStr = (self.renderingMode == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "DualPass" or "AFR"
             setXmlStringFn(xmlFile, "vrSettings.renderingMode", modeStr)
         end
         setXmlFloatFn(xmlFile, "vrSettings.hudFillLevelGap", self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP)

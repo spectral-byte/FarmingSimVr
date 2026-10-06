@@ -620,6 +620,43 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     _G.delete = nil
 end)
 
+test("SwitchingModeWhileCompositorActivePersistsTheNewMode", function()
+    local store = {}
+    local latchedMode = "AFR"
+    local queuedMode = nil
+    _G.getUserProfileAppPath = function() return "C:/Users/test/Documents/My Games/FarmingSimulator2025/" end
+    _G.createXMLFile = function() return 999 end
+    _G.setXMLFloat = function() end
+    _G.setXMLString = function(_, key, val) store[key] = val end
+    _G.saveXMLFile = function() end
+    _G.delete = function() end
+    -- An active compositor only queues the change; the latched mode is unchanged until a frame boundary
+    _G.VRBridge = {
+        getRenderingMode = function() return latchedMode end,
+        setRenderingMode = function(mode) queuedMode = mode end,
+    }
+    VRCompanion.renderingMode = VRCompanion.RENDERING_MODE_AFR
+
+    VRCompanion:setRenderingMode("dualpass", true)
+    assert(queuedMode == VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, "the new mode is queued on VRBridge")
+    assert(store["vrSettings.renderingMode"] == "DualPass",
+        "switching to dual-pass must persist DualPass, got " .. tostring(store["vrSettings.renderingMode"]))
+
+    latchedMode = "SequentialDualPass"
+    VRCompanion:setRenderingMode("afr", true)
+    assert(store["vrSettings.renderingMode"] == "AFR",
+        "switching to AFR must persist AFR, got " .. tostring(store["vrSettings.renderingMode"]))
+
+    _G.VRBridge = nil
+    VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)
+    _G.getUserProfileAppPath = nil
+    _G.createXMLFile = nil
+    _G.setXMLFloat = nil
+    _G.setXMLString = nil
+    _G.saveXMLFile = nil
+    _G.delete = nil
+end)
+
 test("SettingsFileWithoutHudInsetTopUsesTheTopInsetDefault", function()
     _G.loadXMLFile = function() return 555 end
     _G.getXMLFloat = function(_, key)
