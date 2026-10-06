@@ -10,6 +10,7 @@ class VRBridge;
 class LuauInterceptor;
 class MirrorWindowController;
 class NgxInterceptor;
+class FidelityFxInterceptor;
 class DxgiProxy;
 
 // Composition root: constructs and wires every Injector subsystem.
@@ -34,6 +35,7 @@ public:
         std::shared_ptr<LuauInterceptor> luauInterceptor;
         std::shared_ptr<MirrorWindowController> windowController;
         std::shared_ptr<NgxInterceptor> ngxInterceptor;
+        std::shared_ptr<FidelityFxInterceptor> ffxInterceptor;
     };
 
     // Process-wide runtime, created on first use.
@@ -71,6 +73,7 @@ public:
     LuauInterceptor& GetLuauInterceptor() { return *m_deps.luauInterceptor; }
     MirrorWindowController& GetWindowController() { return *m_deps.windowController; }
     NgxInterceptor& GetNgxInterceptor() { return *m_deps.ngxInterceptor; }
+    FidelityFxInterceptor& GetFidelityFxInterceptor() { return *m_deps.ffxInterceptor; }
 
 private:
     // The newest live runtime for which pred(ctx, runtime) holds, or null.

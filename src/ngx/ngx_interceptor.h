@@ -49,6 +49,11 @@ public:
 
     void GetTargetUpscalingDimensions(uint32_t& outWidth, uint32_t& outHeight) const;
 
+    // The FidelityFX interceptor shares this interceptor's LoadLibrary hooks: a load of the FidelityFX
+    // loader is forwarded to it, and CheckAndAttachLoadedModule also checks for an already loaded one.
+    class FidelityFxInterceptor* GetFidelityFxInterceptor() const;
+    void SetFidelityFxInterceptor(class FidelityFxInterceptor* interceptor);
+
     // Check if nvngx is already loaded in the process and attach to it
     void CheckAndAttachLoadedModule();
 
@@ -216,7 +221,11 @@ private:
         PFN_NVSDK_NGX_D3D12_GetCapabilityParameters pfnGetCaps
     );
 
+    void NotifyModuleLoaded(HMODULE hMod, LPCWSTR name);
+    void NotifyModuleLoaded(HMODULE hMod, LPCSTR name);
+
     mutable std::recursive_mutex m_mutex;
+    class FidelityFxInterceptor* m_fidelityFx = nullptr;
     bool m_isAttached = false;
     bool m_moduleHooksInstalled = false;
     HMODULE m_attachedModule = nullptr;

@@ -4,6 +4,7 @@
 #include "luau/luau_interceptor.h"
 #include "luau/vr_bridge.h"
 #include "ngx/ngx_interceptor.h"
+#include "fidelityfx/fidelityfx_interceptor.h"
 #include "openxr/openxr_manager.h"
 #include "proxy/dxgi_proxy.h"
 #include "proxy/mirror_window_controller.h"
@@ -79,6 +80,7 @@ InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
         m_deps.openXrManager = std::make_shared<OpenXrManager>(std::make_shared<NativeOpenXrDispatch>());
     }
     if (!m_deps.ngxInterceptor) m_deps.ngxInterceptor = std::make_shared<NgxInterceptor>();
+    if (!m_deps.ffxInterceptor) m_deps.ffxInterceptor = std::make_shared<FidelityFxInterceptor>();
     if (!m_deps.vrBridge) {
         m_deps.vrBridge = std::make_shared<VRBridge>(m_deps.openXrManager, m_deps.ngxInterceptor);
     }
@@ -103,6 +105,8 @@ InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
     m_deps.ngxInterceptor->SetVRBridge(m_deps.vrBridge.get());
     m_deps.ngxInterceptor->SetOpenXrManager(m_deps.openXrManager.get());
     m_deps.ngxInterceptor->SetDxgiProxy(m_proxy.get());
+    m_deps.ffxInterceptor->SetVRBridge(m_deps.vrBridge.get());
+    m_deps.ngxInterceptor->SetFidelityFxInterceptor(m_deps.ffxInterceptor.get());
 }
 
 InjectorRuntime::~InjectorRuntime() {
@@ -122,6 +126,8 @@ InjectorRuntime::~InjectorRuntime() {
     Unregister(this, /*mayBlock=*/true);
 
     // Do not leave the NGX interceptor pointing at objects we are about to free.
+    m_deps.ngxInterceptor->SetFidelityFxInterceptor(nullptr);
+    m_deps.ffxInterceptor->DetachAll();
     m_deps.ngxInterceptor->SetDxgiProxy(nullptr);
     m_deps.ngxInterceptor->SetVRBridge(nullptr);
     m_deps.ngxInterceptor->SetOpenXrManager(nullptr);
