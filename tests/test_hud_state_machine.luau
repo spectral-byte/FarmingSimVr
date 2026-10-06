@@ -599,11 +599,14 @@ end)
 test("RegisterActionEventsReArmsOnVehicleTransitionsAndPeriodicUpdate", function()
     local registrations = 0
     _G.g_inputBinding = {
-        actionEvents = {},
+        events = {},
+        actionEvents = {}, -- FS25: keyed by action name, not event id
         registerActionEvent = function(self, actionName, target, callback, triggerUp, triggerDown, triggerAlways, startActive)
             registrations = registrations + 1
-            local id = registrations
-            self.actionEvents[id] = { actionName = actionName, callback = callback, target = target }
+            local id = actionName .. "|table: 0x0|" .. registrations
+            local ev = { actionName = actionName, callback = callback, target = target }
+            self.events[id] = ev
+            self.actionEvents[actionName] = { ev }
             return true, id
         end,
         setActionEventTextPriority = function(self, id, prio) end,
@@ -625,7 +628,12 @@ test("RegisterActionEventsReArmsOnVehicleTransitionsAndPeriodicUpdate", function
     assert(VRCompanion.snapRightActionEventId ~= nil)
     assert(VRCompanion.toggleViewActionEventId ~= nil)
 
-    -- Simulate engine clearing actionEvents table upon entering a vehicle
+    -- With all five events still registered, the periodic check registers nothing
+    VRCompanion:registerActionEvents(false)
+    assert(registrations == 5, "Periodic check must not re-register events that are still registered")
+
+    -- Simulate engine dropping the events upon entering a vehicle
+    _G.g_inputBinding.events = {}
     _G.g_inputBinding.actionEvents = {}
 
     -- Calling registerActionEvents() detects missing events and re-registers

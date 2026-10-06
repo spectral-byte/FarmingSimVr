@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "proxy/mirror_window_controller.h"
+#include "core/detour.h"
 #include "core/injector_runtime.h"
 #include <windows.h>
 #include <commctrl.h>
@@ -95,6 +96,62 @@ TEST(MirrorWindowControllerTest, StandaloneControllerSubclassesButInstallsNoWin3
 
     controller.DetachAll();
     DestroyWindow(testWnd);
+}
+
+// Counts GetAncestor calls on this thread: the GetClientRect hook's walk to the root window.
+static thread_local int t_getAncestorCalls = 0;
+static FunctionDetour* s_getAncestorDetour = nullptr;
+static HWND WINAPI CountingGetAncestor(HWND hWnd, UINT flags) {
+    ++t_getAncestorCalls;
+    auto orig = reinterpret_cast<HWND(WINAPI*)(HWND, UINT)>(s_getAncestorDetour->GetOriginal());
+    return orig(hWnd, flags);
+}
+
+TEST(MirrorWindowControllerTest, GetClientRectHookChecksCheapConditionsBeforeTheRootWindowWalk) {
+    HWND gameWnd = CreateWindowA("STATIC", "TestGameWnd", WS_OVERLAPPEDWINDOW, 10, 10, 800, 600, nullptr, nullptr, nullptr, nullptr);
+    HWND otherWnd = CreateWindowA("STATIC", "TestOtherWnd", WS_OVERLAPPEDWINDOW, 20, 20, 400, 300, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(gameWnd != nullptr && otherWnd != nullptr);
+
+    bool vrActive = true;
+    auto controllerPtr = std::make_shared<MirrorWindowController>();
+    InjectorRuntime::Dependencies deps;
+    deps.windowController = controllerPtr;
+    InjectorRuntime runtime(std::move(deps));
+    MirrorWindowController& controller = *controllerPtr;
+    controller.SetIsVrActiveCallback([&vrActive]() { return vrActive; });
+    ASSERT_TRUE(controller.AttachWindowSubclass(gameWnd));
+    ASSERT_TRUE(controller.IsDetourGetClientRectInstalled());
+
+    FunctionDetour getAncestorDetour;
+    s_getAncestorDetour = &getAncestorDetour;
+    void* pfnGetAncestor = reinterpret_cast<void*>(GetProcAddress(GetModuleHandleA("user32.dll"), "GetAncestor"));
+    ASSERT_TRUE(getAncestorDetour.Install(pfnGetAncestor, reinterpret_cast<void*>(&CountingGetAncestor)));
+
+    RECT rc{};
+    // VR active but no target render resolution yet: no walk.
+    t_getAncestorCalls = 0;
+    EXPECT_TRUE(GetClientRect(otherWnd, &rc));
+    EXPECT_EQ(t_getAncestorCalls, 0);
+
+    // Target resolution set but VR inactive: no walk.
+    controller.SetTargetRenderResolution(3840, 2160);
+    vrActive = false;
+    t_getAncestorCalls = 0;
+    EXPECT_TRUE(GetClientRect(otherWnd, &rc));
+    EXPECT_EQ(t_getAncestorCalls, 0);
+
+    // Both set: a window other than the game's is walked to its root, and keeps its real size.
+    vrActive = true;
+    t_getAncestorCalls = 0;
+    EXPECT_TRUE(GetClientRect(otherWnd, &rc));
+    EXPECT_GT(t_getAncestorCalls, 0);
+    EXPECT_NE(rc.right, 3840);
+
+    getAncestorDetour.Uninstall();
+    s_getAncestorDetour = nullptr;
+    controller.DetachAll();
+    DestroyWindow(otherWnd);
+    DestroyWindow(gameWnd);
 }
 
 TEST(MirrorWindowControllerTest, DecoupledResolutionCoordinateTransforms) {

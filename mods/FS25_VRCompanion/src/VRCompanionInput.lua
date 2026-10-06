@@ -14,7 +14,14 @@ function VRCompanion:registerActionEvents(force)
         return
     end
 
-    local actionEvents = inputBinding.actionEvents or (inputBinding.events and inputBinding.events)
+    -- FS25 keys `events` by the event id registerActionEvent returns; `actionEvents`
+    -- is keyed by action name, so it must not be used for id lookups.
+    local actionEvents = inputBinding.events
+    if actionEvents == nil and not self.missingInputEventsLogged then
+        -- Without it the periodic check cannot see registered events and re-registers them every time.
+        print("[FS25_VR] [Warning] g_inputBinding.events is missing; action events will be re-registered on every check.")
+        self.missingInputEventsLogged = true
+    end
     local isHudEventActive = false
     local isRecenterEventActive = false
     local isSnapLeftEventActive = false

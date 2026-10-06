@@ -97,6 +97,10 @@ TEST_F(LuauTestSuiteTest, TestHudStateMachine) {
     RunSuite("tests/test_hud_state_machine.luau");
 }
 
+TEST_F(LuauTestSuiteTest, TestReusableTables) {
+    RunSuite("tests/test_reusable_tables.luau");
+}
+
 TEST_F(LuauTestSuiteTest, TestSnapTurn) {
     RunSuite("tests/test_snap_turn.luau");
 }

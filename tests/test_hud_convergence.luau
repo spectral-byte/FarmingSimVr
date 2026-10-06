@@ -223,6 +223,7 @@ test("RepositionsActiveHudDisplaysWithFrameConvergenceDisparity", function()
             speedMeter = mockSpeedMeter
         }
     }
+    VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
     -- Frame 0 (Parity 0 -> right aligned anchor shifts by +0.012: 0.80 + 0.012 = 0.812)
     curParity = 0
@@ -273,6 +274,7 @@ test("ConvergenceDisparitySynchronizesSpeedMeterAndFillLevelsUnderVehicleAcrossP
             fillLevels = mockFill
         }
     }
+    VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
     -- Frame 0: Left Eye (Parity 0 -> right anchor = 0.65 + 0.012 = 0.662)
     curParity = 0
@@ -292,6 +294,122 @@ test("ConvergenceDisparitySynchronizesSpeedMeterAndFillLevelsUnderVehicleAcrossP
 
     _G.g_currentMission = nil
     _G.VRBridge = nil
+end)
+
+-- Hidden HUD: no repositioning, but convergence state keeps updating
+local function makeCountingHud()
+    local calls = { count = 0 }
+    local function mk(name)
+        return {
+            name = name, width = 0.08, height = 0.03, position = nil,
+            setPosition = function(self, x, y) calls.count = calls.count + 1; self.position = { x = x, y = y } end,
+            setScale = function() calls.count = calls.count + 1 end,
+            storeOriginalPosition = function() calls.count = calls.count + 1 end,
+            reposition = function() calls.count = calls.count + 1 end,
+            updatePosition = function() calls.count = calls.count + 1 end
+        }
+    end
+    local hud = {
+        speedMeter = mk("SpeedMeterDisplay"),
+        fillLevels = mk("FillLevelsDisplay"),
+        inputHelp = mk("InputHelpDisplay"),
+        gameInfo = mk("GameInfoDisplay"),
+        contextAction = mk("ContextActionDisplay"),
+        ingameMap = mk("IngameMap")
+    }
+    hud.fillLevels.bgLeft = mk("bgLeft")
+    hud.fillLevels.bar = mk("bar")
+    return hud, calls
+end
+
+local function setupHiddenHudScene(parity)
+    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    VRCompanion.fillLevelUnderVehicle = true
+    VRCompanion.is2DViewActive = false
+    VRCompanion.activeFillLevelsDisplay = nil
+    _G.VRBridge = {
+        getFrameParity = function() return parity.value end,
+        getIpd = function() return 0.064 end,
+        isReady = function() return true end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+    local hud, calls = makeCountingHud()
+    _G.g_currentMission = { hud = hud }
+    return hud, calls
+end
+
+local function teardownHiddenHudScene()
+    VRCompanion.fillLevelUnderVehicle = false
+    VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+    VRCompanion.activeFillLevelsDisplay = nil
+    _G.g_currentMission = nil
+    _G.VRBridge = nil
+end
+
+test("HiddenHudMakesNoRepositionCallsButStillUpdatesConvergenceState", function()
+    local parity = { value = 0 }
+    local hud, calls = setupHiddenHudScene(parity)
+    VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+
+    for f = 1, 4 do
+        parity.value = f % 2
+        local left, right, offset = VRCompanion:updateHudConvergence(16)
+        assert(left ~= nil and right ~= nil and offset ~= nil, "Hidden update must still return anchors and offset")
+    end
+    assert(calls.count == 0, string.format("Hidden update made %d HUD reposition calls", calls.count))
+    assert(hud.speedMeter.position == nil and hud.fillLevels.position == nil, "No element may be moved while Hidden")
+
+    parity.value = 0
+    VRCompanion:updateHudConvergence(16)
+    assert(math.abs(_G.g_hudAnchorLeft - VRCompanion.hudAnchorLeft) < 0.0000001 and VRCompanion.hudAnchorLeft ~= 0.20, "Anchors must keep converging while Hidden")
+    assert(VRCompanion.currentConvergenceOffset ~= 0.0, "Convergence offset must keep updating while Hidden")
+    teardownHiddenHudScene()
+end)
+
+test("SwitchingFromHiddenPositionsElementsWithCurrentConvergenceOffset", function()
+    local parity = { value = 0 }
+    local hud, calls = setupHiddenHudScene(parity)
+    VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+    VRCompanion:updateHudConvergence()
+    assert(calls.count == 0)
+    local offset = VRCompanion.currentConvergenceOffset
+    assert(math.abs(offset - 0.012) < 0.0001)
+
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+    assert(hud.inputHelp.position ~= nil and hud.speedMeter.position ~= nil and hud.ingameMap.position ~= nil
+        and hud.gameInfo.position ~= nil and hud.contextAction.position ~= nil and hud.fillLevels.position ~= nil,
+        "Every element must be positioned immediately on leaving Hidden")
+    assert(math.abs(hud.inputHelp.position.x - 0.212) < 0.0001, "InputHelp must use shifted left anchor")
+    assert(math.abs(hud.gameInfo.position.x - 0.812) < 0.0001, "GameInfo must use shifted right anchor")
+    assert(math.abs(hud.contextAction.position.x - 0.512) < 0.0001, "ContextAction must carry the offset")
+    assert(math.abs(hud.ingameMap.position.x - 0.212) < 0.0001, "Map must use shifted left anchor")
+    assert(math.abs(hud.fillLevels.position.x - (0.812 - 0.08)) < 0.0001, "Fill levels must carry the offset")
+
+    -- Streamlined path too
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+    parity.value = 1
+    VRCompanion:updateHudConvergence()
+    hud.speedMeter.position = nil
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
+    assert(hud.speedMeter.position ~= nil and math.abs(hud.speedMeter.position.x - 0.788) < 0.0001, "Streamlined must position with the current (-) offset")
+    teardownHiddenHudScene()
+end)
+
+test("VisibleStatesKeepRepositioningEveryUpdate", function()
+    local parity = { value = 0 }
+    local hud, calls = setupHiddenHudScene(parity)
+    VRCompanion.hudState = VRCompanion.HUD_STATE_STREAMLINED
+    VRCompanion:updateHudConvergence()
+    assert(calls.count > 0, "Streamlined update must reposition")
+    local after = calls.count
+    parity.value = 1
+    VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
+    VRCompanion:updateHudConvergence()
+    assert(calls.count > after, "Full update must reposition")
+    assert(math.abs(hud.speedMeter.position.x - 0.788) < 0.0001)
+    teardownHiddenHudScene()
 end)
 
 -- Slice 4: Pass-Through mode and disabled head tracking smooth reversion to zero
@@ -521,6 +639,244 @@ test("MenuTransitionsPreserveConvergenceParityState", function()
     assert(math.abs(off1 - (-0.012)) < 0.0001, "Parity 1 offset is -0.012")
 
     _G.VRBridge = nil
+end)
+
+-- Issue #10: the pass-through and head-tracking checks resolve once per update
+local function withProbedUpdate(probe)
+    local real = VRCompanion.updateHudConvergence
+    VRCompanion.updateHudConvergence = function(self, dt)
+        probe()
+        return real(self, dt)
+    end
+    local ok, err = pcall(function() VRCompanion:update(16) end)
+    VRCompanion.updateHudConvergence = real
+    assert(ok, tostring(err))
+end
+
+-- Peak heap growth (KB) while running fn many times; per-call closures show up as growth
+local function peakHeapGrowthKb(fn, iterations)
+    fn()
+    local base = gcinfo()
+    local peak = 0
+    for i = 1, iterations do
+        fn()
+        local grown = gcinfo() - base
+        if grown > peak then peak = grown end
+    end
+    return peak
+end
+local function installCountingMocks()
+    local counts = { ready = 0, setting = 0, available = 0 }
+    local state = { ready = true, setting = true, available = true }
+    _G.VRBridge = { isReady = function() counts.ready = counts.ready + 1; return state.ready end, isCompanionActive = true }
+    _G.GameSettings = { SETTING = { IS_HEAD_TRACKING_ENABLED = 42 } }
+    _G.g_gameSettings = {
+        getValue = function(_, setting)
+            counts.setting = counts.setting + 1
+            return state.setting
+        end
+    }
+    _G.isHeadTrackingAvailable = function() counts.available = counts.available + 1; return state.available end
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = nil
+    VRCompanion.headTrackingEnabled = true
+    return counts, state
+end
+
+local function clearCountingMocks()
+    _G.VRBridge = nil
+    _G.GameSettings = nil
+    _G.g_gameSettings = nil
+    _G.isHeadTrackingAvailable = nil
+    VRCompanion.passThroughMode = nil
+    VRCompanion.headTrackingEnabled = true
+end
+
+test("RepeatedChecksWithinOneUpdateQueryEachSourceOnce", function()
+    local counts = installCountingMocks()
+    local results = {}
+    withProbedUpdate(function()
+        counts.ready, counts.setting, counts.available = 0, 0, 0
+        for i = 1, 10 do
+            results[#results + 1] = VRCompanion:isPassThroughMode()
+            results[#results + 1] = VRCompanion:isHeadTrackingActive()
+        end
+    end)
+    assert(counts.ready <= 1, "VRBridge.isReady queried " .. counts.ready .. " times in one update")
+    assert(counts.setting <= 1, "game setting read " .. counts.setting .. " times in one update")
+    assert(counts.available <= 1, "isHeadTrackingAvailable called " .. counts.available .. " times in one update")
+    for i = 1, #results, 2 do
+        assert(results[i] == false and results[i + 1] == true, "cached answers must match the resolved answers")
+    end
+    clearCountingMocks()
+end)
+
+local function bothChecks()
+    VRCompanion:isPassThroughMode()
+    VRCompanion:isHeadTrackingActive()
+end
+
+test("CachedChecksDoNotAllocateWithinAnUpdate", function()
+    installCountingMocks()
+    local peak
+    withProbedUpdate(function() peak = peakHeapGrowthKb(bothChecks, 20000) end)
+    assert(peak < 8, "cached checks grew the heap by " .. peak .. " KB")
+    clearCountingMocks()
+end)
+
+test("UncachedChecksDoNotCreateAClosurePerCall", function()
+    installCountingMocks()
+    local peak = peakHeapGrowthKb(bothChecks, 20000)
+    assert(peak < 8, "checks grew the heap by " .. peak .. " KB")
+    clearCountingMocks()
+end)
+test("ReadinessChangeIsReflectedByTheNextUpdate", function()
+    local counts, state = installCountingMocks()
+    local seen
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == false)
+    state.ready = false
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == true, "runtime becoming unready must show up on the next update")
+    _G.VRBridge = nil
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == true)
+    clearCountingMocks()
+end)
+
+test("HeadTrackingSettingAndAvailabilityChangesAreReflectedByTheNextUpdate", function()
+    local counts, state = installCountingMocks()
+    local seen
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == true)
+    state.setting = false
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == false, "head-tracking setting toggle must show up on the next update")
+    state.setting = true
+    state.available = false
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == false, "head tracking becoming unavailable must show up on the next update")
+    clearCountingMocks()
+end)
+
+test("SettersTakeEffectNoLaterThanTheNextUpdate", function()
+    installCountingMocks()
+    local seen
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == false)
+    VRCompanion:setPassThroughMode(true)
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == true, "setPassThroughMode(true) must apply by the next update")
+    VRCompanion:setPassThroughMode(false)
+    withProbedUpdate(function() seen = VRCompanion:isPassThroughMode() end)
+    assert(seen == false)
+
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == true)
+    VRCompanion:setHeadTrackingEnabled(false)
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == false, "setHeadTrackingEnabled(false) must apply by the next update")
+    VRCompanion:setHeadTrackingEnabled(true)
+    withProbedUpdate(function() seen = VRCompanion:isHeadTrackingActive() end)
+    assert(seen == true)
+    clearCountingMocks()
+end)
+
+-- The game runs VRCompanion:update inside the hooked mission update
+local function withHookedMissionUpdate(missionUpdate, fn, mode)
+    _G.FSBaseMission = { update = missionUpdate }
+    VRCompanion:setRenderingMode(mode or "AFR")
+    VRCompanion:setSubPassIndex(0)
+    VRCompanion:hookMissionUpdate()
+    local ok, err = pcall(fn)
+    VRCompanion:unhookMissionUpdate()
+    VRCompanion:setRenderingMode("AFR")
+    _G.FSBaseMission = nil
+    assert(ok, tostring(err))
+end
+
+test("UpdateNestedInTheHookedMissionUpdateQueriesEachSourceOncePerFrame", function()
+    local counts = installCountingMocks()
+    local real = VRCompanion.updateHudConvergence
+    VRCompanion.updateHudConvergence = function(self, dt)
+        for _ = 1, 10 do bothChecks() end
+        return real(self, dt)
+    end
+    local ok, err = true, nil
+    for _, mode in ipairs({ "AFR", "DualPass" }) do
+        if ok then
+            ok, err = pcall(withHookedMissionUpdate, function(self, dt) VRCompanion:update(dt) end, function()
+                for _ = 1, 3 do
+                    counts.ready, counts.setting, counts.available = 0, 0, 0
+                    -- Sub-pass 0 runs the mission update (and with it VRCompanion:update)
+                    VRCompanion:setSubPassIndex(0)
+                    _G.FSBaseMission:update(16)
+                    local where = mode .. ": "
+                    assert(counts.ready == 1, where .. "VRBridge.isReady queried " .. counts.ready .. " times in one frame")
+                    assert(counts.setting == 1, where .. "game setting read " .. counts.setting .. " times in one frame")
+                    assert(counts.available == 1, where .. "isHeadTrackingAvailable called " .. counts.available .. " times in one frame")
+                end
+            end, mode)
+        end
+    end
+    VRCompanion.updateHudConvergence = real
+    clearCountingMocks()
+    assert(ok, tostring(err))
+end)
+
+test("AnErrorDuringAnUpdateClosesTheFrameCheckScope", function()
+    local counts, state = installCountingMocks()
+    local real = VRCompanion.updateHudConvergence
+    VRCompanion.updateHudConvergence = function(self, dt)
+        bothChecks()
+        error("hud update failed")
+    end
+    local updateOk = pcall(function() VRCompanion:update(16) end)
+    VRCompanion.updateHudConvergence = real
+
+    local missionOk
+    local ok, err = pcall(withHookedMissionUpdate, function(self, dt)
+        bothChecks()
+        error("mission update failed")
+    end, function()
+        missionOk = pcall(function() _G.FSBaseMission:update(16) end)
+    end)
+
+    local depth = VRCompanion.frameCheckDepth or 0
+    state.ready = false
+    local seen = VRCompanion:isPassThroughMode()
+    clearCountingMocks()
+    assert(ok, tostring(err))
+    assert(updateOk == false and missionOk == false, "the errors must still reach the caller")
+    assert(depth == 0, "an error must not leave a frame-check scope open, depth=" .. tostring(depth))
+    assert(seen == true, "checks outside an update must resolve fresh after an error")
+end)
+
+test("AnErrorInANestedUpdateKeepsItsRaiseSiteAndClosesEveryScope", function()
+    installCountingMocks()
+    local real = VRCompanion.updateHudConvergence
+    local function failingHudUpdate()
+        error("nested hud update failed")
+    end
+    VRCompanion.updateHudConvergence = failingHudUpdate
+
+    local missionOk, missionErr
+    local ok, err = pcall(withHookedMissionUpdate, function(self, dt) VRCompanion:update(dt) end, function()
+        missionOk, missionErr = pcall(function() _G.FSBaseMission:update(16) end)
+    end)
+    VRCompanion.updateHudConvergence = real
+    local depth = VRCompanion.frameCheckDepth or 0
+    clearCountingMocks()
+
+    assert(ok, tostring(err))
+    missionErr = tostring(missionErr)
+    assert(missionOk == false and string.find(missionErr, "nested hud update failed", 1, true) ~= nil,
+        "the error must still reach the game: " .. missionErr)
+    if debug ~= nil and debug.traceback ~= nil then
+        assert(string.find(missionErr, "failingHudUpdate", 1, true) ~= nil,
+            "the rethrown error must carry the traceback from where it was raised: " .. missionErr)
+    end
+    assert(depth == 0, "an error in a nested scope must not leave a scope open, depth=" .. tostring(depth))
 end)
 
 print(string.format("Summary: %d passed, %d failed", passed, failed))

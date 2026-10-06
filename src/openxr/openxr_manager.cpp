@@ -10,23 +10,61 @@
 
 namespace fs25vr {
 
+// The performance counter frequency is fixed at boot, so it is queried once.
+static int64_t QpcFrequency() {
+    static const int64_t freq = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return static_cast<int64_t>(f.QuadPart);
+    }();
+    return freq;
+}
+
+int64_t OpenXrManager::PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency) {
+    if (frequency <= 0) return 0;
+    // Split into whole seconds and a sub-second remainder: counter * 1e9 overflows int64 after
+    // ~15 minutes of uptime at a 10 MHz counter.
+    const int64_t seconds = counter / frequency;
+    const int64_t remainder = counter % frequency;
+    return seconds * 1000000000LL + (remainder * 1000000000LL) / frequency;
+}
+
+void OpenXrManager::SetPerformanceCounterSource(PerformanceCounterSource source) {
+    m_counterSource = std::move(source);
+}
+
+OpenXrManager::PerformanceCounterSample OpenXrManager::ReadPerformanceCounter() const {
+    if (m_counterSource) return m_counterSource();
+    LARGE_INTEGER qpc;
+    QueryPerformanceCounter(&qpc);
+    return { qpc.QuadPart, QpcFrequency() };
+}
+
 XrTime OpenXrManager::GetCurrentXrTime() const {
+    const PerformanceCounterSample now = ReadPerformanceCounter();
+
     if (m_lastPredictedDisplayTime != 0) {
-        LARGE_INTEGER qpc, freq;
-        QueryPerformanceCounter(&qpc);
-        QueryPerformanceFrequency(&freq);
-        int64_t elapsedQpc = qpc.QuadPart - m_lastPredictedQpc;
-        if (elapsedQpc > 0 && freq.QuadPart > 0) {
-            XrTime deltaNs = static_cast<XrTime>((elapsedQpc * 1000000000LL) / freq.QuadPart);
-            return m_lastPredictedDisplayTime + deltaNs;
+        int64_t elapsedQpc = now.counter - m_lastPredictedQpc;
+        if (elapsedQpc > 0 && now.frequency > 0) {
+            return m_lastPredictedDisplayTime + PerformanceCounterToNanoseconds(elapsedQpc, now.frequency);
         }
         return m_lastPredictedDisplayTime;
     }
 
-    LARGE_INTEGER qpc, freq;
-    QueryPerformanceCounter(&qpc);
-    QueryPerformanceFrequency(&freq);
-    return static_cast<XrTime>((qpc.QuadPart * 1000000000LL) / freq.QuadPart);
+    // Before the first frame: let the runtime convert the counter into its own time base.
+    if (m_runtimeInfo.win32TimeConversionEnabled && m_instance != XR_NULL_HANDLE) {
+        LARGE_INTEGER counter;
+        counter.QuadPart = now.counter;
+        XrTime converted = 0;
+        if (XR_SUCCEEDED(m_dispatch->ConvertWin32PerformanceCounterToTime(m_instance, &counter, &converted)) &&
+            converted > 0) {
+            return converted;
+        }
+    }
+
+    // No runtime conversion: the counter in nanoseconds, computed without overflow. Runtimes that
+    // back XrTime with the performance counter share this time base, and the counter is monotonic.
+    return PerformanceCounterToNanoseconds(now.counter, now.frequency);
 }
 
 OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
@@ -56,12 +94,17 @@ bool OpenXrManager::CheckD3D12ExtensionSupport() {
         return false;
     }
 
+    bool d3d12Found = false;
     for (const auto& ext : extensions) {
         if (strcmp(ext.extensionName, XR_KHR_D3D12_ENABLE_EXTENSION_NAME) == 0) {
             m_runtimeInfo.d3d12ExtensionSupported = true;
-            return true;
+            d3d12Found = true;
+        } else if (strcmp(ext.extensionName, XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME) == 0) {
+            m_win32TimeConversionAvailable = true;
         }
     }
+
+    if (d3d12Found) return true;
 
     LogWarn("OpenXR runtime does not support required extension: " + std::string(XR_KHR_D3D12_ENABLE_EXTENSION_NAME));
     return false;
@@ -76,9 +119,10 @@ bool OpenXrManager::Initialize() {
         return true;
     }
 
-    const char* enabledExtensions[] = {
-        XR_KHR_D3D12_ENABLE_EXTENSION_NAME
-    };
+    std::vector<const char*> enabledExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    if (m_win32TimeConversionAvailable) {
+        enabledExtensions.push_back(XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME);
+    }
 
     XrInstanceCreateInfo createInfo{XR_TYPE_INSTANCE_CREATE_INFO};
     createInfo.next = nullptr;
@@ -88,8 +132,8 @@ bool OpenXrManager::Initialize() {
     strncpy_s(createInfo.applicationInfo.engineName, "GIANTS Engine 10", XR_MAX_ENGINE_NAME_SIZE - 1);
     createInfo.applicationInfo.engineVersion = 1;
     createInfo.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
-    createInfo.enabledExtensionCount = 1;
-    createInfo.enabledExtensionNames = enabledExtensions;
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
+    createInfo.enabledExtensionNames = enabledExtensions.data();
 
     XrResult res = m_dispatch->CreateInstance(&createInfo, &m_instance);
     if (XR_FAILED(res)) {
@@ -99,6 +143,7 @@ bool OpenXrManager::Initialize() {
         m_state = OpenXrState::PassThrough;
         return true;
     }
+    m_runtimeInfo.win32TimeConversionEnabled = m_win32TimeConversionAvailable;
 
     XrInstanceProperties instanceProps{XR_TYPE_INSTANCE_PROPERTIES};
     if ((XR_SUCCEEDED(m_dispatch->GetInstanceProperties(m_instance, &instanceProps)))) {
@@ -960,9 +1005,7 @@ bool OpenXrManager::BeginFrame() {
 
     if (m_frameState.predictedDisplayTime != 0) {
         m_lastPredictedDisplayTime = m_frameState.predictedDisplayTime;
-        LARGE_INTEGER qpc;
-        QueryPerformanceCounter(&qpc);
-        m_lastPredictedQpc = qpc.QuadPart;
+        m_lastPredictedQpc = ReadPerformanceCounter().counter;
     }
 
     XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};

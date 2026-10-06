@@ -10,6 +10,10 @@ VRCompanion.Core = VRCompanion.Core or {}
 VRCompanion.name = VRCompanion.name or g_currentModName or "FS25_VRCompanion"
 VRCompanion.version = VRCompanion.version or "1.0.0.0"
 
+-- Slow retry cadence (in update ticks) for re-running the dt=0 guard install so a late
+-- Ferry class or newly spawned vehicles are picked up without scanning _G every frame.
+VRCompanion.VEHICLE_SPEED_HOOK_RETRY_TICKS = 180
+
 VRCompanion.handshakeComplete = (VRCompanion.handshakeComplete ~= nil) and VRCompanion.handshakeComplete or false
 VRCompanion.frameTicks = VRCompanion.frameTicks or 0
 VRCompanion.lastControlledVehicle = VRCompanion.lastControlledVehicle or nil
@@ -393,6 +397,8 @@ function VRCompanion:hookVehicleSpeed()
     end
 
     self.vehicleSpeedHooked = true
+    -- Recorded here so the install from loadMap also restarts the slow retry cadence.
+    self.lastVehicleSpeedHookTick = self.frameTicks or 0
 end
 
 function VRCompanion:unhookVehicleSpeed()
@@ -458,10 +464,54 @@ function VRCompanion:hookPlayerCamera()
     end
 end
 
+local traceback = (debug ~= nil) and debug.traceback or nil
+
+-- Appends the traceback from where an error was raised, so rethrowing it from the
+-- outermost frame-check scope does not hide its origin.
+local function withRaiseTraceback(err)
+    if traceback ~= nil and type(err) == "string" then
+        return traceback(err, 2)
+    end
+    return err
+end
+
+-- Closes a nested frame-check scope after a normal return. An error skips this; the
+-- outermost scope then closes every scope opened inside it.
+local function endNestedFrameChecks(self, ...)
+    self:endFrameChecks()
+    return ...
+end
+
+-- Closes the outermost frame-check scope however the call ended, then passes on its
+-- results or rethrows its error, so an error never leaves a scope open.
+local function endOutermostFrameChecks(self, ok, ...)
+    self:resetFrameChecks()
+    if not ok then
+        error((...), 0)
+    end
+    return ...
+end
+
+-- Runs fn(self, ...) inside a frame-check scope. Only the outermost scope runs fn
+-- protected, so the game's own mission update is not wrapped twice when the game
+-- runs VRCompanion:update inside it.
+local function runWithFrameChecks(self, fn, ...)
+    local outermost = (self.frameCheckDepth or 0) == 0
+    self:beginFrameChecks()
+    if outermost then
+        return endOutermostFrameChecks(self, xpcall(fn, withRaiseTraceback, self, ...))
+    end
+    return endNestedFrameChecks(self, fn(self, ...))
+end
+
 function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     if self.inMissionUpdate then
         return origUpdateFn(missionSelf, dt, ...)
     end
+    return runWithFrameChecks(self, self.runMissionUpdate, missionSelf, dt, origUpdateFn, ...)
+end
+
+function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
     local isSequentialDualPass = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS)
         and not self.is2DViewActive
@@ -470,6 +520,8 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
     if not isSequentialDualPass then
         self.accumulatedPass1Dt = 0.0
+        self.deferRenderingCameraBind = false
+        self:endEyeProjectionScope()
         return origUpdateFn(missionSelf, dt, ...)
     end
 
@@ -479,6 +531,12 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     end
 
     local subPass = self:getSubPassIndex() % 2
+
+    -- One eye projection fetch and one rendering camera bind per sub-pass: camera
+    -- updates inside the sub-pass share the cached projection and leave the bind to
+    -- the single bindRenderingCamera call at the end.
+    self:beginEyeProjectionScope()
+    self.deferRenderingCameraBind = true
 
     if subPass == 1 then
         -- Sub-Pass 1 (Right Eye): Freeze simulation at timestamp T.
@@ -490,14 +548,12 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         local camLeft, camRight = self:getStereoCameraNodes()
         local targetCam = camRight
 
-        self:bindRenderingCamera(targetCam)
         if targetCam ~= nil then
-            self:applyCameraProjection(targetCam, 1)
+            self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, 1)
         end
 
         -- Synchronize right eye camera transforms without running engine simulation
-        self:syncActiveEyeCamera(1)
-        self:bindRenderingCamera(targetCam)
+        self:finishSubPass(subPass, 1, targetCam)
         if type(self.updateHudConvergence) == "function" then
             self:updateHudConvergence(0.0)
         end
@@ -516,11 +572,9 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     local camLeft, camRight = self:getStereoCameraNodes()
     local targetCam = camLeft
 
-    self:bindRenderingCamera(targetCam)
-
     -- Update camera projection for active eye
     if targetCam ~= nil then
-        self:applyCameraProjection(targetCam, 0)
+        self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, 0)
     end
 
     -- Run mission update with accumulated real dt under reentrancy guard and pcall protection
@@ -536,8 +590,7 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         res = nil
     end
 
-    self:syncActiveEyeCamera(0)
-    self:bindRenderingCamera(targetCam)
+    self:finishSubPass(subPass, 0, targetCam)
     if type(self.updateHudConvergence) == "function" then
         self:updateHudConvergence(effectiveDt)
     end
@@ -545,6 +598,22 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     return res
 end
 
+-- Runs one camera step of a sub-pass; an error is logged instead of escaping, so the
+-- sub-pass still ends with its single camera bind and closes its projection scope.
+function VRCompanion:runSubPassStep(subPass, fn, ...)
+    local ok, err = pcall(fn, self, ...)
+    if not ok and self.lastMissionUpdateError ~= tostring(err) then
+        print(string.format("[FS25_VR] [Warning] Camera update error on Sub-Pass %d: %s", subPass, tostring(err)))
+        self.lastMissionUpdateError = tostring(err)
+    end
+end
+
+function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam)
+    self:runSubPassStep(subPass, self.syncActiveEyeCamera, eyeIndex)
+    self.deferRenderingCameraBind = false
+    self:bindRenderingCamera(targetCam)
+    self:endEyeProjectionScope()
+end
 function VRCompanion:hookMissionUpdate()
     if self.missionUpdateHooked then
         return
@@ -596,11 +665,17 @@ function VRCompanion:unhookMissionUpdate()
     end
 
     self.accumulatedPass1Dt = 0.0
+    self.deferRenderingCameraBind = false
+    self:endEyeProjectionScope()
     self.missionUpdateHooked = false
     print("[FS25_VR] Unhooked mission update loop.")
 end
 
 function VRCompanion:update(dt)
+    return runWithFrameChecks(self, self.runUpdate, dt)
+end
+
+function VRCompanion:runUpdate(dt)
     self.frameTicks = (self.frameTicks or 0) + 1
 
     -- Synchronize 2D view active state with native VRBridge if changed externally
@@ -633,7 +708,11 @@ function VRCompanion:update(dt)
     if not self.missionUpdateHooked then
         self:hookMissionUpdate()
     end
-    if not self.vehicleSpeedHooked or self.origFerryUpdatePosition == nil then
+    -- Install dt=0 guards once, then only retry (to catch a late Ferry class or newly
+    -- spawned vehicles) on a slow cadence or on a vehicle transition, never every frame.
+    local speedHookRetryDue = self.vehicleSpeedHooked
+        and (self.frameTicks - (self.lastVehicleSpeedHookTick or 0)) >= self.VEHICLE_SPEED_HOOK_RETRY_TICKS
+    if not self.vehicleSpeedHooked or speedHookRetryDue then
         self:hookVehicleSpeed()
     end
 
@@ -654,6 +733,8 @@ function VRCompanion:update(dt)
     if self.lastControlledVehicle ~= curVehicle then
         local oldVeh = self.lastControlledVehicle
         self.lastControlledVehicle = curVehicle
+        -- A new vehicle may have just been spawned/entered: re-run the guard install.
+        self:hookVehicleSpeed()
         if type(self.onVehicleTransition) == "function" then
             self:onVehicleTransition(oldVeh, curVehicle)
         end
@@ -716,7 +797,9 @@ function VRCompanion:deleteMap()
 
     self.inMissionUpdate = false
     self.handshakeComplete = false
+    self:clearFrameChecks()
     self.frameTicks = 0
+    self.lastVehicleSpeedHookTick = 0
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
     self.activePlayerCamera = nil

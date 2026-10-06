@@ -773,16 +773,15 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     uint32_t contextIndex = 0;
     bool alternatesEyeContexts = false;
 
-    if (interceptor.IsVirtualHandle(InFeatureHandle)) {
-        auto* vHandle = interceptor.GetVirtualHandle(InFeatureHandle);
-        if (!vHandle) {
-            target = InFeatureHandle;
-            contextIndex = 0;
-        } else if (interceptor.IsSingleContextBypassActive()) {
+    // One registry lookup resolves the Virtual NGX Handle; the bridge read above is reused
+    // for the bypass and eye-index decisions instead of re-taking the interceptor lock.
+    auto* vHandle = interceptor.GetVirtualHandle(InFeatureHandle);
+    if (vHandle && vHandle->magic == VIRTUAL_NGX_HANDLE_MAGIC) {
+        if (bridge && (bridge->Is2DViewActive() || bridge->IsMenuVisible())) {
             target = vHandle->hLeft;
             contextIndex = 0;
         } else {
-            uint32_t eyeIndex = isDualPass ? interceptor.GetActiveDualPassEyeIndex()
+            uint32_t eyeIndex = isDualPass ? bridge->GetSubPassIndex()
                                            : (bridge ? bridge->GetFrameParity() : 0);
             target = (eyeIndex == 1 && vHandle->hRight) ? vHandle->hRight : vHandle->hLeft;
             contextIndex = (eyeIndex == 1 && vHandle->hRight) ? 1 : 0;

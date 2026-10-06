@@ -34,3 +34,6 @@ Accepted
 - **Undocumented `setStereoRendering(true)`** (rejected: telemetry probe in `fs25_vr.log` confirmed GIANTS Engine 10 records only 1 viewport and 1 scene pass under D3D12; legacy DX11 stub).
 - **Native OS Timer Detouring for $\Delta t = 0$** (rejected: detouring `QueryPerformanceCounter` system-wide risks disrupting audio thread synchronization and Win32 message processing; Luau update hook clamping is strictly isolated to game simulation).
 - **Dual-Pass Only / Deprecating AFR** (rejected: Sequential Dual-Pass increases draw calls by ~85% and requires high-end hardware like RTX 4080/4090/5080; preserving AFR as a switchable option ensures smooth playability on midrange GPUs).
+
+## Amendment
+The OpenXR frame is now waited on and begun after the previous pair's `Present`, before the engine update, so sub-pass 0 and sub-pass 1 both locate the head at the pair's predicted display time. Sub-pass 0 therefore finds a frame already begun. See [ADR-0019](0019-begin-the-openxr-frame-before-the-engine-update.md).

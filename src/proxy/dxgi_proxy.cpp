@@ -505,6 +505,16 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
     return true;
 }
 
+void DxgiProxy::OnPresentReturned(HRESULT presentResult) {
+    // A failed Present (device removed or reset) leaves the next frame to the lazy begin in
+    // CopyBackBufferToEye rather than blocking in xrWaitFrame ahead of device-lost handling.
+    if (FAILED(presentResult)) return;
+    if (m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning() &&
+        m_openXrManager->HasEyeSwapchains()) {
+        m_openXrManager->BeginFrame();  // returns at once when a frame is already begun
+    }
+}
+
 UINT DxgiProxy::EffectiveSyncInterval(UINT gameSyncInterval) const {
     // xrWaitFrame paces frames only while the session runs and eye swapchains exist (OnPresent calls it
     // only then). While it is paused (headset asleep, not yet READY) or swapchain creation failed, keep
@@ -523,15 +533,15 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UIN
     if (!proxy) return S_OK;
     bool shouldPresent = proxy->OnPresent(self, syncInterval, flags);
     if (!shouldPresent) {
+        proxy->OnPresentReturned();
         return S_OK;
     }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(
         proxy->m_detourPresent.GetOriginal()
     );
-    if (orig) {
-        return orig(self, proxy->EffectiveSyncInterval(syncInterval), flags);
-    }
-    return S_OK;
+    HRESULT hr = orig ? orig(self, proxy->EffectiveSyncInterval(syncInterval), flags) : S_OK;
+    proxy->OnPresentReturned(hr);
+    return hr;
 }
 
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
@@ -539,15 +549,15 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
     if (!proxy) return S_OK;
     bool shouldPresent = proxy->OnPresent1(self, syncInterval, flags, params);
     if (!shouldPresent) {
+        proxy->OnPresentReturned();
         return S_OK;
     }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*)>(
         proxy->m_detourPresent1.GetOriginal()
     );
-    if (orig) {
-        return orig(self, proxy->EffectiveSyncInterval(syncInterval), flags, params);
-    }
-    return S_OK;
+    HRESULT hr = orig ? orig(self, proxy->EffectiveSyncInterval(syncInterval), flags, params) : S_OK;
+    proxy->OnPresentReturned(hr);
+    return hr;
 }
 
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers(
