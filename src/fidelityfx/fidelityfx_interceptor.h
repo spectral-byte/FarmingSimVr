@@ -2,6 +2,7 @@
 
 #include "ffx_defs.h"
 #include "core/detour.h"
+#include "ngx/mv_pass.h"
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -72,6 +73,14 @@ public:
     // (1 means the contexts strictly alternated).
     uint32_t GetDiagLongestContextRun() const;
 
+    // Motion vector correction (#38). Under Sequential Dual-Pass an upscale dispatch for an eye context
+    // first runs the same motion vector pass as DLSS, then FSR3 reads the corrected texture for that one
+    // call and the game's dispatch description is restored. The switch is the DLSS one (vrDlssMvFix on the
+    // NGX interceptor); the pass, and its disable-on-failure, are this interceptor's own.
+    void SetMotionVectorPassFactory(MotionVectorPassFactory factory);
+    bool IsMvFixDisabledForSession() const { return m_mvFixDisabled.load(); }
+    std::string GetMvFixDisableReason() const;
+
     // Discontinuity Flush coordination (shares the VRBridge state with the DLSS path).
     void TriggerDiscontinuityFlush();
     bool ConsumeDiscontinuity(uint32_t contextIndex);
@@ -100,6 +109,15 @@ private:
     void LogDiagSummary();
     static JitterSummary Summarize(const std::vector<DiagSample>& samples);
 
+    // Runs the motion vector pass for one upscale dispatch and swaps the pass's texture into the
+    // description. True when swapped; savedMv then holds the game's resource for the caller to restore.
+    // state names what happened, for the diagnostics.
+    bool ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint32_t createFlags, uint32_t eye, uint64_t dispatchIndex,
+                           ffxApiResource& savedMv, const char*& state);
+    ID3D12Resource* RecordMvPass(const MvPassInputs& inputs, std::vector<MvSelfCheckReport>& reports);
+    void DisableMvFix(const std::string& reason);
+    void LogSelfCheckReport(const MvSelfCheckReport& report) const;
+
     mutable std::recursive_mutex m_mutex;
     bool m_isAttached = false;
     VRBridge* m_vrBridge = nullptr;
@@ -117,6 +135,12 @@ private:
     std::atomic<int> m_lastRenderingMode{-1};
     std::atomic<bool> m_internalDiscontinuityPendingLeft{false};
     std::atomic<bool> m_internalDiscontinuityPendingRight{false};
+
+    mutable std::mutex m_mvFixMutex;
+    MotionVectorPassFactory m_mvPassFactory;
+    std::unique_ptr<IMotionVectorPass> m_mvPass;
+    std::string m_mvFixDisableReason;
+    std::atomic<bool> m_mvFixDisabled{false};
 
     std::atomic<uint32_t> m_diagRemaining{0};
     mutable std::mutex m_diagMutex;

@@ -2,6 +2,8 @@
 #include "core/logger.h"
 #include "core/dll_lifecycle.h"
 #include "luau/vr_bridge.h"
+#include "ngx/ngx_interceptor.h"
+#include "ffx_mv_conventions.h"
 #include <algorithm>
 #include <cmath>
 #include <cwctype>
@@ -70,11 +72,175 @@ FidelityFxInterceptor* FidelityFxInterceptor::Host() {
     return s_host.load();
 }
 
-FidelityFxInterceptor::FidelityFxInterceptor() = default;
+FidelityFxInterceptor::FidelityFxInterceptor() {
+    m_mvPassFactory = [](ID3D12GraphicsCommandList*) { return CreateD3D12MotionVectorPass(); };
+}
 
 FidelityFxInterceptor::~FidelityFxInterceptor() {
-    if (IsProcessTerminating()) return;
+    if (IsProcessTerminating()) {
+        // Releasing GPU objects while the process is going down is not safe; the OS reclaims them.
+        (void)m_mvPass.release();
+        return;
+    }
     DetachAll();
+}
+
+void FidelityFxInterceptor::SetMotionVectorPassFactory(MotionVectorPassFactory factory) {
+    std::lock_guard<std::mutex> lock(m_mvFixMutex);
+    m_mvPass.reset();
+    m_mvPassFactory = std::move(factory);
+}
+
+std::string FidelityFxInterceptor::GetMvFixDisableReason() const {
+    std::lock_guard<std::mutex> lock(m_mvFixMutex);
+    return m_mvFixDisableReason;
+}
+
+void FidelityFxInterceptor::DisableMvFix(const std::string& reason) {
+    {
+        std::lock_guard<std::mutex> lock(m_mvFixMutex);
+        if (m_mvFixDisabled.load()) return;
+        m_mvFixDisableReason = reason;
+    }
+    m_mvFixDisabled.store(true);
+    LogError("FidelityFxInterceptor: Motion vector pass disabled for this session: " + reason +
+             ". FSR3 continues on the engine's motion vectors.");
+}
+
+ID3D12Resource* FidelityFxInterceptor::RecordMvPass(const MvPassInputs& inputs, std::vector<MvSelfCheckReport>& reports) {
+    std::unique_lock<std::mutex> lock(m_mvFixMutex);
+    if (m_mvFixDisabled.load()) return nullptr;
+    if (!m_mvPass) {
+        if (m_mvPassFactory) m_mvPass = m_mvPassFactory(inputs.cmdList);
+        if (!m_mvPass) {
+            lock.unlock();
+            DisableMvFix("the motion vector pass could not be created");
+            return nullptr;
+        }
+    }
+    MvPassResult result = m_mvPass->Record(inputs);
+    if (!result.ok || !result.output) {
+        lock.unlock();
+        DisableMvFix(result.failureReason.empty() ? std::string("the pass reported a failure") : result.failureReason);
+        return nullptr;
+    }
+    reports = m_mvPass->PollSelfCheck();
+    return result.output;
+}
+
+void FidelityFxInterceptor::LogSelfCheckReport(const MvSelfCheckReport& report) const {
+    const mvreproj::SelfCheckStats& s = report.stats;
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(3)
+       << "FidelityFxInterceptor: [Diag] MvCheck Eye=" << report.eye << " Dispatch #" << report.evalIndex
+       << " Samples=" << s.total << " Valid=" << s.valid
+       << " skipped=" << std::setprecision(1) << s.skippedFraction * 100.0 << "% (sky or off-screen)"
+       << std::setprecision(3)
+       << " " << mvreproj::ConventionName(mvreproj::Convention::ToPrevious) << ": mean=" << s.meanToPrevious
+       << " median=" << s.medianToPrevious << " px"
+       << " " << mvreproj::ConventionName(mvreproj::Convention::ToCurrent) << ": mean=" << s.meanToCurrent
+       << " median=" << s.medianToCurrent << " px"
+       << " Best=" << mvreproj::ConventionName(mvreproj::BetterConvention(s));
+    LogInfo(ss.str());
+}
+
+bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint32_t createFlags, uint32_t eye,
+                                              uint64_t dispatchIndex, ffxApiResource& savedMv, const char*& state) {
+    VRBridge* bridge = GetVRBridge();
+    state = "off";
+    // The switch is vrDlssMvFix, shared with DLSS.
+    std::shared_ptr<NgxInterceptor> ngx = bridge ? bridge->GetNgxInterceptor() : nullptr;
+    if (!ngx || !ngx->IsMvFixEnabled() || m_mvFixDisabled.load()) return false;
+
+    // Correction exists for Sequential Dual-Pass; AFR keeps the engine's vectors until its own correction lands.
+    if (bridge->GetRenderingMode() != VRRenderingMode::SequentialDualPass) {
+        state = "not-sequential-dual-pass";
+        return false;
+    }
+    if (!desc.commandList || !desc.depth.resource || !desc.motionVectors.resource) {
+        state = "missing-inputs";
+        return false;
+    }
+    const FfxMvConventions conventions = ReadFfxMvConventions(createFlags, desc);
+    if (conventions.unsupportedReason) {
+        state = conventions.unsupportedReason;
+        return false;
+    }
+
+    mvreproj::CorrectionPlan plan = mvreproj::PlanCorrection(bridge->GetCameraRecords().Resolve(eye));
+    state = mvreproj::CorrectionDecisionName(plan.decision);
+    MvCorrectionRequest correctionRequest;
+    const MvCorrectionRequest* correction = nullptr;
+    if (plan.decision == mvreproj::CorrectionDecision::Correct) {
+        if (std::fabs(conventions.mvScaleX) > 1e-6f && std::fabs(conventions.mvScaleY) > 1e-6f) {
+            // The dispatch's own camera fields describe the camera that rendered this frame.
+            if (conventions.hasProjection) {
+                plan.current.tanHalfFovY = conventions.tanHalfFovY;
+                plan.current.nearClip = conventions.nearClip;
+                plan.current.farClip = conventions.farClip;
+            }
+            correctionRequest.mvScaleX = conventions.mvScaleX;
+            correctionRequest.mvScaleY = conventions.mvScaleY;
+            correctionRequest.current = plan.current;
+            correctionRequest.previousFrame = plan.previousFrame;
+            correctionRequest.sameEye = plan.sameEye;
+            correctionRequest.toPreviousFrame = plan.toPreviousFrame;
+            correctionRequest.toSameEye = plan.toSameEye;
+            correction = &correctionRequest;
+            state = "correcting";
+        } else {
+            state = "zero-mv-scale";
+        }
+    }
+
+    // Self-check (diagnostic window only): score the vectors the upscaler will read against the prediction
+    // from depth and the camera records. Measured only.
+    MvSelfCheckRequest checkRequest;
+    const MvSelfCheckRequest* check = nullptr;
+    if (m_diagRemaining.load() > 0) {
+        if (plan.decision == mvreproj::CorrectionDecision::MissingRecords ||
+            plan.decision == mvreproj::CorrectionDecision::UnusableProjection) {
+            LogInfo("FidelityFxInterceptor: [Diag] MvCheck skipped Dispatch #" + std::to_string(dispatchIndex) + " Eye=" +
+                    std::to_string(eye) + ": " + state);
+        } else {
+            checkRequest.eye = eye;
+            checkRequest.evalIndex = dispatchIndex;
+            checkRequest.mvScaleX = conventions.mvScaleX;
+            checkRequest.mvScaleY = conventions.mvScaleY;
+            checkRequest.current = plan.current;
+            if (correction) {
+                // The vectors being scored are the corrected ones: they should land on the same eye's previous camera.
+                checkRequest.previous = plan.sameEye;
+                checkRequest.toPrevious = plan.toSameEye;
+            } else {
+                checkRequest.previous = plan.previousFrame;
+                checkRequest.toPrevious = plan.toPreviousFrame;
+            }
+            check = &checkRequest;
+        }
+        LogInfo("FidelityFxInterceptor: [Diag] MvCorrection Dispatch #" + std::to_string(dispatchIndex) + " Eye=" +
+                std::to_string(eye) + ": " + state);
+    }
+
+    MvPassInputs inputs;
+    inputs.cmdList = static_cast<ID3D12GraphicsCommandList*>(desc.commandList);
+    inputs.depth = static_cast<ID3D12Resource*>(desc.depth.resource);
+    inputs.motionVectors = static_cast<ID3D12Resource*>(desc.motionVectors.resource);
+    inputs.selfCheck = check;
+    inputs.correction = correction;
+    std::vector<MvSelfCheckReport> reports;
+    ID3D12Resource* corrected = RecordMvPass(inputs, reports);
+    for (const MvSelfCheckReport& report : reports) LogSelfCheckReport(report);
+    if (!corrected) {
+        state = "failed";
+        return false;
+    }
+
+    // The pass's texture has the engine's format and size; it is left in the combined shader-read state.
+    savedMv = desc.motionVectors;
+    desc.motionVectors.resource = corrected;
+    desc.motionVectors.state = FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ;
+    return true;
 }
 
 bool FidelityFxInterceptor::MatchesLoaderName(LPCWSTR lpLibFileName) {
@@ -191,6 +357,13 @@ void FidelityFxInterceptor::DetachAll() {
     m_internalDiscontinuityPendingLeft.store(false);
     m_internalDiscontinuityPendingRight.store(false);
     m_diagRemaining.store(0);
+    {
+        std::lock_guard<std::mutex> mvLock(m_mvFixMutex);
+        m_mvPass.reset();
+        m_mvFixDisableReason.clear();
+        m_mvPassFactory = [](ID3D12GraphicsCommandList*) { return CreateD3D12MotionVectorPass(); };
+    }
+    m_mvFixDisabled.store(false);
 }
 
 void FidelityFxInterceptor::DetachLiveHooks() {
@@ -541,13 +714,26 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Dispatch(ffxContext* context, c
         wroteReset = true;
     }
 
+    // The motion vector pass: FSR3 reads the Injector's texture for this one dispatch. Monoscopic presentation
+    // (menus, 2D Floating Window Mode) keeps the engine's vectors.
+    const bool bypass = bridge && (bridge->Is2DViewActive() || bridge->IsMenuVisible());
+    ffxApiResource savedMv{};
+    const char* mvState = "off";
+    bool swappedMv = false;
+    if (!bypass) {
+        swappedMv = host->ApplyMvCorrection(*upscale, virtualContext->flags, contextIndex == 1 ? 1u : 0u,
+                                            host->m_dispatchCount.load(), savedMv, mvState);
+    }
+
     uint64_t index = host->m_dispatchCount.fetch_add(1);
     host->RecordDiagnostics(index, contextIndex, *upscale, needReset, isDualPass);
+    (void)mvState; // named in the [Diag] MvCorrection line while a diagnostic window is armed
 
     ffxReturnCode_t res = orig(&target, desc);
 
-    // Always undo our write so a reused descriptor never carries our reset into later dispatches.
+    // Always undo our writes so a reused descriptor never carries our reset or texture into later dispatches.
     if (wroteReset) upscale->reset = false;
+    if (swappedMv) upscale->motionVectors = savedMv;
     return res;
 }
 

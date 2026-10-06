@@ -72,10 +72,10 @@ FS25 VR is built as a hybrid two-tier architecture:
     | Upscaler | Sequential Dual-Pass | Alternate Frame Rendering |
     |---|---|---|
     | DLSS / DLAA | Supported. Per-eye history with per-eye motion vector correction (`vrDlssMvFix`, ADR-0020): sharp, no ghosting. The eye rendered in the second sub-pass may smear slightly on moving objects. | Supported. Per-eye history with the same motion vector correction (`vrDlssMvFix`); object motion is scaled by the two-frame stride. `vrDlssMvScale` (2.0x default) applies only while the correction is off. |
-    | FSR3 | Per-eye history (no cross-eye ghosting). Motion vector correction is not applied yet, so fine texture may look soft. | Per-eye history, uncorrected. |
-    | In-engine TAA | Not supported in VR: one history is shared across eyes and ghosts. Use DLSS/DLAA. | Not supported in VR (ghosts). |
+    | FSR3 | Supported. Per-eye history with the same per-eye motion vector correction as DLSS (`vrDlssMvFix`, ADR-0020), using the conventions in FSR3's own dispatch description: sharp, no ghosting once the correction is on. The second-sub-pass object-motion caveat applies. | Per-eye history, uncorrected. |
+    | In-engine TAA | Not supported in VR: one history is shared across eyes and ghosts. Use DLSS/DLAA or FSR3. | Not supported in VR (ghosts). |
 
-    `vrDlssMvFix on|off` switches the per-eye motion vector correction (off by default until verified in game).
+    `vrDlssMvFix on|off` switches the per-eye motion vector correction for DLSS and FSR3 (off by default until verified in game; with it off, FSR3 under Sequential Dual-Pass has per-eye history but soft fine texture). `vrDlssDiag` also logs FSR3 dispatches and, while the correction is on, the motion vector self-check for them.
 - **6DOF Head Tracking**: Positional and rotational tracking for both on-foot locomotion and vehicle cockpits with collinear translation and decoupled look yaw rotation.
 - **Symmetric Projection (default) with opt-in Oblique Frustum**: The Injector submits an aspect-matched symmetric FOV and the Companion Mod applies no projection offset by default. Per-eye asymmetric offsets computed from headset optics are available via `vrObliqueProjection true` or `<allowObliqueProjection>true</allowObliqueProjection>` in `settings.xml` (see ADR-0005).
 - **Temporal Upscaler Virtualization**:
