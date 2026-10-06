@@ -704,6 +704,66 @@ TEST(DxgiProxyTest, SequentialDualPassSubPass1SubmitsPairAndExecutesPresent) {
     EXPECT_EQ(vrBridge->GetFrameIndex(), 1u); // Exactly 1 logical frame boundary completed
 }
 
+namespace {
+fs25vr::CameraRecord CameraAt(uint32_t eye, double x) {
+    fs25vr::CameraRecord r;
+    r.eye = eye;
+    r.position[0] = x;
+    r.fovY = 1.0f;
+    return r;
+}
+} // namespace
+
+TEST(DxgiProxyTest, EveryStereoPresentAdvancesTheRenderedFrameThatStampsCameraRecords) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+    CameraRecordStore& records = vrBridge->GetCameraRecords();
+
+    ASSERT_EQ(records.GetFrame(), 0u);
+    ASSERT_TRUE(records.Report(CameraAt(0, 0.0)));          // sub-pass 0 renders the left eye
+    EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(records.GetFrame(), 1u);                       // a suppressed sub-pass present counts too
+
+    ASSERT_TRUE(records.Report(CameraAt(1, 0.064)));         // sub-pass 1 renders the right eye
+    auto resolved = records.Resolve(1);
+    ASSERT_TRUE(resolved.current.has_value());
+    EXPECT_EQ(resolved.current->frame, 1u);
+    ASSERT_TRUE(resolved.previousFrame.has_value());
+    EXPECT_EQ(resolved.previousFrame->eye, 0u);
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(records.GetFrame(), 2u);
+}
+
+TEST(DxgiProxyTest, PresentsOutsideStereoPresentationDiscardCameraRecordsInsteadOfLettingThemGoStale) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+    CameraRecordStore& records = vrBridge->GetCameraRecords();
+
+    ASSERT_TRUE(records.Report(CameraAt(0, 0.0)));
+    vrBridge->Set2DViewActive(true); // 2D Floating Window Mode presents as a quad
+    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
+    EXPECT_EQ(records.GetFrame(), 0u); // the counter only advances in stereo presentation
+    EXPECT_FALSE(records.Resolve(0).current.has_value());
+}
+
 TEST(DxgiProxyTest, SequentialDualPassSubPass0CopiesTheRightEyeOnceTheEyeOrderSwaps) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);

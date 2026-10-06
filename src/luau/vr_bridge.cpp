@@ -853,6 +853,21 @@ int VRBridge::Lua_SetDlssSdpMvScale(lua_State* L) {
     return 1;
 }
 
+int VRBridge::Lua_ReportCameraRecord(lua_State* L) {
+    CameraRecord record;
+    record.eye = static_cast<uint32_t>((std::max)(0, static_cast<int>(luaL_checkinteger(L, 1))));
+    for (int i = 0; i < 3; ++i) record.position[i] = luaL_checknumber(L, 2 + i);
+    for (int i = 0; i < 4; ++i) record.orientation[i] = luaL_checknumber(L, 5 + i);
+    record.fovY = static_cast<float>(luaL_checknumber(L, 9));
+    record.nearClip = static_cast<float>(luaL_checknumber(L, 10));
+    record.farClip = static_cast<float>(luaL_checknumber(L, 11));
+    record.projOffsetX = static_cast<float>(luaL_optnumber(L, 12, 0.0));
+    record.projOffsetY = static_cast<float>(luaL_optnumber(L, 13, 0.0));
+    VRBridge* self = &FromUpvalue(L);
+    lua_pushboolean(L, self->m_cameraRecords.Report(record) ? 1 : 0);
+    return 1;
+}
+
 int VRBridge::Lua_DlssDiag(lua_State* L) {
     int evaluations = lua_isnumber(L, 1) ? static_cast<int>(lua_tointeger(L, 1))
                                          : static_cast<int>(NgxInterceptor::kDefaultDiagEvaluations);

@@ -1079,6 +1079,36 @@ TEST_F(VrBridgeTest, DlssTuningFunctionsReportFailureWithoutNgxInterceptor) {
     EXPECT_EQ(RunLuauString(L, testScript), 0);
 }
 
+TEST_F(VrBridgeTest, ReportCameraRecordStampsTheRecordForTheEyeThatRendered) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    for (int i = 0; i < 7; ++i) bridge.GetCameraRecords().AdvanceFrame();
+
+    ASSERT_EQ(RunLuauString(L, R"(
+        local ok = VRBridge.reportCameraRecord(1, 4000000.25, 12.5, -987654.75, 0, 0, 0, 1, 1.2, 0.15, 2000, 0.01, -0.02)
+        assert(ok == true, "a valid record must be accepted")
+        assert(VRBridge.reportCameraRecord(2, 0, 0, 0, 0, 0, 0, 1, 1, 0.1, 100, 0, 0) == false, "unknown eye must be rejected")
+        assert(VRBridge.reportCameraRecord(0, 0, 0, 0, 0, 0, 0, 0, 1, 0.1, 100, 0, 0) == false, "zero quaternion must be rejected")
+    )"), 0);
+
+    auto resolved = bridge.GetCameraRecords().Resolve(1);
+    ASSERT_TRUE(resolved.current.has_value());
+    EXPECT_EQ(resolved.current->frame, 7u);
+    EXPECT_DOUBLE_EQ(resolved.current->position[0], 4000000.25);
+    EXPECT_DOUBLE_EQ(resolved.current->position[2], -987654.75);
+    EXPECT_FLOAT_EQ(resolved.current->fovY, 1.2f);
+    EXPECT_FLOAT_EQ(resolved.current->farClip, 2000.0f);
+    EXPECT_FLOAT_EQ(resolved.current->projOffsetX, 0.01f);
+    EXPECT_FLOAT_EQ(resolved.current->projOffsetY, -0.02f);
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+}
+
+TEST_F(VrBridgeTest, ReportCameraRecordRaisesLuaErrorForMissingArguments) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    EXPECT_NE(RunLuauString(L, "VRBridge.reportCameraRecord(0, 1, 2)"), 0);
+}
+
 TEST_F(VrBridgeTest, SetRenderingModeIsImmediateWhileOpenXrIsInactive) {
     auto openXr = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::FakeOpenXrRuntime>());
     ASSERT_FALSE(openXr->IsActive());
@@ -1162,7 +1192,8 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "setDlssSharpness",
         "setDlssPreset",
         "dlssDiag",
-        "setDlssSdpMvScale"
+        "setDlssSdpMvScale",
+        "reportCameraRecord"
     };
 
     lua_getglobal(L, "VRBridge");
