@@ -10,3 +10,6 @@ Partially superseded by [ADR-0017](0017-retire-the-d3d12-telemetry-probe.md). Th
 - Sequential Dual-Pass Command List Duplication (rejected: high risk of device removal crashes with D3D12 multithreaded render pools and descriptor heap rebinding).
 - Asynchronous Single-Eye Timewarp Submission (rejected: creates visual disparity and edge swim between eyes during head motion).
 - Strict Alternating L/R with Pair Submission (selected: proven temporal baseline, stable D3D12 command recording, zero reprojection artifacts between eyes).
+
+## Amendment
+The OpenXR frame is now waited on and begun at the end of the previous `Present` rather than at the first eye copy, so both eyes of a pair use the same predicted display time. See [ADR-0019](0019-begin-the-openxr-frame-before-the-engine-update.md).

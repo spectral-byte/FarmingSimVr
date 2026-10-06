@@ -53,6 +53,11 @@ public:
 
     bool OnPresent(IDXGISwapChain* swapChain, UINT syncInterval = 0, UINT flags = 0);
     bool OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval = 0, UINT flags = 0, const DXGI_PRESENT_PARAMETERS* params = nullptr);
+    // Called once the real Present (if any) has returned. Waits on and begins the next OpenXR frame
+    // so the Companion Mod's pose requests for the coming eye pair are located at that frame's
+    // predicted display time (ADR-0019). A no-op when a frame is already begun or the session
+    // cannot run frames.
+    void OnPresentReturned();
     // Sync interval forwarded to the real Present: 0 while xrWaitFrame paces frames, else the game's.
     UINT EffectiveSyncInterval(UINT gameSyncInterval) const;
 
