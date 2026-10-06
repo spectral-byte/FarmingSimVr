@@ -106,7 +106,7 @@ void UnprojectAtViewDepth(float px, float py, float viewDepth, float width, floa
 bool CorrectMotionVector(uint32_t x, uint32_t y, float depth, float mvX, float mvY, float scaleX, float scaleY,
                          uint32_t width, uint32_t height, const Projection& current, const Projection& previousFrame,
                          const Projection& sameEye, const RelativeTransform& toPreviousFrame,
-                         const RelativeTransform& toSameEye, float& outX, float& outY) {
+                         const RelativeTransform& toSameEye, float& outX, float& outY, float objectMotionFactor) {
     outX = mvX;
     outY = mvY;
     if (!(std::fabs(scaleX) > 1e-6f) || !(std::fabs(scaleY) > 1e-6f)) return false;
@@ -127,6 +127,13 @@ bool CorrectMotionVector(uint32_t x, uint32_t y, float depth, float mvX, float m
 
     outX = mvX + (sameX - prevX) / scaleX;
     outY = mvY + (sameY - prevY) / scaleY;
+    if (objectMotionFactor != 1.0f) {
+        // Object motion = the engine's vector less the static prediction toward the previous frame's camera.
+        const float objX = mvX - (prevX - cx) / scaleX;
+        const float objY = mvY - (prevY - cy) / scaleY;
+        outX += (objectMotionFactor - 1.0f) * objX;
+        outY += (objectMotionFactor - 1.0f) * objY;
+    }
     return true;
 }
 

@@ -44,6 +44,9 @@ struct MvCorrectionRequest {
     mvreproj::Projection sameEye;
     mvreproj::RelativeTransform toPreviousFrame; // current camera space -> previous rendered frame's
     mvreproj::RelativeTransform toSameEye;       // current camera space -> same eye's previous camera
+    // Multiplies the engine's object-motion component only (1 under Sequential Dual-Pass, the eye stride
+    // under Alternate Frame Rendering). See mvreproj::CorrectMotionVector.
+    float objectMotionFactor = 1.0f;
 };
 
 struct MvPassInputs {
