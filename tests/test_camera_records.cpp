@@ -150,6 +150,38 @@ TEST(CameraRecordStoreTest, SameEyeRecordTooOldToBeTheLastRenderedOfThatEyeIsMis
     EXPECT_FALSE(store.Resolve(0).sameEyePrevious.has_value());
 }
 
+TEST(CameraRecordStoreTest, SameEyeRecordIsMissingWhenTheRealPreviousSameEyeFrameHadNoRecord) {
+    CameraRecordStore store;
+    PlayFrame(store, 0, 0.0); // frame 0: L
+    PlayFrame(store, 1, 0.0); // frame 1: R
+    store.AdvanceFrame();     // frame 2: the left eye rendered but reported nothing
+    ASSERT_TRUE(store.Report(MakeRecord(0, 0.5))); // frame 3: L; the L record at frame 0 is not its previous render
+
+    auto resolved = store.Resolve(0);
+    ASSERT_TRUE(resolved.current.has_value());
+    EXPECT_FALSE(resolved.sameEyePrevious.has_value());
+    EXPECT_FALSE(resolved.sameEyeRelative.has_value());
+}
+
+TEST(CameraRecordStoreTest, SameEyeRecordTwoFramesBackIsMissingWhenTheFrameBetweenHasNoRecord) {
+    CameraRecordStore store;
+    PlayFrame(store, 0, 0.0); // frame 0: L
+    store.AdvanceFrame();     // frame 1: no record (could have been L)
+    ASSERT_TRUE(store.Report(MakeRecord(0, 0.5))); // frame 2: L
+
+    EXPECT_FALSE(store.Resolve(0).sameEyePrevious.has_value());
+}
+
+TEST(CameraRecordStoreTest, SameEyeRecordTwoFramesBackStillResolvesUnderAlternateFrameRendering) {
+    CameraRecordStore store;
+    PlayFrame(store, 0, 0.0);
+    PlayFrame(store, 1, 0.064);
+    ASSERT_TRUE(store.Report(MakeRecord(0, 0.5)));
+    auto resolved = store.Resolve(0);
+    ASSERT_TRUE(resolved.sameEyePrevious.has_value());
+    EXPECT_EQ(resolved.sameEyePrevious->frame, 0u);
+}
+
 TEST(CameraRecordStoreTest, ClearDropsEveryRecord) {
     CameraRecordStore store;
     PlayFrame(store, 0, 0.0);

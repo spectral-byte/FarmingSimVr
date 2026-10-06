@@ -630,8 +630,8 @@ protected:
 
     // Sequential Dual-Pass, the left eye rendering after the right eye 0.064 m away, one frame after its own
     // previous render: all three cameras resolve.
-    void SetUpSdpWithRecords() {
-        m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    void SetUpSdpWithRecords(VRRenderingMode mode = VRRenderingMode::SequentialDualPass) {
+        m_bridge.SetRenderingMode(mode); // switching mode drops camera records, so it comes first
         CameraRecordStore& cameras = m_bridge.GetCameraRecords();
         ASSERT_TRUE(cameras.Report(FfxCamera(0, 10.0)));
         cameras.AdvanceFrame();
@@ -741,16 +741,65 @@ TEST_F(FfxMvCorrectionTest, MenusAndTwoDimensionalModeKeepTheEnginesMotionVector
     EXPECT_EQ(m_factoryCalls, 0);
 }
 
-TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingKeepsTheEnginesMotionVectorsUntilItsCorrectionLands) {
+TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingCorrectsWithTheObjectMotionEyeStride) {
+    SetUpSdpWithRecords(VRRenderingMode::AFR);
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    ASSERT_NE(m_pass, nullptr);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_FLOAT_EQ(m_pass->corrections[0].objectMotionFactor, 2.0f);
+    EXPECT_EQ(s_dispatchMotionVectors.back(), m_pass->output);
+}
+
+TEST_F(FfxMvCorrectionTest, SequentialDualPassCorrectsWithoutTheEyeStride) {
     SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_FLOAT_EQ(m_pass->corrections[0].objectMotionFactor, 1.0f);
+}
+
+TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingSelfChecksTheCorrectedVectors) {
+    SetUpSdpWithRecords(VRRenderingMode::AFR);
+    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.ArmDiagnostics(4);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
+    EXPECT_NEAR(m_pass->selfChecks[0].toPrevious.c[0], 0.0f, 1e-5f);
+}
+
+TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingWithoutRecordsKeepsTheEnginesVectorsThroughACopy) {
     m_bridge.SetRenderingMode(VRRenderingMode::AFR);
     m_ngxShared->SetMvFixEnabled(true);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
-    EXPECT_EQ(s_dispatchMotionVectors.back(), m_engineMv);
-    EXPECT_EQ(m_factoryCalls, 0);
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_TRUE(m_pass->corrections.empty());
 }
 
+TEST_F(FfxMvCorrectionTest, TheSelfCheckAtAnEyeOrderSwapIsBuiltFromTheRawRecords) {
+    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
+    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+    ASSERT_TRUE(cameras.Report(FfxCamera(1, 10.064)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(FfxCamera(1, 10.1))); // the right eye twice in a row, head moved
+    m_bridge.SetSubPassIndex(1);
+    m_ngxShared->SetMvFixEnabled(true);
+    m_ffx.ArmDiagnostics(4);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+
+    ASSERT_NE(m_pass, nullptr);
+    EXPECT_TRUE(m_pass->corrections.empty());
+    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
+    const MvSelfCheckRequest& r = m_pass->selfChecks[0];
+    EXPECT_NEAR(r.previous.tanHalfFovY, std::tan(0.5f), 1e-6f);
+    EXPECT_NEAR(r.toPrevious.m[0][0], 1.0f, 1e-5f);
+    EXPECT_NEAR(r.toPrevious.c[0], 0.036f, 1e-5f);
+}
 TEST_F(FfxMvCorrectionTest, MissingCameraRecordsPassTheEnginesVectorsThroughACopyWithoutACorrection) {
     m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
     m_bridge.GetCameraRecords().Clear();

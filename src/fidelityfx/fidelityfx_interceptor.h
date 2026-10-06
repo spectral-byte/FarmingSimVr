@@ -116,7 +116,6 @@ private:
                            ffxApiResource& savedMv, const char*& state);
     ID3D12Resource* RecordMvPass(const MvPassInputs& inputs, std::vector<MvSelfCheckReport>& reports);
     void DisableMvFix(const std::string& reason);
-    void LogSelfCheckReport(const MvSelfCheckReport& report) const;
 
     mutable std::recursive_mutex m_mutex;
     bool m_isAttached = false;

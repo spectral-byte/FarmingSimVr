@@ -128,22 +128,6 @@ ID3D12Resource* FidelityFxInterceptor::RecordMvPass(const MvPassInputs& inputs, 
     return result.output;
 }
 
-void FidelityFxInterceptor::LogSelfCheckReport(const MvSelfCheckReport& report) const {
-    const mvreproj::SelfCheckStats& s = report.stats;
-    std::stringstream ss;
-    ss << std::fixed << std::setprecision(3)
-       << "FidelityFxInterceptor: [Diag] MvCheck Eye=" << report.eye << " Dispatch #" << report.evalIndex
-       << " Samples=" << s.total << " Valid=" << s.valid
-       << " skipped=" << std::setprecision(1) << s.skippedFraction * 100.0 << "% (sky or off-screen)"
-       << std::setprecision(3)
-       << " " << mvreproj::ConventionName(mvreproj::Convention::ToPrevious) << ": mean=" << s.meanToPrevious
-       << " median=" << s.medianToPrevious << " px"
-       << " " << mvreproj::ConventionName(mvreproj::Convention::ToCurrent) << ": mean=" << s.meanToCurrent
-       << " median=" << s.medianToCurrent << " px"
-       << " Best=" << mvreproj::ConventionName(mvreproj::BetterConvention(s));
-    LogInfo(ss.str());
-}
-
 bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint32_t createFlags, uint32_t eye,
                                               uint64_t dispatchIndex, ffxApiResource& savedMv, const char*& state) {
     VRBridge* bridge = GetVRBridge();
@@ -152,11 +136,6 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
     std::shared_ptr<NgxInterceptor> ngx = bridge ? bridge->GetNgxInterceptor() : nullptr;
     if (!ngx || !ngx->IsMvFixEnabled() || m_mvFixDisabled.load()) return false;
 
-    // Correction exists for Sequential Dual-Pass; AFR keeps the engine's vectors until its own correction lands.
-    if (bridge->GetRenderingMode() != VRRenderingMode::SequentialDualPass) {
-        state = "not-sequential-dual-pass";
-        return false;
-    }
     if (!desc.commandList || !desc.depth.resource || !desc.motionVectors.resource) {
         state = "missing-inputs";
         return false;
@@ -167,7 +146,8 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
         return false;
     }
 
-    mvreproj::CorrectionPlan plan = mvreproj::PlanCorrection(bridge->GetCameraRecords().Resolve(eye));
+    const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(eye);
+    mvreproj::CorrectionPlan plan = mvreproj::PlanCorrection(resolved);
     state = mvreproj::CorrectionDecisionName(plan.decision);
     MvCorrectionRequest correctionRequest;
     const MvCorrectionRequest* correction = nullptr;
@@ -186,6 +166,10 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
             correctionRequest.sameEye = plan.sameEye;
             correctionRequest.toPreviousFrame = plan.toPreviousFrame;
             correctionRequest.toSameEye = plan.toSameEye;
+            // AFR: the simulation advances every frame, so only the engine's object motion needs the eye
+            // stride (the same eye's history is two frames back). Sequential Dual-Pass replays one time.
+            correctionRequest.objectMotionFactor =
+                bridge->GetRenderingMode() == VRRenderingMode::AFR ? mvreproj::kAfrEyeStride : 1.0f;
             correction = &correctionRequest;
             state = "correcting";
         } else {
@@ -198,25 +182,14 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
     MvSelfCheckRequest checkRequest;
     const MvSelfCheckRequest* check = nullptr;
     if (m_diagRemaining.load() > 0) {
-        if (plan.decision == mvreproj::CorrectionDecision::MissingRecords ||
-            plan.decision == mvreproj::CorrectionDecision::UnusableProjection) {
-            LogInfo("FidelityFxInterceptor: [Diag] MvCheck skipped Dispatch #" + std::to_string(dispatchIndex) + " Eye=" +
-                    std::to_string(eye) + ": " + state);
-        } else {
-            checkRequest.eye = eye;
-            checkRequest.evalIndex = dispatchIndex;
-            checkRequest.mvScaleX = conventions.mvScaleX;
-            checkRequest.mvScaleY = conventions.mvScaleY;
-            checkRequest.current = plan.current;
-            if (correction) {
-                // The vectors being scored are the corrected ones: they should land on the same eye's previous camera.
-                checkRequest.previous = plan.sameEye;
-                checkRequest.toPrevious = plan.toSameEye;
-            } else {
-                checkRequest.previous = plan.previousFrame;
-                checkRequest.toPrevious = plan.toPreviousFrame;
-            }
+        std::string skipReason;
+        if (BuildMvSelfCheckRequest(resolved, eye, dispatchIndex, conventions.mvScaleX, conventions.mvScaleY,
+                                    correction ? &plan : nullptr, checkRequest, skipReason)) {
+            // The dispatch's own camera fields describe the camera that rendered this frame.
+            if (correction) checkRequest.current = plan.current;
             check = &checkRequest;
+        } else {
+            LogInfo(FormatMvSelfCheckSkipped("FidelityFxInterceptor", "Dispatch", eye, dispatchIndex, skipReason));
         }
         LogInfo("FidelityFxInterceptor: [Diag] MvCorrection Dispatch #" + std::to_string(dispatchIndex) + " Eye=" +
                 std::to_string(eye) + ": " + state);
@@ -230,7 +203,7 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
     inputs.correction = correction;
     std::vector<MvSelfCheckReport> reports;
     ID3D12Resource* corrected = RecordMvPass(inputs, reports);
-    for (const MvSelfCheckReport& report : reports) LogSelfCheckReport(report);
+    for (const MvSelfCheckReport& report : reports) LogInfo(FormatMvSelfCheckReport("FidelityFxInterceptor", "Dispatch", report));
     if (!corrected) {
         state = "failed";
         return false;
@@ -686,7 +659,6 @@ ffxReturnCode_t FidelityFxInterceptor::Intercept_Dispatch(ffxContext* context, c
     }
 
     VRBridge* bridge = host->GetVRBridge();
-    const bool isUpscale = true;
 
     // Mode transition tracking & discontinuity latching
     int currentMode = bridge ? static_cast<int>(bridge->GetRenderingMode()) : -1;

@@ -2,7 +2,9 @@
 #include "core/logger.h"
 #include <d3dcompiler.h>
 #include <wrl/client.h>
+#include <cmath>
 #include <cstdint>
+#include <iomanip>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -682,6 +684,63 @@ private:
 
 std::unique_ptr<IMotionVectorPass> CreateD3D12MotionVectorPass() {
     return std::make_unique<D3D12MotionVectorPass>();
+}
+
+} // namespace fs25vr
+
+namespace fs25vr {
+
+bool BuildMvSelfCheckRequest(const ResolvedCameras& resolved, uint32_t eye, uint64_t evalIndex, float mvScaleX,
+                             float mvScaleY, const mvreproj::CorrectionPlan* corrected, MvSelfCheckRequest& request,
+                             std::string& skipReason) {
+    if (!resolved.current || !resolved.previousFrame || !resolved.previousFrameRelative) {
+        skipReason = "missing camera record (" + DescribeResolvedCameras(resolved) + ")";
+        return false;
+    }
+    if (!(resolved.current->fovY > 0.0f) || !(resolved.previousFrame->fovY > 0.0f) ||
+        !(resolved.current->nearClip > 0.0f) || !(resolved.current->farClip > resolved.current->nearClip)) {
+        skipReason = "unusable camera projection in the record";
+        return false;
+    }
+    request.eye = eye;
+    request.evalIndex = evalIndex;
+    request.mvScaleX = mvScaleX;
+    request.mvScaleY = mvScaleY;
+    request.current.tanHalfFovY = std::tan(resolved.current->fovY * 0.5f);
+    request.current.nearClip = resolved.current->nearClip;
+    request.current.farClip = resolved.current->farClip;
+    request.previous.tanHalfFovY = std::tan(resolved.previousFrame->fovY * 0.5f);
+    request.previous.nearClip = resolved.previousFrame->nearClip;
+    request.previous.farClip = resolved.previousFrame->farClip;
+    request.toPrevious = mvreproj::MakeRelativeTransform(*resolved.previousFrameRelative);
+    if (corrected && corrected->decision == mvreproj::CorrectionDecision::Correct) {
+        // The vectors being scored are the corrected ones: they should land on the same eye's previous camera.
+        request.previous = corrected->sameEye;
+        request.toPrevious = corrected->toSameEye;
+    }
+    return true;
+}
+
+std::string FormatMvSelfCheckReport(const char* logPrefix, const char* unit, const MvSelfCheckReport& report) {
+    const mvreproj::SelfCheckStats& s = report.stats;
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(3)
+       << logPrefix << ": [Diag] MvCheck Eye=" << report.eye << " " << unit << " #" << report.evalIndex
+       << " Samples=" << s.total << " Valid=" << s.valid
+       << " skipped=" << std::setprecision(1) << s.skippedFraction * 100.0 << "% (sky or off-screen)"
+       << std::setprecision(3)
+       << " " << mvreproj::ConventionName(mvreproj::Convention::ToPrevious) << ": mean=" << s.meanToPrevious
+       << " median=" << s.medianToPrevious << " px"
+       << " " << mvreproj::ConventionName(mvreproj::Convention::ToCurrent) << ": mean=" << s.meanToCurrent
+       << " median=" << s.medianToCurrent << " px"
+       << " Best=" << mvreproj::ConventionName(mvreproj::BetterConvention(s));
+    return ss.str();
+}
+
+std::string FormatMvSelfCheckSkipped(const char* logPrefix, const char* unit, uint32_t eye, uint64_t index,
+                                     const std::string& reason) {
+    return std::string(logPrefix) + ": [Diag] MvCheck skipped " + unit + " #" + std::to_string(index) + " Eye=" +
+           std::to_string(eye) + ": " + reason;
 }
 
 } // namespace fs25vr

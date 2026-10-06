@@ -443,6 +443,8 @@ void VRBridge::SetFrameIndex(uint64_t index) {
 
 void VRBridge::SetRenderingMode(VRRenderingMode mode) {
     m_renderingMode.store(mode);
+    // The camera records of the old mode would read as history under the new one (the eye cadence differs).
+    m_cameraRecords.Clear();
     m_subPassIndex.store(0);
     m_dualPassPairIndex.store(0);
     SetFrameParity(0);

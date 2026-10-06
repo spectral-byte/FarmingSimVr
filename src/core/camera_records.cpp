@@ -152,6 +152,21 @@ ResolvedCameras CameraRecordStore::Resolve(uint32_t eye) const {
         }
     }
 
+    // A same-eye record is only the eye's previous render when every frame in between has a record of the
+    // other eye: a frame with no record could have been this eye's own render, and its camera is unknown.
+    if (out.sameEyePrevious) {
+        for (uint64_t f = out.sameEyePrevious->frame + 1; f < m_frame; ++f) {
+            bool otherEyeRendered = false;
+            for (size_t i = 0; i < kCapacity && !otherEyeRendered; ++i) {
+                otherEyeRendered = m_used[i] && m_ring[i].frame == f && m_ring[i].eye != eye;
+            }
+            if (!otherEyeRendered) {
+                out.sameEyePrevious.reset();
+                break;
+            }
+        }
+    }
+
     if (out.current) {
         if (out.previousFrame) out.previousFrameRelative = ComputeRelativeCamera(*out.current, *out.previousFrame);
         if (out.sameEyePrevious) out.sameEyeRelative = ComputeRelativeCamera(*out.current, *out.sameEyePrevious);

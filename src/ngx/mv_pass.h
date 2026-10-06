@@ -3,6 +3,7 @@
 #include <d3d12.h>
 #include <dxgiformat.h>
 #include <functional>
+#include "core/camera_records.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -32,6 +33,21 @@ struct MvSelfCheckReport {
     uint64_t evalIndex = 0;
     mvreproj::SelfCheckStats stats;
 };
+
+// Builds the self-check request for one evaluation from the raw camera records, or says why it cannot
+// (missing record, unusable projection). The prediction targets the previous rendered frame's camera;
+// when corrected is a Correct plan the evaluation's vectors are re-aimed at the same eye's previous
+// camera, so it targets that camera instead. Built from the records, not the plan, so it also works on
+// frames the plan declines to correct (an eye order swap).
+bool BuildMvSelfCheckRequest(const ResolvedCameras& resolved, uint32_t eye, uint64_t evalIndex, float mvScaleX,
+                             float mvScaleY, const mvreproj::CorrectionPlan* corrected, MvSelfCheckRequest& request,
+                             std::string& skipReason);
+
+// The [Diag] log lines shared by the upscaler interceptors. logPrefix names the interceptor (for example
+// "NgxInterceptor"); unit names what it counts ("Eval" or "Dispatch").
+std::string FormatMvSelfCheckReport(const char* logPrefix, const char* unit, const MvSelfCheckReport& report);
+std::string FormatMvSelfCheckSkipped(const char* logPrefix, const char* unit, uint32_t eye, uint64_t index,
+                                     const std::string& reason);
 
 // Asks the pass to re-aim the engine's motion vectors from the previous rendered frame's camera at the
 // same eye's previous camera (see mv_reprojection.h). Absent (null) means the pass output is a plain

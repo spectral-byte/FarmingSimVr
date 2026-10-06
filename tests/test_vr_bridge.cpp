@@ -1226,3 +1226,16 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
     lua_pop(L, 1); // pop VRBridge table
 }
 
+
+TEST_F(VrBridgeTest, SwitchingTheStereoPresentationModeDiscardsCameraRecords) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    fs25vr::CameraRecord record;
+    record.eye = 0;
+    ASSERT_TRUE(bridge.GetCameraRecords().Report(record));
+    ASSERT_TRUE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
+
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+}
