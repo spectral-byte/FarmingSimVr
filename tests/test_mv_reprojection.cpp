@@ -802,7 +802,6 @@ TEST(MvCorrectionAfrTest, AfrFramesResolveTheOtherEyeAsPreviousFrameAndTheSameEy
     EXPECT_EQ(left.previousFrame->frame, 1u);
     EXPECT_EQ(left.sameEyePrevious->eye, 0u);
     EXPECT_EQ(left.sameEyePrevious->frame, 0u);
-    EXPECT_FALSE(left.PreviousFrameIsSameEye());
     EXPECT_EQ(PlanCorrection(left).decision, CorrectionDecision::Correct);
 
     store.AdvanceFrame();
@@ -828,17 +827,6 @@ TEST(MvCorrectionPlanTest, ACameraTripleCorrectsAgainstBothPreviousCameras) {
     EXPECT_NEAR(plan.current.tanHalfFovY, std::tan(0.5f), 1e-6f);
     EXPECT_NEAR(plan.toPreviousFrame.c[0], -0.064f, 1e-5f);
     EXPECT_NEAR(plan.toSameEye.c[0], 0.1f, 1e-5f);
-}
-
-TEST(MvCorrectionPlanTest, AnEyeOrderSwapNeedsNoCorrectionBecauseThePreviousFrameIsTheSameEye) {
-    CameraRecordStore store;
-    ASSERT_TRUE(store.Report(Cam(0, 10.0)));
-    store.AdvanceFrame();
-    ASSERT_TRUE(store.Report(Cam(1, 10.064)));
-    store.AdvanceFrame();
-    ASSERT_TRUE(store.Report(Cam(1, 10.064))); // the right eye renders twice in a row
-    CorrectionPlan plan = PlanCorrection(store.Resolve(1));
-    EXPECT_EQ(plan.decision, CorrectionDecision::PreviousFrameIsSameEye);
 }
 
 TEST(MvCorrectionPlanTest, MissingRecordsPassTheEnginesVectorsThrough) {

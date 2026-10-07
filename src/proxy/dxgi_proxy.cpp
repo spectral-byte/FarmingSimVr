@@ -477,19 +477,17 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
             VRRenderingMode renderingMode = m_vrBridge ? m_vrBridge->GetRenderingMode() : VRRenderingMode::AFR;
             if (renderingMode == VRRenderingMode::SequentialDualPass) {
                 uint32_t subPass = m_vrBridge ? m_vrBridge->GetSubPassIndex() : 0;
-                // The eye order alternates between pairs, so each sub-pass copies to the eye it rendered.
-                uint32_t eye = m_vrBridge ? m_vrBridge->GetActiveEye() : subPass;
                 if (subPass == 0) {
-                    // Sub-Pass 0: copies the first eye of the pair, suppresses the physical present, advances subPassIndex to 1
-                    m_openXrManager->CopyBackBufferToEye(eye, pBackBuffer);
+                    // Sub-Pass 0: copies the left eye, suppresses the physical present, advances subPassIndex to 1
+                    m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
                     if (m_vrBridge) {
                         m_vrBridge->SetSubPassIndex(1);
                     }
                     m_lastPresentSuppressed = true;
                     return false;
                 } else {
-                    // Sub-Pass 1: copies the second eye, submits the pair, executes the physical present, resets subPassIndex to 0
-                    m_openXrManager->CopyBackBufferToEye(eye, pBackBuffer);
+                    // Sub-Pass 1: copies the right eye, submits the pair, executes the physical present, resets subPassIndex to 0
+                    m_openXrManager->CopyBackBufferToEye(1, pBackBuffer);
                     m_openXrManager->SubmitFramePair();
                     if (m_vrBridge) {
                         m_vrBridge->AdvanceFrame();

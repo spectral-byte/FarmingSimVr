@@ -3933,70 +3933,6 @@ TEST_F(CompanionModTest, DualPassMissionUpdatePacingAndCameraSelection) {
     )luau", "=testDualPassPacing"), 0);
 }
 
-TEST_F(CompanionModTest, DualPassSwappedEyeOrderBindsRightCameraOnTheSimulatingSubPass) {
-    fs25vr::VRBridge bridge(nullptr, nullptr);
-    ASSERT_TRUE(bridge.Inject(L));
-
-    ASSERT_EQ(LoadCompanionModChecked(L), 0);
-
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        _G.currentCamera = 0
-        function _G.setCamera(cam)
-            _G.currentCamera = cam
-        end
-        function _G.getCamera()
-            return _G.currentCamera
-        end
-
-        _G.capturedDt = nil
-        _G.FSBaseMission = {
-            update = function(self, dt)
-                _G.capturedDt = dt
-            end
-        }
-
-        VRCompanion:loadMap("mapUS")
-        VRCompanion.handshakeComplete = true
-        VRCompanion.passThroughMode = false
-        VRCompanion.headTrackingEnabled = true
-        VRCompanion:setRenderingMode("DualPass")
-        VRCompanion.is2DViewActive = false
-        VRCompanion.isMenuVisible = false
-        VRCompanion.cameraNodeLeft = 5001
-        VRCompanion.cameraNodeRight = 5002
-        VRCompanion.currentConvergenceDisparity = 0.012
-    )luau", "=testSwappedEyeOrderSetup"), 0);
-
-    // The Injector completes kEyeOrderSwapPairs pairs; the right eye now renders first.
-    for (uint64_t i = 0; i < fs25vr::VRBridge::kEyeOrderSwapPairs; ++i) {
-        bridge.AdvanceFrame();
-    }
-    ASSERT_TRUE(bridge.IsEyeOrderSwapped());
-
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        -- Sub-Pass 0 still advances the simulation, now rendering the right eye.
-        VRBridge.setSubPassIndex(0)
-        _G.FSBaseMission:update(16.666)
-        assert(_G.capturedDt ~= nil and math.abs(_G.capturedDt - 16.666) < 0.001, "Sub-Pass 0 must receive real dt")
-        assert(_G.currentCamera == 5002, "swapped Sub-Pass 0 must bind cameraNodeRight (5002)")
-        assert(VRCompanion:getActiveEyeIndex() == 1, "swapped Sub-Pass 0 must report the right eye")
-        assert(math.abs(VRCompanion:getConvergenceOffset(nil, 0.012) - (-0.012)) < 0.0001,
-            "swapped Sub-Pass 0 must use the right eye's HUD convergence offset")
-
-        -- Sub-Pass 1 still freezes the simulation, now rendering the left eye.
-        _G.capturedDt = nil
-        VRBridge.setSubPassIndex(1)
-        _G.FSBaseMission:update(16.666)
-        assert(_G.capturedDt == nil, "Sub-Pass 1 must freeze simulation")
-        assert(_G.currentCamera == 5001, "swapped Sub-Pass 1 must bind cameraNodeLeft (5001)")
-        assert(math.abs(VRCompanion:getConvergenceOffset(nil, 0.012) - 0.012) < 0.0001,
-            "swapped Sub-Pass 1 must use the left eye's HUD convergence offset")
-
-        VRCompanion:deleteMap()
-        _G.FSBaseMission = nil
-    )luau", "=testSwappedEyeOrder"), 0);
-}
-
 namespace {
 // Engine camera queries for two eye camera nodes, 0.064 m apart along world X.
 constexpr const char* kCameraQueryMocks = R"luau(
@@ -4054,28 +3990,6 @@ TEST_F(CompanionModTest, DualPassSubPassesReportTheCameraOfTheEyeEachRendered) {
     EXPECT_FLOAT_EQ(left.current->farClip, 2000.0f);
     EXPECT_FLOAT_EQ(left.current->projOffsetX, 0.01f);
     EXPECT_FLOAT_EQ(left.current->projOffsetY, -0.02f);
-}
-
-TEST_F(CompanionModTest, DualPassCameraRecordsFollowTheEyeOrderSwapNotTheSubPassIndex) {
-    fs25vr::VRBridge bridge(nullptr, nullptr);
-    ASSERT_TRUE(bridge.Inject(L));
-    ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    ASSERT_EQ(RunLuauChunk(L, kCameraQueryMocks, "=cameraQueryMocks"), 0);
-
-    for (uint64_t i = 0; i < fs25vr::VRBridge::kEyeOrderSwapPairs; ++i) {
-        bridge.AdvanceFrame();
-    }
-    ASSERT_TRUE(bridge.IsEyeOrderSwapped());
-
-    // Swapped: sub-pass 0 renders the right eye, so only the right eye has a record afterwards.
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRBridge.setSubPassIndex(0)
-        _G.FSBaseMission:update(16.666)
-    )luau", "=reportSwappedSubPass0"), 0);
-    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
-    auto right = bridge.GetCameraRecords().Resolve(1);
-    ASSERT_TRUE(right.current.has_value());
-    EXPECT_DOUBLE_EQ(right.current->position[0], 4000000.564);
 }
 
 TEST_F(CompanionModTest, NoCameraRecordIsReportedOutsideStereoSubPasses) {

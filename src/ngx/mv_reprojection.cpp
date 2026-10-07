@@ -197,10 +197,6 @@ Projection ProjectionOf(const CameraRecord& r) {
 CorrectionPlan PlanCorrection(const ResolvedCameras& resolved) {
     CorrectionPlan plan;
     if (!resolved.current) return plan;
-    if (resolved.PreviousFrameIsSameEye()) {
-        plan.decision = CorrectionDecision::PreviousFrameIsSameEye;
-        return plan;
-    }
     if (!resolved.previousFrame || !resolved.sameEyePrevious || !resolved.previousFrameRelative ||
         !resolved.sameEyeRelative) {
         return plan;
@@ -222,7 +218,6 @@ CorrectionPlan PlanCorrection(const ResolvedCameras& resolved) {
 const char* CorrectionDecisionName(CorrectionDecision d) {
     switch (d) {
         case CorrectionDecision::Correct: return "correct";
-        case CorrectionDecision::PreviousFrameIsSameEye: return "previous-frame-is-same-eye";
         case CorrectionDecision::UnusableProjection: return "unusable-projection";
         default: return "missing-records";
     }

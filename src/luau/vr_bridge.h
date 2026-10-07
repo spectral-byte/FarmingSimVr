@@ -69,19 +69,10 @@ public:
     }
     void ResetSubPass() { m_subPassIndex.store(0); }
 
-    // The engine steps its TAA/upscaler jitter once per rendered frame, so a fixed L-then-R order hands
-    // each eye only one parity of the sequence (half a pixel of horizontal jitter). SDP swaps which eye
-    // renders in sub-pass 0 every kEyeOrderSwapPairs pairs, which stratifies each eye's horizontal
-    // jitter over every 16 frames whatever the engine's sequence phase.
-    static constexpr uint64_t kEyeOrderSwapPairs = 4;
-    uint64_t GetDualPassPairIndex() const { return m_dualPassPairIndex.load(); }
-    bool IsEyeOrderSwapped() const { return ((m_dualPassPairIndex.load() / kEyeOrderSwapPairs) & 1) != 0; }
-
-    // The eye the current frame renders: the sub-pass mapped through the eye order under SDP,
-    // the frame parity under AFR.
+    // The eye the current frame renders: the sub-pass under SDP (left first), the frame parity under AFR.
     uint32_t GetActiveEye() const {
         if (m_renderingMode.load() == VRRenderingMode::SequentialDualPass) {
-            return m_subPassIndex.load() ^ (IsEyeOrderSwapped() ? 1u : 0u);
+            return m_subPassIndex.load();
         }
         return m_frameParity;
     }
@@ -218,7 +209,6 @@ private:
     static constexpr int kNoPendingMode = -1;
     std::atomic<int> m_pendingRenderingMode{kNoPendingMode};
     std::atomic<uint32_t> m_subPassIndex{0}; // 0 = first sub-pass of the pair (advances simulation), 1 = second
-    std::atomic<uint64_t> m_dualPassPairIndex{0}; // SDP pairs completed since the mode or handshake began
 
     uint32_t m_frameParity = 0; // 0 = Left (2k), 1 = Right (2k+1)
     uint64_t m_frameIndex = 0;

@@ -764,36 +764,6 @@ TEST(DxgiProxyTest, PresentsOutsideStereoPresentationDiscardCameraRecordsInstead
     EXPECT_FALSE(records.Resolve(0).current.has_value());
 }
 
-TEST(DxgiProxyTest, SequentialDualPassSubPass0CopiesTheRightEyeOnceTheEyeOrderSwaps) {
-    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
-    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
-    ASSERT_TRUE(openXrManager->Initialize());
-    ASSERT_TRUE(openXrManager->CreateSession());
-    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
-    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
-
-    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
-    vrBridge->PerformHandshake();
-    vrBridge->SetRenderingMode(VRRenderingMode::SequentialDualPass);
-    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
-
-    for (uint64_t pair = 0; pair < VRBridge::kEyeOrderSwapPairs; ++pair) {
-        EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
-        EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
-    }
-    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), VRBridge::kEyeOrderSwapPairs);
-    ASSERT_TRUE(vrBridge->IsEyeOrderSwapped());
-
-    // Sub-pass 0 of the swapped pair renders and copies the right eye.
-    EXPECT_FALSE(proxy.OnPresent(nullptr, 0, 0));
-    EXPECT_FALSE(openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
-    EXPECT_TRUE(openXrManager->GetEyeSwapchain(1).hasCopiedFrame);
-
-    // Sub-pass 1 copies the left eye and completes the pair.
-    EXPECT_TRUE(proxy.OnPresent(nullptr, 0, 0));
-    EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), VRBridge::kEyeOrderSwapPairs + 1);
-}
-
 // Drives eye pairs through OnPresent/OnPresentReturned the way the Present detour does. For each
 // pair the head is at x = pairIndex when the frame begins and has moved on by the time the
 // Companion Mod asks for either eye's pose; both eyes must still get the pose located at the

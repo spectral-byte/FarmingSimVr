@@ -45,7 +45,7 @@ struct MvSelfCheckReport {
 // (missing record, unusable projection). The prediction targets the previous rendered frame's camera;
 // when corrected is a Correct plan the evaluation's vectors are re-aimed at the same eye's previous
 // camera, so it targets that camera instead. Built from the records, not the plan, so it also works on
-// frames the plan declines to correct (an eye order swap).
+// frames the plan declines to correct.
 bool BuildMvSelfCheckRequest(const ResolvedCameras& resolved, uint32_t eye, uint64_t evalIndex, float mvScaleX,
                              float mvScaleY, const mvreproj::CorrectionPlan* corrected, MvSelfCheckRequest& request,
                              std::string& skipReason);

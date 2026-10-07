@@ -264,23 +264,6 @@ TEST_F(FidelityFxInterceptorTest, DispatchesRouteToTheEyeContextBySubPassUnderSe
     EXPECT_EQ(s_dispatched[2], s_createdContexts[0]);
 }
 
-TEST_F(FidelityFxInterceptorTest, DispatchesFollowTheSwappedEyeOrder) {
-    AttachAll();
-    ffxContext context = CreateUpscaler();
-    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
-    for (uint64_t i = 0; i < VRBridge::kEyeOrderSwapPairs; ++i) m_bridge.AdvanceFrame();
-    auto desc = MakeUpscaleDispatchDesc();
-
-    m_bridge.SetSubPassIndex(0);
-    Dispatch(context, desc);
-    m_bridge.SetSubPassIndex(1);
-    Dispatch(context, desc);
-
-    ASSERT_EQ(s_dispatched.size(), 2u);
-    EXPECT_EQ(s_dispatched[0], s_createdContexts[1]);
-    EXPECT_EQ(s_dispatched[1], s_createdContexts[0]);
-}
-
 TEST_F(FidelityFxInterceptorTest, DispatchesRouteByFrameParityUnderAlternateFrameRendering) {
     AttachAll();
     ffxContext context = CreateUpscaler();
@@ -453,28 +436,6 @@ TEST_F(FidelityFxInterceptorTest, DiagnosticsShowStrictAlternationAndPerEyeJitte
     EXPECT_EQ(leftSummary.distinctOffsets, 1u);
     EXPECT_FLOAT_EQ(leftSummary.minX, 0.25f);
     EXPECT_FLOAT_EQ(rightSummary.maxY, 0.5f);
-}
-
-TEST_F(FidelityFxInterceptorTest, DiagnosticsSeeTheEyeOrderSwapAsADoubleOnOneContext) {
-    AttachAll();
-    ffxContext context = CreateUpscaler();
-    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
-    auto desc = MakeUpscaleDispatchDesc();
-
-    // The last pair before the swap renders left, right; the first pair after renders right, left.
-    for (uint64_t i = 0; i + 1 < VRBridge::kEyeOrderSwapPairs; ++i) m_bridge.AdvanceFrame();
-    m_ffx.ArmDiagnostics(4);
-    m_bridge.SetSubPassIndex(0);
-    Dispatch(context, desc);
-    m_bridge.SetSubPassIndex(1);
-    Dispatch(context, desc);
-    m_bridge.AdvanceFrame();
-    m_bridge.SetSubPassIndex(0);
-    Dispatch(context, desc);
-    m_bridge.SetSubPassIndex(1);
-    Dispatch(context, desc);
-
-    EXPECT_EQ(m_ffx.GetDiagLongestContextRun(), 2u);
 }
 
 TEST_F(FidelityFxInterceptorTest, VirtualizingAContextArmsDiagnostics) {
@@ -831,26 +792,6 @@ TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingWithoutRecordsKeepsTheEngines
     EXPECT_TRUE(m_pass->corrections.empty());
 }
 
-TEST_F(FfxMvCorrectionTest, TheSelfCheckAtAnEyeOrderSwapIsBuiltFromTheRawRecords) {
-    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
-    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
-    ASSERT_TRUE(cameras.Report(FfxCamera(1, 10.064)));
-    cameras.AdvanceFrame();
-    ASSERT_TRUE(cameras.Report(FfxCamera(1, 10.1))); // the right eye twice in a row, head moved
-    m_bridge.SetSubPassIndex(1);
-    m_ngxShared->SetMvFixEnabled(true);
-    m_ffx.ArmDiagnostics(4);
-    auto desc = MakeDesc();
-    Dispatch(m_context, desc);
-
-    ASSERT_NE(m_pass, nullptr);
-    EXPECT_TRUE(m_pass->corrections.empty());
-    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
-    const MvSelfCheckRequest& r = m_pass->selfChecks[0];
-    EXPECT_NEAR(r.previous.tanHalfFovY, std::tan(0.5f), 1e-6f);
-    EXPECT_NEAR(r.toPrevious.m[0][0], 1.0f, 1e-5f);
-    EXPECT_NEAR(r.toPrevious.c[0], 0.036f, 1e-5f);
-}
 TEST_F(FfxMvCorrectionTest, MissingCameraRecordsPassTheEnginesVectorsThroughACopyWithoutACorrection) {
     m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
     m_bridge.GetCameraRecords().Clear();
@@ -868,20 +809,6 @@ TEST_F(FfxMvCorrectionTest, AZeroMotionVectorScalePassesTheEnginesVectorsThrough
     m_ngxShared->SetMvFixEnabled(true);
     auto desc = MakeDesc();
     desc.motionVectorScale = {0.0f, 0.0f};
-    Dispatch(m_context, desc);
-    ASSERT_NE(m_pass, nullptr);
-    EXPECT_TRUE(m_pass->corrections.empty());
-}
-
-TEST_F(FfxMvCorrectionTest, AnEyeOrderSwapNeedsNoCorrection) {
-    m_bridge.SetRenderingMode(VRRenderingMode::SequentialDualPass);
-    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
-    ASSERT_TRUE(cameras.Report(FfxCamera(1, 10.064)));
-    cameras.AdvanceFrame();
-    ASSERT_TRUE(cameras.Report(FfxCamera(1, 10.064))); // the right eye twice in a row
-    m_bridge.SetSubPassIndex(1);
-    m_ngxShared->SetMvFixEnabled(true);
-    auto desc = MakeDesc();
     Dispatch(m_context, desc);
     ASSERT_NE(m_pass, nullptr);
     EXPECT_TRUE(m_pass->corrections.empty());

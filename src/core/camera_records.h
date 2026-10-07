@@ -45,12 +45,6 @@ struct ResolvedCameras {
     std::optional<CameraRecord> sameEyePrevious; // the last frame this eye rendered
     std::optional<RelativeCamera> previousFrameRelative;
     std::optional<RelativeCamera> sameEyeRelative;
-
-    // True at an Eye Order Alternation swap: the eye rendered twice in a row, so the previous
-    // frame already is the same eye's previous frame.
-    bool PreviousFrameIsSameEye() const {
-        return previousFrame && sameEyePrevious && previousFrame->frame == sameEyePrevious->frame;
-    }
 };
 
 // One-line text for the vrDlssDiag trace: which records resolved, and the relative translation and
@@ -65,8 +59,8 @@ public:
     static constexpr uint32_t kEyeCount = 2;
     static constexpr size_t kCapacity = 8;
     // The oldest frame distance at which a record still counts as the same eye's previous camera: the
-    // eye order swap leaves up to three frames between an eye's renders (R L | L R).
-    static constexpr uint64_t kMaxSameEyeFrameGap = 3;
+    // eyes alternate every frame, so an eye renders two frames after its previous render.
+    static constexpr uint64_t kMaxSameEyeFrameGap = 2;
 
     // Stamps the record with the current rendered frame and keeps it. Returns false (and keeps
     // nothing) for an unknown eye or a non-finite or zero-length orientation. The same eye reported

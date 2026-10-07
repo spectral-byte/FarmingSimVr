@@ -94,7 +94,6 @@ bool VRBridge::IsReady() const {
 bool VRBridge::PerformHandshake() {
     m_handshakeCompleted = true;
     m_subPassIndex.store(0);
-    m_dualPassPairIndex.store(0);
     SetFrameParity(0);
     LogInfo("[VRBridge] Native-to-Luau handshake completed successfully. SubPassIndex and FrameParity aligned to 0.");
     return true;
@@ -430,9 +429,6 @@ void VRBridge::ResetSubPassAndParity() {
 
 void VRBridge::AdvanceFrame() {
     m_frameIndex++;
-    if (m_renderingMode.load() == VRRenderingMode::SequentialDualPass) {
-        m_dualPassPairIndex.fetch_add(1);
-    }
     ResetSubPassAndParity();
 }
 
@@ -446,7 +442,6 @@ void VRBridge::SetRenderingMode(VRRenderingMode mode) {
     // The camera records of the old mode would read as history under the new one (the eye cadence differs).
     m_cameraRecords.Clear();
     m_subPassIndex.store(0);
-    m_dualPassPairIndex.store(0);
     SetFrameParity(0);
     LogInfo(std::string("VRBridge: Rendering mode set to: ") +
             (mode == VRRenderingMode::SequentialDualPass ? "SequentialDualPass" : "AFR"));

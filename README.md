@@ -64,7 +64,7 @@ FS25 VR is built as a hybrid two-tier architecture:
 ## Key Features
 
 - **Stereo Presentation Modes**:
-  - **Sequential Dual-Pass (SDP)**: Renders left and right eye perspectives sequentially within a single logical compositor frame. The second sub-pass clamps the Lua simulation delta time to zero ($\Delta t = 0$), so both eyes show the same game state, and which eye renders first alternates every four pairs so each eye's DLSS history gets the full jitter pattern. Use DLSS/DLAA (see the support matrix below). Default mode; recommended for high-end systems (RTX 3080/4080/4090).
+  - **Sequential Dual-Pass (SDP)**: Renders left and right eye perspectives sequentially within a single logical compositor frame. The second sub-pass clamps the Lua simulation delta time to zero ($\Delta t = 0$), so both eyes show the same game state. Use DLSS/DLAA (see the support matrix below). Default mode; recommended for high-end systems (RTX 3080/4080/4090).
   - **Alternate Frame Rendering (AFR)**: Alternates left and right eye perspectives on sequential engine frames for lightweight GPU load on midrange graphics cards. Opt-in via `vrRenderingMode afr`.
   - Dynamically switchable via console command or configuration settings with seamless discontinuity flushing.
   - **Upscaler support per Stereo Presentation Mode**:

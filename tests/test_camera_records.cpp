@@ -1,4 +1,4 @@
-﻿#include <gtest/gtest.h>
+#include <gtest/gtest.h>
 #include "core/camera_records.h"
 #include <cmath>
 #include <string>
@@ -104,42 +104,6 @@ TEST(CameraRecordStoreTest, ResolvesOtherEyePreviousFrameAndSameEyeRecordsInAnAl
     EXPECT_EQ(resolved.previousFrame->frame, 1u);
     EXPECT_EQ(resolved.sameEyePrevious->eye, 0u);
     EXPECT_EQ(resolved.sameEyePrevious->frame, 0u);
-}
-
-TEST(CameraRecordStoreTest, EyeOrderSwapMakesThePreviousFrameTheSameEyesPreviousCamera) {
-    CameraRecordStore store;
-    // Pair 1 renders L R; the swapped pair 2 renders R L, so the right eye renders twice in a row.
-    PlayFrame(store, 0, 0.0);   // frame 0: L
-    PlayFrame(store, 1, 0.064); // frame 1: R
-    ASSERT_TRUE(store.Report(MakeRecord(1, 0.2))); // frame 2: R again, head moved
-
-    auto resolved = store.Resolve(1);
-    ASSERT_TRUE(resolved.current.has_value());
-    ASSERT_TRUE(resolved.previousFrame.has_value());
-    ASSERT_TRUE(resolved.sameEyePrevious.has_value());
-    EXPECT_EQ(resolved.previousFrame->frame, 1u);
-    EXPECT_EQ(resolved.sameEyePrevious->frame, 1u);
-    // The previous frame and the same eye's previous camera are the same record, so their
-    // transforms relative to the current camera agree and nothing needs correcting.
-    ASSERT_TRUE(resolved.previousFrameRelative.has_value());
-    ASSERT_TRUE(resolved.sameEyeRelative.has_value());
-    EXPECT_NEAR(resolved.previousFrameRelative->translation[0], -0.136, 1e-12);
-    EXPECT_NEAR(resolved.sameEyeRelative->translation[0], -0.136, 1e-12);
-    EXPECT_TRUE(resolved.PreviousFrameIsSameEye());
-}
-TEST(CameraRecordStoreTest, SameEyeRecordSurvivesTheLongestGapAcrossAnEyeOrderSwap) {
-    CameraRecordStore store;
-    PlayFrame(store, 1, 0.0); // frame 0 R
-    PlayFrame(store, 0, 0.0); // frame 1 L
-    PlayFrame(store, 0, 0.0); // frame 2 L (swap boundary)
-    ASSERT_TRUE(store.Report(MakeRecord(1, 0.0))); // frame 3 R
-
-    auto resolved = store.Resolve(1);
-    ASSERT_TRUE(resolved.sameEyePrevious.has_value());
-    EXPECT_EQ(resolved.sameEyePrevious->frame, 0u);
-    ASSERT_TRUE(resolved.previousFrame.has_value());
-    EXPECT_EQ(resolved.previousFrame->eye, 0u);
-    EXPECT_FALSE(resolved.PreviousFrameIsSameEye());
 }
 
 TEST(CameraRecordStoreTest, SameEyeRecordTooOldToBeTheLastRenderedOfThatEyeIsMissing) {

@@ -1229,7 +1229,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         mutableParams->Get(NVSDK_NGX_Parameter_MotionVectors, &mv);
         if (depth && mv) {
             // Per-eye correction: re-aim the engine's vectors from the previous rendered frame's camera at the
-            // same eye's previous camera. Frames without a usable plan (missing record, eye order swap, a zero
+            // same eye's previous camera. Frames without a usable plan (missing record, a zero
             // MV scale) get the engine's vectors back unchanged.
             const float effScaleX = prevScaleX * scaleMulX;
             const float effScaleY = prevScaleY * scaleMulY;
@@ -1315,7 +1315,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
             // Automatic near plane estimate, running whenever the correction does (not only in diagnostics
             // windows): every Nth cross-eye evaluation records a sparse self-check against the previous
             // rendered frame's camera on the engine's original vectors; it is read back a few evaluations
-            // later like any self-check. Same-eye frames (the eye order swap) and missing records are skipped.
+            // later like any self-check. Missing records are skipped.
             MvSelfCheckRequest nearRequest;
             float recordNear = 0.0f;
             if (bridge) {
@@ -1325,7 +1325,6 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                 // diagnostics window (which arms itself at start up and on mode changes).
                 if (nearOverride <= 0.0f && resolved.current && resolved.previousFrame &&
                     std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f &&
-                    !resolved.PreviousFrameIsSameEye() &&
                     interceptor.m_nearCrossEyeEvals.fetch_add(1) % NgxInterceptor::kNearEstimateInterval ==
                         NgxInterceptor::kNearEstimateInterval - 1) {
                     std::string skipReason;

@@ -38,17 +38,10 @@ Accepted
 ## Amendment
 The OpenXR frame is now waited on and begun after the previous pair's `Present`, before the engine update, so sub-pass 0 and sub-pass 1 both locate the head at the pair's predicted display time. Sub-pass 0 therefore finds a frame already begun. See [ADR-0019](0019-begin-the-openxr-frame-before-the-engine-update.md).
 
-## Amendment: Eye Order Alternation
-The engine advances its TAA/upscaler jitter once per rendered frame, using a Halton sequence whose horizontal offset flips sign every frame. With a fixed left-then-right order, each eye's DLSS context saw only one horizontal half of the pixel (DLAA diagnostics: left X jitter in [0, +0.44], right in [-0.47, -0.06]), which blurred fine texture.
+## Amendment: Eye Order Alternation (removed)
+An earlier amendment swapped which eye renders in sub-pass 0 every 4 pairs, to give each eye's DLSS context the full jitter pattern (with a fixed left-then-right order each eye saw only one horizontal half of the pixel). It did not fix the blur it was meant to fix, so it was removed: sub-pass 0 is always the left eye and sub-pass 1 the right. `VRBridge::GetActiveEye()` remains and returns the sub-pass under Sequential Dual-Pass.
 
-**Which eye renders in sub-pass 0 now swaps every 4 pairs** (`VRBridge::kEyeOrderSwapPairs`). Over any 16 rendered frames, each eye then gets exactly one horizontal jitter sample in each eighth of the pixel, whatever the engine's sequence phase.
-
-- The sub-pass and the eye are now separate. Sub-pass 0 still advances the simulation and sub-pass 1 still freezes it and submits the pair. `VRBridge::GetActiveEye()` (`getActiveEye` in Luau) names the eye: `subPass XOR orderSwapped`.
-- The eye-swapchain copy, DLSS context routing, head pose recording, camera binding and HUD convergence offset all follow the active eye.
-- Swapping every pair was rejected. One eye would get only the centre jitter positions and the other only the edges.
-- The swap cadence restarts on a mode change or handshake.
-
-This amendment also corrects item 1 of the Context. The double-pumped engine still renders the eyes as consecutive frames through one pipeline, so **in-engine TAA and FSR3 keep a single history shared across eyes, and Sequential Dual-Pass does not remove their ghosting**. Only DLSS gets per-eye history (Dual Feature Context). A per-eye FidelityFX interceptor would be needed for FSR3, and native TAA has no API boundary to split.
+The amendment also corrected item 1 of the Context. The double-pumped engine still renders the eyes as consecutive frames through one pipeline, so **in-engine TAA and FSR3 keep a single history shared across eyes, and Sequential Dual-Pass does not remove their ghosting**. Only DLSS gets per-eye history (Dual Feature Context). A per-eye FidelityFX interceptor would be needed for FSR3, and native TAA has no API boundary to split.
 
 ## Amendment: Per-Eye Motion Vector Correction
 The Dual Feature Context alone left DLAA/DLSS blurry under Sequential Dual-Pass, because the engine's motion vectors point at the other eye's frame, not the same eye's previous frame. The Injector now re-aims them before each per-eye evaluation, and item 3 above (motion vector scaling locked to $1.0\times$) no longer suffices on its own. The correction, the self-check and the known object-motion gap in the second sub-pass are recorded in [ADR-0020](0020-per-eye-motion-vector-correction-for-temporal-upscalers.md).

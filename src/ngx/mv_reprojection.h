@@ -201,7 +201,6 @@ constexpr float kAfrEyeStride = 2.0f;
 
 enum class CorrectionDecision {
     Correct,                 // all three cameras known: re-aim the vector
-    PreviousFrameIsSameEye,  // eye order swap: the engine's vector already targets the same eye
     MissingRecords,          // a camera record is absent (loading, menus): pass the engine's vector through
     UnusableProjection,      // a record with a zero FOV or clip range: pass through
 };

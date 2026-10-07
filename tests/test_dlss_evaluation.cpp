@@ -2009,24 +2009,6 @@ TEST_F(MvCorrectionEvaluationTest, TheRequestCarriesBothPreviousCamerasAndTheSca
     EXPECT_EQ(ParamMv(), m_engineMv);
 }
 
-TEST_F(MvCorrectionEvaluationTest, AnEyeOrderSwapGetsNoCorrectionButStillRunsThePass) {
-    SetUpCorrection();
-    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
-    ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
-    cameras.AdvanceFrame();
-    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
-    cameras.AdvanceFrame();
-    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064))); // the right eye twice in a row
-    m_bridge.SetSubPassIndex(1);
-    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
-
-    ASSERT_NE(m_pass, nullptr);
-    EXPECT_EQ(m_pass->recordCount, 1);
-    EXPECT_TRUE(m_pass->corrections.empty());
-    EXPECT_EQ(m_pass->lastInputs.correction, nullptr);
-    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_pass->output);
-}
-
 TEST_F(MvCorrectionEvaluationTest, FramesWithoutCameraRecordsPassTheEnginesVectorsThrough) {
     SetUpCorrection();
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr); // nothing reported (loading screen)
@@ -2261,22 +2243,6 @@ TEST_F(MvCorrectionEvaluationTest, TheSelfCheckUsesTheSameDepthModelAsTheCorrect
     EXPECT_FALSE(m_pass->selfChecks[1].current.infiniteDepth);
 }
 
-TEST_F(MvCorrectionEvaluationTest, TheSelfCheckOnAFrameWithoutCorrectionAlsoUsesTheDepthModel) {
-    // An eye order swap is not corrected, but its self-check still reads this frame's depth.
-    SetUpCorrection();
-    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
-    ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
-    cameras.AdvanceFrame();
-    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
-    cameras.AdvanceFrame();
-    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
-    m_bridge.SetSubPassIndex(1);
-    m_ngx.ArmDiagnostics(4);
-    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
-    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
-    EXPECT_TRUE(m_pass->selfChecks[0].current.infiniteDepth);
-}
-
 TEST_F(MvCorrectionEvaluationTest, TheProjectionTheCorrectionIsFedIsLoggedOncePerArmingWithItsSource) {
     SetUpCorrection();
     ReportLeftRightLeft();
@@ -2445,20 +2411,10 @@ TEST_F(AutoNearTest, ANonZeroNearClipAlwaysWinsAndStopsTheEstimating) {
     EXPECT_NEAR(m_pass->corrections.back().current.nearClip, 0.1f, 1e-6f);
 }
 
-TEST_F(AutoNearTest, TheEyeOrderSwapAndMissingRecordsRecordNoEstimate) {
+TEST_F(AutoNearTest, MissingRecordsRecordNoEstimate) {
     SetUpCorrection();
     m_ngx.ArmDiagnostics(0);
     for (int i = 0; i < 6; ++i) MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr); // no records at all
-    EXPECT_EQ(NearRequests(), 0u);
-
-    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
-    ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
-    cameras.AdvanceFrame();
-    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
-    cameras.AdvanceFrame();
-    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064))); // the right eye twice in a row: previous frame is same-eye
-    m_bridge.SetSubPassIndex(1);
-    for (int i = 0; i < 8; ++i) MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     EXPECT_EQ(NearRequests(), 0u);
 }
 
