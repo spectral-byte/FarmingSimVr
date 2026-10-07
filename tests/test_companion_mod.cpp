@@ -1032,6 +1032,74 @@ TEST_F(CompanionModTest, DlssNearClipConsoleCommandSetsTheOverride) {
     EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.0f);
 }
 
+TEST_F(CompanionModTest, DlssNearClipFollowsTheCameraModeCabOutsideAndOnFoot) {
+    auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
+    fs25vr::VRBridge bridge(nullptr, ngx);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName }
+        end
+        _G.removeConsoleCommand = function() end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        _G.testVehicleCam = { isInside = true }
+        _G.testVehicle = { getActiveCamera = function(self) return _G.testVehicleCam end }
+        _G.g_currentMission = { controlledVehicle = nil }
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrDlssNearClipCab"].funcName == "consoleCommandDlssNearClipCab", "vrDlssNearClipCab must be registered")
+        assert(registeredCommands["vrDlssNearClipOutside"].funcName == "consoleCommandDlssNearClipOutside", "vrDlssNearClipOutside must be registered")
+        assert(registeredCommands["vrDlssNearClipOnFoot"].funcName == "consoleCommandDlssNearClipOnFoot", "vrDlssNearClipOnFoot must be registered")
+
+        assert(string.find(VRCompanion:consoleCommandDlssNearClipCab(), "Usage: vrDlssNearClipCab") ~= nil, "no argument must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClipOutside("-1"), "Usage: vrDlssNearClipOutside") ~= nil, "negative must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClipCab("0.1"), "0.100 m for the cab", 1, true) ~= nil, "must report the cab value")
+        VRCompanion:consoleCommandDlssNearClipOutside("0.3")
+        local text = VRCompanion:consoleCommandDlssNearClipOnFoot("auto")
+        assert(string.find(text, "cab 0.100 m, outside camera 0.300 m, on foot auto", 1, true) ~= nil, "must report every mode, got " .. text)
+        VRCompanion:update(16)
+    )luau", "=testNearClipOnFoot"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.0f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_currentMission.controlledVehicle = _G.testVehicle
+        VRCompanion:update(16)
+    )luau", "=testNearClipEnterCab"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.1f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.testVehicleCam = { isInside = false }
+        VRCompanion:update(16)
+    )luau", "=testNearClipOutsideCamera"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.3f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.testVehicleCam = { isInside = true }
+        VRCompanion:update(16)
+    )luau", "=testNearClipBackInCab"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.1f);
+
+    // vrDlssNearClip sets every mode at once
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:consoleCommandDlssNearClip("0.2")
+        assert(VRCompanion.dlssNearClipCab == 0.2 and VRCompanion.dlssNearClipOutside == 0.2
+            and VRCompanion.dlssNearClipOnFoot == 0.2, "vrDlssNearClip must set every mode")
+        _G.g_currentMission.controlledVehicle = nil
+        VRCompanion:update(16)
+    )luau", "=testNearClipEveryMode"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.2f);
+}
+
 TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;

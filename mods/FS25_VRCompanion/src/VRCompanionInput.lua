@@ -496,26 +496,83 @@ function VRCompanion:consoleCommandDlssDepthModel(arg)
     end
 end
 
-function VRCompanion:consoleCommandDlssNearClip(arg)
+local DLSS_NEAR_CLIP_MODE_NAMES = { cab = "cab", outside = "outside camera", onFoot = "on foot" }
+
+-- Metres from a console argument: a number >= 0, or "auto" (any case) for 0. nil when it is neither.
+local function parseDlssNearClip(arg)
     local meters = tonumber(arg)
     if meters == nil and type(arg) == "string" and string.lower(arg) == "auto" then
         meters = 0
     end
-    if meters == nil or meters < 0 then
-        return "Usage: vrDlssNearClip <meters|auto> (near plane the DLSS motion vector correction assumes; 0 or auto = estimate it from the engine's motion vectors, the default)"
+    if meters == nil or meters ~= meters or meters < 0 then return nil end
+    return meters
+end
+
+local function describeDlssNearClip(meters)
+    if meters ~= nil and meters > 0 then
+        return string.format("%.3f m", meters)
     end
+    return "auto"
+end
+
+function VRCompanion:describeDlssNearClips()
+    return string.format("cab %s, outside camera %s, on foot %s",
+        describeDlssNearClip(self.dlssNearClipCab),
+        describeDlssNearClip(self.dlssNearClipOutside),
+        describeDlssNearClip(self.dlssNearClipOnFoot))
+end
+
+-- Saves the near planes just set and sends the current camera's to the Injector; appends a note to
+-- text when the bridge cannot take it.
+function VRCompanion:commitDlssNearClips(text)
+    self:saveConfiguration()
     local bridge = VRBridge or (_G and _G.VRBridge)
-    if bridge ~= nil and type(bridge.setDlssNearClip) == "function" then
-        if bridge.setDlssNearClip(meters) then
-            local text = meters > 0 and string.format("DLSS near plane override (vrDlssNearClip) is %.3f m", meters)
-                or "DLSS near plane (vrDlssNearClip) is auto: estimated from the engine's motion vectors (the camera record's near until then)"
-            print("[FS25_VR] " .. text)
-            return text
-        end
-        return "DLSS near plane override unavailable (no NGX interceptor)."
-    else
-        return "VRBridge.setDlssNearClip is not available."
+    if bridge == nil or type(bridge.setDlssNearClip) ~= "function" then
+        text = text .. " (not applied: VRBridge.setDlssNearClip is not available)"
+    elseif not self:applyDlssNearClip(true) then
+        text = text .. " (not applied: no NGX interceptor)"
     end
+    print("[FS25_VR] " .. text)
+    return text
+end
+
+function VRCompanion:consoleCommandDlssNearClip(arg)
+    local meters = parseDlssNearClip(arg)
+    if meters == nil then
+        return "Usage: vrDlssNearClip <meters|auto> (near plane the DLSS motion vector correction assumes for every camera; 0 or auto = estimate it from the engine's motion vectors, the default. vrDlssNearClipCab, vrDlssNearClipOutside and vrDlssNearClipOnFoot set one camera mode.) Now: "
+            .. self:describeDlssNearClips()
+    end
+    for _, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
+        self[field] = meters
+    end
+    local text = meters > 0 and string.format("DLSS near plane (vrDlssNearClip) is %.3f m for every camera", meters)
+        or "DLSS near plane (vrDlssNearClip) is auto for every camera: estimated from the engine's motion vectors (the camera record's near until then)"
+    return self:commitDlssNearClips(text)
+end
+
+function VRCompanion:setDlssNearClipForMode(mode, command, arg)
+    local field = self.DLSS_NEAR_CLIP_FIELDS[mode]
+    local meters = parseDlssNearClip(arg)
+    if meters == nil then
+        return string.format("Usage: %s <meters|auto> (DLSS near plane for the %s; 0 or auto = estimate it automatically). Now: %s",
+            command, DLSS_NEAR_CLIP_MODE_NAMES[mode], describeDlssNearClip(self[field]))
+    end
+    self[field] = meters
+    local text = string.format("DLSS near plane (%s) is %s for the %s; now %s", command,
+        describeDlssNearClip(meters), DLSS_NEAR_CLIP_MODE_NAMES[mode], self:describeDlssNearClips())
+    return self:commitDlssNearClips(text)
+end
+
+function VRCompanion:consoleCommandDlssNearClipCab(arg)
+    return self:setDlssNearClipForMode(self.DLSS_NEAR_CLIP_CAB, "vrDlssNearClipCab", arg)
+end
+
+function VRCompanion:consoleCommandDlssNearClipOutside(arg)
+    return self:setDlssNearClipForMode(self.DLSS_NEAR_CLIP_OUTSIDE, "vrDlssNearClipOutside", arg)
+end
+
+function VRCompanion:consoleCommandDlssNearClipOnFoot(arg)
+    return self:setDlssNearClipForMode(self.DLSS_NEAR_CLIP_ON_FOOT, "vrDlssNearClipOnFoot", arg)
 end
 
 function VRCompanion:consoleCommandDlssDiag(countStr)
@@ -617,6 +674,9 @@ VRCompanion.Input.consoleCommandSetDlssSdpMvScale = function(self, ...) return V
 VRCompanion.Input.consoleCommandDlssMvFix = function(self, ...) return VRCompanion.consoleCommandDlssMvFix(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandDlssDepthModel = function(self, ...) return VRCompanion.consoleCommandDlssDepthModel(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandDlssNearClip = function(self, ...) return VRCompanion.consoleCommandDlssNearClip(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssNearClipCab = function(self, ...) return VRCompanion.consoleCommandDlssNearClipCab(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssNearClipOutside = function(self, ...) return VRCompanion.consoleCommandDlssNearClipOutside(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssNearClipOnFoot = function(self, ...) return VRCompanion.consoleCommandDlssNearClipOnFoot(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandDlssDiag = function(self, ...) return VRCompanion.consoleCommandDlssDiag(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetRenderingMode = function(self, ...) return VRCompanion.consoleCommandSetRenderingMode(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetObliqueProjection = function(self, ...) return VRCompanion.consoleCommandSetObliqueProjection(VRCompanion, ...) end

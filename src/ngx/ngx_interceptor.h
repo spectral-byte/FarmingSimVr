@@ -190,8 +190,9 @@ public:
     // DLSS. Finite: reverse-Z between the camera record's near and far planes. For A/B comparison.
     void SetDepthModelInfinite(bool infinite);
     bool IsDepthModelInfinite() const { return m_depthModelInfinite.load(); }
-    // Near plane in metres (vrDlssNearClip) for the correction and the self-check, on every camera.
-    // m > 0 is a manual override and always wins. 0 (the default, also written uto) estimates the
+    // Near plane in metres for the correction and the self-check, on every camera. The Companion Mod sets
+    // it per camera mode (vrDlssNearClipCab / Outside / OnFoot) as the player enters, leaves or switches
+    // cameras. m > 0 is a manual override and always wins. 0 (the default, also written `auto`) estimates the
     // renderer's near from the engine's own motion vectors (see mvreproj::SolveNear): the Companion Mod's
     // camera record reports the same near for every camera while the renderer's differs (about 0.1 in a
     // vehicle cab, 0.15 on foot). Until the first estimate, and after a Discontinuity Flush, the record's
