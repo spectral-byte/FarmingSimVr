@@ -749,8 +749,9 @@ TEST_F(FfxMvCorrectionTest, WithoutDispatchCameraFieldsTheRecordsProjectionIsUse
     EXPECT_FLOAT_EQ(m_pass->corrections[0].current.nearClip, 0.15f);
 }
 
-TEST_F(FfxMvCorrectionTest, OffByDefaultAndSwitchableAtRuntimeWithTheDlssSwitch) {
+TEST_F(FfxMvCorrectionTest, SwitchableAtRuntimeWithTheDlssSwitch) {
     SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(false);
     auto desc = MakeDesc();
     Dispatch(m_context, desc);
     ASSERT_EQ(s_dispatchMotionVectors.size(), 1u);

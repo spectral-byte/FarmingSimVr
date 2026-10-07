@@ -1626,22 +1626,24 @@ TEST_F(MvPassEvaluationTest, SequentialDualPassEyeContextsBothGetTheInjectorsTex
     EXPECT_EQ(ParamMv(), m_engineMv);
 }
 
-TEST_F(MvPassEvaluationTest, OffByDefaultAndSwitchableAtRuntime) {
+TEST_F(MvPassEvaluationTest, OnByDefaultAndSwitchableAtRuntime) {
     SetUpPass();
+    EXPECT_TRUE(m_ngx.IsMvFixEnabled());
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_pass->output);
+    EXPECT_EQ(m_factoryCalls, 1);
+
+    m_ngx.SetMvFixEnabled(false);
     EXPECT_FALSE(m_ngx.IsMvFixEnabled());
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
-    EXPECT_EQ(m_factoryCalls, 0);
+    EXPECT_EQ(m_pass->recordCount, 1);
 
     m_ngx.SetMvFixEnabled(true);
     EXPECT_TRUE(m_ngx.IsMvFixEnabled());
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     EXPECT_EQ(s_evaluatedMotionVectors.back(), m_pass->output);
-
-    m_ngx.SetMvFixEnabled(false);
-    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
-    EXPECT_EQ(s_evaluatedMotionVectors.back(), m_engineMv);
-    EXPECT_EQ(m_pass->recordCount, 1);
+    EXPECT_EQ(m_pass->recordCount, 2);
 }
 
 TEST_F(MvPassEvaluationTest, MenusAndTwoDimensionalViewKeepTheEnginesMotionVectors) {
@@ -2140,6 +2142,7 @@ TEST_F(MvCorrectionAfrEvaluationTest, VrDlssMvScaleIsIgnoredWhileTheCorrectionIs
 
 TEST_F(MvCorrectionAfrEvaluationTest, WithTheCorrectionOffAfrKeepsEyeStrideScalingExactlyAsBefore) {
     SetUpAfr();
+    m_ngx.SetMvFixEnabled(false);
     ReportLeftRightLeft(); // records or not, the pass is off
     m_ngx.SetMvScaleMultiplier(2.5f, 2.5f);
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);

@@ -470,7 +470,7 @@ void NgxInterceptor::DetachAll() {
         m_mvFixDisableReason.clear();
         m_mvPassFactory = [](ID3D12GraphicsCommandList*) { return CreateD3D12MotionVectorPass(); };
     }
-    m_mvFixEnabled.store(false);
+    m_mvFixEnabled.store(kDefaultMvFixEnabled);
     m_mvFixDisabled.store(false);
     m_depthModelInfinite.store(true);
     m_nearClipOverride.store(0.0f);

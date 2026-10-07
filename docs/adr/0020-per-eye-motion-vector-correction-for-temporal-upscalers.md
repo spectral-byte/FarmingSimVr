@@ -48,7 +48,7 @@ The eye rendered in the second sub-pass runs with the simulation frozen ($\Delta
 
 ## Consequences
 - Sequential Dual-Pass with DLAA/DLSS is expected to be as sharp as the old shared-context image, with no cross-eye ghosting, standing still or turning the head.
-- `vrDlssMvFix` is off by default until the GPU path has been verified in game.
+- `vrDlssMvFix` is on by default; `vrDlssMvFix off` restores the uncorrected behaviour for A/B comparison. A pass failure turns the correction off for the session.
 - One extra lightweight compute dispatch per upscaler evaluation.
 - The correction reuses the camera records for AFR and for FSR3. FSR3 reads its conventions from its own dispatch description instead of the DLSS creation flags.
 - A camera record is only a same-eye previous camera when every frame between it and the current one has a record of the other eye. A frame with no record could have been the eye's own render, so the previous camera is then reported missing rather than guessed. Camera records are dropped on a Stereo Presentation Mode switch as well as on non-stereo presents.

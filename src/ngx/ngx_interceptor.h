@@ -148,6 +148,7 @@ public:
     static constexpr int kDefaultDlssPresetOverride = NVSDK_NGX_DLSS_Hint_Render_Preset_K;
     static constexpr float kDefaultSharpnessOverride = 0.50f;
     static constexpr bool kDefaultForceSharpnessOverride = true;
+    static constexpr bool kDefaultMvFixEnabled = true;
     // Eye-Stride Motion Vector compensation under AFR (ADR-0015). Overridable
     // via SetMvScaleMultiplier; SDP always evaluates at 1.0x.
     static constexpr float kDefaultAfrMvScale = 2.0f;
@@ -176,8 +177,8 @@ public:
 
     // Motion vector pass (vrDlssMvFix). While on, a compute pass recorded on the game's command list ahead
     // of each per-eye DLSS evaluation produces the motion vectors DLSS receives for that one evaluation.
-    // Off by default until verified in game. A pass failure turns it off for the session (the engine's
-    // motion vectors are then used) and "on" no longer takes effect.
+    // On by default. A pass failure turns it off for the session (the engine's motion vectors are then
+    // used) and "on" no longer takes effect.
     // Returns the resulting enabled state, so a request to turn it on after a failure reads false.
     bool SetMvFixEnabled(bool enabled);
     bool IsMvFixEnabled() const { return m_mvFixEnabled.load(); }
@@ -281,7 +282,7 @@ private:
     void OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolution& solution, float recordNear, uint32_t eye,
                         double gatedFraction);
     std::atomic<bool> m_diagProjectionLogged{false}; // the MvProjection line, once per arming
-    std::atomic<bool> m_mvFixEnabled{false};
+    std::atomic<bool> m_mvFixEnabled{kDefaultMvFixEnabled};
     std::atomic<bool> m_mvFixDisabled{false};
     mutable std::mutex m_mvFixMutex;
     std::string m_mvFixDisableReason;
