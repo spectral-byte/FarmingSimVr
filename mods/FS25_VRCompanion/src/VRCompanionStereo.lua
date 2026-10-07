@@ -1047,6 +1047,7 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
                 setRotationFn(activeEyeCam, cabRotX, cabRotY, cabRotZ)
             end
             self:bindRenderingCamera(activeEyeCam)
+            self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
             self.activeRenderingCameraNode = activeEyeCam
         end
     else
@@ -1226,6 +1227,7 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
                 setRotation(activeEyeCam, finalRotX, finalRotY, finalRotZ)
             end
             self:bindRenderingCamera(activeEyeCam)
+            self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
             self.activeRenderingCameraNode = activeEyeCam
         end
     else

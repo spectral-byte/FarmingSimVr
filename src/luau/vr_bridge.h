@@ -6,6 +6,7 @@
 #include <string>
 #include "lua.h"
 #include "lualib.h"
+#include "core/camera_records.h"
 #include "openxr/openxr_manager.h"
 
 namespace fs25vr {
@@ -55,6 +56,11 @@ public:
     // Applies the queued mode, if any. Returns true when a mode was latched.
     bool LatchPendingRenderingMode();
     bool IsSequentialDualPass() const { return m_renderingMode.load() == VRRenderingMode::SequentialDualPass; }
+
+    // Eye cameras the Companion Mod reports per stereo sub-pass, stamped with the rendered-frame
+    // counter the DXGI proxy advances once per Present in stereo presentation.
+    CameraRecordStore& GetCameraRecords() { return m_cameraRecords; }
+    const CameraRecordStore& GetCameraRecords() const { return m_cameraRecords; }
 
     uint32_t GetSubPassIndex() const { return m_subPassIndex.load(); }
     void SetSubPassIndex(uint32_t index) { m_subPassIndex.store(index % 2); }
@@ -120,7 +126,12 @@ public:
     static int Lua_SetDlssSharpness(lua_State* L);
     static int Lua_SetDlssPreset(lua_State* L);
     static int Lua_DlssDiag(lua_State* L);
+    static int Lua_SetDlssMvFix(lua_State* L);
+    static int Lua_SetDlssDepthModel(lua_State* L);
+    static int Lua_SetDlssNearClip(lua_State* L);
     static int Lua_SetDlssSdpMvScale(lua_State* L);
+    // reportCameraRecord(eye, x, y, z, qx, qy, qz, qw, fovY, nearClip, farClip, projOffsetX, projOffsetY)
+    static int Lua_ReportCameraRecord(lua_State* L);
 
     static int Lua_GetRenderingMode(lua_State* L);
     static int Lua_SetRenderingMode(lua_State* L);
@@ -181,6 +192,10 @@ public:
         {"setDlssPreset", &Lua_SetDlssPreset},
         {"dlssDiag", &Lua_DlssDiag},
         {"setDlssSdpMvScale", &Lua_SetDlssSdpMvScale},
+        {"reportCameraRecord", &Lua_ReportCameraRecord},
+        {"setDlssMvFix", &Lua_SetDlssMvFix},
+        {"setDlssDepthModel", &Lua_SetDlssDepthModel},
+        {"setDlssNearClip", &Lua_SetDlssNearClip},
     };
 
     // 1 version property + one field per table entry.
@@ -193,6 +208,7 @@ private:
 
     std::shared_ptr<OpenXrManager> m_openXrManager;
     std::shared_ptr<NgxInterceptor> m_ngxInterceptor;
+    CameraRecordStore m_cameraRecords;
     std::string m_version = "1.0.0";
     bool m_handshakeCompleted = false;
     bool m_menuVisible = false;

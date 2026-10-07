@@ -990,6 +990,12 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
         assert(VRBridge.dlssDiag(0) == false, "dlssDiag must reject a zero count")
         assert(VRBridge.dlssDiag(32) == true, "dlssDiag failed")
         assert(VRBridge.setDlssSdpMvScale(0.0, 0.25) == true, "setDlssSdpMvScale failed")
+        assert(type(VRBridge.setDlssMvFix) == "function", "setDlssMvFix missing")
+        assert(VRBridge.setDlssMvFix(true) == true, "setDlssMvFix on failed")
+        assert(type(VRBridge.setDlssDepthModel) == "function", "setDlssDepthModel missing")
+        assert(VRBridge.setDlssDepthModel(false) == true, "setDlssDepthModel finite failed")
+        assert(type(VRBridge.setDlssNearClip) == "function", "setDlssNearClip missing")
+        assert(VRBridge.setDlssNearClip(0.1) == true, "setDlssNearClip failed")
     )";
 
     EXPECT_EQ(RunLuauString(L, testScript), 0);
@@ -1000,6 +1006,14 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
     EXPECT_EQ(ngx->GetDiagEvaluationsRemaining(), 32u);
     EXPECT_FLOAT_EQ(ngx->GetSdpMvScaleMultiplierX(), 0.0f);
     EXPECT_FLOAT_EQ(ngx->GetSdpMvScaleMultiplierY(), 0.25f);
+    EXPECT_TRUE(ngx->IsMvFixEnabled());
+    EXPECT_FALSE(ngx->IsDepthModelInfinite());
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.1f);
+
+    EXPECT_EQ(RunLuauString(L, "assert(VRBridge.setDlssMvFix(false) == true, \"setDlssMvFix off failed\")"), 0);
+    EXPECT_FALSE(ngx->IsMvFixEnabled());
+    EXPECT_EQ(RunLuauString(L, "assert(VRBridge.setDlssDepthModel(true) == true, \"setDlssDepthModel infinite failed\")"), 0);
+    EXPECT_TRUE(ngx->IsDepthModelInfinite());
 }
 
 TEST_F(VrBridgeTest, DualPassEyeOrderSwapsEveryFourPairs) {
@@ -1075,8 +1089,41 @@ TEST_F(VrBridgeTest, DlssTuningFunctionsReportFailureWithoutNgxInterceptor) {
         assert(VRBridge.setDlssSharpness(0.65) == false, "setDlssSharpness must fail without NGX")
         assert(VRBridge.setDlssPreset(11) == false, "setDlssPreset must fail without NGX")
         assert(VRBridge.dlssDiag(32) == false, "dlssDiag must fail without NGX")
+        assert(VRBridge.setDlssMvFix(true) == false, "setDlssMvFix must fail without NGX")
+        assert(VRBridge.setDlssDepthModel(true) == false, "setDlssDepthModel must fail without NGX")
+        assert(VRBridge.setDlssNearClip(0.1) == false, "setDlssNearClip must fail without NGX")
     )";
     EXPECT_EQ(RunLuauString(L, testScript), 0);
+}
+
+TEST_F(VrBridgeTest, ReportCameraRecordStampsTheRecordForTheEyeThatRendered) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    for (int i = 0; i < 7; ++i) bridge.GetCameraRecords().AdvanceFrame();
+
+    ASSERT_EQ(RunLuauString(L, R"(
+        local ok = VRBridge.reportCameraRecord(1, 4000000.25, 12.5, -987654.75, 0, 0, 0, 1, 1.2, 0.15, 2000, 0.01, -0.02)
+        assert(ok == true, "a valid record must be accepted")
+        assert(VRBridge.reportCameraRecord(2, 0, 0, 0, 0, 0, 0, 1, 1, 0.1, 100, 0, 0) == false, "unknown eye must be rejected")
+        assert(VRBridge.reportCameraRecord(0, 0, 0, 0, 0, 0, 0, 0, 1, 0.1, 100, 0, 0) == false, "zero quaternion must be rejected")
+    )"), 0);
+
+    auto resolved = bridge.GetCameraRecords().Resolve(1);
+    ASSERT_TRUE(resolved.current.has_value());
+    EXPECT_EQ(resolved.current->frame, 7u);
+    EXPECT_DOUBLE_EQ(resolved.current->position[0], 4000000.25);
+    EXPECT_DOUBLE_EQ(resolved.current->position[2], -987654.75);
+    EXPECT_FLOAT_EQ(resolved.current->fovY, 1.2f);
+    EXPECT_FLOAT_EQ(resolved.current->farClip, 2000.0f);
+    EXPECT_FLOAT_EQ(resolved.current->projOffsetX, 0.01f);
+    EXPECT_FLOAT_EQ(resolved.current->projOffsetY, -0.02f);
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+}
+
+TEST_F(VrBridgeTest, ReportCameraRecordRaisesLuaErrorForMissingArguments) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    EXPECT_NE(RunLuauString(L, "VRBridge.reportCameraRecord(0, 1, 2)"), 0);
 }
 
 TEST_F(VrBridgeTest, SetRenderingModeIsImmediateWhileOpenXrIsInactive) {
@@ -1162,7 +1209,11 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "setDlssSharpness",
         "setDlssPreset",
         "dlssDiag",
-        "setDlssSdpMvScale"
+        "setDlssSdpMvScale",
+        "reportCameraRecord",
+        "setDlssMvFix",
+        "setDlssDepthModel",
+        "setDlssNearClip"
     };
 
     lua_getglobal(L, "VRBridge");
@@ -1187,3 +1238,16 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
     lua_pop(L, 1); // pop VRBridge table
 }
 
+
+TEST_F(VrBridgeTest, SwitchingTheStereoPresentationModeDiscardsCameraRecords) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::SequentialDualPass);
+    fs25vr::CameraRecord record;
+    record.eye = 0;
+    ASSERT_TRUE(bridge.GetCameraRecords().Report(record));
+    ASSERT_TRUE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+
+    bridge.SetRenderingMode(fs25vr::VRRenderingMode::AFR);
+
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+}

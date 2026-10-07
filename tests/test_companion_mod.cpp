@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "luau/vr_bridge.h"
+#include "ngx/ngx_interceptor.h"
 #include "fake_openxr_runtime.h"
 #include "luacode.h"
 #include "luau_test_runner.h"
@@ -910,6 +911,125 @@ TEST_F(CompanionModTest, ObliqueProjectionConsoleCommandTogglesPersistsAndApplie
         VRCompanion:deleteMap()
         assert(removedCommands["vrObliqueProjection"] == true, "deleteMap must unregister vrObliqueProjection")
     )luau", "=testObliqueProjectionConsoleCommand"), 0);
+}
+
+TEST_F(CompanionModTest, DlssMvFixConsoleCommandSwitchesTheMotionVectorPass) {
+    auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
+    fs25vr::VRBridge bridge(nullptr, ngx);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName }
+        end
+        _G.removeConsoleCommand = function() end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrDlssMvFix"] ~= nil, "vrDlssMvFix must be registered on map load")
+        assert(registeredCommands["vrDlssMvFix"].funcName == "consoleCommandDlssMvFix", "wrong callback")
+
+        assert(string.find(VRCompanion:consoleCommandDlssMvFix(), "Usage: vrDlssMvFix") ~= nil, "no argument must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssMvFix("maybe"), "Usage: vrDlssMvFix") ~= nil, "bad argument must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssMvFix("on"), "is on") ~= nil, "on must report on")
+    )luau", "=testDlssMvFixConsoleOn"), 0);
+    EXPECT_TRUE(ngx->IsMvFixEnabled());
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(string.find(VRCompanion:consoleCommandDlssMvFix("off"), "is off") ~= nil, "off must report off")
+    )luau", "=testDlssMvFixConsoleOff"), 0);
+    EXPECT_FALSE(ngx->IsMvFixEnabled());
+}
+
+TEST_F(CompanionModTest, DlssDepthModelConsoleCommandSwitchesTheDepthModel) {
+    auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
+    fs25vr::VRBridge bridge(nullptr, ngx);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    EXPECT_TRUE(ngx->IsDepthModelInfinite()); // the default
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName }
+        end
+        _G.removeConsoleCommand = function() end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrDlssDepthModel"] ~= nil, "vrDlssDepthModel must be registered on map load")
+        assert(registeredCommands["vrDlssDepthModel"].funcName == "consoleCommandDlssDepthModel", "wrong callback")
+
+        assert(string.find(VRCompanion:consoleCommandDlssDepthModel(), "Usage: vrDlssDepthModel") ~= nil, "no argument must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssDepthModel("reverse"), "Usage: vrDlssDepthModel") ~= nil, "bad argument must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssDepthModel("finite"), "is finite") ~= nil, "finite must report finite")
+    )luau", "=testDlssDepthModelFinite"), 0);
+    EXPECT_FALSE(ngx->IsDepthModelInfinite());
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(string.find(VRCompanion:consoleCommandDlssDepthModel("Infinite"), "is infinite") ~= nil, "infinite must report infinite")
+    )luau", "=testDlssDepthModelInfinite"), 0);
+    EXPECT_TRUE(ngx->IsDepthModelInfinite());
+}
+
+TEST_F(CompanionModTest, DlssNearClipConsoleCommandSetsTheOverride) {
+    auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
+    fs25vr::VRBridge bridge(nullptr, ngx);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName }
+        end
+        _G.removeConsoleCommand = function() end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrDlssNearClip"] ~= nil, "vrDlssNearClip must be registered on map load")
+        assert(registeredCommands["vrDlssNearClip"].funcName == "consoleCommandDlssNearClip", "wrong callback")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip(), "Usage: vrDlssNearClip") ~= nil, "no argument must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("abc"), "Usage: vrDlssNearClip") ~= nil, "bad argument must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("-1"), "Usage: vrDlssNearClip") ~= nil, "negative must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("0.1"), "0.100") ~= nil, "must report the override")
+    )luau", "=testDlssNearClipSet"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.1f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("0"), "is auto") ~= nil, "0 must report auto")
+    )luau", "=testDlssNearClipZero"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.0f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:consoleCommandDlssNearClip("0.2")
+    )luau", "=testDlssNearClipSetAgain"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.2f);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("auto"), "is auto") ~= nil, "auto must report auto")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("AUTO"), "is auto") ~= nil, "auto is case-insensitive")
+    )luau", "=testDlssNearClipAuto"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.0f);
 }
 
 TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
@@ -3875,6 +3995,120 @@ TEST_F(CompanionModTest, DualPassSwappedEyeOrderBindsRightCameraOnTheSimulatingS
         VRCompanion:deleteMap()
         _G.FSBaseMission = nil
     )luau", "=testSwappedEyeOrder"), 0);
+}
+
+namespace {
+// Engine camera queries for two eye camera nodes, 0.064 m apart along world X.
+constexpr const char* kCameraQueryMocks = R"luau(
+    _G.currentCamera = 0
+    function _G.setCamera(cam) _G.currentCamera = cam end
+    function _G.getCamera() return _G.currentCamera end
+    local worldPos = { [5001] = {4000000.5, 1.25, -2000000.75}, [5002] = {4000000.564, 1.25, -2000000.75} }
+    function _G.getWorldTranslation(node) local p = worldPos[node]; return p[1], p[2], p[3] end
+    function _G.getWorldQuaternion(node) return 0, 0.7071067811865476, 0, 0.7071067811865476 end
+    function _G.getFovY(node) return 1.25 end
+    function _G.getNearClip(node) return 0.15 end
+    function _G.getFarClip(node) return 2000 end
+    function _G.getProjectionOffset(node) return 0.01, -0.02 end
+    _G.FSBaseMission = { update = function(self, dt) end }
+
+    VRCompanion:loadMap("mapUS")
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+    VRCompanion:setRenderingMode("DualPass")
+    VRCompanion.is2DViewActive = false
+    VRCompanion.isMenuVisible = false
+    VRCompanion.cameraNodeLeft = 5001
+    VRCompanion.cameraNodeRight = 5002
+)luau";
+} // namespace
+
+TEST_F(CompanionModTest, DualPassSubPassesReportTheCameraOfTheEyeEachRendered) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, kCameraQueryMocks, "=cameraQueryMocks"), 0);
+
+    // Sub-pass 0 renders the left eye, sub-pass 1 the right eye; each reports once, stamped with
+    // the frame the Injector is rendering.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRBridge.setSubPassIndex(0)
+        _G.FSBaseMission:update(16.666)
+        VRBridge.setSubPassIndex(1)
+        _G.FSBaseMission:update(16.666)
+    )luau", "=reportBothSubPasses"), 0);
+
+    auto left = bridge.GetCameraRecords().Resolve(0);
+    auto right = bridge.GetCameraRecords().Resolve(1);
+    ASSERT_TRUE(left.current.has_value());
+    ASSERT_TRUE(right.current.has_value());
+    EXPECT_EQ(left.current->frame, bridge.GetCameraRecords().GetFrame());
+    EXPECT_DOUBLE_EQ(left.current->position[0], 4000000.5);
+    EXPECT_DOUBLE_EQ(left.current->position[2], -2000000.75);
+    EXPECT_DOUBLE_EQ(right.current->position[0], 4000000.564);
+    EXPECT_NEAR(left.current->orientation[1], 0.7071067811865476, 1e-12);
+    EXPECT_NEAR(left.current->orientation[3], 0.7071067811865476, 1e-12);
+    EXPECT_FLOAT_EQ(left.current->fovY, 1.25f);
+    EXPECT_FLOAT_EQ(left.current->nearClip, 0.15f);
+    EXPECT_FLOAT_EQ(left.current->farClip, 2000.0f);
+    EXPECT_FLOAT_EQ(left.current->projOffsetX, 0.01f);
+    EXPECT_FLOAT_EQ(left.current->projOffsetY, -0.02f);
+}
+
+TEST_F(CompanionModTest, DualPassCameraRecordsFollowTheEyeOrderSwapNotTheSubPassIndex) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, kCameraQueryMocks, "=cameraQueryMocks"), 0);
+
+    for (uint64_t i = 0; i < fs25vr::VRBridge::kEyeOrderSwapPairs; ++i) {
+        bridge.AdvanceFrame();
+    }
+    ASSERT_TRUE(bridge.IsEyeOrderSwapped());
+
+    // Swapped: sub-pass 0 renders the right eye, so only the right eye has a record afterwards.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRBridge.setSubPassIndex(0)
+        _G.FSBaseMission:update(16.666)
+    )luau", "=reportSwappedSubPass0"), 0);
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+    auto right = bridge.GetCameraRecords().Resolve(1);
+    ASSERT_TRUE(right.current.has_value());
+    EXPECT_DOUBLE_EQ(right.current->position[0], 4000000.564);
+}
+
+TEST_F(CompanionModTest, NoCameraRecordIsReportedOutsideStereoSubPasses) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, kCameraQueryMocks, "=cameraQueryMocks"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion.is2DViewActive = true
+        VRBridge.setSubPassIndex(0)
+        _G.FSBaseMission:update(16.666)
+        VRCompanion.is2DViewActive = false
+        VRCompanion.isMenuVisible = true
+        _G.FSBaseMission:update(16.666)
+    )luau", "=reportOutsideStereo"), 0);
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(1).current.has_value());
+}
+
+TEST_F(CompanionModTest, MissingEngineCameraQueriesNeverBreakTheSubPass) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, kCameraQueryMocks, "=cameraQueryMocks"), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.getWorldQuaternion = nil
+        VRBridge.setSubPassIndex(0)
+        _G.FSBaseMission:update(16.666)
+        assert(_G.currentCamera == 5001, "the sub-pass must still bind its eye camera")
+    )luau", "=reportWithoutQuaternion"), 0);
+    EXPECT_FALSE(bridge.GetCameraRecords().Resolve(0).current.has_value());
 }
 
 TEST_F(CompanionModTest, DualPassHudConvergenceLockedToSubPassEyeIndex) {

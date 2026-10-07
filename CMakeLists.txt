@@ -75,6 +75,8 @@ set(CORE_SOURCES
     src/core/thread_trace.cpp
     src/core/thread_trace.h
     src/core/math_utils.h
+    src/core/camera_records.cpp
+    src/core/camera_records.h
     src/core/detour.cpp
     src/core/detour.h
     src/core/injector_runtime.cpp
@@ -100,6 +102,15 @@ set(CORE_SOURCES
     src/ngx/virtual_ngx_handle.h
     src/ngx/ngx_interceptor.h
     src/ngx/ngx_interceptor.cpp
+    src/ngx/mv_pass.h
+    src/ngx/mv_pass.cpp
+    src/ngx/mv_reprojection.h
+    src/ngx/mv_reprojection.cpp
+    src/ngx/near_estimator.h
+    src/ngx/near_estimator.cpp
+    src/fidelityfx/ffx_defs.h
+    src/fidelityfx/fidelityfx_interceptor.h
+    src/fidelityfx/fidelityfx_interceptor.cpp
 )
 
 # Core static library: compiled once, shared by the Injector DLL and the tests
@@ -139,6 +150,9 @@ set_target_properties(fake_nvngx PROPERTIES OUTPUT_NAME nvngx)
 add_executable(fs25_vr_tests
     tests/test_dll_lifecycle.cpp
     tests/test_math_utils.cpp
+    tests/test_camera_records.cpp
+    tests/test_mv_reprojection.cpp
+    tests/test_near_estimator.cpp
     tests/test_logger.cpp
     tests/test_thread_trace.cpp
     tests/test_openxr_cursor_overlay.cpp
@@ -152,6 +166,7 @@ add_executable(fs25_vr_tests
     tests/test_virtual_ngx_handle.cpp
     tests/test_dlss_evaluation.cpp
     tests/test_ngx_interceptor.cpp
+    tests/test_fidelityfx_interceptor.cpp
     tests/luau_test_runner.cpp
     tests/test_luau_suites.cpp
 )
