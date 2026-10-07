@@ -2119,6 +2119,14 @@ TEST_F(MvCorrectionAfrEvaluationTest, TheStrideFactorIsAfrOnlySequentialDualPass
     EXPECT_FLOAT_EQ(m_pass->corrections[0].objectMotionFactor, 1.0f);
 }
 
+TEST_F(MvCorrectionAfrEvaluationTest, TheNgxCorrectionGatesPixelsThatAreNotStaticConsistent) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_TRUE(m_pass->corrections[0].gateNonStatic);
+}
+
 TEST_F(MvCorrectionAfrEvaluationTest, VrDlssMvScaleIsIgnoredWhileTheCorrectionIsOn) {
     SetUpAfr();
     m_ngx.SetMvFixEnabled(true);
@@ -2359,6 +2367,11 @@ protected:
         r.nearSolution.scale = 0.15 / nearClip;
         r.nearSolution.used = 500;
         r.nearSolution.total = 600;
+        r.nearSolution.informative = 560;
+        r.nearSolution.retained = 500;
+        r.nearSolution.inlierFraction = 0.9;
+        r.stats.gatedFraction = 0.125;
+        r.eye = 1;
         return r;
     }
     size_t NearRequests() const {
@@ -2396,7 +2409,7 @@ TEST_F(AutoNearTest, AnEstimateMovesTheCorrectionsNearForBothEyesAndIsShownOnThe
     SetUpAuto();
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     ASSERT_NE(m_pass, nullptr);
-    for (int i = 0; i < 3; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
+    for (size_t i = 0; i < NearEstimator::kMinSolutions; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     EXPECT_NEAR(m_ngx.GetAutoNearEstimate(), 0.1f, 1e-6f);
 
@@ -2414,7 +2427,7 @@ TEST_F(AutoNearTest, AnEstimateMovesTheCorrectionsNearForBothEyesAndIsShownOnThe
 TEST_F(AutoNearTest, ANonZeroNearClipAlwaysWinsAndStopsTheEstimating) {
     SetUpAuto();
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
-    for (int i = 0; i < 3; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
+    for (size_t i = 0; i < NearEstimator::kMinSolutions; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     ASSERT_GT(m_ngx.GetAutoNearEstimate(), 0.0f);
 
@@ -2449,14 +2462,14 @@ TEST_F(AutoNearTest, TheEyeOrderSwapAndMissingRecordsRecordNoEstimate) {
 TEST_F(AutoNearTest, ADiscontinuityFlushForgetsTheEstimateAndReadbacksStillInFlight) {
     SetUpAuto();
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
-    for (int i = 0; i < 3; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
+    for (size_t i = 0; i < NearEstimator::kMinSolutions; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     ASSERT_GT(m_ngx.GetAutoNearEstimate(), 0.0f);
 
     m_ngx.TriggerDiscontinuityFlush(); // a map change, a mode switch
     EXPECT_FLOAT_EQ(m_ngx.GetAutoNearEstimate(), 0.0f);
     // A solution recorded before the flush and read back after it describes the old scene.
-    for (int i = 0; i < 3; ++i) m_pass->pendingReports.push_back(NearReport(1, 0.1f));
+    for (size_t i = 0; i < NearEstimator::kMinSolutions; ++i) m_pass->pendingReports.push_back(NearReport(1, 0.1f));
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     EXPECT_FLOAT_EQ(m_ngx.GetAutoNearEstimate(), 0.0f);
     EXPECT_FLOAT_EQ(m_pass->corrections.back().current.nearClip, 0.15f) << "back to the camera record";
@@ -2471,12 +2484,12 @@ TEST_F(AutoNearTest, TheEstimateIsLoggedOncePerTwoSecondsWhileItMoves) {
         for (size_t at = log.find("auto near "); at != std::string::npos; at = log.find("auto near ", at + 1)) ++n;
         return n;
     };
-    for (int i = 0; i < 3; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
+    for (size_t i = 0; i < NearEstimator::kMinSolutions; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
-    EXPECT_NE(Log().find("NgxInterceptor: auto near 0.100 m (record 0.150)"), std::string::npos) << Log();
+    EXPECT_NE(Log().find("NgxInterceptor: auto near 0.100 m (record 0.150, Eye=1 inliers=90.0% (500 of 500) gated=12.5%)"), std::string::npos) << Log();
     EXPECT_EQ(count(), 1u);
 
-    for (int i = 0; i < 5; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.15f)); // a change of more than 5%
+    for (size_t i = 0; i < NearEstimator::kWindow; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.15f)); // a change of more than 5%
     MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
     EXPECT_NEAR(m_ngx.GetAutoNearEstimate(), 0.15f, 1e-6f);
     EXPECT_EQ(count(), 1u) << "throttled: less than 2 s since the last line";

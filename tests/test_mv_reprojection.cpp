@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "core/camera_records.h"
+#include "ngx/mv_pass.h"
 #include "ngx/mv_reprojection.h"
 #include <cmath>
 #include <vector>
@@ -355,7 +356,7 @@ TEST(MvReprojectionTest, RawUnitsAreVisibleWhenTheStoredVectorIsNdcLikeAndScaled
     SelfCheckStats stats = Summarize(s.data(), s.size());
     EXPECT_NEAR(stats.k, 1.0, 1e-12);
     EXPECT_NEAR(stats.rawMean, 0.25, 1e-9);
-    // Î£(rawÂ·p) / Î£(pÂ·p) = (0.25 * -25) / 625.
+    // ÃŽÂ£(rawÃ‚Â·p) / ÃŽÂ£(pÃ‚Â·p) = (0.25 * -25) / 625.
     EXPECT_NEAR(stats.kRaw, -0.01, 1e-9);
     EXPECT_FLOAT_EQ(static_cast<float>(stats.rawMinX), 0.25f);
     EXPECT_FLOAT_EQ(static_cast<float>(stats.rawMaxX), 0.25f);
@@ -519,6 +520,115 @@ Corrected CorrectInfinite(float mvX, float mvY, const RelativeTransform& toPrev,
 
 } // namespace
 
+// ---- Static-consistency gating (vrDlssMvFix, NGX) ----
+//
+// The correction assumes the pixel is static world. A pixel that moves with the camera (cab interior) or on
+// its own (another vehicle) has an engine vector that disagrees with the static prediction toward the
+// previous rendered frame: |e - d| > max(kStaticGateAbsPx, kStaticGateRelative * |d|). Those pass through.
+
+namespace {
+
+Corrected CorrectGated(float mvX, float mvY, const RelativeTransform& toPrev, const RelativeTransform& toSame,
+                       float depth = 0.45f) {
+    Corrected c = {};
+    c.applied = CorrectMotionVector(150, 25, depth, mvX, mvY, 1.0f, 1.0f, 200, 100, TestProjection(),
+                                    TestProjection(), TestProjection(), toPrev, toSame, c.x, c.y, 1.0f, true);
+    return c;
+}
+
+} // namespace
+
+TEST(MvStaticGateTest, TheGateConstantsAreTwoPixelsOrTwentyPercent) {
+    EXPECT_FLOAT_EQ(kStaticGateAbsPx, 2.0f);
+    EXPECT_FLOAT_EQ(kStaticGateRelative, 0.2f);
+}
+
+TEST(MvStaticGateTest, ConsistencyUsesTheLargerOfTheAbsoluteAndRelativeThreshold) {
+    // |d| = 25: the relative threshold is 5 px.
+    EXPECT_TRUE(IsStaticConsistent(-20.1f, 0.0f, -25.0f, 0.0f));
+    EXPECT_FALSE(IsStaticConsistent(-19.9f, 0.0f, -25.0f, 0.0f));
+    // |d| = 5: 20 percent is 1 px, so the 2 px floor applies.
+    EXPECT_TRUE(IsStaticConsistent(-3.1f, 0.0f, -5.0f, 0.0f));
+    EXPECT_FALSE(IsStaticConsistent(-2.9f, 0.0f, -5.0f, 0.0f));
+    // The error is a 2D distance: (3, 4) off a 25 px prediction is 5 px, right at the limit (inclusive).
+    EXPECT_TRUE(IsStaticConsistent(-22.0f, 4.0f, -25.0f, 0.0f));
+    EXPECT_FALSE(IsStaticConsistent(-22.0f, 4.1f, -25.0f, 0.0f));
+}
+
+TEST(MvStaticGateTest, AStaticPixelIsStillCorrected) {
+    Corrected c = CorrectGated(-25.0f, 0.0f, Aside(1.0), Aside(0.0));
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 0.0f, 1e-2f);
+}
+
+TEST(MvStaticGateTest, ACameraAttachedPixelKeepsTheEnginesVector) {
+    // The engine says 0 (it moves with the camera) while the static prediction is -25 px.
+    Corrected c = CorrectGated(0.0f, 0.0f, Aside(1.0), Aside(0.0));
+    EXPECT_FALSE(c.applied);
+    EXPECT_FLOAT_EQ(c.x, 0.0f);
+    EXPECT_FLOAT_EQ(c.y, 0.0f);
+}
+
+TEST(MvStaticGateTest, AMovingObjectPixelKeepsTheEnginesVector) {
+    // 30 px of its own motion on top of the camera's: far outside 5 px.
+    Corrected c = CorrectGated(-25.0f + 30.0f, -4.0f, Aside(1.0), Aside(-0.5));
+    EXPECT_FALSE(c.applied);
+    EXPECT_FLOAT_EQ(c.x, 5.0f);
+    EXPECT_FLOAT_EQ(c.y, -4.0f);
+}
+
+TEST(MvStaticGateTest, TheRelativeThresholdDecidesForANearPixel) {
+    // |d| = 25: 4.9 px of extra motion is corrected (object motion survives), 5.1 px passes through.
+    Corrected in = CorrectGated(-25.0f + 4.9f, 0.0f, Aside(1.0), Aside(-0.5));
+    ASSERT_TRUE(in.applied);
+    EXPECT_NEAR(in.x, 4.9f + 12.5f, 1e-2f);
+    Corrected out = CorrectGated(-25.0f + 5.1f, 0.0f, Aside(1.0), Aside(-0.5));
+    EXPECT_FALSE(out.applied);
+    EXPECT_NEAR(out.x, -19.9f, 1e-4f);
+}
+
+TEST(MvStaticGateTest, TheAbsoluteThresholdDecidesForADistantPixel) {
+    // z = 10 m: depth 0.01 gives d = -5 px, so the 2 px floor (not 1 px) applies.
+    Corrected in = CorrectGated(-5.0f + 1.9f, 0.0f, Aside(1.0), Aside(0.0), 0.01f);
+    ASSERT_TRUE(in.applied);
+    EXPECT_NEAR(in.x, 1.9f, 1e-2f);
+    Corrected out = CorrectGated(-5.0f + 2.1f, 0.0f, Aside(1.0), Aside(0.0), 0.01f);
+    EXPECT_FALSE(out.applied);
+    EXPECT_NEAR(out.x, -2.9f, 1e-4f);
+}
+
+TEST(MvStaticGateTest, GatingIsOffUnlessRequested) {
+    Corrected c = Correct(0.0f, 0.0f, 1.0f, Aside(1.0), Aside(0.0));
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 25.0f, 1e-2f); // the camera-attached pixel is "corrected" by the full static amount
+}
+
+TEST(MvStaticGateTest, TheGateWorksInTheUnitsOfTheScaleDlssWillApply) {
+    // Scale 2: stored -12.5 is -25 px. Stored 0 is camera-attached either way.
+    Corrected c = {};
+    c.applied = CorrectMotionVector(150, 25, 0.45f, -12.5f, 0.0f, 2.0f, 2.0f, 200, 100, TestProjection(), TestProjection(),
+                                    TestProjection(), Aside(1.0), Aside(-0.5), c.x, c.y, 1.0f, true);
+    ASSERT_TRUE(c.applied);
+    EXPECT_NEAR(c.x, 6.25f, 1e-2f);
+    c.applied = CorrectMotionVector(150, 25, 0.45f, -2.0f, 0.0f, 2.0f, 2.0f, 200, 100, TestProjection(), TestProjection(),
+                                    TestProjection(), Aside(1.0), Aside(-0.5), c.x, c.y, 1.0f, true);
+    EXPECT_FALSE(c.applied);
+    EXPECT_FLOAT_EQ(c.x, -2.0f);
+}
+
+TEST(MvStaticGateTest, TheSelfCheckSummaryReportsTheGatedFractionOfValidSamples) {
+    std::vector<SampleResult> samples(10);
+    for (size_t i = 0; i < samples.size(); ++i) {
+        SampleResult& s = samples[i];
+        s.status = static_cast<uint32_t>(SampleStatus::Valid);
+        s.predictedX = -25.0f;
+        s.engineX = i < 3 ? 0.0f : -25.0f; // three camera-attached samples
+    }
+    samples[9].status = static_cast<uint32_t>(SampleStatus::Sky); // not counted
+    SelfCheckStats stats = Summarize(samples.data(), samples.size());
+    EXPECT_EQ(stats.valid, 9u);
+    EXPECT_NEAR(stats.gatedFraction, 3.0 / 9.0, 1e-9);
+}
 TEST(MvInfiniteDepthTest, ViewDepthIsNearOverDepth) {
     EXPECT_NEAR(ReverseZToViewDepth(1.0f, 1.0f, 0.0f, true), 1.0f, 1e-6f);
     EXPECT_NEAR(ReverseZToViewDepth(0.5f, 1.0f, 0.0f, true), 2.0f, 1e-6f);
@@ -929,4 +1039,178 @@ TEST(NearEstimateTest, AWorkedScenePlusTheSolverRecoversTheRendererNear) {
     NearSolution sol = SolveNear(samples.data(), samples.size(), assumed.nearClip);
     ASSERT_TRUE(sol.valid);
     EXPECT_NEAR(sol.nearClip, 0.5f, 0.01f);
+}
+
+// ---- Robust near estimate: camera-attached and moving pixels, the near field ----
+
+namespace {
+
+// One sample with the rotation R, translation T (both at the assumed near), the engine vector e = R + k T and
+// the view depth z0 at the assumed near. The true view depth is z0 / s, with s the true scale.
+SampleResult Sample(float rx, float ry, float tx, float ty, float k, float z0) {
+    SampleResult s;
+    s.status = static_cast<uint32_t>(SampleStatus::Valid);
+    s.rotationX = rx;
+    s.rotationY = ry;
+    s.predictedX = rx + tx;
+    s.predictedY = ry + ty;
+    s.engineX = rx + k * tx;
+    s.engineY = ry + k * ty;
+    s.viewDepth = z0;
+    return s;
+}
+
+const float kR[3][2] = {{10.0f, 5.0f}, {-7.0f, 2.0f}, {0.0f, 0.0f}};
+const float kT[3][2] = {{2.0f, 0.0f}, {0.0f, 4.0f}, {-3.0f, 1.0f}};
+
+// n pixels of static world at a true scale k, 3 m .. far in front at the true near.
+void AddStatic(std::vector<SampleResult>& out, size_t n, float k, float z0Start) {
+    for (size_t i = 0; i < n; ++i) {
+        const size_t j = i % 3;
+        out.push_back(Sample(kR[j][0], kR[j][1], kT[j][0], kT[j][1], k,
+                             z0Start + 0.5f * static_cast<float>(i)));
+    }
+}
+
+// n pixels that move with the camera: the engine vector is zero while the static prediction is large.
+void AddCameraAttached(std::vector<SampleResult>& out, size_t n, float z0) {
+    for (size_t i = 0; i < n; ++i) {
+        const size_t j = i % 3;
+        SampleResult s = Sample(kR[j][0], kR[j][1], 4.0f * kT[j][0], 4.0f * kT[j][1], 0.0f, z0);
+        s.engineX = 0.0f;
+        s.engineY = 0.0f;
+        out.push_back(s);
+    }
+}
+
+// n pixels of something that moves by its own 60 px on top of the camera's motion.
+void AddMoving(std::vector<SampleResult>& out, size_t n, float k, float z0Start) {
+    for (size_t i = 0; i < n; ++i) {
+        const size_t j = i % 3;
+        SampleResult s = Sample(kR[j][0], kR[j][1], kT[j][0], kT[j][1], k, z0Start + 0.5f * static_cast<float>(i));
+        s.engineX += 60.0f;
+        s.engineY -= 40.0f;
+        out.push_back(s);
+    }
+}
+
+} // namespace
+
+TEST(RobustNearTest, EvaluateSampleRecordsTheViewDepthAtTheAssumedNear) {
+    SampleResult s = EvaluateSample(99, 49, DepthAtMetres2(), 0.0f, 0.0f, 1.0f, 1.0f, 200, 100, TestProjection(),
+                                    TestProjection(), Identity());
+    ASSERT_EQ(s.status, static_cast<uint32_t>(SampleStatus::Valid));
+    EXPECT_NEAR(s.viewDepth, 2.0f, 1e-4f);
+}
+
+TEST(RobustNearTest, CameraAttachedPixelsInTheNearFieldDoNotCorruptTheFit) {
+    // 40 static pixels at the true scale 1.5 (true near 0.1 against an assumed 0.15), and 30 dashboard pixels
+    // that move with the camera 0.3 m away (0.2 m at the true near) plus 8 moving ones.
+    std::vector<SampleResult> samples;
+    AddStatic(samples, 40, 1.5f, 3.0f);
+    AddCameraAttached(samples, 30, 0.3f);
+    AddMoving(samples, 8, 1.5f, 3.0f);
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
+    ASSERT_TRUE(sol.valid);
+    EXPECT_NEAR(sol.nearClip, 0.1f, 1e-4f);
+    EXPECT_EQ(sol.used, 40u);
+    // The near-field samples leave the denominator; the 8 moving ones stay in it: 40 of 48.
+    EXPECT_NEAR(sol.inlierFraction, 40.0 / 48.0, 1e-9);
+}
+
+TEST(RobustNearTest, TheConsistencyTestAloneRejectsCameraAttachedPixelsAwayFromTheCamera) {
+    // The camera-attached pixels at 6 m (a far windscreen frame, say): only the residual test can see them.
+    std::vector<SampleResult> samples;
+    AddStatic(samples, 40, 1.5f, 3.0f);
+    AddCameraAttached(samples, 25, 6.0f);
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
+    ASSERT_TRUE(sol.valid);
+    EXPECT_NEAR(sol.nearClip, 0.1f, 1e-4f);
+    EXPECT_EQ(sol.used, 40u);
+}
+
+TEST(RobustNearTest, ANearFieldMajorityCannotOutvoteTheWorld) {
+    // 30 world pixels at s = 1.5 and 50 near-field pixels that are consistent among themselves at s = 3
+    // (a camera-relative object whose vectors carry half the camera translation).
+    std::vector<SampleResult> samples;
+    AddStatic(samples, 30, 1.5f, 4.0f);
+    for (size_t i = 0; i < 50; ++i) {
+        const size_t j = i % 3;
+        samples.push_back(Sample(kR[j][0], kR[j][1], kT[j][0], kT[j][1], 3.0f, 0.4f));
+    }
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
+    ASSERT_TRUE(sol.valid);
+    EXPECT_NEAR(sol.nearClip, 0.1f, 1e-4f);
+}
+
+TEST(RobustNearTest, ALargeScaleCorrectionDoesNotExcludeTheWorldItself) {
+    // The assumed near (0.4) is four times the true one (0.1): s = 4, so world pixels at true depth 2 m and
+    // beyond read z0 = 8 m and beyond. The cutoff is taken at the fitted scale, so none is cut.
+    std::vector<SampleResult> samples;
+    AddStatic(samples, 40, 4.0f, 8.0f);
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.4f);
+    ASSERT_TRUE(sol.valid);
+    EXPECT_NEAR(sol.nearClip, 0.1f, 1e-4f);
+}
+
+TEST(RobustNearTest, WithoutAViewDepthNothingIsExcludedForBeingNear) {
+    std::vector<SampleResult> samples = NearSamples(30, 1.5f); // viewDepth 0: unknown
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
+    ASSERT_TRUE(sol.valid);
+    EXPECT_EQ(sol.used, 30u);
+}
+
+TEST(RobustNearTest, TooFewInliersRefuseASolutionAndReportTheFraction) {
+    // 20 static pixels among 40 whose vectors scatter over unrelated scales: 20 of 60 informative = 1/3.
+    std::vector<SampleResult> samples;
+    AddStatic(samples, 20, 1.5f, 3.0f);
+    const float scatter[4] = {-2.0f, 4.0f, 7.0f, 11.0f};
+    for (size_t i = 0; i < 40; ++i) {
+        const size_t j = i % 3;
+        samples.push_back(Sample(kR[j][0], kR[j][1], kT[j][0], kT[j][1], scatter[i % 4], 8.0f));
+    }
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
+    EXPECT_FALSE(sol.valid);
+    EXPECT_LT(sol.inlierFraction, kMinNearInlierFraction);
+    EXPECT_GT(sol.inlierFraction, 0.2);
+}
+
+TEST(RobustNearTest, AnEverythingNearFieldSetHasNothingLeftToFit) {
+    std::vector<SampleResult> samples;
+    AddStatic(samples, 40, 1.5f, 3.0f);
+    for (SampleResult& s : samples) s.viewDepth = 0.4f; // all 0.27 m at the true near
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
+    EXPECT_FALSE(sol.valid);
+}
+TEST(RobustNearTest, TheMvCheckLineCarriesTheGatedAndInlierFractions) {
+    MvSelfCheckReport report;
+    report.eye = 1;
+    report.evalIndex = 42;
+    report.stats.total = 1024;
+    report.stats.valid = 900;
+    report.stats.gatedFraction = 0.25;
+    std::string plain = FormatMvSelfCheckReport("NgxInterceptor", "Eval", report);
+    EXPECT_NE(plain.find("Gated=25.0%"), std::string::npos) << plain;
+    EXPECT_EQ(plain.find("NearInliers"), std::string::npos) << plain;
+
+    report.nearEstimate = true;
+    report.nearSolution.valid = true;
+    report.nearSolution.used = 400;
+    report.nearSolution.retained = 500;
+    report.nearSolution.informative = 700;
+    report.nearSolution.total = 900;
+    report.nearSolution.inlierFraction = 0.8;
+    std::string withNear = FormatMvSelfCheckReport("NgxInterceptor", "Eval", report);
+    EXPECT_NE(withNear.find("NearInliers=80.0% (400 of 500"), std::string::npos) << withNear;
+    EXPECT_NE(withNear.find("accepted"), std::string::npos) << withNear;
+    EXPECT_NE(withNear.find("Eye=1"), std::string::npos) << withNear;
+}
+
+TEST(RobustNearTest, TheMvProjectionLineNamesTheStaticGateOnlyWhenItIsOn) {
+    MvProjectionDiag d;
+    d.used = {0.1f, 1000.0f, 1.0f};
+    EXPECT_EQ(FormatMvProjectionLine("NgxInterceptor", "Eval", 0, 1, d).find("staticGate"), std::string::npos);
+    d.staticGate = true;
+    const std::string line = FormatMvProjectionLine("NgxInterceptor", "Eval", 0, 1, d);
+    EXPECT_NE(line.find("staticGate=on(2 px or 20%"), std::string::npos) << line;
 }

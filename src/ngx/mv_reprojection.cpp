@@ -118,6 +118,7 @@ SampleResult EvaluateSample(uint32_t x, uint32_t y, float depth, float mvX, floa
     result.rawY = mvY;
     result.rotationX = rotPx - cx;
     result.rotationY = rotPy - cy;
+    result.viewDepth = -p[2];
     result.status = static_cast<uint32_t>(SampleStatus::Valid);
     return result;
 }
@@ -134,7 +135,8 @@ void UnprojectAtViewDepth(float px, float py, float viewDepth, float width, floa
 bool CorrectMotionVector(uint32_t x, uint32_t y, float depth, float mvX, float mvY, float scaleX, float scaleY,
                          uint32_t width, uint32_t height, const Projection& current, const Projection& previousFrame,
                          const Projection& sameEye, const RelativeTransform& toPreviousFrame,
-                         const RelativeTransform& toSameEye, float& outX, float& outY, float objectMotionFactor) {
+                         const RelativeTransform& toSameEye, float& outX, float& outY, float objectMotionFactor,
+                         bool gateNonStatic) {
     outX = mvX;
     outY = mvY;
     if (!(std::fabs(scaleX) > 1e-6f) || !(std::fabs(scaleY) > 1e-6f)) return false;
@@ -155,6 +157,10 @@ bool CorrectMotionVector(uint32_t x, uint32_t y, float depth, float mvX, float m
     ApplyRelativeTransform(toSameEye, p, q);
     if (!ProjectToPixel(q, w, h, sameEye, sameX, sameY)) return false;
 
+    if (gateNonStatic &&
+        !IsStaticConsistent(mvX * scaleX, mvY * scaleY, prevX - cx, prevY - cy)) {
+        return false; // camera-attached or moving: the engine's vector already holds its own motion
+    }
     outX = mvX + (sameX - prevX) / scaleX;
     outY = mvY + (sameY - prevY) / scaleY;
     if (objectMotionFactor != 1.0f) {
@@ -165,6 +171,11 @@ bool CorrectMotionVector(uint32_t x, uint32_t y, float depth, float mvX, float m
         outY += (objectMotionFactor - 1.0f) * objY;
     }
     return true;
+}
+
+bool IsStaticConsistent(float ex, float ey, float dx, float dy) {
+    const float limit = (std::max)(kStaticGateAbsPx, kStaticGateRelative * std::hypot(dx, dy));
+    return std::hypot(ex - dx, ey - dy) <= limit;
 }
 
 namespace {
@@ -260,6 +271,7 @@ SelfCheckStats Summarize(const SampleResult* samples, size_t count) {
 
     double sumEngine = 0.0, sumPredicted = 0.0, sumRaw = 0.0, sumEP = 0.0, sumRP = 0.0, sumPP = 0.0;
     bool first = true;
+    uint32_t gated = 0;
     for (size_t i = 0; i < count; ++i) {
         const SampleResult& s = samples[i];
         if (s.status != static_cast<uint32_t>(SampleStatus::Valid)) continue;
@@ -271,6 +283,10 @@ SelfCheckStats Summarize(const SampleResult* samples, size_t count) {
         sumEP += ex * px + ey * py;
         sumRP += rx * px + ry * py;
         sumPP += px * px + py * py;
+        if (!IsStaticConsistent(static_cast<float>(ex), static_cast<float>(ey), static_cast<float>(px),
+                                static_cast<float>(py))) {
+            ++gated;
+        }
         if (first) {
             stats.rawMinX = stats.rawMaxX = rx;
             stats.rawMinY = stats.rawMaxY = ry;
@@ -286,6 +302,7 @@ SelfCheckStats Summarize(const SampleResult* samples, size_t count) {
         stats.engineMean = sumEngine / stats.valid;
         stats.predictedMean = sumPredicted / stats.valid;
         stats.rawMean = sumRaw / stats.valid;
+        stats.gatedFraction = static_cast<double>(gated) / stats.valid;
     }
     if (sumPP > 0.0) {
         stats.k = sumEP / sumPP;
@@ -297,48 +314,89 @@ SelfCheckStats Summarize(const SampleResult* samples, size_t count) {
 NearSolution SolveNear(const SampleResult* samples, size_t count, float assumedNear) {
     NearSolution out;
     if (!samples || !(assumedNear > 0.0f) || !std::isfinite(assumedNear)) return out;
-    struct Term { double ex, ey, tx, ty; };
+    // e - R and T (the translation part of the prediction), R itself (for the size of the prediction in the
+    // consistency test), and the view depth at the assumed near.
+    struct Term { double ex, ey, tx, ty, rx, ry, z0; };
     std::vector<Term> terms;
     for (size_t i = 0; i < count; ++i) {
         const SampleResult& s = samples[i];
         if (s.status != static_cast<uint32_t>(SampleStatus::Valid)) continue;
+        ++out.total;
+        const double tx = static_cast<double>(s.predictedX) - s.rotationX;
+        const double ty = static_cast<double>(s.predictedY) - s.rotationY;
+        if (!(tx * tx + ty * ty >= kMinInformativeTranslationSq)) continue;
         terms.push_back({static_cast<double>(s.engineX) - s.rotationX, static_cast<double>(s.engineY) - s.rotationY,
-                         static_cast<double>(s.predictedX) - s.rotationX, static_cast<double>(s.predictedY) - s.rotationY});
+                         tx, ty, s.rotationX, s.rotationY, s.viewDepth});
     }
-    out.total = static_cast<uint32_t>(terms.size());
+    out.informative = static_cast<uint32_t>(terms.size());
     if (terms.size() < kMinNearSamples) return out;
-
     double sumTT = 0.0;
     for (const Term& t : terms) sumTT += t.tx * t.tx + t.ty * t.ty;
     if (!(sumTT / static_cast<double>(terms.size()) >= kMinNearTranslationSq)) return out;
 
-    // Robust start: the median of the per-sample ratios, so a few wild vectors cannot drag the fit.
-    std::vector<float> ratios;
+    // At candidate scale s a term is outside the near field when its view depth z0 / s reaches the cutoff (a
+    // term without a depth always is), and an inlier when its vector matches the static prediction R + s T.
+    auto retained = [&](const Term& t, double s) { return !(t.z0 > 0.0) || t.z0 / s >= kNearFieldViewDepth; };
+    auto inlier = [&](const Term& t, double s) {
+        return IsStaticConsistent(static_cast<float>(t.rx + t.ex), static_cast<float>(t.ry + t.ey),
+                                  static_cast<float>(t.rx + s * t.tx), static_cast<float>(t.ry + s * t.ty));
+    };
+    struct Tally { uint32_t retained = 0, inliers = 0; };
+    auto tally = [&](double s) {
+        Tally r;
+        for (const Term& t : terms) {
+            if (!retained(t, s)) continue;
+            ++r.retained;
+            if (inlier(t, s)) ++r.inliers;
+        }
+        return r;
+    };
+
+    // Candidate scales: the per-sample ratios (quantiles when there are many). The best candidate is the one
+    // most samples agree with; a camera-attached or moving minority cannot pull it the way it pulls a mean.
+    std::vector<double> ratios;
     for (const Term& t : terms) {
-        const double tt = t.tx * t.tx + t.ty * t.ty;
-        if (tt >= kMinNearTranslationSq) ratios.push_back(static_cast<float>((t.ex * t.tx + t.ey * t.ty) / tt));
+        const double r = (t.ex * t.tx + t.ey * t.ty) / (t.tx * t.tx + t.ty * t.ty);
+        if (r > 0.0 && std::isfinite(r)) ratios.push_back(r);
     }
     if (ratios.empty()) return out;
-    double s = Median(ratios);
-    for (int pass = 0; pass < 3; ++pass) {
-        std::vector<float> residuals;
-        for (const Term& t : terms) {
-            residuals.push_back(static_cast<float>(std::hypot(t.ex - s * t.tx, t.ey - s * t.ty)));
+    std::sort(ratios.begin(), ratios.end());
+    std::vector<double> candidates;
+    if (ratios.size() <= kMaxNearCandidates) {
+        candidates = ratios;
+    } else {
+        for (size_t i = 0; i < kMaxNearCandidates; ++i) candidates.push_back(ratios[i * ratios.size() / kMaxNearCandidates]);
+    }
+    double s = 0.0;
+    uint32_t bestInliers = 0;
+    for (double c : candidates) {
+        const Tally t = tally(c);
+        if (t.inliers > bestInliers) {
+            bestInliers = t.inliers;
+            s = c;
         }
-        std::vector<float> sorted = residuals;
-        const double sigma = 1.4826 * Median(sorted);
-        const double threshold = (std::max)(3.0 * sigma, 1.0); // a pixel is the noise floor
+    }
+    if (!(s > 0.0)) return out;
+
+    // Refine: least squares over the inliers at the current scale, then re-classify.
+    for (int pass = 0; pass < 4; ++pass) {
         double num = 0.0, den = 0.0;
-        uint32_t used = 0;
-        for (size_t i = 0; i < terms.size(); ++i) {
-            if (residuals[i] > threshold) continue;
-            num += terms[i].ex * terms[i].tx + terms[i].ey * terms[i].ty;
-            den += terms[i].tx * terms[i].tx + terms[i].ty * terms[i].ty;
-            ++used;
+        for (const Term& t : terms) {
+            if (!retained(t, s) || !inlier(t, s)) continue;
+            num += t.ex * t.tx + t.ey * t.ty;
+            den += t.tx * t.tx + t.ty * t.ty;
         }
-        if (used < kMinNearSamples || !(den / used >= kMinNearTranslationSq)) return out;
+        if (!(den > 0.0) || !(num > 0.0)) break;
         s = num / den;
-        out.used = used;
+    }
+    const Tally fin = tally(s);
+    out.used = fin.inliers;
+    out.retained = fin.retained;
+    out.inlierFraction = fin.retained ? static_cast<double>(fin.inliers) / fin.retained : 0.0;
+    if (fin.inliers < kMinNearSamples || fin.retained < kMinNearSamples ||
+        fin.retained < kMinNearRetainedFraction * static_cast<double>(terms.size()) ||
+        out.inlierFraction < kMinNearInlierFraction) {
+        return out;
     }
     if (!(s > 0.0) || !std::isfinite(s)) return out;
     out.scale = s;
@@ -346,7 +404,6 @@ NearSolution SolveNear(const SampleResult* samples, size_t count, float assumedN
     out.valid = true;
     return out;
 }
-
 Convention BetterConvention(const SelfCheckStats& stats) {
     if (stats.valid == 0) return Convention::None;
     return stats.medianToCurrent < stats.medianToPrevious ? Convention::ToCurrent : Convention::ToPrevious;

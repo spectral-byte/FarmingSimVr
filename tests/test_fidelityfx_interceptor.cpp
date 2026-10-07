@@ -793,6 +793,15 @@ TEST_F(FfxMvCorrectionTest, AlternateFrameRenderingCorrectsWithTheObjectMotionEy
     EXPECT_EQ(s_dispatchMotionVectors.back(), m_pass->output);
 }
 
+TEST_F(FfxMvCorrectionTest, TheFidelityFxCorrectionIsLeftUngated) {
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    Dispatch(m_context, desc);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_FALSE(m_pass->corrections[0].gateNonStatic);
+}
+
 TEST_F(FfxMvCorrectionTest, SequentialDualPassCorrectsWithoutTheEyeStride) {
     SetUpSdpWithRecords();
     m_ngxShared->SetMvFixEnabled(true);

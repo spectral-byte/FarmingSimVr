@@ -278,7 +278,8 @@ private:
     std::atomic<float> m_nearLastLogged{0.0f};
     std::atomic<int64_t> m_nearLastLogMs{INT64_MIN};
     void ForgetNearEstimate();
-    void OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolution& solution, float recordNear);
+    void OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolution& solution, float recordNear, uint32_t eye,
+                        double gatedFraction);
     std::atomic<bool> m_diagProjectionLogged{false}; // the MvProjection line, once per arming
     std::atomic<bool> m_mvFixEnabled{false};
     std::atomic<bool> m_mvFixDisabled{false};

@@ -484,7 +484,8 @@ void NgxInterceptor::ForgetNearEstimate() {
     m_nearLastLogMs.store(INT64_MIN);
 }
 
-void NgxInterceptor::OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolution& solution, float recordNear) {
+void NgxInterceptor::OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolution& solution, float recordNear,
+                                    uint32_t eye, double gatedFraction) {
     m_nearEstimator.Submit(evalIndex, solution);
     const float estimate = m_nearEstimator.Estimate();
     if (!(estimate > 0.0f)) return;
@@ -499,7 +500,8 @@ void NgxInterceptor::OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolu
     m_nearLastLogged.store(estimate);
     std::stringstream ss;
     ss << std::fixed << std::setprecision(3) << "NgxInterceptor: auto near " << estimate << " m (record "
-       << recordNear << ")";
+       << recordNear << ", Eye=" << eye << " inliers=" << std::setprecision(1) << solution.inlierFraction * 100.0
+       << "% (" << solution.used << " of " << solution.retained << ") gated=" << gatedFraction * 100.0 << "%)";
     LogInfo(ss.str());
 }
 
@@ -1259,6 +1261,8 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                     // AFR: the simulation advances every frame, so only the engine's object motion needs the
                     // eye stride (the same eye's history is two frames back).
                     correctionRequest.objectMotionFactor = eyeStride ? mvreproj::kAfrEyeStride : 1.0f;
+                    // Camera-attached geometry (the cab) and moving objects keep the engine's vector.
+                    correctionRequest.gateNonStatic = true;
                     correction = &correctionRequest;
                 } else {
                     correctionState = "zero-mv-scale";
@@ -1299,6 +1303,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                         diag.projOffsetY = resolved.current->projOffsetY;
                         diag.aspect = renderH ? static_cast<float>(renderW) / static_cast<float>(renderH) : 1.0f;
                         diag.infinite = infiniteDepth;
+                        diag.staticGate = true;
                         diag.depthSource = "vrDlssDepthModel";
                         LogInfo(FormatMvProjectionLine("NgxInterceptor", "Eval", checkEye, evalIndex, diag));
                     }
@@ -1339,7 +1344,11 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
             ID3D12Resource* corrected = interceptor.RecordMvPass(InCmdList, depth, mv, check, &reports, correction);
             for (const MvSelfCheckReport& report : reports) {
                 if (report.nearEstimate) {
-                    interceptor.OnNearSolution(report.evalIndex, report.nearSolution, recordNear);
+                    interceptor.OnNearSolution(report.evalIndex, report.nearSolution, recordNear, report.eye,
+                                               report.stats.gatedFraction);
+                    if (interceptor.m_diagRemaining.load() > 0) {
+                        LogInfo(FormatMvSelfCheckReport("NgxInterceptor", "Eval", report));
+                    }
                     continue;
                 }
                 if (!interceptor.m_diagRawRangeLogged.exchange(true)) {

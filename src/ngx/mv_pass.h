@@ -76,6 +76,7 @@ struct MvProjectionDiag {
     float projOffsetY = 0.0f;
     float aspect = 1.0f;      // render width / render height
     bool infinite = false;
+    bool staticGate = false;  // the correction passes non-static-consistent pixels through (NGX only)
     const char* depthSource = ""; // what chose the depth model ("vrDlssDepthModel", "create-flags")
     float autoEstimate = 0.0f; // the automatic near estimate, shown when source is "auto"
     bool hasRecordNear = false; // set to get a hint when source is "override" and the record's near differs
@@ -103,6 +104,9 @@ struct MvCorrectionRequest {
     // Multiplies the engine's object-motion component only (1 under Sequential Dual-Pass, the eye stride
     // under Alternate Frame Rendering). See mvreproj::CorrectMotionVector.
     float objectMotionFactor = 1.0f;
+    // Pixels whose engine vector is not static-consistent (mvreproj::IsStaticConsistent) keep it unchanged.
+    // NGX turns it on. FidelityFX leaves it off: its correction is verified as it is.
+    bool gateNonStatic = false;
 };
 
 struct MvPassInputs {

@@ -71,8 +71,10 @@ struct SampleResult {
     float rawY = 0.0f;
     float rotationX = 0.0f;     // rotation-only displacement of the point as if at infinity (valid samples)
     float rotationY = 0.0f;
+    float viewDepth = 0.0f;     // metres in front of the camera at the near plane the sample was made with (0 = unknown)
+    float reserved[3] = {};
 };
-static_assert(sizeof(SampleResult) == 48, "SampleResult mirrors the GPU results element (3 x uint4)");
+static_assert(sizeof(SampleResult) == 64, "SampleResult mirrors the GPU results element (4 x uint4)");
 
 // Predicts the displacement of the static point seen at integer pixel (x, y) between the current camera
 // and the previous rendered frame's camera, and scores the engine vector (mvX, mvY) times (scaleX,
@@ -103,9 +105,23 @@ struct SelfCheckStats {
     double rawMean = 0.0;       // mean |r| (raw units)
     double kRaw = 0.0;          // sum(r.p) / sum(p.p): far from 1 with k near 1 means a units mismatch
     double rawMinX = 0.0, rawMaxX = 0.0, rawMinY = 0.0, rawMaxY = 0.0;
+    // Fraction of valid samples whose engine vector is not static-consistent with the prediction
+    // (IsStaticConsistent): what the correction's gate passes through unchanged. Camera-attached and
+    // moving pixels, or everything when the near plane is wrong.
+    double gatedFraction = 0.0;
 };
 
 SelfCheckStats Summarize(const SampleResult* samples, size_t count);
+
+// ---- Static-consistency gate ----
+//
+// The correction and the near estimate both assume static world pixels. A pixel is static-consistent when the
+// engine vector e (pixels, after the scale) is within max(kStaticGateAbsPx, kStaticGateRelative * |d|) of the
+// static prediction d toward the previous rendered frame's camera. Camera-attached geometry (e is about 0 while
+// d is large) and moving objects fail it. Shared by the CPU mirror and the "correct" shader.
+constexpr float kStaticGateAbsPx = 2.0f;
+constexpr float kStaticGateRelative = 0.2f;
+bool IsStaticConsistent(float ex, float ey, float dx, float dy);
 
 // ---- Near plane estimate ----
 //
@@ -113,20 +129,34 @@ SelfCheckStats Summarize(const SampleResult* samples, size_t count);
 // rotation-only displacement and T the translation part of the prediction to the previous rendered frame's
 // camera, computed with an assumed near n0 (T = predicted - R, scaling as 1/near under infinite reverse-Z).
 // Least squares gives s = sum((e - R).T) / sum(T.T) and near_true = n0 / s.
-constexpr uint32_t kMinNearSamples = 16;       // valid samples needed
+constexpr uint32_t kMinNearSamples = 16;       // samples needed, both informative and inlier
 constexpr double kMinNearTranslationSq = 0.01; // mean T.T (px^2) below which the ratio is noise
+// A sample only informs the ratio when its translation is at least a pixel; below that every s is consistent.
+constexpr double kMinInformativeTranslationSq = 1.0;
+// Samples closer than this (metres, reconstructed at the candidate scale: view depth z0 / s) are camera-attached
+// geometry or hands and tools; they are left out of the fit. Evaluated per candidate, so a wrong estimate
+// cannot exclude the world and lock itself in.
+constexpr float kNearFieldViewDepth = 1.5f;
+constexpr double kMinNearInlierFraction = 0.5;    // inliers / retained informative samples
+constexpr double kMinNearRetainedFraction = 0.25; // retained / informative: the near-field cut may not eat the scene
+constexpr size_t kMaxNearCandidates = 64;         // candidate scales tried (quantiles of the per-sample ratios)
 
 struct NearSolution {
     bool valid = false;
     float nearClip = 0.0f; // metres
     double scale = 0.0;    // s
-    uint32_t used = 0;     // samples that took part after outlier rejection
+    uint32_t used = 0;     // inliers: static-consistent samples that took part in the fit
     uint32_t total = 0;    // valid samples offered
+    uint32_t informative = 0;    // of those, with a translation worth fitting
+    uint32_t retained = 0;       // informative samples outside the near field at the fitted scale
+    double inlierFraction = 0.0; // used / retained (also filled in for a refused solution, for the log)
 };
 
 // Solves for the renderer's near from a self-check recorded against the previous rendered frame's camera
-// (not the same-eye one) on the engine's original vectors, with n0 = assumedNear. Rejects s <= 0, too few
-// samples, a translation too small to measure, and outliers (moving objects) around a robust first fit.
+// (not the same-eye one) on the engine's original vectors, with n0 = assumedNear. A RANSAC-style search over
+// candidate scales keeps the one with the most samples that pass IsStaticConsistent (camera-attached and
+// moving samples fail it) outside the near field, then refines it by least squares over those inliers.
+// Refuses s <= 0, too few samples, and too low an inlier count or fraction.
 NearSolution SolveNear(const SampleResult* samples, size_t count, float assumedNear);
 
 enum class Convention { None, ToPrevious, ToCurrent };
@@ -152,6 +182,9 @@ void UnprojectAtViewDepth(float px, float py, float viewDepth, float width, floa
 // when no correction is possible (a scale of zero, or the point behind either camera). The sky corrects
 // like a point on the far plane, which carries the camera rotation.
 //
+// With gateNonStatic a pixel that is not static-consistent (IsStaticConsistent: the engine vector against the
+// static prediction toward the previous rendered frame) keeps the engine's vector and returns false.
+//
 // objectMotionFactor multiplies the engine's object-motion component (its vector minus the static-scene
 // prediction toward the previous rendered frame) and nothing else. Sequential Dual-Pass leaves it at 1:
 // the second sub-pass replays the same simulation time. Alternate Frame Rendering advances the simulation
@@ -161,7 +194,7 @@ bool CorrectMotionVector(uint32_t x, uint32_t y, float depth, float mvX, float m
                          uint32_t width, uint32_t height, const Projection& current, const Projection& previousFrame,
                          const Projection& sameEye, const RelativeTransform& toPreviousFrame,
                          const RelativeTransform& toSameEye, float& outX, float& outY,
-                         float objectMotionFactor = 1.0f);
+                         float objectMotionFactor = 1.0f, bool gateNonStatic = false);
 
 // Frames between two evaluations of one eye's upscaler context under Alternate Frame Rendering.
 constexpr float kAfrEyeStride = 2.0f;

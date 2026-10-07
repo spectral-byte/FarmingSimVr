@@ -78,6 +78,7 @@ cbuffer Constants : register(b0)
     float4 gS1;
     float4 gS2;
     float4 gD;  // tanHalfFovY (same eye's previous camera), object motion factor, infinite far plane (1), unused
+    float4 gE;  // static gate: absolute px, relative fraction, enabled (1), unused
 };
 
 // View-space depth of a reverse-Z depth value (mirrors ReverseZToViewDepth). With an infinite far plane it
@@ -135,6 +136,14 @@ void correct(uint3 id : SV_DispatchThreadID)
     bool ok = abs(gB.x) > 1e-6 && abs(gB.y) > 1e-6;
     ok = ok && ProjectPixel(Transform(gR0, gR1, gR2, p), gC.w, prevPixel);
     ok = ok && ProjectPixel(Transform(gS0, gS1, gS2, p), gD.x, samePixel);
+    if (ok && gE.z != 0.0)
+    {
+        // Static-consistency gate (mirrors IsStaticConsistent): a pixel whose vector disagrees with the static
+        // prediction toward the previous frame's camera moves on its own (or with the camera): keep its vector.
+        float2 d = prevPixel - float2(cx, cy);
+        float2 e = mv * gB.xy;
+        ok = length(e - d) <= max(gE.x, gE.y * length(d));
+    }
     if (ok)
     {
         // Camera part: re-aim from the previous frame's camera at the same eye's. Object part (the engine's
@@ -156,11 +165,12 @@ void selfcheck(uint3 id : SV_DispatchThreadID)
     uint px = min(gA.x - 1, (uint)(((float)id.x + 0.5) * w / (float)grid));
     uint py = min(gA.y - 1, (uint)(((float)id.y + 0.5) * h / (float)grid));
 
-    // Three uint4 per sample, mirroring mvreproj::SampleResult: errToPrevious, errToCurrent, status, sequence;
-    // engine vector (scaled), predicted displacement; raw engine vector, rotation-only displacement.
+    // Four uint4 per sample, mirroring mvreproj::SampleResult: errToPrevious, errToCurrent, status, sequence;
+    // engine vector (scaled), predicted displacement; raw engine vector, rotation-only displacement; view depth.
     uint4 result = uint4(0, 0, 0, gA.w);
     uint4 extra0 = uint4(0, 0, 0, 0);
     uint4 extra1 = uint4(0, 0, 0, 0);
+    uint4 extra2 = uint4(0, 0, 0, 0);
     float depth = gDepth.Load(int3(px, py, 0));
     if (!(depth > 0.0))
     {
@@ -204,6 +214,7 @@ void selfcheck(uint3 id : SV_DispatchThreadID)
                 float rx = (qr.x / (zr * gC.w * gB.w) * 0.5 + 0.5) * w - cx;
                 float ry = (0.5 - qr.y / (zr * gC.w) * 0.5) * h - cy;
                 extra1 = uint4(asuint(raw.x), asuint(raw.y), asuint(rx), asuint(ry));
+                extra2 = uint4(asuint(z), 0, 0, 0); // view depth at the assumed near (mirrors SampleResult::viewDepth)
             }
             else
             {
@@ -212,10 +223,11 @@ void selfcheck(uint3 id : SV_DispatchThreadID)
             }
         }
     }
-    uint index = (id.y * grid + id.x) * 3;
+    uint index = (id.y * grid + id.x) * 4;
     gResults[index] = result;
     gResults[index + 1] = extra0;
     gResults[index + 2] = extra1;
+    gResults[index + 3] = extra2;
 }
 )hlsl";
 }
@@ -263,7 +275,7 @@ constexpr UINT kSelfCheckSamples = kSelfCheckGrid * kSelfCheckGrid;
 constexpr UINT kReadbackSlots = 8;      // self-checks in flight before a readback buffer is reused
 constexpr uint64_t kReadbackDelayCalls = 6;   // Records after which a self-check is read back (a few frames)
 constexpr uint64_t kReadbackGiveUpCalls = 64; // a readback that never shows the expected stamp is dropped
-// Root constants, laid out as the shader's cbuffer (40 dwords).
+// Root constants, laid out as the shader's cbuffer (44 dwords).
 struct PassConstants {
     uint32_t a[4];    // width, height, self-check reads the corrected output, sequence
     float b[4];       // mvScaleX, mvScaleY, tanHalfFovY (current), aspect
@@ -271,8 +283,9 @@ struct PassConstants {
     float r[3][4];    // p_prev = R * p + c per row
     float s[3][4];    // p_same = S * p + c per row
     float d[4];       // tanHalfFovY (same eye's previous camera), object motion factor, infinite far plane
+    float e[4];       // static gate: absolute px, relative fraction, enabled, unused
 };
-static_assert(sizeof(PassConstants) == 40 * sizeof(uint32_t), "root constants are 40 dwords");
+static_assert(sizeof(PassConstants) == 44 * sizeof(uint32_t), "root constants are 44 dwords");
 
 void FillTransform(float (&rows)[3][4], const mvreproj::RelativeTransform& t) {
     for (int row = 0; row < 3; ++row) {
@@ -373,7 +386,7 @@ public:
         D3D12_UNORDERED_ACCESS_VIEW_DESC resultsUav = {};
         resultsUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
         resultsUav.Format = DXGI_FORMAT_UNKNOWN;
-        resultsUav.Buffer.NumElements = kSelfCheckSamples * 3; // three uint4 per sample (sizeof(SampleResult))
+        resultsUav.Buffer.NumElements = kSelfCheckSamples * 4; // four uint4 per sample (sizeof(SampleResult))
         resultsUav.Buffer.StructureByteStride = 4 * sizeof(uint32_t);
         device->CreateUnorderedAccessView(m_results.Get(), nullptr, &resultsUav, cpu);
 
@@ -498,6 +511,9 @@ private:
         c.d[0] = req.sameEye.tanHalfFovY;
         c.d[1] = req.objectMotionFactor;
         c.d[2] = req.current.infiniteDepth ? 1.0f : 0.0f;
+        c.e[0] = mvreproj::kStaticGateAbsPx;
+        c.e[1] = mvreproj::kStaticGateRelative;
+        c.e[2] = req.gateNonStatic ? 1.0f : 0.0f;
     }
 
     void RecordSelfCheck(ID3D12GraphicsCommandList* cl, const MvSelfCheckRequest& req, UINT width, UINT height,
@@ -782,7 +798,14 @@ std::string FormatMvSelfCheckReport(const char* logPrefix, const char* unit, con
        << " median=" << s.medianToCurrent << " px"
        << " Best=" << mvreproj::ConventionName(mvreproj::BetterConvention(s))
        << " EngineMean=" << s.engineMean << " PredMean=" << s.predictedMean << " k=" << s.k
-       << " RawMean=" << s.rawMean << " kRaw=" << s.kRaw;
+       << " RawMean=" << s.rawMean << " kRaw=" << s.kRaw
+       << std::setprecision(1) << " Gated=" << s.gatedFraction * 100.0 << "% (not static-consistent with the prediction)";
+    if (report.nearEstimate) {
+        const mvreproj::NearSolution& n = report.nearSolution;
+        ss << " NearInliers=" << n.inlierFraction * 100.0 << "% (" << n.used << " of " << n.retained
+           << " informative outside the near field, " << n.informative << " informative, " << n.total << " valid) "
+           << (n.valid ? "accepted" : "refused");
+    }
     return ss.str();
 }
 
@@ -806,6 +829,11 @@ std::string FormatMvProjectionLine(const char* logPrefix, const char* unit, uint
        << " fovY=" << d.used.fovY << " tanHalfFovY=" << std::tan(d.used.fovY * 0.5f)
        << " projOffset=(" << d.projOffsetX << ", " << d.projOffsetY << ") aspect=" << d.aspect
        << " depthModel=" << (d.infinite ? "infinite" : "finite") << " depthSource=" << d.depthSource;
+    if (d.staticGate) {
+        ss << std::setprecision(0) << " staticGate=on(" << mvreproj::kStaticGateAbsPx << " px or "
+           << mvreproj::kStaticGateRelative * 100.0f << "% of the predicted motion; gated and inlier fractions are on the MvCheck lines)"
+           << std::setprecision(3);
+    }
     if (d.hasRecordNear && std::string(d.source) == "override" &&
         std::fabs(d.recordNear - d.used.nearClip) > 1e-4f) {
         ss << " hint{recordNearClip=" << d.recordNear << " differs from the override by "
