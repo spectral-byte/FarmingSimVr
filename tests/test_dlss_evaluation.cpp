@@ -2341,6 +2341,147 @@ TEST_F(MvCorrectionEvaluationTest, TheFiniteDepthModelIsNamedInTheProjectionLine
     EXPECT_NE(Log().find("aspect=1.778 depthModel=finite"), std::string::npos) << Log();
 }
 
+// ---- Automatic near plane (vrDlssNearClip auto) ----
+
+class AutoNearTest : public MvCorrectionEvaluationTest {
+protected:
+    void SetUpAuto() {
+        SetUpCorrection();
+        ReportLeftRightLeft();
+        m_ngx.ArmDiagnostics(0); // creating the feature armed the diagnostics; the estimate must not need them
+    }
+    static MvSelfCheckReport NearReport(uint64_t evalIndex, float nearClip) {
+        MvSelfCheckReport r;
+        r.evalIndex = evalIndex;
+        r.nearEstimate = true;
+        r.nearSolution.valid = true;
+        r.nearSolution.nearClip = nearClip;
+        r.nearSolution.scale = 0.15 / nearClip;
+        r.nearSolution.used = 500;
+        r.nearSolution.total = 600;
+        return r;
+    }
+    size_t NearRequests() const {
+        size_t n = 0;
+        if (m_pass) for (const MvSelfCheckRequest& r : m_pass->selfChecks) n += r.nearEstimate ? 1 : 0;
+        return n;
+    }
+};
+
+TEST_F(AutoNearTest, AutoIsTheDefaultAndTheRecordsNearIsUsedUntilTheFirstEstimate) {
+    SetUpAuto();
+    EXPECT_FLOAT_EQ(m_ngx.GetNearClipOverride(), 0.0f);
+    EXPECT_FLOAT_EQ(m_ngx.GetAutoNearEstimate(), 0.0f);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_FLOAT_EQ(m_pass->corrections[0].current.nearClip, 0.15f);
+}
+
+TEST_F(AutoNearTest, EveryFourthCrossEyeEvaluationRecordsAnEstimateOutsideADiagnosticsWindow) {
+    SetUpAuto();
+    ASSERT_EQ(m_ngx.GetDiagEvaluationsRemaining(), 0u);
+    for (int i = 0; i < 8; ++i) MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(m_pass->selfChecks.size(), 2u);
+    for (const MvSelfCheckRequest& r : m_pass->selfChecks) {
+        EXPECT_TRUE(r.nearEstimate);
+        // It targets the previous rendered frame's camera (the right eye, 0.064 m aside), not the same eye's.
+        EXPECT_NEAR(r.toPrevious.c[0], -0.064f, 1e-5f);
+        EXPECT_TRUE(r.current.infiniteDepth);
+        EXPECT_FLOAT_EQ(r.current.nearClip, 0.15f); // the assumed near n0
+    }
+    EXPECT_EQ(m_pass->selfChecks[1].evalIndex - m_pass->selfChecks[0].evalIndex, 4u);
+}
+
+TEST_F(AutoNearTest, AnEstimateMovesTheCorrectionsNearForBothEyesAndIsShownOnTheProjectionLine) {
+    SetUpAuto();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_NE(m_pass, nullptr);
+    for (int i = 0; i < 3; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_NEAR(m_ngx.GetAutoNearEstimate(), 0.1f, 1e-6f);
+
+    m_ngx.ArmDiagnostics(8);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    const MvCorrectionRequest& c = m_pass->corrections.back();
+    EXPECT_NEAR(c.current.nearClip, 0.1f, 1e-6f);
+    EXPECT_NEAR(c.previousFrame.nearClip, 0.1f, 1e-6f);
+    EXPECT_NEAR(c.sameEye.nearClip, 0.1f, 1e-6f);
+    ASSERT_FALSE(m_pass->selfChecks.empty());
+    EXPECT_NEAR(m_pass->selfChecks.back().current.nearClip, 0.1f, 1e-6f);
+    EXPECT_NE(Log().find("used=auto estimate=0.100 record=0.150 nearClip=0.100"), std::string::npos) << Log();
+}
+
+TEST_F(AutoNearTest, ANonZeroNearClipAlwaysWinsAndStopsTheEstimating) {
+    SetUpAuto();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    for (int i = 0; i < 3; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_GT(m_ngx.GetAutoNearEstimate(), 0.0f);
+
+    m_ngx.SetNearClipOverride(0.12f);
+    const size_t requestsBefore = NearRequests();
+    for (int i = 0; i < 8; ++i) MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_FLOAT_EQ(m_pass->corrections.back().current.nearClip, 0.12f);
+    EXPECT_EQ(NearRequests(), requestsBefore) << "no estimate is recorded while overridden";
+
+    m_ngx.SetNearClipOverride(0.0f); // back to auto: the learned estimate is still good
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_NEAR(m_pass->corrections.back().current.nearClip, 0.1f, 1e-6f);
+}
+
+TEST_F(AutoNearTest, TheEyeOrderSwapAndMissingRecordsRecordNoEstimate) {
+    SetUpCorrection();
+    m_ngx.ArmDiagnostics(0);
+    for (int i = 0; i < 6; ++i) MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr); // no records at all
+    EXPECT_EQ(NearRequests(), 0u);
+
+    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+    ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064))); // the right eye twice in a row: previous frame is same-eye
+    m_bridge.SetSubPassIndex(1);
+    for (int i = 0; i < 8; ++i) MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(NearRequests(), 0u);
+}
+
+TEST_F(AutoNearTest, ADiscontinuityFlushForgetsTheEstimateAndReadbacksStillInFlight) {
+    SetUpAuto();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    for (int i = 0; i < 3; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_GT(m_ngx.GetAutoNearEstimate(), 0.0f);
+
+    m_ngx.TriggerDiscontinuityFlush(); // a map change, a mode switch
+    EXPECT_FLOAT_EQ(m_ngx.GetAutoNearEstimate(), 0.0f);
+    // A solution recorded before the flush and read back after it describes the old scene.
+    for (int i = 0; i < 3; ++i) m_pass->pendingReports.push_back(NearReport(1, 0.1f));
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_FLOAT_EQ(m_ngx.GetAutoNearEstimate(), 0.0f);
+    EXPECT_FLOAT_EQ(m_pass->corrections.back().current.nearClip, 0.15f) << "back to the camera record";
+}
+
+TEST_F(AutoNearTest, TheEstimateIsLoggedOncePerTwoSecondsWhileItMoves) {
+    SetUpAuto();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    auto count = [&]() {
+        const std::string log = Log();
+        size_t n = 0;
+        for (size_t at = log.find("auto near "); at != std::string::npos; at = log.find("auto near ", at + 1)) ++n;
+        return n;
+    };
+    for (int i = 0; i < 3; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.1f));
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_NE(Log().find("NgxInterceptor: auto near 0.100 m (record 0.150)"), std::string::npos) << Log();
+    EXPECT_EQ(count(), 1u);
+
+    for (int i = 0; i < 5; ++i) m_pass->pendingReports.push_back(NearReport(0, 0.15f)); // a change of more than 5%
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_NEAR(m_ngx.GetAutoNearEstimate(), 0.15f, 1e-6f);
+    EXPECT_EQ(count(), 1u) << "throttled: less than 2 s since the last line";
+}
+
 } // namespace
 
 } // namespace fs25vr

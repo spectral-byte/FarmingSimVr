@@ -355,7 +355,7 @@ TEST(MvReprojectionTest, RawUnitsAreVisibleWhenTheStoredVectorIsNdcLikeAndScaled
     SelfCheckStats stats = Summarize(s.data(), s.size());
     EXPECT_NEAR(stats.k, 1.0, 1e-12);
     EXPECT_NEAR(stats.rawMean, 0.25, 1e-9);
-    // Σ(raw·p) / Σ(p·p) = (0.25 * -25) / 625.
+    // Î£(rawÂ·p) / Î£(pÂ·p) = (0.25 * -25) / 625.
     EXPECT_NEAR(stats.kRaw, -0.01, 1e-9);
     EXPECT_FLOAT_EQ(static_cast<float>(stats.rawMinX), 0.25f);
     EXPECT_FLOAT_EQ(static_cast<float>(stats.rawMaxX), 0.25f);
@@ -755,4 +755,178 @@ TEST(MvCorrectionPlanTest, AnUnusableProjectionPassesThrough) {
     bad.fovY = 0.0f;
     ASSERT_TRUE(store.Report(bad));
     EXPECT_EQ(PlanCorrection(store.Resolve(0)).decision, CorrectionDecision::UnusableProjection);
+}
+
+// ---- Automatic near plane estimate (vrDlssNearClip auto) ----
+//
+// For static geometry the engine vector is e = R + T / near_true: R the rotation-only displacement, T the
+// translation part of the prediction computed with an assumed near n0. s = sum((e-R).T) / sum(T.T) and
+// near_true = n0 / s. The expected values below are worked out by hand.
+
+namespace {
+
+// n samples cycling through three hand-picked (R, T) pairs, with the engine vector e = R + k T.
+std::vector<SampleResult> NearSamples(size_t n, float k) {
+    const float R[3][2] = {{10.0f, 5.0f}, {-7.0f, 2.0f}, {0.0f, 0.0f}};
+    const float T[3][2] = {{2.0f, 0.0f}, {0.0f, 4.0f}, {-3.0f, 1.0f}};
+    std::vector<SampleResult> out(n);
+    for (size_t i = 0; i < n; ++i) {
+        const size_t j = i % 3;
+        SampleResult& s = out[i];
+        s.status = static_cast<uint32_t>(SampleStatus::Valid);
+        s.rotationX = R[j][0];
+        s.rotationY = R[j][1];
+        s.predictedX = R[j][0] + T[j][0]; // the full prediction at the assumed near
+        s.predictedY = R[j][1] + T[j][1];
+        s.engineX = R[j][0] + k * T[j][0];
+        s.engineY = R[j][1] + k * T[j][1];
+    }
+    return out;
+}
+
+} // namespace
+
+TEST(NearEstimateTest, AKnownNearIsRecoveredExactly) {
+    // Assumed 0.15, true 0.1: the translation is 1.5x what was assumed, s = 1.5, near = 0.15 / 1.5.
+    std::vector<SampleResult> samples = NearSamples(30, 1.5f);
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
+    ASSERT_TRUE(sol.valid);
+    EXPECT_NEAR(sol.scale, 1.5, 1e-9);
+    EXPECT_NEAR(sol.nearClip, 0.1f, 1e-6f);
+    EXPECT_EQ(sol.used, 30u);
+}
+
+TEST(NearEstimateTest, ARightAssumptionGivesAScaleOfOne) {
+    std::vector<SampleResult> samples = NearSamples(30, 1.0f);
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
+    ASSERT_TRUE(sol.valid);
+    EXPECT_NEAR(sol.nearClip, 0.15f, 1e-6f);
+}
+
+TEST(NearEstimateTest, RotationAloneCarriesNoInformation) {
+    // e = R everywhere and T = 0: nothing to fit, whatever the rotation is.
+    std::vector<SampleResult> samples(30);
+    for (SampleResult& s : samples) {
+        s.status = static_cast<uint32_t>(SampleStatus::Valid);
+        s.rotationX = s.engineX = s.predictedX = 40.0f;
+        s.rotationY = s.engineY = s.predictedY = -12.0f;
+    }
+    EXPECT_FALSE(SolveNear(samples.data(), samples.size(), 0.15f).valid);
+}
+
+TEST(NearEstimateTest, TheRotationIsSubtractedBeforeFitting) {
+    // A large rotation on top of the translation must not bias s: with R left in, s would be far from 1.5.
+    std::vector<SampleResult> samples = NearSamples(30, 1.5f);
+    for (SampleResult& s : samples) {
+        s.rotationX += 100.0f; s.predictedX += 100.0f; s.engineX += 100.0f;
+    }
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
+    ASSERT_TRUE(sol.valid);
+    EXPECT_NEAR(sol.nearClip, 0.1f, 1e-5f);
+}
+
+TEST(NearEstimateTest, OutliersFromMovingObjectsAreRejected) {
+    std::vector<SampleResult> samples = NearSamples(60, 1.5f);
+    // 8 samples belong to something that moves: their vectors are unrelated to the camera.
+    for (size_t i = 0; i < 8; ++i) {
+        samples[i * 7].engineX += 250.0f;
+        samples[i * 7].engineY -= 180.0f;
+    }
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
+    ASSERT_TRUE(sol.valid);
+    EXPECT_NEAR(sol.nearClip, 0.1f, 1e-4f);
+    EXPECT_EQ(sol.used, 52u);
+}
+
+TEST(NearEstimateTest, SkySamplesAreIgnored) {
+    std::vector<SampleResult> samples = NearSamples(30, 1.5f);
+    SampleResult sky;
+    sky.status = static_cast<uint32_t>(SampleStatus::Sky);
+    sky.engineX = 999.0f;
+    for (int i = 0; i < 20; ++i) samples.push_back(sky);
+    NearSolution sol = SolveNear(samples.data(), samples.size(), 0.15f);
+    ASSERT_TRUE(sol.valid);
+    EXPECT_NEAR(sol.nearClip, 0.1f, 1e-6f);
+    EXPECT_EQ(sol.used, 30u);
+}
+
+TEST(NearEstimateTest, DegenerateInputsAreRefused) {
+    EXPECT_FALSE(SolveNear(nullptr, 0, 0.15f).valid);
+
+    std::vector<SampleResult> samples = NearSamples(30, 1.5f);
+    EXPECT_FALSE(SolveNear(samples.data(), samples.size(), 0.0f).valid) << "no assumed near";
+
+    EXPECT_FALSE(SolveNear(samples.data(), 5, 0.15f).valid) << "too few samples";
+
+    // Engine vectors that run against the translation: s <= 0 is not a distance.
+    std::vector<SampleResult> opposite = NearSamples(30, -1.0f);
+    EXPECT_FALSE(SolveNear(opposite.data(), opposite.size(), 0.15f).valid);
+
+    // Translation below a tenth of a pixel rms: the ratio would be noise.
+    std::vector<SampleResult> tiny = NearSamples(30, 1.5f);
+    for (SampleResult& s : tiny) {
+        s.predictedX = s.rotationX + (s.predictedX - s.rotationX) * 0.01f;
+        s.predictedY = s.rotationY + (s.predictedY - s.rotationY) * 0.01f;
+    }
+    EXPECT_FALSE(SolveNear(tiny.data(), tiny.size(), 0.15f).valid);
+}
+
+TEST(NearEstimateTest, EvaluateSampleSplitsTheRotationFromTheTranslation) {
+    // The other camera is yawed 45 degrees about +Y and 1 m to the right. At the centre pixel the rotation
+    // alone moves the point by +50 px (see ARotatedCameraProjectsThroughTheInverseRotation), whatever its depth.
+    CameraRecord current;
+    current.orientation[3] = 1.0;
+    CameraRecord other = current;
+    other.position[0] = 1.0;
+    const double half = 3.14159265358979323846 / 8.0;
+    other.orientation[1] = std::sin(half);
+    other.orientation[3] = std::cos(half);
+    RelativeTransform t = MakeRelativeTransform(ComputeRelativeCamera(current, other));
+
+    SampleResult near2 = EvaluateSample(99, 49, DepthAtMetres2(), 0.0f, 0.0f, 1.0f, 1.0f, 200, 100,
+                                        TestProjection(), TestProjection(), t);
+    SampleResult far5 = EvaluateSample(99, 49, 0.18f, 0.0f, 0.0f, 1.0f, 1.0f, 200, 100,
+                                       TestProjection(), TestProjection(), t);
+    ASSERT_EQ(near2.status, static_cast<uint32_t>(SampleStatus::Valid));
+    ASSERT_EQ(far5.status, static_cast<uint32_t>(SampleStatus::Valid));
+    EXPECT_NEAR(near2.rotationX, 50.0f, 1.5f);
+    EXPECT_NEAR(near2.rotationY, 0.0f, 1.5f);
+    EXPECT_FLOAT_EQ(near2.rotationX, far5.rotationX); // depth-independent
+    EXPECT_FLOAT_EQ(near2.rotationY, far5.rotationY);
+    // The translation (prediction minus rotation) does depend on depth.
+    EXPECT_GT(std::fabs((near2.predictedX - near2.rotationX) - (far5.predictedX - far5.rotationX)), 1.0f);
+}
+
+TEST(NearEstimateTest, AWorkedScenePlusTheSolverRecoversTheRendererNear) {
+    // End to end through the CPU mirror: a static scene seen by a camera that is 1 m to the left of the other
+    // (and not rotated). The engine's true near is 0.5; the pass assumes 1.0. Depth is infinite reverse-Z,
+    // d = near_true / z. The engine vector is the displacement predicted with the true near.
+    CameraRecord current;
+    current.orientation[3] = 1.0;
+    CameraRecord other = current;
+    other.position[0] = 1.0;
+    RelativeTransform t = MakeRelativeTransform(ComputeRelativeCamera(current, other));
+    Projection truth = TestProjection();
+    truth.infiniteDepth = true;
+    truth.nearClip = 0.5f;
+    Projection assumed = truth;
+    assumed.nearClip = 1.0f;
+
+    std::vector<SampleResult> samples;
+    for (uint32_t y = 10; y < 90; y += 10) {
+        for (uint32_t x = 40; x < 160; x += 10) {
+            const float z = 2.0f + 0.05f * static_cast<float>(x + y); // metres in front of the camera
+            const float depth = truth.nearClip / z;
+            SampleResult real = EvaluateSample(x, y, depth, 0.0f, 0.0f, 1.0f, 1.0f, 200, 100, truth, truth, t);
+            ASSERT_EQ(real.status, static_cast<uint32_t>(SampleStatus::Valid));
+            // What the engine wrote: previous - current, as predicted with the true near.
+            SampleResult s = EvaluateSample(x, y, depth, real.predictedX, real.predictedY, 1.0f, 1.0f, 200, 100,
+                                            assumed, assumed, t);
+            ASSERT_EQ(s.status, static_cast<uint32_t>(SampleStatus::Valid));
+            samples.push_back(s);
+        }
+    }
+    NearSolution sol = SolveNear(samples.data(), samples.size(), assumed.nearClip);
+    ASSERT_TRUE(sol.valid);
+    EXPECT_NEAR(sol.nearClip, 0.5f, 0.01f);
 }

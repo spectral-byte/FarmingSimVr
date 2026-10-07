@@ -903,7 +903,7 @@ int VRBridge::Lua_SetDlssNearClip(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    self->m_ngxInterceptor->SetNearClipOverride(meters);
+    self->m_ngxInterceptor->SetNearClipOverride(meters); // 0 = automatic
     lua_pushboolean(L, 1);
     return 1;
 }

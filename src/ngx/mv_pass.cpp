@@ -157,7 +157,7 @@ void selfcheck(uint3 id : SV_DispatchThreadID)
     uint py = min(gA.y - 1, (uint)(((float)id.y + 0.5) * h / (float)grid));
 
     // Three uint4 per sample, mirroring mvreproj::SampleResult: errToPrevious, errToCurrent, status, sequence;
-    // engine vector (scaled), predicted displacement; raw engine vector, padding.
+    // engine vector (scaled), predicted displacement; raw engine vector, rotation-only displacement.
     uint4 result = uint4(0, 0, 0, gA.w);
     uint4 extra0 = uint4(0, 0, 0, 0);
     uint4 extra1 = uint4(0, 0, 0, 0);
@@ -195,7 +195,21 @@ void selfcheck(uint3 id : SV_DispatchThreadID)
             result.x = asuint(length(mv - d));
             result.y = asuint(length(mv + d));
             extra0 = uint4(asuint(mv.x), asuint(mv.y), asuint(d.x), asuint(d.y));
-            extra1 = uint4(asuint(raw.x), asuint(raw.y), 0, 0);
+            // Rotation-only displacement (mirrors EvaluateSample): the unit direction through the rotation, no translation.
+            float3 pn = normalize(p);
+            float3 qr = float3(dot(gR0.xyz, pn), dot(gR1.xyz, pn), dot(gR2.xyz, pn));
+            float zr = -qr.z;
+            if (zr > 1e-6)
+            {
+                float rx = (qr.x / (zr * gC.w * gB.w) * 0.5 + 0.5) * w - cx;
+                float ry = (0.5 - qr.y / (zr * gC.w) * 0.5) * h - cy;
+                extra1 = uint4(asuint(raw.x), asuint(raw.y), asuint(rx), asuint(ry));
+            }
+            else
+            {
+                result = uint4(0, 0, 2, gA.w); // the rotation leaves the point behind the camera
+                extra0 = uint4(0, 0, 0, 0);
+            }
         }
     }
     uint index = (id.y * grid + id.x) * 3;
@@ -384,7 +398,10 @@ public:
 
         // The self-check only measures: it reads the engine's depth and vectors and writes the results
         // buffer, which is copied to a readback buffer that is read a few evaluations later.
-        if (in.selfCheck && EnsureReadbackBuffers()) RecordSelfCheck(cl, *in.selfCheck, width, height, gpu, correcting);
+        // A near plane estimate always reads the engine's original vectors, even when the correction ran.
+        if (in.selfCheck && EnsureReadbackBuffers()) {
+            RecordSelfCheck(cl, *in.selfCheck, width, height, gpu, correcting && !in.selfCheck->nearEstimate);
+        }
 
         MvPassResult ok;
         ok.ok = true;
@@ -413,6 +430,10 @@ public:
                 report.evalIndex = p.evalIndex;
                 report.stats = mvreproj::Summarize(samples, kSelfCheckSamples);
                 report.mvFormat = static_cast<uint32_t>(m_format);
+                if (p.nearEstimate) {
+                    report.nearEstimate = true;
+                    report.nearSolution = mvreproj::SolveNear(samples, kSelfCheckSamples, p.assumedNear);
+                }
                 reports.push_back(report);
                 p.active = false;
             } else if (m_calls > p.recordedAtCall + kReadbackGiveUpCalls) {
@@ -432,6 +453,8 @@ private:
         uint32_t eye = 0;
         uint64_t evalIndex = 0;
         uint64_t recordedAtCall = 0;
+        bool nearEstimate = false;
+        float assumedNear = 0.0f;
     };
 
     bool EnsureReadbackBuffers() {
@@ -514,6 +537,8 @@ private:
         p.eye = req.eye;
         p.evalIndex = req.evalIndex;
         p.recordedAtCall = m_calls;
+        p.nearEstimate = req.nearEstimate;
+        p.assumedNear = req.current.nearClip;
     }
 
     static void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res,
@@ -775,7 +800,9 @@ std::string FormatMvProjectionLine(const char* logPrefix, const char* unit, uint
     std::stringstream ss;
     ss << std::fixed << std::setprecision(3)
        << logPrefix << ": [Diag] MvProjection Eye=" << eye << " " << unit << " #" << index
-       << ": used=" << d.source << " nearClip=" << d.used.nearClip << " farClip=" << d.used.farClip
+       << ": used=" << d.source;
+    if (std::string(d.source) == "auto") ss << " estimate=" << d.autoEstimate << " record=" << d.recordNear;
+    ss << " nearClip=" << d.used.nearClip << " farClip=" << d.used.farClip
        << " fovY=" << d.used.fovY << " tanHalfFovY=" << std::tan(d.used.fovY * 0.5f)
        << " projOffset=(" << d.projOffsetX << ", " << d.projOffsetY << ") aspect=" << d.aspect
        << " depthModel=" << (d.infinite ? "infinite" : "finite") << " depthSource=" << d.depthSource;

@@ -25,6 +25,10 @@ struct MvSelfCheckRequest {
     mvreproj::Projection current;
     mvreproj::Projection previous;           // the previous rendered frame's camera
     mvreproj::RelativeTransform toPrevious;  // current camera space -> previous camera space
+    // The check feeds the automatic near plane estimate: it always targets the previous rendered frame's
+    // camera and reads the engine's original vectors, and its report carries a mvreproj::NearSolution
+    // computed with current.nearClip as the assumed near.
+    bool nearEstimate = false;
 };
 
 // A self-check read back some frames after it was recorded.
@@ -33,6 +37,8 @@ struct MvSelfCheckReport {
     uint64_t evalIndex = 0;
     mvreproj::SelfCheckStats stats;
     uint32_t mvFormat = 0; // DXGI_FORMAT of the motion vector texture the self-check read
+    bool nearEstimate = false;           // the request asked for a near plane estimate
+    mvreproj::NearSolution nearSolution; // valid only when nearEstimate
 };
 
 // Builds the self-check request for one evaluation from the raw camera records, or says why it cannot
@@ -64,13 +70,14 @@ struct MvProjectionSide {
 };
 
 struct MvProjectionDiag {
-    const char* source = "camera-record"; // where `used` came from: "camera-record" or "dispatch-desc"
+    const char* source = "camera-record"; // where `used` came from: "camera-record", "dispatch-desc", "override" or "auto"
     MvProjectionSide used;
     float projOffsetX = 0.0f; // the record's; the correction ignores it
     float projOffsetY = 0.0f;
     float aspect = 1.0f;      // render width / render height
     bool infinite = false;
     const char* depthSource = ""; // what chose the depth model ("vrDlssDepthModel", "create-flags")
+    float autoEstimate = 0.0f; // the automatic near estimate, shown when source is "auto"
     bool hasRecordNear = false; // set to get a hint when source is "override" and the record's near differs
     float recordNear = 0.0f;
     bool hasComparison = false;

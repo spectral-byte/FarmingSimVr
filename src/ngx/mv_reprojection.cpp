@@ -89,6 +89,21 @@ SampleResult EvaluateSample(uint32_t x, uint32_t y, float depth, float mvX, floa
         return result;
     }
 
+    // The same point as if infinitely far: only the relative rotation moves it. Depth cancels in the
+    // projection, so the unit direction stands in for the point.
+    float rotP[3] = {p[0], p[1], p[2]};
+    float rotQ[3];
+    const float rotLen = std::sqrt(rotP[0] * rotP[0] + rotP[1] * rotP[1] + rotP[2] * rotP[2]);
+    for (float& v : rotP) v /= rotLen;
+    for (int i = 0; i < 3; ++i) {
+        rotQ[i] = toPrevious.m[i][0] * rotP[0] + toPrevious.m[i][1] * rotP[1] + toPrevious.m[i][2] * rotP[2];
+    }
+    float rotPx = 0.0f, rotPy = 0.0f;
+    if (!ProjectToPixel(rotQ, w, h, previous, rotPx, rotPy)) {
+        result.status = static_cast<uint32_t>(SampleStatus::OffScreen);
+        return result;
+    }
+
     const float dx = px - cx; // predicted previous - current
     const float dy = py - cy;
     const float ex = mvX * scaleX;
@@ -101,6 +116,8 @@ SampleResult EvaluateSample(uint32_t x, uint32_t y, float depth, float mvX, floa
     result.predictedY = dy;
     result.rawX = mvX;
     result.rawY = mvY;
+    result.rotationX = rotPx - cx;
+    result.rotationY = rotPy - cy;
     result.status = static_cast<uint32_t>(SampleStatus::Valid);
     return result;
 }
@@ -275,6 +292,59 @@ SelfCheckStats Summarize(const SampleResult* samples, size_t count) {
         stats.kRaw = sumRP / sumPP;
     }
     return stats;
+}
+
+NearSolution SolveNear(const SampleResult* samples, size_t count, float assumedNear) {
+    NearSolution out;
+    if (!samples || !(assumedNear > 0.0f) || !std::isfinite(assumedNear)) return out;
+    struct Term { double ex, ey, tx, ty; };
+    std::vector<Term> terms;
+    for (size_t i = 0; i < count; ++i) {
+        const SampleResult& s = samples[i];
+        if (s.status != static_cast<uint32_t>(SampleStatus::Valid)) continue;
+        terms.push_back({static_cast<double>(s.engineX) - s.rotationX, static_cast<double>(s.engineY) - s.rotationY,
+                         static_cast<double>(s.predictedX) - s.rotationX, static_cast<double>(s.predictedY) - s.rotationY});
+    }
+    out.total = static_cast<uint32_t>(terms.size());
+    if (terms.size() < kMinNearSamples) return out;
+
+    double sumTT = 0.0;
+    for (const Term& t : terms) sumTT += t.tx * t.tx + t.ty * t.ty;
+    if (!(sumTT / static_cast<double>(terms.size()) >= kMinNearTranslationSq)) return out;
+
+    // Robust start: the median of the per-sample ratios, so a few wild vectors cannot drag the fit.
+    std::vector<float> ratios;
+    for (const Term& t : terms) {
+        const double tt = t.tx * t.tx + t.ty * t.ty;
+        if (tt >= kMinNearTranslationSq) ratios.push_back(static_cast<float>((t.ex * t.tx + t.ey * t.ty) / tt));
+    }
+    if (ratios.empty()) return out;
+    double s = Median(ratios);
+    for (int pass = 0; pass < 3; ++pass) {
+        std::vector<float> residuals;
+        for (const Term& t : terms) {
+            residuals.push_back(static_cast<float>(std::hypot(t.ex - s * t.tx, t.ey - s * t.ty)));
+        }
+        std::vector<float> sorted = residuals;
+        const double sigma = 1.4826 * Median(sorted);
+        const double threshold = (std::max)(3.0 * sigma, 1.0); // a pixel is the noise floor
+        double num = 0.0, den = 0.0;
+        uint32_t used = 0;
+        for (size_t i = 0; i < terms.size(); ++i) {
+            if (residuals[i] > threshold) continue;
+            num += terms[i].ex * terms[i].tx + terms[i].ey * terms[i].ty;
+            den += terms[i].tx * terms[i].tx + terms[i].ty * terms[i].ty;
+            ++used;
+        }
+        if (used < kMinNearSamples || !(den / used >= kMinNearTranslationSq)) return out;
+        s = num / den;
+        out.used = used;
+    }
+    if (!(s > 0.0) || !std::isfinite(s)) return out;
+    out.scale = s;
+    out.nearClip = static_cast<float>(assumedNear / s);
+    out.valid = true;
+    return out;
 }
 
 Convention BetterConvention(const SelfCheckStats& stats) {

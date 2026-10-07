@@ -1017,8 +1017,18 @@ TEST_F(CompanionModTest, DlssNearClipConsoleCommandSetsTheOverride) {
     EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.1f);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(string.find(VRCompanion:consoleCommandDlssNearClip("0"), "camera record") ~= nil, "0 must report the record's near")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("0"), "is auto") ~= nil, "0 must report auto")
     )luau", "=testDlssNearClipZero"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.0f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:consoleCommandDlssNearClip("0.2")
+    )luau", "=testDlssNearClipSetAgain"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.2f);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("auto"), "is auto") ~= nil, "auto must report auto")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("AUTO"), "is auto") ~= nil, "auto is case-insensitive")
+    )luau", "=testDlssNearClipAuto"), 0);
     EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.0f);
 }
 

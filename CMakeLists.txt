@@ -106,6 +106,8 @@ set(CORE_SOURCES
     src/ngx/mv_pass.cpp
     src/ngx/mv_reprojection.h
     src/ngx/mv_reprojection.cpp
+    src/ngx/near_estimator.h
+    src/ngx/near_estimator.cpp
     src/fidelityfx/ffx_defs.h
     src/fidelityfx/fidelityfx_interceptor.h
     src/fidelityfx/fidelityfx_interceptor.cpp
@@ -150,6 +152,7 @@ add_executable(fs25_vr_tests
     tests/test_math_utils.cpp
     tests/test_camera_records.cpp
     tests/test_mv_reprojection.cpp
+    tests/test_near_estimator.cpp
     tests/test_logger.cpp
     tests/test_thread_trace.cpp
     tests/test_openxr_cursor_overlay.cpp

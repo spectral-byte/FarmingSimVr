@@ -498,14 +498,17 @@ end
 
 function VRCompanion:consoleCommandDlssNearClip(arg)
     local meters = tonumber(arg)
+    if meters == nil and type(arg) == "string" and string.lower(arg) == "auto" then
+        meters = 0
+    end
     if meters == nil or meters < 0 then
-        return "Usage: vrDlssNearClip <meters> (near plane the DLSS motion vector correction assumes; 0 = use the camera record's near, the default)"
+        return "Usage: vrDlssNearClip <meters|auto> (near plane the DLSS motion vector correction assumes; 0 or auto = estimate it from the engine's motion vectors, the default)"
     end
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge ~= nil and type(bridge.setDlssNearClip) == "function" then
         if bridge.setDlssNearClip(meters) then
             local text = meters > 0 and string.format("DLSS near plane override (vrDlssNearClip) is %.3f m", meters)
-                or "DLSS near plane override (vrDlssNearClip) is off: using the camera record's near"
+                or "DLSS near plane (vrDlssNearClip) is auto: estimated from the engine's motion vectors (the camera record's near until then)"
             print("[FS25_VR] " .. text)
             return text
         end

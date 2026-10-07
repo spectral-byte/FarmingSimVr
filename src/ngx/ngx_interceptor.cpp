@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#include <chrono>
 
 namespace fs25vr {
 
@@ -473,13 +474,40 @@ void NgxInterceptor::DetachAll() {
     m_mvFixDisabled.store(false);
     m_depthModelInfinite.store(true);
     m_nearClipOverride.store(0.0f);
+    ForgetNearEstimate();
+}
+
+void NgxInterceptor::ForgetNearEstimate() {
+    m_nearEstimator.Reset(m_evalCount.load());
+    m_nearCrossEyeEvals.store(0);
+    m_nearLastLogged.store(0.0f);
+    m_nearLastLogMs.store(INT64_MIN);
+}
+
+void NgxInterceptor::OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolution& solution, float recordNear) {
+    m_nearEstimator.Submit(evalIndex, solution);
+    const float estimate = m_nearEstimator.Estimate();
+    if (!(estimate > 0.0f)) return;
+    // Once per 2 s, and only while it moves by more than 5% from what was last logged.
+    const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch()).count();
+    const int64_t lastMs = m_nearLastLogMs.load();
+    const float last = m_nearLastLogged.load();
+    const bool due = lastMs == INT64_MIN || nowMs - lastMs >= 2000;
+    if (!due || (last > 0.0f && std::fabs(estimate - last) <= 0.05f * last)) return;
+    m_nearLastLogMs.store(nowMs);
+    m_nearLastLogged.store(estimate);
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(3) << "NgxInterceptor: auto near " << estimate << " m (record "
+       << recordNear << ")";
+    LogInfo(ss.str());
 }
 
 void NgxInterceptor::SetNearClipOverride(float meters) {
     if (!std::isfinite(meters) || meters < 0.0f) meters = 0.0f;
     if (m_nearClipOverride.exchange(meters) != meters) {
         LogInfo("NgxInterceptor: Near plane override (vrDlssNearClip) " +
-                (meters > 0.0f ? std::to_string(meters) + " m" : std::string("off (camera record)")));
+                (meters > 0.0f ? std::to_string(meters) + " m" : std::string("auto (estimated, camera record until then)")));
     }
 }
 
@@ -725,6 +753,7 @@ void NgxInterceptor::TriggerDiscontinuityFlush() {
     }
     m_internalDiscontinuityPendingLeft.store(true);
     m_internalDiscontinuityPendingRight.store(true);
+    ForgetNearEstimate();
 }
 
 bool NgxInterceptor::HasPendingDiscontinuity(uint32_t contextIndex) const {
@@ -1101,6 +1130,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
 
     // Check if a Discontinuity Flush is pending for this context
     bool needReset = interceptor.ConsumeDiscontinuity(contextIndex);
+    if (needReset) interceptor.ForgetNearEstimate(); // the scene may have changed: relearn the near
 
     int prevReset = 0;
     bool hadPrevReset = false;
@@ -1208,13 +1238,16 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
             const MvCorrectionRequest* correction = nullptr;
             correctionState = mvreproj::CorrectionDecisionName(plan.decision);
             const bool infiniteDepth = interceptor.m_depthModelInfinite.load();
+            // Near plane: a manual override wins, then the automatic estimate, then the camera record's.
             const float nearOverride = interceptor.m_nearClipOverride.load();
+            const float autoNear = nearOverride > 0.0f ? 0.0f : interceptor.m_nearEstimator.Estimate();
+            const float forcedNear = nearOverride > 0.0f ? nearOverride : autoNear;
             if (plan.decision == mvreproj::CorrectionDecision::Correct) {
                 if (std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f) {
                     // Only the camera that rendered the depth buffer reads it.
                     plan.current.infiniteDepth = infiniteDepth;
-                    if (nearOverride > 0.0f) {
-                        plan.current.nearClip = plan.previousFrame.nearClip = plan.sameEye.nearClip = nearOverride;
+                    if (forcedNear > 0.0f) {
+                        plan.current.nearClip = plan.previousFrame.nearClip = plan.sameEye.nearClip = forcedNear;
                     }
                     correctionRequest.mvScaleX = effScaleX;
                     correctionRequest.mvScaleY = effScaleY;
@@ -1248,7 +1281,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                                                       prevScaleX * scaleMulX, prevScaleY * scaleMulY,
                                                       correction ? &plan : nullptr, checkRequest, skipReason)) {
                     checkRequest.current.infiniteDepth = infiniteDepth;
-                    if (nearOverride > 0.0f) checkRequest.current.nearClip = checkRequest.previous.nearClip = nearOverride;
+                    if (forcedNear > 0.0f) checkRequest.current.nearClip = checkRequest.previous.nearClip = forcedNear;
                     check = &checkRequest;
                     if (!interceptor.m_diagProjectionLogged.exchange(true)) {
                         const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(checkEye);
@@ -1256,9 +1289,10 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                         mutableParams->Get(NVSDK_NGX_Parameter_Width, &renderW);
                         mutableParams->Get(NVSDK_NGX_Parameter_Height, &renderH);
                         MvProjectionDiag diag;
-                        diag.source = nearOverride > 0.0f ? "override" : "camera-record";
-                        diag.used = {nearOverride > 0.0f ? nearOverride : resolved.current->nearClip,
+                        diag.source = nearOverride > 0.0f ? "override" : (autoNear > 0.0f ? "auto" : "camera-record");
+                        diag.used = {forcedNear > 0.0f ? forcedNear : resolved.current->nearClip,
                                      resolved.current->farClip, resolved.current->fovY};
+                        diag.autoEstimate = autoNear;
                         diag.hasRecordNear = true;
                         diag.recordNear = resolved.current->nearClip;
                         diag.projOffsetX = resolved.current->projOffsetX;
@@ -1273,9 +1307,41 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                     LogInfo(FormatMvSelfCheckSkipped("NgxInterceptor", "Eval", checkEye, evalIndex, skipReason));
                 }
             }
+            // Automatic near plane estimate, running whenever the correction does (not only in diagnostics
+            // windows): every Nth cross-eye evaluation records a sparse self-check against the previous
+            // rendered frame's camera on the engine's original vectors; it is read back a few evaluations
+            // later like any self-check. Same-eye frames (the eye order swap) and missing records are skipped.
+            MvSelfCheckRequest nearRequest;
+            float recordNear = 0.0f;
+            if (bridge) {
+                const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(correctionEye);
+                if (resolved.current) recordNear = resolved.current->nearClip;
+                // One check per evaluation: on its every Nth evaluation the estimate takes the slot, also in a
+                // diagnostics window (which arms itself at start up and on mode changes).
+                if (nearOverride <= 0.0f && resolved.current && resolved.previousFrame &&
+                    std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f &&
+                    !resolved.PreviousFrameIsSameEye() &&
+                    interceptor.m_nearCrossEyeEvals.fetch_add(1) % NgxInterceptor::kNearEstimateInterval ==
+                        NgxInterceptor::kNearEstimateInterval - 1) {
+                    std::string skipReason;
+                    const uint64_t nearEvalIndex = interceptor.m_evalCount.load();
+                    if (BuildMvSelfCheckRequest(resolved, correctionEye, nearEvalIndex, effScaleX, effScaleY, nullptr,
+                                                nearRequest, skipReason)) {
+                        nearRequest.current.infiniteDepth = infiniteDepth;
+                        // The assumed near n0: whatever the correction is using this frame.
+                        if (forcedNear > 0.0f) nearRequest.current.nearClip = nearRequest.previous.nearClip = forcedNear;
+                        nearRequest.nearEstimate = true;
+                        check = &nearRequest;
+                    }
+                }
+            }
             std::vector<MvSelfCheckReport> reports;
             ID3D12Resource* corrected = interceptor.RecordMvPass(InCmdList, depth, mv, check, &reports, correction);
             for (const MvSelfCheckReport& report : reports) {
+                if (report.nearEstimate) {
+                    interceptor.OnNearSolution(report.evalIndex, report.nearSolution, recordNear);
+                    continue;
+                }
                 if (!interceptor.m_diagRawRangeLogged.exchange(true)) {
                     LogInfo(FormatMvRawRangeReport("NgxInterceptor", "Eval", report));
                 }

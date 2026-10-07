@@ -2,6 +2,7 @@
 
 #include "ngx_defs.h"
 #include "mv_pass.h"
+#include "near_estimator.h"
 #include "virtual_ngx_handle.h"
 #include "core/detour.h"
 #include <atomic>
@@ -188,10 +189,18 @@ public:
     // DLSS. Finite: reverse-Z between the camera record's near and far planes. For A/B comparison.
     void SetDepthModelInfinite(bool infinite);
     bool IsDepthModelInfinite() const { return m_depthModelInfinite.load(); }
-    // Near plane override in metres (vrDlssNearClip) for the correction and the self-check, on every camera.
-    // 0 (the default) uses the camera record's near; negative or non-finite values count as 0.
+    // Near plane in metres (vrDlssNearClip) for the correction and the self-check, on every camera.
+    // m > 0 is a manual override and always wins. 0 (the default, also written uto) estimates the
+    // renderer's near from the engine's own motion vectors (see mvreproj::SolveNear): the Companion Mod's
+    // camera record reports the same near for every camera while the renderer's differs (about 0.1 in a
+    // vehicle cab, 0.15 on foot). Until the first estimate, and after a Discontinuity Flush, the record's
+    // near is used. Negative or non-finite values count as 0.
     void SetNearClipOverride(float meters);
     float GetNearClipOverride() const { return m_nearClipOverride.load(); }
+    // The smoothed automatic estimate in metres, or 0 when there is none (yet).
+    float GetAutoNearEstimate() const { return m_nearEstimator.Estimate(); }
+    // Every Nth cross-eye evaluation records a near plane estimate (a sparse self-check read back later).
+    static constexpr uint32_t kNearEstimateInterval = 4;
     // Replace how the pass is created (tests install a fake). Defaults to the D3D12 implementation.
     void SetMotionVectorPassFactory(MotionVectorPassFactory factory);
     const char* DescribeMvFixState() const;
@@ -264,6 +273,12 @@ private:
 
     std::atomic<bool> m_depthModelInfinite{true};
     std::atomic<float> m_nearClipOverride{0.0f};
+    NearEstimator m_nearEstimator;
+    std::atomic<uint32_t> m_nearCrossEyeEvals{0}; // cross-eye evaluations seen, to pick every Nth
+    std::atomic<float> m_nearLastLogged{0.0f};
+    std::atomic<int64_t> m_nearLastLogMs{INT64_MIN};
+    void ForgetNearEstimate();
+    void OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolution& solution, float recordNear);
     std::atomic<bool> m_diagProjectionLogged{false}; // the MvProjection line, once per arming
     std::atomic<bool> m_mvFixEnabled{false};
     std::atomic<bool> m_mvFixDisabled{false};

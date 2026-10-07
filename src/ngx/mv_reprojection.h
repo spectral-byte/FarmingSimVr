@@ -69,7 +69,8 @@ struct SampleResult {
     float predictedY = 0.0f;
     float rawX = 0.0f;          // engine vector as stored, before the scale (raw units)
     float rawY = 0.0f;
-    float padding[2] = {0.0f, 0.0f}; // keeps the element 3 x uint4 like the GPU buffer
+    float rotationX = 0.0f;     // rotation-only displacement of the point as if at infinity (valid samples)
+    float rotationY = 0.0f;
 };
 static_assert(sizeof(SampleResult) == 48, "SampleResult mirrors the GPU results element (3 x uint4)");
 
@@ -105,6 +106,28 @@ struct SelfCheckStats {
 };
 
 SelfCheckStats Summarize(const SampleResult* samples, size_t count);
+
+// ---- Near plane estimate ----
+//
+// For static geometry the engine vector (pixels, after the scale) is e = R + T / near_true, where R is the
+// rotation-only displacement and T the translation part of the prediction to the previous rendered frame's
+// camera, computed with an assumed near n0 (T = predicted - R, scaling as 1/near under infinite reverse-Z).
+// Least squares gives s = sum((e - R).T) / sum(T.T) and near_true = n0 / s.
+constexpr uint32_t kMinNearSamples = 16;       // valid samples needed
+constexpr double kMinNearTranslationSq = 0.01; // mean T.T (px^2) below which the ratio is noise
+
+struct NearSolution {
+    bool valid = false;
+    float nearClip = 0.0f; // metres
+    double scale = 0.0;    // s
+    uint32_t used = 0;     // samples that took part after outlier rejection
+    uint32_t total = 0;    // valid samples offered
+};
+
+// Solves for the renderer's near from a self-check recorded against the previous rendered frame's camera
+// (not the same-eye one) on the engine's original vectors, with n0 = assumedNear. Rejects s <= 0, too few
+// samples, a translation too small to measure, and outliers (moving objects) around a robust first fit.
+NearSolution SolveNear(const SampleResult* samples, size_t count, float assumedNear);
 
 enum class Convention { None, ToPrevious, ToCurrent };
 // The convention with the smaller median error; None when no sample was valid.
