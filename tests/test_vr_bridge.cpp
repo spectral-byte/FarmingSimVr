@@ -992,6 +992,8 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
         assert(VRBridge.setDlssSdpMvScale(0.0, 0.25) == true, "setDlssSdpMvScale failed")
         assert(type(VRBridge.setDlssMvFix) == "function", "setDlssMvFix missing")
         assert(VRBridge.setDlssMvFix(true) == true, "setDlssMvFix on failed")
+        assert(type(VRBridge.setDlssDepthModel) == "function", "setDlssDepthModel missing")
+        assert(VRBridge.setDlssDepthModel(false) == true, "setDlssDepthModel finite failed")
     )";
 
     EXPECT_EQ(RunLuauString(L, testScript), 0);
@@ -1003,9 +1005,12 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
     EXPECT_FLOAT_EQ(ngx->GetSdpMvScaleMultiplierX(), 0.0f);
     EXPECT_FLOAT_EQ(ngx->GetSdpMvScaleMultiplierY(), 0.25f);
     EXPECT_TRUE(ngx->IsMvFixEnabled());
+    EXPECT_FALSE(ngx->IsDepthModelInfinite());
 
     EXPECT_EQ(RunLuauString(L, "assert(VRBridge.setDlssMvFix(false) == true, \"setDlssMvFix off failed\")"), 0);
     EXPECT_FALSE(ngx->IsMvFixEnabled());
+    EXPECT_EQ(RunLuauString(L, "assert(VRBridge.setDlssDepthModel(true) == true, \"setDlssDepthModel infinite failed\")"), 0);
+    EXPECT_TRUE(ngx->IsDepthModelInfinite());
 }
 
 TEST_F(VrBridgeTest, DualPassEyeOrderSwapsEveryFourPairs) {
@@ -1082,6 +1087,7 @@ TEST_F(VrBridgeTest, DlssTuningFunctionsReportFailureWithoutNgxInterceptor) {
         assert(VRBridge.setDlssPreset(11) == false, "setDlssPreset must fail without NGX")
         assert(VRBridge.dlssDiag(32) == false, "dlssDiag must fail without NGX")
         assert(VRBridge.setDlssMvFix(true) == false, "setDlssMvFix must fail without NGX")
+        assert(VRBridge.setDlssDepthModel(true) == false, "setDlssDepthModel must fail without NGX")
     )";
     EXPECT_EQ(RunLuauString(L, testScript), 0);
 }
@@ -1201,7 +1207,8 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "dlssDiag",
         "setDlssSdpMvScale",
         "reportCameraRecord",
-        "setDlssMvFix"
+        "setDlssMvFix",
+        "setDlssDepthModel"
     };
 
     lua_getglobal(L, "VRBridge");

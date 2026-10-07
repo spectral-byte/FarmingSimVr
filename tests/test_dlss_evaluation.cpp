@@ -2207,6 +2207,102 @@ TEST_F(MvCorrectionEvaluationTest, MvFixOffRestoresTheUncorrectedBehaviour) {
     EXPECT_EQ(m_factoryCalls, 0);
 }
 
+// ---- Depth model (vrDlssDepthModel) ----
+
+TEST_F(MvCorrectionEvaluationTest, TheEngineDepthIsReadAsInfiniteReverseZByDefault) {
+    SetUpCorrection();
+    EXPECT_TRUE(m_ngx.IsDepthModelInfinite());
+    ReportLeftRightLeft();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    const MvCorrectionRequest& c = m_pass->corrections[0];
+    // Only the camera that rendered the depth buffer reads it.
+    EXPECT_TRUE(c.current.infiniteDepth);
+    EXPECT_FALSE(c.previousFrame.infiniteDepth);
+    EXPECT_FALSE(c.sameEye.infiniteDepth);
+    EXPECT_FLOAT_EQ(c.current.nearClip, 0.15f); // near still comes from the camera record
+}
+
+TEST_F(MvCorrectionEvaluationTest, TheFiniteDepthModelRestoresTheFiniteProjection) {
+    SetUpCorrection();
+    m_ngx.SetDepthModelInfinite(false);
+    EXPECT_FALSE(m_ngx.IsDepthModelInfinite());
+    ReportLeftRightLeft();
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    EXPECT_FALSE(m_pass->corrections[0].current.infiniteDepth);
+    EXPECT_FLOAT_EQ(m_pass->corrections[0].current.farClip, 2000.0f);
+}
+
+TEST_F(MvCorrectionEvaluationTest, TheSelfCheckUsesTheSameDepthModelAsTheCorrection) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    m_ngx.ArmDiagnostics(8);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
+    EXPECT_TRUE(m_pass->selfChecks[0].current.infiniteDepth);
+    EXPECT_FALSE(m_pass->selfChecks[0].previous.infiniteDepth);
+
+    m_ngx.SetDepthModelInfinite(false);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(m_pass->selfChecks.size(), 2u);
+    EXPECT_FALSE(m_pass->selfChecks[1].current.infiniteDepth);
+}
+
+TEST_F(MvCorrectionEvaluationTest, TheSelfCheckOnAFrameWithoutCorrectionAlsoUsesTheDepthModel) {
+    // An eye order swap is not corrected, but its self-check still reads this frame's depth.
+    SetUpCorrection();
+    CameraRecordStore& cameras = m_bridge.GetCameraRecords();
+    ASSERT_TRUE(cameras.Report(DiagCamera(0, 10.0)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
+    cameras.AdvanceFrame();
+    ASSERT_TRUE(cameras.Report(DiagCamera(1, 10.064)));
+    m_bridge.SetSubPassIndex(1);
+    m_ngx.ArmDiagnostics(4);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
+    EXPECT_TRUE(m_pass->selfChecks[0].current.infiniteDepth);
+}
+
+TEST_F(MvCorrectionEvaluationTest, TheProjectionTheCorrectionIsFedIsLoggedOncePerArmingWithItsSource) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    auto count = [&]() {
+        const std::string log = Log();
+        size_t n = 0;
+        for (size_t at = log.find("MvProjection"); at != std::string::npos; at = log.find("MvProjection", at + 1)) ++n;
+        return n;
+    };
+    m_ngx.ArmDiagnostics(0); // creating the feature armed the diagnostics
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(count(), 0u) << "not armed";
+
+    m_ngx.ArmDiagnostics(8);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(count(), 1u);
+    // fovY 1.0 rad: tan(0.5) = 0.546; a 1920x1080 render: aspect 1.778; the record carries no offset.
+    EXPECT_NE(Log().find("NgxInterceptor: [Diag] MvProjection Eye=0 Eval #1: used=camera-record nearClip=0.150 "
+                         "farClip=2000.000 fovY=1.000 tanHalfFovY=0.546 projOffset=(0.000, 0.000) aspect=1.778 "
+                         "depthModel=infinite"),
+              std::string::npos) << Log();
+
+    m_ngx.ArmDiagnostics(8);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(count(), 2u);
+}
+
+TEST_F(MvCorrectionEvaluationTest, TheFiniteDepthModelIsNamedInTheProjectionLine) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    m_ngx.SetDepthModelInfinite(false);
+    m_ngx.ArmDiagnostics(8);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_NE(Log().find("aspect=1.778 depthModel=finite"), std::string::npos) << Log();
+}
+
 } // namespace
 
 } // namespace fs25vr

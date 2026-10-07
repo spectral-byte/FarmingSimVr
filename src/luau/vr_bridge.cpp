@@ -883,6 +883,19 @@ int VRBridge::Lua_SetDlssMvFix(lua_State* L) {
     return 1;
 }
 
+int VRBridge::Lua_SetDlssDepthModel(lua_State* L) {
+    bool infinite = lua_toboolean(L, 1) != 0;
+    VRBridge* self = &FromUpvalue(L);
+    // No NGX interceptor wired: there is no correction to switch.
+    if (!self->m_ngxInterceptor) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    self->m_ngxInterceptor->SetDepthModelInfinite(infinite);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int VRBridge::Lua_DlssDiag(lua_State* L) {
     int evaluations = lua_isnumber(L, 1) ? static_cast<int>(lua_tointeger(L, 1))
                                          : static_cast<int>(NgxInterceptor::kDefaultDiagEvaluations);

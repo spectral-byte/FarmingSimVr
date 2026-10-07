@@ -949,6 +949,43 @@ TEST_F(CompanionModTest, DlssMvFixConsoleCommandSwitchesTheMotionVectorPass) {
     EXPECT_FALSE(ngx->IsMvFixEnabled());
 }
 
+TEST_F(CompanionModTest, DlssDepthModelConsoleCommandSwitchesTheDepthModel) {
+    auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
+    fs25vr::VRBridge bridge(nullptr, ngx);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    EXPECT_TRUE(ngx->IsDepthModelInfinite()); // the default
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName }
+        end
+        _G.removeConsoleCommand = function() end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrDlssDepthModel"] ~= nil, "vrDlssDepthModel must be registered on map load")
+        assert(registeredCommands["vrDlssDepthModel"].funcName == "consoleCommandDlssDepthModel", "wrong callback")
+
+        assert(string.find(VRCompanion:consoleCommandDlssDepthModel(), "Usage: vrDlssDepthModel") ~= nil, "no argument must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssDepthModel("reverse"), "Usage: vrDlssDepthModel") ~= nil, "bad argument must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssDepthModel("finite"), "is finite") ~= nil, "finite must report finite")
+    )luau", "=testDlssDepthModelFinite"), 0);
+    EXPECT_FALSE(ngx->IsDepthModelInfinite());
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(string.find(VRCompanion:consoleCommandDlssDepthModel("Infinite"), "is infinite") ~= nil, "infinite must report infinite")
+    )luau", "=testDlssDepthModelInfinite"), 0);
+    EXPECT_TRUE(ngx->IsDepthModelInfinite());
+}
+
 TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;

@@ -761,6 +761,42 @@ std::string FormatMvSelfCheckReport(const char* logPrefix, const char* unit, con
     return ss.str();
 }
 
+namespace {
+
+void AppendNumber(std::stringstream& ss, float v) {
+    if (v >= 1e30f) ss << "max";
+    else ss << v;
+}
+
+} // namespace
+
+std::string FormatMvProjectionLine(const char* logPrefix, const char* unit, uint32_t eye, uint64_t index,
+                                   const MvProjectionDiag& d) {
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(3)
+       << logPrefix << ": [Diag] MvProjection Eye=" << eye << " " << unit << " #" << index
+       << ": used=" << d.source << " nearClip=" << d.used.nearClip << " farClip=" << d.used.farClip
+       << " fovY=" << d.used.fovY << " tanHalfFovY=" << std::tan(d.used.fovY * 0.5f)
+       << " projOffset=(" << d.projOffsetX << ", " << d.projOffsetY << ") aspect=" << d.aspect
+       << " depthModel=" << (d.infinite ? "infinite" : "finite") << " depthSource=" << d.depthSource;
+    if (d.hasComparison) {
+        ss << " dispatch{nearClip=";
+        AppendNumber(ss, d.dispatchRaw.nearClip);
+        ss << " farClip=";
+        AppendNumber(ss, d.dispatchRaw.farClip);
+        ss << " fovY=" << d.dispatchRaw.fovY << " viewSpaceToMeters=" << d.viewSpaceToMeters << "}"
+           << " record{nearClip=" << d.record.nearClip << " farClip=" << d.record.farClip
+           << " fovY=" << d.record.fovY << " tanHalfFovY=" << std::tan(d.record.fovY * 0.5f) << "}";
+        if (std::string(d.source) == "dispatch-desc") {
+            ss << " recordMinusDispatch{nearClip=" << (d.record.nearClip - d.used.nearClip)
+               << " fovY=" << (d.record.fovY - d.used.fovY) << "}";
+        } else {
+            ss << " recordMinusDispatch=n/a (dispatch fields unusable)";
+        }
+    }
+    return ss.str();
+}
+
 std::string FormatMvRawRangeReport(const char* logPrefix, const char* unit, const MvSelfCheckReport& report) {
     const mvreproj::SelfCheckStats& s = report.stats;
     std::stringstream ss;

@@ -143,6 +143,7 @@ private:
 
     std::atomic<uint32_t> m_diagRemaining{0};
     std::atomic<bool> m_diagRawRangeLogged{false}; // the raw MV range line, once per arming
+    std::atomic<bool> m_diagProjectionLogged{false}; // the MvProjection line, once per arming
     mutable std::mutex m_diagMutex;
     std::vector<DiagSample> m_diagSamples[2];
     int m_diagLastContext = -1;

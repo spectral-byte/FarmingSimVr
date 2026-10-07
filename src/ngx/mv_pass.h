@@ -53,6 +53,33 @@ std::string FormatMvRawRangeReport(const char* logPrefix, const char* unit, cons
 std::string FormatMvSelfCheckSkipped(const char* logPrefix, const char* unit, uint32_t eye, uint64_t index,
                                      const std::string& reason);
 
+// The projection one correction is fed, for the once-per-arming "[Diag] MvProjection" line. `used` is what
+// the pass gets for the current camera; the comparison block (FSR3 only) puts the dispatch description's
+// raw camera fields next to the Companion Mod's camera record so a mismatch between the record and the
+// renderer's real projection is visible.
+struct MvProjectionSide {
+    float nearClip = 0.0f;
+    float farClip = 0.0f;
+    float fovY = 0.0f;
+};
+
+struct MvProjectionDiag {
+    const char* source = "camera-record"; // where `used` came from: "camera-record" or "dispatch-desc"
+    MvProjectionSide used;
+    float projOffsetX = 0.0f; // the record's; the correction ignores it
+    float projOffsetY = 0.0f;
+    float aspect = 1.0f;      // render width / render height
+    bool infinite = false;
+    const char* depthSource = ""; // what chose the depth model ("vrDlssDepthModel", "create-flags")
+    bool hasComparison = false;
+    MvProjectionSide dispatchRaw;  // cameraNear / cameraFar / cameraFovAngleVertical as the game passed them
+    float viewSpaceToMeters = 0.0f;
+    MvProjectionSide record;
+};
+
+std::string FormatMvProjectionLine(const char* logPrefix, const char* unit, uint32_t eye, uint64_t index,
+                                   const MvProjectionDiag& d);
+
 // Asks the pass to re-aim the engine's motion vectors from the previous rendered frame's camera at the
 // same eye's previous camera (see mv_reprojection.h). Absent (null) means the pass output is a plain
 // copy of the engine's vectors. The pass fills in the render aspect itself.

@@ -471,6 +471,13 @@ void NgxInterceptor::DetachAll() {
     }
     m_mvFixEnabled.store(false);
     m_mvFixDisabled.store(false);
+    m_depthModelInfinite.store(true);
+}
+
+void NgxInterceptor::SetDepthModelInfinite(bool infinite) {
+    if (m_depthModelInfinite.exchange(infinite) != infinite) {
+        LogInfo(std::string("NgxInterceptor: Depth model (vrDlssDepthModel) ") + (infinite ? "infinite" : "finite"));
+    }
 }
 
 bool NgxInterceptor::SetMvFixEnabled(bool enabled) {
@@ -580,6 +587,7 @@ void NgxInterceptor::ArmDiagnostics(uint32_t evaluations) {
         m_diagLongestContextRun = 0;
     }
     m_diagRawRangeLogged.store(false);
+    m_diagProjectionLogged.store(false);
     m_diagRemaining.store(evaluations);
     LogInfo("NgxInterceptor: [Diag] Armed for " + std::to_string(evaluations) + " evaluations.");
 }
@@ -1190,8 +1198,11 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
             MvCorrectionRequest correctionRequest;
             const MvCorrectionRequest* correction = nullptr;
             correctionState = mvreproj::CorrectionDecisionName(plan.decision);
+            const bool infiniteDepth = interceptor.m_depthModelInfinite.load();
             if (plan.decision == mvreproj::CorrectionDecision::Correct) {
                 if (std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f) {
+                    // Only the camera that rendered the depth buffer reads it.
+                    plan.current.infiniteDepth = infiniteDepth;
                     correctionRequest.mvScaleX = effScaleX;
                     correctionRequest.mvScaleY = effScaleY;
                     correctionRequest.current = plan.current;
@@ -1223,7 +1234,23 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                 if (bridge && BuildMvSelfCheckRequest(bridge->GetCameraRecords().Resolve(checkEye), checkEye, evalIndex,
                                                       prevScaleX * scaleMulX, prevScaleY * scaleMulY,
                                                       correction ? &plan : nullptr, checkRequest, skipReason)) {
+                    checkRequest.current.infiniteDepth = infiniteDepth;
                     check = &checkRequest;
+                    if (!interceptor.m_diagProjectionLogged.exchange(true)) {
+                        const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(checkEye);
+                        unsigned int renderW = 0, renderH = 0;
+                        mutableParams->Get(NVSDK_NGX_Parameter_Width, &renderW);
+                        mutableParams->Get(NVSDK_NGX_Parameter_Height, &renderH);
+                        MvProjectionDiag diag;
+                        diag.source = "camera-record";
+                        diag.used = {resolved.current->nearClip, resolved.current->farClip, resolved.current->fovY};
+                        diag.projOffsetX = resolved.current->projOffsetX;
+                        diag.projOffsetY = resolved.current->projOffsetY;
+                        diag.aspect = renderH ? static_cast<float>(renderW) / static_cast<float>(renderH) : 1.0f;
+                        diag.infinite = infiniteDepth;
+                        diag.depthSource = "vrDlssDepthModel";
+                        LogInfo(FormatMvProjectionLine("NgxInterceptor", "Eval", checkEye, evalIndex, diag));
+                    }
                 } else {
                     if (!bridge) skipReason = "no VR bridge";
                     LogInfo(FormatMvSelfCheckSkipped("NgxInterceptor", "Eval", checkEye, evalIndex, skipReason));

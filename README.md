@@ -75,7 +75,7 @@ FS25 VR is built as a hybrid two-tier architecture:
     | FSR3 | Supported. Per-eye history with the same per-eye motion vector correction as DLSS (`vrDlssMvFix`, ADR-0020), using the conventions in FSR3's own dispatch description: sharp, no ghosting once the correction is on. The second-sub-pass object-motion caveat applies. | Per-eye history with the same motion vector correction (`vrDlssMvFix`); object motion is scaled by the two-frame stride. |
     | In-engine TAA | Not supported in VR: one history is shared across eyes and ghosts. Use DLSS/DLAA or FSR3. | Not supported in VR (ghosts). |
 
-    `vrDlssMvFix on|off` switches the per-eye motion vector correction for DLSS and FSR3 (the `vrDlssMv*` names cover both upscalers; `vrDlssMvScale` is DLSS only) (off by default until verified in game; with it off, FSR3 under Sequential Dual-Pass has per-eye history but soft fine texture). `vrDlssDiag` also logs FSR3 dispatches and, while the correction is on, the motion vector self-check for them.
+    `vrDlssMvFix on|off` switches the per-eye motion vector correction for DLSS and FSR3 (the `vrDlssMv*` names cover both upscalers; `vrDlssMvScale` is DLSS only) (off by default until verified in game; with it off, FSR3 under Sequential Dual-Pass has per-eye history but soft fine texture). `vrDlssDepthModel infinite|finite` (default infinite) picks the depth model the DLSS correction reads the engine depth with (FSR3 reads its own create flags). `vrDlssDiag` also logs a one-time `[Diag] MvProjection` line with the projection fed to the correction (FSR3 shows the dispatch fields next to the camera record), and logs FSR3 dispatches and, while the correction is on, the motion vector self-check for them.
 - **6DOF Head Tracking**: Positional and rotational tracking for both on-foot locomotion and vehicle cockpits with collinear translation and decoupled look yaw rotation.
 - **Symmetric Projection (default) with opt-in Oblique Frustum**: The Injector submits an aspect-matched symmetric FOV and the Companion Mod applies no projection offset by default. Per-eye asymmetric offsets computed from headset optics are available via `vrObliqueProjection true` or `<allowObliqueProjection>true</allowObliqueProjection>` in `settings.xml` (see ADR-0005).
 - **Temporal Upscaler Virtualization**:
@@ -92,7 +92,7 @@ FS25 VR is built as a hybrid two-tier architecture:
   - Alpha-blended hardware mouse cursor projected accurately onto the floating quad.
   - Dynamic quad centering and 6DOF background showroom tracking.
 - **In-Engine 2D View Toggle**: Instant hotkey toggle between full 3D VR and a 2D floating virtual screen for comfortable cutscene or menu viewing.
-- **Snap Turn Locomotion**: Instant rotational increments (configurable 30°, 45°, 90°) for both on-foot walking and in-cab vehicle driving.
+- **Snap Turn Locomotion**: Instant rotational increments (configurable 30Â°, 45Â°, 90Â°) for both on-foot walking and in-cab vehicle driving.
 - **Desktop Mirror Window Decoupling**: Renders at native headset resolution while maintaining an unscaled, clamped desktop mirror window without aspect ratio distortion.
 
 ---
@@ -107,7 +107,7 @@ FS25 VR is built as a hybrid two-tier architecture:
   - Meta Quest 2 / 3 / Pro (via Quest Link, AirLink, or Virtual Desktop)
   - Valve Index, HTC Vive, Bigscreen Beyond (via SteamVR)
   - Pimax headsets (via PimaxXR / OpenXR runtime)
-- **Software Prerequisites**: Microsoft Visual C++ 2015–2022 Redistributable (x64)
+- **Software Prerequisites**: Microsoft Visual C++ 2015â€“2022 Redistributable (x64)
 
 ### Step 1: Install the Native Injector (`dxgi.dll`)
 

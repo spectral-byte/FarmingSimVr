@@ -473,6 +473,29 @@ function VRCompanion:consoleCommandDlssMvFix(arg)
     end
 end
 
+function VRCompanion:consoleCommandDlssDepthModel(arg)
+    local value = arg ~= nil and string.lower(tostring(arg)) or ""
+    local infinite
+    if value == "infinite" then
+        infinite = true
+    elseif value == "finite" then
+        infinite = false
+    else
+        return "Usage: vrDlssDepthModel <infinite|finite> (depth model the DLSS motion vector correction reads; default infinite)"
+    end
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.setDlssDepthModel) == "function" then
+        if bridge.setDlssDepthModel(infinite) then
+            local state = infinite and "infinite" or "finite"
+            print(string.format("[FS25_VR] DLSS depth model (vrDlssDepthModel) is %s", state))
+            return string.format("DLSS depth model (vrDlssDepthModel) is %s", state)
+        end
+        return "DLSS depth model unavailable (no NGX interceptor)."
+    else
+        return "VRBridge.setDlssDepthModel is not available."
+    end
+end
+
 function VRCompanion:consoleCommandDlssDiag(countStr)
     local count = tonumber(countStr) or 128
     local bridge = VRBridge or (_G and _G.VRBridge)
@@ -570,7 +593,8 @@ VRCompanion.Input.consoleCommandSetDlssSharpness = function(self, ...) return VR
 VRCompanion.Input.consoleCommandSetDlssPreset = function(self, ...) return VRCompanion.consoleCommandSetDlssPreset(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetDlssSdpMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssSdpMvScale(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandDlssMvFix = function(self, ...) return VRCompanion.consoleCommandDlssMvFix(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssDiag = function(self, ...) return VRCompanion.consoleCommandDlssDiag(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssDepthModel = function(self, ...) return VRCompanion.consoleCommandDlssDepthModel(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssDiag =function(self, ...) return VRCompanion.consoleCommandDlssDiag(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetRenderingMode = function(self, ...) return VRCompanion.consoleCommandSetRenderingMode(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetObliqueProjection = function(self, ...) return VRCompanion.consoleCommandSetObliqueProjection(VRCompanion, ...) end
 

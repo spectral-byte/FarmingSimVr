@@ -5,7 +5,11 @@
 #include "luau/vr_bridge.h"
 #include "ngx/mv_pass.h"
 #include "ngx/ngx_interceptor.h"
+#include "core/logger.h"
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <vector>
@@ -920,6 +924,94 @@ TEST_F(FfxMvCorrectionTest, FiniteDepthContextsDoNotRequestInfiniteDepth) {
     ASSERT_NE(m_pass, nullptr);
     ASSERT_EQ(m_pass->corrections.size(), 1u);
     EXPECT_FALSE(m_pass->corrections[0].current.infiniteDepth);
+}
+
+TEST(MvProjectionLineTest, ShowsTheDispatchAndTheRecordSideBySideWithTheirDifference) {
+    MvProjectionDiag d;
+    d.source = "dispatch-desc";
+    d.used = {0.2f, 0.0f, 0.8f};
+    d.projOffsetX = 0.01f;
+    d.projOffsetY = -0.02f;
+    d.aspect = 1920.0f / 1080.0f;
+    d.infinite = true;
+    d.depthSource = "create-flags";
+    d.hasComparison = true;
+    d.dispatchRaw = {0.2f, std::numeric_limits<float>::max(), 0.8f};
+    d.viewSpaceToMeters = 1.0f;
+    d.record = {0.15f, 2000.0f, 1.0f};
+    // tan(0.4) = 0.423, tan(0.5) = 0.546, 1920 / 1080 = 1.778, 0.15 - 0.2 = -0.05, 1.0 - 0.8 = 0.2
+    EXPECT_EQ(FormatMvProjectionLine("FidelityFxInterceptor", "Dispatch", 0, 3, d),
+              "FidelityFxInterceptor: [Diag] MvProjection Eye=0 Dispatch #3: used=dispatch-desc nearClip=0.200 "
+              "farClip=0.000 fovY=0.800 tanHalfFovY=0.423 projOffset=(0.010, -0.020) aspect=1.778 "
+              "depthModel=infinite depthSource=create-flags dispatch{nearClip=0.200 farClip=max fovY=0.800 "
+              "viewSpaceToMeters=1.000} record{nearClip=0.150 farClip=2000.000 fovY=1.000 tanHalfFovY=0.546} "
+              "recordMinusDispatch{nearClip=-0.050 fovY=0.200}");
+}
+
+TEST(MvProjectionLineTest, SaysSoWhenTheDispatchFieldsWereUnusable) {
+    MvProjectionDiag d;
+    d.source = "camera-record";
+    d.used = {0.15f, 2000.0f, 1.0f};
+    d.aspect = 2.0f;
+    d.infinite = false;
+    d.depthSource = "create-flags";
+    d.hasComparison = true;
+    d.dispatchRaw = {0.0f, 0.0f, 0.0f};
+    d.viewSpaceToMeters = 0.0f;
+    d.record = {0.15f, 2000.0f, 1.0f};
+    const std::string line = FormatMvProjectionLine("FidelityFxInterceptor", "Dispatch", 1, 9, d);
+    EXPECT_NE(line.find("used=camera-record nearClip=0.150 farClip=2000.000 fovY=1.000 tanHalfFovY=0.546 "
+                        "projOffset=(0.000, 0.000) aspect=2.000 depthModel=finite depthSource=create-flags"),
+              std::string::npos) << line;
+    EXPECT_NE(line.find("dispatch{nearClip=0.000 farClip=0.000 fovY=0.000 viewSpaceToMeters=0.000}"), std::string::npos) << line;
+    EXPECT_NE(line.find("recordMinusDispatch=n/a"), std::string::npos) << line;
+}
+
+class FfxMvProjectionDiagTest : public FfxMvCorrectionTest {
+protected:
+    std::filesystem::path m_logPath;
+    void SetUp() override {
+        FfxMvCorrectionTest::SetUp();
+        m_logPath = std::filesystem::temp_directory_path() / "fs25vr_ffx_mvprojection_test.log";
+        Logger::Instance().SetLogFile(m_logPath);
+    }
+    void TearDown() override {
+        FfxMvCorrectionTest::TearDown();
+        Logger::Instance().SetLogFile(Logger::DefaultLogPath());
+        std::filesystem::remove(m_logPath);
+    }
+    std::string Log() {
+        Logger::Instance().Flush();
+        std::ifstream in(m_logPath, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+};
+
+TEST_F(FfxMvProjectionDiagTest, TheDispatchAndRecordProjectionsAreLoggedOncePerArming) {
+    ffxContext context = nullptr;
+    auto createDesc = MakeUpscaleCreateDesc(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_DEPTH_INFINITE);
+    ASSERT_EQ(MockCreate(&context, &createDesc.header, nullptr), FFX_API_RETURN_OK);
+    m_ffx.ArmDiagnostics(0); // creating a context arms the diagnostics
+    SetUpSdpWithRecords();
+    m_ngxShared->SetMvFixEnabled(true);
+    auto desc = MakeDesc();
+    desc.cameraNear = 0.2f;
+    desc.cameraFar = std::numeric_limits<float>::max();
+    Dispatch(context, desc);
+    EXPECT_EQ(Log().find("MvProjection"), std::string::npos) << "not armed";
+
+    m_ffx.ArmDiagnostics(8);
+    Dispatch(context, desc);
+    Dispatch(context, desc);
+    const std::string log = Log();
+    const size_t first = log.find("[Diag] MvProjection");
+    ASSERT_NE(first, std::string::npos) << log;
+    EXPECT_EQ(log.find("[Diag] MvProjection", first + 1), std::string::npos) << "once per arming";
+    // The dispatch says near 0.2, fovY 0.8; the record says near 0.15, fovY 1.0 rad.
+    EXPECT_NE(log.find("used=dispatch-desc nearClip=0.200"), std::string::npos) << log;
+    EXPECT_NE(log.find("depthModel=infinite depthSource=create-flags"), std::string::npos) << log;
+    EXPECT_NE(log.find("record{nearClip=0.150 farClip=2000.000 fovY=1.000"), std::string::npos) << log;
+    EXPECT_NE(log.find("recordMinusDispatch{nearClip=-0.050 fovY=0.200}"), std::string::npos) << log;
 }
 
 TEST_F(FfxMvCorrectionTest, DispatchWithoutCommandListOrInputsPassesThroughWithoutDisabling) {

@@ -195,6 +195,27 @@ bool FidelityFxInterceptor::ApplyMvCorrection(ffxDispatchDescUpscale& desc, uint
         }
         LogInfo("FidelityFxInterceptor: [Diag] MvCorrection Dispatch #" + std::to_string(dispatchIndex) + " Eye=" +
                 std::to_string(eye) + ": " + state);
+        if (resolved.current && !m_diagProjectionLogged.exchange(true)) {
+            const CameraRecord& rec = *resolved.current;
+            MvProjectionDiag diag;
+            diag.source = conventions.hasProjection ? "dispatch-desc" : "camera-record";
+            diag.used = conventions.hasProjection
+                            ? MvProjectionSide{conventions.nearClip, conventions.farClip,
+                                               2.0f * std::atan(conventions.tanHalfFovY)}
+                            : MvProjectionSide{rec.nearClip, rec.farClip, rec.fovY};
+            diag.projOffsetX = rec.projOffsetX;
+            diag.projOffsetY = rec.projOffsetY;
+            diag.aspect = desc.renderSize.height
+                              ? static_cast<float>(desc.renderSize.width) / static_cast<float>(desc.renderSize.height)
+                              : 1.0f;
+            diag.infinite = conventions.depthInfinite;
+            diag.depthSource = "create-flags";
+            diag.hasComparison = true;
+            diag.dispatchRaw = {desc.cameraNear, desc.cameraFar, desc.cameraFovAngleVertical};
+            diag.viewSpaceToMeters = desc.viewSpaceToMetersFactor;
+            diag.record = {rec.nearClip, rec.farClip, rec.fovY};
+            LogInfo(FormatMvProjectionLine("FidelityFxInterceptor", "Dispatch", eye, dispatchIndex, diag));
+        }
     }
 
     MvPassInputs inputs;
@@ -393,6 +414,7 @@ void FidelityFxInterceptor::ArmDiagnostics(uint32_t dispatches) {
         m_diagLongestContextRun = 0;
     }
     m_diagRawRangeLogged.store(false);
+    m_diagProjectionLogged.store(false);
     m_diagRemaining.store(dispatches);
     LogInfo("FidelityFxInterceptor: [Diag] Armed for " + std::to_string(dispatches) + " dispatches.");
 }

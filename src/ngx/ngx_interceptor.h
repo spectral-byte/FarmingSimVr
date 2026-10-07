@@ -182,6 +182,12 @@ public:
     bool IsMvFixEnabled() const { return m_mvFixEnabled.load(); }
     bool IsMvFixDisabledForSession() const { return m_mvFixDisabled.load(); }
     std::string GetMvFixDisableReason() const;
+    // Depth model the correction and the self-check read the engine's depth with (vrDlssDepthModel).
+    // Infinite (the default): reverse-Z with an infinite far plane, view depth = near / depth, the model
+    // the engine's FSR3 path declares (FFX_UPSCALE_ENABLE_DEPTH_INFINITE) and the same renderer feeds
+    // DLSS. Finite: reverse-Z between the camera record's near and far planes. For A/B comparison.
+    void SetDepthModelInfinite(bool infinite);
+    bool IsDepthModelInfinite() const { return m_depthModelInfinite.load(); }
     // Replace how the pass is created (tests install a fake). Defaults to the D3D12 implementation.
     void SetMotionVectorPassFactory(MotionVectorPassFactory factory);
     const char* DescribeMvFixState() const;
@@ -252,6 +258,8 @@ private:
                                  const MvCorrectionRequest* correction = nullptr);
     void DisableMvFix(const std::string& reason);
 
+    std::atomic<bool> m_depthModelInfinite{true};
+    std::atomic<bool> m_diagProjectionLogged{false}; // the MvProjection line, once per arming
     std::atomic<bool> m_mvFixEnabled{false};
     std::atomic<bool> m_mvFixDisabled{false};
     mutable std::mutex m_mvFixMutex;
