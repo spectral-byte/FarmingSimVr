@@ -188,6 +188,10 @@ public:
     // DLSS. Finite: reverse-Z between the camera record's near and far planes. For A/B comparison.
     void SetDepthModelInfinite(bool infinite);
     bool IsDepthModelInfinite() const { return m_depthModelInfinite.load(); }
+    // Near plane override in metres (vrDlssNearClip) for the correction and the self-check, on every camera.
+    // 0 (the default) uses the camera record's near; negative or non-finite values count as 0.
+    void SetNearClipOverride(float meters);
+    float GetNearClipOverride() const { return m_nearClipOverride.load(); }
     // Replace how the pass is created (tests install a fake). Defaults to the D3D12 implementation.
     void SetMotionVectorPassFactory(MotionVectorPassFactory factory);
     const char* DescribeMvFixState() const;
@@ -259,6 +263,7 @@ private:
     void DisableMvFix(const std::string& reason);
 
     std::atomic<bool> m_depthModelInfinite{true};
+    std::atomic<float> m_nearClipOverride{0.0f};
     std::atomic<bool> m_diagProjectionLogged{false}; // the MvProjection line, once per arming
     std::atomic<bool> m_mvFixEnabled{false};
     std::atomic<bool> m_mvFixDisabled{false};

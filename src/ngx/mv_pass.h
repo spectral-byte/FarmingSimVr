@@ -71,6 +71,8 @@ struct MvProjectionDiag {
     float aspect = 1.0f;      // render width / render height
     bool infinite = false;
     const char* depthSource = ""; // what chose the depth model ("vrDlssDepthModel", "create-flags")
+    bool hasRecordNear = false; // set to get a hint when source is "override" and the record's near differs
+    float recordNear = 0.0f;
     bool hasComparison = false;
     MvProjectionSide dispatchRaw;  // cameraNear / cameraFar / cameraFovAngleVertical as the game passed them
     float viewSpaceToMeters = 0.0f;

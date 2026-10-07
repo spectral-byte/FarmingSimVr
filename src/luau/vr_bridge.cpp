@@ -896,6 +896,18 @@ int VRBridge::Lua_SetDlssDepthModel(lua_State* L) {
     return 1;
 }
 
+int VRBridge::Lua_SetDlssNearClip(lua_State* L) {
+    float meters = static_cast<float>(luaL_checknumber(L, 1));
+    VRBridge* self = &FromUpvalue(L);
+    if (!self->m_ngxInterceptor) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    self->m_ngxInterceptor->SetNearClipOverride(meters);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int VRBridge::Lua_DlssDiag(lua_State* L) {
     int evaluations = lua_isnumber(L, 1) ? static_cast<int>(lua_tointeger(L, 1))
                                          : static_cast<int>(NgxInterceptor::kDefaultDiagEvaluations);

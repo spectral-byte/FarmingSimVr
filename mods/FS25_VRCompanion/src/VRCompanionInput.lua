@@ -496,6 +496,25 @@ function VRCompanion:consoleCommandDlssDepthModel(arg)
     end
 end
 
+function VRCompanion:consoleCommandDlssNearClip(arg)
+    local meters = tonumber(arg)
+    if meters == nil or meters < 0 then
+        return "Usage: vrDlssNearClip <meters> (near plane the DLSS motion vector correction assumes; 0 = use the camera record's near, the default)"
+    end
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.setDlssNearClip) == "function" then
+        if bridge.setDlssNearClip(meters) then
+            local text = meters > 0 and string.format("DLSS near plane override (vrDlssNearClip) is %.3f m", meters)
+                or "DLSS near plane override (vrDlssNearClip) is off: using the camera record's near"
+            print("[FS25_VR] " .. text)
+            return text
+        end
+        return "DLSS near plane override unavailable (no NGX interceptor)."
+    else
+        return "VRBridge.setDlssNearClip is not available."
+    end
+end
+
 function VRCompanion:consoleCommandDlssDiag(countStr)
     local count = tonumber(countStr) or 128
     local bridge = VRBridge or (_G and _G.VRBridge)
@@ -594,7 +613,8 @@ VRCompanion.Input.consoleCommandSetDlssPreset = function(self, ...) return VRCom
 VRCompanion.Input.consoleCommandSetDlssSdpMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssSdpMvScale(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandDlssMvFix = function(self, ...) return VRCompanion.consoleCommandDlssMvFix(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandDlssDepthModel = function(self, ...) return VRCompanion.consoleCommandDlssDepthModel(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssDiag =function(self, ...) return VRCompanion.consoleCommandDlssDiag(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssNearClip = function(self, ...) return VRCompanion.consoleCommandDlssNearClip(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssDiag = function(self, ...) return VRCompanion.consoleCommandDlssDiag(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetRenderingMode = function(self, ...) return VRCompanion.consoleCommandSetRenderingMode(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetObliqueProjection = function(self, ...) return VRCompanion.consoleCommandSetObliqueProjection(VRCompanion, ...) end
 

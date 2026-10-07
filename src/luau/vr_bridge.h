@@ -128,6 +128,7 @@ public:
     static int Lua_DlssDiag(lua_State* L);
     static int Lua_SetDlssMvFix(lua_State* L);
     static int Lua_SetDlssDepthModel(lua_State* L);
+    static int Lua_SetDlssNearClip(lua_State* L);
     static int Lua_SetDlssSdpMvScale(lua_State* L);
     // reportCameraRecord(eye, x, y, z, qx, qy, qz, qw, fovY, nearClip, farClip, projOffsetX, projOffsetY)
     static int Lua_ReportCameraRecord(lua_State* L);
@@ -194,6 +195,7 @@ public:
         {"reportCameraRecord", &Lua_ReportCameraRecord},
         {"setDlssMvFix", &Lua_SetDlssMvFix},
         {"setDlssDepthModel", &Lua_SetDlssDepthModel},
+        {"setDlssNearClip", &Lua_SetDlssNearClip},
     };
 
     // 1 version property + one field per table entry.

@@ -986,6 +986,42 @@ TEST_F(CompanionModTest, DlssDepthModelConsoleCommandSwitchesTheDepthModel) {
     EXPECT_TRUE(ngx->IsDepthModelInfinite());
 }
 
+TEST_F(CompanionModTest, DlssNearClipConsoleCommandSetsTheOverride) {
+    auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
+    fs25vr::VRBridge bridge(nullptr, ngx);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName }
+        end
+        _G.removeConsoleCommand = function() end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrDlssNearClip"] ~= nil, "vrDlssNearClip must be registered on map load")
+        assert(registeredCommands["vrDlssNearClip"].funcName == "consoleCommandDlssNearClip", "wrong callback")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip(), "Usage: vrDlssNearClip") ~= nil, "no argument must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("abc"), "Usage: vrDlssNearClip") ~= nil, "bad argument must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("-1"), "Usage: vrDlssNearClip") ~= nil, "negative must return usage")
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("0.1"), "0.100") ~= nil, "must report the override")
+    )luau", "=testDlssNearClipSet"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.1f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(string.find(VRCompanion:consoleCommandDlssNearClip("0"), "camera record") ~= nil, "0 must report the record's near")
+    )luau", "=testDlssNearClipZero"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.0f);
+}
+
 TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;

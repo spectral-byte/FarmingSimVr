@@ -472,6 +472,15 @@ void NgxInterceptor::DetachAll() {
     m_mvFixEnabled.store(false);
     m_mvFixDisabled.store(false);
     m_depthModelInfinite.store(true);
+    m_nearClipOverride.store(0.0f);
+}
+
+void NgxInterceptor::SetNearClipOverride(float meters) {
+    if (!std::isfinite(meters) || meters < 0.0f) meters = 0.0f;
+    if (m_nearClipOverride.exchange(meters) != meters) {
+        LogInfo("NgxInterceptor: Near plane override (vrDlssNearClip) " +
+                (meters > 0.0f ? std::to_string(meters) + " m" : std::string("off (camera record)")));
+    }
 }
 
 void NgxInterceptor::SetDepthModelInfinite(bool infinite) {
@@ -1199,10 +1208,14 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
             const MvCorrectionRequest* correction = nullptr;
             correctionState = mvreproj::CorrectionDecisionName(plan.decision);
             const bool infiniteDepth = interceptor.m_depthModelInfinite.load();
+            const float nearOverride = interceptor.m_nearClipOverride.load();
             if (plan.decision == mvreproj::CorrectionDecision::Correct) {
                 if (std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f) {
                     // Only the camera that rendered the depth buffer reads it.
                     plan.current.infiniteDepth = infiniteDepth;
+                    if (nearOverride > 0.0f) {
+                        plan.current.nearClip = plan.previousFrame.nearClip = plan.sameEye.nearClip = nearOverride;
+                    }
                     correctionRequest.mvScaleX = effScaleX;
                     correctionRequest.mvScaleY = effScaleY;
                     correctionRequest.current = plan.current;
@@ -1235,6 +1248,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                                                       prevScaleX * scaleMulX, prevScaleY * scaleMulY,
                                                       correction ? &plan : nullptr, checkRequest, skipReason)) {
                     checkRequest.current.infiniteDepth = infiniteDepth;
+                    if (nearOverride > 0.0f) checkRequest.current.nearClip = checkRequest.previous.nearClip = nearOverride;
                     check = &checkRequest;
                     if (!interceptor.m_diagProjectionLogged.exchange(true)) {
                         const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(checkEye);
@@ -1242,8 +1256,11 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
                         mutableParams->Get(NVSDK_NGX_Parameter_Width, &renderW);
                         mutableParams->Get(NVSDK_NGX_Parameter_Height, &renderH);
                         MvProjectionDiag diag;
-                        diag.source = "camera-record";
-                        diag.used = {resolved.current->nearClip, resolved.current->farClip, resolved.current->fovY};
+                        diag.source = nearOverride > 0.0f ? "override" : "camera-record";
+                        diag.used = {nearOverride > 0.0f ? nearOverride : resolved.current->nearClip,
+                                     resolved.current->farClip, resolved.current->fovY};
+                        diag.hasRecordNear = true;
+                        diag.recordNear = resolved.current->nearClip;
                         diag.projOffsetX = resolved.current->projOffsetX;
                         diag.projOffsetY = resolved.current->projOffsetY;
                         diag.aspect = renderH ? static_cast<float>(renderW) / static_cast<float>(renderH) : 1.0f;

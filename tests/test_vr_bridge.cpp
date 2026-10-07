@@ -994,6 +994,8 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
         assert(VRBridge.setDlssMvFix(true) == true, "setDlssMvFix on failed")
         assert(type(VRBridge.setDlssDepthModel) == "function", "setDlssDepthModel missing")
         assert(VRBridge.setDlssDepthModel(false) == true, "setDlssDepthModel finite failed")
+        assert(type(VRBridge.setDlssNearClip) == "function", "setDlssNearClip missing")
+        assert(VRBridge.setDlssNearClip(0.1) == true, "setDlssNearClip failed")
     )";
 
     EXPECT_EQ(RunLuauString(L, testScript), 0);
@@ -1006,6 +1008,7 @@ TEST_F(VrBridgeTest, ExposesDlssTuningFunctionsToLuau) {
     EXPECT_FLOAT_EQ(ngx->GetSdpMvScaleMultiplierY(), 0.25f);
     EXPECT_TRUE(ngx->IsMvFixEnabled());
     EXPECT_FALSE(ngx->IsDepthModelInfinite());
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.1f);
 
     EXPECT_EQ(RunLuauString(L, "assert(VRBridge.setDlssMvFix(false) == true, \"setDlssMvFix off failed\")"), 0);
     EXPECT_FALSE(ngx->IsMvFixEnabled());
@@ -1088,6 +1091,7 @@ TEST_F(VrBridgeTest, DlssTuningFunctionsReportFailureWithoutNgxInterceptor) {
         assert(VRBridge.dlssDiag(32) == false, "dlssDiag must fail without NGX")
         assert(VRBridge.setDlssMvFix(true) == false, "setDlssMvFix must fail without NGX")
         assert(VRBridge.setDlssDepthModel(true) == false, "setDlssDepthModel must fail without NGX")
+        assert(VRBridge.setDlssNearClip(0.1) == false, "setDlssNearClip must fail without NGX")
     )";
     EXPECT_EQ(RunLuauString(L, testScript), 0);
 }
@@ -1208,7 +1212,8 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "setDlssSdpMvScale",
         "reportCameraRecord",
         "setDlssMvFix",
-        "setDlssDepthModel"
+        "setDlssDepthModel",
+        "setDlssNearClip"
     };
 
     lua_getglobal(L, "VRBridge");

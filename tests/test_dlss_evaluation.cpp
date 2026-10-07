@@ -2294,6 +2294,44 @@ TEST_F(MvCorrectionEvaluationTest, TheProjectionTheCorrectionIsFedIsLoggedOncePe
     EXPECT_EQ(count(), 2u);
 }
 
+TEST_F(MvCorrectionEvaluationTest, ANearClipOverrideReplacesTheRecordsNearOnEveryCamera) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    EXPECT_FLOAT_EQ(m_ngx.GetNearClipOverride(), 0.0f); // default: the record's near
+    m_ngx.SetNearClipOverride(0.1f);
+    m_ngx.ArmDiagnostics(8);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+
+    ASSERT_EQ(m_pass->corrections.size(), 1u);
+    const MvCorrectionRequest& c = m_pass->corrections[0];
+    EXPECT_FLOAT_EQ(c.current.nearClip, 0.1f);
+    EXPECT_FLOAT_EQ(c.previousFrame.nearClip, 0.1f);
+    EXPECT_FLOAT_EQ(c.sameEye.nearClip, 0.1f);
+    ASSERT_EQ(m_pass->selfChecks.size(), 1u);
+    EXPECT_FLOAT_EQ(m_pass->selfChecks[0].current.nearClip, 0.1f);
+    EXPECT_FLOAT_EQ(m_pass->selfChecks[0].previous.nearClip, 0.1f);
+    EXPECT_FLOAT_EQ(c.current.farClip, 2000.0f); // only near is overridden
+
+    // The record says 0.15: 0.15 - 0.1 = 0.05.
+    EXPECT_NE(Log().find("used=override nearClip=0.100 farClip=2000.000"), std::string::npos) << Log();
+    EXPECT_NE(Log().find("recordNearClip=0.150 differs from the override by 0.050"), std::string::npos) << Log();
+}
+
+TEST_F(MvCorrectionEvaluationTest, ANearClipOverrideEqualToTheRecordsNearGivesNoHintAndZeroRestoresTheRecord) {
+    SetUpCorrection();
+    ReportLeftRightLeft();
+    m_ngx.SetNearClipOverride(0.15f);
+    m_ngx.ArmDiagnostics(8);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_EQ(Log().find("differs from the override"), std::string::npos) << Log();
+
+    m_ngx.SetNearClipOverride(0.0f);
+    MockEvaluateFeature(m_cmdList, m_handle, &m_params, nullptr);
+    EXPECT_FLOAT_EQ(m_pass->corrections.back().current.nearClip, 0.15f);
+    m_ngx.SetNearClipOverride(-3.0f); // not a distance: ignored like zero
+    EXPECT_FLOAT_EQ(m_ngx.GetNearClipOverride(), 0.0f);
+}
+
 TEST_F(MvCorrectionEvaluationTest, TheFiniteDepthModelIsNamedInTheProjectionLine) {
     SetUpCorrection();
     ReportLeftRightLeft();

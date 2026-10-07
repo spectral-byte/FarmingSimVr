@@ -779,6 +779,11 @@ std::string FormatMvProjectionLine(const char* logPrefix, const char* unit, uint
        << " fovY=" << d.used.fovY << " tanHalfFovY=" << std::tan(d.used.fovY * 0.5f)
        << " projOffset=(" << d.projOffsetX << ", " << d.projOffsetY << ") aspect=" << d.aspect
        << " depthModel=" << (d.infinite ? "infinite" : "finite") << " depthSource=" << d.depthSource;
+    if (d.hasRecordNear && std::string(d.source) == "override" &&
+        std::fabs(d.recordNear - d.used.nearClip) > 1e-4f) {
+        ss << " hint{recordNearClip=" << d.recordNear << " differs from the override by "
+           << (d.recordNear - d.used.nearClip) << " (record minus override)}";
+    }
     if (d.hasComparison) {
         ss << " dispatch{nearClip=";
         AppendNumber(ss, d.dispatchRaw.nearClip);
