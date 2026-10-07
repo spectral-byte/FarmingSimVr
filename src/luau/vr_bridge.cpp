@@ -2,6 +2,7 @@
 #include "core/logger.h"
 #include "core/thread_trace.h"
 #include "ngx/ngx_interceptor.h"
+#include "fidelityfx/fidelityfx_interceptor.h"
 
 namespace fs25vr {
 
@@ -438,6 +439,8 @@ void VRBridge::SetFrameIndex(uint64_t index) {
 
 void VRBridge::SetRenderingMode(VRRenderingMode mode) {
     m_renderingMode.store(mode);
+    // The camera records of the old mode would read as history under the new one (the eye cadence differs).
+    m_cameraRecords.Clear();
     m_subPassIndex.store(0);
     SetFrameParity(0);
     LogInfo(std::string("VRBridge: Rendering mode set to: ") +
@@ -697,6 +700,13 @@ int VRBridge::Lua_AdvanceSubPass(lua_State* L) {
     return 1;
 }
 
+int VRBridge::Lua_GetActiveEye(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    lua_pushinteger(L, static_cast<int>(self->GetActiveEye()));
+    return 1;
+}
+
 int VRBridge::Lua_Index(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
@@ -822,6 +832,91 @@ int VRBridge::Lua_SetDlssPreset(lua_State* L) {
         return 1;
     }
     self->m_ngxInterceptor->SetDlssPresetOverride(preset);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int VRBridge::Lua_SetDlssSdpMvScale(lua_State* L) {
+    double scaleX = luaL_checknumber(L, 1);
+    double scaleY = lua_isnumber(L, 2) ? lua_tonumber(L, 2) : scaleX;
+    VRBridge* self = &FromUpvalue(L);
+    // No NGX interceptor wired: DLSS tuning is unavailable, which the Companion Mod can report.
+    if (!self->m_ngxInterceptor) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    self->m_ngxInterceptor->SetSdpMvScaleMultiplier(static_cast<float>(scaleX), static_cast<float>(scaleY));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int VRBridge::Lua_ReportCameraRecord(lua_State* L) {
+    CameraRecord record;
+    record.eye = static_cast<uint32_t>((std::max)(0, static_cast<int>(luaL_checkinteger(L, 1))));
+    for (int i = 0; i < 3; ++i) record.position[i] = luaL_checknumber(L, 2 + i);
+    for (int i = 0; i < 4; ++i) record.orientation[i] = luaL_checknumber(L, 5 + i);
+    record.fovY = static_cast<float>(luaL_checknumber(L, 9));
+    record.nearClip = static_cast<float>(luaL_checknumber(L, 10));
+    record.farClip = static_cast<float>(luaL_checknumber(L, 11));
+    record.projOffsetX = static_cast<float>(luaL_optnumber(L, 12, 0.0));
+    record.projOffsetY = static_cast<float>(luaL_optnumber(L, 13, 0.0));
+    VRBridge* self = &FromUpvalue(L);
+    lua_pushboolean(L, self->m_cameraRecords.Report(record) ? 1 : 0);
+    return 1;
+}
+
+int VRBridge::Lua_SetDlssMvFix(lua_State* L) {
+    bool enabled = lua_toboolean(L, 1) != 0;
+    VRBridge* self = &FromUpvalue(L);
+    // No NGX interceptor wired: there is no motion vector pass to switch.
+    if (!self->m_ngxInterceptor) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    // True when the request took effect; turning the pass on after it disabled itself for the session reads false.
+    lua_pushboolean(L, self->m_ngxInterceptor->SetMvFixEnabled(enabled) == enabled ? 1 : 0);
+    return 1;
+}
+
+int VRBridge::Lua_SetDlssDepthModel(lua_State* L) {
+    bool infinite = lua_toboolean(L, 1) != 0;
+    VRBridge* self = &FromUpvalue(L);
+    // No NGX interceptor wired: there is no correction to switch.
+    if (!self->m_ngxInterceptor) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    self->m_ngxInterceptor->SetDepthModelInfinite(infinite);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int VRBridge::Lua_SetDlssNearClip(lua_State* L) {
+    float meters = static_cast<float>(luaL_checknumber(L, 1));
+    VRBridge* self = &FromUpvalue(L);
+    if (!self->m_ngxInterceptor) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    self->m_ngxInterceptor->SetNearClipOverride(meters); // 0 = automatic
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int VRBridge::Lua_DlssDiag(lua_State* L) {
+    int evaluations = lua_isnumber(L, 1) ? static_cast<int>(lua_tointeger(L, 1))
+                                         : static_cast<int>(NgxInterceptor::kDefaultDiagEvaluations);
+    VRBridge* self = &FromUpvalue(L);
+    // No NGX interceptor wired: there are no DLSS evaluations to trace.
+    if (!self->m_ngxInterceptor || evaluations <= 0) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    self->m_ngxInterceptor->ArmDiagnostics(static_cast<uint32_t>(evaluations));
+    // FSR3 dispatches are traced through the same command.
+    if (FidelityFxInterceptor* ffx = self->m_ngxInterceptor->GetFidelityFxInterceptor()) {
+        ffx->ArmDiagnostics(static_cast<uint32_t>(evaluations));
+    }
     lua_pushboolean(L, 1);
     return 1;
 }

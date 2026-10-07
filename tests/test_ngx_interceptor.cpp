@@ -124,21 +124,6 @@ protected:
     }
 };
 
-TEST_F(NgxInterceptorTest, GetActiveDualPassEyeIndexReflectsSubPassIndex) {
-    auto& interceptor = m_ngx;
-    auto& bridge = m_bridge;
-    interceptor.SetVRBridge(&bridge);
-
-    bridge.SetSubPassIndex(0);
-    EXPECT_EQ(interceptor.GetActiveDualPassEyeIndex(), 0u);
-
-    bridge.SetSubPassIndex(1);
-    EXPECT_EQ(interceptor.GetActiveDualPassEyeIndex(), 1u);
-
-    bridge.SetSubPassIndex(0);
-    EXPECT_EQ(interceptor.GetActiveDualPassEyeIndex(), 0u);
-}
-
 TEST_F(NgxInterceptorTest, SubPassRoutingInSequentialDualPassRoutesLeftAndRight) {
     auto& interceptor = m_ngx;
     interceptor.AttachDirect(&MockCreate, &MockRelease, &MockEvaluate);

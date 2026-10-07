@@ -80,6 +80,10 @@ _Avoid_: Resolution override, window scaling hack, virtual resolution
 A pair of independent temporal upscaler runtime handles (one dedicated to the left eye and one to the right eye) maintained by the Injector to isolate history buffers across Alternate Frame Rendering (AFR) cycles.
 _Avoid_: Dual DLSS instances, stereo history buffers, split upscaler
 
+**Per-Eye Motion Vector Correction**:
+The re-aiming of the engine's motion vectors, before each per-eye upscaler evaluation, from the previous rendered frame's camera (the other eye under Sequential Dual-Pass) to the same eye's previous camera, keeping the engine's object motion. It applies to DLSS and FSR3 alike, and the `vrDlssMv*` console names cover both. See ADR-0020.
+_Avoid_: MV fix, motion vector hack, MV scaling
+
 **Cross-Eye History Poisoning**:
 The corruption of temporal antialiasing and upscaling history buffers caused by alternating between left and right stereoscopic viewpoints across successive frames.
 _Avoid_: Interlaced ghosting, AFR smearing, stereo trail artifact

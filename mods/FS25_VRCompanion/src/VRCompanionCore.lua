@@ -170,6 +170,11 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrDlssMvScale", "Set DLSS motion vector scale multiplier: vrDlssMvScale <scaleX> [scaleY]", "consoleCommandSetDlssMvScale", self)
         addConsoleCommand("vrDlssSharpness", "Set DLSS sharpness override: vrDlssSharpness <sharpness 0.0-1.0>", "consoleCommandSetDlssSharpness", self)
         addConsoleCommand("vrDlssPreset", "Set DLSS preset hint: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L>", "consoleCommandSetDlssPreset", self)
+        addConsoleCommand("vrDlssSdpMvScale", "Set DLSS motion vector scale under Sequential Dual-Pass: vrDlssSdpMvScale <scaleX> [scaleY]", "consoleCommandSetDlssSdpMvScale", self)
+        addConsoleCommand("vrDlssMvFix", "Switch the DLSS motion vector pass for A/B comparison: vrDlssMvFix <on|off>", "consoleCommandDlssMvFix", self)
+        addConsoleCommand("vrDlssDepthModel", "Set the depth model of the DLSS motion vector correction for A/B comparison: vrDlssDepthModel <infinite|finite>", "consoleCommandDlssDepthModel", self)
+        addConsoleCommand("vrDlssNearClip", "Override the near plane of the DLSS motion vector correction in metres (0 or auto = estimate it automatically, the default): vrDlssNearClip <meters|auto>", "consoleCommandDlssNearClip", self)
+        addConsoleCommand("vrDlssDiag","Trace DLSS evaluations to fs25_vr.log: vrDlssDiag [evaluations]", "consoleCommandDlssDiag", self)
         addConsoleCommand("vrRenderingMode", "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", "consoleCommandSetRenderingMode", self)
         addConsoleCommand("vrObliqueProjection", "Toggle Oblique Frustum projection: vrObliqueProjection <true|false|toggle>", "consoleCommandSetObliqueProjection", self)
     end
@@ -531,6 +536,9 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     end
 
     local subPass = self:getSubPassIndex() % 2
+    -- Sub-pass 0 advances the simulation and sub-pass 1 replays it frozen; which eye each
+    -- sub-pass renders alternates between pairs (see getDualPassEye).
+    local eye = self:getDualPassEye()
 
     -- One eye projection fetch and one rendering camera bind per sub-pass: camera
     -- updates inside the sub-pass share the cached projection and leave the bind to
@@ -538,22 +546,22 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     self:beginEyeProjectionScope()
     self.deferRenderingCameraBind = true
 
+    local camLeft, camRight = self:getStereoCameraNodes()
+    local targetCam = (eye == 1) and camRight or camLeft
+
     if subPass == 1 then
-        -- Sub-Pass 1 (Right Eye): Freeze simulation at timestamp T.
+        -- Sub-Pass 1: Freeze simulation at timestamp T.
         self.accumulatedPass1Dt = (self.accumulatedPass1Dt or 0.0) + rawDt
         if self.accumulatedPass1Dt > 200.0 then
             self.accumulatedPass1Dt = 200.0
         end
 
-        local camLeft, camRight = self:getStereoCameraNodes()
-        local targetCam = camRight
-
         if targetCam ~= nil then
-            self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, 1)
+            self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, eye)
         end
 
-        -- Synchronize right eye camera transforms without running engine simulation
-        self:finishSubPass(subPass, 1, targetCam)
+        -- Synchronize the eye's camera transforms without running engine simulation
+        self:finishSubPass(subPass, eye, targetCam)
         if type(self.updateHudConvergence) == "function" then
             self:updateHudConvergence(0.0)
         end
@@ -568,13 +576,9 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         effectiveDt = 200.0
     end
 
-    -- Sub-Pass 0: cameraNodeLeft is bound as active rendering camera
-    local camLeft, camRight = self:getStereoCameraNodes()
-    local targetCam = camLeft
-
     -- Update camera projection for active eye
     if targetCam ~= nil then
-        self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, 0)
+        self:runSubPassStep(subPass, self.applyCameraProjection, targetCam, eye)
     end
 
     -- Run mission update with accumulated real dt under reentrancy guard and pcall protection
@@ -590,7 +594,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         res = nil
     end
 
-    self:finishSubPass(subPass, 0, targetCam)
+    self:finishSubPass(subPass, eye, targetCam)
     if type(self.updateHudConvergence) == "function" then
         self:updateHudConvergence(effectiveDt)
     end
@@ -612,7 +616,56 @@ function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam)
     self:runSubPassStep(subPass, self.syncActiveEyeCamera, eyeIndex)
     self.deferRenderingCameraBind = false
     self:bindRenderingCamera(targetCam)
+    self:runSubPassStep(subPass, self.reportEyeCamera, eyeIndex, targetCam)
     self:endEyeProjectionScope()
+end
+
+-- Tells the Injector which camera this sub-pass rendered with: the bound eye camera's world
+-- transform and projection, keyed by the eye (the sub-pass index alone does not name it under Eye
+-- Order Alternation). The Injector stamps it with its rendered-frame counter. Any missing engine
+-- query skips the report, which the Injector then treats as a frame without a camera record.
+function VRCompanion:reportEyeCamera(eyeIndex, camNode)
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge == nil or type(bridge.reportCameraRecord) ~= "function" then return false end
+    if camNode == nil or camNode == 0 then return false end
+
+    local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
+    local getWorldQuaternionFn = getWorldQuaternion or (_G and _G.getWorldQuaternion)
+    local getFovYFn = getFovY or (_G and _G.getFovY)
+    local getNearClipFn = getNearClip or (_G and _G.getNearClip)
+    local getFarClipFn = getFarClip or (_G and _G.getFarClip)
+    local getProjectionOffsetFn = getProjectionOffset or (_G and _G.getProjectionOffset)
+    if type(getWorldTranslationFn) ~= "function" or type(getWorldQuaternionFn) ~= "function"
+        or type(getFovYFn) ~= "function" or type(getNearClipFn) ~= "function"
+        or type(getFarClipFn) ~= "function" then
+        return false
+    end
+
+    local x, y, z = getWorldTranslationFn(camNode)
+    local qx, qy, qz, qw = getWorldQuaternionFn(camNode)
+    local fovY = getFovYFn(camNode)
+    local nearClip = getNearClipFn(camNode)
+    local farClip = getFarClipFn(camNode)
+    if x == nil or qw == nil or fovY == nil or nearClip == nil or farClip == nil then return false end
+
+    local offsetX, offsetY = 0, 0
+    if type(getProjectionOffsetFn) == "function" then
+        offsetX, offsetY = getProjectionOffsetFn(camNode)
+    end
+
+    return bridge.reportCameraRecord(eyeIndex % 2, x, y, z, qx, qy, qz, qw, fovY, nearClip, farClip,
+        offsetX or 0, offsetY or 0)
+end
+
+-- Alternate Frame Rendering renders one eye per frame, bound by the camera updates rather than a
+-- sub-pass. Reports that eye's camera like a sub-pass does, so the Injector's motion vector correction
+-- can re-aim the engine's vectors at the same eye's camera two frames back. Sequential Dual-Pass
+-- reports from its mission update instead, so this stays silent there. An engine query failure costs a
+-- missing record, never the camera update.
+function VRCompanion:reportAfrEyeCamera(eyeIndex, camNode)
+    if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then return false end
+    local ok, reported = pcall(self.reportEyeCamera, self, eyeIndex, camNode)
+    return ok and reported == true
 end
 function VRCompanion:hookMissionUpdate()
     if self.missionUpdateHooked then

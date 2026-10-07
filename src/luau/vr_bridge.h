@@ -6,6 +6,7 @@
 #include <string>
 #include "lua.h"
 #include "lualib.h"
+#include "core/camera_records.h"
 #include "openxr/openxr_manager.h"
 
 namespace fs25vr {
@@ -56,6 +57,11 @@ public:
     bool LatchPendingRenderingMode();
     bool IsSequentialDualPass() const { return m_renderingMode.load() == VRRenderingMode::SequentialDualPass; }
 
+    // Eye cameras the Companion Mod reports per stereo sub-pass, stamped with the rendered-frame
+    // counter the DXGI proxy advances once per Present in stereo presentation.
+    CameraRecordStore& GetCameraRecords() { return m_cameraRecords; }
+    const CameraRecordStore& GetCameraRecords() const { return m_cameraRecords; }
+
     uint32_t GetSubPassIndex() const { return m_subPassIndex.load(); }
     void SetSubPassIndex(uint32_t index) { m_subPassIndex.store(index % 2); }
     uint32_t AdvanceSubPass() {
@@ -63,12 +69,14 @@ public:
     }
     void ResetSubPass() { m_subPassIndex.store(0); }
 
-    uint32_t GetFrameParity() const {
+    // The eye the current frame renders: the sub-pass under SDP (left first), the frame parity under AFR.
+    uint32_t GetActiveEye() const {
         if (m_renderingMode.load() == VRRenderingMode::SequentialDualPass) {
             return m_subPassIndex.load();
         }
         return m_frameParity;
     }
+    uint32_t GetFrameParity() const { return GetActiveEye(); }
     uint64_t GetFrameIndex() const { return m_frameIndex; }
     void AdvanceFrame();
     void SetFrameParity(uint32_t parity);
@@ -108,12 +116,20 @@ public:
     static int Lua_SetDlssMvScale(lua_State* L);
     static int Lua_SetDlssSharpness(lua_State* L);
     static int Lua_SetDlssPreset(lua_State* L);
+    static int Lua_DlssDiag(lua_State* L);
+    static int Lua_SetDlssMvFix(lua_State* L);
+    static int Lua_SetDlssDepthModel(lua_State* L);
+    static int Lua_SetDlssNearClip(lua_State* L);
+    static int Lua_SetDlssSdpMvScale(lua_State* L);
+    // reportCameraRecord(eye, x, y, z, qx, qy, qz, qw, fovY, nearClip, farClip, projOffsetX, projOffsetY)
+    static int Lua_ReportCameraRecord(lua_State* L);
 
     static int Lua_GetRenderingMode(lua_State* L);
     static int Lua_SetRenderingMode(lua_State* L);
     static int Lua_GetSubPassIndex(lua_State* L);
     static int Lua_SetSubPassIndex(lua_State* L);
     static int Lua_AdvanceSubPass(lua_State* L);
+    static int Lua_GetActiveEye(lua_State* L);
 
     static int Lua_GetFrameParity(lua_State* L);
     static int Lua_GetFrameIndex(lua_State* L);
@@ -159,11 +175,18 @@ public:
         {"getSubPassIndex", &Lua_GetSubPassIndex},
         {"setSubPassIndex", &Lua_SetSubPassIndex},
         {"advanceSubPass", &Lua_AdvanceSubPass},
+        {"getActiveEye", &Lua_GetActiveEye},
         {"resetTemporalHistory", &Lua_ResetTemporalHistory},
         {"signalDiscontinuity", &Lua_SignalDiscontinuity},
         {"setDlssMvScale", &Lua_SetDlssMvScale},
         {"setDlssSharpness", &Lua_SetDlssSharpness},
         {"setDlssPreset", &Lua_SetDlssPreset},
+        {"dlssDiag", &Lua_DlssDiag},
+        {"setDlssSdpMvScale", &Lua_SetDlssSdpMvScale},
+        {"reportCameraRecord", &Lua_ReportCameraRecord},
+        {"setDlssMvFix", &Lua_SetDlssMvFix},
+        {"setDlssDepthModel", &Lua_SetDlssDepthModel},
+        {"setDlssNearClip", &Lua_SetDlssNearClip},
     };
 
     // 1 version property + one field per table entry.
@@ -176,6 +199,7 @@ private:
 
     std::shared_ptr<OpenXrManager> m_openXrManager;
     std::shared_ptr<NgxInterceptor> m_ngxInterceptor;
+    CameraRecordStore m_cameraRecords;
     std::string m_version = "1.0.0";
     bool m_handshakeCompleted = false;
     bool m_menuVisible = false;
@@ -184,7 +208,7 @@ private:
     std::atomic<VRRenderingMode> m_renderingMode{VRRenderingMode::SequentialDualPass};
     static constexpr int kNoPendingMode = -1;
     std::atomic<int> m_pendingRenderingMode{kNoPendingMode};
-    std::atomic<uint32_t> m_subPassIndex{0}; // 0 = Left Eye, 1 = Right Eye
+    std::atomic<uint32_t> m_subPassIndex{0}; // 0 = first sub-pass of the pair (advances simulation), 1 = second
 
     uint32_t m_frameParity = 0; // 0 = Left (2k), 1 = Right (2k+1)
     uint64_t m_frameIndex = 0;

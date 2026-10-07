@@ -4,10 +4,13 @@
 #include "luau/vr_bridge.h"
 #include "proxy/dxgi_proxy.h"
 #include "openxr/openxr_manager.h"
+#include "fidelityfx/fidelityfx_interceptor.h"
 #include <cwctype>
+#include <cmath>
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#include <chrono>
 
 namespace fs25vr {
 
@@ -16,6 +19,33 @@ namespace {
 // resolve the interceptor that installed them here instead of reaching for the singleton.
 std::atomic<NgxInterceptor*> s_featureHost{nullptr};
 std::atomic<NgxInterceptor*> s_loadHookHost{nullptr};
+
+// NVSDK_NGX_DLSS_Feature_Flags bits, named for the creation diagnostics.
+constexpr struct { int bit; const char* name; } kDlssCreateFlagNames[] = {
+    {1 << 0, "IsHDR"},
+    {1 << 1, "MVLowRes"},
+    {1 << 2, "MVJittered"},
+    {1 << 3, "DepthInverted"},
+    {1 << 5, "DoSharpening"},
+    {1 << 6, "AutoExposure"},
+    {1 << 7, "AlphaUpscaling"},
+};
+
+std::string DescribeDlssCreateFlags(int flags) {
+    std::string names;
+    for (const auto& flag : kDlssCreateFlagNames) {
+        if (flags & flag.bit) {
+            if (!names.empty()) names += "|";
+            names += flag.name;
+        }
+    }
+    return names.empty() ? "none" : names;
+}
+
+// Jitter offsets closer than this are the same sample position.
+constexpr float kJitterMatchTolerance = 1e-4f;
+// Distinct offsets listed per context in the summary; the count covers all of them.
+constexpr size_t kMaxListedJitterOffsets = 16;
 } // namespace
 
 NgxInterceptor* NgxInterceptor::FeatureHost() {
@@ -26,10 +56,16 @@ NgxInterceptor* NgxInterceptor::LoadHookHost() {
     return s_loadHookHost.load();
 }
 
-NgxInterceptor::NgxInterceptor() = default;
+NgxInterceptor::NgxInterceptor() {
+    m_mvPassFactory = [](ID3D12GraphicsCommandList*) { return CreateD3D12MotionVectorPass(); };
+}
 
 NgxInterceptor::~NgxInterceptor() {
-    if (IsProcessTerminating()) return;
+    if (IsProcessTerminating()) {
+        // Releasing GPU objects while the process is going down is not safe; the OS reclaims them.
+        (void)m_mvPass.release();
+        return;
+    }
     DetachAll();
 }
 
@@ -290,7 +326,31 @@ bool NgxInterceptor::AttachModule(HMODULE hNgxModule) {
     return ok;
 }
 
+FidelityFxInterceptor* NgxInterceptor::GetFidelityFxInterceptor() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    return m_fidelityFx;
+}
+
+void NgxInterceptor::SetFidelityFxInterceptor(FidelityFxInterceptor* interceptor) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    m_fidelityFx = interceptor;
+}
+
+// LoadLibrary can be hooked only once per process and this interceptor owns those hooks, so a load of
+// the FidelityFX loader is routed to its interceptor from here.
+void NgxInterceptor::NotifyModuleLoaded(HMODULE hMod, LPCWSTR name) {
+    FidelityFxInterceptor* ffx = GetFidelityFxInterceptor();
+    if (ffx && FidelityFxInterceptor::MatchesLoaderName(name)) ffx->AttachModule(hMod);
+}
+
+void NgxInterceptor::NotifyModuleLoaded(HMODULE hMod, LPCSTR name) {
+    FidelityFxInterceptor* ffx = GetFidelityFxInterceptor();
+    if (ffx && FidelityFxInterceptor::MatchesLoaderName(name)) ffx->AttachModule(hMod);
+}
+
 void NgxInterceptor::CheckAndAttachLoadedModule() {
+    if (FidelityFxInterceptor* ffx = GetFidelityFxInterceptor()) ffx->CheckAndAttachLoadedModule();
+
     static const wchar_t* const s_candidates[] = {
         L"nvngx.dll",
         L"_nvngx.dll"
@@ -398,9 +458,135 @@ void NgxInterceptor::DetachAll() {
     m_forceSharpnessOverride = kDefaultForceSharpnessOverride;
     m_mvScaleMultiplierX = kDefaultAfrMvScale;
     m_mvScaleMultiplierY = kDefaultAfrMvScale;
+    m_sdpMvScaleMultiplierX = 1.0f;
+    m_sdpMvScaleMultiplierY = 1.0f;
     m_lastRenderingMode.store(-1);
     m_internalDiscontinuityPendingLeft.store(false);
     m_internalDiscontinuityPendingRight.store(false);
+    m_diagRemaining.store(0);
+    {
+        std::lock_guard<std::mutex> mvLock(m_mvFixMutex);
+        m_mvPass.reset();
+        m_mvFixDisableReason.clear();
+        m_mvPassFactory = [](ID3D12GraphicsCommandList*) { return CreateD3D12MotionVectorPass(); };
+    }
+    m_mvFixEnabled.store(kDefaultMvFixEnabled);
+    m_mvFixDisabled.store(false);
+    m_depthModelInfinite.store(true);
+    m_nearClipOverride.store(0.0f);
+    ForgetNearEstimate();
+}
+
+void NgxInterceptor::ForgetNearEstimate() {
+    m_nearEstimator.Reset(m_evalCount.load());
+    m_nearCrossEyeEvals.store(0);
+    m_nearLastLogged.store(0.0f);
+    m_nearLastLogMs.store(INT64_MIN);
+}
+
+void NgxInterceptor::OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolution& solution, float recordNear,
+                                    uint32_t eye, double gatedFraction) {
+    m_nearEstimator.Submit(evalIndex, solution);
+    const float estimate = m_nearEstimator.Estimate();
+    if (!(estimate > 0.0f)) return;
+    // Once per 2 s, and only while it moves by more than 5% from what was last logged.
+    const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch()).count();
+    const int64_t lastMs = m_nearLastLogMs.load();
+    const float last = m_nearLastLogged.load();
+    const bool due = lastMs == INT64_MIN || nowMs - lastMs >= 2000;
+    if (!due || (last > 0.0f && std::fabs(estimate - last) <= 0.05f * last)) return;
+    m_nearLastLogMs.store(nowMs);
+    m_nearLastLogged.store(estimate);
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(3) << "NgxInterceptor: auto near " << estimate << " m (record "
+       << recordNear << ", Eye=" << eye << " inliers=" << std::setprecision(1) << solution.inlierFraction * 100.0
+       << "% (" << solution.used << " of " << solution.retained << ") gated=" << gatedFraction * 100.0 << "%)";
+    LogInfo(ss.str());
+}
+
+void NgxInterceptor::SetNearClipOverride(float meters) {
+    if (!std::isfinite(meters) || meters < 0.0f) meters = 0.0f;
+    if (m_nearClipOverride.exchange(meters) != meters) {
+        LogInfo("NgxInterceptor: Near plane override (vrDlssNearClip) " +
+                (meters > 0.0f ? std::to_string(meters) + " m" : std::string("auto (estimated, camera record until then)")));
+    }
+}
+
+void NgxInterceptor::SetDepthModelInfinite(bool infinite) {
+    if (m_depthModelInfinite.exchange(infinite) != infinite) {
+        LogInfo(std::string("NgxInterceptor: Depth model (vrDlssDepthModel) ") + (infinite ? "infinite" : "finite"));
+    }
+}
+
+bool NgxInterceptor::SetMvFixEnabled(bool enabled) {
+    if (enabled && m_mvFixDisabled.load()) {
+        LogWarn("NgxInterceptor: vrDlssMvFix on ignored; the pass is disabled for this session (" + GetMvFixDisableReason() + ")");
+        return false;
+    }
+    bool previous = m_mvFixEnabled.exchange(enabled);
+    if (previous != enabled) {
+        LogInfo(std::string("NgxInterceptor: Motion vector pass (vrDlssMvFix) ") + (enabled ? "on" : "off"));
+    }
+    return enabled;
+}
+
+std::string NgxInterceptor::GetMvFixDisableReason() const {
+    std::lock_guard<std::mutex> lock(m_mvFixMutex);
+    return m_mvFixDisableReason;
+}
+
+void NgxInterceptor::SetMotionVectorPassFactory(MotionVectorPassFactory factory) {
+    std::lock_guard<std::mutex> lock(m_mvFixMutex);
+    m_mvPass.reset();
+    m_mvPassFactory = std::move(factory);
+}
+
+const char* NgxInterceptor::DescribeMvFixState() const {
+    if (m_mvFixDisabled.load()) return "failed";
+    return m_mvFixEnabled.load() ? "on" : "off";
+}
+
+void NgxInterceptor::DisableMvFix(const std::string& reason) {
+    {
+        std::lock_guard<std::mutex> lock(m_mvFixMutex);
+        if (m_mvFixDisabled.load()) return;
+        m_mvFixDisableReason = reason;
+    }
+    m_mvFixDisabled.store(true);
+    m_mvFixEnabled.store(false);
+    LogError("NgxInterceptor: Motion vector pass disabled for this session: " + reason +
+             ". DLSS continues on the engine's motion vectors.");
+}
+
+ID3D12Resource* NgxInterceptor::RecordMvPass(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* depth, ID3D12Resource* mv,
+                                             const MvSelfCheckRequest* request,
+                                             std::vector<MvSelfCheckReport>* reports,
+                                             const MvCorrectionRequest* correction) {
+    std::unique_lock<std::mutex> lock(m_mvFixMutex);
+    if (m_mvFixDisabled.load()) return nullptr;
+    if (!m_mvPass) {
+        if (m_mvPassFactory) m_mvPass = m_mvPassFactory(cmdList);
+        if (!m_mvPass) {
+            lock.unlock();
+            DisableMvFix("the motion vector pass could not be created");
+            return nullptr;
+        }
+    }
+    MvPassInputs inputs;
+    inputs.cmdList = cmdList;
+    inputs.depth = depth;
+    inputs.motionVectors = mv;
+    inputs.selfCheck = request;
+    inputs.correction = correction;
+    MvPassResult result = m_mvPass->Record(inputs);
+    if (!result.ok || !result.output) {
+        lock.unlock();
+        DisableMvFix(result.failureReason.empty() ? std::string("the pass reported a failure") : result.failureReason);
+        return nullptr;
+    }
+    if (reports) *reports = m_mvPass->PollSelfCheck();
+    return result.output;
 }
 
 void NgxInterceptor::DetachLiveHooks() {
@@ -426,7 +612,140 @@ bool NgxInterceptor::IsSingleContextBypassActive() const {
 
 uint32_t NgxInterceptor::GetActiveDualPassEyeIndex() const {
     VRBridge* bridge = GetVRBridge();
-    return bridge ? bridge->GetSubPassIndex() : 0;
+    return bridge ? bridge->GetActiveEye() : 0;
+}
+
+void NgxInterceptor::ArmDiagnostics(uint32_t evaluations) {
+    evaluations = (std::min)(evaluations, kMaxDiagEvaluations);
+    {
+        std::lock_guard<std::mutex> lock(m_diagMutex);
+        m_diagSamples[0].clear();
+        m_diagSamples[1].clear();
+        m_diagLastContext = -1;
+        m_diagContextRun = 0;
+        m_diagLongestContextRun = 0;
+    }
+    m_diagRawRangeLogged.store(false);
+    m_diagProjectionLogged.store(false);
+    m_diagRemaining.store(evaluations);
+    LogInfo("NgxInterceptor: [Diag] Armed for " + std::to_string(evaluations) + " evaluations.");
+}
+
+NgxInterceptor::JitterSummary NgxInterceptor::Summarize(const std::vector<DiagSample>& samples) {
+    JitterSummary summary;
+    std::vector<std::pair<float, float>> distinct;
+    for (const auto& s : samples) {
+        if (summary.evaluations == 0) {
+            summary.minX = summary.maxX = s.jitterX;
+            summary.minY = summary.maxY = s.jitterY;
+        }
+        summary.evaluations++;
+        if (s.reset) summary.resets++;
+        summary.minX = (std::min)(summary.minX, s.jitterX);
+        summary.maxX = (std::max)(summary.maxX, s.jitterX);
+        summary.minY = (std::min)(summary.minY, s.jitterY);
+        summary.maxY = (std::max)(summary.maxY, s.jitterY);
+        bool seen = std::any_of(distinct.begin(), distinct.end(), [&](const auto& d) {
+            return std::fabs(d.first - s.jitterX) < kJitterMatchTolerance &&
+                   std::fabs(d.second - s.jitterY) < kJitterMatchTolerance;
+        });
+        if (!seen) distinct.emplace_back(s.jitterX, s.jitterY);
+    }
+    summary.distinctOffsets = static_cast<uint32_t>(distinct.size());
+    return summary;
+}
+
+NgxInterceptor::JitterSummary NgxInterceptor::GetDiagJitterSummary(uint32_t contextIndex) const {
+    std::lock_guard<std::mutex> lock(m_diagMutex);
+    return Summarize(m_diagSamples[contextIndex == 1 ? 1 : 0]);
+}
+
+void NgxInterceptor::RecordDiagnostics(uint64_t evalIndex, uint32_t contextIndex,
+                                       const NVSDK_NGX_Parameter* params, bool reset, bool isDualPass) {
+    uint32_t remaining = m_diagRemaining.load();
+    while (remaining > 0 && !m_diagRemaining.compare_exchange_weak(remaining, remaining - 1)) {}
+    if (remaining == 0) return;
+
+    float jitX = 0.0f, jitY = 0.0f, mvX = 1.0f, mvY = 1.0f;
+    unsigned int renderW = 0, renderH = 0;
+    if (params) {
+        // The engine may request a reset itself, not only our Discontinuity Flush.
+        int resetParam = 0;
+        if (NVSDK_NGX_SUCCEED(params->Get(NVSDK_NGX_Parameter_Reset, &resetParam)) && resetParam != 0) {
+            reset = true;
+        }
+        params->Get(NVSDK_NGX_Parameter_Jitter_Offset_X, &jitX);
+        params->Get(NVSDK_NGX_Parameter_Jitter_Offset_Y, &jitY);
+        params->Get(NVSDK_NGX_Parameter_MV_Scale_X, &mvX);
+        params->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &mvY);
+        if (NVSDK_NGX_FAILED(params->Get(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, &renderW)) ||
+            NVSDK_NGX_FAILED(params->Get(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, &renderH))) {
+            params->Get(NVSDK_NGX_Parameter_Width, &renderW);
+            params->Get(NVSDK_NGX_Parameter_Height, &renderH);
+        }
+    }
+
+    VRBridge* bridge = GetVRBridge();
+    uint32_t ctx = (contextIndex == 1) ? 1 : 0;
+    {
+        std::lock_guard<std::mutex> lock(m_diagMutex);
+        m_diagSamples[ctx].push_back({jitX, jitY, reset});
+        m_diagContextRun = (m_diagLastContext == static_cast<int>(ctx)) ? m_diagContextRun + 1 : 1;
+        m_diagLongestContextRun = (std::max)(m_diagLongestContextRun, m_diagContextRun);
+        m_diagLastContext = static_cast<int>(ctx);
+    }
+
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(4)
+       << "NgxInterceptor: [Diag] Eval #" << evalIndex << " Ctx=" << ctx
+       << " Mode=" << (isDualPass ? "SDP" : "AFR")
+       << " SubPass=" << (bridge ? bridge->GetSubPassIndex() : 0)
+       << " Eye=" << (bridge ? bridge->GetActiveEye() : 0)
+       << " Jitter=(" << jitX << ", " << jitY << ")"
+       << " MVScale=(" << mvX << ", " << mvY << ")"
+       << " MvFix=" << DescribeMvFixState()
+       << " Reset=" << (reset ? 1 : 0)
+       << " Render=" << renderW << "x" << renderH
+       << " Thread=" << GetCurrentThreadId();
+    if (bridge) {
+        // The cameras the engine rendered this frame, the previous frame and this eye's last frame with.
+        ss << " " << DescribeResolvedCameras(bridge->GetCameraRecords().Resolve(bridge->GetActiveEye()));
+    }
+    LogInfo(ss.str());
+
+    if (remaining == 1) {
+        LogDiagSummary();
+    }
+}
+
+void NgxInterceptor::LogDiagSummary() {
+    std::lock_guard<std::mutex> lock(m_diagMutex);
+    for (uint32_t ctx = 0; ctx < 2; ++ctx) {
+        const auto& samples = m_diagSamples[ctx];
+        JitterSummary summary = Summarize(samples);
+
+        std::stringstream ss;
+        ss << std::fixed << std::setprecision(4)
+           << "NgxInterceptor: [Diag] Summary Ctx=" << ctx << " Evals=" << summary.evaluations
+           << " Resets=" << summary.resets << " DistinctJitter=" << summary.distinctOffsets
+           << " JitterX=[" << summary.minX << ", " << summary.maxX << "]"
+           << " JitterY=[" << summary.minY << ", " << summary.maxY << "] Offsets:";
+        std::vector<std::pair<float, float>> listed;
+        for (const auto& s : samples) {
+            if (listed.size() >= kMaxListedJitterOffsets) break;
+            bool seen = std::any_of(listed.begin(), listed.end(), [&](const auto& d) {
+                return std::fabs(d.first - s.jitterX) < kJitterMatchTolerance &&
+                       std::fabs(d.second - s.jitterY) < kJitterMatchTolerance;
+            });
+            if (!seen) {
+                listed.emplace_back(s.jitterX, s.jitterY);
+                ss << " (" << s.jitterX << ", " << s.jitterY << ")";
+            }
+        }
+        LogInfo(ss.str());
+    }
+    LogInfo("NgxInterceptor: [Diag] Longest same-context run=" + std::to_string(m_diagLongestContextRun) +
+            " (1 means the contexts strictly alternated).");
 }
 
 void NgxInterceptor::TriggerDiscontinuityFlush() {
@@ -436,6 +755,7 @@ void NgxInterceptor::TriggerDiscontinuityFlush() {
     }
     m_internalDiscontinuityPendingLeft.store(true);
     m_internalDiscontinuityPendingRight.store(true);
+    ForgetNearEstimate();
 }
 
 bool NgxInterceptor::HasPendingDiscontinuity(uint32_t contextIndex) const {
@@ -686,6 +1006,22 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_CreateFeature(
        << ", Target=" << effectiveTargetW << "x" << effectiveTargetH
        << ", Render=" << renderRes.renderWidth << "x" << renderRes.renderHeight << ")";
     LogInfo(ss.str());
+
+    int createFlags = 0;
+    bool hasCreateFlags = NVSDK_NGX_SUCCEED(InParameters->Get(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, &createFlags));
+    unsigned int inW = 0, inH = 0, outW = 0, outH = 0;
+    InParameters->Get(NVSDK_NGX_Parameter_Width, &inW);
+    InParameters->Get(NVSDK_NGX_Parameter_Height, &inH);
+    InParameters->Get(NVSDK_NGX_Parameter_OutWidth, &outW);
+    InParameters->Get(NVSDK_NGX_Parameter_OutHeight, &outH);
+    std::stringstream diag;
+    diag << "NgxInterceptor: [Diag] Create flags=" << (hasCreateFlags ? DescribeDlssCreateFlags(createFlags) : "absent")
+         << " (0x" << std::hex << createFlags << std::dec << ")"
+         << " PerfQuality=" << perfQualityInt
+         << " Engine dims=" << inW << "x" << inH << " -> " << outW << "x" << outH
+         << " RightCloneHasFlags=" << (clonedParams->HasParam(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags) ? 1 : 0);
+    LogInfo(diag.str());
+    interceptor.ArmDiagnostics();
     return NVSDK_NGX_Result_Success;
 }
 
@@ -765,6 +1101,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
     int lastMode = interceptor.m_lastRenderingMode.exchange(currentMode);
     if (lastMode != -1 && lastMode != currentMode) {
         interceptor.TriggerDiscontinuityFlush();
+        interceptor.ArmDiagnostics();
     }
 
     bool isDualPass = (bridge && bridge->GetRenderingMode() == VRRenderingMode::SequentialDualPass);
@@ -781,8 +1118,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
             target = vHandle->hLeft;
             contextIndex = 0;
         } else {
-            uint32_t eyeIndex = isDualPass ? bridge->GetSubPassIndex()
-                                           : (bridge ? bridge->GetFrameParity() : 0);
+            uint32_t eyeIndex = bridge ? bridge->GetActiveEye() : 0;
             target = (eyeIndex == 1 && vHandle->hRight) ? vHandle->hRight : vHandle->hLeft;
             contextIndex = (eyeIndex == 1 && vHandle->hRight) ? 1 : 0;
             alternatesEyeContexts = (vHandle->hRight != nullptr);
@@ -796,6 +1132,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
 
     // Check if a Discontinuity Flush is pending for this context
     bool needReset = interceptor.ConsumeDiscontinuity(contextIndex);
+    if (needReset) interceptor.ForgetNearEstimate(); // the scene may have changed: relearn the near
 
     int prevReset = 0;
     bool hadPrevReset = false;
@@ -841,12 +1178,25 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
 
     // Eye-stride compensation only applies when consecutive evaluations of a context are two
     // frames apart: AFR alternating a virtual handle's two eye contexts during stereo presentation,
-    // which starts at the Companion Mod handshake. SDP, the monoscopic single-context bypass, a
-    // handle that was not split per eye, and pre-handshake (quad layer) frames are 1.0x.
+    // which starts at the Companion Mod handshake. SDP per-eye contexts use their own diagnostic
+    // multiplier (1.0x unless set). The monoscopic single-context bypass, a handle that was not split
+    // per eye, and pre-handshake (quad layer) frames are 1.0x.
     bool eyeStride = !isDualPass && alternatesEyeContexts && bridge && bridge->IsCompanionActive();
+    bool dualPassEyeContexts = isDualPass && alternatesEyeContexts && bridge && bridge->IsCompanionActive();
     float prevScaleX = 1.0f, prevScaleY = 1.0f;
-    float scaleMulX = eyeStride ? interceptor.GetMvScaleMultiplierX() : 1.0f;
-    float scaleMulY = eyeStride ? interceptor.GetMvScaleMultiplierY() : 1.0f;
+    float scaleMulX = 1.0f, scaleMulY = 1.0f;
+    // Under AFR the eye-stride multiplier (vrDlssMvScale) is only the fallback for when the motion vector
+    // pass is off or has disabled itself. While the pass is available, the correction handles the stride
+    // itself (it scales the object-motion component only), so the multiplier is held back here and applied
+    // below only if the pass did not take over this evaluation.
+    float afrFallbackMulX = 1.0f, afrFallbackMulY = 1.0f;
+    if (eyeStride) {
+        afrFallbackMulX = interceptor.GetMvScaleMultiplierX();
+        afrFallbackMulY = interceptor.GetMvScaleMultiplierY();
+    } else if (dualPassEyeContexts) {
+        scaleMulX = interceptor.GetSdpMvScaleMultiplierX();
+        scaleMulY = interceptor.GetSdpMvScaleMultiplierY();
+    }
     bool wroteScale = false;
     if (mutableParams) {
         // An absent MV scale means 1.0 to DLSS, which is also what we restore it to.
@@ -854,14 +1204,175 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_MV_Scale_X, &scale))) prevScaleX = scale;
         scale = 1.0f;
         if (NVSDK_NGX_SUCCEED(mutableParams->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &scale))) prevScaleY = scale;
-        if (scaleMulX != 1.0f || scaleMulY != 1.0f) {
-            mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX * scaleMulX);
-            mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY * scaleMulY);
-            wroteScale = true;
+    }
+    const bool mvFixWillRun = interceptor.m_mvFixEnabled.load() && !interceptor.m_mvFixDisabled.load();
+    if (eyeStride && !mvFixWillRun) {
+        scaleMulX = afrFallbackMulX;
+        scaleMulY = afrFallbackMulY;
+    }
+    if (mutableParams && (scaleMulX != 1.0f || scaleMulY != 1.0f)) {
+        mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX * scaleMulX);
+        mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY * scaleMulY);
+        wroteScale = true;
+    }
+
+    // The motion vector pass: DLSS reads the Injector's texture for this one evaluation, then the game's
+    // motion vectors are put back. Monoscopic presentation (menus, 2D Floating Window Mode) and handles
+    // that are not split per eye keep the engine's motion vectors.
+    ID3D12Resource* prevMv = nullptr;
+    bool swappedMv = false;
+    const char* correctionState = "off";
+    if (interceptor.m_mvFixEnabled.load() && alternatesEyeContexts && InCmdList && mutableParams) {
+        ID3D12Resource* depth = nullptr;
+        ID3D12Resource* mv = nullptr;
+        mutableParams->Get(NVSDK_NGX_Parameter_Depth, &depth);
+        mutableParams->Get(NVSDK_NGX_Parameter_MotionVectors, &mv);
+        if (depth && mv) {
+            // Per-eye correction: re-aim the engine's vectors from the previous rendered frame's camera at the
+            // same eye's previous camera. Frames without a usable plan (missing record, a zero
+            // MV scale) get the engine's vectors back unchanged.
+            const float effScaleX = prevScaleX * scaleMulX;
+            const float effScaleY = prevScaleY * scaleMulY;
+            const uint32_t correctionEye = bridge ? bridge->GetActiveEye() : 0;
+            mvreproj::CorrectionPlan plan;
+            if (bridge) plan = mvreproj::PlanCorrection(bridge->GetCameraRecords().Resolve(correctionEye));
+            MvCorrectionRequest correctionRequest;
+            const MvCorrectionRequest* correction = nullptr;
+            correctionState = mvreproj::CorrectionDecisionName(plan.decision);
+            const bool infiniteDepth = interceptor.m_depthModelInfinite.load();
+            // Near plane: a manual override wins, then the automatic estimate, then the camera record's.
+            const float nearOverride = interceptor.m_nearClipOverride.load();
+            const float autoNear = nearOverride > 0.0f ? 0.0f : interceptor.m_nearEstimator.Estimate();
+            const float forcedNear = nearOverride > 0.0f ? nearOverride : autoNear;
+            if (plan.decision == mvreproj::CorrectionDecision::Correct) {
+                if (std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f) {
+                    // Only the camera that rendered the depth buffer reads it.
+                    plan.current.infiniteDepth = infiniteDepth;
+                    if (forcedNear > 0.0f) {
+                        plan.current.nearClip = plan.previousFrame.nearClip = plan.sameEye.nearClip = forcedNear;
+                    }
+                    correctionRequest.mvScaleX = effScaleX;
+                    correctionRequest.mvScaleY = effScaleY;
+                    correctionRequest.current = plan.current;
+                    correctionRequest.previousFrame = plan.previousFrame;
+                    correctionRequest.sameEye = plan.sameEye;
+                    correctionRequest.toPreviousFrame = plan.toPreviousFrame;
+                    correctionRequest.toSameEye = plan.toSameEye;
+                    // AFR: the simulation advances every frame, so only the engine's object motion needs the
+                    // eye stride (the same eye's history is two frames back).
+                    correctionRequest.objectMotionFactor = eyeStride ? mvreproj::kAfrEyeStride : 1.0f;
+                    // Camera-attached geometry (the cab) and moving objects keep the engine's vector.
+                    correctionRequest.gateNonStatic = true;
+                    correction = &correctionRequest;
+                } else {
+                    correctionState = "zero-mv-scale";
+                }
+            }
+            if (interceptor.m_diagRemaining.load() > 0) {
+                LogInfo("NgxInterceptor: [Diag] MvCorrection Eval #" + std::to_string(interceptor.m_evalCount.load()) +
+                        " Eye=" + std::to_string(correctionEye) + ": " + (correction ? "correcting" : correctionState));
+            }
+
+            // Self-check (vrDlssDiag window only): predict the engine's vectors from depth and the camera
+            // records and score them. Measured only; the pass output stays a copy of the engine's vectors.
+            MvSelfCheckRequest checkRequest;
+            const MvSelfCheckRequest* check = nullptr;
+            if (interceptor.m_diagRemaining.load() > 0) {
+                const uint64_t evalIndex = interceptor.m_evalCount.load();
+                const uint32_t checkEye = bridge ? bridge->GetActiveEye() : 0;
+                std::string skipReason;
+                if (bridge && BuildMvSelfCheckRequest(bridge->GetCameraRecords().Resolve(checkEye), checkEye, evalIndex,
+                                                      prevScaleX * scaleMulX, prevScaleY * scaleMulY,
+                                                      correction ? &plan : nullptr, checkRequest, skipReason)) {
+                    checkRequest.current.infiniteDepth = infiniteDepth;
+                    if (forcedNear > 0.0f) checkRequest.current.nearClip = checkRequest.previous.nearClip = forcedNear;
+                    check = &checkRequest;
+                    if (!interceptor.m_diagProjectionLogged.exchange(true)) {
+                        const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(checkEye);
+                        unsigned int renderW = 0, renderH = 0;
+                        mutableParams->Get(NVSDK_NGX_Parameter_Width, &renderW);
+                        mutableParams->Get(NVSDK_NGX_Parameter_Height, &renderH);
+                        MvProjectionDiag diag;
+                        diag.source = nearOverride > 0.0f ? "override" : (autoNear > 0.0f ? "auto" : "camera-record");
+                        diag.used = {forcedNear > 0.0f ? forcedNear : resolved.current->nearClip,
+                                     resolved.current->farClip, resolved.current->fovY};
+                        diag.autoEstimate = autoNear;
+                        diag.hasRecordNear = true;
+                        diag.recordNear = resolved.current->nearClip;
+                        diag.projOffsetX = resolved.current->projOffsetX;
+                        diag.projOffsetY = resolved.current->projOffsetY;
+                        diag.aspect = renderH ? static_cast<float>(renderW) / static_cast<float>(renderH) : 1.0f;
+                        diag.infinite = infiniteDepth;
+                        diag.staticGate = true;
+                        diag.depthSource = "vrDlssDepthModel";
+                        LogInfo(FormatMvProjectionLine("NgxInterceptor", "Eval", checkEye, evalIndex, diag));
+                    }
+                } else {
+                    if (!bridge) skipReason = "no VR bridge";
+                    LogInfo(FormatMvSelfCheckSkipped("NgxInterceptor", "Eval", checkEye, evalIndex, skipReason));
+                }
+            }
+            // Automatic near plane estimate, running whenever the correction does (not only in diagnostics
+            // windows): every Nth cross-eye evaluation records a sparse self-check against the previous
+            // rendered frame's camera on the engine's original vectors; it is read back a few evaluations
+            // later like any self-check. Missing records are skipped.
+            MvSelfCheckRequest nearRequest;
+            float recordNear = 0.0f;
+            if (bridge) {
+                const ResolvedCameras resolved = bridge->GetCameraRecords().Resolve(correctionEye);
+                if (resolved.current) recordNear = resolved.current->nearClip;
+                // One check per evaluation: on its every Nth evaluation the estimate takes the slot, also in a
+                // diagnostics window (which arms itself at start up and on mode changes).
+                if (nearOverride <= 0.0f && resolved.current && resolved.previousFrame &&
+                    std::fabs(effScaleX) > 1e-6f && std::fabs(effScaleY) > 1e-6f &&
+                    interceptor.m_nearCrossEyeEvals.fetch_add(1) % NgxInterceptor::kNearEstimateInterval ==
+                        NgxInterceptor::kNearEstimateInterval - 1) {
+                    std::string skipReason;
+                    const uint64_t nearEvalIndex = interceptor.m_evalCount.load();
+                    if (BuildMvSelfCheckRequest(resolved, correctionEye, nearEvalIndex, effScaleX, effScaleY, nullptr,
+                                                nearRequest, skipReason)) {
+                        nearRequest.current.infiniteDepth = infiniteDepth;
+                        // The assumed near n0: whatever the correction is using this frame.
+                        if (forcedNear > 0.0f) nearRequest.current.nearClip = nearRequest.previous.nearClip = forcedNear;
+                        nearRequest.nearEstimate = true;
+                        check = &nearRequest;
+                    }
+                }
+            }
+            std::vector<MvSelfCheckReport> reports;
+            ID3D12Resource* corrected = interceptor.RecordMvPass(InCmdList, depth, mv, check, &reports, correction);
+            for (const MvSelfCheckReport& report : reports) {
+                if (report.nearEstimate) {
+                    interceptor.OnNearSolution(report.evalIndex, report.nearSolution, recordNear, report.eye,
+                                               report.stats.gatedFraction);
+                    if (interceptor.m_diagRemaining.load() > 0) {
+                        LogInfo(FormatMvSelfCheckReport("NgxInterceptor", "Eval", report));
+                    }
+                    continue;
+                }
+                if (!interceptor.m_diagRawRangeLogged.exchange(true)) {
+                    LogInfo(FormatMvRawRangeReport("NgxInterceptor", "Eval", report));
+                }
+                LogInfo(FormatMvSelfCheckReport("NgxInterceptor", "Eval", report));
+            }
+            if (corrected) {
+                prevMv = mv;
+                mutableParams->Set(NVSDK_NGX_Parameter_MotionVectors, corrected);
+                swappedMv = true;
+            }
         }
     }
 
+    // AFR with the pass expected to run but not taking over (it failed on this evaluation, or the engine's
+    // depth or vectors were unavailable): fall back to eye-stride scaling.
+    if (eyeStride && mvFixWillRun && !swappedMv && mutableParams) {
+        mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_X, prevScaleX * afrFallbackMulX);
+        mutableParams->Set(NVSDK_NGX_Parameter_MV_Scale_Y, prevScaleY * afrFallbackMulY);
+        wroteScale = true;
+    }
+
     uint64_t currentEval = interceptor.m_evalCount.fetch_add(1);
+    interceptor.RecordDiagnostics(currentEval, contextIndex, InParameters, needReset, isDualPass);
     if ((currentEval == 0 || (currentEval % 300 == 0)) && InParameters) {
         unsigned int inW = 0, inH = 0, outW = 0, outH = 0;
         InParameters->Get(NVSDK_NGX_Parameter_Width, &inW);
@@ -896,6 +1407,7 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
            << " Target=" << target << " Dim=[" << inW << "x" << inH << " -> " << outW << "x" << outH << "]"
            << " MVScale=(" << mvX << ", " << mvY << ") [has=(" << hasMvX << "," << hasMvY << ")]"
            << " Jitter=(" << jitX << ", " << jitY << ") [has=(" << hasJitX << "," << hasJitY << ")]"
+           << " MvFix=" << interceptor.DescribeMvFixState() << " MvCorrection=" << correctionState
            << " Sharp=" << sharp << " [has=" << hasSharp << "] Preset=" << curPreset << " Reset=" << (needReset ? 1 : 0)
            << " Res=[Col=" << pColor << " Depth=" << pDepth << " MV=" << pMv << " Out=" << pOut << "]";
         LogInfo(ss.str());
@@ -909,6 +1421,10 @@ NVSDK_NGX_Result NgxInterceptor::Intercept_EvaluateFeature(
         } else {
             mutableParams->Set(NVSDK_NGX_Parameter_Reset, 0);
         }
+    }
+
+    if (swappedMv) {
+        mutableParams->Set(NVSDK_NGX_Parameter_MotionVectors, prevMv);
     }
 
     // Always undo our write so a reused parameter block never compounds the multiplier
@@ -984,6 +1500,8 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryW(LPCWSTR lpLibFileName) {
 
     if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
         interceptor->AttachModule(hMod);
+    } else if (interceptor && hMod) {
+        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
     }
     return hMod;
 }
@@ -996,6 +1514,8 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExW(LPCWSTR lpLibFileName, H
 
     if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
         interceptor->AttachModule(hMod);
+    } else if (interceptor && hMod) {
+        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
     }
     return hMod;
 }
@@ -1008,6 +1528,8 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryA(LPCSTR lpLibFileName) {
 
     if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
         interceptor->AttachModule(hMod);
+    } else if (interceptor && hMod) {
+        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
     }
     return hMod;
 }
@@ -1020,6 +1542,8 @@ HMODULE WINAPI NgxInterceptor::Intercept_LoadLibraryExA(LPCSTR lpLibFileName, HA
 
     if (interceptor && hMod && MatchesNgxName(lpLibFileName)) {
         interceptor->AttachModule(hMod);
+    } else if (interceptor && hMod) {
+        interceptor->NotifyModuleLoaded(hMod, lpLibFileName);
     }
     return hMod;
 }

@@ -133,7 +133,7 @@ function VRCompanion:getConvergenceOffset(parity, disparity)
     local targetParity = parity
     if targetParity == nil then
         if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then
-            targetParity = self:getSubPassIndex() % 2
+            targetParity = self:getDualPassEye()
         else
             targetParity = self:getFrameParity()
         end
@@ -384,7 +384,7 @@ function VRCompanion:updateHudConvergence(dt)
 
     local eyeOrParity = nil
     if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then
-        eyeOrParity = self:getSubPassIndex() % 2
+        eyeOrParity = self:getDualPassEye()
     else
         eyeOrParity = self:getFrameParity()
     end

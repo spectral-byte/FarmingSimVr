@@ -305,7 +305,24 @@ void DxgiProxy::LatchPendingRenderingMode() {
     }
 }
 
-bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT /*flags*/) {
+bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
+    m_presentWasStereo = false;
+    bool shouldPresent = OnPresentImpl(swapChain, syncInterval, flags);
+    // The rendered-frame counter stamps the Companion Mod's camera records and resolves them for DLSS
+    // evaluations. It advances per stereo Present only; a Present outside stereo presentation (menu,
+    // 2D Floating Window Mode, Pass-Through) renders no eye camera, so its records are dropped
+    // rather than left to read as the current frame's.
+    if (m_vrBridge) {
+        if (m_presentWasStereo) {
+            m_vrBridge->GetCameraRecords().AdvanceFrame();
+        } else {
+            m_vrBridge->GetCameraRecords().Clear();
+        }
+    }
+    return shouldPresent;
+}
+
+bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT /*flags*/) {
     FS25VR_TRACE_THREAD("DxgiProxy.Present");
     m_lastPresentSuppressed = false;
 
@@ -453,6 +470,7 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
                 }
             }
             m_wasInQuadMode = false;
+            m_presentWasStereo = true;
             if (m_openXrManager->GetMenuCursorState().visible) {
                 m_openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
             }
@@ -460,7 +478,7 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
             if (renderingMode == VRRenderingMode::SequentialDualPass) {
                 uint32_t subPass = m_vrBridge ? m_vrBridge->GetSubPassIndex() : 0;
                 if (subPass == 0) {
-                    // Sub-Pass 0 (Left Eye): Copies backbuffer to OpenXR eye swapchain 0, suppresses physical present, advances subPassIndex to 1
+                    // Sub-Pass 0: copies the left eye, suppresses the physical present, advances subPassIndex to 1
                     m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
                     if (m_vrBridge) {
                         m_vrBridge->SetSubPassIndex(1);
@@ -468,7 +486,7 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT
                     m_lastPresentSuppressed = true;
                     return false;
                 } else {
-                    // Sub-Pass 1 (Right Eye): Copies backbuffer to OpenXR eye swapchain 1, submits pair, executes physical present, resets subPassIndex to 0
+                    // Sub-Pass 1: copies the right eye, submits the pair, executes the physical present, resets subPassIndex to 0
                     m_openXrManager->CopyBackBufferToEye(1, pBackBuffer);
                     m_openXrManager->SubmitFramePair();
                     if (m_vrBridge) {

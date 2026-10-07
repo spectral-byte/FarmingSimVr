@@ -138,6 +138,10 @@ private:
     std::once_flag m_vrInitOnce;
     bool m_wasInQuadMode = false;
     bool m_lastPresentSuppressed = false;
+    // Set by OnPresentImpl when the Present was a stereo presentation (an eye copy), so OnPresent
+    // advances the rendered-frame counter for it and discards camera records for any other Present.
+    bool m_presentWasStereo = false;
+    bool OnPresentImpl(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
 
     IDXGISwapChain* m_cachedSwapChain = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;

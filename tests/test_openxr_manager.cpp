@@ -1,4 +1,4 @@
-﻿#include <gtest/gtest.h>
+#include <gtest/gtest.h>
 #include "openxr/openxr_manager.h"
 #include "core/dll_lifecycle.h"
 #include "fake_openxr_tracking.h"

@@ -391,7 +391,7 @@ end
 function VRCompanion:consoleCommandSetDlssMvScale(scaleXStr, scaleYStr)
     local sx = tonumber(scaleXStr)
     if sx == nil then
-        return "Usage: vrDlssMvScale <scaleX> [scaleY] (default 2.0 under AFR; 1.0 disables eye-stride compensation)"
+        return "Usage: vrDlssMvScale <scaleX> [scaleY] (AFR fallback only, used while vrDlssMvFix is off or disabled; default 2.0; 1.0 disables eye-stride compensation)"
     end
     local sy = tonumber(scaleYStr) or sx
     local bridge = VRBridge or (_G and _G.VRBridge)
@@ -431,6 +431,104 @@ function VRCompanion:consoleCommandSetDlssPreset(presetStr)
         return string.format("DLSS Preset hint override set to: %d", p)
     else
         return "VRBridge.setDlssPreset is not available."
+    end
+end
+
+function VRCompanion:consoleCommandSetDlssSdpMvScale(scaleXStr, scaleYStr)
+    local sx = tonumber(scaleXStr)
+    if sx == nil then
+        return "Usage: vrDlssSdpMvScale <scaleX> [scaleY] (default 1.0; 0 ignores motion vectors)"
+    end
+    local sy = tonumber(scaleYStr) or sx
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.setDlssSdpMvScale) == "function" then
+        bridge.setDlssSdpMvScale(sx, sy)
+        print(string.format("[FS25_VR] DLSS Sequential Dual-Pass motion vector scale set to: X=%.2f, Y=%.2f", sx, sy))
+        return string.format("DLSS Sequential Dual-Pass motion vector scale set to: X=%.2f, Y=%.2f", sx, sy)
+    else
+        return "VRBridge.setDlssSdpMvScale is not available."
+    end
+end
+
+function VRCompanion:consoleCommandDlssMvFix(arg)
+    local value = arg ~= nil and string.lower(tostring(arg)) or ""
+    local enable
+    if value == "on" or value == "true" or value == "1" then
+        enable = true
+    elseif value == "off" or value == "false" or value == "0" then
+        enable = false
+    else
+        return "Usage: vrDlssMvFix <on|off>"
+    end
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.setDlssMvFix) == "function" then
+        if bridge.setDlssMvFix(enable) then
+            local state = enable and "on" or "off"
+            print(string.format("[FS25_VR] DLSS motion vector pass (vrDlssMvFix) is %s", state))
+            return string.format("DLSS motion vector pass (vrDlssMvFix) is %s", state)
+        end
+        return "DLSS motion vector pass unavailable (no NGX interceptor, or it was disabled after a failure; see fs25_vr.log)."
+    else
+        return "VRBridge.setDlssMvFix is not available."
+    end
+end
+
+function VRCompanion:consoleCommandDlssDepthModel(arg)
+    local value = arg ~= nil and string.lower(tostring(arg)) or ""
+    local infinite
+    if value == "infinite" then
+        infinite = true
+    elseif value == "finite" then
+        infinite = false
+    else
+        return "Usage: vrDlssDepthModel <infinite|finite> (depth model the DLSS motion vector correction reads; default infinite)"
+    end
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.setDlssDepthModel) == "function" then
+        if bridge.setDlssDepthModel(infinite) then
+            local state = infinite and "infinite" or "finite"
+            print(string.format("[FS25_VR] DLSS depth model (vrDlssDepthModel) is %s", state))
+            return string.format("DLSS depth model (vrDlssDepthModel) is %s", state)
+        end
+        return "DLSS depth model unavailable (no NGX interceptor)."
+    else
+        return "VRBridge.setDlssDepthModel is not available."
+    end
+end
+
+function VRCompanion:consoleCommandDlssNearClip(arg)
+    local meters = tonumber(arg)
+    if meters == nil and type(arg) == "string" and string.lower(arg) == "auto" then
+        meters = 0
+    end
+    if meters == nil or meters < 0 then
+        return "Usage: vrDlssNearClip <meters|auto> (near plane the DLSS motion vector correction assumes; 0 or auto = estimate it from the engine's motion vectors, the default)"
+    end
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.setDlssNearClip) == "function" then
+        if bridge.setDlssNearClip(meters) then
+            local text = meters > 0 and string.format("DLSS near plane override (vrDlssNearClip) is %.3f m", meters)
+                or "DLSS near plane (vrDlssNearClip) is auto: estimated from the engine's motion vectors (the camera record's near until then)"
+            print("[FS25_VR] " .. text)
+            return text
+        end
+        return "DLSS near plane override unavailable (no NGX interceptor)."
+    else
+        return "VRBridge.setDlssNearClip is not available."
+    end
+end
+
+function VRCompanion:consoleCommandDlssDiag(countStr)
+    local count = tonumber(countStr) or 128
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge ~= nil and type(bridge.dlssDiag) == "function" then
+        if bridge.dlssDiag(count) then
+            print(string.format("[FS25_VR] Tracing the next %d DLSS evaluations to fs25_vr.log", count))
+            return string.format("Tracing the next %d DLSS evaluations to fs25_vr.log", count)
+        end
+        return "DLSS diagnostics unavailable (no NGX interceptor or invalid count)."
+    else
+        return "VRBridge.dlssDiag is not available."
     end
 end
 
@@ -515,6 +613,11 @@ VRCompanion.Input.consoleCommandToggleView = function(self, ...) return VRCompan
 VRCompanion.Input.consoleCommandSetDlssMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssMvScale(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetDlssSharpness = function(self, ...) return VRCompanion.consoleCommandSetDlssSharpness(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetDlssPreset = function(self, ...) return VRCompanion.consoleCommandSetDlssPreset(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetDlssSdpMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssSdpMvScale(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssMvFix = function(self, ...) return VRCompanion.consoleCommandDlssMvFix(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssDepthModel = function(self, ...) return VRCompanion.consoleCommandDlssDepthModel(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssNearClip = function(self, ...) return VRCompanion.consoleCommandDlssNearClip(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandDlssDiag = function(self, ...) return VRCompanion.consoleCommandDlssDiag(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetRenderingMode = function(self, ...) return VRCompanion.consoleCommandSetRenderingMode(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetObliqueProjection = function(self, ...) return VRCompanion.consoleCommandSetObliqueProjection(VRCompanion, ...) end
 
