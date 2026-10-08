@@ -35,7 +35,6 @@ end
 VRCompanion.cameraNodeLeft = VRCompanion.cameraNodeLeft or nil
 VRCompanion.cameraNodeRight = VRCompanion.cameraNodeRight or nil
 VRCompanion.cyclopeanAudioListenerNode = VRCompanion.cyclopeanAudioListenerNode or nil
-VRCompanion.activeRenderingCameraNode = VRCompanion.activeRenderingCameraNode or nil
 VRCompanion.origCamSettings = VRCompanion.origCamSettings or {}
 VRCompanion.menuCameraOffsets = VRCompanion.menuCameraOffsets or {}
 
@@ -885,7 +884,6 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
             end
             self:bindRenderingCamera(activeEyeCam)
             self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
-            self.activeRenderingCameraNode = activeEyeCam
         end
     else
         local targetNode = self.cameraNodeLeft or referenceCamNode
@@ -901,7 +899,6 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
                 setRotationFn(targetNode, rotX, rotY, rotZ)
             end
             self:bindRenderingCamera(targetNode)
-            self.activeRenderingCameraNode = targetNode
         end
     end
 end
@@ -940,11 +937,11 @@ function VRCompanion:getOutsideCameraBaseHeading(camNode, localDirectionToWorldF
 end
 
 -- Leaves the Outside Camera to the engine: renders through the engine's own camera again when an
--- eye camera was bound in its place. Binding changes no transform of the engine's nodes.
+-- eye camera was bound in its place (activeRenderingCamera is the camera bindRenderingCamera last
+-- bound). Binding changes no transform of the engine's nodes.
 function VRCompanion:renderThroughEngineCamera(camNode)
     if self.activeRenderingCamera ~= nil and self.activeRenderingCamera ~= camNode then
         self:bindRenderingCamera(camNode)
-        self.activeRenderingCameraNode = camNode
     end
 end
 

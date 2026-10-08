@@ -263,7 +263,6 @@ local function resetCompanion()
     VRCompanion.cameraNodeRight = nil
     VRCompanion.cyclopeanAudioListenerNode = nil
     VRCompanion.activeRenderingCamera = nil
-    VRCompanion.activeRenderingCameraNode = nil
     VRCompanion.deferRenderingCameraBind = false
     VRCompanion.origCamSettings = {}
     VRCompanion.is2DViewActive = false
