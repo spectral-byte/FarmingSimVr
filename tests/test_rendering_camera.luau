@@ -109,7 +109,7 @@ local function uninstall()
         "getRotation", "getWorldTranslation", "getWorldRotation", "localDirectionToWorld", "createCamera", "entityExists",
         "getFovY", "setFovY", "getNearClip", "getFarClip", "setNearClip", "setFarClip", "setProjectionOffset",
         "getProjectionOffset", "setCamera", "getCamera", "g_cameraManager", "g_currentMission", "VRBridge",
-        "FSBaseMission" }) do
+        "FSBaseMission", "createTransformGroup", "delete" }) do
         _G[name] = nil
     end
     VRCompanion.cameraNodeLeft = nil
@@ -266,6 +266,41 @@ run("WithAGuiMenuOpenTheCabViewIsHeadTrackedOnce", { mode = "AFR", pose = validP
     assert(ok, tostring(err))
 end)
 
+run("UnloadingTheMapNeverDeletesNodesTheGameAlreadyDeleted", { mode = "AFR", pose = validPose() }, function()
+    _G.createTransformGroup = function() nextNodeId = nextNodeId + 1; return addNode(nextNodeId, { 0, 0, 0 }, { 0, 0, 0 }) end
+    VRCompanion:onVehicleCameraUpdate(cabCamera(), 16.6)
+    assert(VRCompanion.cyclopeanAudioListenerNode ~= nil, "precondition: the Cyclopean Audio Listener Node exists")
+    -- The game deletes its vehicles, and the nodes the mod linked under them, before the mod unloads
+    for id in pairs(nodes) do
+        if id >= 7000 then nodes[id] = nil end
+    end
+    local unknownDeletes = {}
+    _G.delete = function(node)
+        if nodes[node] == nil then
+            table.insert(unknownDeletes, tostring(node))
+            error("Unknown entity id " .. tostring(node))
+        end
+        nodes[node] = nil
+    end
+
+    local ok, err = pcall(function() VRCompanion:deleteMap() end)
+
+    _G.delete = nil
+    _G.createTransformGroup = nil
+    assert(ok, tostring(err))
+    assert(#unknownDeletes == 0, "deleteMap must not delete nodes that no longer exist, deleted: " .. table.concat(unknownDeletes, ", "))
+end)
+
+run("UnloadingTheMapDeletesTheVrCamera", { mode = "AFR", pose = validPose() }, function()
+    VRCompanion:onPlayerCameraUpdate(playerCamera(), 16.6)
+    local vrCamera = VRCompanion.cameraNodeLeft
+    _G.delete = function(node) nodes[node] = nil end
+
+    VRCompanion:deleteMap()
+
+    assert(nodes[vrCamera] == nil, "the VR camera must be deleted when the map unloads")
+end)
+
 -- A game screen with a camera of its own (the shop, construction mode) is shown
 local function showShop()
     gameActivates(SHOP)
@@ -297,6 +332,26 @@ run("AfterTheGameScreenClosesOnFootRendersInVrAgain", { mode = "AFR", pose = val
     gameActivates(PLAYER)
     VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
     assert(rendered ~= PLAYER and rendered ~= SHOP, "head-tracked stereo must render through an eye camera again, got " .. tostring(rendered))
+end)
+
+run("AfterAGameScreenRestoresTheCameraItReplacedHeadTrackingResumes", { mode = "AFR", pose = validPose() }, function()
+    local state = { mode = "AFR", pose = validPose() }
+    installBridge(state)
+    local playerCam = playerCamera()
+    VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
+    -- The screen saves the active camera (the VR camera), shows its own, then restores the saved one
+    local saved = g_cameraManager:getActiveCamera()
+    showShop()
+    VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
+    gameActivates(saved)
+    VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
+    local x = nodes[rendered].t[1]
+
+    state.pose.x = state.pose.x + 0.2
+    VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
+
+    assert(rendered == saved, "the VR camera must render again, got " .. tostring(rendered))
+    assert(math.abs(nodes[rendered].t[1] - x) > 0.1, "the view must follow the head again, not stay frozen")
 end)
 
 run("WhileTheGameShowsAnotherCameraSequentialDualPassLeavesRenderingAlone", { mode = "SequentialDualPass", subPass = 0, pose = validPose() }, function()

@@ -904,8 +904,6 @@ function VRCompanion:deleteMap()
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
     self.activePlayerCamera = nil
-    self.cameraNodeLeft = nil
-    self.cameraNodeRight = nil
     self.activeRenderingCamera = nil
     self.subPassIndex = 0
     self.accumulatedPass1Dt = 0.0
@@ -917,20 +915,22 @@ function VRCompanion:deleteMap()
     self.guiVisibilityInitialized = false
 
     local deleteFn = delete or (_G and _G.delete)
+    local entityExistsFn = entityExists or (_G and _G.entityExists)
+    -- Nodes linked under a vehicle are already gone: the game deletes its vehicles first, and
+    -- deleting an unknown entity logs a script error even inside pcall
+    local function deleteIfExists(node)
+        if node == nil or node == 0 then return end
+        if type(entityExistsFn) == "function" and not entityExistsFn(node) then return end
+        pcall(deleteFn, node)
+    end
     if type(deleteFn) == "function" then
-        if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
-            pcall(deleteFn, self.cameraNodeLeft)
+        deleteIfExists(self.cameraNodeLeft)
+        -- Both eyes share one camera node unless something set them apart
+        if self.cameraNodeRight ~= self.cameraNodeLeft then
+            deleteIfExists(self.cameraNodeRight)
         end
-        -- Both eyes may share one camera node
-        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 and self.cameraNodeRight ~= self.cameraNodeLeft then
-            pcall(deleteFn, self.cameraNodeRight)
-        end
-        if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
-            pcall(deleteFn, self.cyclopeanAudioListenerNode)
-        end
-        if self.outsideCameraBaseNode ~= nil and self.outsideCameraBaseNode ~= 0 then
-            pcall(deleteFn, self.outsideCameraBaseNode)
-        end
+        deleteIfExists(self.cyclopeanAudioListenerNode)
+        deleteIfExists(self.outsideCameraBaseNode)
     end
     self.outsideCameraBaseNode = nil
     self.cameraNodeLeft = nil

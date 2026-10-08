@@ -525,6 +525,23 @@ test("HeadRotationComposesOnTheLevelBaseInTheEnginesOwnEulerConvention", functio
     end
 end)
 
+test("RollingTheHeadRaisesTheViewsRightSideByTheSineOfTheRollInAnyEulerConvention", function()
+    for _, order in ipairs({ "YXZ", "ZYX" }) do
+        eulerOrder = order
+        local state = { mode = "AFR", parity = 0,
+            pose = { isValid = true, x = 0, y = 0, z = 0, pitch = 0, yaw = 0, roll = 0.25, qx = 0, qy = 0, qz = 0, qw = 1 } }
+        setup(state)
+        local cam = installOrbitCamera({ 0, math.pi, 0 })
+
+        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+
+        local _, rightY = localDirectionToWorld(bound, 1, 0, 0)
+        cleanup()
+        eulerOrder = "YXZ"
+        assert(near(rightY, 0.247404, 1e-5), string.format("%s: a 0.25 rad head roll must raise the right side by 0.247404, got %f", order, rightY))
+    end
+end)
+
 test("TheBoundEyeCameraClipsLikeTheEngineCameraItReplaces", function()
     local state = { mode = "AFR", parity = 0, pose = tiltedPose() }
     setup(state)
@@ -705,6 +722,20 @@ test("WithAnInvalidHeadPoseTheOutsideCameraShowsTheEngineViewInsteadOfFreezing",
     end
     assertEngineUntouched()
     cleanup()
+end)
+
+test("WithoutALevelBaseNodeTheOutsideCameraShowsTheEngineView", function()
+    local state = { mode = "AFR", parity = 0, pose = tiltedPose() }
+    setup(state)
+    local cam = installOrbitCamera()
+    -- No transform group can be created for the level base
+    _G.createTransformGroup = nil
+
+    VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+
+    local ok, err = pcall(assertShowsEngineView, bound, "no level base")
+    cleanup()
+    assert(ok, tostring(err))
 end)
 
 test("WithAnInvalidHeadPoseSequentialDualPassSubPassesShowTheEngineView", function()

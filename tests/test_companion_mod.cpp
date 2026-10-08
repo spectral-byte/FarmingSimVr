@@ -577,45 +577,47 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
     )", "=verifyInsideCam"), 0);
 
     // Clear and test outside camera: the engine camera sits at (10, 2, 30) looking along world +X
-    // (heading -pi/2) and is only read; the head pose is composited on that level base and rendered
-    // through an eye camera placed in world space
+    // (heading -pi/2) and is only read. The head pose is composited on a level base node at that
+    // position and heading, and rendered through the eye camera linked under it.
     ASSERT_EQ(RunLuauChunk(L, R"(
-        _G.cameraTransforms = {}
-        _G.writtenNodes = {}
-        function setTranslation(node, x, y, z)
-            _G.writtenNodes[node] = true
-            _G.cameraTransforms.translation = { node = node, x = x, y = y, z = z }
-        end
-        function setRotation(node, rx, ry, rz)
-            _G.writtenNodes[node] = true
-            _G.cameraTransforms.rotation = { node = node, rx = rx, ry = ry, rz = rz }
-        end
-        function link(parentNode, child) end
+        _G.translations = {}
+        _G.rotations = {}
+        _G.parents = {}
+        function setTranslation(node, x, y, z) _G.translations[node] = { x = x, y = y, z = z } end
+        function setRotation(node, rx, ry, rz) _G.rotations[node] = { rx = rx, ry = ry, rz = rz } end
+        function link(parentNode, child) _G.parents[child] = parentNode end
+        function getParent(node) return _G.parents[node] or 0 end
         function getRootNode() return 1 end
         function getWorldTranslation(node) return 10.0, 2.0, 30.0 end
         function localDirectionToWorld(node, x, y, z) return -z, y, x end
-        local nextCamera = 700
+        local nextNode = 700
         function createCamera(name, fovY, nearClip, farClip)
-            nextCamera = nextCamera + 1
-            return nextCamera
+            nextNode = nextNode + 1
+            return nextNode
+        end
+        function createTransformGroup(name)
+            nextNode = nextNode + 1
+            return nextNode
         end
     )", "=setupOutsideCamMocks"), 0);
     int updateOutside = RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockOutsideCam, 16.6)", "=updateOutside");
     EXPECT_EQ(updateOutside, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
     ASSERT_EQ(RunLuauChunk(L, R"(
-        assert(_G.writtenNodes[101] == nil, "the engine's Outside Camera node must not be modified")
-        local t = _G.cameraTransforms.translation
-        assert(t ~= nil and t.node ~= 101, "an eye camera must receive the head-tracked translation")
-        assert(_G.currentCamera == t.node, "the head-tracked eye camera must be bound for rendering")
-        -- head translation (0.15, 0.05, -0.10) rotated by the base heading -pi/2 is (0.10, 0.05, 0.15)
-        assert(math.abs(t.x - 10.10) < 0.001, "x transform mismatch")
-        assert(math.abs(t.y - 2.05) < 0.001, "y transform mismatch")
-        assert(math.abs(t.z - 30.15) < 0.001, "z transform mismatch")
-        local r = _G.cameraTransforms.rotation
-        assert(r ~= nil and r.node == t.node, "the eye camera must receive the head-tracked rotation")
-        assert(math.abs(r.rx - 0.20) < 0.001, "pitch must be the head pitch on a level base")
-        assert(math.abs(r.ry - (-math.pi * 0.5 - 0.30)) < 0.001, "yaw must be the base heading plus head yaw")
-        assert(math.abs(r.rz - 0.02) < 0.001, "roll must be the head roll on a level base")
+        assert(_G.translations[101] == nil and _G.rotations[101] == nil,
+            "the engine's Outside Camera node must not be modified")
+        local eye = _G.currentCamera
+        assert(eye ~= nil and eye ~= 101, "the head-tracked eye camera must be bound for rendering")
+        local base = _G.parents[eye]
+        assert(base ~= nil and _G.parents[base] == 1, "the eye camera must sit on a level base under the world root")
+        local bt, br = _G.translations[base], _G.rotations[base]
+        assert(math.abs(bt.x - 10) < 0.001 and math.abs(bt.y - 2) < 0.001 and math.abs(bt.z - 30) < 0.001,
+            "the base must be at the engine camera's world position")
+        assert(math.abs(br.rx) < 0.001 and math.abs(br.ry - (-math.pi * 0.5)) < 0.001 and math.abs(br.rz) < 0.001,
+            "the base must be level, turned only by the engine camera's heading")
+        local t, r = _G.translations[eye], _G.rotations[eye]
+        assert(math.abs(t.y - 0.05) < 0.001, "the eye must carry the head translation on the base")
+        assert(math.abs(r.rx - 0.20) < 0.001 and math.abs(r.ry - (-0.30)) < 0.001 and math.abs(r.rz - 0.02) < 0.001,
+            "the eye must carry the head pitch, yaw and roll on the base")
     )", "=verifyOutsideCam"), 0);
 }
 
@@ -4294,76 +4296,6 @@ TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrame
     )luau", "=testVehicleCamParitySwitch"), 0);
 }
 
-TEST_F(CompanionModTest, DISABLED_DualCameraNodesRetainIndependentTransformHistoryAcrossAfrCycles) {
-    // Superseded: both eyes now share one camera node, because alternating two rendering cameras
-    // made the temporal upscalers drop their history every frame (seen in the headset with DLSS
-    // and FSR). Eye-stride motion vectors are corrected by the Injector (ADR-0020).
-    SetupCameraMockGlobals(L);
-    fs25vr::FakeTrackedHeadset headset;
-    auto oxr = headset.manager;
-    fs25vr::HeadPose simPose;
-    simPose.isValid = true;
-    simPose.position = fs25vr::Vector3(0.0f, 0.0f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
-    headset.SetHeadPose(simPose);
-    oxr->SetIpd(0.064f);
-
-    fs25vr::VRBridge bridge(oxr, nullptr);
-    ASSERT_TRUE(bridge.Inject(L));
-    RegisterTestSetFrameParity(bridge);
-
-    ASSERT_EQ(LoadCompanionModChecked(L), 0);
-
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion:loadMap("testMap")
-        VRCompanion:setRenderingMode("AFR")
-        VRCompanion:set2DViewActive(false)
-        VRCompanion.handshakeComplete = true
-
-        local mockVehCam = {
-            isInside = true,
-            cameraNode = 100,
-            transX = 0, transY = 1.8, transZ = 0
-        }
-
-        local leftCam = VRCompanion.cameraNodeLeft
-        local rightCam = VRCompanion.cameraNodeRight
-
-        -- Frame 0: Left Eye (Parity 0)
-        VRBridge.setFrameParity(0)
-        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
-        local l0_x, l0_y, l0_z = getTranslation(leftCam)
-
-        -- Frame 1: Right Eye (Parity 1)
-        VRBridge.setFrameParity(1)
-        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
-        local r1_x, r1_y, r1_z = getTranslation(rightCam)
-        local l1_x, l1_y, l1_z = getTranslation(leftCam)
-
-        -- cameraNodeLeft must retain its previous transform state during right eye frame!
-        assert(math.abs(l1_x - l0_x) < 0.0001, "cameraNodeLeft must retain transform history on parity 1")
-        assert(math.abs(l1_y - l0_y) < 0.0001, "cameraNodeLeft Y must remain unchanged on parity 1")
-        assert(math.abs(l1_z - l0_z) < 0.0001, "cameraNodeLeft Z must remain unchanged on parity 1")
-
-        -- Right eye must have stereoscopic offset relative to left eye
-        assert(math.abs(r1_x - l0_x) > 0.01, "Right eye and left eye must have non-zero stereoscopic offset")
-
-        -- Frame 2: Left Eye (Parity 0) with forward motion
-        VRBridge.setFrameParity(0)
-        mockVehCam.transZ = 0.1
-        VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
-        local l2_x, l2_y, l2_z = getTranslation(leftCam)
-        local r2_x, r2_y, r2_z = getTranslation(rightCam)
-
-        -- cameraNodeRight must retain its transform history during left eye frame!
-        assert(math.abs(r2_x - r1_x) < 0.0001, "cameraNodeRight must retain transform history on parity 0")
-
-        -- Single-eye motion vector (l2 - l0): pure translation along movement direction without horizontal jump
-        local horizontalDelta = math.abs(l2_x - l0_x)
-        assert(horizontalDelta < 0.001, "Eye-stride motion vector must have zero horizontal jump contamination")
-    )luau", "=testTransformHistoryRetention"), 0);
-}
-
 TEST_F(CompanionModTest, CyclopeanAudioListenerBoundAtNeutralHeadMidpointWithoutInterEyeJitter) {
     SetupCameraMockGlobals(L);
     fs25vr::FakeTrackedHeadset headset;
@@ -4962,7 +4894,7 @@ TEST_F(CompanionModTest, VehicleSpeedAndFerryDtZeroGuardsPreventDivideByZeroExce
     )luau", "=testVehicleSpeedDtZeroGuards"), 0);
 }
 
-TEST_F(CompanionModTest, CameraManagerActiveCameraBindingEliminatesEngineWarnings) {
+TEST_F(CompanionModTest, BindingTheVrCameraMakesTheCameraManagerRenderThroughIt) {
     SetupCameraMockGlobals(L);
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -4970,32 +4902,24 @@ TEST_F(CompanionModTest, CameraManagerActiveCameraBindingEliminatesEngineWarning
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        local rawSetCameraCalled = 0
-        local managerBoundCam = nil
-
+        -- As in the game: the camera manager renders only through registered cameras, and the
+        -- global setCamera is its deprecation wrapper and binds nothing
+        local rendered = nil
+        local registered = {}
         local origSetCamera = _G.setCamera
-        _G.setCamera = function(node)
-            rawSetCameraCalled = rawSetCameraCalled + 1
-            origSetCamera(node)
-        end
-
+        _G.setCamera = function(node) end
         _G.g_cameraManager = {
-            setActiveCamera = function(self, cam)
-                managerBoundCam = cam
-            end
+            addCamera = function(self, cam) registered[cam] = true end,
+            setActiveCamera = function(self, cam) if registered[cam] then rendered = cam end end,
         }
+        VRCompanion.cameraNodeLeft, VRCompanion.cameraNodeRight = 9001, 9001
 
         VRCompanion:bindRenderingCamera(9001)
-        assert(managerBoundCam == 9001, "g_cameraManager:setActiveCamera must be called with targetCam")
-        assert(rawSetCameraCalled == 0, "Raw setCamera must NOT be called when g_cameraManager is available")
-        assert(VRCompanion.activeRenderingCamera == 9001, "activeRenderingCamera must be 9001")
-        assert(_G.currentCamera == 9001, "_G.currentCamera must be 9001")
-        assert(_G.activeCamera == 9001, "_G.activeCamera must be 9001")
 
-        -- Cleanup
         _G.g_cameraManager = nil
         _G.setCamera = origSetCamera
-    )luau", "=testCameraManagerActiveCameraBinding"), 0);
+        assert(rendered == 9001, "the engine must render through the VR camera, got " .. tostring(rendered))
+    )luau", "=testBindingTheVrCamera"), 0);
 }
 
 TEST_F(CompanionModTest, SequentialDualPassSubPass1ExplicitlySynchronizesRightEyeCamera) {
