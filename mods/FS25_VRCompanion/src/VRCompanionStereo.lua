@@ -223,18 +223,16 @@ function VRCompanion:bindRenderingCamera(targetCam)
     -- During a Sequential Dual-Pass sub-pass the mission update owns the single bind
     -- of the eye's camera; camera updates inside the sub-pass only position nodes.
     if self.deferRenderingCameraBind then return end
-    local bound = false
-    local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
-    if camMgr ~= nil and type(camMgr.setActiveCamera) == "function" then
-        local ok = pcall(camMgr.setActiveCamera, camMgr, targetCam)
-        if ok then
-            bound = true
-        end
-    end
-    if not bound then
-        local setCameraFn = setCamera or (_G and _G.setCamera)
-        if type(setCameraFn) == "function" then
-            pcall(setCameraFn, targetCam)
+    -- The engine's raw setCamera renders through any camera. The game's camera manager silently
+    -- ignores cameras it didn't register, such as the Dual Eye Camera Nodes, so it is only the
+    -- fallback; leaving it untouched also keeps the game's own idea of its active camera.
+    local setCameraFn = setCamera or (_G and _G.setCamera)
+    if type(setCameraFn) == "function" then
+        pcall(setCameraFn, targetCam)
+    else
+        local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
+        if camMgr ~= nil and type(camMgr.setActiveCamera) == "function" then
+            pcall(camMgr.setActiveCamera, camMgr, targetCam)
         end
     end
     self.activeRenderingCamera = targetCam
@@ -827,6 +825,27 @@ function VRCompanion:getActiveEyeIndex(afrFallback)
     return 0
 end
 
+-- Gives an eye camera the near and far clip planes of the engine camera it renders in place of.
+-- The Dual Eye Camera Nodes are shared by every camera path, which have their own clip planes.
+function VRCompanion:matchEngineCameraClip(eyeNode, referenceCamNode)
+    if referenceCamNode == nil or referenceCamNode == 0 or eyeNode == referenceCamNode then return end
+    local getNearClipFn = getNearClip or (_G and _G.getNearClip)
+    local getFarClipFn = getFarClip or (_G and _G.getFarClip)
+    local setNearClipFn = setNearClip or (_G and _G.setNearClip)
+    local setFarClipFn = setFarClip or (_G and _G.setFarClip)
+    if type(getNearClipFn) ~= "function" or type(getFarClipFn) ~= "function"
+        or type(setNearClipFn) ~= "function" or type(setFarClipFn) ~= "function" then
+        return
+    end
+    local nearClip, farClip = getNearClipFn(referenceCamNode), getFarClipFn(referenceCamNode)
+    if nearClip ~= nil and getNearClipFn(eyeNode) ~= nearClip then
+        setNearClipFn(eyeNode, nearClip)
+    end
+    if farClip ~= nil and getFarClipFn(eyeNode) ~= farClip then
+        setFarClipFn(eyeNode, farClip)
+    end
+end
+
 -- Final step of a head-tracked camera frame, shared by every camera path: links the Dual Eye
 -- Camera Nodes and the Cyclopean Audio Listener Node under parentNode, places the listener at the
 -- centre of the head and the active eye at the eye position, applies that eye's Oblique Frustum
@@ -878,6 +897,7 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
         local activeEyeCam = isRightEye and self.cameraNodeRight or self.cameraNodeLeft
 
         if activeEyeCam ~= nil and activeEyeCam ~= 0 then
+            self:matchEngineCameraClip(activeEyeCam, referenceCamNode)
             self:applyCameraProjection(activeEyeCam, eyeIndex, eyeProj)
             if type(setTranslationFn) == "function" then
                 setTranslationFn(activeEyeCam, eyeX, eyeY, eyeZ)
@@ -894,6 +914,7 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
             -- This branch always shows the left eye; reuse eyeProj only when it was fetched for eye 0.
             local leftProj = nil
             if eyeIndex == 0 then leftProj = eyeProj end
+            self:matchEngineCameraClip(targetNode, referenceCamNode)
             self:applyCameraProjection(targetNode, 0, leftProj)
             if type(setTranslationFn) == "function" then
                 setTranslationFn(targetNode, eyeX, eyeY, eyeZ)
@@ -939,12 +960,24 @@ function VRCompanion:getOutsideCameraBaseHeading(camNode, localDirectionToWorldF
     return math.atan2(-fx, -fz)
 end
 
--- Leaves the Outside Camera to the engine: renders through the engine's own camera again when an
--- eye camera was bound in its place (activeRenderingCamera is the camera bindRenderingCamera last
--- bound). Binding changes no transform of the engine's nodes.
+-- Leaves the view to the engine: renders through the engine's own camera again when an eye camera
+-- was bound in its place (activeRenderingCamera is the camera bindRenderingCamera last bound).
+-- Binding changes no transform of the engine's nodes.
 function VRCompanion:renderThroughEngineCamera(camNode)
     if self.activeRenderingCamera ~= nil and self.activeRenderingCamera ~= camNode then
         self:bindRenderingCamera(camNode)
+    end
+end
+
+-- Renders through the camera the game's camera manager considers active, which the mod never
+-- changes, so the engine isn't left on a Dual Eye Camera Node (e.g. when the mod unloads).
+function VRCompanion:restoreGameActiveCamera()
+    local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
+    if camMgr == nil or type(camMgr.getActiveCamera) ~= "function" then return end
+    local ok, camNode = pcall(camMgr.getActiveCamera, camMgr)
+    if ok and camNode ~= nil and camNode ~= 0 then
+        self.deferRenderingCameraBind = false
+        self:renderThroughEngineCamera(camNode)
     end
 end
 
@@ -1047,9 +1080,10 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         end
     end
 
-    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely.
-    -- VehicleCamera.update handles standard 2D mouse and thumbstick camera rotation.
+    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely and show the
+    -- game's own camera. VehicleCamera.update handles standard 2D mouse and thumbstick rotation.
     if self.is2DViewActive then
+        self:renderThroughEngineCamera(cam.cameraNode)
         return
     end
 
@@ -1238,9 +1272,10 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     local eyeProj = self:fetchEyeProjection(eyeIndex)
     self:applyCameraProjection(activeCamNode, eyeIndex, eyeProj)
 
-    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely.
-    -- Standard on-foot camera rotation is driven via mouse/thumbstick.
+    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely and show the
+    -- game's own camera. Standard on-foot camera rotation is driven via mouse/thumbstick.
     if self.is2DViewActive then
+        self:renderThroughEngineCamera(activeCamNode)
         return
     end
 
@@ -1570,6 +1605,8 @@ VRCompanion.Stereo.getActiveEyeIndex = function(self, ...) return VRCompanion.ge
 VRCompanion.Stereo.placeAndBindEyes = function(self, ...) return VRCompanion.placeAndBindEyes(VRCompanion, ...) end
 VRCompanion.Stereo.getOutsideCameraBaseHeading = function(self, ...) return VRCompanion.getOutsideCameraBaseHeading(VRCompanion, ...) end
 VRCompanion.Stereo.renderThroughEngineCamera = function(self, ...) return VRCompanion.renderThroughEngineCamera(VRCompanion, ...) end
+VRCompanion.Stereo.restoreGameActiveCamera = function(self, ...) return VRCompanion.restoreGameActiveCamera(VRCompanion, ...) end
+VRCompanion.Stereo.matchEngineCameraClip = function(self, ...) return VRCompanion.matchEngineCameraClip(VRCompanion, ...) end
 VRCompanion.Stereo.onOutsideCameraUpdate = function(self, ...) return VRCompanion.onOutsideCameraUpdate(VRCompanion, ...) end
 VRCompanion.Stereo.onVehicleCameraUpdate = function(self, ...) return VRCompanion.onVehicleCameraUpdate(VRCompanion, ...) end
 VRCompanion.Stereo.onPlayerCameraMakeCurrent = function(self, ...) return VRCompanion.onPlayerCameraMakeCurrent(VRCompanion, ...) end

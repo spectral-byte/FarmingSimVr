@@ -837,6 +837,9 @@ end
 function VRCompanion:deleteMap()
     print("[FS25_VR] Unloading Companion Mod from map.")
 
+    -- Hand rendering back to the game's active camera before the Dual Eye Camera Nodes go away
+    self:restoreGameActiveCamera()
+
     if self.stereoToggled and type(setStereoRendering) == "function" then
         setStereoRendering(false)
         print("[FS25_VR] Restored engine stereo rendering toggle: setStereoRendering(false)")

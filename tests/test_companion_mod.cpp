@@ -4956,7 +4956,7 @@ TEST_F(CompanionModTest, VehicleSpeedAndFerryDtZeroGuardsPreventDivideByZeroExce
     )luau", "=testVehicleSpeedDtZeroGuards"), 0);
 }
 
-TEST_F(CompanionModTest, CameraManagerActiveCameraBindingEliminatesEngineWarnings) {
+TEST_F(CompanionModTest, BindingAnEyeCameraRendersThroughItEvenThoughTheCameraManagerIgnoresIt) {
     SetupCameraMockGlobals(L);
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -4964,32 +4964,14 @@ TEST_F(CompanionModTest, CameraManagerActiveCameraBindingEliminatesEngineWarning
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        local rawSetCameraCalled = 0
-        local managerBoundCam = nil
-
-        local origSetCamera = _G.setCamera
-        _G.setCamera = function(node)
-            rawSetCameraCalled = rawSetCameraCalled + 1
-            origSetCamera(node)
-        end
-
-        _G.g_cameraManager = {
-            setActiveCamera = function(self, cam)
-                managerBoundCam = cam
-            end
-        }
+        -- As in the engine, the camera manager ignores cameras the game didn't register
+        _G.g_cameraManager = { setActiveCamera = function(self, cam) end }
 
         VRCompanion:bindRenderingCamera(9001)
-        assert(managerBoundCam == 9001, "g_cameraManager:setActiveCamera must be called with targetCam")
-        assert(rawSetCameraCalled == 0, "Raw setCamera must NOT be called when g_cameraManager is available")
-        assert(VRCompanion.activeRenderingCamera == 9001, "activeRenderingCamera must be 9001")
-        assert(_G.currentCamera == 9001, "_G.currentCamera must be 9001")
-        assert(_G.activeCamera == 9001, "_G.activeCamera must be 9001")
 
-        -- Cleanup
         _G.g_cameraManager = nil
-        _G.setCamera = origSetCamera
-    )luau", "=testCameraManagerActiveCameraBinding"), 0);
+        assert(getCamera() == 9001, "the engine must render through the eye camera, got " .. tostring(getCamera()))
+    )luau", "=testBindingAnEyeCameraRendersThroughIt"), 0);
 }
 
 TEST_F(CompanionModTest, SequentialDualPassSubPass1ExplicitlySynchronizesRightEyeCamera) {

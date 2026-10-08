@@ -52,6 +52,7 @@ local nextNodeId = 5000
 local bound = nil
 local audioListener = nil
 local fovByNode = {}
+local clipByNode = {}
 
 local function rotMatrix(rx, ry, rz)
     local ca, sa = math.cos(rx), math.sin(rx)
@@ -124,6 +125,7 @@ local function installSceneGraph()
     engineNodes = {}
     engineWrites = {}
     fovByNode = {}
+    clipByNode = {}
     bound = nil
     audioListener = nil
     addNode(ROOT, 0, { 0, 0, 0 }, { 0, 0, 0 })
@@ -170,6 +172,7 @@ local function installSceneGraph()
     _G.createCamera = function(name, fovY, nearClip, farClip)
         local id = newNode()
         fovByNode[id] = fovY
+        clipByNode[id] = { nearClip, farClip }
         return id
     end
     _G.createTransformGroup = function(name)
@@ -180,24 +183,39 @@ local function installSceneGraph()
         fovByNode[node] = fovY
     end
     _G.getFovY = function(node) return fovByNode[node] or 1.0 end
-    _G.getNearClip = function(node) return 0.1 end
-    _G.getFarClip = function(node) return 2000 end
+    _G.getNearClip = function(node) return clipByNode[node] and clipByNode[node][1] or 0.1 end
+    _G.getFarClip = function(node) return clipByNode[node] and clipByNode[node][2] or 2000 end
+    _G.setNearClip = function(node, v)
+        logEngineWrite("setNearClip", node)
+        clipByNode[node] = { v, _G.getFarClip(node) }
+    end
+    _G.setFarClip = function(node, v)
+        logEngineWrite("setFarClip", node)
+        clipByNode[node] = { _G.getNearClip(node), v }
+    end
     _G.setProjectionOffset = function(node, x, y)
         logEngineWrite("setProjectionOffset", node)
     end
     _G.getProjectionOffset = function(node) return 0, 0 end
     _G.setAudioListener = function(node) audioListener = node end
+    -- As in the engine: the camera manager only switches to cameras the game registered (the
+    -- engine's own camera nodes) and silently ignores any other; raw setCamera switches to any
+    -- camera. `bound` is the camera the engine renders through, as getCamera() reports it.
     _G.g_cameraManager = {
-        setActiveCamera = function(self, node) bound = node end
+        setActiveCamera = function(self, node)
+            if engineNodes[node] then bound = node end
+        end
     }
+    _G.setCamera = function(node) bound = node end
+    _G.getCamera = function() return bound end
 end
 
 local function removeSceneGraph()
     for _, name in ipairs({ "getRootNode", "getParent", "link", "setTranslation", "setRotation",
         "getTranslation", "getRotation", "getWorldTranslation", "getWorldRotation", "localDirectionToWorld",
-        "createCamera", "createTransformGroup", "setFovY", "getFovY", "getNearClip", "getFarClip",
+        "createCamera", "createTransformGroup", "setFovY", "getFovY", "getNearClip", "getFarClip", "setNearClip", "setFarClip",
         "setProjectionOffset", "getProjectionOffset", "setAudioListener", "g_cameraManager",
-        "g_currentMission", "VRBridge", "FSBaseMission" }) do
+        "setCamera", "getCamera", "g_currentMission", "VRBridge", "FSBaseMission" }) do
         _G[name] = nil
     end
 end
@@ -220,6 +238,8 @@ local function installOrbitCamera(vehicleRot)
         rotX = -0.35, rotY = 2.4, origRotX = -0.35, origRotY = 2.4, zoom = 14,
     }
     _G.g_currentMission = { controlledVehicle = { rootNode = VEHICLE, getActiveCamera = function() return cam end } }
+    -- The game made this camera active, so the engine renders through it until the mod binds another
+    bound = CAMERA
     return cam
 end
 
@@ -231,6 +251,8 @@ local function installFixedCamera(vehicleRot, localRot)
     engineNodes[CAMERA] = true
     local cam = { isInside = false, isRotatable = false, cameraNode = CAMERA, rotX = localRot[1], rotY = localRot[2] }
     _G.g_currentMission = { controlledVehicle = { rootNode = VEHICLE, getActiveCamera = function() return cam end } }
+    -- The game made this camera active, so the engine renders through it until the mod binds another
+    bound = CAMERA
     return cam
 end
 
@@ -418,6 +440,45 @@ local function tiltedPose()
     return { isValid = true, x = 0.1, y = -0.05, z = 0.15, pitch = -0.2, yaw = 0.5, roll = -0.06, qx = 0, qy = 0, qz = 0, qw = 1 }
 end
 
+test("TheBoundEyeCameraClipsLikeTheEngineCameraItReplaces", function()
+    local state = { mode = "AFR", parity = 0, pose = tiltedPose() }
+    setup(state)
+    -- The eye cameras already exist from another camera with its own clip planes (on foot, say)
+    VRCompanion:ensureDualEyeCameraNodes(nil)
+    for _, eye in ipairs({ VRCompanion.cameraNodeLeft, VRCompanion.cameraNodeRight }) do
+        clipByNode[eye] = { 0.15, 2000 }
+    end
+    local cam = installOrbitCamera()
+    clipByNode[CAMERA] = { 0.6, 1500 }
+
+    for eye = 0, 1 do
+        state.parity = eye
+        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+        local clip = clipByNode[bound]
+        assert(clip ~= nil and near(clip[1], 0.6) and near(clip[2], 1500),
+            string.format("eye %d must clip at the engine camera's near 0.6 / far 1500, got %s / %s",
+                eye, tostring(clip and clip[1]), tostring(clip and clip[2])))
+    end
+    assertEngineUntouched()
+    cleanup()
+end)
+
+test("UnloadingTheMapRendersThroughTheGamesActiveCameraAgain", function()
+    local state = { mode = "AFR", parity = 0, pose = tiltedPose() }
+    setup(state)
+    local cam = installOrbitCamera()
+    _G.g_cameraManager.getActiveCamera = function(self) return CAMERA end
+    VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+    assert(bound ~= CAMERA, "precondition: head-tracked stereo renders through an eye camera")
+
+    local ok, err = pcall(function() VRCompanion:deleteMap() end)
+
+    local rendered = bound
+    cleanup()
+    assert(ok, tostring(err))
+    assert(rendered == CAMERA, "after unloading, the engine must render through the game's active camera, got " .. tostring(rendered))
+end)
+
 test("FixedOutsideCameraAimedDownwardStillYieldsALevelBase", function()
     local state = { mode = "AFR", parity = 1, pose = tiltedPose() }
     setup(state)
@@ -506,8 +567,6 @@ test("MenuFramesThroughTheCompanionUpdateNeverWriteTheEngineOutsideCameraNodes",
     local cam = installOrbitCamera()
     local guiVisible = true
     _G.g_gui = { getIsGuiVisible = function() return guiVisible end }
-    -- With a menu open the engine renders through its own Outside Camera node
-    _G.getCamera = function() return bound or CAMERA end
 
     local ok, err = pcall(function()
         -- The menu opens, the player keeps moving their head, then closes it
@@ -522,7 +581,6 @@ test("MenuFramesThroughTheCompanionUpdateNeverWriteTheEngineOutsideCameraNodes",
         assertEngineUntouched()
     end)
     _G.g_gui = nil
-    _G.getCamera = nil
     VRCompanion.menuCameraOffsets = {}
     VRCompanion.menuCamTicks = 0
     VRCompanion.guiVisibilityInitialized = false
