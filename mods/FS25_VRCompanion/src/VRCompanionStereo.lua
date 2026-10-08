@@ -1410,6 +1410,15 @@ function VRCompanion:updateMenuBackgroundCamera(dt)
         return
     end
 
+    -- An Outside Camera behind a menu is left to the engine: its nodes are never written
+    local curVeh = self:getControlledVehicle()
+    if curVeh ~= nil then
+        local vehCam = self:getVehicleActiveCamera(curVeh)
+        if vehCam ~= nil and not vehCam.isInside then
+            return
+        end
+    end
+
     local camNode = nil
     if type(getCamera) == "function" then
         local ok, node = pcall(getCamera)

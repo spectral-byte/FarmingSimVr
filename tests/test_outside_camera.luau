@@ -501,6 +501,37 @@ test("WithAGuiMenuOpenTheOutsideCameraIsLeftToTheEngine", function()
     cleanup()
 end)
 
+test("MenuFramesThroughTheCompanionUpdateNeverWriteTheEngineOutsideCameraNodes", function()
+    local state = { mode = "AFR", parity = 0, pose = tiltedPose() }
+    setup(state)
+    local cam = installOrbitCamera()
+    local guiVisible = true
+    _G.g_gui = { getIsGuiVisible = function() return guiVisible end }
+    -- With a menu open the engine renders through its own Outside Camera node
+    _G.getCamera = function() return bound or CAMERA end
+
+    local ok, err = pcall(function()
+        -- The menu opens, the player keeps moving their head, then closes it
+        for frame = 1, 3 do
+            state.pose.x = 0.05 * frame
+            state.pose.yaw = 0.1 * frame
+            VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+            VRCompanion:update(16.6)
+        end
+        guiVisible = false
+        VRCompanion:update(16.6)
+        assertEngineUntouched()
+    end)
+    _G.g_gui = nil
+    _G.getCamera = nil
+    VRCompanion.menuCameraOffsets = {}
+    VRCompanion.menuCamTicks = 0
+    VRCompanion.guiVisibilityInitialized = false
+    VRCompanion.lastControlledVehicle = nil
+    cleanup()
+    assert(ok, tostring(err))
+end)
+
 -- The view shows exactly what the engine camera sees: its world position and full world rotation
 local function assertShowsEngineView(node, label)
     local ex, ey, ez = getWorldTranslation(CAMERA)
