@@ -1389,10 +1389,11 @@ test("RecenterInOutsideCameraInVehicleOnlyModeSkipsTrackingRecenterButStillReset
     VRCompanion:onVehicleCameraChanged(veh, 2)
     orbitCam.rotX = -0.2
     orbitCam.rotY = 2.5
+    local flushesBefore = calls.discontinuity
 
     VRCompanion:onRecenterAction()
 
-    assert(calls.discontinuity == 1, "Recenter must signal one discontinuity")
+    assert(calls.discontinuity == flushesBefore + 1, "Recenter must signal one discontinuity")
     assert(calls.recenter == 0, "VehicleOnly mode must not recenter the OpenXR reference space")
     assert(math.abs(orbitCam.rotY - 1.0) < 0.0001 and math.abs(orbitCam.rotX - 0.4) < 0.0001,
         "Orbit yaw and pitch must reset to the default in VehicleOnly mode too")
