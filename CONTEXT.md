@@ -101,7 +101,7 @@ An opaque proxy struct allocated by the Injector that encapsulates paired underl
 _Avoid_: Dummy handle, shadow DLSS handle, fake handle
 
 **Dual Eye Camera Nodes**:
-The pair of in-engine scene graph camera nodes alternated on successive frames to preserve per-camera transform history and generate native eye-stride motion vectors.
+The left- and right-eye rendering cameras of the Companion Mod, registered with the game's camera manager so the engine renders through them. Both eyes share one camera node, moved to each eye's position on alternate frames, because the temporal upscalers drop their history whenever the rendering camera changes.
 _Avoid_: Split cameras, twin cameras, alternating cameras
 
 **Discontinuity Flush**:

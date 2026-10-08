@@ -162,60 +162,51 @@ function VRCompanion:getStereoCameraNodes(activeCam)
         cam = self.activePlayerCamera
     end
 
-    local camLeft = self.cameraNodeLeft
-    local camRight = self.cameraNodeRight
-
+    -- Every game camera shares the Dual Eye Camera Nodes, seeded from the first one they replace
+    local baseNode = nil
     if cam ~= nil then
-        if cam.cameraNodeLeft ~= nil then
-            camLeft = cam.cameraNodeLeft
-        end
-        if cam.cameraNodeRight ~= nil then
-            camRight = cam.cameraNodeRight
-        end
-
-        -- If not yet created for this camera, initialize them
-        if camLeft == nil or camRight == nil then
-            local baseNode = (cam.firstPersonCamera ~= nil) and cam.firstPersonCamera or cam.cameraNode
-            if camLeft == nil then
-                if type(createCamera) == "function" then
-                    local fovY = (type(getFovY) == "function" and baseNode and getFovY(baseNode)) or 1.0472
-                    camLeft = createCamera("vrStereoCamLeft", fovY, 0.15, 2000.0)
-                else
-                    camLeft = (baseNode and (baseNode .. "_left")) or (baseNode or 2001)
-                end
-            end
-            if camRight == nil then
-                if type(createCamera) == "function" then
-                    local fovY = (type(getFovY) == "function" and baseNode and getFovY(baseNode)) or 1.0472
-                    camRight = createCamera("vrStereoCamRight", fovY, 0.15, 2000.0)
-                else
-                    camRight = (baseNode and (baseNode .. "_right")) or ((baseNode or 2001) + 1)
-                end
-            end
-            cam.cameraNodeLeft = camLeft
-            cam.cameraNodeRight = camRight
-        end
+        baseNode = (cam.firstPersonCamera ~= nil) and cam.firstPersonCamera or cam.cameraNode
     end
-
+    local camLeft, camRight = self:ensureDualEyeCameraNodes(baseNode)
     if camLeft == nil then
-        if type(createCamera) == "function" then
-            camLeft = createCamera("vrDefaultCamLeft", 1.0472, 0.15, 2000.0)
-        else
-            camLeft = 2001
-        end
+        camLeft, camRight = 2001, 2002
+        self.cameraNodeLeft, self.cameraNodeRight = camLeft, camRight
     end
-    if camRight == nil then
-        if type(createCamera) == "function" then
-            camRight = createCamera("vrDefaultCamRight", 1.0472, 0.15, 2000.0)
-        else
-            camRight = 2002
-        end
-    end
-
-    self.cameraNodeLeft = camLeft
-    self.cameraNodeRight = camRight
-
     return camLeft, camRight
+end
+
+function VRCompanion:isDualEyeCameraNode(node)
+    return node ~= nil and node ~= 0 and (node == self.cameraNodeLeft or node == self.cameraNodeRight)
+end
+
+-- The camera manager's active camera, or nil when it can't say
+function VRCompanion:getManagerActiveCamera(camMgr)
+    if camMgr == nil or type(camMgr.getActiveCamera) ~= "function" then return nil end
+    local ok, node = pcall(camMgr.getActiveCamera, camMgr)
+    if ok and node ~= nil and node ~= 0 then return node end
+    return nil
+end
+
+function VRCompanion:registerDualEyeCameraNode(camMgr, node)
+    if self.registeredEyeCameras == nil then self.registeredEyeCameras = {} end
+    if self.registeredEyeCameras[node] or type(camMgr.addCamera) ~= "function" then return end
+    if pcall(camMgr.addCamera, camMgr, node, nil, false) then
+        self.registeredEyeCameras[node] = true
+    end
+end
+
+-- Removes the Dual Eye Camera Nodes from the camera manager (all of them, or only node)
+function VRCompanion:unregisterDualEyeCameraNodes(node)
+    if self.registeredEyeCameras == nil then return end
+    local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
+    for registered in pairs(self.registeredEyeCameras) do
+        if node == nil or registered == node then
+            if camMgr ~= nil and type(camMgr.removeCamera) == "function" then
+                pcall(camMgr.removeCamera, camMgr, registered)
+            end
+            self.registeredEyeCameras[registered] = nil
+        end
+    end
 end
 
 function VRCompanion:bindRenderingCamera(targetCam)
@@ -223,16 +214,26 @@ function VRCompanion:bindRenderingCamera(targetCam)
     -- During a Sequential Dual-Pass sub-pass the mission update owns the single bind
     -- of the eye's camera; camera updates inside the sub-pass only position nodes.
     if self.deferRenderingCameraBind then return end
-    -- The engine's raw setCamera renders through any camera. The game's camera manager silently
-    -- ignores cameras it didn't register, such as the Dual Eye Camera Nodes, so it is only the
-    -- fallback; leaving it untouched also keeps the game's own idea of its active camera.
-    local setCameraFn = setCamera or (_G and _G.setCamera)
-    if type(setCameraFn) == "function" then
-        pcall(setCameraFn, targetCam)
-    else
-        local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
-        if camMgr ~= nil and type(camMgr.setActiveCamera) == "function" then
+    -- The game's camera manager renders only through cameras registered with it and silently
+    -- ignores any other, so a Dual Eye Camera Node is registered before it is bound. The global
+    -- setCamera is the game's deprecation wrapper (it warns and doesn't bind such a camera) and is
+    -- only the fallback when there is no camera manager.
+    local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
+    if camMgr ~= nil and type(camMgr.setActiveCamera) == "function" then
+        local active = self:getManagerActiveCamera(camMgr)
+        if active ~= nil and not self:isDualEyeCameraNode(active) then
+            self.gameCameraNode = active
+        end
+        if self:isDualEyeCameraNode(targetCam) then
+            self:registerDualEyeCameraNode(camMgr, targetCam)
+        end
+        if active ~= targetCam then
             pcall(camMgr.setActiveCamera, camMgr, targetCam)
+        end
+    else
+        local setCameraFn = setCamera or (_G and _G.setCamera)
+        if type(setCameraFn) == "function" then
+            pcall(setCameraFn, targetCam)
         end
     end
     self.activeRenderingCamera = targetCam
@@ -242,15 +243,20 @@ function VRCompanion:bindRenderingCamera(targetCam)
     end
 end
 
--- Whether the game currently shows the camera with node camNode (or altNode): the camera manager's
--- active camera, which the mod leaves to the game whenever raw setCamera exists. False while a game screen with a camera of its own
--- (the shop, construction mode) is shown; the mod then leaves rendering to the game. Without a
--- camera manager to ask, the camera being updated is assumed shown.
+-- Whether the game currently shows the camera with node camNode (or altNode): the game's own
+-- camera, i.e. the camera manager's active camera, or the one it had before a Dual Eye Camera Node
+-- took its place. False while a game screen with a camera of its own (the shop, construction mode)
+-- is shown; the mod then leaves rendering to the game. Without a camera manager to ask, the camera
+-- being updated is assumed shown.
 function VRCompanion:isGameShowingCamera(camNode, altNode)
-    local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
-    if camMgr == nil or type(camMgr.getActiveCamera) ~= "function" then return true end
-    local ok, active = pcall(camMgr.getActiveCamera, camMgr)
-    if not ok or active == nil or active == 0 then return true end
+    local active = self:getManagerActiveCamera(g_cameraManager or (_G and _G.g_cameraManager))
+    if active == nil then return true end
+    if self:isDualEyeCameraNode(active) then
+        active = self.gameCameraNode
+        if active == nil then return true end
+    else
+        self.gameCameraNode = active
+    end
     local shown = (active == camNode) or (altNode ~= nil and active == altNode)
     if shown ~= self.lastGameShowingTrackedCamera then
         self.lastGameShowingTrackedCamera = shown
@@ -304,20 +310,20 @@ function VRCompanion:initDualEyeCameraNodes(referenceCamNode)
         end
     end
 
-    if self.cameraNodeLeft == nil or self.cameraNodeLeft == 0 then
-        if type(createCameraFn) == "function" then
-            self.cameraNodeLeft = createCameraFn("cameraNodeLeft", fovY, nearClip, farClip)
+    -- Both eyes render through one camera node, moved to each eye in turn: temporal upscalers
+    -- (DLSS, FSR) drop their history whenever the rendering camera changes
+    local function hasNode(node) return node ~= nil and node ~= 0 end
+    if not hasNode(self.cameraNodeLeft) then
+        if hasNode(self.cameraNodeRight) then
+            self.cameraNodeLeft = self.cameraNodeRight
+        elseif type(createCameraFn) == "function" then
+            self.cameraNodeLeft = createCameraFn("vrEyeCamera", fovY, nearClip, farClip)
         elseif type(createTransformGroupFn) == "function" then
-            self.cameraNodeLeft = createTransformGroupFn("cameraNodeLeft")
+            self.cameraNodeLeft = createTransformGroupFn("vrEyeCamera")
         end
     end
-
-    if self.cameraNodeRight == nil or self.cameraNodeRight == 0 then
-        if type(createCameraFn) == "function" then
-            self.cameraNodeRight = createCameraFn("cameraNodeRight", fovY, nearClip, farClip)
-        elseif type(createTransformGroupFn) == "function" then
-            self.cameraNodeRight = createTransformGroupFn("cameraNodeRight")
-        end
+    if not hasNode(self.cameraNodeRight) then
+        self.cameraNodeRight = self.cameraNodeLeft
     end
 
     return self.cameraNodeLeft, self.cameraNodeRight
@@ -328,9 +334,11 @@ function VRCompanion:ensureDualEyeCameraNodes(referenceCamNode)
     local entityExistsFn = entityExists or (_G and _G.entityExists)
     if type(entityExistsFn) == "function" then
         if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 and not entityExistsFn(self.cameraNodeLeft) then
+            self:unregisterDualEyeCameraNodes(self.cameraNodeLeft)
             self.cameraNodeLeft = nil
         end
         if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 and not entityExistsFn(self.cameraNodeRight) then
+            self:unregisterDualEyeCameraNodes(self.cameraNodeRight)
             self.cameraNodeRight = nil
         end
     end
@@ -1022,16 +1030,18 @@ function VRCompanion:showEngineCameraView(camNode, eyeIndex, eyeProj, stereoRequ
     self:placeAndBindEyes(camNode, rootNode, x, y, z, x, y, z, rotX, rotY, rotZ, eyeIndex, eyeProj, stereoRequested)
 end
 
--- Renders through the camera the game's camera manager considers active (the mod binds through
--- the manager only when the engine lacks raw setCamera), so the engine isn't left on a Dual Eye
--- Camera Node, e.g. when the mod unloads.
+-- Renders through the game's own camera again and takes the Dual Eye Camera Nodes off the camera
+-- manager, so the engine isn't left on one of them, e.g. when the mod unloads.
 function VRCompanion:restoreGameActiveCamera()
     local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
-    if camMgr == nil or type(camMgr.getActiveCamera) ~= "function" then return end
-    local ok, camNode = pcall(camMgr.getActiveCamera, camMgr)
-    if ok and camNode ~= nil and camNode ~= 0 then
-        self:renderThroughEngineCamera(camNode)
+    local active = self:getManagerActiveCamera(camMgr)
+    if self:isDualEyeCameraNode(active) then
+        active = self.gameCameraNode
     end
+    if active ~= nil then
+        self:renderThroughEngineCamera(active)
+    end
+    self:unregisterDualEyeCameraNodes()
 end
 
 -- Outside Camera: any camera of the controlled vehicle other than its in-cab camera. Runs after
@@ -1081,13 +1091,49 @@ function VRCompanion:onOutsideCameraUpdate(cam)
 
     local tx, ty, tz = pose.x or 0, pose.y or 0, pose.z or 0
     local offX, offY, offZ = self:computeEyeOffset(pose, eyeIndex, afrFallback)
+
+    -- The head pose goes on a level base node turned only by the heading, so the engine composes
+    -- the head rotation in its own Euler convention, as the cab does on its head tracking node
+    local baseNode = self:ensureOutsideCameraBaseNode(rootNode)
+    if baseNode ~= nil then
+        local setTranslationFn = setTranslation or (_G and _G.setTranslation)
+        local setRotationFn = setRotation or (_G and _G.setRotation)
+        setTranslationFn(baseNode, baseX, baseY, baseZ)
+        setRotationFn(baseNode, 0, heading, 0)
+        self:placeAndBindEyes(camNode, baseNode, tx, ty, tz, tx + offX, ty + offY, tz + offZ,
+            pose.pitch or 0, pose.yaw or 0, pose.roll or 0, eyeIndex, eyeProj, afrFallback)
+        return
+    end
+
     local headX, headY, headZ = self:rotateVectorByYaw(tx, ty, tz, heading)
     local eyeX, eyeY, eyeZ = self:rotateVectorByYaw(tx + offX, ty + offY, tz + offZ, heading)
-
     self:placeAndBindEyes(camNode, rootNode,
         baseX + headX, baseY + headY, baseZ + headZ, baseX + eyeX, baseY + eyeY, baseZ + eyeZ,
         pose.pitch or 0, self:normalizeAngle(heading + (pose.yaw or 0)), pose.roll or 0,
         eyeIndex, eyeProj, afrFallback)
+end
+
+-- The Outside Camera's level base: a transform group under the world root, owned by the mod
+function VRCompanion:ensureOutsideCameraBaseNode(rootNode)
+    local entityExistsFn = entityExists or (_G and _G.entityExists)
+    if self.outsideCameraBaseNode ~= nil and type(entityExistsFn) == "function"
+        and not entityExistsFn(self.outsideCameraBaseNode) then
+        self.outsideCameraBaseNode = nil
+    end
+    if self.outsideCameraBaseNode == nil then
+        local createTransformGroupFn = createTransformGroup or (_G and _G.createTransformGroup)
+        local linkFn = link or (_G and _G.link)
+        if type(createTransformGroupFn) ~= "function" or type(linkFn) ~= "function"
+            or type(setTranslation or (_G and _G.setTranslation)) ~= "function"
+            or type(setRotation or (_G and _G.setRotation)) ~= "function" then
+            return nil
+        end
+        local node = createTransformGroupFn("vrOutsideCameraBase")
+        if node == nil or node == 0 then return nil end
+        linkFn(rootNode, node)
+        self.outsideCameraBaseNode = node
+    end
+    return self.outsideCameraBaseNode
 end
 
 function VRCompanion:onVehicleCameraUpdate(cam, dt)
@@ -1634,6 +1680,10 @@ VRCompanion.Stereo.getDualPassEye = function(self, ...) return VRCompanion.getDu
 VRCompanion.Stereo.setSubPassIndex = function(self, ...) return VRCompanion.setSubPassIndex(VRCompanion, ...) end
 VRCompanion.Stereo.advanceSubPass = function(self, ...) return VRCompanion.advanceSubPass(VRCompanion, ...) end
 VRCompanion.Stereo.getStereoCameraNodes = function(self, ...) return VRCompanion.getStereoCameraNodes(VRCompanion, ...) end
+VRCompanion.Stereo.isDualEyeCameraNode = function(self, ...) return VRCompanion.isDualEyeCameraNode(VRCompanion, ...) end
+VRCompanion.Stereo.getManagerActiveCamera = function(self, ...) return VRCompanion.getManagerActiveCamera(VRCompanion, ...) end
+VRCompanion.Stereo.registerDualEyeCameraNode = function(self, ...) return VRCompanion.registerDualEyeCameraNode(VRCompanion, ...) end
+VRCompanion.Stereo.unregisterDualEyeCameraNodes = function(self, ...) return VRCompanion.unregisterDualEyeCameraNodes(VRCompanion, ...) end
 VRCompanion.Stereo.bindRenderingCamera = function(self, ...) return VRCompanion.bindRenderingCamera(VRCompanion, ...) end
 VRCompanion.Stereo.isGameShowingCamera = function(self, ...) return VRCompanion.isGameShowingCamera(VRCompanion, ...) end
 VRCompanion.Stereo.syncActiveEyeCamera = function(self, ...) return VRCompanion.syncActiveEyeCamera(VRCompanion, ...) end
@@ -1667,6 +1717,7 @@ VRCompanion.Stereo.renderThroughEngineCamera = function(self, ...) return VRComp
 VRCompanion.Stereo.showEngineCameraView = function(self, ...) return VRCompanion.showEngineCameraView(VRCompanion, ...) end
 VRCompanion.Stereo.restoreGameActiveCamera = function(self, ...) return VRCompanion.restoreGameActiveCamera(VRCompanion, ...) end
 VRCompanion.Stereo.onOutsideCameraUpdate = function(self, ...) return VRCompanion.onOutsideCameraUpdate(VRCompanion, ...) end
+VRCompanion.Stereo.ensureOutsideCameraBaseNode = function(self, ...) return VRCompanion.ensureOutsideCameraBaseNode(VRCompanion, ...) end
 VRCompanion.Stereo.onVehicleCameraUpdate = function(self, ...) return VRCompanion.onVehicleCameraUpdate(VRCompanion, ...) end
 VRCompanion.Stereo.onPlayerCameraMakeCurrent = function(self, ...) return VRCompanion.onPlayerCameraMakeCurrent(VRCompanion, ...) end
 VRCompanion.Stereo.onPlayerCameraUpdate = function(self, ...) return VRCompanion.onPlayerCameraUpdate(VRCompanion, ...) end

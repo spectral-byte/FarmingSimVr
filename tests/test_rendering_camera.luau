@@ -80,9 +80,28 @@ local function install()
     _G.setFarClip = function(node, v) nodes[node].farClip = v end
     _G.setProjectionOffset = function() end
     _G.getProjectionOffset = function() return 0, 0 end
-    _G.setCamera = function(node) rendered = node end
+    -- As in the game: the camera manager renders through the cameras registered with it (the
+    -- game's own, and any added with addCamera) and ignores any other; the global setCamera is the
+    -- game's deprecation wrapper and binds nothing
+    local registered = { [CAB] = true, [PLAYER] = true, [SHOP] = true }
+    _G.setCamera = function(node) end
     _G.getCamera = function() return rendered end
-    _G.g_cameraManager = { getActiveCamera = function(self) return gameActive end }
+    _G.g_cameraManager = {
+        addCamera = function(self, node) registered[node] = true end,
+        removeCamera = function(self, node) registered[node] = nil end,
+        setActiveCamera = function(self, node)
+            if registered[node] then
+                rendered = node
+                gameActive = node
+            end
+        end,
+        getActiveCamera = function(self) return gameActive end,
+    }
+end
+
+-- The game makes one of its own cameras active
+local function gameActivates(node)
+    g_cameraManager:setActiveCamera(node)
 end
 
 local function uninstall()
@@ -98,6 +117,8 @@ local function uninstall()
     VRCompanion.cyclopeanAudioListenerNode = nil
     VRCompanion.activeRenderingCamera = nil
     VRCompanion.activePlayerCamera = nil
+    VRCompanion.registeredEyeCameras = nil
+    VRCompanion.gameCameraNode = nil
     VRCompanion.deferRenderingCameraBind = false
     VRCompanion.origCamSettings = {}
     VRCompanion.isMenuVisible = false
@@ -135,11 +156,13 @@ local function validPose()
 end
 
 local function cabCamera()
+    gameActivates(CAB)
     return { isInside = true, cameraNode = CAB, origRotY = 2.0, rotY = 2.0, rotX = 0.1, rotZ = 0,
         origTransX = 5, origTransY = 2, origTransZ = 3 }
 end
 
 local function playerCamera()
+    gameActivates(PLAYER)
     return { cameraNode = PLAYER, firstPersonCamera = PLAYER }
 end
 
@@ -245,20 +268,35 @@ end)
 
 -- A game screen with a camera of its own (the shop, construction mode) is shown
 local function showShop()
-    gameActive = SHOP
-    rendered = SHOP
+    gameActivates(SHOP)
 end
 
 run("WhileTheGameShowsAnotherCameraOnFootLeavesRenderingAlone", { mode = "AFR", pose = validPose() }, function()
+    local playerCam = playerCamera()
+    VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
+    assert(rendered ~= PLAYER, "precondition: head-tracked stereo renders through an eye camera")
     showShop()
-    VRCompanion:onPlayerCameraUpdate(playerCamera(), 16.6)
+    VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
     assert(rendered == SHOP, "the game's own screen camera must keep rendering, got " .. tostring(rendered))
 end)
 
 run("WhileTheGameShowsAnotherCameraTheCabLeavesRenderingAlone", { mode = "AFR", pose = validPose() }, function()
+    local cab = cabCamera()
+    VRCompanion:onVehicleCameraUpdate(cab, 16.6)
+    assert(rendered ~= CAB, "precondition: head-tracked stereo renders through an eye camera")
     showShop()
-    VRCompanion:onVehicleCameraUpdate(cabCamera(), 16.6)
+    VRCompanion:onVehicleCameraUpdate(cab, 16.6)
     assert(rendered == SHOP, "the game's own screen camera must keep rendering, got " .. tostring(rendered))
+end)
+
+run("AfterTheGameScreenClosesOnFootRendersInVrAgain", { mode = "AFR", pose = validPose() }, function()
+    local playerCam = playerCamera()
+    VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
+    showShop()
+    VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
+    gameActivates(PLAYER)
+    VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
+    assert(rendered ~= PLAYER and rendered ~= SHOP, "head-tracked stereo must render through an eye camera again, got " .. tostring(rendered))
 end)
 
 run("WhileTheGameShowsAnotherCameraSequentialDualPassLeavesRenderingAlone", { mode = "SequentialDualPass", subPass = 0, pose = validPose() }, function()

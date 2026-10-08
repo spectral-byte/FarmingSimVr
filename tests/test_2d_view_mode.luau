@@ -194,11 +194,19 @@ test("OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMouseLook", function()
     VRCompanion:set2DViewActive(false)
 end)
 
--- The camera the engine renders through, as raw setCamera binds it and getCamera() reports it
+-- The camera the engine renders through, as getCamera() reports it. As in the game, the camera
+-- manager renders through registered cameras (the game's own, and any added with addCamera) and
+-- ignores others; the global setCamera is the game's deprecation wrapper and binds nothing.
 local function installRenderedCamera(initial)
     local rendered = initial
-    _G.setCamera = function(node) rendered = node end
+    local registered = { [initial] = true }
+    _G.setCamera = function(node) end
     _G.getCamera = function() return rendered end
+    _G.g_cameraManager = {
+        addCamera = function(self, node) registered[node] = true end,
+        setActiveCamera = function(self, node) if registered[node] then rendered = node end end,
+        getActiveCamera = function(self) return rendered end,
+    }
     local nextEye = 7000
     _G.createCamera = function() nextEye = nextEye + 1; return nextEye end
 end
@@ -206,6 +214,9 @@ end
 local function removeRenderedCamera()
     _G.setCamera = nil
     _G.getCamera = nil
+    _G.g_cameraManager = nil
+    VRCompanion.registeredEyeCameras = nil
+    VRCompanion.gameCameraNode = nil
     _G.createCamera = nil
     VRCompanion.cameraNodeLeft = nil
     VRCompanion.cameraNodeRight = nil

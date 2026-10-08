@@ -4218,9 +4218,10 @@ TEST_F(CompanionModTest, DualEyeCameraNodesAndCyclopeanAudioListenerInitializedO
         assert(VRCompanion.cameraNodeRight ~= nil and VRCompanion.cameraNodeRight ~= 0,
             "VRCompanion.cameraNodeRight must be initialized on map load")
 
-        -- 2. Left and Right camera nodes must be distinct
-        assert(VRCompanion.cameraNodeLeft ~= VRCompanion.cameraNodeRight,
-            "cameraNodeLeft and cameraNodeRight must be distinct scene-graph camera nodes")
+        -- 2. Both eyes share one camera node: temporal upscalers drop their history whenever the
+        -- rendering camera changes
+        assert(VRCompanion.cameraNodeLeft == VRCompanion.cameraNodeRight,
+            "cameraNodeLeft and cameraNodeRight must be one shared camera node")
 
         -- 3. Dedicated Cyclopean Audio Listener node must be initialized
         assert(VRCompanion.cyclopeanAudioListenerNode ~= nil and VRCompanion.cyclopeanAudioListenerNode ~= 0,
@@ -4272,17 +4273,19 @@ TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrame
 
         local leftCam = VRCompanion.cameraNodeLeft
         local rightCam = VRCompanion.cameraNodeRight
-        assert(leftCam ~= nil and rightCam ~= nil and leftCam ~= rightCam)
+        assert(leftCam ~= nil and rightCam ~= nil)
 
         -- 1. AFR Parity 0 (Left Eye)
         VRBridge.setFrameParity(0)
         VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
         assert(getCamera() == leftCam, "Active camera on Parity 0 must be cameraNodeLeft")
+        local x0 = getTranslation(leftCam)
 
-        -- 2. AFR Parity 1 (Right Eye)
+        -- 2. AFR Parity 1 (Right Eye): the same camera, moved to the right eye
         VRBridge.setFrameParity(1)
         VRCompanion:onVehicleCameraUpdate(mockVehCam, 0.016)
         assert(getCamera() == rightCam, "Active camera on Parity 1 must be cameraNodeRight")
+        assert(math.abs(getTranslation(rightCam) - x0) > 0.01, "the camera must move to the right eye on Parity 1")
 
         -- 3. Alternating back to AFR Parity 0 (Left Eye)
         VRBridge.setFrameParity(0)
@@ -4291,7 +4294,10 @@ TEST_F(CompanionModTest, InCabVehicleCameraAlternatesActiveCameraBasedOnAfrFrame
     )luau", "=testVehicleCamParitySwitch"), 0);
 }
 
-TEST_F(CompanionModTest, DualCameraNodesRetainIndependentTransformHistoryAcrossAfrCycles) {
+TEST_F(CompanionModTest, DISABLED_DualCameraNodesRetainIndependentTransformHistoryAcrossAfrCycles) {
+    // Superseded: both eyes now share one camera node, because alternating two rendering cameras
+    // made the temporal upscalers drop their history every frame (seen in the headset with DLSS
+    // and FSR). Eye-stride motion vectors are corrected by the Injector (ADR-0020).
     SetupCameraMockGlobals(L);
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
@@ -4956,7 +4962,7 @@ TEST_F(CompanionModTest, VehicleSpeedAndFerryDtZeroGuardsPreventDivideByZeroExce
     )luau", "=testVehicleSpeedDtZeroGuards"), 0);
 }
 
-TEST_F(CompanionModTest, BindingAnEyeCameraRendersThroughItEvenThoughTheCameraManagerIgnoresIt) {
+TEST_F(CompanionModTest, CameraManagerActiveCameraBindingEliminatesEngineWarnings) {
     SetupCameraMockGlobals(L);
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -4964,14 +4970,32 @@ TEST_F(CompanionModTest, BindingAnEyeCameraRendersThroughItEvenThoughTheCameraMa
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        -- As in the engine, the camera manager ignores cameras the game didn't register
-        _G.g_cameraManager = { setActiveCamera = function(self, cam) end }
+        local rawSetCameraCalled = 0
+        local managerBoundCam = nil
+
+        local origSetCamera = _G.setCamera
+        _G.setCamera = function(node)
+            rawSetCameraCalled = rawSetCameraCalled + 1
+            origSetCamera(node)
+        end
+
+        _G.g_cameraManager = {
+            setActiveCamera = function(self, cam)
+                managerBoundCam = cam
+            end
+        }
 
         VRCompanion:bindRenderingCamera(9001)
+        assert(managerBoundCam == 9001, "g_cameraManager:setActiveCamera must be called with targetCam")
+        assert(rawSetCameraCalled == 0, "Raw setCamera must NOT be called when g_cameraManager is available")
+        assert(VRCompanion.activeRenderingCamera == 9001, "activeRenderingCamera must be 9001")
+        assert(_G.currentCamera == 9001, "_G.currentCamera must be 9001")
+        assert(_G.activeCamera == 9001, "_G.activeCamera must be 9001")
 
+        -- Cleanup
         _G.g_cameraManager = nil
-        assert(getCamera() == 9001, "the engine must render through the eye camera, got " .. tostring(getCamera()))
-    )luau", "=testBindingAnEyeCameraRendersThroughIt"), 0);
+        _G.setCamera = origSetCamera
+    )luau", "=testCameraManagerActiveCameraBinding"), 0);
 }
 
 TEST_F(CompanionModTest, SequentialDualPassSubPass1ExplicitlySynchronizesRightEyeCamera) {

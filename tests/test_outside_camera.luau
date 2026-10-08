@@ -50,20 +50,11 @@ local engineNodes = {}
 local engineWrites = {}
 local nextNodeId = 5000
 local bound = nil
+local managerActive = nil
+local setCameraCalls = 0
 local audioListener = nil
 local fovByNode = {}
 local clipByNode = {}
-
-local function rotMatrix(rx, ry, rz)
-    local ca, sa = math.cos(rx), math.sin(rx)
-    local cb, sb = math.cos(ry), math.sin(ry)
-    local cc, sc = math.cos(rz), math.sin(rz)
-    return {
-        { cb * cc + sb * sa * sc, -cb * sc + sb * sa * cc, sb * ca },
-        { ca * sc, ca * cc, -sa },
-        { -sb * cc + cb * sa * sc, sb * sc + cb * sa * cc, cb * ca },
-    }
-end
 
 local function matMul(a, b)
     local m = { {}, {}, {} }
@@ -73,6 +64,41 @@ local function matMul(a, b)
         end
     end
     return m
+end
+
+local function axisRotation(axis, angle)
+    local c, s = math.cos(angle), math.sin(angle)
+    if axis == "X" then return { { 1, 0, 0 }, { 0, c, -s }, { 0, s, c } } end
+    if axis == "Y" then return { { c, 0, s }, { 0, 1, 0 }, { -s, 0, c } } end
+    return { { c, -s, 0 }, { s, c, 0 }, { 0, 0, 1 } }
+end
+
+-- How the fake engine reads Euler angles: "YXZ" composes R = Ry * Rx * Rz, "ZYX" composes
+-- R = Rz * Ry * Rx. The mod must not depend on which one the engine uses.
+local eulerOrder = "YXZ"
+
+local function rotMatrix(rx, ry, rz)
+    local angles = { X = rx, Y = ry, Z = rz }
+    local m = axisRotation(string.sub(eulerOrder, 1, 1), angles[string.sub(eulerOrder, 1, 1)])
+    for i = 2, 3 do
+        local axis = string.sub(eulerOrder, i, i)
+        m = matMul(m, axisRotation(axis, angles[axis]))
+    end
+    return m
+end
+
+-- Euler angles (rx, ry, rz) of a rotation matrix in the fake engine's convention
+local function eulerOf(m)
+    if eulerOrder == "ZYX" then
+        local s = math.max(-1, math.min(1, -m[3][1]))
+        return math.atan2(m[3][2], m[3][3]), math.asin(s), math.atan2(m[2][1], m[1][1])
+    end
+    local s = math.max(-1, math.min(1, -m[2][3]))
+    return math.asin(s), math.atan2(m[1][3], m[3][3]), math.atan2(m[2][1], m[2][2])
+end
+
+local function transpose(m)
+    return { { m[1][1], m[2][1], m[3][1] }, { m[1][2], m[2][2], m[3][2] }, { m[1][3], m[2][3], m[3][3] } }
 end
 
 local function matApply(m, x, y, z)
@@ -163,11 +189,22 @@ local function installSceneGraph()
         return x, y, z
     end
     _G.getWorldRotation = function(node)
-        return worldEuler(node)
+        return eulerOf((worldTransform(node)))
     end
     _G.localDirectionToWorld = function(node, x, y, z)
         local m = worldTransform(node)
         return matApply(m, x, y, z)
+    end
+    _G.localToLocal = function(fromNode, toNode, x, y, z)
+        local fm, fx, fy, fz = worldTransform(fromNode)
+        local wx, wy, wz = matApply(fm, x, y, z)
+        local tm, tx, ty, tz = worldTransform(toNode)
+        return matApply(transpose(tm), fx + wx - tx, fy + wy - ty, fz + wz - tz)
+    end
+    _G.localRotationToLocal = function(fromNode, toNode, rx, ry, rz)
+        local fm = worldTransform(fromNode)
+        local tm = worldTransform(toNode)
+        return eulerOf(matMul(transpose(tm), matMul(fm, rotMatrix(rx, ry, rz))))
     end
     _G.createCamera = function(name, fovY, nearClip, farClip)
         local id = newNode()
@@ -198,21 +235,36 @@ local function installSceneGraph()
     end
     _G.getProjectionOffset = function(node) return 0, 0 end
     _G.setAudioListener = function(node) audioListener = node end
-    -- As in the engine: the camera manager only switches to cameras the game registered (the
-    -- engine's own camera nodes) and silently ignores any other; raw setCamera switches to any
-    -- camera. `bound` is the camera the engine renders through, as getCamera() reports it.
+    -- As in the game: the camera manager renders through the cameras registered with it (the
+    -- game's own, and any added with addCamera) and silently ignores any other camera; the global
+    -- setCamera is the game's deprecation wrapper and binds nothing. `bound` is the camera the
+    -- engine renders through, as getCamera() reports it.
+    local registered = {}
+    managerActive = nil
+    setCameraCalls = 0
     _G.g_cameraManager = {
+        addCamera = function(self, node) registered[node] = true end,
+        removeCamera = function(self, node) registered[node] = nil end,
         setActiveCamera = function(self, node)
-            if engineNodes[node] then bound = node end
-        end
+            if engineNodes[node] or registered[node] then
+                bound = node
+                managerActive = node
+            end
+        end,
+        getActiveCamera = function(self) return managerActive end,
     }
-    _G.setCamera = function(node) bound = node end
+    _G.setCamera = function(node) setCameraCalls = setCameraCalls + 1 end
     _G.getCamera = function() return bound end
+end
+
+-- The game makes one of its own cameras active
+local function gameActivates(node)
+    g_cameraManager:setActiveCamera(node)
 end
 
 local function removeSceneGraph()
     for _, name in ipairs({ "getRootNode", "getParent", "link", "setTranslation", "setRotation",
-        "getTranslation", "getRotation", "getWorldTranslation", "getWorldRotation", "localDirectionToWorld",
+        "getTranslation", "getRotation", "getWorldTranslation", "getWorldRotation", "localDirectionToWorld", "localToLocal", "localRotationToLocal",
         "createCamera", "createTransformGroup", "setFovY", "getFovY", "getNearClip", "getFarClip", "setNearClip", "setFarClip",
         "setProjectionOffset", "getProjectionOffset", "setAudioListener", "g_cameraManager",
         "setCamera", "getCamera", "g_currentMission", "VRBridge", "FSBaseMission" }) do
@@ -239,7 +291,7 @@ local function installOrbitCamera(vehicleRot)
     }
     _G.g_currentMission = { controlledVehicle = { rootNode = VEHICLE, getActiveCamera = function() return cam end } }
     -- The game made this camera active, so the engine renders through it until the mod binds another
-    bound = CAMERA
+    gameActivates(CAMERA)
     return cam
 end
 
@@ -252,7 +304,7 @@ local function installFixedCamera(vehicleRot, localRot)
     local cam = { isInside = false, isRotatable = false, cameraNode = CAMERA, rotX = localRot[1], rotY = localRot[2] }
     _G.g_currentMission = { controlledVehicle = { rootNode = VEHICLE, getActiveCamera = function() return cam end } }
     -- The game made this camera active, so the engine renders through it until the mod binds another
-    bound = CAMERA
+    gameActivates(CAMERA)
     return cam
 end
 
@@ -285,6 +337,9 @@ local function resetCompanion()
     VRCompanion.cameraNodeRight = nil
     VRCompanion.cyclopeanAudioListenerNode = nil
     VRCompanion.activeRenderingCamera = nil
+    VRCompanion.registeredEyeCameras = nil
+    VRCompanion.gameCameraNode = nil
+    VRCompanion.outsideCameraBaseNode = nil
     VRCompanion.deferRenderingCameraBind = false
     VRCompanion.origCamSettings = {}
     VRCompanion.is2DViewActive = false
@@ -396,7 +451,8 @@ test("AfrPlacesEachEyeAtTheEngineCameraPlusTheRotatedHeadTranslationAndEyeOffset
         eyeNodes[eye] = bound
         assertEyePlaced(bound, eye, "AFR")
     end
-    assert(eyeNodes[0] ~= eyeNodes[1], "left and right eyes must render through their own Dual Eye Camera Nodes")
+    -- Temporal upscalers (DLSS, FSR) drop their history whenever the rendering camera changes
+    assert(eyeNodes[0] == eyeNodes[1], "both eyes must render through one camera so temporal upscalers keep their history")
 
     local lx, ly, lz = getWorldTranslation(audioListener)
     local hx, hy, hz = expectedHeadPosition()
@@ -428,7 +484,7 @@ test("SequentialDualPassPositionsTheCorrectEyeOnBothSubPassesIncludingTheSubPass
             assertEyePlaced(bound, subPass, "sub-pass " .. subPass)
         end
         assert(missionUpdates == 1, "only sub-pass 0 runs the mission update; sub-pass 1 relies on the eye sync")
-        assert(eyeNodes[0] ~= eyeNodes[1], "each sub-pass must render through its own eye camera")
+        assert(eyeNodes[0] == eyeNodes[1], "both sub-passes must render through one camera so temporal upscalers keep their history")
         assertEngineUntouched()
     end)
     VRCompanion:unhookMissionUpdate()
@@ -439,6 +495,35 @@ end)
 local function tiltedPose()
     return { isValid = true, x = 0.1, y = -0.05, z = 0.15, pitch = -0.2, yaw = 0.5, roll = -0.06, qx = 0, qy = 0, qz = 0, qw = 1 }
 end
+
+test("HeadRotationComposesOnTheLevelBaseInTheEnginesOwnEulerConvention", function()
+    for _, order in ipairs({ "YXZ", "ZYX" }) do
+        eulerOrder = order
+        local state = { mode = "AFR", parity = 0,
+            pose = { isValid = true, x = 0, y = 0, z = 0, pitch = 0.2, yaw = 0.3, roll = 0.25, qx = 0, qy = 0, qz = 0, qw = 1 } }
+        setup(state)
+        -- The orbit looks back at the vehicle, as it does by default
+        local cam = installOrbitCamera({ 0, math.pi, 0 })
+
+        local ok, err = pcall(function()
+            VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+            -- The level base turned to the camera's heading, then the head's rotation read the way
+            -- the engine reads Euler angles (as the cab composes it through localRotationToLocal)
+            local expected = matMul(axisRotation("Y", engineCameraHeading()), rotMatrix(0.2, 0.3, 0.25))
+            local actual = worldTransform(bound)
+            for i = 1, 3 do
+                for j = 1, 3 do
+                    assert(near(actual[i][j], expected[i][j], 1e-5), string.format(
+                        "%s: the eye camera must be the base heading followed by the head rotation (row %d col %d: %f, expected %f)",
+                        order, i, j, actual[i][j], expected[i][j]))
+                end
+            end
+        end)
+        cleanup()
+        eulerOrder = "YXZ"
+        assert(ok, tostring(err))
+    end
+end)
 
 test("TheBoundEyeCameraClipsLikeTheEngineCameraItReplaces", function()
     local state = { mode = "AFR", parity = 0, pose = tiltedPose() }
@@ -463,11 +548,10 @@ test("TheBoundEyeCameraClipsLikeTheEngineCameraItReplaces", function()
     cleanup()
 end)
 
-test("UnloadingTheMapRendersThroughTheGamesActiveCameraAgain", function()
+test("UnloadingTheMapRendersThroughTheGamesOwnCameraAgain", function()
     local state = { mode = "AFR", parity = 0, pose = tiltedPose() }
     setup(state)
     local cam = installOrbitCamera()
-    _G.g_cameraManager.getActiveCamera = function(self) return CAMERA end
     VRCompanion:onVehicleCameraUpdate(cam, 16.6)
     assert(bound ~= CAMERA, "precondition: head-tracked stereo renders through an eye camera")
 

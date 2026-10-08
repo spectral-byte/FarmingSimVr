@@ -921,13 +921,18 @@ function VRCompanion:deleteMap()
         if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
             pcall(deleteFn, self.cameraNodeLeft)
         end
-        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
+        -- Both eyes may share one camera node
+        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 and self.cameraNodeRight ~= self.cameraNodeLeft then
             pcall(deleteFn, self.cameraNodeRight)
         end
         if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
             pcall(deleteFn, self.cyclopeanAudioListenerNode)
         end
+        if self.outsideCameraBaseNode ~= nil and self.outsideCameraBaseNode ~= 0 then
+            pcall(deleteFn, self.outsideCameraBaseNode)
+        end
     end
+    self.outsideCameraBaseNode = nil
     self.cameraNodeLeft = nil
     self.cameraNodeRight = nil
     self.cyclopeanAudioListenerNode = nil

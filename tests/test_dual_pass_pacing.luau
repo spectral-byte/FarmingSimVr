@@ -508,29 +508,38 @@ test("MissionUpdateReentrancyGuardAndPcallProtection", function()
     VRCompanion:setSubPassIndex(0)
 end)
 
--- Slice 9: bindRenderingCamera renders through cameras the game never registered
-test("BindRenderingCameraRendersThroughAnUnregisteredEyeCameraWhileTheCameraManagerIsPresent", function()
-    -- As in the engine, the camera manager ignores cameras the game didn't register
-    _G.g_cameraManager = { setActiveCamera = function(self, cam) end }
-    _G.currentCamera = 0
+-- Slice 9: Camera Manager Integration in bindRenderingCamera
+test("CameraManagerIntegrationInBindRenderingCamera", function()
+    local camManagerBoundCam = nil
+    local rawSetCameraCalled = 0
+
+    local origSetCamera = _G.setCamera
+    _G.setCamera = function(node)
+        rawSetCameraCalled = rawSetCameraCalled + 1
+        origSetCamera(node)
+    end
+
+    _G.g_cameraManager = {
+        setActiveCamera = function(self, cam)
+            camManagerBoundCam = cam
+        end
+    }
 
     VRCompanion:bindRenderingCamera(5005)
+    assert(camManagerBoundCam == 5005, "g_cameraManager:setActiveCamera must be called with targetCam")
+    assert(rawSetCameraCalled == 0, "Raw setCamera must NOT be called when g_cameraManager is available")
+    assert(VRCompanion.activeRenderingCamera == 5005, "activeRenderingCamera must be 5005")
+    assert(_G.currentCamera == 5005, "_G.currentCamera must be updated to 5005")
+    assert(_G.activeCamera == 5005, "_G.activeCamera must be updated to 5005")
 
+    -- When g_cameraManager is absent, must cleanly fallback to setCamera
     _G.g_cameraManager = nil
-    assert(getCamera() == 5005, "the engine must render through the eye camera, got " .. tostring(getCamera()))
-end)
-
-test("BindRenderingCameraFallsBackToTheCameraManagerWithoutRawSetCamera", function()
-    local origSetCamera = _G.setCamera
-    _G.setCamera = nil
-    local managerBound = nil
-    _G.g_cameraManager = { setActiveCamera = function(self, cam) managerBound = cam end }
-
     VRCompanion:bindRenderingCamera(6006)
+    assert(rawSetCameraCalled == 1, "Raw setCamera must be called when g_cameraManager is nil")
+    assert(_G.currentCamera == 6006, "_G.currentCamera must be updated to 6006")
 
+    -- Cleanup
     _G.setCamera = origSetCamera
-    _G.g_cameraManager = nil
-    assert(managerBound == 6006, "without raw setCamera the camera manager must bind the camera")
 end)
 
 -- Slice 10: Explicit Active Eye Camera Sync for Sub-Pass 1 (Right Eye)
@@ -935,17 +944,16 @@ test("BaseCameraTranslatesStereoscopicallyInDualPassMode", function()
 end)
 
 -- Slice 14: One eye projection fetch and one rendering camera bind per camera update / sub-pass
-local suiteSetCamera = _G.setCamera
-
 local function installProjectionCountingBridge(state)
     state.projectionFetches = 0
     state.binds = {}
     _G.setTranslation = function() end
     _G.setRotation = function() end
-    _G.setCamera = function(cam)
-        suiteSetCamera(cam)
-        table.insert(state.binds, cam)
-    end
+    _G.g_cameraManager = {
+        setActiveCamera = function(self, cam)
+            table.insert(state.binds, cam)
+        end
+    }
     _G.VRBridge = {
         isReady = function() return true end,
         isCompanionActive = true,
@@ -971,7 +979,7 @@ end
 local function cleanupProjectionCountingBridge()
     _G.setTranslation = nil
     _G.setRotation = nil
-    _G.setCamera = suiteSetCamera
+    _G.g_cameraManager = nil
     _G.g_currentMission = nil
     _G.VRBridge = nil
     VRCompanion:setRenderingMode("AFR")
