@@ -35,7 +35,6 @@ end
 VRCompanion.cameraNodeLeft = VRCompanion.cameraNodeLeft or nil
 VRCompanion.cameraNodeRight = VRCompanion.cameraNodeRight or nil
 VRCompanion.cyclopeanAudioListenerNode = VRCompanion.cyclopeanAudioListenerNode or nil
-VRCompanion.activeRenderingCameraNode = VRCompanion.activeRenderingCameraNode or nil
 VRCompanion.origCamSettings = VRCompanion.origCamSettings or {}
 VRCompanion.menuCameraOffsets = VRCompanion.menuCameraOffsets or {}
 
@@ -833,9 +832,12 @@ end
 -- centre of the head and the active eye at the eye position, applies that eye's Oblique Frustum
 -- projection and binds it for rendering, for whichever Stereo Presentation Mode is active.
 -- All transforms are in parentNode's space and share one rotation. referenceCamNode seeds node
--- creation and is the mono fallback target when no left eye node exists. Allocates nothing.
+-- creation and is the mono fallback target when no left eye node exists. stereoRequested (the
+-- bridge's requiresAfrFallback: the mod renders the eyes itself) asks for the eyeIndex eye; it is
+-- still overridden to mono, left eye, while a GUI menu or 2D Floating Window Mode is shown.
+-- Allocates nothing.
 function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
-        headX, headY, headZ, eyeX, eyeY, eyeZ, rotX, rotY, rotZ, eyeIndex, eyeProj, afrFallback)
+        headX, headY, headZ, eyeX, eyeY, eyeZ, rotX, rotY, rotZ, eyeIndex, eyeProj, stereoRequested)
     local getParentFn = getParent or (_G and _G.getParent)
     local linkFn = link or (_G and _G.link)
     local setTranslationFn = setTranslation or (_G and _G.setTranslation)
@@ -869,7 +871,7 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
         end
     end
 
-    local isStereoActive = afrFallback and not self.isMenuVisible and not self.is2DViewActive
+    local isStereoActive = stereoRequested and not self.isMenuVisible and not self.is2DViewActive
 
     if isStereoActive then
         local isRightEye = (eyeIndex == 1)
@@ -885,7 +887,6 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
             end
             self:bindRenderingCamera(activeEyeCam)
             self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
-            self.activeRenderingCameraNode = activeEyeCam
         end
     else
         local targetNode = self.cameraNodeLeft or referenceCamNode
@@ -901,7 +902,6 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
                 setRotationFn(targetNode, rotX, rotY, rotZ)
             end
             self:bindRenderingCamera(targetNode)
-            self.activeRenderingCameraNode = targetNode
         end
     end
 end
@@ -914,8 +914,12 @@ VRCompanion.OUTSIDE_CAMERA_VERTICAL_BLEND = 0.1
 -- projected onto the horizontal plane. Near vertical that projection shrinks to nothing and flips
 -- as the camera crosses straight down, so the camera's up direction is blended in there: for a
 -- camera looking down it points the way the camera would look if levelled (for one looking up,
--- the opposite way). The blend fades out continuously, so the heading never jumps. Returns nil
--- when no heading can be derived.
+-- the opposite way). The blend fades out continuously, so the heading stays continuous through
+-- straight down and straight up. A camera pitched past vertical (turned over) is the exception:
+-- its look heading and its levelled heading point opposite ways, so the blended vector passes
+-- through zero about 5 degrees past vertical and the heading flips by 180 degrees there. Any rule
+-- that follows the look heading away from vertical has to turn that half circle somewhere.
+-- Returns nil when no heading can be derived.
 function VRCompanion:getOutsideCameraBaseHeading(camNode, localDirectionToWorldFn)
     local lx, ly, lz = localDirectionToWorldFn(camNode, 0, 0, -1)
     if lx == nil or ly == nil or lz == nil then return nil end
@@ -936,11 +940,11 @@ function VRCompanion:getOutsideCameraBaseHeading(camNode, localDirectionToWorldF
 end
 
 -- Leaves the Outside Camera to the engine: renders through the engine's own camera again when an
--- eye camera was bound in its place. Binding changes no transform of the engine's nodes.
+-- eye camera was bound in its place (activeRenderingCamera is the camera bindRenderingCamera last
+-- bound). Binding changes no transform of the engine's nodes.
 function VRCompanion:renderThroughEngineCamera(camNode)
     if self.activeRenderingCamera ~= nil and self.activeRenderingCamera ~= camNode then
         self:bindRenderingCamera(camNode)
-        self.activeRenderingCameraNode = camNode
     end
 end
 
@@ -1408,6 +1412,15 @@ end
 function VRCompanion:updateMenuBackgroundCamera(dt)
     if not self.isMenuVisible or self.is2DViewActive then
         return
+    end
+
+    -- An Outside Camera behind a menu is left to the engine: its nodes are never written
+    local curVeh = self:getControlledVehicle()
+    if curVeh ~= nil then
+        local vehCam = self:getVehicleActiveCamera(curVeh)
+        if vehCam ~= nil and not vehCam.isInside then
+            return
+        end
     end
 
     local camNode = nil

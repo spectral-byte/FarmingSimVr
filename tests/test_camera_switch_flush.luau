@@ -135,21 +135,35 @@ end)
 test("SwitchingBackToTheCabStillRestoresThePerVehicleLookYaw", function()
     local veh = makeVehicle()
     local signals, cleanup = setUpScene(veh)
+    local cab = veh.spec_enterable.cameras[1]
 
-    VRCompanion.vehicleRotationStates = VRCompanion.vehicleRotationStates or {}
-    VRCompanion.vehicleRotationStates[veh] = { rotY = 0.9, rotX = -0.05 }
+    -- The player enters looking out of the side window: that is the vehicle's remembered cab look
+    cab.rotY, cab.rotX = 0.9, -0.05
+    local ok, err = pcall(function()
+        VRCompanion:onEnterVehicle(veh, true)
+        Enterable.setActiveCameraIndex(veh, 2)
+        -- The engine resets the inactive cab camera's look while the Outside Camera is active
+        cab.rotY, cab.rotX = 0.3, 0.1
+        Enterable.setActiveCameraIndex(veh, 1)
+    end)
+    local cabRotY, cabRotX = cab.rotY, cab.rotX
+
+    VRCompanion.lastControlledVehicle = nil
+    cleanup()
+    assert(ok, tostring(err))
+    assert(math.abs(cabRotY - 0.9) < 1e-6 and math.abs(cabRotX - (-0.05)) < 1e-6,
+        string.format("Cab look must be restored to (yaw 0.9, pitch -0.05), got (%f, %f)", cabRotY, cabRotX))
+end)
+
+test("SwitchingToTheOrbitOutsideCameraLeavesItsOrbitAsTheEngineSetIt", function()
+    local veh = makeVehicle()
+    local signals, cleanup = setUpScene(veh)
 
     Enterable.setActiveCameraIndex(veh, 2)
     local orbit = veh.spec_enterable.cameras[2]
     local orbitRotY, orbitRotX = orbit.rotY, orbit.rotX
 
-    Enterable.setActiveCameraIndex(veh, 1)
-    local cab = veh.spec_enterable.cameras[1]
-    local cabRotY, cabRotX = cab.rotY, cab.rotX
-
     cleanup()
-    assert(math.abs(cabRotY - 0.9) < 1e-6, string.format("Cab look yaw must be restored to 0.9, got %f", cabRotY))
-    assert(math.abs(cabRotX - (-0.05)) < 1e-6, string.format("Cab look pitch must be restored to -0.05, got %f", cabRotX))
     assert(orbitRotY == 1.0 and orbitRotX == 0.4, "Outside Camera orbit rotation must not be touched by the camera switch")
 end)
 

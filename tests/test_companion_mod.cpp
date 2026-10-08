@@ -603,7 +603,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
     int updateOutside = RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockOutsideCam, 16.6)", "=updateOutside");
     EXPECT_EQ(updateOutside, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
     ASSERT_EQ(RunLuauChunk(L, R"(
-        assert(_G.writtenNodes[101] == nil, "the engine's exterior camera node must not be modified")
+        assert(_G.writtenNodes[101] == nil, "the engine's Outside Camera node must not be modified")
         local t = _G.cameraTransforms.translation
         assert(t ~= nil and t.node ~= 101, "an eye camera must receive the head-tracked translation")
         assert(_G.currentCamera == t.node, "the head-tracked eye camera must be bound for rendering")

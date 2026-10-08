@@ -169,5 +169,34 @@ test("TrackIrFallbackReusesItsTableAndKeepsTheBridgeTableComplete", function()
     _G.isHeadTrackingAvailable = nil
 end)
 
+test("PerFrameOutsideCameraUpdatesReuseBothTables", function()
+    -- An orbit Outside Camera at (10, 2, 30) looking along world +X, rendered through world-space eye nodes
+    local nextNode = 800
+    _G.createCamera = function() nextNode = nextNode + 1; return nextNode end
+    _G.getRootNode = function() return 1 end
+    _G.getParent = function() return 1 end
+    _G.link = function() end
+    _G.getWorldTranslation = function() return 10.0, 2.0, 30.0 end
+    _G.localDirectionToWorld = function(node, x, y, z) return -z, y, x end
+    local cam = { isInside = false, isRotatable = true, cameraNode = 20, rotX = -0.3, rotY = 1.2 }
+
+    local ok, err = pcall(function()
+        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+        local poseBefore, projBefore = count(poseTablesReturned), count(projTablesSeen)
+        for _ = 1, 5 do
+            VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+        end
+        assert(count(poseTablesReturned) == poseBefore and count(projTablesSeen) == projBefore,
+            string.format("Outside Camera frames must reuse the pose and projection tables, got %d new pose and %d new projection tables",
+                count(poseTablesReturned) - poseBefore, count(projTablesSeen) - projBefore))
+    end)
+    for _, name in ipairs({ "createCamera", "getRootNode", "getParent", "link", "getWorldTranslation", "localDirectionToWorld" }) do
+        _G[name] = nil
+    end
+    VRCompanion.cameraNodeLeft = nil
+    VRCompanion.cameraNodeRight = nil
+    assert(ok, tostring(err))
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed in test_reusable_tables.luau", failed))

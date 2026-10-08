@@ -923,7 +923,6 @@ function VRCompanion:deleteMap()
     self.cameraNodeLeft = nil
     self.cameraNodeRight = nil
     self.cyclopeanAudioListenerNode = nil
-    self.activeRenderingCameraNode = nil
     if type(self.restoreMenuBackgroundCamera) == "function" then
         self:restoreMenuBackgroundCamera()
     end
