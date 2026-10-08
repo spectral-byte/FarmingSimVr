@@ -105,6 +105,10 @@ TEST_F(LuauTestSuiteTest, TestOutsideCamera) {
     RunSuite("tests/test_outside_camera.luau");
 }
 
+TEST_F(LuauTestSuiteTest, TestRenderingCamera) {
+    RunSuite("tests/test_rendering_camera.luau");
+}
+
 TEST_F(LuauTestSuiteTest, TestReusableTables) {
     RunSuite("tests/test_reusable_tables.luau");
 }

@@ -650,10 +650,14 @@ function VRCompanion:runSubPassStep(subPass, fn, ...)
 end
 
 function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam)
+    -- The eye sync's camera update records whether the game is showing the camera it tracks
+    self.trackedCameraShown = nil
     self:runSubPassStep(subPass, self.syncActiveEyeCamera, eyeIndex)
     self.deferRenderingCameraBind = false
-    self:bindRenderingCamera(targetCam)
-    self:runSubPassStep(subPass, self.reportEyeCamera, eyeIndex, targetCam)
+    if self.trackedCameraShown ~= false then
+        self:bindRenderingCamera(targetCam)
+        self:runSubPassStep(subPass, self.reportEyeCamera, eyeIndex, targetCam)
+    end
     self:endEyeProjectionScope()
 end
 
@@ -838,6 +842,7 @@ function VRCompanion:deleteMap()
     print("[FS25_VR] Unloading Companion Mod from map.")
 
     -- Hand rendering back to the game's active camera before the Dual Eye Camera Nodes go away
+    self.deferRenderingCameraBind = false
     self:restoreGameActiveCamera()
 
     if self.stereoToggled and type(setStereoRendering) == "function" then

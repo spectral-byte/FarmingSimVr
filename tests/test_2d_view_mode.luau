@@ -212,7 +212,7 @@ local function removeRenderedCamera()
     VRCompanion.activeRenderingCamera = nil
 end
 
-test("In2DModeTheCabRendersThroughTheGamesOwnCamera", function()
+test("In2DFloatingWindowModeTheCabRendersThroughTheGamesOwnCamera", function()
     installRenderedCamera(10)
     function setTranslation() end
     function setRotation() end
@@ -233,7 +233,7 @@ test("In2DModeTheCabRendersThroughTheGamesOwnCamera", function()
     assert(ok, tostring(err))
 end)
 
-test("In2DModeOnFootRendersThroughTheGamesOwnCamera", function()
+test("In2DFloatingWindowModeOnFootRendersThroughTheGamesOwnCamera", function()
     installRenderedCamera(20)
     function setTranslation() end
     function setRotation() end

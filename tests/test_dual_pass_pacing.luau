@@ -935,13 +935,15 @@ test("BaseCameraTranslatesStereoscopicallyInDualPassMode", function()
 end)
 
 -- Slice 14: One eye projection fetch and one rendering camera bind per camera update / sub-pass
+local suiteSetCamera = _G.setCamera
+
 local function installProjectionCountingBridge(state)
     state.projectionFetches = 0
     state.binds = {}
     _G.setTranslation = function() end
     _G.setRotation = function() end
     _G.setCamera = function(cam)
-        _G.currentCamera = cam
+        suiteSetCamera(cam)
         table.insert(state.binds, cam)
     end
     _G.VRBridge = {
@@ -969,7 +971,7 @@ end
 local function cleanupProjectionCountingBridge()
     _G.setTranslation = nil
     _G.setRotation = nil
-    _G.setCamera = function(node) _G.currentCamera = node end
+    _G.setCamera = suiteSetCamera
     _G.g_currentMission = nil
     _G.VRBridge = nil
     VRCompanion:setRenderingMode("AFR")
