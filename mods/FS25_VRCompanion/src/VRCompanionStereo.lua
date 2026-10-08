@@ -914,8 +914,12 @@ VRCompanion.OUTSIDE_CAMERA_VERTICAL_BLEND = 0.1
 -- projected onto the horizontal plane. Near vertical that projection shrinks to nothing and flips
 -- as the camera crosses straight down, so the camera's up direction is blended in there: for a
 -- camera looking down it points the way the camera would look if levelled (for one looking up,
--- the opposite way). The blend fades out continuously, so the heading never jumps. Returns nil
--- when no heading can be derived.
+-- the opposite way). The blend fades out continuously, so the heading stays continuous through
+-- straight down and straight up. A camera pitched past vertical (turned over) is the exception:
+-- its look heading and its levelled heading point opposite ways, so the blended vector passes
+-- through zero about 5 degrees past vertical and the heading flips by 180 degrees there. Any rule
+-- that follows the look heading away from vertical has to turn that half circle somewhere.
+-- Returns nil when no heading can be derived.
 function VRCompanion:getOutsideCameraBaseHeading(camNode, localDirectionToWorldFn)
     local lx, ly, lz = localDirectionToWorldFn(camNode, 0, 0, -1)
     if lx == nil or ly == nil or lz == nil then return nil end
