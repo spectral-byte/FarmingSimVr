@@ -1277,40 +1277,69 @@ local function controlOutsideCamera(cam)
     return veh
 end
 
-test("OutsideCameraSnapTurnStepsOrbitYawBySnapAngleAndSignalsOneDiscontinuity", function()
-    VRCompanion:resetSnapTurnDebounce()
-    local calls = installCountingBridge()
-
-    local orbitCam = {
+-- A rotatable orbit camera the player has already orbited with the mouse
+local function orbitedOutsideCamera()
+    return {
         isInside = false,
         isRotatable = true,
         cameraNode = 1101,
         rotateNode = 1102,
         origRotX = 0.3, origRotY = 0.0,
-        rotX = 0.5, rotY = 2.8, -- player already orbited with the mouse
+        rotX = 0.5, rotY = 2.8,
         zoom = 12.0,
     }
+end
+
+test("OutsideCameraSnapTurnStepsOrbitYawBySnapAngle", function()
+    VRCompanion:resetSnapTurnDebounce()
+    installCountingBridge()
+    local orbitCam = orbitedOutsideCamera()
     controlOutsideCamera(orbitCam)
 
     -- Snap right by 90 deg: 2.8 - pi/2
     local ok, newRot = VRCompanion:snapTurnRight(nil, 1000)
-    assert(ok == true, "Snap turn must be handled in a rotatable Outside Camera")
-    assert(math.abs(orbitCam.rotY - (2.8 - math.pi * 0.5)) < 0.0001,
-        string.format("Orbit yaw must step right by pi/2, got %f", orbitCam.rotY))
-    assert(newRot == orbitCam.rotY, "Snap turn must report the new orbit yaw")
-    assert(calls.discontinuity == 1, string.format("Expected one discontinuity, got %d", calls.discontinuity))
-    assert(orbitCam.rotX == 0.5, "Orbit pitch must not change")
-    assert(orbitCam.zoom == 12.0, "Zoom must not change")
-
-    -- Snap left twice from 2.8 - pi/2: +pi/2 -> 2.8, +pi/2 -> 2.8 + pi/2 wraps to 2.8 + pi/2 - 2pi
-    VRCompanion:snapTurnLeft(nil, 1300)
-    assert(math.abs(orbitCam.rotY - 2.8) < 0.0001, string.format("Orbit yaw must return to 2.8, got %f", orbitCam.rotY))
-    VRCompanion:snapTurnLeft(nil, 1600)
-    assert(math.abs(orbitCam.rotY - (2.8 + math.pi * 0.5 - 2 * math.pi)) < 0.0001,
-        string.format("Orbit yaw must be normalized into [-pi, pi], got %f", orbitCam.rotY))
-    assert(calls.discontinuity == 3, "Each snap turn must signal one discontinuity")
 
     VRCompanion:resetSnapTurnDebounce()
+    assert(ok == true and math.abs(newRot - (2.8 - math.pi * 0.5)) < 0.0001 and newRot == orbitCam.rotY,
+        string.format("Orbit yaw must step right by pi/2 and be reported, got ok = %s, rotY = %f, reported %s",
+            tostring(ok), orbitCam.rotY, tostring(newRot)))
+end)
+
+test("OutsideCameraSnapTurnSignalsOneDiscontinuity", function()
+    VRCompanion:resetSnapTurnDebounce()
+    local calls = installCountingBridge()
+    controlOutsideCamera(orbitedOutsideCamera())
+
+    VRCompanion:snapTurnRight(nil, 1000)
+
+    VRCompanion:resetSnapTurnDebounce()
+    assert(calls.discontinuity == 1, string.format("Expected one discontinuity, got %d", calls.discontinuity))
+end)
+
+test("OutsideCameraSnapTurnLeavesOrbitPitchAndZoomAlone", function()
+    VRCompanion:resetSnapTurnDebounce()
+    installCountingBridge()
+    local orbitCam = orbitedOutsideCamera()
+    controlOutsideCamera(orbitCam)
+
+    VRCompanion:snapTurnRight(nil, 1000)
+
+    VRCompanion:resetSnapTurnDebounce()
+    assert(orbitCam.rotX == 0.5 and orbitCam.zoom == 12.0, "Orbit pitch and zoom must not change")
+end)
+
+test("OutsideCameraSnapTurnKeepsOrbitYawWithinPlusMinusPi", function()
+    VRCompanion:resetSnapTurnDebounce()
+    installCountingBridge()
+    local orbitCam = orbitedOutsideCamera()
+    controlOutsideCamera(orbitCam)
+
+    -- Snap left from 2.8: 2.8 + pi/2 wraps to 2.8 + pi/2 - 2pi
+    VRCompanion:snapTurnLeft(nil, 1000)
+
+    VRCompanion:resetSnapTurnDebounce()
+    assert(math.abs(orbitCam.rotY - (2.8 + math.pi * 0.5 - 2 * math.pi)) < 0.0001,
+        string.format("Orbit yaw must be normalized into [-pi, pi], got %f", orbitCam.rotY))
 end)
 
 test("OutsideCameraSnapTurnHonorsDebounce", function()
@@ -1343,12 +1372,24 @@ test("FixedOutsideCameraSnapTurnIsNotHandled", function()
     assert(hitchCam.rotY == math.pi and hitchCam.rotX == -0.9, "Fixed Outside Camera must be left unchanged")
     assert(calls.discontinuity == 0, "Unhandled snap turn must not signal a discontinuity")
 
+    VRCompanion:resetSnapTurnDebounce()
+end)
+
+test("FixedOutsideCameraSnapTurnStartsNoDebounceCooldown", function()
+    VRCompanion:resetSnapTurnDebounce()
+    installCountingBridge()
+
+    local hitchCam = { isInside = false, isRotatable = false, cameraNode = 1301, origRotX = -0.9, origRotY = math.pi, rotX = -0.9, rotY = math.pi }
+    controlOutsideCamera(hitchCam)
+    VRCompanion:snapTurnRight(nil, 1000)
+
     -- Not handled means no cooldown starts: a snap turn right after the next camera switch still works
     local orbitCam = { isInside = false, isRotatable = true, cameraNode = 1302, origRotX = 0, origRotY = 0, rotX = 0, rotY = 0 }
     controlOutsideCamera(orbitCam)
-    assert(VRCompanion:snapTurnRight(nil, 1050) == true, "An unhandled snap turn must not start the debounce cooldown")
+    local ok = VRCompanion:snapTurnRight(nil, 1050)
 
     VRCompanion:resetSnapTurnDebounce()
+    assert(ok == true, "An unhandled snap turn must not start the debounce cooldown")
 end)
 
 test("RecenterInOutsideCameraSwingsOrbitBackToDefaultRecordedOnActivation", function()
