@@ -175,7 +175,7 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrDlssSdpMvScale", "Set DLSS motion vector scale under Sequential Dual-Pass: vrDlssSdpMvScale <scaleX> [scaleY]", "consoleCommandSetDlssSdpMvScale", self)
         addConsoleCommand("vrDlssMvFix", "Switch the DLSS motion vector pass for A/B comparison: vrDlssMvFix <on|off>", "consoleCommandDlssMvFix", self)
         addConsoleCommand("vrDlssDepthModel", "Set the depth model of the DLSS motion vector correction for A/B comparison: vrDlssDepthModel <infinite|finite>", "consoleCommandDlssDepthModel", self)
-        addConsoleCommand("vrDlssNearClip", "Set the near plane of the DLSS motion vector correction for every camera in metres (0 or auto = estimate it automatically, the default): vrDlssNearClip <meters|auto>", "consoleCommandDlssNearClip", self)
+        addConsoleCommand("vrDlssNearClip", "Set the near plane of the DLSS motion vector correction for every camera in metres (0 or auto = estimate it automatically): vrDlssNearClip <meters|auto>", "consoleCommandDlssNearClip", self)
         addConsoleCommand("vrDlssNearClipCab", "Set the DLSS near plane for a vehicle's inside camera: vrDlssNearClipCab <meters|auto>", "consoleCommandDlssNearClipCab", self)
         addConsoleCommand("vrDlssNearClipOutside", "Set the DLSS near plane for a vehicle's outside cameras: vrDlssNearClipOutside <meters|auto>", "consoleCommandDlssNearClipOutside", self)
         addConsoleCommand("vrDlssNearClipOnFoot", "Set the DLSS near plane on foot: vrDlssNearClipOnFoot <meters|auto>", "consoleCommandDlssNearClipOnFoot", self)
@@ -309,8 +309,9 @@ end
 function VRCompanion:getDlssNearClipForCurrentCamera()
     local cab, outside, onFoot = self.dlssNearClipCab, self.dlssNearClipOutside, self.dlssNearClipOnFoot
     -- One value for every mode needs no camera lookup
-    if cab == outside and outside == onFoot then return cab or self.DEFAULT_DLSS_NEAR_CLIP end
-    return self[self.DLSS_NEAR_CLIP_FIELDS[self:getDlssNearClipMode()]] or self.DEFAULT_DLSS_NEAR_CLIP
+    if cab ~= nil and cab == outside and outside == onFoot then return cab end
+    local mode = self:getDlssNearClipMode()
+    return self[self.DLSS_NEAR_CLIP_FIELDS[mode]] or self.DEFAULT_DLSS_NEAR_CLIPS[mode]
 end
 
 -- Sends the current camera's near plane to the Injector when it differs from the one last sent, so

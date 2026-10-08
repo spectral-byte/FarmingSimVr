@@ -1032,6 +1032,35 @@ TEST_F(CompanionModTest, DlssNearClipConsoleCommandSetsTheOverride) {
     EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.0f);
 }
 
+TEST_F(CompanionModTest, DlssNearClipDefaultsAreCabPointOneOutsideAutoAndOnFootPointOneFive) {
+    auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
+    fs25vr::VRBridge bridge(nullptr, ngx);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    // No settings file: the defaults apply from map load
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.addConsoleCommand = function() end
+        _G.testVehicleCam = { isInside = true }
+        _G.testVehicle = { getActiveCamera = function(self) return _G.testVehicleCam end }
+        _G.g_currentMission = { controlledVehicle = nil }
+        VRCompanion:loadMap("testMap")
+    )luau", "=testNearClipDefaultsLoad"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.15f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_currentMission.controlledVehicle = _G.testVehicle
+        VRCompanion:update(16)
+    )luau", "=testNearClipDefaultsCab"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.1f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.testVehicleCam = { isInside = false }
+        VRCompanion:update(16)
+    )luau", "=testNearClipDefaultsOutside"), 0);
+    EXPECT_FLOAT_EQ(ngx->GetNearClipOverride(), 0.0f);
+}
+
 TEST_F(CompanionModTest, DlssNearClipFollowsTheCameraModeCabOutsideAndOnFoot) {
     auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
     fs25vr::VRBridge bridge(nullptr, ngx);

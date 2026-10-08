@@ -539,7 +539,7 @@ end
 function VRCompanion:consoleCommandDlssNearClip(arg)
     local meters = parseDlssNearClip(arg)
     if meters == nil then
-        return "Usage: vrDlssNearClip <meters|auto> (near plane the DLSS motion vector correction assumes for every camera; 0 or auto = estimate it from the engine's motion vectors, the default. vrDlssNearClipCab, vrDlssNearClipOutside and vrDlssNearClipOnFoot set one camera mode.) Now: "
+        return "Usage: vrDlssNearClip <meters|auto> (near plane the DLSS motion vector correction assumes for every camera; 0 or auto = estimate it from the engine's motion vectors. vrDlssNearClipCab, vrDlssNearClipOutside and vrDlssNearClipOnFoot set one camera mode; defaults: cab 0.1 m, outside camera auto, on foot 0.15 m.) Now: "
             .. self:describeDlssNearClips()
     end
     for _, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
