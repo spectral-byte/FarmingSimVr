@@ -826,6 +826,84 @@ function VRCompanion:getActiveEyeIndex(afrFallback)
     return 0
 end
 
+-- Final step of a head-tracked camera frame, shared by every camera path: links the Dual Eye
+-- Camera Nodes and the Cyclopean Audio Listener Node under parentNode, places the listener at the
+-- centre of the head and the active eye at the eye position, applies that eye's Oblique Frustum
+-- projection and binds it for rendering, for whichever Stereo Presentation Mode is active.
+-- All transforms are in parentNode's space and share one rotation. referenceCamNode seeds node
+-- creation and is the mono fallback target when no left eye node exists. Allocates nothing.
+function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
+        headX, headY, headZ, eyeX, eyeY, eyeZ, rotX, rotY, rotZ, eyeIndex, eyeProj, afrFallback)
+    local getParentFn = getParent or (_G and _G.getParent)
+    local linkFn = link or (_G and _G.link)
+    local setTranslationFn = setTranslation or (_G and _G.setTranslation)
+    local setRotationFn = setRotation or (_G and _G.setRotation)
+
+    self:ensureDualEyeCameraNodes(referenceCamNode)
+    self:ensureCyclopeanAudioListener(referenceCamNode)
+
+    if parentNode ~= nil and parentNode ~= 0 and type(linkFn) == "function" and type(getParentFn) == "function" then
+        if self.cameraNodeLeft ~= nil and getParentFn(self.cameraNodeLeft) ~= parentNode then
+            pcall(linkFn, parentNode, self.cameraNodeLeft)
+        end
+        if self.cameraNodeRight ~= nil and getParentFn(self.cameraNodeRight) ~= parentNode then
+            pcall(linkFn, parentNode, self.cameraNodeRight)
+        end
+        if self.cyclopeanAudioListenerNode ~= nil and getParentFn(self.cyclopeanAudioListenerNode) ~= parentNode then
+            pcall(linkFn, parentNode, self.cyclopeanAudioListenerNode)
+        end
+    end
+
+    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
+        if type(setTranslationFn) == "function" then
+            setTranslationFn(self.cyclopeanAudioListenerNode, headX, headY, headZ)
+        end
+        if type(setRotationFn) == "function" then
+            setRotationFn(self.cyclopeanAudioListenerNode, rotX, rotY, rotZ)
+        end
+        local setAudioListenerFn = setAudioListener or (_G and _G.setAudioListener)
+        if type(setAudioListenerFn) == "function" then
+            setAudioListenerFn(self.cyclopeanAudioListenerNode)
+        end
+    end
+
+    local isStereoActive = afrFallback and not self.isMenuVisible and not self.is2DViewActive
+
+    if isStereoActive then
+        local isRightEye = (eyeIndex == 1)
+        local activeEyeCam = isRightEye and self.cameraNodeRight or self.cameraNodeLeft
+
+        if activeEyeCam ~= nil and activeEyeCam ~= 0 then
+            self:applyCameraProjection(activeEyeCam, eyeIndex, eyeProj)
+            if type(setTranslationFn) == "function" then
+                setTranslationFn(activeEyeCam, eyeX, eyeY, eyeZ)
+            end
+            if type(setRotationFn) == "function" then
+                setRotationFn(activeEyeCam, rotX, rotY, rotZ)
+            end
+            self:bindRenderingCamera(activeEyeCam)
+            self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
+            self.activeRenderingCameraNode = activeEyeCam
+        end
+    else
+        local targetNode = self.cameraNodeLeft or referenceCamNode
+        if targetNode ~= nil and targetNode ~= 0 then
+            -- This branch always shows the left eye; reuse eyeProj only when it was fetched for eye 0.
+            local leftProj = nil
+            if eyeIndex == 0 then leftProj = eyeProj end
+            self:applyCameraProjection(targetNode, 0, leftProj)
+            if type(setTranslationFn) == "function" then
+                setTranslationFn(targetNode, eyeX, eyeY, eyeZ)
+            end
+            if type(setRotationFn) == "function" then
+                setRotationFn(targetNode, rotX, rotY, rotZ)
+            end
+            self:bindRenderingCamera(targetNode)
+            self.activeRenderingCameraNode = targetNode
+        end
+    end
+end
+
 function VRCompanion:onVehicleCameraUpdate(cam, dt)
     -- Only apply 6DOF tracking and projection to interior in-cab cameras
     if not cam or not cam.isInside or cam.cameraNode == nil then
@@ -1004,69 +1082,9 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         cabRotZ = roll
     end
 
-    self:ensureDualEyeCameraNodes(cam.cameraNode)
-    self:ensureCyclopeanAudioListener(cam.cameraNode)
-
-    if camParent ~= nil and camParent ~= 0 and type(linkFn) == "function" and type(getParentFn) == "function" then
-        if self.cameraNodeLeft ~= nil and getParentFn(self.cameraNodeLeft) ~= camParent then
-            pcall(linkFn, camParent, self.cameraNodeLeft)
-        end
-        if self.cameraNodeRight ~= nil and getParentFn(self.cameraNodeRight) ~= camParent then
-            pcall(linkFn, camParent, self.cameraNodeRight)
-        end
-        if self.cyclopeanAudioListenerNode ~= nil and getParentFn(self.cyclopeanAudioListenerNode) ~= camParent then
-            pcall(linkFn, camParent, self.cyclopeanAudioListenerNode)
-        end
-    end
-
-    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
-        if type(setTranslationFn) == "function" then
-            setTranslationFn(self.cyclopeanAudioListenerNode, midCabTransX, midCabTransY, midCabTransZ)
-        end
-        if type(setRotationFn) == "function" then
-            setRotationFn(self.cyclopeanAudioListenerNode, cabRotX, cabRotY, cabRotZ)
-        end
-        local setAudioListenerFn = setAudioListener or (_G and _G.setAudioListener)
-        if type(setAudioListenerFn) == "function" then
-            setAudioListenerFn(self.cyclopeanAudioListenerNode)
-        end
-    end
-
-    local isStereoActive = afrFallback and not self.isMenuVisible and not self.is2DViewActive
-
-    if isStereoActive then
-        local isRightEye = (eyeIndex == 1)
-        local activeEyeCam = isRightEye and self.cameraNodeRight or self.cameraNodeLeft
-
-        if activeEyeCam ~= nil and activeEyeCam ~= 0 then
-            self:applyCameraProjection(activeEyeCam, eyeIndex, eyeProj)
-            if type(setTranslationFn) == "function" then
-                setTranslationFn(activeEyeCam, cabTransX, cabTransY, cabTransZ)
-            end
-            if type(setRotationFn) == "function" then
-                setRotationFn(activeEyeCam, cabRotX, cabRotY, cabRotZ)
-            end
-            self:bindRenderingCamera(activeEyeCam)
-            self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
-            self.activeRenderingCameraNode = activeEyeCam
-        end
-    else
-        local targetNode = self.cameraNodeLeft or cam.cameraNode
-        if targetNode ~= nil and targetNode ~= 0 then
-            -- This branch always shows the left eye; reuse eyeProj only when it was fetched for eye 0.
-            local leftProj = nil
-            if eyeIndex == 0 then leftProj = eyeProj end
-            self:applyCameraProjection(targetNode, 0, leftProj)
-            if type(setTranslationFn) == "function" then
-                setTranslationFn(targetNode, cabTransX, cabTransY, cabTransZ)
-            end
-            if type(setRotationFn) == "function" then
-                setRotationFn(targetNode, cabRotX, cabRotY, cabRotZ)
-            end
-            self:bindRenderingCamera(targetNode)
-            self.activeRenderingCameraNode = targetNode
-        end
-    end
+    self:placeAndBindEyes(cam.cameraNode, camParent,
+        midCabTransX, midCabTransY, midCabTransZ, cabTransX, cabTransY, cabTransZ,
+        cabRotX, cabRotY, cabRotZ, eyeIndex, eyeProj, afrFallback)
 
     if type(setTranslationFn) == "function" then
         setTranslationFn(cam.cameraNode, cabTransX, cabTransY, cabTransZ)
@@ -1184,69 +1202,9 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
         finalRotZ = roll
     end
 
-    self:ensureDualEyeCameraNodes(activeCamNode)
-    self:ensureCyclopeanAudioListener(activeCamNode)
-
-    if camParent ~= nil and camParent ~= 0 and type(link) == "function" and type(getParent) == "function" then
-        if self.cameraNodeLeft ~= nil and getParent(self.cameraNodeLeft) ~= camParent then
-            pcall(link, camParent, self.cameraNodeLeft)
-        end
-        if self.cameraNodeRight ~= nil and getParent(self.cameraNodeRight) ~= camParent then
-            pcall(link, camParent, self.cameraNodeRight)
-        end
-        if self.cyclopeanAudioListenerNode ~= nil and getParent(self.cyclopeanAudioListenerNode) ~= camParent then
-            pcall(link, camParent, self.cyclopeanAudioListenerNode)
-        end
-    end
-
-    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
-        if type(setTranslation) == "function" then
-            setTranslation(self.cyclopeanAudioListenerNode, finalMidTx, finalMidTy, finalMidTz)
-        end
-        if type(setRotation) == "function" then
-            setRotation(self.cyclopeanAudioListenerNode, finalRotX, finalRotY, finalRotZ)
-        end
-        local setAudioListenerFn = setAudioListener or (_G and _G.setAudioListener)
-        if type(setAudioListenerFn) == "function" then
-            setAudioListenerFn(self.cyclopeanAudioListenerNode)
-        end
-    end
-
-    local isStereoActive = afrFallback and not self.isMenuVisible and not self.is2DViewActive
-
-    if isStereoActive then
-        local isRightEye = (eyeIndex == 1)
-        local activeEyeCam = isRightEye and self.cameraNodeRight or self.cameraNodeLeft
-
-        if activeEyeCam ~= nil and activeEyeCam ~= 0 then
-            self:applyCameraProjection(activeEyeCam, eyeIndex, eyeProj)
-            if type(setTranslation) == "function" then
-                setTranslation(activeEyeCam, finalTx, finalTy, finalTz)
-            end
-            if type(setRotation) == "function" then
-                setRotation(activeEyeCam, finalRotX, finalRotY, finalRotZ)
-            end
-            self:bindRenderingCamera(activeEyeCam)
-            self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
-            self.activeRenderingCameraNode = activeEyeCam
-        end
-    else
-        local targetNode = self.cameraNodeLeft or activeCamNode
-        if targetNode ~= nil and targetNode ~= 0 then
-            -- This branch always shows the left eye; reuse eyeProj only when it was fetched for eye 0.
-            local leftProj = nil
-            if eyeIndex == 0 then leftProj = eyeProj end
-            self:applyCameraProjection(targetNode, 0, leftProj)
-            if type(setTranslation) == "function" then
-                setTranslation(targetNode, finalTx, finalTy, finalTz)
-            end
-            if type(setRotation) == "function" then
-                setRotation(targetNode, finalRotX, finalRotY, finalRotZ)
-            end
-            self:bindRenderingCamera(targetNode)
-            self.activeRenderingCameraNode = targetNode
-        end
-    end
+    self:placeAndBindEyes(activeCamNode, camParent,
+        finalMidTx, finalMidTy, finalMidTz, finalTx, finalTy, finalTz,
+        finalRotX, finalRotY, finalRotZ, eyeIndex, eyeProj, afrFallback)
 
     if type(setTranslation) == "function" then
         setTranslation(activeCamNode, finalTx, finalTy, finalTz)
@@ -1487,6 +1445,7 @@ VRCompanion.Stereo.requiresAfrFallback = function(self, ...) return VRCompanion.
 VRCompanion.Stereo.computeEyeOffset = function(self, ...) return VRCompanion.computeEyeOffset(VRCompanion, ...) end
 VRCompanion.Stereo.getResolvedHeadPose = function(self, ...) return VRCompanion.getResolvedHeadPose(VRCompanion, ...) end
 VRCompanion.Stereo.getActiveEyeIndex = function(self, ...) return VRCompanion.getActiveEyeIndex(VRCompanion, ...) end
+VRCompanion.Stereo.placeAndBindEyes = function(self, ...) return VRCompanion.placeAndBindEyes(VRCompanion, ...) end
 VRCompanion.Stereo.onVehicleCameraUpdate = function(self, ...) return VRCompanion.onVehicleCameraUpdate(VRCompanion, ...) end
 VRCompanion.Stereo.onPlayerCameraMakeCurrent = function(self, ...) return VRCompanion.onPlayerCameraMakeCurrent(VRCompanion, ...) end
 VRCompanion.Stereo.onPlayerCameraUpdate = function(self, ...) return VRCompanion.onPlayerCameraUpdate(VRCompanion, ...) end
