@@ -748,7 +748,8 @@ function VRCompanion:onRecenterAction()
             self:updateVehicleCameraTrackingNode(vehCam)
             print("[FS25_VR] VehicleOnly mode: Cockpit vehicle camera look yaw reset to origRotY.")
         end
-    elseif vehCam then
+    elseif vehCam and vehCam.isRotatable then
+        -- A fixed Outside Camera (hitch, header) has no orbit to reset
         self:resetOutsideCameraOrbit(vehCam)
     end
 

@@ -1402,6 +1402,24 @@ test("RecenterInOutsideCameraInVehicleOnlyModeSkipsTrackingRecenterButStillReset
     VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
 end)
 
+test("RecenterLeavesAFixedOutsideCameraAimedAsTheGameAimedIt", function()
+    VRCompanion:resetSnapTurnDebounce()
+    VRCompanion.recenterVrTrackingSpace = true
+    installCountingBridge()
+
+    -- A hitch camera has no orbit: its rotX/rotY are the game's aim, whatever its orig fields say
+    local hitchCam = { isInside = false, isRotatable = false, cameraNode = 1601, origRotX = 0, origRotY = 0, rotX = -0.9, rotY = math.pi }
+    local veh = controlOutsideCamera(hitchCam)
+    VRCompanion:onVehicleCameraChanged(veh, 3)
+
+    VRCompanion:onRecenterAction()
+
+    assert(hitchCam.rotX == -0.9 and hitchCam.rotY == math.pi,
+        string.format("Recenter must not touch a fixed Outside Camera's aim, got rotX = %f, rotY = %f", hitchCam.rotX, hitchCam.rotY))
+
+    VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed in test_snap_turn.luau", failed))
 
