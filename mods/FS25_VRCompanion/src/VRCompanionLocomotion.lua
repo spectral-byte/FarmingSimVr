@@ -174,6 +174,18 @@ function VRCompanion:initVehicleCameraState(veh, cam)
     end
 end
 
+-- Records an Outside Camera's default orbit yaw and pitch ("forward" for the Recenter Action) the first
+-- time it becomes active, the way the cab records its forward direction. The engine's own origRotX/origRotY,
+-- when present, already are that default. No per-vehicle orbit memory: the game's camera-reset setting owns it.
+function VRCompanion:recordOutsideCameraDefaults(cam)
+    if cam.origRotY == nil then
+        cam.origRotY = cam.rotY or 0
+    end
+    if cam.origRotX == nil then
+        cam.origRotX = cam.rotX or 0
+    end
+end
+
 function VRCompanion:saveVehicleRotationState(veh)
     if veh == nil then return end
     if self.vehicleRotationStates == nil then
@@ -202,7 +214,11 @@ function VRCompanion:restoreVehicleRotationState(veh)
     end
 
     local cam = self:getVehicleActiveCamera(veh)
-    if cam == nil or not cam.isInside then return end
+    if cam == nil then return end
+    if not cam.isInside then
+        self:recordOutsideCameraDefaults(cam)
+        return
+    end
 
     self:initVehicleCameraState(veh, cam)
 
@@ -327,6 +343,8 @@ function VRCompanion:onVehicleCameraChanged(veh, camIndex)
                 cam.rotY = saved.rotY
                 if saved.rotX ~= nil then cam.rotX = saved.rotX end
             end
+        elseif cam ~= nil then
+            self:recordOutsideCameraDefaults(cam)
         end
     end
 end
@@ -444,6 +462,8 @@ function VRCompanion:snapTurn(direction, angleOverride, curTime)
         print(string.format("[FS25_VR] In-cab snap turn %s (%.1f deg): rotY = %.3f",
             direction < 0 and "left" or "right", math.deg(angle), vehCam.rotY))
         return true, vehCam.rotY
+    elseif vehCam then
+        return self:snapTurnOutsideCamera(vehCam, direction, angleOverride, t)
     elseif self:getControlledVehicle() == nil then
         local playerCam = self:getPlayerCamera()
         if playerCam ~= nil then
@@ -478,6 +498,23 @@ function VRCompanion:snapTurn(direction, angleOverride, curTime)
     end
 
     return false, "no_active_camera"
+end
+
+-- Snap Turn in an Outside Camera steps the engine's orbit yaw around the vehicle (VehicleCamera.update
+-- applies cam.rotY to its rotate node). A fixed Outside Camera (hitch, header) has no orbit to step.
+function VRCompanion:snapTurnOutsideCamera(cam, direction, angleOverride, t)
+    if not cam.isRotatable then
+        return false, "fixed_outside_camera"
+    end
+    local angle = angleOverride or self:getSnapTurnAngle()
+    cam.rotY = self:normalizeAngle((cam.rotY or 0) - direction * angle)
+    self.lastSnapTurnTime = t
+    if type(self.signalDiscontinuityFlush) == "function" then
+        self:signalDiscontinuityFlush()
+    end
+    print(string.format("[FS25_VR] Outside camera snap turn %s (%.1f deg): orbit rotY = %.3f",
+        direction < 0 and "left" or "right", math.deg(angle), cam.rotY))
+    return true, cam.rotY
 end
 
 function VRCompanion:snapTurnLeft(angleOverride, curTime)
@@ -659,6 +696,15 @@ function VRCompanion:realignPlayerCameraToRoot(cam)
     end
 end
 
+-- Swings an Outside Camera's orbit back to forward: orbit yaw and pitch go back to the camera's
+-- default, the way the cab's Recenter resets mouse look. Zoom is left alone.
+function VRCompanion:resetOutsideCameraOrbit(cam)
+    self:recordOutsideCameraDefaults(cam)
+    cam.rotY = cam.origRotY
+    cam.rotX = cam.origRotX
+    print(string.format("[FS25_VR] Outside camera orbit reset to default: rotX = %.3f, rotY = %.3f", cam.rotX, cam.rotY))
+end
+
 function VRCompanion:onRecenterAction()
     print("[FS25_VR] Recenter Action triggered.")
     if type(self.signalDiscontinuityFlush) == "function" then
@@ -702,6 +748,8 @@ function VRCompanion:onRecenterAction()
             self:updateVehicleCameraTrackingNode(vehCam)
             print("[FS25_VR] VehicleOnly mode: Cockpit vehicle camera look yaw reset to origRotY.")
         end
+    elseif vehCam then
+        self:resetOutsideCameraOrbit(vehCam)
     end
 
     -- Realign on-foot player camera relative to character root
@@ -747,7 +795,10 @@ VRCompanion.Locomotion.getVehicleLookYaw = function(self, ...) return VRCompanio
 VRCompanion.Locomotion.rotateVectorByYaw = function(self, ...) return VRCompanion.rotateVectorByYaw(VRCompanion, ...) end
 VRCompanion.Locomotion.updateVehicleCameraTrackingNode = function(self, ...) return VRCompanion.updateVehicleCameraTrackingNode(VRCompanion, ...) end
 VRCompanion.Locomotion.snapTurn = function(self, ...) return VRCompanion.snapTurn(VRCompanion, ...) end
-VRCompanion.Locomotion.snapTurnLeft = function(self, ...) return VRCompanion.snapTurnLeft(VRCompanion, ...) end
+VRCompanion.Locomotion.snapTurnOutsideCamera = function(self, ...) return VRCompanion.snapTurnOutsideCamera(VRCompanion, ...) end
+VRCompanion.Locomotion.recordOutsideCameraDefaults = function(self, ...) return VRCompanion.recordOutsideCameraDefaults(VRCompanion, ...) end
+VRCompanion.Locomotion.resetOutsideCameraOrbit = function(self, ...) return VRCompanion.resetOutsideCameraOrbit(VRCompanion, ...) end
+VRCompanion.Locomotion.snapTurnLeft =function(self, ...) return VRCompanion.snapTurnLeft(VRCompanion, ...) end
 VRCompanion.Locomotion.snapTurnRight = function(self, ...) return VRCompanion.snapTurnRight(VRCompanion, ...) end
 VRCompanion.Locomotion.realignVehicleCameraToSeat = function(self, ...) return VRCompanion.realignVehicleCameraToSeat(VRCompanion, ...) end
 VRCompanion.Locomotion.realignPlayerCameraToRoot = function(self, ...) return VRCompanion.realignPlayerCameraToRoot(VRCompanion, ...) end
