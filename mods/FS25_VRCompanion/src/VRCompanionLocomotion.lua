@@ -331,7 +331,7 @@ function VRCompanion:onVehicleCameraChanged(veh, camIndex)
     if veh ~= nil then
         -- Any camera switch of the controlled vehicle (cab or Outside Camera, either direction) jumps
         -- to an unrelated viewpoint, so the temporal upscaler must drop its history.
-        if veh == self:getControlledVehicle() then
+        if veh == self:getControlledVehicle() and type(self.signalDiscontinuityFlush) == "function" then
             self:signalDiscontinuityFlush()
         end
 
