@@ -455,12 +455,7 @@ function VRCompanion:snapTurn(direction, angleOverride, curTime)
         end
 
         self:updateVehicleCameraTrackingNode(vehCam)
-        self.lastSnapTurnTime = t
-        if type(self.signalDiscontinuityFlush) == "function" then
-            self:signalDiscontinuityFlush()
-        end
-        print(string.format("[FS25_VR] In-cab snap turn %s (%.1f deg): rotY = %.3f",
-            direction < 0 and "left" or "right", math.deg(angle), vehCam.rotY))
+        self:completeSnapTurn(t, "In-cab", direction, angle, "rotY", vehCam.rotY)
         return true, vehCam.rotY
     elseif vehCam then
         return self:snapTurnOutsideCamera(vehCam, direction, angleOverride, t)
@@ -487,12 +482,7 @@ function VRCompanion:snapTurn(direction, angleOverride, curTime)
                 pcall(playerCam.setRotation, playerCam, 0, newYaw, 0)
             end
 
-            self.lastSnapTurnTime = t
-            if type(self.signalDiscontinuityFlush) == "function" then
-                self:signalDiscontinuityFlush()
-            end
-            print(string.format("[FS25_VR] On-foot snap turn %s (%.1f deg): yawNode = %.3f",
-                direction < 0 and "left" or "right", math.deg(angle), newYaw))
+            self:completeSnapTurn(t, "On-foot", direction, angle, "yawNode", newYaw)
             return true, newYaw
         end
     end
@@ -508,13 +498,19 @@ function VRCompanion:snapTurnOutsideCamera(cam, direction, angleOverride, t)
     end
     local angle = angleOverride or self:getSnapTurnAngle()
     cam.rotY = self:normalizeAngle((cam.rotY or 0) - direction * angle)
+    self:completeSnapTurn(t, "Outside camera", direction, angle, "orbit rotY", cam.rotY)
+    return true, cam.rotY
+end
+
+-- Shared tail of every handled Snap Turn (in-cab, Outside Camera, on foot): starts the debounce
+-- cooldown, flushes the temporal upscaler's history across the jump and logs the new yaw.
+function VRCompanion:completeSnapTurn(t, viewLabel, direction, angle, yawLabel, newYaw)
     self.lastSnapTurnTime = t
     if type(self.signalDiscontinuityFlush) == "function" then
         self:signalDiscontinuityFlush()
     end
-    print(string.format("[FS25_VR] Outside camera snap turn %s (%.1f deg): orbit rotY = %.3f",
-        direction < 0 and "left" or "right", math.deg(angle), cam.rotY))
-    return true, cam.rotY
+    print(string.format("[FS25_VR] %s snap turn %s (%.1f deg): %s = %.3f",
+        viewLabel, direction < 0 and "left" or "right", math.deg(angle), yawLabel, newYaw))
 end
 
 function VRCompanion:snapTurnLeft(angleOverride, curTime)
@@ -797,6 +793,7 @@ VRCompanion.Locomotion.rotateVectorByYaw = function(self, ...) return VRCompanio
 VRCompanion.Locomotion.updateVehicleCameraTrackingNode = function(self, ...) return VRCompanion.updateVehicleCameraTrackingNode(VRCompanion, ...) end
 VRCompanion.Locomotion.snapTurn = function(self, ...) return VRCompanion.snapTurn(VRCompanion, ...) end
 VRCompanion.Locomotion.snapTurnOutsideCamera = function(self, ...) return VRCompanion.snapTurnOutsideCamera(VRCompanion, ...) end
+VRCompanion.Locomotion.completeSnapTurn = function(self, ...) return VRCompanion.completeSnapTurn(VRCompanion, ...) end
 VRCompanion.Locomotion.recordOutsideCameraDefaults = function(self, ...) return VRCompanion.recordOutsideCameraDefaults(VRCompanion, ...) end
 VRCompanion.Locomotion.resetOutsideCameraOrbit = function(self, ...) return VRCompanion.resetOutsideCameraOrbit(VRCompanion, ...) end
 VRCompanion.Locomotion.snapTurnLeft =function(self, ...) return VRCompanion.snapTurnLeft(VRCompanion, ...) end
