@@ -81,6 +81,10 @@ TEST_F(LuauTestSuiteTest, Test2dViewMode) {
     RunSuite("tests/test_2d_view_mode.luau");
 }
 
+TEST_F(LuauTestSuiteTest, TestCameraSwitchFlush) {
+    RunSuite("tests/test_camera_switch_flush.luau");
+}
+
 TEST_F(LuauTestSuiteTest, TestDualPassPacing) {
     RunSuite("tests/test_dual_pass_pacing.luau");
 }
