@@ -832,9 +832,12 @@ end
 -- centre of the head and the active eye at the eye position, applies that eye's Oblique Frustum
 -- projection and binds it for rendering, for whichever Stereo Presentation Mode is active.
 -- All transforms are in parentNode's space and share one rotation. referenceCamNode seeds node
--- creation and is the mono fallback target when no left eye node exists. Allocates nothing.
+-- creation and is the mono fallback target when no left eye node exists. stereoRequested (the
+-- bridge's requiresAfrFallback: the mod renders the eyes itself) asks for the eyeIndex eye; it is
+-- still overridden to mono, left eye, while a GUI menu or 2D Floating Window Mode is shown.
+-- Allocates nothing.
 function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
-        headX, headY, headZ, eyeX, eyeY, eyeZ, rotX, rotY, rotZ, eyeIndex, eyeProj, afrFallback)
+        headX, headY, headZ, eyeX, eyeY, eyeZ, rotX, rotY, rotZ, eyeIndex, eyeProj, stereoRequested)
     local getParentFn = getParent or (_G and _G.getParent)
     local linkFn = link or (_G and _G.link)
     local setTranslationFn = setTranslation or (_G and _G.setTranslation)
@@ -868,7 +871,7 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
         end
     end
 
-    local isStereoActive = afrFallback and not self.isMenuVisible and not self.is2DViewActive
+    local isStereoActive = stereoRequested and not self.isMenuVisible and not self.is2DViewActive
 
     if isStereoActive then
         local isRightEye = (eyeIndex == 1)
