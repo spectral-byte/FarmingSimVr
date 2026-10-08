@@ -576,12 +576,47 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
         assert(math.abs(_G.cameraTransforms.rotation.rz - 0.02) < 0.001, "roll mismatch")
     )", "=verifyInsideCam"), 0);
 
-    // Clear and test outside camera
-    RunLuauChunk(L, "_G.cameraTransforms = {}", "=clearTransforms");
+    // Clear and test outside camera: the engine camera sits at (10, 2, 30) looking along world +X
+    // (heading -pi/2) and is only read; the head pose is composited on that level base and rendered
+    // through an eye camera placed in world space
+    ASSERT_EQ(RunLuauChunk(L, R"(
+        _G.cameraTransforms = {}
+        _G.writtenNodes = {}
+        function setTranslation(node, x, y, z)
+            _G.writtenNodes[node] = true
+            _G.cameraTransforms.translation = { node = node, x = x, y = y, z = z }
+        end
+        function setRotation(node, rx, ry, rz)
+            _G.writtenNodes[node] = true
+            _G.cameraTransforms.rotation = { node = node, rx = rx, ry = ry, rz = rz }
+        end
+        function link(parentNode, child) end
+        function getRootNode() return 1 end
+        function getWorldTranslation(node) return 10.0, 2.0, 30.0 end
+        function localDirectionToWorld(node, x, y, z) return -z, y, x end
+        local nextCamera = 700
+        function createCamera(name, fovY, nearClip, farClip)
+            nextCamera = nextCamera + 1
+            return nextCamera
+        end
+    )", "=setupOutsideCamMocks"), 0);
     int updateOutside = RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockOutsideCam, 16.6)", "=updateOutside");
-    EXPECT_EQ(updateOutside, 0);
-    // Exterior camera must not have translation or rotation modified
-    ASSERT_EQ(RunLuauChunk(L, "assert(_G.cameraTransforms.translation == nil, 'exterior camera must not be modified')", "=verifyOutsideCam"), 0);
+    EXPECT_EQ(updateOutside, 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
+    ASSERT_EQ(RunLuauChunk(L, R"(
+        assert(_G.writtenNodes[101] == nil, "the engine's exterior camera node must not be modified")
+        local t = _G.cameraTransforms.translation
+        assert(t ~= nil and t.node ~= 101, "an eye camera must receive the head-tracked translation")
+        assert(_G.currentCamera == t.node, "the head-tracked eye camera must be bound for rendering")
+        -- head translation (0.15, 0.05, -0.10) rotated by the base heading -pi/2 is (0.10, 0.05, 0.15)
+        assert(math.abs(t.x - 10.10) < 0.001, "x transform mismatch")
+        assert(math.abs(t.y - 2.05) < 0.001, "y transform mismatch")
+        assert(math.abs(t.z - 30.15) < 0.001, "z transform mismatch")
+        local r = _G.cameraTransforms.rotation
+        assert(r ~= nil and r.node == t.node, "the eye camera must receive the head-tracked rotation")
+        assert(math.abs(r.rx - 0.20) < 0.001, "pitch must be the head pitch on a level base")
+        assert(math.abs(r.ry - (-math.pi * 0.5 - 0.30)) < 0.001, "yaw must be the base heading plus head yaw")
+        assert(math.abs(r.rz - 0.02) < 0.001, "roll must be the head roll on a level base")
+    )", "=verifyOutsideCam"), 0);
 }
 
 TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking) {

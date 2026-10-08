@@ -248,8 +248,9 @@ end
 function VRCompanion:syncActiveEyeCamera(subPass)
     local curVeh = self:getControlledVehicle()
     if curVeh ~= nil then
+        -- The in-cab camera and every Outside Camera go through the vehicle camera path
         local cam = self:getVehicleActiveCamera(curVeh)
-        if cam ~= nil and cam.isInside then
+        if cam ~= nil then
             self:onVehicleCameraUpdate(cam, 0.0)
             return
         end
@@ -449,7 +450,8 @@ function VRCompanion:restoreCameraProjectionsFor2D()
     local veh = self:getControlledVehicle()
     if veh ~= nil then
         local cam = self:getVehicleActiveCamera(veh)
-        if cam ~= nil and cam.cameraNode ~= nil then
+        -- An Outside Camera's own node never gets a VR projection, so there is nothing to restore
+        if cam ~= nil and cam.isInside and cam.cameraNode ~= nil then
             self:applyCameraProjection(cam.cameraNode, 0)
         end
     end
@@ -904,9 +906,116 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
     end
 end
 
+-- Below this horizontal length of the engine camera's unit look direction (about 6 degrees from
+-- vertical) the camera's up direction is blended into the Outside Camera's base heading.
+VRCompanion.OUTSIDE_CAMERA_VERTICAL_BLEND = 0.1
+
+-- World heading of an Outside Camera's level base: the engine camera's world look direction
+-- projected onto the horizontal plane. Near vertical that projection shrinks to nothing and flips
+-- as the camera crosses straight down, so the camera's up direction is blended in there: for a
+-- camera looking down it points the way the camera would look if levelled (for one looking up,
+-- the opposite way). The blend fades out continuously, so the heading never jumps. Returns nil
+-- when no heading can be derived.
+function VRCompanion:getOutsideCameraBaseHeading(camNode, localDirectionToWorldFn)
+    local lx, ly, lz = localDirectionToWorldFn(camNode, 0, 0, -1)
+    if lx == nil or ly == nil or lz == nil then return nil end
+    local fx, fz = lx, lz
+    local horizontal = math.sqrt(lx * lx + lz * lz)
+    local blendBelow = self.OUTSIDE_CAMERA_VERTICAL_BLEND
+    if horizontal < blendBelow then
+        local ux, _, uz = localDirectionToWorldFn(camNode, 0, 1, 0)
+        if ux ~= nil and uz ~= nil then
+            local weight = 1 - horizontal / blendBelow
+            if ly > 0 then weight = -weight end
+            fx = fx + weight * ux
+            fz = fz + weight * uz
+        end
+    end
+    if fx * fx + fz * fz < 1e-12 then return nil end
+    return math.atan2(-fx, -fz)
+end
+
+-- Leaves the Outside Camera to the engine: renders through the engine's own camera again when an
+-- eye camera was bound in its place. Binding changes no transform of the engine's nodes.
+function VRCompanion:renderThroughEngineCamera(camNode)
+    if self.activeRenderingCamera ~= nil and self.activeRenderingCamera ~= camNode then
+        self:bindRenderingCamera(camNode)
+        self.activeRenderingCameraNode = camNode
+    end
+end
+
+-- Outside Camera: any camera of the controlled vehicle other than its in-cab camera. Runs after
+-- the engine's own camera update, so orbit, zoom and collision pull-in are already applied. The
+-- engine's camera nodes are only read: the view renders through the Dual Eye Camera Nodes placed
+-- in world space on a level base (the engine camera's position and horizontal heading, zero pitch
+-- and roll), with the head pose composited on top.
+function VRCompanion:onOutsideCameraUpdate(cam)
+    local camNode = cam.cameraNode
+    -- 2D Floating Window Mode and GUI menus show the engine's camera as-is
+    if self.is2DViewActive or self.isMenuVisible then
+        self:renderThroughEngineCamera(camNode)
+        return
+    end
+
+    local getRootNodeFn = getRootNode or (_G and _G.getRootNode)
+    local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
+    local localDirectionToWorldFn = localDirectionToWorld or (_G and _G.localDirectionToWorld)
+    if type(getRootNodeFn) ~= "function" or type(getWorldTranslationFn) ~= "function"
+        or type(localDirectionToWorldFn) ~= "function" then
+        self:renderThroughEngineCamera(camNode)
+        return
+    end
+    local rootNode = getRootNodeFn()
+    -- The shared step renders through, and writes, its reference node when no eye node exists
+    self:ensureDualEyeCameraNodes(camNode)
+    if rootNode == nil or rootNode == 0 or self.cameraNodeLeft == nil or self.cameraNodeLeft == 0 then
+        self:renderThroughEngineCamera(camNode)
+        return
+    end
+
+    local afrFallback = self:requiresAfrFallback()
+    local eyeIndex = self:getActiveEyeIndex(afrFallback)
+    local eyeProj = self:fetchEyeProjection(eyeIndex)
+
+    local baseX, baseY, baseZ = getWorldTranslationFn(camNode)
+
+    local pose = self:getResolvedHeadPose()
+    if not pose or not pose.isValid then
+        -- Tracking lost: show the engine camera's own view (orbit pitch included) rather than eyes
+        -- frozen in the world. Placing the eyes there, instead of binding the engine camera, also
+        -- holds when a Sequential Dual-Pass sub-pass binds its eye camera at the end.
+        local getWorldRotationFn = getWorldRotation or (_G and _G.getWorldRotation)
+        if type(getWorldRotationFn) ~= "function" then
+            self:renderThroughEngineCamera(camNode)
+            return
+        end
+        local rotX, rotY, rotZ = getWorldRotationFn(camNode)
+        self:placeAndBindEyes(camNode, rootNode, baseX, baseY, baseZ, baseX, baseY, baseZ,
+            rotX, rotY, rotZ, eyeIndex, eyeProj, afrFallback)
+        return
+    end
+    -- No derivable heading (a degenerate engine transform) keeps the last one rather than snapping
+    local heading = self:getOutsideCameraBaseHeading(camNode, localDirectionToWorldFn)
+        or self.outsideCameraHeading or 0
+    self.outsideCameraHeading = heading
+
+    local tx, ty, tz = pose.x or 0, pose.y or 0, pose.z or 0
+    local offX, offY, offZ = self:computeEyeOffset(pose, eyeIndex, afrFallback)
+    local headX, headY, headZ = self:rotateVectorByYaw(tx, ty, tz, heading)
+    local eyeX, eyeY, eyeZ = self:rotateVectorByYaw(tx + offX, ty + offY, tz + offZ, heading)
+
+    self:placeAndBindEyes(camNode, rootNode,
+        baseX + headX, baseY + headY, baseZ + headZ, baseX + eyeX, baseY + eyeY, baseZ + eyeZ,
+        pose.pitch or 0, self:normalizeAngle(heading + (pose.yaw or 0)), pose.roll or 0,
+        eyeIndex, eyeProj, afrFallback)
+end
+
 function VRCompanion:onVehicleCameraUpdate(cam, dt)
-    -- Only apply 6DOF tracking and projection to interior in-cab cameras
-    if not cam or not cam.isInside or cam.cameraNode == nil then
+    if not cam or cam.cameraNode == nil then
+        return
+    end
+    if not cam.isInside then
+        self:onOutsideCameraUpdate(cam)
         return
     end
 
@@ -1446,6 +1555,9 @@ VRCompanion.Stereo.computeEyeOffset = function(self, ...) return VRCompanion.com
 VRCompanion.Stereo.getResolvedHeadPose = function(self, ...) return VRCompanion.getResolvedHeadPose(VRCompanion, ...) end
 VRCompanion.Stereo.getActiveEyeIndex = function(self, ...) return VRCompanion.getActiveEyeIndex(VRCompanion, ...) end
 VRCompanion.Stereo.placeAndBindEyes = function(self, ...) return VRCompanion.placeAndBindEyes(VRCompanion, ...) end
+VRCompanion.Stereo.getOutsideCameraBaseHeading = function(self, ...) return VRCompanion.getOutsideCameraBaseHeading(VRCompanion, ...) end
+VRCompanion.Stereo.renderThroughEngineCamera = function(self, ...) return VRCompanion.renderThroughEngineCamera(VRCompanion, ...) end
+VRCompanion.Stereo.onOutsideCameraUpdate = function(self, ...) return VRCompanion.onOutsideCameraUpdate(VRCompanion, ...) end
 VRCompanion.Stereo.onVehicleCameraUpdate = function(self, ...) return VRCompanion.onVehicleCameraUpdate(VRCompanion, ...) end
 VRCompanion.Stereo.onPlayerCameraMakeCurrent = function(self, ...) return VRCompanion.onPlayerCameraMakeCurrent(VRCompanion, ...) end
 VRCompanion.Stereo.onPlayerCameraUpdate = function(self, ...) return VRCompanion.onPlayerCameraUpdate(VRCompanion, ...) end
