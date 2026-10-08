@@ -508,7 +508,7 @@ void NgxInterceptor::OnNearSolution(uint64_t evalIndex, const mvreproj::NearSolu
 void NgxInterceptor::SetNearClipOverride(float meters) {
     if (!std::isfinite(meters) || meters < 0.0f) meters = 0.0f;
     if (m_nearClipOverride.exchange(meters) != meters) {
-        LogInfo("NgxInterceptor: Near plane override (vrDlssNearClip) " +
+        LogInfo("NgxInterceptor: Near plane (vrDlssNearClip*) " +
                 (meters > 0.0f ? std::to_string(meters) + " m" : std::string("auto (estimated, camera record until then)")));
     }
 }

@@ -52,6 +52,30 @@ VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_S
 VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION = false
 VRCompanion.allowObliqueProjection = VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION
 
+-- DLSS near plane per camera mode (vrDlssNearClipCab / Outside / OnFoot), in metres; 0 = auto, which the
+-- Injector estimates from the engine's motion vectors. The renderer's near differs between a vehicle's
+-- inside camera, its other cameras and the on-foot camera, so each can be fixed on its own. The cab and
+-- on-foot defaults are the renderer's known nears; the outside cameras vary, so they default to auto.
+VRCompanion.DLSS_NEAR_CLIP_CAB = "cab"
+VRCompanion.DLSS_NEAR_CLIP_OUTSIDE = "outside"
+VRCompanion.DLSS_NEAR_CLIP_ON_FOOT = "onFoot"
+VRCompanion.DLSS_NEAR_CLIP_FIELDS = {
+    cab = "dlssNearClipCab",
+    outside = "dlssNearClipOutside",
+    onFoot = "dlssNearClipOnFoot",
+}
+VRCompanion.DEFAULT_DLSS_NEAR_CLIP_CAB = 0.1
+VRCompanion.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE = 0
+VRCompanion.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT = 0.15
+VRCompanion.DEFAULT_DLSS_NEAR_CLIPS = {
+    cab = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_CAB,
+    outside = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE,
+    onFoot = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT,
+}
+VRCompanion.dlssNearClipCab = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_CAB
+VRCompanion.dlssNearClipOutside = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE
+VRCompanion.dlssNearClipOnFoot = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT
+
 VRCompanion.RECENTER_MODES = {
     BOTH = "Both",
     VEHICLE_ONLY = "VehicleOnly"
@@ -167,6 +191,9 @@ function VRCompanion:saveConfiguration(xmlPath)
         end
         setXmlFloatFn(xmlFile, "vrSettings.hudFillLevelGap", self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP)
         setXmlFloatFn(xmlFile, "vrSettings.snapTurnAngle", self:getSnapTurnAngleDegrees())
+        for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
+            setXmlFloatFn(xmlFile, "vrSettings." .. field, self[field] or self.DEFAULT_DLSS_NEAR_CLIPS[mode])
+        end
 
         pcall(saveXmlFn, xmlFile)
         if type(deleteXmlFn) == "function" then
@@ -259,6 +286,15 @@ function VRCompanion:loadConfiguration(xmlPath)
                     self.snapTurnAngle = math.rad(loadedSnapAngle)
                 end
 
+                for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
+                    local loadedNear = readXmlFloat(getXmlFloatFn, xmlFile, "vrSettings." .. field)
+                    if loadedNear ~= nil and loadedNear >= 0 then
+                        self[field] = loadedNear
+                    else
+                        self[field] = self.DEFAULT_DLSS_NEAR_CLIPS[mode]
+                    end
+                end
+
                 local loadedMode = readXmlString(getXmlStringFn, xmlFile,
                     "vrSettings.renderingMode")
                 if loadedMode ~= nil and loadedMode ~= "" then
@@ -317,6 +353,11 @@ function VRCompanion:loadConfiguration(xmlPath)
     end
     if self.snapTurnAngle == nil then
         self.snapTurnAngle = self.DEFAULT_SNAP_TURN_ANGLE
+    end
+    for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
+        if self[field] == nil then
+            self[field] = self.DEFAULT_DLSS_NEAR_CLIPS[mode]
+        end
     end
 
     self:configureHudInsets(insetX, insetY, scale, insetTop)

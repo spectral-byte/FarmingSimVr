@@ -427,6 +427,9 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion.recenterVrTrackingSpace = false
     VRCompanion.allowObliqueProjection = true
     VRCompanion.snapTurnAngle = math.rad(45)
+    VRCompanion.dlssNearClipCab = 0.1
+    VRCompanion.dlssNearClipOutside = 0.3
+    VRCompanion.dlssNearClipOnFoot = 0
     VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_AFR, false)
     assert(VRCompanion:saveConfiguration("settings.xml") == true, "save must succeed")
 
@@ -439,6 +442,9 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion.recenterVrTrackingSpace = nil
     VRCompanion.allowObliqueProjection = nil
     VRCompanion.snapTurnAngle = nil
+    VRCompanion.dlssNearClipCab = nil
+    VRCompanion.dlssNearClipOutside = nil
+    VRCompanion.dlssNearClipOnFoot = nil
     VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)
     local insets = VRCompanion:loadConfiguration("settings.xml")
 
@@ -454,8 +460,14 @@ test("SavedSettingsRoundTripThroughLoader", function()
     assert(VRCompanion.allowObliqueProjection == true, "oblique projection must round-trip")
     assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(45)) < 0.0001, "snap turn angle must round-trip")
     assert(VRCompanion:getRenderingMode() == VRCompanion.RENDERING_MODE_AFR, "stereo presentation mode must round-trip")
+    assert(math.abs(VRCompanion.dlssNearClipCab - 0.1) < 0.0001, "cab DLSS near plane must round-trip")
+    assert(math.abs(VRCompanion.dlssNearClipOutside - 0.3) < 0.0001, "outside camera DLSS near plane must round-trip")
+    assert(VRCompanion.dlssNearClipOnFoot == 0, "on-foot DLSS near plane (auto) must round-trip")
 
     -- Restore defaults for later tests
+    VRCompanion.dlssNearClipCab = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_CAB
+    VRCompanion.dlssNearClipOutside = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE
+    VRCompanion.dlssNearClipOnFoot = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT
     VRCompanion.allowObliqueProjection = VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION
     VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
     VRCompanion.fillLevelUnderVehicle = VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE
@@ -528,6 +540,12 @@ test("RuntimeStateStartsFromDefaultConstants", function()
         assert(fresh.snapTurnAngle == fresh.DEFAULT_SNAP_TURN_ANGLE, "snap turn angle starts at its default")
         assert(fresh.renderingMode == fresh.DEFAULT_RENDERING_MODE, "stereo presentation mode starts at its default")
         assert(fresh.allowObliqueProjection == fresh.DEFAULT_ALLOW_OBLIQUE_PROJECTION, "oblique projection starts at its default")
+        assert(fresh.DEFAULT_DLSS_NEAR_CLIP_CAB == 0.1, "cab DLSS near plane defaults to 0.1 m")
+        assert(fresh.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE == 0, "outside camera DLSS near plane defaults to auto")
+        assert(fresh.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT == 0.15, "on-foot DLSS near plane defaults to 0.15 m")
+        assert(fresh.dlssNearClipCab == fresh.DEFAULT_DLSS_NEAR_CLIP_CAB, "cab DLSS near plane starts at its default")
+        assert(fresh.dlssNearClipOutside == fresh.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE, "outside camera DLSS near plane starts at its default (auto)")
+        assert(fresh.dlssNearClipOnFoot == fresh.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT, "on-foot DLSS near plane starts at its default")
     end)
     _G.VRCompanion = saved
     assert(ok, tostring(err))
@@ -604,7 +622,10 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     assert(store["vrSettings.recenterVrTrackingSpace"] == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "saved recenter tracking")
     assert(store["vrSettings.allowObliqueProjection"] == VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION, "saved oblique projection")
     assert(math.abs(store["vrSettings.snapTurnAngle"] - math.deg(VRCompanion.DEFAULT_SNAP_TURN_ANGLE)) < 0.0001, "saved snap turn angle")
-    assert(store["vrSettings.renderingMode"] == "DualPass", "saved stereo presentation mode must be DualPass, got " .. tostring(store["vrSettings.renderingMode"]))
+    assert(store["vrSettings.dlssNearClipCab"] == VRCompanion.DEFAULT_DLSS_NEAR_CLIP_CAB, "saved cab DLSS near plane")
+    assert(store["vrSettings.dlssNearClipOutside"] == VRCompanion.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE, "saved outside camera DLSS near plane")
+    assert(store["vrSettings.dlssNearClipOnFoot"] == VRCompanion.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT, "saved on-foot DLSS near plane")
+    assert(store["vrSettings.renderingMode"] == "DualPass","saved stereo presentation mode must be DualPass, got " .. tostring(store["vrSettings.renderingMode"]))
 
     _G.VRBridge = nil
     VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)

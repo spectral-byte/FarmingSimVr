@@ -145,6 +145,8 @@ function VRCompanion:loadMap(name)
     if type(self.applyHudInsets) == "function" then
         self:applyHudInsets()
     end
+    -- 7a. Send the loaded DLSS near plane for the starting camera
+    self:applyDlssNearClip(true)
 
     -- 8. Initialize HUD state to Hidden for full VR immersion (Issue #25)
     if type(self.setHudState) == "function" then
@@ -173,7 +175,10 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrDlssSdpMvScale", "Set DLSS motion vector scale under Sequential Dual-Pass: vrDlssSdpMvScale <scaleX> [scaleY]", "consoleCommandSetDlssSdpMvScale", self)
         addConsoleCommand("vrDlssMvFix", "Switch the DLSS motion vector pass for A/B comparison: vrDlssMvFix <on|off>", "consoleCommandDlssMvFix", self)
         addConsoleCommand("vrDlssDepthModel", "Set the depth model of the DLSS motion vector correction for A/B comparison: vrDlssDepthModel <infinite|finite>", "consoleCommandDlssDepthModel", self)
-        addConsoleCommand("vrDlssNearClip", "Override the near plane of the DLSS motion vector correction in metres (0 or auto = estimate it automatically, the default): vrDlssNearClip <meters|auto>", "consoleCommandDlssNearClip", self)
+        addConsoleCommand("vrDlssNearClip", "Set the near plane of the DLSS motion vector correction for every camera in metres (0 or auto = estimate it automatically): vrDlssNearClip <meters|auto>", "consoleCommandDlssNearClip", self)
+        addConsoleCommand("vrDlssNearClipCab", "Set the DLSS near plane for a vehicle's inside camera: vrDlssNearClipCab <meters|auto>", "consoleCommandDlssNearClipCab", self)
+        addConsoleCommand("vrDlssNearClipOutside", "Set the DLSS near plane for a vehicle's outside cameras: vrDlssNearClipOutside <meters|auto>", "consoleCommandDlssNearClipOutside", self)
+        addConsoleCommand("vrDlssNearClipOnFoot", "Set the DLSS near plane on foot: vrDlssNearClipOnFoot <meters|auto>", "consoleCommandDlssNearClipOnFoot", self)
         addConsoleCommand("vrDlssDiag","Trace DLSS evaluations to fs25_vr.log: vrDlssDiag [evaluations]", "consoleCommandDlssDiag", self)
         addConsoleCommand("vrRenderingMode", "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", "consoleCommandSetRenderingMode", self)
         addConsoleCommand("vrObliqueProjection", "Toggle Oblique Frustum projection: vrObliqueProjection <true|false|toggle>", "consoleCommandSetObliqueProjection", self)
@@ -288,6 +293,38 @@ function VRCompanion:getVehicleActiveCamera(veh)
         return veh.activeCamera
     end
     return nil
+end
+
+-- The camera mode the DLSS near plane is configured per: a vehicle's inside camera (cab), any other
+-- vehicle camera (outside), or the player camera (on foot).
+function VRCompanion:getDlssNearClipMode()
+    local veh = self:getControlledVehicle()
+    if veh == nil then return self.DLSS_NEAR_CLIP_ON_FOOT end
+    local cam = self:getVehicleActiveCamera(veh)
+    if cam ~= nil and cam.isInside then return self.DLSS_NEAR_CLIP_CAB end
+    return self.DLSS_NEAR_CLIP_OUTSIDE
+end
+
+-- The near plane in metres (0 = auto) configured for the camera the player is looking through.
+function VRCompanion:getDlssNearClipForCurrentCamera()
+    local cab, outside, onFoot = self.dlssNearClipCab, self.dlssNearClipOutside, self.dlssNearClipOnFoot
+    -- One value for every mode needs no camera lookup
+    if cab ~= nil and cab == outside and outside == onFoot then return cab end
+    local mode = self:getDlssNearClipMode()
+    return self[self.DLSS_NEAR_CLIP_FIELDS[mode]] or self.DEFAULT_DLSS_NEAR_CLIPS[mode]
+end
+
+-- Sends the current camera's near plane to the Injector when it differs from the one last sent, so
+-- entering or leaving a vehicle or switching its camera takes effect on the next update. force resends
+-- it anyway. Returns the bridge's result when it sends, otherwise false.
+function VRCompanion:applyDlssNearClip(force)
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge == nil or type(bridge.setDlssNearClip) ~= "function" then return false end
+    local meters = self:getDlssNearClipForCurrentCamera()
+    if not force and self.appliedDlssNearClip == meters then return false end
+    -- Recorded even when the bridge has no NGX interceptor, so that is not retried every frame
+    self.appliedDlssNearClip = meters
+    return bridge.setDlssNearClip(meters) == true
 end
 
 function VRCompanion:hookVehicleCamera()
@@ -792,6 +829,9 @@ function VRCompanion:runUpdate(dt)
             self:onVehicleTransition(oldVeh, curVehicle)
         end
     end
+
+    -- Follow the camera mode with the DLSS near plane (cab, outside camera, on foot)
+    self:applyDlssNearClip(false)
 end
 
 function VRCompanion:deleteMap()
@@ -863,6 +903,7 @@ function VRCompanion:deleteMap()
     self.accumulatedPass1Dt = 0.0
     self.enterableHooked = false
     self.lastControlledVehicle = nil
+    self.appliedDlssNearClip = nil
     self.vehicleRotationStates = {}
     self.isMenuVisible = false
     self.guiVisibilityInitialized = false
@@ -976,7 +1017,10 @@ VRCompanion.Core.getPlayerCamera = function(self, ...) return VRCompanion.getPla
 VRCompanion.Core.getControlledVehicle = function(self, ...) return VRCompanion.getControlledVehicle(VRCompanion, ...) end
 VRCompanion.Core.getActiveVehicleCamera = function(self, ...) return VRCompanion.getActiveVehicleCamera(VRCompanion, ...) end
 VRCompanion.Core.getVehicleActiveCamera = function(self, ...) return VRCompanion.getVehicleActiveCamera(VRCompanion, ...) end
-VRCompanion.Core.hookVehicleCamera = function(self, ...) return VRCompanion.hookVehicleCamera(VRCompanion, ...) end
+VRCompanion.Core.getDlssNearClipMode = function(self, ...) return VRCompanion.getDlssNearClipMode(VRCompanion, ...) end
+VRCompanion.Core.getDlssNearClipForCurrentCamera = function(self, ...) return VRCompanion.getDlssNearClipForCurrentCamera(VRCompanion, ...) end
+VRCompanion.Core.applyDlssNearClip = function(self, ...) return VRCompanion.applyDlssNearClip(VRCompanion, ...) end
+VRCompanion.Core.hookVehicleCamera =function(self, ...) return VRCompanion.hookVehicleCamera(VRCompanion, ...) end
 VRCompanion.Core.hookEnterable = function(self, ...) return VRCompanion.hookEnterable(VRCompanion, ...) end
 VRCompanion.Core.hookVehicleSpeed = function(self, ...) return VRCompanion.hookVehicleSpeed(VRCompanion, ...) end
 VRCompanion.Core.unhookVehicleSpeed = function(self, ...) return VRCompanion.unhookVehicleSpeed(VRCompanion, ...) end
