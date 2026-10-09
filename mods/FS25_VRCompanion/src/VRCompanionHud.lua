@@ -41,26 +41,28 @@ if VRCompanion.hudAnchorBottom == nil then VRCompanion.hudAnchorBottom = VRCompa
 if VRCompanion.hudAnchorTop == nil then VRCompanion.hudAnchorTop = VRCompanion.hudAnchorTopBase end
 if VRCompanion.effectiveUiScale == nil then VRCompanion.effectiveUiScale = VRCompanion.DEFAULT_HUD_UI_SCALE end
 if VRCompanion.currentConvergenceOffset == nil then VRCompanion.currentConvergenceOffset = 0.0 end
-local HUD_DISPLAY_ANCHORS = {
-    SpeedMeterDisplay = { alignX = "right", alignY = "bottom" },
-    InputHelpDisplay = { alignX = "left", alignY = "top" },
-    GameInfoDisplay = { alignX = "right", alignY = "top" },
-    ContextActionDisplay = { alignX = "left", alignY = "bottom" },
-    IngameMap = { alignX = "left", alignY = "bottom" },
-    FillLevelsDisplay = { alignX = "right", alignY = "bottom" }
+-- The four HUD Groups (CONTEXT.md, ADR-0022). Each group lists its engine displays and its
+-- fixed home corner, and says whether it shows in the Streamlined and Full HUD. Placement and
+-- visibility both look a display up through its group. The context action display is in no group.
+VRCompanion.HUD_GROUPS = {
+    map = { displays = { "IngameMap" }, alignX = "left", alignY = "bottom", streamlined = false, full = true },
+    speedometer = { displays = { "SpeedMeterDisplay", "FillLevelsDisplay" }, alignX = "right", alignY = "bottom", streamlined = true, full = true },
+    info = { displays = { "GameInfoDisplay" }, alignX = "right", alignY = "top", streamlined = false, full = true },
+    controls = { displays = { "InputHelpDisplay" }, alignX = "left", alignY = "top", streamlined = false, full = true }
 }
 
-local STREAMLINED_ALLOWED_DISPLAYS = {
-    SpeedMeterDisplay = true,
-    speedMeter = true,
-    speedMeterDisplay = true,
-    ContextActionDisplay = true,
-    contextAction = true,
-    contextActionDisplay = true,
-    FillLevelsDisplay = true,
-    fillLevels = true,
-    fillLevelsDisplay = true
-}
+-- Not in any group: bottom-centered, and shown in both the Streamlined and Full HUD.
+local CONTEXT_ACTION_DISPLAY = "ContextActionDisplay"
+local UNGROUPED_ALIGNMENT = { alignX = "left", alignY = "bottom" }
+
+local function findHudGroup(displayName)
+    for _, group in pairs(VRCompanion.HUD_GROUPS) do
+        for _, member in ipairs(group.displays) do
+            if member == displayName then return group end
+        end
+    end
+    return nil
+end
 
 local HUD_HOOKED_CLASSES = {
     { className = "SpeedMeterDisplay", displayName = "SpeedMeterDisplay" },
@@ -444,24 +446,23 @@ function VRCompanion:repositionHudForConvergence()
         end
     end
 
-    if sm ~= nil and type(sm.setPosition) == "function" then
-        pcall(sm.setPosition, sm, shiftedRight, targetSmBottom)
+    -- Each display sits at its group's home corner. The speedometer's bottom may be lifted
+    -- above the fill levels.
+    local function placeAtHomeCorner(display, displayName, bottom)
+        if display == nil or type(display.setPosition) ~= "function" then return end
+        local group = findHudGroup(displayName) or UNGROUPED_ALIGNMENT
+        local x = (group.alignX == "right") and shiftedRight or shiftedLeft
+        local y = (group.alignY == "top") and baseTop or (bottom or baseBottom)
+        pcall(display.setPosition, display, x, y)
     end
-    local ih = hud.inputHelp or hud.inputHelpDisplay
-    if ih ~= nil and type(ih.setPosition) == "function" then
-        pcall(ih.setPosition, ih, shiftedLeft, baseTop)
-    end
-    local gi = hud.gameInfo or hud.gameInfoDisplay
-    if gi ~= nil and type(gi.setPosition) == "function" then
-        pcall(gi.setPosition, gi, shiftedRight, baseTop)
-    end
+
+    placeAtHomeCorner(sm, "SpeedMeterDisplay", targetSmBottom)
+    placeAtHomeCorner(hud.inputHelp or hud.inputHelpDisplay, "InputHelpDisplay")
+    placeAtHomeCorner(hud.gameInfo or hud.gameInfoDisplay, "GameInfoDisplay")
+    placeAtHomeCorner(hud.ingameMap or hud.ingameMapDisplay, "IngameMap")
     local ca = hud.contextAction or hud.contextActionDisplay
     if ca ~= nil and type(ca.setPosition) == "function" then
         pcall(ca.setPosition, ca, 0.5 + offset, baseBottom)
-    end
-    local im = hud.ingameMap or hud.ingameMapDisplay
-    if im ~= nil and type(im.setPosition) == "function" then
-        pcall(im.setPosition, im, shiftedLeft, baseBottom)
     end
 end
 
@@ -474,12 +475,21 @@ function VRCompanion:isDisplayVisible(displayName, state)
     state = state or self:getHudState()
     if state == self.HUD_STATE_HIDDEN then
         return false
-    elseif state == self.HUD_STATE_STREAMLINED then
-        return STREAMLINED_ALLOWED_DISPLAYS[displayName] == true
-    elseif state == self.HUD_STATE_FULL then
+    end
+    if state ~= self.HUD_STATE_STREAMLINED and state ~= self.HUD_STATE_FULL then
+        return false
+    end
+    if displayName == CONTEXT_ACTION_DISPLAY then
         return true
     end
-    return false
+    local group = findHudGroup(displayName)
+    if group == nil then
+        return state == self.HUD_STATE_FULL
+    end
+    if state == self.HUD_STATE_STREAMLINED then
+        return group.streamlined == true
+    end
+    return group.full == true
 end
 
 function VRCompanion:applyHudState(state)
@@ -665,7 +675,7 @@ function VRCompanion:positionHudDisplay(display, displayName)
         return
     end
 
-    local anchorConfig = HUD_DISPLAY_ANCHORS[displayName] or { alignX = "left", alignY = "bottom" }
+    local anchorConfig = findHudGroup(displayName) or UNGROUPED_ALIGNMENT
     local w = (type(display.getWidth) == "function" and display:getWidth()) or display.width or 0
     local h = (type(display.getHeight) == "function" and display:getHeight()) or display.height or 0
 

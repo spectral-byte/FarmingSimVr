@@ -240,6 +240,45 @@ test("RepositionsActiveHudDisplaysWithFrameConvergenceDisparity", function()
     _G.VRBridge = nil
 end)
 
+-- HUD Groups (spec #50, ticket #51): the per-frame placement takes each display's home corner from its group
+test("ConvergencePlacementTakesTheHomeCornerFromTheDisplaysGroup", function()
+    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    VRCompanion.fillLevelUnderVehicle = false
+    _G.VRBridge = {
+        getFrameParity = function() return 0 end,
+        getIpd = function() return 0.064 end,
+        isReady = function() return true end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+
+    local mockInfo = {
+        position = nil,
+        setPosition = function(self, x, y) self.position = { x = x, y = y } end
+    }
+    _G.g_currentMission = { hud = { gameInfo = mockInfo } }
+    VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
+
+    VRCompanion:updateHudConvergence()
+    assert(math.abs(mockInfo.position.x - VRCompanion.hudAnchorRight) < 0.0001, "Info group is anchored to the right edge")
+    assert(math.abs(mockInfo.position.y - VRCompanion.hudAnchorTop) < 0.0001, "Info group is anchored to the top edge")
+
+    local info = VRCompanion.HUD_GROUPS.info
+    local origX, origY = info.alignX, info.alignY
+    local ok, err = pcall(function()
+        info.alignX, info.alignY = "left", "bottom"
+        VRCompanion:updateHudConvergence()
+        assert(math.abs(mockInfo.position.x - VRCompanion.hudAnchorLeft) < 0.0001, "Moving the group's corner moves the display to the left edge")
+        assert(math.abs(mockInfo.position.y - VRCompanion.hudAnchorBottom) < 0.0001, "Moving the group's corner moves the display to the bottom edge")
+    end)
+    info.alignX, info.alignY = origX, origY
+
+    _G.g_currentMission = nil
+    _G.VRBridge = nil
+    assert(ok, err)
+end)
+
 test("ConvergenceDisparitySynchronizesSpeedMeterAndFillLevelsUnderVehicleAcrossParity", function()
     VRCompanion:configureHudInsets(0.35, 0.25, 0.50)
     VRCompanion.fillLevelUnderVehicle = true

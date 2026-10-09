@@ -240,6 +240,21 @@ test("PositionsIndividualDisplaysViaHelper", function()
     assert(math.abs(map.anchorY - 0.22) < 0.0001, "IngameMap anchorY must be 0.22")
 end)
 
+-- HUD Groups (spec #50, ticket #51): a display's home corner comes from its group
+test("PlacesADisplayAtItsGroupsHomeCorner", function()
+    local info = VRCompanion.HUD_GROUPS.info
+    local origX, origY = info.alignX, info.alignY
+    local ok, err = pcall(function()
+        info.alignX, info.alignY = "left", "bottom"
+        local gi = { width = 0.20, height = 0.12 }
+        VRCompanion:positionHudDisplay(gi, "GameInfoDisplay")
+        assert(math.abs(gi.anchorX - VRCompanion.hudAnchorLeft) < 0.0001, "Info display follows its group's left edge")
+        assert(math.abs(gi.anchorY - VRCompanion.hudAnchorBottom) < 0.0001, "Info display follows its group's bottom edge")
+    end)
+    info.alignX, info.alignY = origX, origY
+    assert(ok, err)
+end)
+
 test("PositionsDisplaysWithDimensionsOffset", function()
     local smWithDim = {
         width = 0.15,

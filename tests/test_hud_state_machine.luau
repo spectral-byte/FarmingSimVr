@@ -131,6 +131,85 @@ test("IsDisplayVisibleFiltersComponentsAcrossAllThreeStates", function()
     assert(VRCompanion:isDisplayVisible("SpeedMeterDisplay") == false, "SpeedMeterDisplay hidden with omitted state")
 end)
 
+-- HUD Groups (spec #50, ticket #51): visibility is looked up through a display's group
+test("DefinesTheFourHudGroupsWithTheirMemberDisplaysAndHomeCorners", function()
+    local groups = VRCompanion.HUD_GROUPS
+    assert(type(groups) == "table", "HUD_GROUPS must be defined")
+
+    local function memberOf(group, displayName)
+        for _, name in ipairs(group.displays) do
+            if name == displayName then return true end
+        end
+        return false
+    end
+
+    assert(memberOf(groups.map, "IngameMap") and #groups.map.displays == 1, "Map group holds only IngameMap")
+    assert(groups.map.alignX == "left" and groups.map.alignY == "bottom", "Map group is bottom-left")
+
+    assert(memberOf(groups.speedometer, "SpeedMeterDisplay") and memberOf(groups.speedometer, "FillLevelsDisplay")
+        and #groups.speedometer.displays == 2, "Speedometer group holds the speedometer and the fill levels")
+    assert(groups.speedometer.alignX == "right" and groups.speedometer.alignY == "bottom", "Speedometer group is bottom-right")
+
+    assert(memberOf(groups.info, "GameInfoDisplay") and #groups.info.displays == 1, "Info group holds only GameInfoDisplay")
+    assert(groups.info.alignX == "right" and groups.info.alignY == "top", "Info group is top-right")
+
+    assert(memberOf(groups.controls, "InputHelpDisplay") and #groups.controls.displays == 1, "Controls group holds only InputHelpDisplay")
+    assert(groups.controls.alignX == "left" and groups.controls.alignY == "top", "Controls group is top-left")
+
+    local count = 0
+    for _, group in pairs(groups) do
+        count = count + 1
+        assert(not memberOf(group, "ContextActionDisplay"), "The context action display belongs to no group")
+    end
+    assert(count == 4, "There are exactly four HUD Groups")
+end)
+
+test("DisplayVisibilityFollowsItsGroupsFlagsInStreamlinedAndFull", function()
+    local info = VRCompanion.HUD_GROUPS.info
+    local origStreamlined, origFull = info.streamlined, info.full
+    local ok, err = pcall(function()
+        info.streamlined = true
+        info.full = false
+        assert(VRCompanion:isDisplayVisible("GameInfoDisplay", VRCompanion.HUD_STATE_STREAMLINED) == true,
+            "A display follows its group's Streamlined flag")
+        assert(VRCompanion:isDisplayVisible("GameInfoDisplay", VRCompanion.HUD_STATE_FULL) == false,
+            "A display follows its group's Full flag")
+        assert(VRCompanion:isDisplayVisible("GameInfoDisplay", VRCompanion.HUD_STATE_HIDDEN) == false,
+            "Hidden shows nothing whatever the group flags say")
+    end)
+    info.streamlined, info.full = origStreamlined, origFull
+    assert(ok, err)
+end)
+
+test("SpeedometerGroupFlagsGovernBothItsDisplays", function()
+    local group = VRCompanion.HUD_GROUPS.speedometer
+    local orig = group.streamlined
+    local ok, err = pcall(function()
+        group.streamlined = false
+        assert(VRCompanion:isDisplayVisible("SpeedMeterDisplay", VRCompanion.HUD_STATE_STREAMLINED) == false)
+        assert(VRCompanion:isDisplayVisible("FillLevelsDisplay", VRCompanion.HUD_STATE_STREAMLINED) == false)
+    end)
+    group.streamlined = orig
+    assert(ok, err)
+end)
+
+test("ContextActionVisibilityIsIndependentOfTheGroups", function()
+    local saved = {}
+    for name, group in pairs(VRCompanion.HUD_GROUPS) do
+        saved[name] = { group.streamlined, group.full }
+        group.streamlined, group.full = false, false
+    end
+    local ok, err = pcall(function()
+        assert(VRCompanion:isDisplayVisible("ContextActionDisplay", VRCompanion.HUD_STATE_STREAMLINED) == true)
+        assert(VRCompanion:isDisplayVisible("ContextActionDisplay", VRCompanion.HUD_STATE_FULL) == true)
+        assert(VRCompanion:isDisplayVisible("ContextActionDisplay", VRCompanion.HUD_STATE_HIDDEN) == false)
+    end)
+    for name, flags in pairs(saved) do
+        VRCompanion.HUD_GROUPS[name].streamlined, VRCompanion.HUD_GROUPS[name].full = flags[1], flags[2]
+    end
+    assert(ok, err)
+end)
+
 -- Slice 3: HUD visibility and display state application
 test("AppliesHiddenStateToHudAndDisplays", function()
     local hud = {
