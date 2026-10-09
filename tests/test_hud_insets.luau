@@ -1,5 +1,5 @@
 -- ====================================================================
--- Test Suite for VR HUD Insets & UI Scale (Issue #24)
+-- Test Suite for the HUD Safe Area, HUD Group placement and settings persistence
 -- ====================================================================
 
 -- Mock GIANTS Engine globals before loading VRCompanion
@@ -26,7 +26,7 @@ local function test(name, fn)
     end
 end
 
-print("Running VR HUD Inset Tests...")
+print("Running VR HUD Safe Area and HUD Group Tests...")
 
 -- Mock display that records the last position and scale it was given
 local function makeDisplay(width, height)
@@ -75,10 +75,10 @@ local function unloadMap()
     resetHudSettings()
 end
 
--- Slice 1: HUD Safe Area anchors (the engine's global HUD anchors), default values, and clamp boundaries
+-- Slice 1: the HUD Safe Area sets the engine's global HUD anchors (spec #50, ticket #55)
 test("CalculatesDefaultHudAnchors", function()
-    assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.30, "DEFAULT_HUD_INSET_X must be 0.30")
-    assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.22, "DEFAULT_HUD_INSET_Y must be 0.22")
+    assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL == 0.30, "DEFAULT_HUD_SAFE_AREA_HORIZONTAL must be 0.30")
+    assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL == 0.22, "DEFAULT_HUD_SAFE_AREA_VERTICAL must be 0.22")
 
     local left, right, bottom, top = VRCompanion:calculateHudAnchors()
     assert(near(left, 0.30), "Default left anchor must be 0.30")
@@ -97,50 +97,58 @@ end)
 
 test("ClampsHudAnchorsWithinSafeBoundaries", function()
     local leftMin, rightMin, bottomMin, topMin = VRCompanion:calculateHudAnchors(-0.10, -0.05)
-    assert(near(leftMin, 0.0), "Negative insetX clamped to 0.0")
+    assert(near(leftMin, 0.0), "Negative horizontal margin clamped to 0.0")
     assert(near(rightMin, 1.0), "Right anchor clamped to 1.0")
-    assert(near(bottomMin, 0.0), "Negative insetY clamped to 0.0")
+    assert(near(bottomMin, 0.0), "Negative vertical margin clamped to 0.0")
     assert(near(topMin, 1.0), "Top anchor clamped to 1.0")
 
     local leftMax, rightMax, bottomMax, topMax = VRCompanion:calculateHudAnchors(0.50, 0.45)
-    assert(near(leftMax, 0.40), "Excessive insetX clamped to 0.40")
+    assert(near(leftMax, 0.40), "Excessive horizontal margin clamped to 0.40")
     assert(near(rightMax, 0.60), "Right anchor clamped to 0.60")
-    assert(near(bottomMax, 0.35), "Excessive insetY clamped to 0.35")
+    assert(near(bottomMax, 0.35), "Excessive vertical margin clamped to 0.35")
     assert(near(topMax, 0.65), "Top anchor clamped to 0.65")
 end)
 
--- Slice 2: Configuration API and metadata / XML fallback
-test("ConfiguresHudInsetsAndQueriesState", function()
-    VRCompanion:configureHudInsets(0.25, 0.18)
-    local insets = VRCompanion:getHudInsets()
+test("TheGlobalInsetStateAndConstantsAreRemoved", function()
+    for _, name in ipairs({ "DEFAULT_HUD_INSET_X", "DEFAULT_HUD_INSET_Y", "DEFAULT_HUD_INSET_TOP",
+            "MIN_HUD_INSET_X", "MAX_HUD_INSET_X", "MIN_HUD_INSET_Y", "MAX_HUD_INSET_Y", "MIN_HUD_INSET_TOP", "MAX_HUD_INSET_TOP" }) do
+        assert(VRCompanion[name] == nil, name .. " must be removed")
+    end
+    for _, name in ipairs({ "hudInsetX", "hudInsetY", "hudInsetTop", "configureHudInsets", "getHudInsets", "applyHudInsets",
+            "restoreHudInsets", "consoleCommandSetHudInsets", "consoleCommandSetHudTopInset" }) do
+        assert(VRCompanion[name] == nil, name .. " must be removed")
+    end
+end)
 
-    assert(near(insets.left, 0.25), "getHudInsets().left must match")
-    assert(near(insets.right, 0.75), "getHudInsets().right must match")
-    assert(near(insets.bottom, 0.18), "getHudInsets().bottom must match")
-    assert(near(insets.top, 0.82), "getHudInsets().top must match")
-    assert(near(insets.insetX, 0.25), "getHudInsets().insetX must match")
-    assert(near(insets.insetY, 0.18), "getHudInsets().insetY must match")
-    assert(insets.scaleMultiplier == nil, "the single UI scale multiplier is gone")
+-- Slice 2: Configuration API and metadata / XML fallback
+test("ConfiguresHudSafeAreaAndQueriesState", function()
+    VRCompanion:configureHudSafeArea(0.25, 0.18)
+    local safeArea = VRCompanion:getHudSafeArea()
+
+    assert(near(safeArea.left, 0.25), "getHudSafeArea().left must match")
+    assert(near(safeArea.right, 0.75), "getHudSafeArea().right must match")
+    assert(near(safeArea.bottom, 0.18), "getHudSafeArea().bottom must match")
+    assert(near(safeArea.top, 0.82), "getHudSafeArea().top must match")
+    assert(near(safeArea.horizontal, 0.25), "getHudSafeArea().horizontal must match")
+    assert(near(safeArea.vertical, 0.18), "getHudSafeArea().vertical must match")
+    assert(safeArea.scaleMultiplier == nil, "the single UI scale multiplier is gone")
     resetHudSettings()
 end)
 
 test("LoadsConfigurationWithGracefulFallbackWhenUnspecified", function()
-    VRCompanion.hudInsetX = nil
-    VRCompanion.hudInsetY = nil
-    VRCompanion.hudInsetTop = nil
+    VRCompanion:configureHudSafeArea(0.10, 0.10)
 
-    local insets = VRCompanion:loadConfiguration("non_existent_file.xml")
-    assert(near(insets.left, 0.30), "Must fall back to default left 0.30")
-    assert(near(insets.right, 0.70), "Must fall back to default right 0.70")
-    assert(near(insets.bottom, 0.22), "Must fall back to default bottom 0.22")
-    assert(near(insets.top, 0.78), "Must fall back to default top 0.78")
+    local safeArea = VRCompanion:loadConfiguration("non_existent_file.xml")
+    assert(near(safeArea.left, 0.30), "Must fall back to default left 0.30")
+    assert(near(safeArea.right, 0.70), "Must fall back to default right 0.70")
+    assert(near(safeArea.bottom, 0.22), "Must fall back to default bottom 0.22")
+    assert(near(safeArea.top, 0.78), "Must fall back to default top 0.78")
 end)
 
 test("LoadsConfigurationFromXmlWhenSpecified", function()
     _G.mockXmlData = {
-        ["vrSettings.hudInsetHorizontal"] = 0.22,
-        ["vrSettings.hudInsetVertical"] = 0.15,
-        ["vrSettings.hudInsetTop"] = 0.15
+        ["vrSettings.hudSafeAreaHorizontal"] = 0.22,
+        ["vrSettings.hudSafeAreaVertical"] = 0.15
     }
     _G.loadXMLFile = function(tag, path) return 123 end
     _G.getXMLFloat = function(xmlFile, key)
@@ -148,11 +156,11 @@ test("LoadsConfigurationFromXmlWhenSpecified", function()
     end
     _G.delete = function(xmlFile) end
 
-    local insets = VRCompanion:loadConfiguration("mockSettings.xml")
-    assert(near(insets.left, 0.22), "Loaded left anchor must be 0.22")
-    assert(near(insets.right, 0.78), "Loaded right anchor must be 0.78")
-    assert(near(insets.bottom, 0.15), "Loaded bottom anchor must be 0.15")
-    assert(near(insets.top, 0.85), "Loaded top anchor must be 0.85")
+    local safeArea = VRCompanion:loadConfiguration("mockSettings.xml")
+    assert(near(safeArea.left, 0.22), "Loaded left anchor must be 0.22")
+    assert(near(safeArea.right, 0.78), "Loaded right anchor must be 0.78")
+    assert(near(safeArea.bottom, 0.15), "Loaded bottom anchor must be 0.15")
+    assert(near(safeArea.top, 0.85), "Loaded top anchor must be 0.85")
 
     _G.loadXMLFile = nil
     _G.getXMLFloat = nil
@@ -161,6 +169,45 @@ test("LoadsConfigurationFromXmlWhenSpecified", function()
     resetHudSettings()
 end)
 
+test("SettingsFileWithOnlyTheOldInsetKeysLoadsTheNewDefaults", function()
+    VRCompanion:configureHudSafeArea(0.05, 0.05)
+    _G.loadXMLFile = function() return 555 end
+    _G.getXMLFloat = function(_, key)
+        if key == "vrSettings.hudInsetHorizontal" then return 0.12 end
+        if key == "vrSettings.hudInsetVertical" then return 0.10 end
+        if key == "vrSettings.hudInsetTop" then return 0.40 end
+        return nil
+    end
+    _G.delete = function() end
+
+    local safeArea = VRCompanion:loadConfiguration("settings.xml")
+    assert(near(safeArea.horizontal, 0.30) and near(safeArea.vertical, 0.22), "old inset keys are ignored, not migrated")
+    assert(near(safeArea.left, 0.30) and near(safeArea.right, 0.70), "horizontal anchors use the default")
+    assert(near(safeArea.bottom, 0.22) and near(safeArea.top, 0.78), "vertical anchors use the default for both edges")
+
+    _G.loadXMLFile = nil
+    _G.getXMLFloat = nil
+    _G.delete = nil
+    resetHudSettings()
+end)
+
+test("HudSafeAreaWithOneKeyMissingKeepsTheOtherDefault", function()
+    _G.loadXMLFile = function() return 555 end
+    _G.getXMLFloat = function(_, key)
+        if key == "vrSettings.hudSafeAreaHorizontal" then return 0.12 end
+        return nil
+    end
+    _G.delete = function() end
+
+    local safeArea = VRCompanion:loadConfiguration("settings.xml")
+    assert(near(safeArea.horizontal, 0.12), "the saved horizontal margin loads")
+    assert(near(safeArea.vertical, 0.22), "the missing vertical margin falls back to its default")
+
+    _G.loadXMLFile = nil
+    _G.getXMLFloat = nil
+    _G.delete = nil
+    resetHudSettings()
+end)
 -- Slice 3: HUD Groups are placed by their own HUD Group Margins
 test("DefinesTheGroupMarginAndScaleDefaultsOnce", function()
     assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X == 0.30, "horizontal group margin default")
@@ -392,14 +439,16 @@ test("SavesConfigurationToXmlFile", function()
     _G.delete = function(xmlFile) fileDeleted = true end
 
     resetHudSettings()
-    VRCompanion:configureHudInsets(0.32, 0.24)
+    VRCompanion:configureHudSafeArea(0.32, 0.24)
     setGroup("info", 0.11, 0.12, 0.90)
     VRCompanion.hudConvergenceDepth = 1.9
     local success = VRCompanion:saveConfiguration()
 
     assert(success == true, "saveConfiguration should succeed with mock XML functions")
-    assert(math.abs(savedData["vrSettings.hudInsetHorizontal"] - 0.32) < 0.0001, "Saved hudInsetHorizontal should be 0.32")
-    assert(math.abs(savedData["vrSettings.hudInsetVertical"] - 0.24) < 0.0001, "Saved hudInsetVertical should be 0.24")
+    assert(math.abs(savedData["vrSettings.hudSafeAreaHorizontal"] - 0.32) < 0.0001, "Saved hudSafeAreaHorizontal should be 0.32")
+    assert(math.abs(savedData["vrSettings.hudSafeAreaVertical"] - 0.24) < 0.0001, "Saved hudSafeAreaVertical should be 0.24")
+    assert(savedData["vrSettings.hudInsetHorizontal"] == nil and savedData["vrSettings.hudInsetVertical"] == nil
+        and savedData["vrSettings.hudInsetTop"] == nil, "the removed inset keys are not written")
     assert(savedData["vrSettings.hudUiScale"] == nil, "the single UI scale is no longer written")
     assert(near(savedData["vrSettings.hudGroupInfoMarginHorizontal"], 0.11), "Saved info group horizontal margin")
     assert(near(savedData["vrSettings.hudGroupInfoMarginVertical"], 0.12), "Saved info group vertical margin")
@@ -433,8 +482,8 @@ test("LoadsUserSettingsXmlWithoutReadingModDesc", function()
     end
     _G.getXMLFloat = function(xmlFile, key)
         if xmlFile == 101 then
-            if key == "vrSettings.hudInsetHorizontal" then return 0.33 end
-            if key == "vrSettings.hudInsetVertical" then return 0.25 end
+            if key == "vrSettings.hudSafeAreaHorizontal" then return 0.33 end
+            if key == "vrSettings.hudSafeAreaVertical" then return 0.25 end
             if key == "vrSettings.hudGroupMapMarginHorizontal" then return 0.12 end
             if key == "vrSettings.hudGroupMapMarginVertical" then return 0.34 end
             if key == "vrSettings.hudGroupMapScale" then return 0.75 end
@@ -446,10 +495,11 @@ test("LoadsUserSettingsXmlWithoutReadingModDesc", function()
     end
     _G.delete = function(xmlFile) end
 
-    local insets = VRCompanion:loadConfiguration()
+    local safeArea = VRCompanion:loadConfiguration()
 
-    assert(math.abs(insets.left - 0.33) < 0.0001, "User settings should set left to 0.33")
-    assert(math.abs(insets.bottom - 0.25) < 0.0001, "User settings should set bottom to 0.25")
+    assert(math.abs(safeArea.left - 0.33) < 0.0001, "User settings should set left to 0.33")
+    assert(math.abs(safeArea.bottom - 0.25) < 0.0001, "User settings should set bottom to 0.25")
+    assert(math.abs(safeArea.top - 0.75) < 0.0001, "The vertical margin also sets the top anchor")
     local map = VRCompanion:getHudGroupLayout("map")
     assert(near(map.marginX, 0.12) and near(map.marginY, 0.34) and near(map.scale, 0.75), "User settings set the map group's margins and scale")
     local controls = VRCompanion:getHudGroupLayout("controls")
@@ -470,9 +520,8 @@ end)
 
 -- Issue #83: every default is defined exactly once, in the DEFAULT_* constants
 test("DefaultsMatchTheValuesPreviouslyYieldedByModDesc", function()
-    assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.30, "horizontal inset default")
-    assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.22, "vertical inset default")
-    assert(VRCompanion.DEFAULT_HUD_INSET_TOP == 0.22, "top inset default")
+    assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL == 0.30, "HUD Safe Area horizontal default")
+    assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL == 0.22, "HUD Safe Area vertical default")
     assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X == 0.30, "group horizontal margin default")
     assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y == 0.22, "group vertical margin default")
     assert(VRCompanion.DEFAULT_HUD_GROUP_SCALE == 0.82, "group scale default")
@@ -491,6 +540,9 @@ test("ModDescDoesNotDefineSettingDefaults", function()
     local modDescContent = fs.readFile("mods/FS25_VRCompanion/modDesc.xml")
     assert(string.find(modDescContent, "<vrSettings>", 1, true) == nil, "modDesc.xml must not define <vrSettings> defaults")
     assert(string.find(modDescContent, "setting_vrHudUiScale", 1, true) == nil, "the removed UI scale setting has no label")
+    for _, label in ipairs({ "setting_vrHudInsetHorizontal", "setting_vrHudInsetVertical", "setting_vrHudInsetTop" }) do
+        assert(string.find(modDescContent, label, 1, true) == nil, "the removed " .. label .. " setting has no label")
+    end
 end)
 
 test("SavedSettingsRoundTripThroughLoader", function()
@@ -508,7 +560,7 @@ test("SavedSettingsRoundTripThroughLoader", function()
     _G.getXMLString = function(_, key) return store[key] end
     _G.delete = function() end
 
-    VRCompanion:configureHudInsets(0.31, 0.19, 0.27)
+    VRCompanion:configureHudSafeArea(0.31, 0.19)
     setGroup("map", 0.05, 0.06, 1.10)
     setGroup("speedometer", 0.07, 0.08, 0.70)
     setGroup("info", 0.09, 0.10, 0.60)
@@ -527,7 +579,7 @@ test("SavedSettingsRoundTripThroughLoader", function()
     assert(VRCompanion:saveConfiguration("settings.xml") == true, "save must succeed")
 
     -- Reset everything to defaults, then load what was saved
-    VRCompanion:configureHudInsets()
+    VRCompanion:configureHudSafeArea()
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do VRCompanion:setHudGroupLayout(groupName, 0.30, 0.22, 0.82) end
     VRCompanion.hudConvergenceDepth = nil
     VRCompanion.hudFillLevelGap = nil
@@ -540,11 +592,11 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion.dlssNearClipOutside = nil
     VRCompanion.dlssNearClipOnFoot = nil
     VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)
-    local insets = VRCompanion:loadConfiguration("settings.xml")
+    local safeArea = VRCompanion:loadConfiguration("settings.xml")
 
-    assert(math.abs(insets.insetX - 0.31) < 0.0001, "horizontal inset must round-trip")
-    assert(math.abs(insets.insetY - 0.19) < 0.0001, "vertical inset must round-trip")
-    assert(math.abs(insets.insetTop - 0.27) < 0.0001, "top inset must round-trip")
+    assert(math.abs(safeArea.horizontal - 0.31) < 0.0001, "HUD Safe Area horizontal margin must round-trip")
+    assert(math.abs(safeArea.vertical - 0.19) < 0.0001, "HUD Safe Area vertical margin must round-trip")
+    assert(math.abs(safeArea.left - 0.31) < 0.0001 and math.abs(safeArea.top - 0.81) < 0.0001, "the loaded margins set the global anchors")
     local expectedGroups = { map = { 0.05, 0.06, 1.10 }, speedometer = { 0.07, 0.08, 0.70 }, info = { 0.09, 0.10, 0.60 }, controls = { 0.11, 0.12, 1.40 } }
     for groupName, expected in pairs(expectedGroups) do
         local layout = VRCompanion:getHudGroupLayout(groupName)
@@ -576,7 +628,7 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion.hudFillLevelGap = VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP
     VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
     VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)
-    VRCompanion:configureHudInsets()
+    VRCompanion:configureHudSafeArea()
     _G.getUserProfileAppPath = nil
     _G.createFolder = nil
     _G.createXMLFile = nil
@@ -646,7 +698,7 @@ test("GroupVisibilitySettingsRoundTripThroughSaveAndLoad", function()
         assert(VRCompanion:isDisplayVisible("InputHelpDisplay", VRCompanion.HUD_STATE_STREAMLINED) == true, "controls Streamlined must round-trip")
     end)
     resetGroupVisibilityToDefaults()
-    VRCompanion:configureHudInsets()
+    VRCompanion:configureHudSafeArea()
 end)
 
 test("MissingGroupVisibilityKeysFallBackToDefaultConstants", function()
@@ -663,7 +715,7 @@ test("MissingGroupVisibilityKeysFallBackToDefaultConstants", function()
         end
     end)
     resetGroupVisibilityToDefaults()
-    VRCompanion:configureHudInsets()
+    VRCompanion:configureHudSafeArea()
 end)
 
 test("FirstRunSavesEveryGroupVisibilityDefault", function()
@@ -681,7 +733,7 @@ test("FirstRunSavesEveryGroupVisibilityDefault", function()
         end
     end)
     resetGroupVisibilityToDefaults()
-    VRCompanion:configureHudInsets()
+    VRCompanion:configureHudSafeArea()
 end)
 
 test("LoaderIgnoresAliasAndLegacyKeysNoReleaseWrote", function()
@@ -700,8 +752,8 @@ test("LoaderIgnoresAliasAndLegacyKeysNoReleaseWrote", function()
 
     VRCompanion.showHudLoadNotification = nil
     VRCompanion.recenterVrTrackingSpace = nil
-    local insets = VRCompanion:loadConfiguration("settings.xml")
-    assert(math.abs(insets.insetTop - VRCompanion.DEFAULT_HUD_INSET_TOP) < 0.0001, "alias top inset keys must be ignored")
+    local safeArea = VRCompanion:loadConfiguration("settings.xml")
+    assert(math.abs(safeArea.vertical - VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL) < 0.0001, "alias top inset keys must be ignored")
     assert(VRCompanion.showHudLoadNotification == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "alias notification keys must be ignored")
     assert(VRCompanion.recenterVrTrackingSpace == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "alias recenter key must be ignored")
 
@@ -709,7 +761,7 @@ test("LoaderIgnoresAliasAndLegacyKeysNoReleaseWrote", function()
     _G.getXMLFloat = nil
     _G.getXMLBool = nil
     _G.delete = nil
-    VRCompanion:configureHudInsets()
+    VRCompanion:configureHudSafeArea()
 end)
 
 test("RuntimeStateStartsFromDefaultConstants", function()
@@ -719,10 +771,10 @@ test("RuntimeStateStartsFromDefaultConstants", function()
     local ok, err = pcall(function()
         loadCompanionMod()
         local fresh = _G.VRCompanion
-        assert(fresh.hudInsetX == fresh.DEFAULT_HUD_INSET_X, "hudInsetX starts at its default")
-        assert(fresh.hudInsetY == fresh.DEFAULT_HUD_INSET_Y, "hudInsetY starts at its default")
-        assert(fresh.hudInsetTop == fresh.DEFAULT_HUD_INSET_TOP, "hudInsetTop starts at its default")
-        assert(math.abs(fresh.hudAnchorTopBase - (1.0 - fresh.DEFAULT_HUD_INSET_TOP)) < 0.0001, "top anchor starts at the top inset default")
+        assert(fresh.hudSafeAreaHorizontal == fresh.DEFAULT_HUD_SAFE_AREA_HORIZONTAL, "HUD Safe Area horizontal starts at its default")
+        assert(fresh.hudSafeAreaVertical == fresh.DEFAULT_HUD_SAFE_AREA_VERTICAL, "HUD Safe Area vertical starts at its default")
+        assert(math.abs(fresh.hudAnchorLeftBase - fresh.DEFAULT_HUD_SAFE_AREA_HORIZONTAL) < 0.0001, "left anchor starts at the horizontal default")
+        assert(math.abs(fresh.hudAnchorTopBase - (1.0 - fresh.DEFAULT_HUD_SAFE_AREA_VERTICAL)) < 0.0001, "top anchor starts at the vertical default")
         for _, groupName in ipairs(fresh.HUD_GROUP_NAMES) do
             local layout = fresh.hudGroupLayout[groupName]
             assert(layout.marginX == fresh.DEFAULT_HUD_GROUP_MARGIN_X, groupName .. " horizontal margin starts at its default")
@@ -777,7 +829,7 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     }
 
     -- Leftover state from an earlier session must not leak into the first-run file
-    VRCompanion:configureHudInsets(0.10, 0.10, 0.40)
+    VRCompanion:configureHudSafeArea(0.10, 0.10)
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do VRCompanion:setHudGroupLayout(groupName, 0.01, 0.02, 1.30) end
     VRCompanion.hudConvergenceDepth = nil
     VRCompanion.hudFillLevelGap = nil
@@ -789,12 +841,11 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     VRCompanion.renderingMode = VRCompanion.RENDERING_MODE_AFR
     VRCompanion.renderingModeExplicit = nil
 
-    local insets = VRCompanion:loadConfiguration()
+    local safeArea = VRCompanion:loadConfiguration()
 
     -- Every default is applied
-    assert(math.abs(insets.insetX - VRCompanion.DEFAULT_HUD_INSET_X) < 0.0001, "horizontal inset default applied")
-    assert(math.abs(insets.insetY - VRCompanion.DEFAULT_HUD_INSET_Y) < 0.0001, "vertical inset default applied")
-    assert(math.abs(insets.insetTop - VRCompanion.DEFAULT_HUD_INSET_TOP) < 0.0001, "top inset default applied")
+    assert(math.abs(safeArea.horizontal - VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL) < 0.0001, "HUD Safe Area horizontal default applied")
+    assert(math.abs(safeArea.vertical - VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL) < 0.0001, "HUD Safe Area vertical default applied")
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do
         local layout = VRCompanion:getHudGroupLayout(groupName)
         assert(near(layout.marginX, VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X), groupName .. " horizontal margin default applied")
@@ -814,9 +865,10 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
 
     -- ...and the first-run settings file contains exactly those defaults
     assert(saveCount == 1, "first run must create the settings file")
-    assert(math.abs(store["vrSettings.hudInsetHorizontal"] - VRCompanion.DEFAULT_HUD_INSET_X) < 0.0001, "saved horizontal inset")
-    assert(math.abs(store["vrSettings.hudInsetVertical"] - VRCompanion.DEFAULT_HUD_INSET_Y) < 0.0001, "saved vertical inset")
-    assert(math.abs(store["vrSettings.hudInsetTop"] - VRCompanion.DEFAULT_HUD_INSET_TOP) < 0.0001, "saved top inset")
+    assert(math.abs(store["vrSettings.hudSafeAreaHorizontal"] - VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL) < 0.0001, "saved HUD Safe Area horizontal margin")
+    assert(math.abs(store["vrSettings.hudSafeAreaVertical"] - VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL) < 0.0001, "saved HUD Safe Area vertical margin")
+    assert(store["vrSettings.hudInsetHorizontal"] == nil and store["vrSettings.hudInsetVertical"] == nil
+        and store["vrSettings.hudInsetTop"] == nil, "the removed inset keys are not written")
     assert(store["vrSettings.hudUiScale"] == nil, "the removed UI scale key is not written")
     for _, groupName in ipairs({ "Map", "Speedometer", "Info", "Controls" }) do
         local key = "vrSettings.hudGroup" .. groupName
@@ -838,7 +890,7 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
 
     _G.VRBridge = nil
     VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)
-    VRCompanion:configureHudInsets()
+    VRCompanion:configureHudSafeArea()
     _G.getUserProfileAppPath = nil
     _G.loadXMLFile = nil
     _G.createFolder = nil
@@ -885,28 +937,6 @@ test("SwitchingModeWhileCompositorActivePersistsTheNewMode", function()
     _G.setXMLString = nil
     _G.saveXMLFile = nil
     _G.delete = nil
-end)
-
-test("SettingsFileWithoutHudInsetTopUsesTheTopInsetDefault", function()
-    _G.loadXMLFile = function() return 555 end
-    _G.getXMLFloat = function(_, key)
-        if key == "vrSettings.hudInsetHorizontal" then return 0.12 end
-        if key == "vrSettings.hudInsetVertical" then return 0.10 end
-        return nil
-    end
-    _G.delete = function() end
-
-    VRCompanion:configureHudInsets(0.30, 0.30, 0.45)
-    local insets = VRCompanion:loadConfiguration("settings.xml")
-    assert(math.abs(insets.insetY - 0.10) < 0.0001, "vertical inset is read from the file")
-    assert(math.abs(insets.insetTop - VRCompanion.DEFAULT_HUD_INSET_TOP) < 0.0001, "missing top inset falls back to DEFAULT_HUD_INSET_TOP")
-    assert(math.abs(insets.top - (1.0 - VRCompanion.DEFAULT_HUD_INSET_TOP)) < 0.0001, "top anchor uses DEFAULT_HUD_INSET_TOP")
-    assert(math.abs(insets.bottom - 0.10) < 0.0001, "bottom anchor uses the loaded vertical inset")
-
-    _G.loadXMLFile = nil
-    _G.getXMLFloat = nil
-    _G.delete = nil
-    VRCompanion:configureHudInsets()
 end)
 
 -- Slice 5: Fill level positioning under vehicle element (SpeedMeterDisplay)
@@ -1132,83 +1162,9 @@ test("ConsoleCommandSetsHudFillLevelGap", function()
     VRCompanion.hudFillLevelGap = VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP
 end)
 
-test("CalculatesCustomTopAnchorWhenInsetTopSpecified", function()
-    local left, right, bottom, top = VRCompanion:calculateHudAnchors(0.35, 0.25, 0.38)
-    assert(math.abs(left - 0.35) < 0.0001, "Left anchor must be 0.35")
-    assert(math.abs(right - 0.65) < 0.0001, "Right anchor must be 0.65")
-    assert(math.abs(bottom - 0.25) < 0.0001, "Bottom anchor must be 0.25")
-    assert(math.abs(top - 0.62) < 0.0001, "Top anchor must be 1.0 - 0.38 = 0.62")
-end)
-
-test("ClampsTopInsetWithinSafeBoundaries", function()
-    local _, _, _, topMin = VRCompanion:calculateHudAnchors(0.20, 0.16, -0.10)
-    assert(math.abs(topMin - 1.0) < 0.0001, "Negative top inset clamped to 0.0 -> top anchor 1.0")
-
-    local _, _, _, topMax = VRCompanion:calculateHudAnchors(0.20, 0.16, 0.80)
-    assert(math.abs(topMax - 0.50) < 0.0001, "Excessive top inset clamped to 0.50 -> top anchor 0.50")
-end)
-
-test("SavesAndLoadsHudInsetTopConfiguration", function()
-    local savedData = {}
-    _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
-    _G.createFolder = function(folder) end
-    _G.createXMLFile = function(tag, path, rootNode) return 888 end
-    _G.setXMLFloat = function(xmlFile, key, val) savedData[key] = val end
-    _G.setXMLBool = function(xmlFile, key, val) savedData[key] = val end
-    _G.saveXMLFile = function(xmlFile) end
-    _G.delete = function(xmlFile) end
-
-    VRCompanion.hudInsetTop = 0.35
-    VRCompanion:saveConfiguration()
-    assert(math.abs((savedData["vrSettings.hudInsetTop"] or 0) - 0.35) < 0.0001, "hudInsetTop must be saved to XML")
-
-    -- Test loading from XML
-    _G.loadXMLFile = function(tag, path) return 777 end
-    _G.getXMLFloat = function(xmlFile, key)
-        if key == "vrSettings.hudInsetTop" then return 0.40 end
-        return nil
-    end
-    _G.getXMLBool = function(xmlFile, key) return nil end
-
-    VRCompanion:loadConfiguration("mockSettings.xml")
-    assert(math.abs(VRCompanion.hudInsetTop - 0.40) < 0.0001, "Must load 0.40 from XML when configured")
-    assert(math.abs(VRCompanion.hudAnchorTop - 0.60) < 0.0001, "Top anchor must be 0.60")
-
-    -- Clean up mocks
-    _G.getUserProfileAppPath = nil
-    _G.createFolder = nil
-    _G.createXMLFile = nil
-    _G.setXMLFloat = nil
-    _G.setXMLBool = nil
-    _G.saveXMLFile = nil
-    _G.loadXMLFile = nil
-    _G.getXMLFloat = nil
-    _G.getXMLBool = nil
-    _G.delete = nil
-    VRCompanion.hudInsetTop = nil
-end)
-
-test("ConsoleCommandSetsHudTopInset", function()
-    local result = VRCompanion:consoleCommandSetHudTopInset("0.35")
-    assert(math.abs(VRCompanion.hudInsetTop - 0.35) < 0.0001, "Console command should set hudInsetTop to 0.35")
-    assert(math.abs(VRCompanion.hudAnchorTop - 0.65) < 0.0001, "Console command should update hudAnchorTop to 0.65")
-    assert(string.find(result, "0.35") ~= nil, "Response should confirm 0.35")
-
-    local usage = VRCompanion:consoleCommandSetHudTopInset("invalid")
-    assert(string.find(usage, "Usage") ~= nil, "Invalid input should return usage string")
-
-    -- Clamping test
-    VRCompanion:consoleCommandSetHudTopInset("0.90")
-    assert(math.abs(VRCompanion.hudInsetTop - 0.50) < 0.0001, "Should clamp top inset to max 0.50")
-
-    -- Reset back
-    VRCompanion.hudInsetTop = nil
-    resetHudSettings()
-end)
-
 test("ConvergencePositionsTopGroupsFromTheirOwnVerticalMargins", function()
     resetHudSettings()
-    VRCompanion:configureHudInsets(0.35, 0.25, 0.38)
+    VRCompanion:configureHudSafeArea(0.35, 0.25)
     setGroup("controls", 0.10, 0.12)
     setGroup("info", 0.10, 0.31)
     local mockIhPos = nil
@@ -1229,7 +1185,7 @@ test("ConvergencePositionsTopGroupsFromTheirOwnVerticalMargins", function()
     assert(mockGiPos ~= nil, "GameInfo must be positioned")
     assert(math.abs(mockIhPos.y - (1.0 - 0.12 - 0.20)) < 0.0001, "InputHelp top edge sits at the controls group's vertical margin")
     assert(math.abs(mockGiPos.y - (1.0 - 0.31 - 0.10)) < 0.0001, "GameInfo top edge sits at the info group's vertical margin")
-    assert(math.abs(VRCompanion.hudAnchorTop - 0.62) < 0.0001, "the Safe Area's top anchor is unaffected by the groups")
+    assert(math.abs(VRCompanion.hudAnchorTop - 0.75) < 0.0001, "the Safe Area's top anchor is unaffected by the groups")
 
     _G.g_currentMission = nil
     _G.VRBridge = nil
@@ -1472,6 +1428,117 @@ test("GroupLayoutsStartFromTheDefaultsWhenTheSettingsFileHasNoGroupKeys", functi
     _G.getXMLFloat = nil
     _G.delete = nil
     resetHudSettings()
+end)
+
+-- vrHudSafeArea console command and the HUD Safe Area lifecycle (spec #50, ticket #55)
+local function anchorsAre(left, right, bottom, top)
+    return near(_G.g_hudAnchorLeft, left) and near(_G.g_hudAnchorRight, right)
+        and near(_G.g_hudAnchorBottom, bottom) and near(_G.g_hudAnchorTop, top)
+end
+
+test("VrHudSafeAreaAppliesSavesAndConfirmsOnScreen", function()
+    local hud = makeHud()
+    loadMapWith(hud)
+    local warnings = {}
+    _G.g_currentMission.showBlinkingWarning = function(self, msg) table.insert(warnings, msg) end
+    local saved = installSaveMocks()
+    local before = {}
+    for _, name in ipairs(DISPLAY_NAMES) do before[name] = hud[name].position end
+
+    local result = VRCompanion:consoleCommandSetHudSafeArea("0.25", "0.18")
+
+    assert(anchorsAre(0.25, 0.75, 0.18, 0.82), "the global HUD anchors apply immediately")
+    assert(saved.count >= 1, "saves the configuration")
+    assert(near(saved.store["vrSettings.hudSafeAreaHorizontal"], 0.25), "saved horizontal margin")
+    assert(near(saved.store["vrSettings.hudSafeAreaVertical"], 0.18), "saved vertical margin")
+    assert(#warnings == 1 and string.find(warnings[1], "Safe Area", 1, true) and string.find(warnings[1], "Saved", 1, true),
+        "shows an on-screen confirmation")
+    assert(type(result) == "string" and not string.find(result, "Usage", 1, true), "console reply confirms the change")
+    assert(string.find(result, "0.25", 1, true) and string.find(result, "0.18", 1, true), "the reply names the new margins")
+    -- The Safe Area does not move the groups
+    assert(near(hud.ingameMap.position.x, 0.30) and near(hud.ingameMap.position.y, 0.22), "the map group stays on its own margins")
+    assert(near(hud.speedMeter.position.x, 1.0 - 0.30 - 0.15), "the speedometer group stays on its own margins")
+
+    removeSaveMocks()
+    unloadMap()
+end)
+
+test("VrHudSafeAreaClampsItsMargins", function()
+    loadMapWith(makeHud())
+    VRCompanion:consoleCommandSetHudSafeArea("0.9", "0.9")
+    assert(anchorsAre(0.40, 0.60, 0.35, 0.65), "excessive margins clamp to 0.40 / 0.35")
+    VRCompanion:consoleCommandSetHudSafeArea("-1", "-1")
+    assert(anchorsAre(0.0, 1.0, 0.0, 1.0), "negative margins clamp to 0")
+    unloadMap()
+end)
+
+test("VrHudSafeAreaWithoutArgumentsPrintsUsageAndTheCurrentValues", function()
+    loadMapWith(makeHud())
+    VRCompanion:consoleCommandSetHudSafeArea("0.12", "0.34")
+    local saved = installSaveMocks()
+
+    local usage = VRCompanion:consoleCommandSetHudSafeArea()
+    assert(string.find(usage, "Usage: vrHudSafeArea <horizontal> <vertical>", 1, true), "prints the usage")
+    assert(string.find(usage, "horizontal=0.12", 1, true) and string.find(usage, "vertical=0.34", 1, true), "lists the current margins")
+    assert(anchorsAre(0.12, 0.88, 0.34, 0.66), "printing the usage changes nothing")
+    assert(saved.count == 0, "printing the usage saves nothing")
+
+    removeSaveMocks()
+    unloadMap()
+end)
+
+test("VrHudSafeAreaWithInvalidArgumentsPrintsUsageAndChangesNothing", function()
+    loadMapWith(makeHud())
+    local saved = installSaveMocks()
+    local badCalls = { { "0.1" }, { "left", "0.1" }, { "0.1", "tall" }, { "nan", "0.1" }, { "0.1", "nan" }, { nil, "0.1" } }
+    for i, args in ipairs(badCalls) do
+        local result = VRCompanion:consoleCommandSetHudSafeArea(args[1], args[2])
+        assert(string.find(result, "Usage: vrHudSafeArea", 1, true), "invalid call " .. i .. " must print the usage")
+        assert(string.find(result, "horizontal=0.30, vertical=0.22", 1, true), "invalid call " .. i .. " lists the current values")
+    end
+    assert(anchorsAre(0.30, 0.70, 0.22, 0.78), "invalid input changes nothing")
+    assert(saved.count == 0, "invalid input saves nothing")
+
+    removeSaveMocks()
+    unloadMap()
+end)
+
+test("HudSafeAreaCommandIsRegisteredAndTheRemovedInsetCommandsAreNot", function()
+    local registered, removed = {}, {}
+    _G.addConsoleCommand = function(cmd, desc, funcName) registered[cmd] = { desc = desc, funcName = funcName } end
+    _G.removeConsoleCommand = function(cmd) removed[cmd] = true end
+    loadMapWith(makeHud())
+    assert(registered["vrHudSafeArea"] ~= nil and registered["vrHudSafeArea"].funcName == "consoleCommandSetHudSafeArea", "vrHudSafeArea is registered")
+    for _, name in ipairs({ "vrHudInsets", "vrHudInsetTop", "vrHudTopInset" }) do
+        assert(registered[name] == nil, name .. " must no longer be registered")
+    end
+    unloadMap()
+    assert(removed["vrHudSafeArea"] == true, "vrHudSafeArea is removed on map unload")
+    _G.addConsoleCommand = nil
+    _G.removeConsoleCommand = nil
+end)
+
+test("MapUnloadRestoresTheFullScreenAnchorsWhateverTheSafeArea", function()
+    loadMapWith(makeHud())
+    VRCompanion:consoleCommandSetHudSafeArea("0.15", "0.10")
+    assert(anchorsAre(0.15, 0.85, 0.10, 0.90), "the custom Safe Area is applied")
+    unloadMap()
+    assert(anchorsAre(0.0, 1.0, 0.0, 1.0), "the global anchors are back at the full screen")
+end)
+
+test("TwoDFloatingWindowModeUsesTheFullScreenAnchorsAndTheSafeAreaReturnsWithVr", function()
+    local hud = makeHud()
+    loadMapWith(hud)
+    VRCompanion:set2DViewActive(true)
+    assert(anchorsAre(0.0, 1.0, 0.0, 1.0), "2D Floating Window Mode keeps the full-screen anchors")
+
+    -- A Safe Area set while in 2D saves, but the engine's layout stays untouched until VR returns
+    VRCompanion:consoleCommandSetHudSafeArea("0.20", "0.12")
+    assert(anchorsAre(0.0, 1.0, 0.0, 1.0), "the Safe Area does not reach the anchors in 2D Floating Window Mode")
+
+    VRCompanion:set2DViewActive(false)
+    assert(anchorsAre(0.20, 0.80, 0.12, 0.88), "returning to VR applies the Safe Area")
+    unloadMap()
 end)
 
 print(string.format("Summary: %d passed, %d failed", passed, failed))

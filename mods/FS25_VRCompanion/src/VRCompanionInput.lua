@@ -184,52 +184,39 @@ function VRCompanion:registerActionEvents(force)
     end
 end
 
-function VRCompanion:consoleCommandSetHudInsets(insetXStr, insetYStr, topInsetStr)
-    local ix = tonumber(insetXStr)
-    local iy = tonumber(insetYStr)
-    local it = tonumber(topInsetStr)
-    if ix == nil or iy == nil then
-        return string.format("Usage: vrHudInsets <insetX> <insetY> [topInset] (HUD Safe Area, current: insetX=%.2f, insetY=%.2f, topInset=%.2f)",
-            self.hudInsetX or self.DEFAULT_HUD_INSET_X,
-            self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
-            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP)
+-- Usage text for vrHudSafeArea: the syntax followed by the current margins
+function VRCompanion:getHudSafeAreaUsage()
+    return string.format("Usage: vrHudSafeArea <horizontal> <vertical>\n  margins %.2f to %.2f (horizontal) and %.2f to %.2f (vertical) from the screen edges, keeping warnings, notifications and other mods' HUDs inside the lens\n  current: horizontal=%.2f, vertical=%.2f",
+        self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_HORIZONTAL, self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_VERTICAL,
+        self.hudSafeAreaHorizontal or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL,
+        self.hudSafeAreaVertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
+end
+
+function VRCompanion:consoleCommandSetHudSafeArea(horizontalStr, verticalStr)
+    local horizontal = tonumber(horizontalStr)
+    local vertical = tonumber(verticalStr)
+    local function isNumber(v) return v ~= nil and v == v end
+    if not isNumber(horizontal) or not isNumber(vertical) then
+        return self:getHudSafeAreaUsage()
     end
-    self:configureHudInsets(ix, iy, it or self.hudInsetTop or iy)
-    self:applyHudInsets()
+
+    self:configureHudSafeArea(horizontal, vertical)
+    -- 2D Floating Window Mode keeps the full-screen anchors; the Safe Area applies on returning to VR
+    if not self.is2DViewActive then
+        self:applyHudSafeArea()
+    end
     self:saveConfiguration()
+
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
-            mission:showBlinkingWarning(string.format("VR HUD Insets: X=%.2f, Y=%.2f, Top=%.2f (Saved)",
-                self.hudInsetX, self.hudInsetY, self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP), 2500)
+            mission:showBlinkingWarning(string.format("VR HUD Safe Area: Horizontal=%.2f, Vertical=%.2f (Saved)",
+                self.hudSafeAreaHorizontal, self.hudSafeAreaVertical), 2500)
         end)
     end
-    return string.format("VR HUD insets updated and saved: Left=%.2f, Right=%.2f, Bottom=%.2f, Top=%.2f",
-        self.hudAnchorLeft, self.hudAnchorRight, self.hudAnchorBottom, self.hudAnchorTop)
+    return string.format("VR HUD Safe Area updated and saved: horizontal=%.2f, vertical=%.2f",
+        self.hudSafeAreaHorizontal, self.hudSafeAreaVertical)
 end
-
-function VRCompanion:consoleCommandSetHudTopInset(topInsetStr)
-    local topVal = tonumber(topInsetStr)
-    if topVal == nil then
-        return string.format("Usage: vrHudTopInset <topInset> (0.0 to 0.50, current: %.2f, topAnchor: %.2f)",
-            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP,
-            self.hudAnchorTop or (1.0 - (self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP)))
-    end
-    local clampedTop = self:clamp(topVal, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
-    self.hudInsetTop = clampedTop
-    self:configureHudInsets(self.hudInsetX, self.hudInsetY, clampedTop)
-    self:applyHudInsets()
-    self:saveConfiguration()
-    local mission = g_currentMission or _G.g_currentMission
-    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
-        pcall(function()
-            mission:showBlinkingWarning(string.format("VR HUD Top Inset: %.2f (Top Anchor: %.2f, Saved)",
-                clampedTop, self.hudAnchorTop), 2500)
-        end)
-    end
-    return string.format("VR HUD top inset set to: %.2f (top anchor: %.2f)", clampedTop, self.hudAnchorTop)
-end
-
 -- Usage text for vrHudGroup: the syntax followed by every group's current margins and scale
 function VRCompanion:getHudGroupUsage()
     local lines = {
@@ -739,9 +726,9 @@ end
 
 -- Export to Input subsystem table
 VRCompanion.Input.registerActionEvents = function(self, ...) return VRCompanion.registerActionEvents(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudInsets = function(self, ...) return VRCompanion.consoleCommandSetHudInsets(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetHudSafeArea = function(self, ...) return VRCompanion.consoleCommandSetHudSafeArea(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudGroup = function(self, ...) return VRCompanion.consoleCommandSetHudGroup(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudTopInset = function(self, ...) return VRCompanion.consoleCommandSetHudTopInset(VRCompanion, ...) end
+
 VRCompanion.Input.consoleCommandSetHudState = function(self, ...) return VRCompanion.consoleCommandSetHudState(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudFillUnderVehicle = function(self, ...) return VRCompanion.consoleCommandSetHudFillUnderVehicle(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudFillGap = function(self, ...) return VRCompanion.consoleCommandSetHudFillGap(VRCompanion, ...) end

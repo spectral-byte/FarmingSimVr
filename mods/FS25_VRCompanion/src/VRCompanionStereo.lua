@@ -418,13 +418,13 @@ function VRCompanion:set2DViewActive(active)
             if self.activePlayerCamera ~= nil and type(self.realignPlayerCameraToRoot) == "function" then
                 self:realignPlayerCameraToRoot(self.activePlayerCamera)
             end
-            if type(self.restoreHudInsets) == "function" then
-                self:restoreHudInsets(true)
+            if type(self.restoreHudSafeArea) == "function" then
+                self:restoreHudSafeArea(true)
             end
         else
             print("[FS25_VR] Exited 2D Floating Window Mode; returning to 3D VR mode.")
-            if type(self.applyHudInsets) == "function" then
-                self:applyHudInsets()
+            if type(self.applyHudSafeArea) == "function" then
+                self:applyHudSafeArea()
             end
             if type(self.applyHudState) == "function" then
                 self:applyHudState()

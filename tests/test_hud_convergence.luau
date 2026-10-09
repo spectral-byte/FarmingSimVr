@@ -29,9 +29,9 @@ end
 print("Running VR HUD Convergence Parity Tests...")
 
 -- Every setting back to its default (HUD Group Margins included), then the HUD Safe Area set
-local function useSafeArea(insetX, insetY)
+local function useSafeArea(horizontal, vertical)
     VRCompanion:loadConfiguration("non_existent_file.xml")
-    VRCompanion:configureHudInsets(insetX, insetY)
+    VRCompanion:configureHudSafeArea(horizontal, vertical)
 end
 
 -- Slice 1: Mathematical scaling, target depth, fallback, and boundary clamping
@@ -642,17 +642,17 @@ end)
 test("MapLifecycleLoadsCustomDepthAndRestoresZeroOffsetOnUnload", function()
     -- Mock XML with custom depth
     _G.mockXmlData = {
-        ["vrSettings.hudInsetHorizontal"] = 0.20,
-        ["vrSettings.hudInsetVertical"] = 0.16,
+        ["vrSettings.hudSafeAreaHorizontal"] = 0.20,
+        ["vrSettings.hudSafeAreaVertical"] = 0.16,
         ["vrSettings.hudConvergenceDepth"] = 2.0
     }
     _G.loadXMLFile = function(tag, path) return 123 end
     _G.getXMLFloat = function(xmlFile, key) return _G.mockXmlData[key] end
     _G.delete = function(xmlFile) end
 
-    local insets = VRCompanion:loadConfiguration("mockSettings.xml")
+    local safeArea = VRCompanion:loadConfiguration("mockSettings.xml")
     assert(math.abs(VRCompanion.hudConvergenceDepth - 2.0) < 0.0001, "Loaded convergence depth must be 2.0")
-    assert(math.abs(insets.convergenceDepth - 2.0) < 0.0001, "getHudInsets().convergenceDepth must be 2.0")
+    assert(math.abs(safeArea.convergenceDepth - 2.0) < 0.0001, "getHudSafeArea().convergenceDepth must be 2.0")
 
     -- Verify disparity scaled with 2.0m depth: (0.064 / 2.0) * 0.3375 = 0.0108
     local disparity = VRCompanion:computeConvergenceDisparity(0.064)

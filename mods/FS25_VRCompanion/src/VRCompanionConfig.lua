@@ -7,19 +7,14 @@ VRCompanion = VRCompanion or {}
 VRCompanion.Config = VRCompanion.Config or {}
 
 -- HUD Safe Area constants (the engine's global HUD anchors, ADR-0022)
-VRCompanion.DEFAULT_HUD_INSET_X = 0.30
-VRCompanion.DEFAULT_HUD_INSET_Y = 0.22
-VRCompanion.DEFAULT_HUD_INSET_TOP = 0.22
-
-VRCompanion.MIN_HUD_INSET_X = 0.0
-VRCompanion.MAX_HUD_INSET_X = 0.40
-VRCompanion.MIN_HUD_INSET_Y = 0.0
-VRCompanion.MAX_HUD_INSET_Y = 0.35
-VRCompanion.MIN_HUD_INSET_TOP = 0.0
-VRCompanion.MAX_HUD_INSET_TOP = 0.50
+VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL = 0.30
+VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL = 0.22
+VRCompanion.MIN_HUD_SAFE_AREA = 0.0
+VRCompanion.MAX_HUD_SAFE_AREA_HORIZONTAL = 0.40
+VRCompanion.MAX_HUD_SAFE_AREA_VERTICAL = 0.35
 
 -- HUD Group Margin and scale constants. Every group starts from the same defaults, which match
--- where the HUD sat under the old global inset.
+-- where the HUD sat before the groups existed.
 VRCompanion.HUD_GROUP_NAMES = { "map", "speedometer", "info", "controls" }
 VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X = 0.30
 VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y = 0.22
@@ -214,9 +209,8 @@ function VRCompanion:saveConfiguration(xmlPath)
 
     local ok, xmlFile = pcall(createXmlFn, "VRCompanionConfig", path, "vrSettings")
     if ok and xmlFile ~= 0 and xmlFile ~= nil then
-        setXmlFloatFn(xmlFile, "vrSettings.hudInsetHorizontal", self.hudInsetX or self.DEFAULT_HUD_INSET_X)
-        setXmlFloatFn(xmlFile, "vrSettings.hudInsetVertical", self.hudInsetY or self.DEFAULT_HUD_INSET_Y)
-        setXmlFloatFn(xmlFile, "vrSettings.hudInsetTop", self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP)
+        setXmlFloatFn(xmlFile, "vrSettings.hudSafeAreaHorizontal", self.hudSafeAreaHorizontal or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL)
+        setXmlFloatFn(xmlFile, "vrSettings.hudSafeAreaVertical", self.hudSafeAreaVertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
         for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
             local current = (self.hudGroupLayout or {})[groupName] or {}
             local layout = self:sanitizeHudGroupLayout(current.marginX, current.marginY, current.scale)
@@ -263,9 +257,8 @@ function VRCompanion:saveConfiguration(xmlPath)
 end
 
 function VRCompanion:loadConfiguration(xmlPath)
-    local insetX = self.DEFAULT_HUD_INSET_X
-    local insetY = self.DEFAULT_HUD_INSET_Y
-    local insetTop = self.DEFAULT_HUD_INSET_TOP
+    local safeAreaHorizontal = self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL
+    local safeAreaVertical = self.DEFAULT_HUD_SAFE_AREA_VERTICAL
     local groupLayouts = newDefaultHudGroupLayouts()
     local renderingModeLoaded = false
 
@@ -286,19 +279,14 @@ function VRCompanion:loadConfiguration(xmlPath)
         if filePath ~= nil and type(loadXmlFn) == "function" and type(getXmlFloatFn) == "function" then
             local ok, xmlFile = pcall(loadXmlFn, "VRCompanionConfig", filePath)
             if ok and xmlFile ~= 0 and xmlFile ~= nil then
-                local loadedX = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudInsetHorizontal")
-                if loadedX ~= nil then insetX = loadedX end
+                -- The old hudInsetHorizontal, hudInsetVertical and hudInsetTop keys are ignored (ADR-0022)
+                local loadedSafeAreaHorizontal = readXmlFloat(getXmlFloatFn, xmlFile,
+                    "vrSettings.hudSafeAreaHorizontal")
+                if loadedSafeAreaHorizontal ~= nil then safeAreaHorizontal = loadedSafeAreaHorizontal end
 
-                local loadedY = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudInsetVertical")
-                if loadedY ~= nil then insetY = loadedY end
-
-                local loadedInsetTop = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudInsetTop")
-                if loadedInsetTop ~= nil then
-                    insetTop = self:clamp(loadedInsetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
-                end
+                local loadedSafeAreaVertical = readXmlFloat(getXmlFloatFn, xmlFile,
+                    "vrSettings.hudSafeAreaVertical")
+                if loadedSafeAreaVertical ~= nil then safeAreaVertical = loadedSafeAreaVertical end
 
                 for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
                     local key = hudGroupSettingsKey(groupName)
@@ -438,14 +426,14 @@ function VRCompanion:loadConfiguration(xmlPath)
     end
 
     self.hudGroupLayout = groupLayouts
-    self:configureHudInsets(insetX, insetY, insetTop)
+    self:configureHudSafeArea(safeAreaHorizontal, safeAreaVertical)
 
     -- First run: create the user settings file from the values just applied
     if not loadedUser and userPath ~= nil then
         self:saveConfiguration(userPath)
     end
 
-    return self:getHudInsets()
+    return self:getHudSafeArea()
 end
 
 -- Export to Config subsystem table

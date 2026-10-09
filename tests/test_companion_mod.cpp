@@ -2023,12 +2023,12 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear)
     )luau", "=testMouseTurn"), 0);
 }
 
-TEST_F(CompanionModTest, DefinesAndCalculatesDefaultAndCustomVRHudInsets) {
+TEST_F(CompanionModTest, DefinesAndCalculatesDefaultAndCustomVRHudSafeArea) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.30, "DEFAULT_HUD_INSET_X must be 0.30")
-        assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.22, "DEFAULT_HUD_INSET_Y must be 0.22")
+        assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL == 0.30, "DEFAULT_HUD_SAFE_AREA_HORIZONTAL must be 0.30")
+        assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL == 0.22, "DEFAULT_HUD_SAFE_AREA_VERTICAL must be 0.22")
         assert(VRCompanion.DEFAULT_HUD_GROUP_SCALE == 0.82, "DEFAULT_HUD_GROUP_SCALE must be 0.82")
         assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X == 0.30 and VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y == 0.22, "group margin defaults must be 0.30 / 0.22")
 
@@ -2046,20 +2046,20 @@ TEST_F(CompanionModTest, DefinesAndCalculatesDefaultAndCustomVRHudInsets) {
     )luau", "=verifyCalculations"), 0);
 }
 
-TEST_F(CompanionModTest, ClampsVRHudInsetsWithinSafeBoundaries) {
+TEST_F(CompanionModTest, ClampsVRHudSafeAreaWithinSafeBoundaries) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local minL, minR, minB, minT = VRCompanion:calculateHudAnchors(-0.5, -0.5)
-        assert(math.abs(minL - 0.0) < 0.0001, "negative insetX clamped to 0.0")
+        assert(math.abs(minL - 0.0) < 0.0001, "negative horizontal margin clamped to 0.0")
         assert(math.abs(minR - 1.0) < 0.0001, "right anchor clamped to 1.0")
-        assert(math.abs(minB - 0.0) < 0.0001, "negative insetY clamped to 0.0")
+        assert(math.abs(minB - 0.0) < 0.0001, "negative vertical margin clamped to 0.0")
         assert(math.abs(minT - 1.0) < 0.0001, "top anchor clamped to 1.0")
 
         local maxL, maxR, maxB, maxT = VRCompanion:calculateHudAnchors(0.9, 0.9)
-        assert(math.abs(maxL - 0.40) < 0.0001, "excessive insetX clamped to 0.40")
+        assert(math.abs(maxL - 0.40) < 0.0001, "excessive horizontal margin clamped to 0.40")
         assert(math.abs(maxR - 0.60) < 0.0001, "right anchor clamped to 0.60")
-        assert(math.abs(maxB - 0.35) < 0.0001, "excessive insetY clamped to 0.35")
+        assert(math.abs(maxB - 0.35) < 0.0001, "excessive vertical margin clamped to 0.35")
         assert(math.abs(maxT - 0.65) < 0.0001, "top anchor clamped to 0.65")
     )luau", "=verifyClamping"), 0);
 }
@@ -2068,16 +2068,14 @@ TEST_F(CompanionModTest, ExposesConfigurationWithGracefulFallbackToDefaults) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion:configureHudInsets(0.22, 0.14)
-        local insets = VRCompanion:getHudInsets()
-        assert(math.abs(insets.left - 0.22) < 0.0001, "insets.left must match")
-        assert(math.abs(insets.right - 0.78) < 0.0001, "insets.right must match")
-        assert(math.abs(insets.bottom - 0.14) < 0.0001, "insets.bottom must match")
-        assert(math.abs(insets.top - 0.86) < 0.0001, "insets.top must match")
+        VRCompanion:configureHudSafeArea(0.22, 0.14)
+        local safeArea = VRCompanion:getHudSafeArea()
+        assert(math.abs(safeArea.left - 0.22) < 0.0001, "safeArea.left must match")
+        assert(math.abs(safeArea.right - 0.78) < 0.0001, "safeArea.right must match")
+        assert(math.abs(safeArea.bottom - 0.14) < 0.0001, "safeArea.bottom must match")
+        assert(math.abs(safeArea.top - 0.86) < 0.0001, "safeArea.top must match")
 
         -- Graceful fallback on missing/unspecified XML config
-        VRCompanion.hudInsetX = nil
-        VRCompanion.hudInsetY = nil
         local fb = VRCompanion:loadConfiguration("missing_file.xml")
         assert(math.abs(fb.left - 0.30) < 0.0001, "fallback left must be default 0.30")
         assert(math.abs(fb.right - 0.70) < 0.0001, "fallback right must be default 0.70")
@@ -2586,7 +2584,7 @@ TEST_F(CompanionModTest, AlternatesPositiveDisparityOnLeftParityAndNegativeOnRig
     oxr->SetIpd(0.064f);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+        VRCompanion:configureHudSafeArea(0.20, 0.16)
         VRCompanion.handshakeComplete = true
         VRCompanion.passThroughMode = false
         VRCompanion.headTrackingEnabled = true
@@ -2622,7 +2620,7 @@ TEST_F(CompanionModTest, UpdatesConvergenceEveryFrameWithoutCoordinateDriftAcros
     oxr->SetIpd(0.064f);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+        VRCompanion:configureHudSafeArea(0.20, 0.16)
         VRCompanion.handshakeComplete = true
         VRCompanion.passThroughMode = false
         VRCompanion.headTrackingEnabled = true
@@ -2654,7 +2652,7 @@ TEST_F(CompanionModTest, RevertsConvergenceOffsetSmoothlyToZeroInPassThroughOrDi
     oxr->SetIpd(0.064f);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+        VRCompanion:configureHudSafeArea(0.20, 0.16)
         VRCompanion.handshakeComplete = true
         VRCompanion.passThroughMode = false
         VRCompanion.headTrackingEnabled = true

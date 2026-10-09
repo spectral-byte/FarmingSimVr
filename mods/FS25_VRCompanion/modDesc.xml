@@ -44,14 +44,6 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
             <en>Toggle VR View Mode</en>
             <de>VR-Ansichtsmodus umschalten</de>
         </text>
-        <text name="setting_vrHudInsetHorizontal">
-            <en>VR HUD Horizontal Inset</en>
-            <de>VR-HUD horizontaler Einzug</de>
-        </text>
-        <text name="setting_vrHudInsetVertical">
-            <en>VR HUD Vertical Inset</en>
-            <de>VR-HUD vertikaler Einzug</de>
-        </text>
         <text name="setting_vrHudConvergenceDepth">
             <en>VR HUD Convergence Depth (Meters)</en>
             <de>VR-HUD Konvergenztiefe (Meter)</de>
@@ -59,10 +51,6 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         <text name="setting_vrHudFillLevelGap">
             <en>VR HUD Fill Level Gap</en>
             <de>VR-HUD Füllstands-Abstand</de>
-        </text>
-        <text name="setting_vrHudInsetTop">
-            <en>VR HUD Top Inset</en>
-            <de>VR-HUD oberer Einzug</de>
         </text>
         <text name="setting_vrShowHudLoadNotification">
             <en>Show VR HUD Map Load Alert</en>

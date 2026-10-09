@@ -27,14 +27,13 @@ VRCompanion.HUD_STATE_NAMES = {
 
 -- VR HUD runtime state defaults (initialized only when not already set)
 if VRCompanion.hudState == nil then VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN end
-if VRCompanion.hudInsetX == nil then VRCompanion.hudInsetX = VRCompanion.DEFAULT_HUD_INSET_X end
-if VRCompanion.hudInsetY == nil then VRCompanion.hudInsetY = VRCompanion.DEFAULT_HUD_INSET_Y end
-if VRCompanion.hudInsetTop == nil then VRCompanion.hudInsetTop = VRCompanion.DEFAULT_HUD_INSET_TOP end
+if VRCompanion.hudSafeAreaHorizontal == nil then VRCompanion.hudSafeAreaHorizontal = VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL end
+if VRCompanion.hudSafeAreaVertical == nil then VRCompanion.hudSafeAreaVertical = VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL end
 if VRCompanion.hudConvergenceDepth == nil then VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH end
-if VRCompanion.hudAnchorLeftBase == nil then VRCompanion.hudAnchorLeftBase = VRCompanion.DEFAULT_HUD_INSET_X end
-if VRCompanion.hudAnchorRightBase == nil then VRCompanion.hudAnchorRightBase = 1.0 - VRCompanion.DEFAULT_HUD_INSET_X end
-if VRCompanion.hudAnchorBottomBase == nil then VRCompanion.hudAnchorBottomBase = VRCompanion.DEFAULT_HUD_INSET_Y end
-if VRCompanion.hudAnchorTopBase == nil then VRCompanion.hudAnchorTopBase = 1.0 - VRCompanion.DEFAULT_HUD_INSET_TOP end
+if VRCompanion.hudAnchorLeftBase == nil then VRCompanion.hudAnchorLeftBase = VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL end
+if VRCompanion.hudAnchorRightBase == nil then VRCompanion.hudAnchorRightBase = 1.0 - VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL end
+if VRCompanion.hudAnchorBottomBase == nil then VRCompanion.hudAnchorBottomBase = VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL end
+if VRCompanion.hudAnchorTopBase == nil then VRCompanion.hudAnchorTopBase = 1.0 - VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL end
 if VRCompanion.hudAnchorLeft == nil then VRCompanion.hudAnchorLeft = VRCompanion.hudAnchorLeftBase end
 if VRCompanion.hudAnchorRight == nil then VRCompanion.hudAnchorRight = VRCompanion.hudAnchorRightBase end
 if VRCompanion.hudAnchorBottom == nil then VRCompanion.hudAnchorBottom = VRCompanion.hudAnchorBottomBase end
@@ -472,10 +471,10 @@ function VRCompanion:updateHudConvergence(dt)
 
     self.currentConvergenceOffset = offset
 
-    local baseLeft = self.hudAnchorLeftBase or self.DEFAULT_HUD_INSET_X
-    local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_INSET_X)
-    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
-    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_TOP)
+    local baseLeft = self.hudAnchorLeftBase or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL
+    local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL)
+    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_SAFE_AREA_VERTICAL
+    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
 
     local shiftedLeft = self:clamp(baseLeft + offset, 0.0, 1.0)
     local shiftedRight = self:clamp(baseRight + offset, 0.0, 1.0)
@@ -703,35 +702,22 @@ end
 
 -- The HUD Safe Area: the engine's global HUD anchors, which keep everything outside the HUD Groups
 -- (warnings, notifications, other mods' HUDs) inside the lens. It no longer places the groups.
-function VRCompanion:calculateHudAnchors(insetX, insetY, insetTop)
-    local clampedInsetX = self:clamp(insetX or self.DEFAULT_HUD_INSET_X, self.MIN_HUD_INSET_X, self.MAX_HUD_INSET_X)
-    local clampedInsetY = self:clamp(insetY or self.DEFAULT_HUD_INSET_Y, self.MIN_HUD_INSET_Y, self.MAX_HUD_INSET_Y)
-    -- No top inset: the top edge follows an explicitly given vertical inset, else DEFAULT_HUD_INSET_TOP
-    local rawInsetTop = insetTop
-    if rawInsetTop == nil then
-        rawInsetTop = (insetY ~= nil) and clampedInsetY or self.DEFAULT_HUD_INSET_TOP
-    end
-    local clampedInsetTop = self:clamp(rawInsetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
+function VRCompanion:calculateHudAnchors(horizontal, vertical)
+    local clampedHorizontal = self:clamp(horizontal or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL, self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_HORIZONTAL)
+    local clampedVertical = self:clamp(vertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL, self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_VERTICAL)
 
-    local left = clampedInsetX
-    local right = 1.0 - clampedInsetX
-    local bottom = clampedInsetY
-    local top = 1.0 - clampedInsetTop
+    local left = clampedHorizontal
+    local right = 1.0 - clampedHorizontal
+    local bottom = clampedVertical
+    local top = 1.0 - clampedVertical
 
     return left, right, bottom, top
 end
 
-function VRCompanion:configureHudInsets(insetX, insetY, insetTop)
-    local left, right, bottom, top = self:calculateHudAnchors(insetX, insetY, insetTop)
-    self.hudInsetX = self:clamp(insetX or self.DEFAULT_HUD_INSET_X, self.MIN_HUD_INSET_X, self.MAX_HUD_INSET_X)
-    self.hudInsetY = self:clamp(insetY or self.DEFAULT_HUD_INSET_Y, self.MIN_HUD_INSET_Y, self.MAX_HUD_INSET_Y)
-    if insetTop ~= nil then
-        self.hudInsetTop = self:clamp(insetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
-    elseif insetY ~= nil then
-        self.hudInsetTop = nil -- top edge follows the vertical inset
-    else
-        self.hudInsetTop = self.DEFAULT_HUD_INSET_TOP
-    end
+function VRCompanion:configureHudSafeArea(horizontal, vertical)
+    local left, right, bottom, top = self:calculateHudAnchors(horizontal, vertical)
+    self.hudSafeAreaHorizontal = left
+    self.hudSafeAreaVertical = bottom
     self.hudAnchorLeftBase = left
     self.hudAnchorRightBase = right
     self.hudAnchorBottomBase = bottom
@@ -743,17 +729,16 @@ function VRCompanion:configureHudInsets(insetX, insetY, insetTop)
     self.currentConvergenceOffset = 0.0
 end
 
-function VRCompanion:getHudInsets()
+function VRCompanion:getHudSafeArea()
     return {
-        left = self.hudAnchorLeft or self.DEFAULT_HUD_INSET_X,
-        right = self.hudAnchorRight or (1.0 - self.DEFAULT_HUD_INSET_X),
-        bottom = self.hudAnchorBottom or self.DEFAULT_HUD_INSET_Y,
-        top = self.hudAnchorTop or (1.0 - self.DEFAULT_HUD_INSET_TOP),
-        baseLeft = self.hudAnchorLeftBase or self.hudAnchorLeft or self.DEFAULT_HUD_INSET_X,
-        baseRight = self.hudAnchorRightBase or self.hudAnchorRight or (1.0 - self.DEFAULT_HUD_INSET_X),
-        insetX = self.hudInsetX or self.DEFAULT_HUD_INSET_X,
-        insetY = self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
-        insetTop = self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP,
+        left = self.hudAnchorLeft or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL,
+        right = self.hudAnchorRight or (1.0 - self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL),
+        bottom = self.hudAnchorBottom or self.DEFAULT_HUD_SAFE_AREA_VERTICAL,
+        top = self.hudAnchorTop or (1.0 - self.DEFAULT_HUD_SAFE_AREA_VERTICAL),
+        baseLeft = self.hudAnchorLeftBase or self.hudAnchorLeft or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL,
+        baseRight = self.hudAnchorRightBase or self.hudAnchorRight or (1.0 - self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL),
+        horizontal = self.hudSafeAreaHorizontal or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL,
+        vertical = self.hudSafeAreaVertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL,
         convergenceOffset = self.currentConvergenceOffset or 0.0,
         convergenceDisparity = self.currentConvergenceDisparity or 0.0,
         convergenceDepth = self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH,
@@ -762,7 +747,6 @@ function VRCompanion:getHudInsets()
         showHudLoadNotification = (self.showHudLoadNotification == true)
     }
 end
-
 function VRCompanion:positionHudDisplay(display, displayName)
     if display == nil then return end
 
@@ -838,7 +822,7 @@ function VRCompanion:repositionAllHudDisplays(hud)
     end
 end
 
-function VRCompanion:applyHudInsets()
+function VRCompanion:applyHudSafeArea()
     if self.origHudAnchors == nil then
         self.origHudAnchors = {
             left = _G.g_hudAnchorLeft or 0.0,
@@ -863,7 +847,7 @@ function VRCompanion:applyHudInsets()
         self.hudAnchorLeft, self.hudAnchorRight, self.hudAnchorBottom, self.hudAnchorTop))
 end
 
-function VRCompanion:restoreHudInsets(preserveOrigAnchors)
+function VRCompanion:restoreHudSafeArea(preserveOrigAnchors)
     local left = 0.0
     local right = 1.0
     local bottom = 0.0
@@ -897,10 +881,10 @@ function VRCompanion:restoreHudInsets(preserveOrigAnchors)
     _G.g_hudAnchorBottom = bottom
     _G.g_hudAnchorTop = top
 
-    local baseLeft = self.hudAnchorLeftBase or self.DEFAULT_HUD_INSET_X
-    local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_INSET_X)
-    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
-    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_TOP)
+    local baseLeft = self.hudAnchorLeftBase or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL
+    local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL)
+    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_SAFE_AREA_VERTICAL
+    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
 
     self.hudAnchorLeft = baseLeft
     self.hudAnchorRight = baseRight
@@ -1102,12 +1086,12 @@ VRCompanion.Hud.setHudGroupVisibility = function(self, ...) return VRCompanion.s
 VRCompanion.Hud.cycleHudState =function(self, ...) return VRCompanion.cycleHudState(VRCompanion, ...) end
 VRCompanion.Hud.onHudToggleAction = function(self, ...) return VRCompanion.onHudToggleAction(VRCompanion, ...) end
 VRCompanion.Hud.calculateHudAnchors = function(self, ...) return VRCompanion.calculateHudAnchors(VRCompanion, ...) end
-VRCompanion.Hud.configureHudInsets = function(self, ...) return VRCompanion.configureHudInsets(VRCompanion, ...) end
-VRCompanion.Hud.getHudInsets = function(self, ...) return VRCompanion.getHudInsets(VRCompanion, ...) end
+VRCompanion.Hud.configureHudSafeArea = function(self, ...) return VRCompanion.configureHudSafeArea(VRCompanion, ...) end
+VRCompanion.Hud.getHudSafeArea = function(self, ...) return VRCompanion.getHudSafeArea(VRCompanion, ...) end
 VRCompanion.Hud.positionHudDisplay = function(self, ...) return VRCompanion.positionHudDisplay(VRCompanion, ...) end
 VRCompanion.Hud.repositionAllHudDisplays = function(self, ...) return VRCompanion.repositionAllHudDisplays(VRCompanion, ...) end
-VRCompanion.Hud.applyHudInsets = function(self, ...) return VRCompanion.applyHudInsets(VRCompanion, ...) end
-VRCompanion.Hud.restoreHudInsets = function(self, ...) return VRCompanion.restoreHudInsets(VRCompanion, ...) end
+VRCompanion.Hud.applyHudSafeArea = function(self, ...) return VRCompanion.applyHudSafeArea(VRCompanion, ...) end
+VRCompanion.Hud.restoreHudSafeArea = function(self, ...) return VRCompanion.restoreHudSafeArea(VRCompanion, ...) end
 VRCompanion.Hud.hookHud = function(self, ...) return VRCompanion.hookHud(VRCompanion, ...) end
 VRCompanion.Hud.unhookHud = function(self, ...) return VRCompanion.unhookHud(VRCompanion, ...) end
 

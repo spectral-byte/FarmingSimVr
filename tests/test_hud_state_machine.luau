@@ -592,7 +592,7 @@ test("LoadMapInitializesHudInHiddenStateAndRegistersAction", function()
     }
     _G.g_currentMission = { hud = mockHud }
 
-    VRCompanion:configureHudInsets()
+    VRCompanion:configureHudSafeArea()
     VRCompanion:loadMap("mapUS")
 
     -- Check HUD state defaulted to Hidden (0)

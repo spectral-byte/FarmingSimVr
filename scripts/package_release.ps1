@@ -144,7 +144,7 @@ PERFORMANCE & SETTINGS
   * vrRenderingMode <afr|dualpass|toggle>
   * vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]
                                          (default: 0.30 0.22 0.82 for every group)
-  * vrHudInsets <horizontal> <vertical> [top]   (HUD Safe Area, default: 0.30 0.22 0.22)
+  * vrHudSafeArea <horizontal> <vertical>      (HUD Safe Area, default: 0.30 0.22)
   * vrHudConvergence <depth_in_meters>   (default: 1.8)
   * vrSnapTurnAngle <degrees>            (default: 90)
 

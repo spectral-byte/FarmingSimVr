@@ -27,7 +27,7 @@ FS25 VR is built as a hybrid two-tier architecture:
    - Consumes 6DOF head poses and asymmetric perspective projections from `VRBridge`.
    - Manages dual eye camera nodes and cyclopean spatial audio listener alignment.
    - Coordinates Sequential Dual-Pass (SDP) and Alternate Frame Rendering (AFR) pipelines.
-   - Features comprehensive VR HUD anchoring with configurable insets and IPD-scaled stereoscopic convergence depth.
+   - Features comprehensive VR HUD anchoring with a configurable HUD Safe Area, per-group HUD placement and IPD-scaled stereoscopic convergence depth.
    - Implements in-engine snap turn locomotion, 2D floating window view toggling, and reference space recentering.
 
 ```
@@ -164,7 +164,7 @@ Press the tilde key (`` ` `` / `~`) to open the in-engine developer console:
 - `vrRenderingMode <afr|dualpass|toggle>`: Switch between Sequential Dual-Pass and Alternate Frame Rendering.
 - `vrObliqueProjection <true|false|toggle>`: Enable per-eye Oblique Frustum projection (default: `false`, symmetric).
 - `vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]`: Place one HUD Group and set its scale. Each group has a fixed home corner (Map bottom-left, Speedometer bottom-right with the fill levels under it, Info top-right, Controls top-left). The horizontal and vertical values are the distance, as a fraction of the screen, from the home corner's two edges to the group's outer edges, so a larger group grows inward. Margins clamp to `0.00`-`0.45` and the scale to `0.50`-`1.50`; the scale is multiplied by the game's own UI scale setting. Defaults for every group: `0.30 0.22 0.82`. The change applies immediately and is saved. Run without arguments to list every group's current margins and scale. The context action prompt is not a group: it stays centered at the bottom on the Speedometer group's vertical margin.
-- `vrHudInsets <horizontal> <vertical> [top]`: Adjust the HUD Safe Area, the margin applied to the engine's global HUD anchors that keeps warnings, notifications and other mods' HUDs inside the lens (default: `0.30 0.22 0.22`). It does not move the HUD Groups.
+- `vrHudSafeArea <horizontal> <vertical>`: Set the HUD Safe Area, one margin applied to the engine's global HUD anchors that keeps everything outside the HUD Groups (blinking warnings, notifications and other mods' HUDs) inside the lens. The horizontal margin clamps to `0.00`-`0.40` and the vertical margin (applied to both top and bottom) to `0.00`-`0.35`. Defaults: `0.30 0.22`. It does not move the HUD Groups. The change applies immediately and is saved; run without arguments to print the usage and the current values. The anchors are restored to the full screen on map unload and in 2D Floating Window Mode.
 - `vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>`: Choose which HUD Groups show in the Streamlined HUD and in the Full HUD (defaults: Streamlined = `speedometer` only, Full = all four groups). The Hidden HUD always shows nothing, and the context action prompt always shows in both states. Applies immediately and is saved; run with no arguments to list every group's current visibility. The HUD cycle notification lists the groups that are on in the new state, e.g. `VR HUD: Streamlined (Speedometer, Map)`.
 - HUD convergence depth is set via `<hudConvergenceDepth>` in `settings.xml` (default: `1.8`).
 - `vrSnapTurnAngle <degrees>`: Set snap turn rotational angle step (default: `90`).
