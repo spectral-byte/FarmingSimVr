@@ -240,6 +240,7 @@ For in-depth technical documentation, refer to the architecture records in [`doc
 - [`ADR-0019`](docs/adr/0019-begin-the-openxr-frame-before-the-engine-update.md): Begin the OpenXR Frame Before the Engine Update
 - [`ADR-0020`](docs/adr/0020-per-eye-motion-vector-correction-for-temporal-upscalers.md): Per-Eye Motion Vector Correction for Temporal Upscalers
 - [`ADR-0021`](docs/adr/0021-one-registered-vr-camera-for-both-eyes.md): One Registered VR Camera for Both Eyes
+- [`ADR-0022`](docs/adr/0022-per-group-hud-margins-and-a-separate-safe-area.md): Per-Group HUD Margins and a Separate Safe Area
 
 ---
 

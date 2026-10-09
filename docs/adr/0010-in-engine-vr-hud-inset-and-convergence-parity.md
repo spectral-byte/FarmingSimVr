@@ -5,7 +5,7 @@ In Farming Simulator 25, GIANTS Engine 10 renders 2D HUD interface elements (spe
 
 To deliver a comfortable, responsive, and immersive HUD in VR without fragile or invasive Direct3D 12 render-target duplication, we established the following architectural design:
 
-1. **In-Engine VR HUD Inset & UI Scale**:
+1. **In-Engine VR HUD Inset & UI Scale** *(Amended by [ADR-0022](0022-per-group-hud-margins-and-a-separate-safe-area.md): each HUD Group has its own margins and scale, and the anchors keep only a HUD Safe Area.)*:
    - The Companion Mod contracts the engine's global anchors (`g_hudAnchorLeft`, `g_hudAnchorRight`, `g_hudAnchorTop`, `g_hudAnchorBottom`) inward by configurable safe margins (defaulting to 20% horizontal and 16% vertical inset).
    - A dedicated VR UI scale multiplier (defaulting to 0.88x) is applied, keeping telemetry compact and legible within the central ~60° viewing cone.
    - Values are exposed in configuration for fine-tuning across different headset fields of view.
@@ -23,7 +23,7 @@ To deliver a comfortable, responsive, and immersive HUD in VR without fragile or
      - `Full`: Unhides all base-game HUD elements with full VR insets and convergence disparity.
 
 ## Status
-Accepted
+Accepted, amended: the global VR HUD inset and UI scale (item 1) are replaced by per-group HUD margins and a separate HUD Safe Area, see [ADR-0022](0022-per-group-hud-margins-and-a-separate-safe-area.md). The convergence parity (item 2) and the three-stage toggle (item 3) stand, with the Streamlined and Full contents now set per group.
 
 ## Considered Options
 - Unmodified corner screen-space rendering (rejected: corners are pushed outside VR headset optics, causing chromatic aberration, lens cutoff, and illegibility).

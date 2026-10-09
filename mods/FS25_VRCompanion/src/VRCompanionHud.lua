@@ -42,6 +42,8 @@ if VRCompanion.currentConvergenceOffset == nil then VRCompanion.currentConvergen
 -- The four HUD Groups (CONTEXT.md, ADR-0022). Each group lists its engine displays and its
 -- fixed home corner, and says whether it shows in the Streamlined and Full HUD. Placement and
 -- visibility both look a display up through its group. The context action display is in no group.
+-- The group names, in order, are VRCompanion.HUD_GROUP_NAMES (VRCompanionConfig.lua): that one list
+-- drives layout, visibility, save/load and listing.
 VRCompanion.HUD_GROUPS = {
     map = { displays = { "IngameMap" }, alignX = "left", alignY = "bottom" },
     speedometer = { displays = { "SpeedMeterDisplay", "FillLevelsDisplay" }, alignX = "right", alignY = "bottom" },
@@ -49,7 +51,8 @@ VRCompanion.HUD_GROUPS = {
     controls = { displays = { "InputHelpDisplay" }, alignX = "left", alignY = "top" }
 }
 -- Visibility flags start at their DEFAULT_* constants (VRCompanionConfig.lua)
-for name, group in pairs(VRCompanion.HUD_GROUPS) do
+for _, name in ipairs(VRCompanion.HUD_GROUP_NAMES) do
+    local group = VRCompanion.HUD_GROUPS[name]
     group.streamlined = VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED[name]
     group.full = VRCompanion.DEFAULT_HUD_GROUP_FULL[name]
 end
@@ -61,7 +64,8 @@ local CONTEXT_ACTION_ANCHOR_GROUP = "speedometer"
 
 -- The group a display belongs to, and the group's name
 local function findHudGroup(displayName)
-    for groupName, group in pairs(VRCompanion.HUD_GROUPS) do
+    for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do
+        local group = VRCompanion.HUD_GROUPS[groupName]
         for _, member in ipairs(group.displays) do
             if member == displayName then return group, groupName end
         end
@@ -149,7 +153,10 @@ function VRCompanion:getHudDisplayPosition(display, displayName, convergenceOffs
         local fillLevels = self:getFillLevelsDisplay()
         if fillLevels ~= nil then
             local _, fillHeight = self:getFillLevelsBlockSize(fillLevels)
-            y = y + fillHeight + self.HUD_FILL_LEVEL_GAP * self:getHudGroupScale(groupName)
+            -- No fill levels shown: nothing to stack above, so no space and no gap are reserved
+            if fillHeight > 0 then
+                y = y + fillHeight + self.HUD_FILL_LEVEL_GAP * self:getHudGroupScale(groupName)
+            end
         end
     end
     return x + offset, y
@@ -320,13 +327,15 @@ function VRCompanion:getFillLevelsBlockSize(display)
         width = 0.12 * uiScale
     end
 
+    -- The display's own list of fill levels is authoritative, and may be empty. Only a display that
+    -- says nothing about its levels is assumed to be showing one row.
     local numLevels = 1
-    if display.fillLevelData ~= nil and type(display.fillLevelData) == "table" and #display.fillLevelData > 0 then
+    if type(display.fillLevelData) == "table" then
         numLevels = #display.fillLevelData
     elseif display.vehicle ~= nil and type(display.vehicle.getFillUnits) == "function" then
         local ok, units = pcall(display.vehicle.getFillUnits, display.vehicle)
-        if ok and type(units) == "table" and #units > 0 then
-            numLevels = math.max(1, #units)
+        if ok and type(units) == "table" then
+            numLevels = #units
         end
     end
     local height = numLevels * rowHeight + math.max(0, numLevels - 1) * self.HUD_FILL_LEVEL_GAP * uiScale
@@ -665,14 +674,14 @@ function VRCompanion:getHudGroupLabel(groupName)
     return (string.gsub(groupName, "^%l", string.upper))
 end
 
--- The group names that show in a HUD state, in HUD_GROUP_ORDER. Hidden has none.
+-- The group names that show in a HUD state, in HUD_GROUP_NAMES order. Hidden has none.
 function VRCompanion:getEnabledHudGroups(state)
     local enabled = {}
     if state ~= self.HUD_STATE_STREAMLINED and state ~= self.HUD_STATE_FULL then
         return enabled
     end
     local flag = (state == self.HUD_STATE_STREAMLINED) and "streamlined" or "full"
-    for _, name in ipairs(self.HUD_GROUP_ORDER) do
+    for _, name in ipairs(self.HUD_GROUP_NAMES) do
         local group = self.HUD_GROUPS[name]
         if group ~= nil and group[flag] == true then
             table.insert(enabled, name)
@@ -742,6 +751,7 @@ function VRCompanion:getHudSafeArea()
         showHudLoadNotification = (self.showHudLoadNotification == true)
     }
 end
+
 function VRCompanion:positionHudDisplay(display, displayName)
     if display == nil then return end
 
@@ -757,7 +767,8 @@ function VRCompanion:positionHudDisplay(display, displayName)
         return
     end
 
-    local anchorX, anchorY = self:getHudDisplayPosition(display, displayName)
+    -- The current convergence offset shifts every display, as it does in repositionHudForConvergence
+    local anchorX, anchorY = self:getHudDisplayPosition(display, displayName, self.currentConvergenceOffset)
 
     display.anchorX = anchorX
     display.anchorY = anchorY
@@ -780,6 +791,7 @@ function VRCompanion:positionHudDisplay(display, displayName)
         pcall(function() display:updatePosition() end)
     end
 end
+
 function VRCompanion:repositionAllHudDisplays(hud)
     local targetHud = hud
     if targetHud == nil then
@@ -1063,6 +1075,14 @@ function VRCompanion:unhookHud()
 end
 
 -- Export to Hud subsystem table
+VRCompanion.Hud.getHudGroupLayout = function(self, ...) return VRCompanion.getHudGroupLayout(VRCompanion, ...) end
+VRCompanion.Hud.setHudGroupLayout = function(self, ...) return VRCompanion.setHudGroupLayout(VRCompanion, ...) end
+VRCompanion.Hud.getHudBaseUiScale = function(self, ...) return VRCompanion.getHudBaseUiScale(VRCompanion, ...) end
+VRCompanion.Hud.getHudGroupScale = function(self, ...) return VRCompanion.getHudGroupScale(VRCompanion, ...) end
+VRCompanion.Hud.getHudDisplayScale = function(self, ...) return VRCompanion.getHudDisplayScale(VRCompanion, ...) end
+VRCompanion.Hud.getHudDisplayPosition = function(self, ...) return VRCompanion.getHudDisplayPosition(VRCompanion, ...) end
+VRCompanion.Hud.getFillLevelsBlockSize = function(self, ...) return VRCompanion.getFillLevelsBlockSize(VRCompanion, ...) end
+VRCompanion.Hud.getHudGroupLabel = function(self, ...) return VRCompanion.getHudGroupLabel(VRCompanion, ...) end
 VRCompanion.Hud.computeConvergenceDisparity = function(self, ...) return VRCompanion.computeConvergenceDisparity(VRCompanion, ...) end
 VRCompanion.Hud.getConvergenceDisparity = function(self, ...) return VRCompanion.getConvergenceDisparity(VRCompanion, ...) end
 VRCompanion.Hud.getConvergenceOffset = function(self, ...) return VRCompanion.getConvergenceOffset(VRCompanion, ...) end
@@ -1076,7 +1096,7 @@ VRCompanion.Hud.applyHudState = function(self, ...) return VRCompanion.applyHudS
 VRCompanion.Hud.setHudState = function(self, ...) return VRCompanion.setHudState(VRCompanion, ...) end
 VRCompanion.Hud.getEnabledHudGroups = function(self, ...) return VRCompanion.getEnabledHudGroups(VRCompanion, ...) end
 VRCompanion.Hud.setHudGroupVisibility = function(self, ...) return VRCompanion.setHudGroupVisibility(VRCompanion, ...) end
-VRCompanion.Hud.cycleHudState =function(self, ...) return VRCompanion.cycleHudState(VRCompanion, ...) end
+VRCompanion.Hud.cycleHudState = function(self, ...) return VRCompanion.cycleHudState(VRCompanion, ...) end
 VRCompanion.Hud.onHudToggleAction = function(self, ...) return VRCompanion.onHudToggleAction(VRCompanion, ...) end
 VRCompanion.Hud.calculateHudAnchors = function(self, ...) return VRCompanion.calculateHudAnchors(VRCompanion, ...) end
 VRCompanion.Hud.configureHudSafeArea = function(self, ...) return VRCompanion.configureHudSafeArea(VRCompanion, ...) end

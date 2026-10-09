@@ -1043,6 +1043,44 @@ test("KeepsTheFillLevelsOnTheBottomMarginWithoutLiftingTheSpeedometerAwayFromThe
     unloadMap()
 end)
 
+test("ReservesNoSpaceUnderTheSpeedometerWhileNoFillLevelIsShown", function()
+    local hud = makeStackHud(0)
+    _G.FillLevelsDisplay = { draw = function() end }
+    loadMapWith(hud)
+    setGroup("speedometer", 0.35, 0.25, 0.50)
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+    assert(near(hud.speedMeter.position.y, 0.25), "with no fill levels the speedometer sits on the group's bottom margin, no phantom row or gap")
+    assert(near(hud.speedMeter.position.x + 0.10, 0.65), "and stays right-aligned to the group's horizontal margin")
+
+    -- A fill level appears (an implement is attached): the next draw lifts the speedometer above it
+    hud.fillLevels.fillLevelData = { {} }
+    _G.FillLevelsDisplay.draw(hud.fillLevels)
+    assert(near(hud.fillLevels.position.y, 0.25), "the fill level sits on the bottom margin")
+    assert(near(hud.speedMeter.position.y, 0.25 + 0.03 + 0.002), "the speedometer rises to clear the one fill level")
+
+    -- The last fill level goes away: the speedometer drops back
+    hud.fillLevels.fillLevelData = {}
+    _G.FillLevelsDisplay.draw(hud.fillLevels)
+    assert(near(hud.speedMeter.position.y, 0.25), "the speedometer drops back to the bottom margin")
+
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+    unloadMap()
+    _G.FillLevelsDisplay = nil
+    VRCompanion.activeFillLevelsDisplay = nil
+end)
+
+test("ReservesNoSpaceWhenTheVehicleHasNoFillUnits", function()
+    local hud = makeStackHud()
+    hud.fillLevels.vehicle = { getFillUnits = function() return {} end }
+    loadMapWith(hud)
+    setGroup("speedometer", 0.35, 0.25, 0.50)
+    assert(near(hud.speedMeter.position.y, 0.25), "a vehicle without fill units reserves no space")
+    hud.fillLevels.vehicle = { getFillUnits = function() return { {}, {} } end }
+    setGroup("speedometer", 0.35, 0.25, 0.50)
+    assert(near(hud.speedMeter.position.y, 0.25 + 2 * 0.03 + 0.002 + 0.002), "two fill units reserve two rows and the gap between them")
+    unloadMap()
+end)
+
 test("PlacesTheFillLevelsAndSpeedometerStackWhenTheHudLeavesHidden", function()
     local hud = makeStackHud()
     loadMapWith(hud)

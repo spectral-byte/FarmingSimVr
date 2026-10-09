@@ -192,10 +192,12 @@ function VRCompanion:getHudSafeAreaUsage()
         self.hudSafeAreaVertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
 end
 
+-- A usable number: tonumber's nil for text and NaN are both rejected
+local function isNumber(v) return v ~= nil and v == v end
+
 function VRCompanion:consoleCommandSetHudSafeArea(horizontalStr, verticalStr)
     local horizontal = tonumber(horizontalStr)
     local vertical = tonumber(verticalStr)
-    local function isNumber(v) return v ~= nil and v == v end
     if not isNumber(horizontal) or not isNumber(vertical) then
         return self:getHudSafeAreaUsage()
     end
@@ -217,6 +219,7 @@ function VRCompanion:consoleCommandSetHudSafeArea(horizontalStr, verticalStr)
     return string.format("VR HUD Safe Area updated and saved: horizontal=%.2f, vertical=%.2f",
         self.hudSafeAreaHorizontal, self.hudSafeAreaVertical)
 end
+
 -- Usage text for vrHudGroup: the syntax followed by every group's current margins and scale
 function VRCompanion:getHudGroupUsage()
     local lines = {
@@ -239,7 +242,6 @@ function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, vertical
     local vertical = tonumber(verticalStr)
     local hasScale = (scaleStr ~= nil and scaleStr ~= "")
     local scale = hasScale and tonumber(scaleStr) or nil
-    local function isNumber(v) return v ~= nil and v == v end
     if groupName == nil or self.HUD_GROUPS[groupName] == nil
         or not isNumber(horizontal) or not isNumber(vertical) or (hasScale and not isNumber(scale)) then
         return self:getHudGroupUsage()
@@ -262,6 +264,7 @@ function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, vertical
     return string.format("VR HUD %s group updated and saved: horizontal=%.2f, vertical=%.2f, scale=%.2f",
         groupName, layout.marginX, layout.marginY, layout.scale)
 end
+
 function VRCompanion:consoleCommandSetHudState(stateStr)
     local st = tonumber(stateStr)
     if st == nil or st < 0 or st > 2 then
@@ -298,7 +301,7 @@ end
 
 local function hudGroupShowUsage(self)
     local lines = { "Usage: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>" }
-    for _, name in ipairs(self.HUD_GROUP_ORDER) do
+    for _, name in ipairs(self.HUD_GROUP_NAMES) do
         local group = self.HUD_GROUPS[name]
         table.insert(lines, string.format("  %s: streamlined=%s full=%s", name,
             group.streamlined and "on" or "off", group.full and "on" or "off"))
@@ -675,7 +678,7 @@ end
 VRCompanion.Input.registerActionEvents = function(self, ...) return VRCompanion.registerActionEvents(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudSafeArea = function(self, ...) return VRCompanion.consoleCommandSetHudSafeArea(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudGroup = function(self, ...) return VRCompanion.consoleCommandSetHudGroup(VRCompanion, ...) end
-
+VRCompanion.Input.consoleCommandHudGroupShow = function(self, ...) return VRCompanion.consoleCommandHudGroupShow(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudState = function(self, ...) return VRCompanion.consoleCommandSetHudState(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudLoadNotification = function(self, ...) return VRCompanion.consoleCommandSetHudLoadNotification(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetRecenterMode = function(self, ...) return VRCompanion.consoleCommandSetRecenterMode(VRCompanion, ...) end

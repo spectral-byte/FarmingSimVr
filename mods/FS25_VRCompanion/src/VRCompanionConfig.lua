@@ -14,8 +14,9 @@ VRCompanion.MAX_HUD_SAFE_AREA_HORIZONTAL = 0.40
 VRCompanion.MAX_HUD_SAFE_AREA_VERTICAL = 0.35
 
 -- HUD Group Margin and scale constants. Every group starts from the same defaults, which match
--- where the HUD sat before the groups existed.
-VRCompanion.HUD_GROUP_NAMES = { "map", "speedometer", "info", "controls" }
+-- where the HUD sat before the groups existed. HUD_GROUP_NAMES is the one ordered list of groups:
+-- layout, visibility, save/load and listing in messages all follow it.
+VRCompanion.HUD_GROUP_NAMES = { "speedometer", "map", "info", "controls" }
 VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X = 0.30
 VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y = 0.22
 VRCompanion.DEFAULT_HUD_GROUP_SCALE = 0.82
@@ -25,8 +26,6 @@ VRCompanion.MIN_HUD_GROUP_SCALE = 0.50
 VRCompanion.MAX_HUD_GROUP_SCALE = 1.50
 
 -- HUD Group visibility (CONTEXT.md, ADR-0022): which groups show in the Streamlined and the Full HUD.
--- HUD_GROUP_ORDER is the order groups are listed in messages.
-VRCompanion.HUD_GROUP_ORDER = { "speedometer", "map", "info", "controls" }
 VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED = { map = false, speedometer = true, info = false, controls = false }
 VRCompanion.DEFAULT_HUD_GROUP_FULL = { map = true, speedometer = true, info = true, controls = true }
 
@@ -222,7 +221,7 @@ function VRCompanion:saveConfiguration(xmlPath)
             setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
             setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
             setXmlBoolFn(xmlFile, "vrSettings.allowObliqueProjection", self.allowObliqueProjection == true)
-            for _, groupName in ipairs(self.HUD_GROUP_ORDER) do
+            for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
                 local group = (self.HUD_GROUPS or {})[groupName] or {}
                 local streamlined, full = group.streamlined, group.full
                 if streamlined == nil then streamlined = self.DEFAULT_HUD_GROUP_STREAMLINED[groupName] end
@@ -259,10 +258,12 @@ function VRCompanion:loadConfiguration(xmlPath)
     local renderingModeLoaded = false
 
     -- Group visibility starts from the defaults; the settings file overrides the keys it has
-    for _, groupName in ipairs(self.HUD_GROUP_ORDER) do
-        local group = self.HUD_GROUPS[groupName]
-        group.streamlined = self.DEFAULT_HUD_GROUP_STREAMLINED[groupName]
-        group.full = self.DEFAULT_HUD_GROUP_FULL[groupName]
+    for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
+        local group = (self.HUD_GROUPS or {})[groupName]
+        if group ~= nil then
+            group.streamlined = self.DEFAULT_HUD_GROUP_STREAMLINED[groupName]
+            group.full = self.DEFAULT_HUD_GROUP_FULL[groupName]
+        end
     end
 
     local loadXmlFn = loadXMLFile or _G.loadXMLFile
@@ -318,13 +319,15 @@ function VRCompanion:loadConfiguration(xmlPath)
                     self.allowObliqueProjection = loadedAllowOblique
                 end
 
-                for _, groupName in ipairs(self.HUD_GROUP_ORDER) do
-                    local group = self.HUD_GROUPS[groupName]
-                    local prefix = "vrSettings.hudGroups." .. groupName
-                    local loadedStreamlined = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile, prefix .. ".showStreamlined")
-                    local loadedFull = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile, prefix .. ".showFull")
-                    if loadedStreamlined ~= nil then group.streamlined = loadedStreamlined end
-                    if loadedFull ~= nil then group.full = loadedFull end
+                for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
+                    local group = (self.HUD_GROUPS or {})[groupName]
+                    if group ~= nil then
+                        local prefix = "vrSettings.hudGroups." .. groupName
+                        local loadedStreamlined = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile, prefix .. ".showStreamlined")
+                        local loadedFull = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile, prefix .. ".showFull")
+                        if loadedStreamlined ~= nil then group.streamlined = loadedStreamlined end
+                        if loadedFull ~= nil then group.full = loadedFull end
+                    end
                 end
 
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,

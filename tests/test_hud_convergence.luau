@@ -390,6 +390,50 @@ test("ConvergenceShiftsEveryGroupAndTheContextActionByTheSameAmount", function()
     useSafeArea(0.30, 0.22)
 end)
 
+test("ConsoleCommandsKeepTheConvergenceOffsetOnEveryGroupFillLevelsAndTheContextAction", function()
+    useSafeArea(0.20, 0.16)
+    local consoleSet = function(...) VRCompanion:consoleCommandSetHudGroup(...) end
+    consoleSet("map", "0.05", "0.10", "1.0")
+    consoleSet("speedometer", "0.07", "0.12", "1.0")
+    consoleSet("info", "0.09", "0.14", "1.0")
+    consoleSet("controls", "0.11", "0.16", "1.0")
+    VRCompanion.activeFillLevelsDisplay = nil
+    _G.VRBridge = {
+        getFrameParity = function() return 0 end,
+        getIpd = function() return 0.064 end,
+        isReady = function() return true end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+
+    local function mk()
+        return { width = 0.10, height = 0.05, position = nil, setPosition = function(self, x, y) self.position = { x = x, y = y } end }
+    end
+    local hud = { ingameMap = mk(), speedMeter = mk(), fillLevels = mk(), gameInfo = mk(), inputHelp = mk(), contextAction = mk() }
+    _G.g_currentMission = { hud = hud }
+    VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
+
+    -- The left eye's frame sets the +0.012 offset; the console command that follows places everything with it
+    VRCompanion:updateHudConvergence()
+    assert(math.abs(VRCompanion.currentConvergenceOffset - 0.012) < 0.0001, "left eye offset")
+    for _, n in ipairs({ "ingameMap", "speedMeter", "fillLevels", "gameInfo", "inputHelp", "contextAction" }) do hud[n].position = nil end
+    consoleSet("speedometer", "0.07", "0.12", "1.0")
+
+    assert(math.abs(hud.speedMeter.position.x - (1.0 - 0.07 - 0.10 + 0.012)) < 0.0001, "speedometer keeps the offset after the console command")
+    assert(math.abs(hud.fillLevels.position.x - (1.0 - 0.07 - 0.10 + 0.012)) < 0.0001, "fill levels keep the offset after the console command")
+    assert(math.abs(hud.ingameMap.position.x - (0.05 + 0.012)) < 0.0001, "map keeps the offset")
+    assert(math.abs(hud.gameInfo.position.x - (1.0 - 0.09 - 0.10 + 0.012)) < 0.0001, "info keeps the offset")
+    assert(math.abs(hud.inputHelp.position.x - (0.11 + 0.012)) < 0.0001, "controls keep the offset")
+    assert(math.abs(hud.contextAction.position.x - (0.5 + 0.012)) < 0.0001, "context action keeps the offset")
+
+    VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+    VRCompanion.activeFillLevelsDisplay = nil
+    _G.g_currentMission = nil
+    _G.VRBridge = nil
+    useSafeArea(0.30, 0.22)
+end)
+
 -- Hidden HUD: no repositioning, but convergence state keeps updating
 local function makeCountingHud()
     local calls = { count = 0 }
