@@ -1180,12 +1180,72 @@ function VRCompanion:dbgDump()
     end
 end
 
+-- Logs what the current map layout answers for its position and size, with and without the map as argument
+local function dbgLayoutGetters(map)
+    local layout = map.layout
+    if type(layout) ~= "table" then return end
+    for _, method in ipairs({ "getPosition", "getMapPosition", "getMapSize", "getMapPivot", "getWidth", "getHeight" }) do
+        if type(layout[method]) == "function" then
+            local ok1, a1, b1, c1, d1 = pcall(layout[method], layout)
+            local ok2, a2, b2, c2, d2 = pcall(layout[method], layout, map)
+            print(DBG_TAG .. string.format("  layout:%s() -> %s %s %s %s | layout:%s(map) -> %s %s %s %s", method,
+                tostring(ok1), dbgFmt(a1), dbgFmt(b1), dbgFmt(c1), method, tostring(ok2), dbgFmt(a2), dbgFmt(b2), dbgFmt(c2)))
+        end
+    end
+    if type(map.getPosition) == "function" then
+        local ok, x, y = pcall(map.getPosition, map)
+        print(DBG_TAG .. string.format("  map:getPosition() -> %s %s %s", tostring(ok), dbgFmt(x), dbgFmt(y)))
+    end
+end
+
+-- While diagnostics are on, logs every render of the map's overlays: the coordinates the engine really draws at
+function VRCompanion:dbgStartRenderProbe(map)
+    local ids = {}
+    if type(map.overlay) == "table" and map.overlay.overlayId then ids[map.overlay.overlayId] = "frame" end
+    if type(map.mapOverlay) == "table" and map.mapOverlay.overlayId then ids[map.mapOverlay.overlayId] = "content" end
+    if type(map.layout) == "table" and map.layout.overlayMask then ids[map.layout.overlayMask] = "mask" end
+    if self.dbgOrigRenderOverlay == nil then self.dbgOrigRenderOverlay = _G.renderOverlay end
+    local orig = self.dbgOrigRenderOverlay
+    if type(orig) ~= "function" then
+        print(DBG_TAG .. "renderOverlay is not a function; render probe not installed")
+        return
+    end
+    self.dbgRenderLogs = 0
+    _G.renderOverlay = function(id, x, y, w, h, ...)
+        local label = ids[id]
+        if label ~= nil and self.hudDiagnostics and self.dbgRenderLogs < 30 then
+            self.dbgRenderLogs = self.dbgRenderLogs + 1
+            print(DBG_TAG .. string.format("renderOverlay %s id=%s x=%s y=%s w=%s h=%s safeFrame=(%s,%s)", label, tostring(id), dbgFmt(x), dbgFmt(y), dbgFmt(w), dbgFmt(h),
+                dbgFmt(_G.g_safeFrameOffsetX), dbgFmt(_G.g_safeFrameOffsetY)))
+            if self.dbgRenderLogs <= 3 then
+                local ok, trace = pcall(debug.traceback, "", 2)
+                print(DBG_TAG .. "  called from: " .. (ok and tostring(trace):gsub("\n", " <- ") or "no traceback"))
+            end
+        end
+        return orig(id, x, y, w, h, ...)
+    end
+end
+
+function VRCompanion:dbgStopRenderProbe()
+    if self.dbgOrigRenderOverlay ~= nil then
+        _G.renderOverlay = self.dbgOrigRenderOverlay
+        self.dbgOrigRenderOverlay = nil
+    end
+end
+
 function VRCompanion:setHudDiagnostics(enabled)
     self.hudDiagnostics = enabled == true
     self.dbgDraws, self.dbgOverwrites, self.dbgFillSig, self.dbgFillLogs, self.dbgMapSnaps = {}, {}, nil, 0, 0
     print(DBG_TAG .. "HUD diagnostics " .. (self.hudDiagnostics and "on" or "off"))
+    self:dbgStopRenderProbe()
     if self.hudDiagnostics then
         self:dbgDump()
+        local mission = g_currentMission or _G.g_currentMission
+        local map = mission and mission.hud and (mission.hud.ingameMap or mission.hud.ingameMapDisplay)
+        if map ~= nil then
+            dbgLayoutGetters(map)
+            self:dbgStartRenderProbe(map)
+        end
     end
 end
 
