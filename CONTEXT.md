@@ -44,9 +44,9 @@ _Avoid_: Reset view, camera zeroing
 Any camera of the controlled vehicle other than its in-cab camera, whether the rotatable orbit camera around the vehicle or a fixed mount such as a hitch or header camera. It receives the same 6DOF head tracking and stereoscopic presentation as the in-cab camera.
 _Avoid_: Third-person view, exterior view, chase cam, outside view
 
-**VR HUD Inset**:
-The normalized viewport margin applied to engine HUD anchors (`g_hudAnchor*`) that contracts 2D interface elements inward from screen edges into the optical sweet spot of the VR headset.
-_Avoid_: UI padding, screen margin, HUD border
+**HUD Safe Area**:
+The normalized viewport margin applied to the engine's global HUD anchors (`g_hudAnchor*`) that keeps 2D interface elements outside the HUD Groups, such as warnings, notifications, and other mods' HUDs, within the optical sweet spot of the VR headset.
+_Avoid_: VR HUD Inset, UI padding, screen margin, HUD border
 
 **HUD Convergence Offset**:
 The alternating horizontal screen-space displacement applied across Alternate Frame Rendering (AFR) frames to render 2D interface elements at a comfortable stereoscopic depth.
@@ -56,9 +56,21 @@ _Avoid_: 3D HUD shift, eye disparity offset, stereo HUD hack
 The bindable in-engine input action that toggles or pulses the visibility of the in-game HUD between hidden and visible states.
 _Avoid_: Show HUD button, HUD keybind, UI switch
 
+**HUD Group**:
+One of the four independently placed clusters of engine HUD elements, each fixed to a home screen corner: the Map group (bottom-left), the Speedometer group with its fill levels (bottom-right), the Info group with clock and money (top-right), and the Controls group of input help (top-left). Each has its own HUD Group Margin, scale, and visibility in the Streamlined and Full HUD.
+_Avoid_: HUD element, HUD panel, widget
+
+**HUD Group Margin**:
+The normalized horizontal and vertical distance from a HUD Group's home screen corner to the group's outer edges.
+_Avoid_: Offset, XY position, inset
+
 **Streamlined HUD**:
-The decluttered VR presentation mode that preserves essential driving and machine telemetry while suppressing bulky secondary panels (such as the minimap and input help).
-_Avoid_: Mini HUD, compact UI, lite HUD
+The decluttered VR presentation state that shows only the HUD Groups the player has enabled for it, by default the speedometer group.
+_Avoid_: Vehicle HUD, mini HUD, compact UI, lite HUD
+
+**Full HUD**:
+The VR presentation state that shows every HUD Group the player has enabled for it, by default all four.
+_Avoid_: All-on HUD, complete HUD
 
 **Snap Turn**:
 An instantaneous rotational increment applied to the player's body, the in-cab gaze angle, or an Outside Camera's orbit around the vehicle to reorient view direction without vestibular motion sickness.
