@@ -1252,6 +1252,215 @@ test("ModDescDeclaresSnapTurnActionsBindingsL10nAndSettings", function()
     assert(string.find(modDescContent, "<vrSettings>", 1, true) == nil, "modDesc.xml must not define a <vrSettings> default block")
 end)
 
+-- ====================================================================
+-- Outside Camera Snap Turn and Recenter Action (Issue #46)
+-- ====================================================================
+
+-- Fake VRBridge that counts discontinuity signals and recenters
+local function installCountingBridge()
+    local calls = { discontinuity = 0, recenter = 0 }
+    _G.VRBridge = {
+        isReady = function() return true end,
+        getFrameParity = function() return 0 end,
+        getRequiresAfrFallback = function() return false end,
+        getHeadPose = function() return { isValid = true, x = 0, y = 0, z = 0, pitch = 0, yaw = 0, roll = 0 } end,
+        signalDiscontinuity = function() calls.discontinuity = calls.discontinuity + 1 end,
+        recenter = function() calls.recenter = calls.recenter + 1; return { success = true } end,
+        resetTemporalHistory = function() end,
+    }
+    return calls
+end
+
+local function controlOutsideCamera(cam)
+    local veh = { getActiveCamera = function() return cam end }
+    _G.g_currentMission = { controlledVehicle = veh }
+    return veh
+end
+
+-- A rotatable orbit camera the player has already orbited with the mouse
+local function orbitedOutsideCamera()
+    return {
+        isInside = false,
+        isRotatable = true,
+        cameraNode = 1101,
+        rotateNode = 1102,
+        origRotX = 0.3, origRotY = 0.0,
+        rotX = 0.5, rotY = 2.8,
+        zoom = 12.0,
+    }
+end
+
+test("OutsideCameraSnapTurnStepsOrbitYawBySnapAngle", function()
+    VRCompanion:resetSnapTurnDebounce()
+    installCountingBridge()
+    local orbitCam = orbitedOutsideCamera()
+    controlOutsideCamera(orbitCam)
+
+    -- Snap right by 90 deg: 2.8 - pi/2
+    local ok, newRot = VRCompanion:snapTurnRight(nil, 1000)
+
+    VRCompanion:resetSnapTurnDebounce()
+    assert(ok == true and math.abs(newRot - (2.8 - math.pi * 0.5)) < 0.0001 and newRot == orbitCam.rotY,
+        string.format("Orbit yaw must step right by pi/2 and be reported, got ok = %s, rotY = %f, reported %s",
+            tostring(ok), orbitCam.rotY, tostring(newRot)))
+end)
+
+test("OutsideCameraSnapTurnSignalsOneDiscontinuity", function()
+    VRCompanion:resetSnapTurnDebounce()
+    local calls = installCountingBridge()
+    controlOutsideCamera(orbitedOutsideCamera())
+
+    VRCompanion:snapTurnRight(nil, 1000)
+
+    VRCompanion:resetSnapTurnDebounce()
+    assert(calls.discontinuity == 1, string.format("Expected one discontinuity, got %d", calls.discontinuity))
+end)
+
+test("OutsideCameraSnapTurnLeavesOrbitPitchAndZoomAlone", function()
+    VRCompanion:resetSnapTurnDebounce()
+    installCountingBridge()
+    local orbitCam = orbitedOutsideCamera()
+    controlOutsideCamera(orbitCam)
+
+    VRCompanion:snapTurnRight(nil, 1000)
+
+    VRCompanion:resetSnapTurnDebounce()
+    assert(orbitCam.rotX == 0.5 and orbitCam.zoom == 12.0, "Orbit pitch and zoom must not change")
+end)
+
+test("OutsideCameraSnapTurnKeepsOrbitYawWithinPlusMinusPi", function()
+    VRCompanion:resetSnapTurnDebounce()
+    installCountingBridge()
+    local orbitCam = orbitedOutsideCamera()
+    controlOutsideCamera(orbitCam)
+
+    -- Snap left from 2.8: 2.8 + pi/2 wraps to 2.8 + pi/2 - 2pi
+    VRCompanion:snapTurnLeft(nil, 1000)
+
+    VRCompanion:resetSnapTurnDebounce()
+    assert(math.abs(orbitCam.rotY - (2.8 + math.pi * 0.5 - 2 * math.pi)) < 0.0001,
+        string.format("Orbit yaw must be normalized into [-pi, pi], got %f", orbitCam.rotY))
+end)
+
+test("OutsideCameraSnapTurnHonorsDebounce", function()
+    VRCompanion:resetSnapTurnDebounce()
+    local calls = installCountingBridge()
+
+    local orbitCam = { isInside = false, isRotatable = true, cameraNode = 1201, origRotX = 0, origRotY = 0, rotX = 0, rotY = 0 }
+    controlOutsideCamera(orbitCam)
+
+    assert(VRCompanion:snapTurnRight(nil, 1000) == true, "First snap turn must succeed")
+    local ok, reason = VRCompanion:snapTurnRight(nil, 1100)
+    assert(ok == false and reason == "debounced", "Snap turn within the cooldown must be debounced")
+    assert(math.abs(orbitCam.rotY - (-math.pi * 0.5)) < 0.0001, "Debounced snap turn must not move the orbit")
+    assert(calls.discontinuity == 1, "Debounced snap turn must not signal a discontinuity")
+
+    VRCompanion:resetSnapTurnDebounce()
+end)
+
+test("FixedOutsideCameraSnapTurnIsNotHandled", function()
+    VRCompanion:resetSnapTurnDebounce()
+    local calls = installCountingBridge()
+
+    -- A hitch camera: fixed (not rotatable), aimed down at the drawbar
+    local hitchCam = { isInside = false, isRotatable = false, cameraNode = 1301, origRotX = -0.9, origRotY = math.pi, rotX = -0.9, rotY = math.pi }
+    controlOutsideCamera(hitchCam)
+
+    local ok, reason = VRCompanion:snapTurnRight(nil, 1000)
+    assert(ok == false, "Snap turn must not be handled in a fixed Outside Camera")
+    assert(reason ~= nil, "Snap turn must report why it wasn't handled")
+    assert(hitchCam.rotY == math.pi and hitchCam.rotX == -0.9, "Fixed Outside Camera must be left unchanged")
+    assert(calls.discontinuity == 0, "Unhandled snap turn must not signal a discontinuity")
+
+    VRCompanion:resetSnapTurnDebounce()
+end)
+
+test("FixedOutsideCameraSnapTurnStartsNoDebounceCooldown", function()
+    VRCompanion:resetSnapTurnDebounce()
+    installCountingBridge()
+
+    local hitchCam = { isInside = false, isRotatable = false, cameraNode = 1301, origRotX = -0.9, origRotY = math.pi, rotX = -0.9, rotY = math.pi }
+    controlOutsideCamera(hitchCam)
+    VRCompanion:snapTurnRight(nil, 1000)
+
+    -- Not handled means no cooldown starts: a snap turn right after the next camera switch still works
+    local orbitCam = { isInside = false, isRotatable = true, cameraNode = 1302, origRotX = 0, origRotY = 0, rotX = 0, rotY = 0 }
+    controlOutsideCamera(orbitCam)
+    local ok = VRCompanion:snapTurnRight(nil, 1050)
+
+    VRCompanion:resetSnapTurnDebounce()
+    assert(ok == true, "An unhandled snap turn must not start the debounce cooldown")
+end)
+
+test("RecenterInOutsideCameraSwingsOrbitBackToDefaultRecordedOnActivation", function()
+    VRCompanion:resetSnapTurnDebounce()
+    VRCompanion.recenterVrTrackingSpace = true
+    local calls = installCountingBridge()
+
+    -- Engine state when the orbit camera becomes active: this is "forward" for the camera
+    local orbitCam = { isInside = false, isRotatable = true, cameraNode = 1401, rotateNode = 1402, rotX = 0.35, rotY = 0.2, zoom = 15.0 }
+    local veh = controlOutsideCamera(orbitCam)
+    VRCompanion:onVehicleCameraChanged(veh, 2)
+
+    -- Player orbits with the mouse, zooms in, and snap turns
+    orbitCam.rotX = 0.9
+    orbitCam.rotY = -1.1
+    orbitCam.zoom = 8.0
+    VRCompanion:snapTurnLeft(nil, 1000)
+    local flushesBefore = calls.discontinuity
+
+    VRCompanion:onRecenterAction()
+
+    assert(calls.discontinuity == flushesBefore + 1, "Recenter must signal one discontinuity")
+    assert(calls.recenter == 1, "Recenter must recenter the OpenXR reference space")
+    assert(math.abs(orbitCam.rotY - 0.2) < 0.0001, string.format("Orbit yaw must reset to 0.2, got %f", orbitCam.rotY))
+    assert(math.abs(orbitCam.rotX - 0.35) < 0.0001, string.format("Orbit pitch must reset to 0.35, got %f", orbitCam.rotX))
+    assert(orbitCam.zoom == 8.0, "Recenter must leave zoom alone")
+
+    VRCompanion:resetSnapTurnDebounce()
+end)
+
+test("RecenterInOutsideCameraInVehicleOnlyModeSkipsTrackingRecenterButStillResetsOrbit", function()
+    VRCompanion:resetSnapTurnDebounce()
+    VRCompanion.recenterVrTrackingSpace = false
+    local calls = installCountingBridge()
+
+    local orbitCam = { isInside = false, isRotatable = true, cameraNode = 1501, rotX = 0.4, rotY = 1.0, zoom = 10.0 }
+    local veh = controlOutsideCamera(orbitCam)
+    VRCompanion:onVehicleCameraChanged(veh, 2)
+    orbitCam.rotX = -0.2
+    orbitCam.rotY = 2.5
+    local flushesBefore = calls.discontinuity
+
+    VRCompanion:onRecenterAction()
+
+    assert(calls.discontinuity == flushesBefore + 1, "Recenter must signal one discontinuity")
+    assert(calls.recenter == 0, "VehicleOnly mode must not recenter the OpenXR reference space")
+    assert(math.abs(orbitCam.rotY - 1.0) < 0.0001 and math.abs(orbitCam.rotX - 0.4) < 0.0001,
+        "Orbit yaw and pitch must reset to the default in VehicleOnly mode too")
+    assert(orbitCam.zoom == 10.0, "Recenter must leave zoom alone")
+
+    VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
+end)
+
+test("RecenterLeavesAFixedOutsideCameraAimedAsTheGameAimedIt", function()
+    VRCompanion:resetSnapTurnDebounce()
+    VRCompanion.recenterVrTrackingSpace = true
+    installCountingBridge()
+
+    -- A hitch camera has no orbit: its rotX/rotY are the game's aim, whatever its orig fields say
+    local hitchCam = { isInside = false, isRotatable = false, cameraNode = 1601, origRotX = 0, origRotY = 0, rotX = -0.9, rotY = math.pi }
+    local veh = controlOutsideCamera(hitchCam)
+    VRCompanion:onVehicleCameraChanged(veh, 3)
+
+    VRCompanion:onRecenterAction()
+
+    assert(hitchCam.rotX == -0.9 and hitchCam.rotY == math.pi,
+        string.format("Recenter must not touch a fixed Outside Camera's aim, got rotX = %f, rotY = %f", hitchCam.rotX, hitchCam.rotY))
+
+    VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed in test_snap_turn.luau", failed))
 

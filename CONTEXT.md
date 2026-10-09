@@ -37,8 +37,12 @@ The inert operational state where the Injector forwards all DXGI calls to the sy
 _Avoid_: Bypass mode, fallback state
 
 **Recenter Action**:
-The bindable in-engine input action that zeroes the player's 6DOF offset and resets the OpenXR reference space origin relative to the vehicle cockpit or player camera.
+The bindable in-engine input action that zeroes the player's 6DOF offset and resets the OpenXR reference space origin relative to the active vehicle camera (in-cab or Outside Camera) or player camera.
 _Avoid_: Reset view, camera zeroing
+
+**Outside Camera**:
+Any camera of the controlled vehicle other than its in-cab camera, whether the rotatable orbit camera around the vehicle or a fixed mount such as a hitch or header camera. It receives the same 6DOF head tracking and stereoscopic presentation as the in-cab camera.
+_Avoid_: Third-person view, exterior view, chase cam, outside view
 
 **VR HUD Inset**:
 The normalized viewport margin applied to engine HUD anchors (`g_hudAnchor*`) that contracts 2D interface elements inward from screen edges into the optical sweet spot of the VR headset.
@@ -57,7 +61,7 @@ The decluttered VR presentation mode that preserves essential driving and machin
 _Avoid_: Mini HUD, compact UI, lite HUD
 
 **Snap Turn**:
-An instantaneous rotational increment applied to the player's body or in-cab gaze angle to reorient view direction without vestibular motion sickness.
+An instantaneous rotational increment applied to the player's body, the in-cab gaze angle, or an Outside Camera's orbit around the vehicle to reorient view direction without vestibular motion sickness.
 _Avoid_: Quick turn, instant rotation, snap rotate, flick turn
 
 **VR View Toggle Action**:
@@ -97,7 +101,7 @@ An opaque proxy struct allocated by the Injector that encapsulates paired underl
 _Avoid_: Dummy handle, shadow DLSS handle, fake handle
 
 **Dual Eye Camera Nodes**:
-The pair of in-engine scene graph camera nodes alternated on successive frames to preserve per-camera transform history and generate native eye-stride motion vectors.
+The left- and right-eye rendering cameras of the Companion Mod, registered with the game's camera manager so the engine renders through them. Both eyes share one camera node, moved to each eye's position on alternate frames, because the temporal upscalers drop their history whenever the rendering camera changes.
 _Avoid_: Split cameras, twin cameras, alternating cameras
 
 **Discontinuity Flush**:

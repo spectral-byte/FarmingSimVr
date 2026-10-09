@@ -650,10 +650,14 @@ function VRCompanion:runSubPassStep(subPass, fn, ...)
 end
 
 function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam)
+    -- The eye sync's camera update records whether the game is showing the camera it tracks
+    self.trackedCameraShown = nil
     self:runSubPassStep(subPass, self.syncActiveEyeCamera, eyeIndex)
     self.deferRenderingCameraBind = false
-    self:bindRenderingCamera(targetCam)
-    self:runSubPassStep(subPass, self.reportEyeCamera, eyeIndex, targetCam)
+    if self.trackedCameraShown ~= false then
+        self:bindRenderingCamera(targetCam)
+        self:runSubPassStep(subPass, self.reportEyeCamera, eyeIndex, targetCam)
+    end
     self:endEyeProjectionScope()
 end
 
@@ -837,6 +841,10 @@ end
 function VRCompanion:deleteMap()
     print("[FS25_VR] Unloading Companion Mod from map.")
 
+    -- Hand rendering back to the game's active camera before the Dual Eye Camera Nodes go away
+    self.deferRenderingCameraBind = false
+    self:restoreGameActiveCamera()
+
     if self.stereoToggled and type(setStereoRendering) == "function" then
         setStereoRendering(false)
         print("[FS25_VR] Restored engine stereo rendering toggle: setStereoRendering(false)")
@@ -896,8 +904,6 @@ function VRCompanion:deleteMap()
     self.vehicleCameraHooked = false
     self.playerCameraHooked = false
     self.activePlayerCamera = nil
-    self.cameraNodeLeft = nil
-    self.cameraNodeRight = nil
     self.activeRenderingCamera = nil
     self.subPassIndex = 0
     self.accumulatedPass1Dt = 0.0
@@ -909,21 +915,27 @@ function VRCompanion:deleteMap()
     self.guiVisibilityInitialized = false
 
     local deleteFn = delete or (_G and _G.delete)
-    if type(deleteFn) == "function" then
-        if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
-            pcall(deleteFn, self.cameraNodeLeft)
-        end
-        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
-            pcall(deleteFn, self.cameraNodeRight)
-        end
-        if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
-            pcall(deleteFn, self.cyclopeanAudioListenerNode)
-        end
+    local entityExistsFn = entityExists or (_G and _G.entityExists)
+    -- Nodes linked under a vehicle are already gone: the game deletes its vehicles first, and
+    -- deleting an unknown entity logs a script error even inside pcall
+    local function deleteIfExists(node)
+        if node == nil or node == 0 then return end
+        if type(entityExistsFn) == "function" and not entityExistsFn(node) then return end
+        pcall(deleteFn, node)
     end
+    if type(deleteFn) == "function" then
+        deleteIfExists(self.cameraNodeLeft)
+        -- Both eyes share one camera node unless something set them apart
+        if self.cameraNodeRight ~= self.cameraNodeLeft then
+            deleteIfExists(self.cameraNodeRight)
+        end
+        deleteIfExists(self.cyclopeanAudioListenerNode)
+        deleteIfExists(self.outsideCameraBaseNode)
+    end
+    self.outsideCameraBaseNode = nil
     self.cameraNodeLeft = nil
     self.cameraNodeRight = nil
     self.cyclopeanAudioListenerNode = nil
-    self.activeRenderingCameraNode = nil
     if type(self.restoreMenuBackgroundCamera) == "function" then
         self:restoreMenuBackgroundCamera()
     end

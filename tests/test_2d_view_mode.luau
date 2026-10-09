@@ -194,6 +194,77 @@ test("OnFootPlayerCameraBypasses6DOFTrackingAndSupports2DMouseLook", function()
     VRCompanion:set2DViewActive(false)
 end)
 
+-- The camera the engine renders through, as getCamera() reports it. As in the game, the camera
+-- manager renders through registered cameras (the game's own, and any added with addCamera) and
+-- ignores others; the global setCamera is the game's deprecation wrapper and binds nothing.
+local function installRenderedCamera(initial)
+    local rendered = initial
+    local registered = { [initial] = true }
+    _G.setCamera = function(node) end
+    _G.getCamera = function() return rendered end
+    _G.g_cameraManager = {
+        addCamera = function(self, node) registered[node] = true end,
+        setActiveCamera = function(self, node) if registered[node] then rendered = node end end,
+        getActiveCamera = function(self) return rendered end,
+    }
+    local nextEye = 7000
+    _G.createCamera = function() nextEye = nextEye + 1; return nextEye end
+end
+
+local function removeRenderedCamera()
+    _G.setCamera = nil
+    _G.getCamera = nil
+    _G.g_cameraManager = nil
+    VRCompanion.registeredEyeCameras = nil
+    VRCompanion.gameCameraNode = nil
+    _G.createCamera = nil
+    VRCompanion.cameraNodeLeft = nil
+    VRCompanion.cameraNodeRight = nil
+    VRCompanion.activeRenderingCamera = nil
+end
+
+test("In2DFloatingWindowModeTheCabRendersThroughTheGamesOwnCamera", function()
+    installRenderedCamera(10)
+    function setTranslation() end
+    function setRotation() end
+    local cab = { isInside = true, cameraNode = 10, origRotY = 3.14159, rotY = 3.14159, rotX = 0.0, rotZ = 0.0,
+        origTransX = 0.5, origTransY = 2.0, origTransZ = 1.0 }
+
+    local ok, err = pcall(function()
+        VRCompanion:set2DViewActive(false)
+        VRCompanion:onVehicleCameraUpdate(cab, 16.6)
+        assert(getCamera() ~= 10, "precondition: in VR the cab renders through an eye camera")
+
+        VRCompanion:set2DViewActive(true)
+        VRCompanion:onVehicleCameraUpdate(cab, 16.6)
+        assert(getCamera() == 10, "2D Floating Window Mode must render through the game's cab camera, got " .. tostring(getCamera()))
+    end)
+    VRCompanion:set2DViewActive(false)
+    removeRenderedCamera()
+    assert(ok, tostring(err))
+end)
+
+test("In2DFloatingWindowModeOnFootRendersThroughTheGamesOwnCamera", function()
+    installRenderedCamera(20)
+    function setTranslation() end
+    function setRotation() end
+    local playerCam = { cameraNode = 20, firstPersonCamera = 20 }
+
+    local ok, err = pcall(function()
+        VRCompanion:set2DViewActive(false)
+        VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
+        assert(getCamera() ~= 20, "precondition: in VR on foot renders through an eye camera")
+
+        VRCompanion:set2DViewActive(true)
+        VRCompanion:onPlayerCameraUpdate(playerCam, 16.6)
+        assert(getCamera() == 20, "2D Floating Window Mode must render through the game's player camera, got " .. tostring(getCamera()))
+    end)
+    VRCompanion:set2DViewActive(false)
+    VRCompanion.activePlayerCamera = nil
+    removeRenderedCamera()
+    assert(ok, tostring(err))
+end)
+
 -- Slice 4: Camera Projection FOV Restoration and Zero Offsets
 test("CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMode", function()
     local camNode = 50

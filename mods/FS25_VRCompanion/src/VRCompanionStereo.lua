@@ -35,7 +35,6 @@ end
 VRCompanion.cameraNodeLeft = VRCompanion.cameraNodeLeft or nil
 VRCompanion.cameraNodeRight = VRCompanion.cameraNodeRight or nil
 VRCompanion.cyclopeanAudioListenerNode = VRCompanion.cyclopeanAudioListenerNode or nil
-VRCompanion.activeRenderingCameraNode = VRCompanion.activeRenderingCameraNode or nil
 VRCompanion.origCamSettings = VRCompanion.origCamSettings or {}
 VRCompanion.menuCameraOffsets = VRCompanion.menuCameraOffsets or {}
 
@@ -163,60 +162,67 @@ function VRCompanion:getStereoCameraNodes(activeCam)
         cam = self.activePlayerCamera
     end
 
-    local camLeft = self.cameraNodeLeft
-    local camRight = self.cameraNodeRight
-
+    -- Every game camera shares the Dual Eye Camera Nodes, seeded from the first one they replace
+    local baseNode = nil
     if cam ~= nil then
-        if cam.cameraNodeLeft ~= nil then
-            camLeft = cam.cameraNodeLeft
-        end
-        if cam.cameraNodeRight ~= nil then
-            camRight = cam.cameraNodeRight
-        end
-
-        -- If not yet created for this camera, initialize them
-        if camLeft == nil or camRight == nil then
-            local baseNode = (cam.firstPersonCamera ~= nil) and cam.firstPersonCamera or cam.cameraNode
-            if camLeft == nil then
-                if type(createCamera) == "function" then
-                    local fovY = (type(getFovY) == "function" and baseNode and getFovY(baseNode)) or 1.0472
-                    camLeft = createCamera("vrStereoCamLeft", fovY, 0.15, 2000.0)
-                else
-                    camLeft = (baseNode and (baseNode .. "_left")) or (baseNode or 2001)
-                end
-            end
-            if camRight == nil then
-                if type(createCamera) == "function" then
-                    local fovY = (type(getFovY) == "function" and baseNode and getFovY(baseNode)) or 1.0472
-                    camRight = createCamera("vrStereoCamRight", fovY, 0.15, 2000.0)
-                else
-                    camRight = (baseNode and (baseNode .. "_right")) or ((baseNode or 2001) + 1)
-                end
-            end
-            cam.cameraNodeLeft = camLeft
-            cam.cameraNodeRight = camRight
-        end
+        baseNode = (cam.firstPersonCamera ~= nil) and cam.firstPersonCamera or cam.cameraNode
     end
-
+    local camLeft, camRight = self:ensureDualEyeCameraNodes(baseNode)
     if camLeft == nil then
-        if type(createCamera) == "function" then
-            camLeft = createCamera("vrDefaultCamLeft", 1.0472, 0.15, 2000.0)
-        else
-            camLeft = 2001
-        end
+        camLeft, camRight = 2001, 2001
+        self.cameraNodeLeft, self.cameraNodeRight = camLeft, camRight
     end
-    if camRight == nil then
-        if type(createCamera) == "function" then
-            camRight = createCamera("vrDefaultCamRight", 1.0472, 0.15, 2000.0)
-        else
-            camRight = 2002
-        end
-    end
-
-    self.cameraNodeLeft = camLeft
-    self.cameraNodeRight = camRight
-
     return camLeft, camRight
+end
+
+-- Whether node is a Dual Eye Camera Node: the current one, or one registered earlier and since
+-- deleted with the vehicle it was linked under (the camera manager may still name it active)
+function VRCompanion:isDualEyeCameraNode(node)
+    if node == nil or node == 0 then return false end
+    return node == self.cameraNodeLeft or node == self.cameraNodeRight
+        or (self.registeredEyeCameras ~= nil and self.registeredEyeCameras[node] == true)
+end
+
+-- The camera manager's active camera, or nil when it can't say
+function VRCompanion:getManagerActiveCamera(camMgr)
+    if camMgr == nil or type(camMgr.getActiveCamera) ~= "function" then return nil end
+    local ok, node = pcall(camMgr.getActiveCamera, camMgr)
+    if ok and node ~= nil and node ~= 0 then return node end
+    return nil
+end
+
+function VRCompanion:registerDualEyeCameraNode(camMgr, node)
+    if self.registeredEyeCameras == nil then self.registeredEyeCameras = {} end
+    if self.registeredEyeCameras[node] or type(camMgr.addCamera) ~= "function" then return end
+    if pcall(camMgr.addCamera, camMgr, node, nil, false) then
+        self.registeredEyeCameras[node] = true
+    end
+end
+
+-- Takes the Dual Eye Camera Nodes off the camera manager. A node deleted with its vehicle is only
+-- forgotten: removing an unknown entity from the camera manager could make it activate a default
+-- camera the mod would then mistake for the game's own.
+function VRCompanion:unregisterDualEyeCameraNodes()
+    if self.registeredEyeCameras == nil then return end
+    local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
+    local entityExistsFn = entityExists or (_G and _G.entityExists)
+    for registered in pairs(self.registeredEyeCameras) do
+        local exists = type(entityExistsFn) ~= "function" or entityExistsFn(registered)
+        if exists and camMgr ~= nil and type(camMgr.removeCamera) == "function" then
+            pcall(camMgr.removeCamera, camMgr, registered)
+        end
+    end
+    self.registeredEyeCameras = nil
+end
+
+-- The game's own camera: the camera manager's active camera, or the one a Dual Eye Camera Node
+-- took the place of. Nil when the camera manager can't say.
+function VRCompanion:getGameCamera()
+    local active = self:getManagerActiveCamera(g_cameraManager or (_G and _G.g_cameraManager))
+    if self:isDualEyeCameraNode(active) then
+        return self.gameCameraNode
+    end
+    return active
 end
 
 function VRCompanion:bindRenderingCamera(targetCam)
@@ -224,15 +230,24 @@ function VRCompanion:bindRenderingCamera(targetCam)
     -- During a Sequential Dual-Pass sub-pass the mission update owns the single bind
     -- of the eye's camera; camera updates inside the sub-pass only position nodes.
     if self.deferRenderingCameraBind then return end
-    local bound = false
+    -- The game's camera manager renders only through cameras registered with it and silently
+    -- ignores any other, so a Dual Eye Camera Node is registered before it is bound. The global
+    -- setCamera is the game's deprecation wrapper (it warns and doesn't bind such a camera) and is
+    -- only the fallback when there is no camera manager.
     local camMgr = g_cameraManager or (_G and _G.g_cameraManager)
     if camMgr ~= nil and type(camMgr.setActiveCamera) == "function" then
-        local ok = pcall(camMgr.setActiveCamera, camMgr, targetCam)
-        if ok then
-            bound = true
+        local active = self:getManagerActiveCamera(camMgr)
+        if self:isDualEyeCameraNode(targetCam) then
+            -- Remember the game's camera the VR camera takes the place of
+            if active ~= nil and not self:isDualEyeCameraNode(active) then
+                self.gameCameraNode = active
+            end
+            self:registerDualEyeCameraNode(camMgr, targetCam)
         end
-    end
-    if not bound then
+        if active ~= targetCam then
+            pcall(camMgr.setActiveCamera, camMgr, targetCam)
+        end
+    else
         local setCameraFn = setCamera or (_G and _G.setCamera)
         if type(setCameraFn) == "function" then
             pcall(setCameraFn, targetCam)
@@ -245,11 +260,29 @@ function VRCompanion:bindRenderingCamera(targetCam)
     end
 end
 
+-- Whether the game's own camera (getGameCamera) is the camera with node camNode (or altNode).
+-- False while a game screen with a camera of its own (the shop, construction mode) is shown; the
+-- mod then leaves rendering to the game. Without a camera manager to ask, the camera being updated
+-- is assumed shown.
+function VRCompanion:isGameShowingCamera(camNode, altNode)
+    local active = self:getGameCamera()
+    if active == nil then return true end
+    local shown = (active == camNode) or (altNode ~= nil and active == altNode)
+    if shown ~= self.lastGameShowingTrackedCamera then
+        self.lastGameShowingTrackedCamera = shown
+        if not shown then
+            print(string.format("[FS25_VR] The game is showing camera %s; leaving rendering to the game.", tostring(active)))
+        end
+    end
+    return shown
+end
+
 function VRCompanion:syncActiveEyeCamera(subPass)
     local curVeh = self:getControlledVehicle()
     if curVeh ~= nil then
+        -- The in-cab camera and every Outside Camera go through the vehicle camera path
         local cam = self:getVehicleActiveCamera(curVeh)
-        if cam ~= nil and cam.isInside then
+        if cam ~= nil then
             self:onVehicleCameraUpdate(cam, 0.0)
             return
         end
@@ -287,26 +320,40 @@ function VRCompanion:initDualEyeCameraNodes(referenceCamNode)
         end
     end
 
+    -- Both eyes render through one camera node, moved to each eye in turn: temporal upscalers
+    -- (DLSS, FSR) drop their history whenever the rendering camera changes
     if self.cameraNodeLeft == nil or self.cameraNodeLeft == 0 then
-        if type(createCameraFn) == "function" then
-            self.cameraNodeLeft = createCameraFn("cameraNodeLeft", fovY, nearClip, farClip)
+        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
+            self.cameraNodeLeft = self.cameraNodeRight
+        elseif type(createCameraFn) == "function" then
+            self.cameraNodeLeft = createCameraFn("vrEyeCamera", fovY, nearClip, farClip)
         elseif type(createTransformGroupFn) == "function" then
-            self.cameraNodeLeft = createTransformGroupFn("cameraNodeLeft")
+            self.cameraNodeLeft = createTransformGroupFn("vrEyeCamera")
         end
     end
-
     if self.cameraNodeRight == nil or self.cameraNodeRight == 0 then
-        if type(createCameraFn) == "function" then
-            self.cameraNodeRight = createCameraFn("cameraNodeRight", fovY, nearClip, farClip)
-        elseif type(createTransformGroupFn) == "function" then
-            self.cameraNodeRight = createTransformGroupFn("cameraNodeRight")
-        end
+        self.cameraNodeRight = self.cameraNodeLeft
     end
 
     return self.cameraNodeLeft, self.cameraNodeRight
 end
 
 function VRCompanion:ensureDualEyeCameraNodes(referenceCamNode)
+    -- The camera node linked under a vehicle is deleted with it (sold, reset): recreate it. The
+    -- deleted id stays in registeredEyeCameras so it is still recognised if the camera manager
+    -- names it active.
+    local entityExistsFn = entityExists or (_G and _G.entityExists)
+    if type(entityExistsFn) == "function" and self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0
+        and not entityExistsFn(self.cameraNodeLeft) then
+        if self.cameraNodeRight == self.cameraNodeLeft then
+            self.cameraNodeRight = nil
+        end
+        self.cameraNodeLeft = nil
+    end
+    if type(entityExistsFn) == "function" and self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0
+        and not entityExistsFn(self.cameraNodeRight) then
+        self.cameraNodeRight = nil
+    end
     if self.cameraNodeLeft == nil or self.cameraNodeRight == nil or self.cameraNodeLeft == 0 or self.cameraNodeRight == 0 then
         self:initDualEyeCameraNodes(referenceCamNode)
     end
@@ -449,7 +496,8 @@ function VRCompanion:restoreCameraProjectionsFor2D()
     local veh = self:getControlledVehicle()
     if veh ~= nil then
         local cam = self:getVehicleActiveCamera(veh)
-        if cam ~= nil and cam.cameraNode ~= nil then
+        -- An Outside Camera's own node never gets a VR projection, so there is nothing to restore
+        if cam ~= nil and cam.isInside and cam.cameraNode ~= nil then
             self:applyCameraProjection(cam.cameraNode, 0)
         end
     end
@@ -826,9 +874,279 @@ function VRCompanion:getActiveEyeIndex(afrFallback)
     return 0
 end
 
+-- Copies one lens setting (field of view, near or far clip) from referenceCamNode to eyeNode when
+-- it differs
+local function copyLensSetting(getFn, setFn, eyeNode, referenceCamNode)
+    if type(getFn) ~= "function" or type(setFn) ~= "function" then return end
+    local ok, value = pcall(getFn, referenceCamNode)
+    if not ok or value == nil then return end
+    local okEye, current = pcall(getFn, eyeNode)
+    if okEye and current ~= value then
+        pcall(setFn, eyeNode, value)
+    end
+end
+
+-- Gives an eye camera the lens of the engine camera it renders in place of: its near and far
+-- clip planes, and its field of view for when no VR projection replaces it. The Dual Eye Camera
+-- Nodes are shared by every camera path, and each engine camera has its own lens.
+function VRCompanion:matchEngineCameraLens(eyeNode, referenceCamNode)
+    if referenceCamNode == nil or referenceCamNode == 0 or eyeNode == referenceCamNode then return end
+    copyLensSetting(getFovY or (_G and _G.getFovY), setFovY or (_G and _G.setFovY), eyeNode, referenceCamNode)
+    copyLensSetting(getNearClip or (_G and _G.getNearClip), setNearClip or (_G and _G.setNearClip), eyeNode, referenceCamNode)
+    copyLensSetting(getFarClip or (_G and _G.getFarClip), setFarClip or (_G and _G.setFarClip), eyeNode, referenceCamNode)
+end
+
+-- Final step of a head-tracked camera frame, shared by every camera path: links the Dual Eye
+-- Camera Nodes and the Cyclopean Audio Listener Node under parentNode, places the listener at the
+-- centre of the head and the active eye at the eye position, gives that eye the lens of
+-- referenceCamNode, applies its Oblique Frustum projection and binds it for rendering, for
+-- whichever Stereo Presentation Mode is active. All transforms are in parentNode's space and
+-- share one rotation. referenceCamNode is the engine camera the eye renders in place of: it seeds
+-- node creation, lends its lens and is the mono fallback target when no left eye node exists. stereoRequested (the
+-- bridge's requiresAfrFallback: the mod renders the eyes itself) asks for the eyeIndex eye; it is
+-- still overridden to mono, left eye, while a GUI menu or 2D Floating Window Mode is shown.
+-- Allocates nothing.
+function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
+        headX, headY, headZ, eyeX, eyeY, eyeZ, rotX, rotY, rotZ, eyeIndex, eyeProj, stereoRequested)
+    local getParentFn = getParent or (_G and _G.getParent)
+    local linkFn = link or (_G and _G.link)
+    local setTranslationFn = setTranslation or (_G and _G.setTranslation)
+    local setRotationFn = setRotation or (_G and _G.setRotation)
+
+    self:ensureDualEyeCameraNodes(referenceCamNode)
+    self:ensureCyclopeanAudioListener(referenceCamNode)
+
+    if parentNode ~= nil and parentNode ~= 0 and type(linkFn) == "function" and type(getParentFn) == "function" then
+        if self.cameraNodeLeft ~= nil and getParentFn(self.cameraNodeLeft) ~= parentNode then
+            pcall(linkFn, parentNode, self.cameraNodeLeft)
+        end
+        if self.cameraNodeRight ~= nil and getParentFn(self.cameraNodeRight) ~= parentNode then
+            pcall(linkFn, parentNode, self.cameraNodeRight)
+        end
+        if self.cyclopeanAudioListenerNode ~= nil and getParentFn(self.cyclopeanAudioListenerNode) ~= parentNode then
+            pcall(linkFn, parentNode, self.cyclopeanAudioListenerNode)
+        end
+    end
+
+    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
+        if type(setTranslationFn) == "function" then
+            setTranslationFn(self.cyclopeanAudioListenerNode, headX, headY, headZ)
+        end
+        if type(setRotationFn) == "function" then
+            setRotationFn(self.cyclopeanAudioListenerNode, rotX, rotY, rotZ)
+        end
+        local setAudioListenerFn = setAudioListener or (_G and _G.setAudioListener)
+        if type(setAudioListenerFn) == "function" then
+            setAudioListenerFn(self.cyclopeanAudioListenerNode)
+        end
+    end
+
+    local isStereoActive = stereoRequested and not self.isMenuVisible and not self.is2DViewActive
+
+    if isStereoActive then
+        local isRightEye = (eyeIndex == 1)
+        local activeEyeCam = isRightEye and self.cameraNodeRight or self.cameraNodeLeft
+
+        if activeEyeCam ~= nil and activeEyeCam ~= 0 then
+            self:matchEngineCameraLens(activeEyeCam, referenceCamNode)
+            self:applyCameraProjection(activeEyeCam, eyeIndex, eyeProj)
+            if type(setTranslationFn) == "function" then
+                setTranslationFn(activeEyeCam, eyeX, eyeY, eyeZ)
+            end
+            if type(setRotationFn) == "function" then
+                setRotationFn(activeEyeCam, rotX, rotY, rotZ)
+            end
+            self:bindRenderingCamera(activeEyeCam)
+            self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
+        end
+    else
+        local targetNode = self.cameraNodeLeft or referenceCamNode
+        if targetNode ~= nil and targetNode ~= 0 then
+            -- This branch always shows the left eye; reuse eyeProj only when it was fetched for eye 0.
+            local leftProj = nil
+            if eyeIndex == 0 then leftProj = eyeProj end
+            self:matchEngineCameraLens(targetNode, referenceCamNode)
+            self:applyCameraProjection(targetNode, 0, leftProj)
+            if type(setTranslationFn) == "function" then
+                setTranslationFn(targetNode, eyeX, eyeY, eyeZ)
+            end
+            if type(setRotationFn) == "function" then
+                setRotationFn(targetNode, rotX, rotY, rotZ)
+            end
+            self:bindRenderingCamera(targetNode)
+        end
+    end
+end
+
+-- Below this horizontal length of the engine camera's unit look direction (about 6 degrees from
+-- vertical) the camera's up direction is blended into the Outside Camera's base heading.
+VRCompanion.OUTSIDE_CAMERA_VERTICAL_BLEND = 0.1
+
+-- World heading of an Outside Camera's level base: the engine camera's world look direction
+-- projected onto the horizontal plane. Near vertical that projection shrinks to nothing and flips
+-- as the camera crosses straight down, so the camera's up direction is blended in there: for a
+-- camera looking down it points the way the camera would look if levelled (for one looking up,
+-- the opposite way). The blend fades out continuously, so the heading stays continuous through
+-- straight down and straight up. A camera pitched past vertical (turned over) is the exception:
+-- its look heading and its levelled heading point opposite ways, so the blended vector passes
+-- through zero about 5 degrees past vertical and the heading flips by 180 degrees there. Any rule
+-- that follows the look heading away from vertical has to turn that half circle somewhere.
+-- Returns nil when no heading can be derived.
+function VRCompanion:getOutsideCameraBaseHeading(camNode, localDirectionToWorldFn)
+    local lx, ly, lz = localDirectionToWorldFn(camNode, 0, 0, -1)
+    if lx == nil or ly == nil or lz == nil then return nil end
+    local fx, fz = lx, lz
+    local horizontal = math.sqrt(lx * lx + lz * lz)
+    local blendBelow = self.OUTSIDE_CAMERA_VERTICAL_BLEND
+    if horizontal < blendBelow then
+        local ux, _, uz = localDirectionToWorldFn(camNode, 0, 1, 0)
+        if ux ~= nil and uz ~= nil then
+            local weight = 1 - horizontal / blendBelow
+            if ly > 0 then weight = -weight end
+            fx = fx + weight * ux
+            fz = fz + weight * uz
+        end
+    end
+    if fx * fx + fz * fz < 1e-12 then return nil end
+    return math.atan2(-fx, -fz)
+end
+
+-- Leaves the view to the engine: renders through the engine's own camera again when an eye camera
+-- was bound in its place (activeRenderingCamera is the camera bindRenderingCamera last bound).
+-- Binding changes no transform of the engine's nodes.
+function VRCompanion:renderThroughEngineCamera(camNode)
+    if self.activeRenderingCamera ~= nil and self.activeRenderingCamera ~= camNode then
+        self:bindRenderingCamera(camNode)
+    end
+end
+
+-- Head tracking lost: shows exactly what the engine camera sees (its world position and rotation)
+-- rather than eyes frozen where tracking dropped. Placing the eyes there, instead of binding the
+-- engine camera, also holds when a Sequential Dual-Pass sub-pass binds its eye camera at the end.
+function VRCompanion:showEngineCameraView(camNode, eyeIndex, eyeProj, stereoRequested)
+    local getRootNodeFn = getRootNode or (_G and _G.getRootNode)
+    local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
+    local getWorldRotationFn = getWorldRotation or (_G and _G.getWorldRotation)
+    if type(getRootNodeFn) ~= "function" or type(getWorldTranslationFn) ~= "function"
+        or type(getWorldRotationFn) ~= "function" then
+        self:renderThroughEngineCamera(camNode)
+        return
+    end
+    local rootNode = getRootNodeFn()
+    if rootNode == nil or rootNode == 0 then
+        self:renderThroughEngineCamera(camNode)
+        return
+    end
+    local x, y, z = getWorldTranslationFn(camNode)
+    local rotX, rotY, rotZ = getWorldRotationFn(camNode)
+    self:placeAndBindEyes(camNode, rootNode, x, y, z, x, y, z, rotX, rotY, rotZ, eyeIndex, eyeProj, stereoRequested)
+end
+
+-- Renders through the game's own camera again and takes the Dual Eye Camera Nodes off the camera
+-- manager, so the engine isn't left on one of them, e.g. when the mod unloads.
+function VRCompanion:restoreGameActiveCamera()
+    local gameCamera = self:getGameCamera()
+    if gameCamera ~= nil then
+        self:renderThroughEngineCamera(gameCamera)
+    end
+    self:unregisterDualEyeCameraNodes()
+    self.gameCameraNode = nil
+end
+
+-- Outside Camera: any camera of the controlled vehicle other than its in-cab camera. Runs after
+-- the engine's own camera update, so orbit, zoom and collision pull-in are already applied. The
+-- engine's camera nodes are only read: the view renders through the Dual Eye Camera Nodes placed
+-- in world space on a level base (the engine camera's position and horizontal heading, zero pitch
+-- and roll), with the head pose composited on top.
+function VRCompanion:onOutsideCameraUpdate(cam)
+    local camNode = cam.cameraNode
+    -- 2D Floating Window Mode and GUI menus show the engine's camera as-is
+    if self.is2DViewActive or self.isMenuVisible then
+        self:renderThroughEngineCamera(camNode)
+        return
+    end
+
+    local getRootNodeFn = getRootNode or (_G and _G.getRootNode)
+    local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
+    local localDirectionToWorldFn = localDirectionToWorld or (_G and _G.localDirectionToWorld)
+    if type(getRootNodeFn) ~= "function" or type(getWorldTranslationFn) ~= "function"
+        or type(localDirectionToWorldFn) ~= "function" then
+        self:renderThroughEngineCamera(camNode)
+        return
+    end
+    local rootNode = getRootNodeFn()
+    -- The shared step renders through, and writes, its reference node when no eye node exists
+    self:ensureDualEyeCameraNodes(camNode)
+    if rootNode == nil or rootNode == 0 or self.cameraNodeLeft == nil or self.cameraNodeLeft == 0 then
+        self:renderThroughEngineCamera(camNode)
+        return
+    end
+
+    local afrFallback = self:requiresAfrFallback()
+    local eyeIndex = self:getActiveEyeIndex(afrFallback)
+    local eyeProj = self:fetchEyeProjection(eyeIndex)
+
+    local baseX, baseY, baseZ = getWorldTranslationFn(camNode)
+
+    local pose = self:getResolvedHeadPose()
+    if not pose or not pose.isValid then
+        self:showEngineCameraView(camNode, eyeIndex, eyeProj, afrFallback)
+        return
+    end
+    -- No derivable heading (a degenerate engine transform) keeps the last one rather than snapping
+    local heading = self:getOutsideCameraBaseHeading(camNode, localDirectionToWorldFn)
+        or self.outsideCameraHeading or 0
+    self.outsideCameraHeading = heading
+
+    local tx, ty, tz = pose.x or 0, pose.y or 0, pose.z or 0
+    local offX, offY, offZ = self:computeEyeOffset(pose, eyeIndex, afrFallback)
+
+    -- The head pose goes on a level base node turned only by the heading, so the engine composes
+    -- the head rotation in its own Euler convention, as the cab does on its head tracking node
+    local baseNode = self:placeOutsideCameraBase(rootNode, baseX, baseY, baseZ, heading)
+    if baseNode == nil then
+        self:showEngineCameraView(camNode, eyeIndex, eyeProj, afrFallback)
+        return
+    end
+    self:placeAndBindEyes(camNode, baseNode, tx, ty, tz, tx + offX, ty + offY, tz + offZ,
+        pose.pitch or 0, pose.yaw or 0, pose.roll or 0, eyeIndex, eyeProj, afrFallback)
+end
+
+-- Places the Outside Camera's level base, a transform group under the world root owned by the
+-- mod, at (x, y, z) turned only by heading. Nil when the engine can't create or place it.
+function VRCompanion:placeOutsideCameraBase(rootNode, x, y, z, heading)
+    local setTranslationFn = setTranslation or (_G and _G.setTranslation)
+    local setRotationFn = setRotation or (_G and _G.setRotation)
+    if type(setTranslationFn) ~= "function" or type(setRotationFn) ~= "function" then return nil end
+    local entityExistsFn = entityExists or (_G and _G.entityExists)
+    if self.outsideCameraBaseNode ~= nil and type(entityExistsFn) == "function"
+        and not entityExistsFn(self.outsideCameraBaseNode) then
+        self.outsideCameraBaseNode = nil
+    end
+    if self.outsideCameraBaseNode == nil then
+        local createTransformGroupFn = createTransformGroup or (_G and _G.createTransformGroup)
+        local linkFn = link or (_G and _G.link)
+        if type(createTransformGroupFn) ~= "function" or type(linkFn) ~= "function" then return nil end
+        local node = createTransformGroupFn("vrOutsideCameraBase")
+        if node == nil or node == 0 then return nil end
+        linkFn(rootNode, node)
+        self.outsideCameraBaseNode = node
+    end
+    setTranslationFn(self.outsideCameraBaseNode, x, y, z)
+    setRotationFn(self.outsideCameraBaseNode, 0, heading, 0)
+    return self.outsideCameraBaseNode
+end
+
 function VRCompanion:onVehicleCameraUpdate(cam, dt)
-    -- Only apply 6DOF tracking and projection to interior in-cab cameras
-    if not cam or not cam.isInside or cam.cameraNode == nil then
+    if not cam or cam.cameraNode == nil then
+        return
+    end
+    self.trackedCameraShown = self:isGameShowingCamera(cam.cameraNode)
+    if not self.trackedCameraShown then
+        return
+    end
+    if not cam.isInside then
+        self:onOutsideCameraUpdate(cam)
         return
     end
 
@@ -856,14 +1174,16 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         end
     end
 
-    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely.
-    -- VehicleCamera.update handles standard 2D mouse and thumbstick camera rotation.
+    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely and show the
+    -- game's own camera. VehicleCamera.update handles standard 2D mouse and thumbstick rotation.
     if self.is2DViewActive then
+        self:renderThroughEngineCamera(cam.cameraNode)
         return
     end
 
     local pose = self:getResolvedHeadPose()
     if not pose or not pose.isValid then
+        self:showEngineCameraView(cam.cameraNode, eyeIndex, eyeProj, afrFallback)
         return
     end
 
@@ -1004,69 +1324,9 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         cabRotZ = roll
     end
 
-    self:ensureDualEyeCameraNodes(cam.cameraNode)
-    self:ensureCyclopeanAudioListener(cam.cameraNode)
-
-    if camParent ~= nil and camParent ~= 0 and type(linkFn) == "function" and type(getParentFn) == "function" then
-        if self.cameraNodeLeft ~= nil and getParentFn(self.cameraNodeLeft) ~= camParent then
-            pcall(linkFn, camParent, self.cameraNodeLeft)
-        end
-        if self.cameraNodeRight ~= nil and getParentFn(self.cameraNodeRight) ~= camParent then
-            pcall(linkFn, camParent, self.cameraNodeRight)
-        end
-        if self.cyclopeanAudioListenerNode ~= nil and getParentFn(self.cyclopeanAudioListenerNode) ~= camParent then
-            pcall(linkFn, camParent, self.cyclopeanAudioListenerNode)
-        end
-    end
-
-    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
-        if type(setTranslationFn) == "function" then
-            setTranslationFn(self.cyclopeanAudioListenerNode, midCabTransX, midCabTransY, midCabTransZ)
-        end
-        if type(setRotationFn) == "function" then
-            setRotationFn(self.cyclopeanAudioListenerNode, cabRotX, cabRotY, cabRotZ)
-        end
-        local setAudioListenerFn = setAudioListener or (_G and _G.setAudioListener)
-        if type(setAudioListenerFn) == "function" then
-            setAudioListenerFn(self.cyclopeanAudioListenerNode)
-        end
-    end
-
-    local isStereoActive = afrFallback and not self.isMenuVisible and not self.is2DViewActive
-
-    if isStereoActive then
-        local isRightEye = (eyeIndex == 1)
-        local activeEyeCam = isRightEye and self.cameraNodeRight or self.cameraNodeLeft
-
-        if activeEyeCam ~= nil and activeEyeCam ~= 0 then
-            self:applyCameraProjection(activeEyeCam, eyeIndex, eyeProj)
-            if type(setTranslationFn) == "function" then
-                setTranslationFn(activeEyeCam, cabTransX, cabTransY, cabTransZ)
-            end
-            if type(setRotationFn) == "function" then
-                setRotationFn(activeEyeCam, cabRotX, cabRotY, cabRotZ)
-            end
-            self:bindRenderingCamera(activeEyeCam)
-            self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
-            self.activeRenderingCameraNode = activeEyeCam
-        end
-    else
-        local targetNode = self.cameraNodeLeft or cam.cameraNode
-        if targetNode ~= nil and targetNode ~= 0 then
-            -- This branch always shows the left eye; reuse eyeProj only when it was fetched for eye 0.
-            local leftProj = nil
-            if eyeIndex == 0 then leftProj = eyeProj end
-            self:applyCameraProjection(targetNode, 0, leftProj)
-            if type(setTranslationFn) == "function" then
-                setTranslationFn(targetNode, cabTransX, cabTransY, cabTransZ)
-            end
-            if type(setRotationFn) == "function" then
-                setRotationFn(targetNode, cabRotX, cabRotY, cabRotZ)
-            end
-            self:bindRenderingCamera(targetNode)
-            self.activeRenderingCameraNode = targetNode
-        end
-    end
+    self:placeAndBindEyes(cam.cameraNode, camParent,
+        midCabTransX, midCabTransY, midCabTransZ, cabTransX, cabTransY, cabTransZ,
+        cabRotX, cabRotY, cabRotZ, eyeIndex, eyeProj, afrFallback)
 
     if type(setTranslationFn) == "function" then
         setTranslationFn(cam.cameraNode, cabTransX, cabTransY, cabTransZ)
@@ -1100,6 +1360,10 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     if not activeCamNode then
         return
     end
+    self.trackedCameraShown = self:isGameShowingCamera(activeCamNode, cam.cameraNode)
+    if not self.trackedCameraShown then
+        return
+    end
 
     local afrFallback = self:requiresAfrFallback()
     local eyeIndex = self:getActiveEyeIndex(afrFallback)
@@ -1107,14 +1371,16 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     local eyeProj = self:fetchEyeProjection(eyeIndex)
     self:applyCameraProjection(activeCamNode, eyeIndex, eyeProj)
 
-    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely.
-    -- Standard on-foot camera rotation is driven via mouse/thumbstick.
+    -- In 2D Floating Window Mode: bypass 6DOF head tracking updates completely and show the
+    -- game's own camera. Standard on-foot camera rotation is driven via mouse/thumbstick.
     if self.is2DViewActive then
+        self:renderThroughEngineCamera(activeCamNode)
         return
     end
 
     local pose = self:getResolvedHeadPose()
     if not pose or not pose.isValid then
+        self:showEngineCameraView(activeCamNode, eyeIndex, eyeProj, afrFallback)
         return
     end
 
@@ -1184,69 +1450,9 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
         finalRotZ = roll
     end
 
-    self:ensureDualEyeCameraNodes(activeCamNode)
-    self:ensureCyclopeanAudioListener(activeCamNode)
-
-    if camParent ~= nil and camParent ~= 0 and type(link) == "function" and type(getParent) == "function" then
-        if self.cameraNodeLeft ~= nil and getParent(self.cameraNodeLeft) ~= camParent then
-            pcall(link, camParent, self.cameraNodeLeft)
-        end
-        if self.cameraNodeRight ~= nil and getParent(self.cameraNodeRight) ~= camParent then
-            pcall(link, camParent, self.cameraNodeRight)
-        end
-        if self.cyclopeanAudioListenerNode ~= nil and getParent(self.cyclopeanAudioListenerNode) ~= camParent then
-            pcall(link, camParent, self.cyclopeanAudioListenerNode)
-        end
-    end
-
-    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
-        if type(setTranslation) == "function" then
-            setTranslation(self.cyclopeanAudioListenerNode, finalMidTx, finalMidTy, finalMidTz)
-        end
-        if type(setRotation) == "function" then
-            setRotation(self.cyclopeanAudioListenerNode, finalRotX, finalRotY, finalRotZ)
-        end
-        local setAudioListenerFn = setAudioListener or (_G and _G.setAudioListener)
-        if type(setAudioListenerFn) == "function" then
-            setAudioListenerFn(self.cyclopeanAudioListenerNode)
-        end
-    end
-
-    local isStereoActive = afrFallback and not self.isMenuVisible and not self.is2DViewActive
-
-    if isStereoActive then
-        local isRightEye = (eyeIndex == 1)
-        local activeEyeCam = isRightEye and self.cameraNodeRight or self.cameraNodeLeft
-
-        if activeEyeCam ~= nil and activeEyeCam ~= 0 then
-            self:applyCameraProjection(activeEyeCam, eyeIndex, eyeProj)
-            if type(setTranslation) == "function" then
-                setTranslation(activeEyeCam, finalTx, finalTy, finalTz)
-            end
-            if type(setRotation) == "function" then
-                setRotation(activeEyeCam, finalRotX, finalRotY, finalRotZ)
-            end
-            self:bindRenderingCamera(activeEyeCam)
-            self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
-            self.activeRenderingCameraNode = activeEyeCam
-        end
-    else
-        local targetNode = self.cameraNodeLeft or activeCamNode
-        if targetNode ~= nil and targetNode ~= 0 then
-            -- This branch always shows the left eye; reuse eyeProj only when it was fetched for eye 0.
-            local leftProj = nil
-            if eyeIndex == 0 then leftProj = eyeProj end
-            self:applyCameraProjection(targetNode, 0, leftProj)
-            if type(setTranslation) == "function" then
-                setTranslation(targetNode, finalTx, finalTy, finalTz)
-            end
-            if type(setRotation) == "function" then
-                setRotation(targetNode, finalRotX, finalRotY, finalRotZ)
-            end
-            self:bindRenderingCamera(targetNode)
-            self.activeRenderingCameraNode = targetNode
-        end
-    end
+    self:placeAndBindEyes(activeCamNode, camParent,
+        finalMidTx, finalMidTy, finalMidTz, finalTx, finalTy, finalTz,
+        finalRotX, finalRotY, finalRotZ, eyeIndex, eyeProj, afrFallback)
 
     if type(setTranslation) == "function" then
         setTranslation(activeCamNode, finalTx, finalTy, finalTz)
@@ -1343,6 +1549,15 @@ function VRCompanion:updateMenuBackgroundCamera(dt)
         return
     end
 
+    -- An Outside Camera behind a menu is left to the engine: its nodes are never written
+    local curVeh = self:getControlledVehicle()
+    if curVeh ~= nil then
+        local vehCam = self:getVehicleActiveCamera(curVeh)
+        if vehCam ~= nil and not vehCam.isInside then
+            return
+        end
+    end
+
     local camNode = nil
     if type(getCamera) == "function" then
         local ok, node = pcall(getCamera)
@@ -1352,6 +1567,10 @@ function VRCompanion:updateMenuBackgroundCamera(dt)
     end
 
     if camNode == nil or camNode == 0 then
+        return
+    end
+    -- A Dual Eye Camera Node is already head tracked by its camera path
+    if camNode == self.cameraNodeLeft or camNode == self.cameraNodeRight then
         return
     end
 
@@ -1462,7 +1681,13 @@ VRCompanion.Stereo.getDualPassEye = function(self, ...) return VRCompanion.getDu
 VRCompanion.Stereo.setSubPassIndex = function(self, ...) return VRCompanion.setSubPassIndex(VRCompanion, ...) end
 VRCompanion.Stereo.advanceSubPass = function(self, ...) return VRCompanion.advanceSubPass(VRCompanion, ...) end
 VRCompanion.Stereo.getStereoCameraNodes = function(self, ...) return VRCompanion.getStereoCameraNodes(VRCompanion, ...) end
+VRCompanion.Stereo.isDualEyeCameraNode = function(self, ...) return VRCompanion.isDualEyeCameraNode(VRCompanion, ...) end
+VRCompanion.Stereo.getManagerActiveCamera = function(self, ...) return VRCompanion.getManagerActiveCamera(VRCompanion, ...) end
+VRCompanion.Stereo.registerDualEyeCameraNode = function(self, ...) return VRCompanion.registerDualEyeCameraNode(VRCompanion, ...) end
+VRCompanion.Stereo.unregisterDualEyeCameraNodes = function(self, ...) return VRCompanion.unregisterDualEyeCameraNodes(VRCompanion, ...) end
+VRCompanion.Stereo.getGameCamera = function(self, ...) return VRCompanion.getGameCamera(VRCompanion, ...) end
 VRCompanion.Stereo.bindRenderingCamera = function(self, ...) return VRCompanion.bindRenderingCamera(VRCompanion, ...) end
+VRCompanion.Stereo.isGameShowingCamera = function(self, ...) return VRCompanion.isGameShowingCamera(VRCompanion, ...) end
 VRCompanion.Stereo.syncActiveEyeCamera = function(self, ...) return VRCompanion.syncActiveEyeCamera(VRCompanion, ...) end
 VRCompanion.Stereo.initDualEyeCameraNodes = function(self, ...) return VRCompanion.initDualEyeCameraNodes(VRCompanion, ...) end
 VRCompanion.Stereo.ensureDualEyeCameraNodes = function(self, ...) return VRCompanion.ensureDualEyeCameraNodes(VRCompanion, ...) end
@@ -1487,6 +1712,14 @@ VRCompanion.Stereo.requiresAfrFallback = function(self, ...) return VRCompanion.
 VRCompanion.Stereo.computeEyeOffset = function(self, ...) return VRCompanion.computeEyeOffset(VRCompanion, ...) end
 VRCompanion.Stereo.getResolvedHeadPose = function(self, ...) return VRCompanion.getResolvedHeadPose(VRCompanion, ...) end
 VRCompanion.Stereo.getActiveEyeIndex = function(self, ...) return VRCompanion.getActiveEyeIndex(VRCompanion, ...) end
+VRCompanion.Stereo.matchEngineCameraLens = function(self, ...) return VRCompanion.matchEngineCameraLens(VRCompanion, ...) end
+VRCompanion.Stereo.placeAndBindEyes = function(self, ...) return VRCompanion.placeAndBindEyes(VRCompanion, ...) end
+VRCompanion.Stereo.getOutsideCameraBaseHeading = function(self, ...) return VRCompanion.getOutsideCameraBaseHeading(VRCompanion, ...) end
+VRCompanion.Stereo.renderThroughEngineCamera = function(self, ...) return VRCompanion.renderThroughEngineCamera(VRCompanion, ...) end
+VRCompanion.Stereo.showEngineCameraView = function(self, ...) return VRCompanion.showEngineCameraView(VRCompanion, ...) end
+VRCompanion.Stereo.restoreGameActiveCamera = function(self, ...) return VRCompanion.restoreGameActiveCamera(VRCompanion, ...) end
+VRCompanion.Stereo.onOutsideCameraUpdate = function(self, ...) return VRCompanion.onOutsideCameraUpdate(VRCompanion, ...) end
+VRCompanion.Stereo.placeOutsideCameraBase = function(self, ...) return VRCompanion.placeOutsideCameraBase(VRCompanion, ...) end
 VRCompanion.Stereo.onVehicleCameraUpdate = function(self, ...) return VRCompanion.onVehicleCameraUpdate(VRCompanion, ...) end
 VRCompanion.Stereo.onPlayerCameraMakeCurrent = function(self, ...) return VRCompanion.onPlayerCameraMakeCurrent(VRCompanion, ...) end
 VRCompanion.Stereo.onPlayerCameraUpdate = function(self, ...) return VRCompanion.onPlayerCameraUpdate(VRCompanion, ...) end
