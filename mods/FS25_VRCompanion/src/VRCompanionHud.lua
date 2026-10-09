@@ -352,8 +352,6 @@ function VRCompanion:positionFillLevelsUnderSpeedometer(display, offset)
     local uiScale = self:getHudGroupScale("speedometer")
     local flPosX, fillBottom = self:getHudDisplayPosition(display, "FillLevelsDisplay", currentOffset)
 
-    self:dbgRecordPlacement("FillLevelsDisplay", flPosX, fillBottom) -- [DEBUG-hudgrp]
-    self:dbgFillLevels(display, flPosX, fillBottom) -- [DEBUG-hudgrp]
     display.anchorX = flPosX
     display.anchorY = fillBottom
     display.anchorLeft = self.hudAnchorLeft
@@ -525,7 +523,6 @@ function VRCompanion:repositionHudForConvergence()
     local function place(display, displayName)
         if display == nil or type(display.setPosition) ~= "function" then return end
         local x, y = self:getHudDisplayPosition(display, displayName, offset)
-        self:dbgRecordPlacement(displayName, x, y) -- [DEBUG-hudgrp]
         pcall(display.setPosition, display, x, y)
     end
 
@@ -773,7 +770,6 @@ function VRCompanion:positionHudDisplay(display, displayName)
     -- The current convergence offset shifts every display, as it does in repositionHudForConvergence
     local anchorX, anchorY = self:getHudDisplayPosition(display, displayName, self.currentConvergenceOffset)
 
-    self:dbgRecordPlacement(displayName, anchorX, anchorY) -- [DEBUG-hudgrp]
     display.anchorX = anchorX
     display.anchorY = anchorY
     display.anchorLeft = self.hudAnchorLeft
@@ -992,374 +988,6 @@ function VRCompanion:callWithMapLayoutShifted(layout, fn, ...)
     return table.unpack(results, 2, results.n)
 end
 
--- [DEBUG-hudgrp] Temporary HUD diagnostics for the map (#56) and the fill levels flicker. Off unless
--- the player runs "vrHudDiag on"; every line is tagged so the whole block can be removed with one grep.
-local DBG_TAG = "[FS25_VR] [DEBUG-hudgrp] "
-local DBG_DISPLAY_NAMES = { "IngameMap", "FillLevelsDisplay", "SpeedMeterDisplay", "InputHelpDisplay", "GameInfoDisplay", "ContextActionDisplay" }
-
-local function dbgFmt(v)
-    if type(v) == "number" then return string.format("%.4f", v) end
-    return tostring(v)
-end
-
-local function dbgScalars(t)
-    local keys = {}
-    for k, v in pairs(t) do
-        local tv = type(v)
-        if tv == "number" or tv == "boolean" or (tv == "string" and #v < 40) then keys[#keys + 1] = tostring(k) end
-    end
-    table.sort(keys)
-    local parts = {}
-    for i = 1, math.min(#keys, 60) do
-        parts[#parts + 1] = keys[i] .. "=" .. dbgFmt(t[keys[i]])
-    end
-    return table.concat(parts, " ")
-end
-
--- Names of the functions a display can call, own and inherited through the metatable chain
-local function dbgMethods(t)
-    local names, seen = {}, {}
-    local cur, level = t, 0
-    while type(cur) == "table" and level < 5 do
-        for k, v in pairs(cur) do
-            if type(v) == "function" and not seen[k] then
-                seen[k] = true
-                names[#names + 1] = tostring(k)
-            end
-        end
-        local ok, mt = pcall(getmetatable, cur)
-        if not ok or type(mt) ~= "table" or type(mt.__index) ~= "table" then break end
-        cur = mt.__index
-        level = level + 1
-    end
-    table.sort(names)
-    return string.sub(table.concat(names, " "), 1, 2500)
-end
-
--- Names and kinds of the table-valued fields, to find where a display keeps its position
-local function dbgTables(t)
-    local names = {}
-    for k, v in pairs(t) do
-        if type(v) == "table" then names[#names + 1] = tostring(k) end
-    end
-    table.sort(names)
-    return table.concat(names, " ")
-end
-
-local function dbgCall(display, method)
-    if type(display[method]) ~= "function" then return "n/a" end
-    local ok, a, b = pcall(display[method], display)
-    if not ok then return "error" end
-    if b ~= nil then return dbgFmt(a) .. "," .. dbgFmt(b) end
-    return dbgFmt(a)
-end
-
-function VRCompanion:dbgFindDisplay(displayName, hud)
-    if displayName == "FillLevelsDisplay" then return self:getFillLevelsDisplay(hud) end
-    if displayName == "IngameMap" then return hud.ingameMap or hud.ingameMapDisplay end
-    if displayName == "SpeedMeterDisplay" then return hud.speedMeter or hud.speedMeterDisplay end
-    if displayName == "InputHelpDisplay" then return hud.inputHelp or hud.inputHelpDisplay end
-    if displayName == "GameInfoDisplay" then return hud.gameInfo or hud.gameInfoDisplay end
-    return hud.contextAction or hud.contextActionDisplay
-end
-
--- Logs the map's frame and content positions around a draw, a few times only
-function VRCompanion:dbgMapSnapshot(map, when)
-    self.dbgMapSnaps = (self.dbgMapSnaps or 0) + 1
-    if self.dbgMapSnaps > 12 then return end
-    local o, m, l = map.overlay or {}, map.mapOverlay or {}, map.layout or {}
-    print(DBG_TAG .. string.format("probe counters: renderOverlay calls=%s Overlay:render calls=%s tagged map/layout method calls=%s", tostring(self.dbgRenderTotal), tostring(self.dbgOverlayRenders), tostring(self.dbgWrapCalls)))
-    print(DBG_TAG .. string.format("map %s: frame=(%s,%s) content=(%s,%s;%sx%s) layout.screenMapPos=(%s,%s) layout.mapPos=(%s,%s) base=%s globals=(%s,%s)",
-        when, dbgFmt(o.x), dbgFmt(o.y), dbgFmt(m.x), dbgFmt(m.y), dbgFmt(m.width), dbgFmt(m.height), dbgFmt(l.screenMapPosX), dbgFmt(l.screenMapPosY),
-        dbgFmt(l.mapPosX), dbgFmt(l.mapPosY), tostring(self.dbgMapBase), dbgFmt(_G.g_safeFrameOffsetX), dbgFmt(_G.g_safeFrameOffsetY)))
-end
-
--- Logs each overlay the map draw shifts: where the engine had it, where it goes, and its clip rectangle and UVs
-function VRCompanion:dbgShiftedRender(overlay, dx, dy, cx1, cy1, cx2, cy2)
-    self.dbgShiftLogs = (self.dbgShiftLogs or 0) + 1
-    if self.dbgShiftLogs > 24 then return end
-    local uvs = ""
-    if type(overlay.uvs) == "table" then
-        local parts = {}
-        for i = 1, math.min(#overlay.uvs, 8) do parts[#parts + 1] = dbgFmt(overlay.uvs[i]) end
-        uvs = table.concat(parts, ",")
-    end
-    print(DBG_TAG .. string.format("shifted render id=%s from=(%s,%s) to=(%s,%s) size=%sx%s clip=(%s,%s,%s,%s) uvs=%s rot=%s", tostring(overlay.overlayId),
-        dbgFmt(overlay.x), dbgFmt(overlay.y), dbgFmt(overlay.x + dx), dbgFmt(overlay.y + dy), dbgFmt(overlay.width), dbgFmt(overlay.height),
-        dbgFmt(cx1), dbgFmt(cy1), dbgFmt(cx2), dbgFmt(cy2), uvs, dbgFmt(overlay.rotation)))
-end
-
-function VRCompanion:dbgRecordPlacement(displayName, x, y)
-    if not self.hudDiagnostics then return end
-    self.dbgPlaced = self.dbgPlaced or {}
-    self.dbgPlaced[displayName] = { x = x, y = y }
-end
-
--- Called at the top of every hooked draw, before the mod touches the display
-function VRCompanion:dbgDrawEntry(displayName, display)
-    if not self.hudDiagnostics then return end
-    self.dbgDraws = self.dbgDraws or {}
-    self.dbgOverwrites = self.dbgOverwrites or {}
-    local n = (self.dbgDraws[displayName] or 0) + 1
-    self.dbgDraws[displayName] = n
-    if n == 1 or n % 600 == 0 then
-        local mission = g_currentMission or _G.g_currentMission
-        local hud = (mission ~= nil) and mission.hud or nil
-        local found = hud and self:dbgFindDisplay(displayName, hud) or nil
-        print(DBG_TAG .. string.format("draw #%d %s: x=%s y=%s isVisible=%s modVisible=%s hudState=%s sameAsHudField=%s", n, displayName,
-            dbgFmt(display.x), dbgFmt(display.y), tostring(display.isVisible), tostring(self:isDisplayVisible(displayName)), tostring(self:getHudState()),
-            tostring(found == display)))
-    end
-    local placed = self.dbgPlaced and self.dbgPlaced[displayName]
-    if placed ~= nil and type(display.x) == "number" and type(display.y) == "number"
-        and (math.abs(display.x - placed.x) > 0.0005 or math.abs(display.y - placed.y) > 0.0005) then
-        local count = (self.dbgOverwrites[displayName] or 0) + 1
-        self.dbgOverwrites[displayName] = count
-        if count <= 20 then
-            print(DBG_TAG .. string.format("ENGINE MOVED %s since the mod placed it: placed=(%s,%s) at draw=(%s,%s) (draw #%d)", displayName,
-                dbgFmt(placed.x), dbgFmt(placed.y), dbgFmt(display.x), dbgFmt(display.y), n))
-        end
-    end
-end
-
--- Called at the end of every fill levels placement: logs whenever what the display reports changes
-function VRCompanion:dbgFillLevels(display, placedX, placedY)
-    if not self.hudDiagnostics then return end
-    local w, h = self:getFillLevelsBlockSize(display)
-    local smY = nil
-    local mission = g_currentMission or _G.g_currentMission
-    local hud = (mission ~= nil) and mission.hud or nil
-    local sm = hud and (hud.speedMeter or hud.speedMeterDisplay)
-    if sm ~= nil then
-        local _, y = self:getHudDisplayPosition(sm, "SpeedMeterDisplay", 0)
-        smY = y
-    end
-    local levels = (type(display.fillLevelData) == "table") and #display.fillLevelData or -1
-    local sig = string.format("levels=%d placed=(%s,%s) block=(%s,%s) engineSize=(%s;%s) speedometerY=%s isVisible=%s getIsVisible=%s modVisible=%s",
-        levels, dbgFmt(placedX), dbgFmt(placedY), dbgFmt(w), dbgFmt(h), dbgCall(display, "getWidth"), dbgCall(display, "getHeight"),
-        dbgFmt(smY), tostring(display.isVisible), dbgCall(display, "getIsVisible"), tostring(self:isDisplayVisible("FillLevelsDisplay")))
-    if sig ~= self.dbgFillSig then
-        self.dbgFillSig = sig
-        self.dbgFillLogs = (self.dbgFillLogs or 0) + 1
-        if self.dbgFillLogs <= 60 then
-            print(DBG_TAG .. "fill levels changed: " .. sig)
-        end
-    end
-end
-
--- Function names on a class table and what its metatable looks like
-local function dbgClass(label, cls)
-    if type(cls) ~= "table" then
-        print(DBG_TAG .. "  class " .. label .. ": not a table (" .. type(cls) .. ")")
-        return
-    end
-    local names = {}
-    for k, v in pairs(cls) do
-        if type(v) == "function" then names[#names + 1] = tostring(k) end
-    end
-    table.sort(names)
-    local ok, mt = pcall(getmetatable, cls)
-    local mtInfo = (not ok) and "getmetatable error" or (mt == nil and "no metatable" or ("metatable __index=" .. type(mt.__index) .. " __metatable=" .. tostring(mt.__metatable)))
-    print(DBG_TAG .. "  class " .. label .. " (" .. mtInfo .. "): " .. string.sub(table.concat(names, " "), 1, 3000))
-end
-
-function VRCompanion:dbgDumpMapClasses(map)
-    dbgClass("IngameMap", _G.IngameMap)
-    local ok, mt = pcall(getmetatable, map)
-    if ok and type(mt) == "table" and type(mt.__index) == "table" then
-        dbgClass("IngameMap instance __index", mt.__index)
-        local ok2, mt2 = pcall(getmetatable, mt.__index)
-        if ok2 and type(mt2) == "table" and type(mt2.__index) == "table" then dbgClass("IngameMap superclass", mt2.__index) end
-    end
-    for _, name in ipairs({ "IngameMapLayout", "IngameMapLayoutNone", "IngameMapLayoutCircle", "IngameMapLayoutSquare", "IngameMapLayoutSquareLarge", "IngameMapLayoutFullscreen" }) do
-        dbgClass(name, _G[name])
-    end
-    if type(map.layout) == "table" then
-        local ok3, lmt = pcall(getmetatable, map.layout)
-        if ok3 and type(lmt) == "table" and type(lmt.__index) == "table" then dbgClass("current layout instance __index", lmt.__index) end
-    end
-end
-
-function VRCompanion:dbgDump()
-    local mission = g_currentMission or _G.g_currentMission
-    local hud = (mission ~= nil) and mission.hud or nil
-    if hud == nil then
-        print(DBG_TAG .. "no mission HUD")
-        return
-    end
-    local map = hud.ingameMap or hud.ingameMapDisplay
-    if map ~= nil then self:dbgDumpMapClasses(map) end
-    print(DBG_TAG .. string.format("hudState=%s is2D=%s anchors L=%s R=%s B=%s T=%s convergenceOffset=%s", tostring(self:getHudState()),
-        tostring(self.is2DViewActive), dbgFmt(self.hudAnchorLeft), dbgFmt(self.hudAnchorRight), dbgFmt(self.hudAnchorBottom),
-        dbgFmt(self.hudAnchorTop), dbgFmt(self.currentConvergenceOffset)))
-    for _, name in ipairs(DBG_DISPLAY_NAMES) do
-        local display = self:dbgFindDisplay(name, hud)
-        local _, groupName = findHudGroup(name)
-        if display == nil then
-            print(DBG_TAG .. name .. ": display not found on the HUD")
-        else
-            local px, py = nil, nil
-            if groupName ~= nil or name == CONTEXT_ACTION_DISPLAY then
-                px, py = self:getHudDisplayPosition(display, name, self.currentConvergenceOffset)
-            end
-            print(DBG_TAG .. string.format("%s: group=%s wantedPos=(%s,%s) pos=(%s) size=(%s;%s) visible: isVisible=%s getIsVisible=%s modVisible=%s",
-                name, tostring(groupName), dbgFmt(px), dbgFmt(py), dbgCall(display, "getPosition"), dbgCall(display, "getWidth"),
-                dbgCall(display, "getHeight"), tostring(display.isVisible), dbgCall(display, "getIsVisible"), tostring(self:isDisplayVisible(name))))
-            print(DBG_TAG .. "  fields: " .. dbgScalars(display))
-            print(DBG_TAG .. "  tables: " .. dbgTables(display))
-            print(DBG_TAG .. "  methods: " .. dbgMethods(display))
-            for _, sub in ipairs({ "layout", "overlay", "bgLeft", "bgScale", "bgRight", "mapElement", "mapOverlay", "terrainOverlay", "iconZoom", "mapFrame", "frame", "mapScale" }) do
-                if type(display[sub]) == "table" then
-                    print(DBG_TAG .. "  ." .. sub .. ": " .. dbgScalars(display[sub]))
-                end
-            end
-            if name == "IngameMap" then
-                -- The map keeps its position somewhere other than x/y: show every sub-table's numbers
-                for k, v in pairs(display) do
-                    if type(v) == "table" and type(k) == "string" then
-                        print(DBG_TAG .. "  .." .. k .. ": " .. dbgScalars(v))
-                    end
-                end
-            end
-        end
-    end
-end
-
--- Logs what the current map layout answers for its position and size, with and without the map as argument
-local function dbgLayoutGetters(map)
-    local layout = map.layout
-    if type(layout) ~= "table" then return end
-    for _, method in ipairs({ "getPosition", "getMapPosition", "getMapSize", "getMapPivot", "getWidth", "getHeight" }) do
-        if type(layout[method]) == "function" then
-            local ok1, a1, b1, c1, d1 = pcall(layout[method], layout)
-            local ok2, a2, b2, c2, d2 = pcall(layout[method], layout, map)
-            print(DBG_TAG .. string.format("  layout:%s() -> %s %s %s %s | layout:%s(map) -> %s %s %s %s", method,
-                tostring(ok1), dbgFmt(a1), dbgFmt(b1), dbgFmt(c1), method, tostring(ok2), dbgFmt(a2), dbgFmt(b2), dbgFmt(c2)))
-        end
-    end
-    if type(map.getPosition) == "function" then
-        local ok, x, y = pcall(map.getPosition, map)
-        print(DBG_TAG .. string.format("  map:getPosition() -> %s %s %s", tostring(ok), dbgFmt(x), dbgFmt(y)))
-    end
-end
-
--- While diagnostics are on, logs every render of the map's overlays: the coordinates the engine really draws at
-function VRCompanion:dbgStartRenderProbe(map)
-    local ids = {}
-    if type(map.overlay) == "table" and map.overlay.overlayId then ids[map.overlay.overlayId] = "frame" end
-    if type(map.mapOverlay) == "table" and map.mapOverlay.overlayId then ids[map.mapOverlay.overlayId] = "content" end
-    if type(map.layout) == "table" and map.layout.overlayMask then ids[map.layout.overlayMask] = "mask" end
-    if self.dbgOrigRenderOverlay == nil then self.dbgOrigRenderOverlay = _G.renderOverlay end
-    local orig = self.dbgOrigRenderOverlay
-    if type(orig) ~= "function" then
-        print(DBG_TAG .. "renderOverlay is not a function; render probe not installed")
-        return
-    end
-    self.dbgRenderLogs = 0
-    self.dbgMapStack = {}
-    self.dbgSeenRenders = {}
-    self.dbgObjectPosLogs = 0
-    self.dbgRenderTotal, self.dbgWrapCalls, self.dbgOverlayRenders = 0, 0, 0
-    -- Second probe on Overlay:render, which does not depend on the renderOverlay global being the one the engine calls
-    local overlayCls = _G.Overlay
-    if type(overlayCls) == "table" and type(overlayCls.render) == "function" then
-        local origRender = overlayCls.render
-        local renderWrapper = function(overlaySelf, ...)
-            self.dbgOverlayRenders = self.dbgOverlayRenders + 1
-            local depth = #self.dbgMapStack
-            local seenKey = (self.dbgMapStack[depth] or "outside") .. "#" .. tostring(type(overlaySelf) == "table" and overlaySelf.overlayId)
-            if type(overlaySelf) == "table" and (ids[overlaySelf.overlayId] ~= nil or depth > 0) and self.hudDiagnostics
-                and self.dbgRenderLogs < 80 and not self.dbgSeenRenders[seenKey] then
-                self.dbgSeenRenders[seenKey] = true
-                self.dbgRenderLogs = self.dbgRenderLogs + 1
-                print(DBG_TAG .. string.format("Overlay:render [%s] %s id=%s x=%s y=%s offset=(%s,%s) size=%sx%s visible=%s a=%s", self.dbgMapStack[depth] or "outside map methods",
-                    tostring(ids[overlaySelf.overlayId] or "other"), tostring(overlaySelf.overlayId), dbgFmt(overlaySelf.x), dbgFmt(overlaySelf.y),
-                    dbgFmt(overlaySelf.offsetX), dbgFmt(overlaySelf.offsetY), dbgFmt(overlaySelf.width), dbgFmt(overlaySelf.height), tostring(overlaySelf.visible), dbgFmt(overlaySelf.a)))
-            end
-            return origRender(overlaySelf, ...)
-        end
-        overlayCls.render = renderWrapper
-        self.dbgWrapped = { { cls = overlayCls, key = "render", orig = origRender, wrapper = renderWrapper } }
-    end
-    _G.renderOverlay = function(id, x, y, w, h, ...)
-        self.dbgRenderTotal = self.dbgRenderTotal + 1
-        local depth = #self.dbgMapStack
-        if (ids[id] ~= nil or depth > 0) and self.hudDiagnostics and self.dbgRenderLogs < 60 then
-            self.dbgRenderLogs = self.dbgRenderLogs + 1
-            print(DBG_TAG .. string.format("renderOverlay [%s] %s id=%s x=%s y=%s w=%s h=%s safeFrame=(%s,%s)", self.dbgMapStack[depth] or "outside map methods",
-                tostring(ids[id] or "other"), tostring(id), dbgFmt(x), dbgFmt(y), dbgFmt(w), dbgFmt(h), dbgFmt(_G.g_safeFrameOffsetX), dbgFmt(_G.g_safeFrameOffsetY)))
-        end
-        return orig(id, x, y, w, h, ...)
-    end
-
-    -- Tag every map and layout method while it runs, so each render call names the method that made it
-    self.dbgWrapped = self.dbgWrapped or {}
-    local skip = { new = true, class = true, isa = true, superClass = true, copy = true }
-    local classNames = { "IngameMap", "IngameMapLayout", "IngameMapLayoutNone", "IngameMapLayoutCircle", "IngameMapLayoutSquare", "IngameMapLayoutSquareLarge", "IngameMapLayoutFullscreen" }
-    -- Hotspots (fields, vehicles) render themselves: tag their render methods too
-    for globalName, value in pairs(_G) do
-        if type(globalName) == "string" and string.find(globalName, "Hotspot$") and type(value) == "table" and type(value.render) == "function" then
-            classNames[#classNames + 1] = globalName
-        end
-    end
-    for _, className in ipairs(classNames) do
-        local cls = _G[className]
-        if type(cls) == "table" then
-            local names = {}
-            for k, v in pairs(cls) do
-                if type(v) == "function" and not skip[k] then names[#names + 1] = k end
-            end
-            for _, k in ipairs(names) do
-                local f = cls[k]
-                local label = className .. "." .. k
-                local wrapper = function(...)
-                    self.dbgWrapCalls = self.dbgWrapCalls + 1
-                    local stack = self.dbgMapStack
-                    stack[#stack + 1] = label
-                    local r = table.pack(pcall(f, ...))
-                    stack[#stack] = nil
-                    if k == "getMapObjectPosition" and self.hudDiagnostics and self.dbgObjectPosLogs < 8 and r[1] then
-                        self.dbgObjectPosLogs = self.dbgObjectPosLogs + 1
-                        print(DBG_TAG .. string.format("%s(...) -> x=%s y=%s rot=%s visible=%s", label, dbgFmt(r[2]), dbgFmt(r[3]), dbgFmt(r[4]), tostring(r[5])))
-                    end
-                    if not r[1] then error(r[2], 0) end
-                    return table.unpack(r, 2, r.n)
-                end
-                cls[k] = wrapper
-                self.dbgWrapped[#self.dbgWrapped + 1] = { cls = cls, key = k, orig = f, wrapper = wrapper }
-            end
-        end
-    end
-end
-
-function VRCompanion:dbgStopRenderProbe()
-    -- Only undo a wrapper that is still the one installed, so a later unhookHud is not overwritten
-    for _, w in ipairs(self.dbgWrapped or {}) do
-        if w.cls[w.key] == w.wrapper then w.cls[w.key] = w.orig end
-    end
-    self.dbgWrapped = nil
-    if self.dbgOrigRenderOverlay ~= nil then
-        _G.renderOverlay = self.dbgOrigRenderOverlay
-        self.dbgOrigRenderOverlay = nil
-    end
-end
-
-function VRCompanion:setHudDiagnostics(enabled)
-    self.hudDiagnostics = enabled == true
-    self.dbgDraws, self.dbgOverwrites, self.dbgFillSig, self.dbgFillLogs, self.dbgMapSnaps, self.dbgShiftLogs = {}, {}, nil, 0, 0, 0
-    print(DBG_TAG .. "HUD diagnostics " .. (self.hudDiagnostics and "on" or "off"))
-    self:dbgStopRenderProbe()
-    if self.hudDiagnostics then
-        self:dbgDump()
-        local mission = g_currentMission or _G.g_currentMission
-        local map = mission and mission.hud and (mission.hud.ingameMap or mission.hud.ingameMapDisplay)
-        if map ~= nil then
-            dbgLayoutGetters(map)
-            self:dbgStartRenderProbe(map)
-        end
-    end
-end
-
 function VRCompanion:hookHud()
     if self.hudHooked then
         self:unhookHud()
@@ -1386,7 +1014,6 @@ function VRCompanion:hookHud()
             if cls.draw ~= nil and type(cls.draw) == "function" then
                 local origDraw = cls.draw
                 hookMethod(cls, "draw", function(displaySelf, ...)
-                    self:dbgDrawEntry(displayName, displaySelf) -- [DEBUG-hudgrp]
                     if displayName == "FillLevelsDisplay" then
                         self.activeFillLevelsDisplay = displaySelf
                         if self:getHudState() ~= self.HUD_STATE_HIDDEN and not self.is2DViewActive then
@@ -1410,14 +1037,7 @@ function VRCompanion:hookHud()
                         return
                     end
                     if displayName == "IngameMap" then
-                        if self.hudDiagnostics then -- [DEBUG-hudgrp]
-                            self:dbgMapSnapshot(displaySelf, "before draw")
-                            local dx, dy = self:getMapDrawShift()
-                            self.dbgMapBase = dx ~= nil and string.format("shift=(%s,%s)", dbgFmt(dx), dbgFmt(dy)) or "engine"
-                        end
-                        local r = table.pack(self:runMapDraw(origDraw, displaySelf, ...))
-                        if self.hudDiagnostics then self:dbgMapSnapshot(displaySelf, "after draw") end -- [DEBUG-hudgrp]
-                        return table.unpack(r, 1, r.n)
+                        return self:runMapDraw(origDraw, displaySelf, ...)
                     end
                     return origDraw(displaySelf, ...)
                 end)
@@ -1503,7 +1123,6 @@ function VRCompanion:hookHud()
             if self.mapDrawDepth > 0 and self.mapHotspotDepth == 0 and (dx ~= 0.0 or dy ~= 0.0) and type(overlay) == "table"
                 and type(overlay.x) == "number" and type(overlay.y) == "number" then
                 local origX, origY = overlay.x, overlay.y
-                if self.hudDiagnostics then self:dbgShiftedRender(overlay, dx, dy, clipX1, clipY1, clipX2, clipY2) end -- [DEBUG-hudgrp]
                 overlay.x, overlay.y = origX + dx, origY + dy
                 if clipX1 ~= nil and clipY1 ~= nil and clipX2 ~= nil and clipY2 ~= nil then
                     clipX1, clipY1, clipX2, clipY2 = clipX1 + dx, clipY1 + dy, clipX2 + dx, clipY2 + dy

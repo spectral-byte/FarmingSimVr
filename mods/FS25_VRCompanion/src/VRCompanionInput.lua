@@ -220,16 +220,6 @@ function VRCompanion:consoleCommandSetHudSafeArea(horizontalStr, verticalStr)
         self.hudSafeAreaHorizontal, self.hudSafeAreaVertical)
 end
 
--- [DEBUG-hudgrp] vrHudDiag [on|off]: with no argument prints what the engine reports for each HUD display
-function VRCompanion:consoleCommandHudDiag(mode)
-    if mode == "on" or mode == "off" then
-        self:setHudDiagnostics(mode == "on")
-        return "HUD diagnostics " .. mode .. " (see the [DEBUG-hudgrp] lines in the game log)"
-    end
-    self:dbgDump()
-    return "HUD dump written to the game log ([DEBUG-hudgrp] lines). Usage: vrHudDiag [on|off]"
-end
-
 -- Usage text for vrHudGroup: the syntax followed by every group's current margins and scale
 function VRCompanion:getHudGroupUsage()
     local lines = {
