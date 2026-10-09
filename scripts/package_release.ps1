@@ -142,8 +142,9 @@ PERFORMANCE & SETTINGS
 
 - In-Game Console Commands (press ~ to open console):
   * vrRenderingMode <afr|dualpass|toggle>
-  * vrHudInset <horizontal> <vertical>   (default: 0.30 0.22)
-  * vrHudUiScale <scale>                 (default: 0.82)
+  * vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]
+                                         (default: 0.30 0.22 0.82 for every group)
+  * vrHudSafeArea <horizontal> <vertical>      (HUD Safe Area, default: 0.30 0.22)
   * vrHudConvergence <depth_in_meters>   (default: 1.8)
   * vrSnapTurnAngle <degrees>            (default: 90)
 

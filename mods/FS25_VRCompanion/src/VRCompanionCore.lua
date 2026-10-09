@@ -138,30 +138,26 @@ function VRCompanion:loadMap(name)
     self.guiVisibilityInitialized = false
     self:pollGuiVisibility()
 
-    -- 7. Apply VR HUD Inset anchoring and UI scale foundation
+    -- 7. Apply the HUD Safe Area and place the HUD Groups
     if type(self.loadConfiguration) == "function" then
         self:loadConfiguration()
     end
-    if type(self.applyHudInsets) == "function" then
-        self:applyHudInsets()
+    if type(self.applyHudSafeArea) == "function" then
+        self:applyHudSafeArea()
     end
     -- 7a. Send the loaded DLSS near plane for the starting camera
     self:applyDlssNearClip(true)
 
-    -- 8. Initialize HUD state to Hidden for full VR immersion (Issue #25)
+    -- 8. Start in the HUD state the player last chose; a first install starts Hidden for full VR immersion (Issue #25)
     if type(self.setHudState) == "function" then
-        self:setHudState(self.HUD_STATE_HIDDEN)
+        self:setHudState(self.persistedHudState or self.DEFAULT_HUD_STATE)
     end
 
     -- 9. Register developer and tuning console commands
     if addConsoleCommand ~= nil then
-        addConsoleCommand("vrHudInsets", "Set VR HUD insets: vrHudInsets <insetX> <insetY> [scale] [topInset]", "consoleCommandSetHudInsets", self)
-        addConsoleCommand("vrHudTopInset", "Set VR HUD top inset: vrHudTopInset <topInset>", "consoleCommandSetHudTopInset", self)
-        addConsoleCommand("vrHudInsetTop", "Set VR HUD top inset: vrHudInsetTop <topInset>", "consoleCommandSetHudTopInset", self)
+        addConsoleCommand("vrHudSafeArea", "Set the VR HUD Safe Area, the margin that keeps warnings, notifications and other mods' HUDs inside the lens: vrHudSafeArea <horizontal> <vertical>", "consoleCommandSetHudSafeArea", self)
+        addConsoleCommand("vrHudGroup", "Set a VR HUD Group Margin and scale: vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]", "consoleCommandSetHudGroup", self)
         addConsoleCommand("vrHudState", "Set VR HUD state: vrHudState <0=Hidden | 1=Streamlined | 2=Full>", "consoleCommandSetHudState", self)
-        addConsoleCommand("vrHudFillUnderVehicle", "Position fill level HUD under vehicle: vrHudFillUnderVehicle <true|false>", "consoleCommandSetHudFillUnderVehicle", self)
-        addConsoleCommand("vrHudFillGap", "Set gap between speedometer and fill level: vrHudFillGap <gap>", "consoleCommandSetHudFillGap", self)
-        addConsoleCommand("vrHudFillLevelGap", "Set gap between speedometer and fill level: vrHudFillLevelGap <gap>", "consoleCommandSetHudFillGap", self)
         addConsoleCommand("vrHudLoadNotification", "Toggle HUD alert on map load: vrHudLoadNotification <true|false>", "consoleCommandSetHudLoadNotification", self)
         addConsoleCommand("vrHudLoadAlert", "Toggle HUD alert on map load: vrHudLoadAlert <true|false>", "consoleCommandSetHudLoadNotification", self)
         addConsoleCommand("vrRecenterMode", "Set VR Recenter Action mode: vrRecenterMode [Both | VehicleOnly | toggle]", "consoleCommandSetRecenterMode", self)
@@ -182,6 +178,7 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrDlssDiag","Trace DLSS evaluations to fs25_vr.log: vrDlssDiag [evaluations]", "consoleCommandDlssDiag", self)
         addConsoleCommand("vrRenderingMode", "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", "consoleCommandSetRenderingMode", self)
         addConsoleCommand("vrObliqueProjection", "Toggle Oblique Frustum projection: vrObliqueProjection <true|false|toggle>", "consoleCommandSetObliqueProjection", self)
+        addConsoleCommand("vrHudGroupShow","Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", "consoleCommandHudGroupShow", self)
     end
 
     if self.showHudLoadNotification == true then
@@ -213,8 +210,8 @@ function VRCompanion:pollGuiVisibility()
                 self:restoreMenuBackgroundCamera()
             end
             if self.is2DViewActive then
-                if type(self.restoreHudInsets) == "function" then
-                    self:restoreHudInsets(true)
+                if type(self.restoreHudSafeArea) == "function" then
+                    self:restoreHudSafeArea(true)
                 end
             else
                 if type(self.applyHudState) == "function" then
@@ -953,9 +950,9 @@ function VRCompanion:deleteMap()
         self:setHudState(self.HUD_STATE_FULL)
     end
 
-    -- Restore HUD insets to 2D defaults
-    if type(self.restoreHudInsets) == "function" then
-        self:restoreHudInsets()
+    -- Restore the global HUD anchors to the full screen
+    if type(self.restoreHudSafeArea) == "function" then
+        self:restoreHudSafeArea()
     end
 
     self.currentConvergenceOffset = 0.0
@@ -1007,9 +1004,9 @@ function VRCompanion:deleteMap()
 
     -- Remove console commands
     if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrHudInsets")
+        removeConsoleCommand("vrHudSafeArea")
+        removeConsoleCommand("vrHudGroup")
         removeConsoleCommand("vrHudState")
-        removeConsoleCommand("vrHudFillUnderVehicle")
         removeConsoleCommand("vrRecenterMode")
         removeConsoleCommand("vrRecenterTracking")
         removeConsoleCommand("vrSnapTurnAngle")
@@ -1017,6 +1014,7 @@ function VRCompanion:deleteMap()
         removeConsoleCommand("vrToggleView")
         removeConsoleCommand("vrRenderingMode")
         removeConsoleCommand("vrObliqueProjection")
+        removeConsoleCommand("vrHudGroupShow")
     end
 end
 

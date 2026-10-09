@@ -6,20 +6,28 @@
 VRCompanion = VRCompanion or {}
 VRCompanion.Config = VRCompanion.Config or {}
 
--- VR HUD Inset and UI Scale Constants
-VRCompanion.DEFAULT_HUD_INSET_X = 0.30
-VRCompanion.DEFAULT_HUD_INSET_Y = 0.22
-VRCompanion.DEFAULT_HUD_INSET_TOP = 0.22
-VRCompanion.DEFAULT_HUD_UI_SCALE = 0.82
+-- HUD Safe Area constants (the engine's global HUD anchors, ADR-0022)
+VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL = 0.30
+VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL = 0.22
+VRCompanion.MIN_HUD_SAFE_AREA = 0.0
+VRCompanion.MAX_HUD_SAFE_AREA_HORIZONTAL = 0.40
+VRCompanion.MAX_HUD_SAFE_AREA_VERTICAL = 0.35
 
-VRCompanion.MIN_HUD_INSET_X = 0.0
-VRCompanion.MAX_HUD_INSET_X = 0.40
-VRCompanion.MIN_HUD_INSET_Y = 0.0
-VRCompanion.MAX_HUD_INSET_Y = 0.35
-VRCompanion.MIN_HUD_INSET_TOP = 0.0
-VRCompanion.MAX_HUD_INSET_TOP = 0.50
-VRCompanion.MIN_HUD_UI_SCALE = 0.50
-VRCompanion.MAX_HUD_UI_SCALE = 1.50
+-- HUD Group Margin and scale constants. Every group starts from the same defaults, which match
+-- where the HUD sat before the groups existed. HUD_GROUP_NAMES is the one ordered list of groups:
+-- layout, visibility, save/load and listing in messages all follow it.
+VRCompanion.HUD_GROUP_NAMES = { "speedometer", "map", "info", "controls" }
+VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X = 0.30
+VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y = 0.22
+VRCompanion.DEFAULT_HUD_GROUP_SCALE = 0.82
+VRCompanion.MIN_HUD_GROUP_MARGIN = 0.0
+VRCompanion.MAX_HUD_GROUP_MARGIN = 0.45
+VRCompanion.MIN_HUD_GROUP_SCALE = 0.50
+VRCompanion.MAX_HUD_GROUP_SCALE = 1.50
+
+-- HUD Group visibility (CONTEXT.md, ADR-0022): which groups show in the Streamlined and the Full HUD.
+VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED = { map = false, speedometer = true, info = false, controls = false }
+VRCompanion.DEFAULT_HUD_GROUP_FULL = { map = true, speedometer = true, info = true, controls = true }
 
 -- VR HUD Convergence Parity Constants
 VRCompanion.DEFAULT_CONVERGENCE_DEPTH = 1.8
@@ -34,11 +42,28 @@ VRCompanion.MAX_CONVERGENCE_DISPARITY = 0.040
 VRCompanion.CONVERGENCE_PARALLAX_FACTOR = 0.3375
 VRCompanion.CONVERGENCE_SMOOTH_SPEED = 12.0
 
--- VR Fill Level Element Positioning
-VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE = true
-VRCompanion.fillLevelUnderVehicle = VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE
-VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP = 0.004
-VRCompanion.hudFillLevelGap = VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP
+-- Per-group HUD Group Margins and scale multipliers, by group name
+local function newDefaultHudGroupLayouts()
+    local layouts = {}
+    for _, name in ipairs(VRCompanion.HUD_GROUP_NAMES) do
+        layouts[name] = {
+            marginX = VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X,
+            marginY = VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y,
+            scale = VRCompanion.DEFAULT_HUD_GROUP_SCALE
+        }
+    end
+    return layouts
+end
+VRCompanion.hudGroupLayout = newDefaultHudGroupLayouts()
+
+-- Speedometer group stacking: the fixed gap between the speedometer and the fill levels, and between
+-- fill level rows, at scale 1.0. It is multiplied by the group's scale and is not adjustable.
+VRCompanion.HUD_FILL_LEVEL_GAP = 0.004
+
+-- The HUD state (Hidden, Streamlined or Full) a map starts in: the one the player last chose, saved between
+-- sessions. A first install starts Hidden (VRCompanion.HUD_STATE_HIDDEN).
+VRCompanion.DEFAULT_HUD_STATE = 0
+VRCompanion.persistedHudState = VRCompanion.DEFAULT_HUD_STATE
 
 -- VR HUD Notifications
 VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION = false
@@ -134,6 +159,20 @@ function VRCompanion:clamp(val, minVal, maxVal)
     return val
 end
 
+-- A group's margins and scale clamped to their ranges; anything not given falls back to its default
+function VRCompanion:sanitizeHudGroupLayout(marginX, marginY, scale)
+    return {
+        marginX = self:clamp(marginX or self.DEFAULT_HUD_GROUP_MARGIN_X, self.MIN_HUD_GROUP_MARGIN, self.MAX_HUD_GROUP_MARGIN),
+        marginY = self:clamp(marginY or self.DEFAULT_HUD_GROUP_MARGIN_Y, self.MIN_HUD_GROUP_MARGIN, self.MAX_HUD_GROUP_MARGIN),
+        scale = self:clamp(scale or self.DEFAULT_HUD_GROUP_SCALE, self.MIN_HUD_GROUP_SCALE, self.MAX_HUD_GROUP_SCALE)
+    }
+end
+
+-- Settings-file key prefix of a group, e.g. "vrSettings.hudGroupMap"
+local function hudGroupSettingsKey(groupName)
+    return "vrSettings.hudGroup" .. string.upper(string.sub(groupName, 1, 1)) .. string.sub(groupName, 2)
+end
+
 function VRCompanion:getUserSettingsPath()
     local getAppPathFn = getUserProfileAppPath or _G.getUserProfileAppPath
     if type(getAppPathFn) == "function" then
@@ -172,24 +211,38 @@ function VRCompanion:saveConfiguration(xmlPath)
 
     local ok, xmlFile = pcall(createXmlFn, "VRCompanionConfig", path, "vrSettings")
     if ok and xmlFile ~= 0 and xmlFile ~= nil then
-        setXmlFloatFn(xmlFile, "vrSettings.hudInsetHorizontal", self.hudInsetX or self.DEFAULT_HUD_INSET_X)
-        setXmlFloatFn(xmlFile, "vrSettings.hudInsetVertical", self.hudInsetY or self.DEFAULT_HUD_INSET_Y)
-        setXmlFloatFn(xmlFile, "vrSettings.hudInsetTop", self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP)
-        setXmlFloatFn(xmlFile, "vrSettings.hudUiScale", self.hudUiScaleMultiplier or self.DEFAULT_HUD_UI_SCALE)
+        setXmlFloatFn(xmlFile, "vrSettings.hudSafeAreaHorizontal", self.hudSafeAreaHorizontal or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL)
+        setXmlFloatFn(xmlFile, "vrSettings.hudSafeAreaVertical", self.hudSafeAreaVertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
+        for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
+            local current = (self.hudGroupLayout or {})[groupName] or {}
+            local layout = self:sanitizeHudGroupLayout(current.marginX, current.marginY, current.scale)
+            local key = hudGroupSettingsKey(groupName)
+            setXmlFloatFn(xmlFile, key .. "MarginHorizontal", layout.marginX)
+            setXmlFloatFn(xmlFile, key .. "MarginVertical", layout.marginY)
+            setXmlFloatFn(xmlFile, key .. "Scale", layout.scale)
+        end
         setXmlFloatFn(xmlFile, "vrSettings.hudConvergenceDepth", self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH)
         if type(setXmlBoolFn) == "function" then
-            setXmlBoolFn(xmlFile, "vrSettings.fillLevelUnderVehicle", self.fillLevelUnderVehicle == true)
             setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
             setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
             setXmlBoolFn(xmlFile, "vrSettings.allowObliqueProjection", self.allowObliqueProjection == true)
+            for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
+                local group = (self.HUD_GROUPS or {})[groupName] or {}
+                local streamlined, full = group.streamlined, group.full
+                if streamlined == nil then streamlined = self.DEFAULT_HUD_GROUP_STREAMLINED[groupName] end
+                if full == nil then full = self.DEFAULT_HUD_GROUP_FULL[groupName] end
+                setXmlBoolFn(xmlFile, "vrSettings.hudGroups." .. groupName .. ".showStreamlined", streamlined == true)
+                setXmlBoolFn(xmlFile, "vrSettings.hudGroups." .. groupName .. ".showFull", full == true)
+            end
         end
         if type(setXmlStringFn) == "function" then
             -- Persist the mode last requested, not VRBridge's: while the compositor is active the bridge
             -- only queues a change until the next frame boundary, so it still reports the old mode here.
             local modeStr = (self.renderingMode == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "DualPass" or "AFR"
             setXmlStringFn(xmlFile, "vrSettings.renderingMode", modeStr)
+            setXmlStringFn(xmlFile, "vrSettings.hudState",
+                self.HUD_STATE_NAMES[self.persistedHudState] or self.HUD_STATE_NAMES[self.DEFAULT_HUD_STATE])
         end
-        setXmlFloatFn(xmlFile, "vrSettings.hudFillLevelGap", self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP)
         setXmlFloatFn(xmlFile, "vrSettings.snapTurnAngle", self:getSnapTurnAngleDegrees())
         for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
             setXmlFloatFn(xmlFile, "vrSettings." .. field, self[field] or self.DEFAULT_DLSS_NEAR_CLIPS[mode])
@@ -206,11 +259,20 @@ function VRCompanion:saveConfiguration(xmlPath)
 end
 
 function VRCompanion:loadConfiguration(xmlPath)
-    local insetX = self.DEFAULT_HUD_INSET_X
-    local insetY = self.DEFAULT_HUD_INSET_Y
-    local scale = self.DEFAULT_HUD_UI_SCALE
-    local insetTop = self.DEFAULT_HUD_INSET_TOP
+    local safeAreaHorizontal = self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL
+    local safeAreaVertical = self.DEFAULT_HUD_SAFE_AREA_VERTICAL
+    local groupLayouts = newDefaultHudGroupLayouts()
+    local persistedHudState = self.DEFAULT_HUD_STATE
     local renderingModeLoaded = false
+
+    -- Group visibility starts from the defaults; the settings file overrides the keys it has
+    for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
+        local group = (self.HUD_GROUPS or {})[groupName]
+        if group ~= nil then
+            group.streamlined = self.DEFAULT_HUD_GROUP_STREAMLINED[groupName]
+            group.full = self.DEFAULT_HUD_GROUP_FULL[groupName]
+        end
+    end
 
     local loadXmlFn = loadXMLFile or _G.loadXMLFile
     local getXmlFloatFn = getXMLFloat or _G.getXMLFloat
@@ -222,23 +284,22 @@ function VRCompanion:loadConfiguration(xmlPath)
         if filePath ~= nil and type(loadXmlFn) == "function" and type(getXmlFloatFn) == "function" then
             local ok, xmlFile = pcall(loadXmlFn, "VRCompanionConfig", filePath)
             if ok and xmlFile ~= 0 and xmlFile ~= nil then
-                local loadedX = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudInsetHorizontal")
-                if loadedX ~= nil then insetX = loadedX end
+                -- The old hudInsetHorizontal, hudInsetVertical and hudInsetTop keys are ignored (ADR-0022)
+                local loadedSafeAreaHorizontal = readXmlFloat(getXmlFloatFn, xmlFile,
+                    "vrSettings.hudSafeAreaHorizontal")
+                if loadedSafeAreaHorizontal ~= nil then safeAreaHorizontal = loadedSafeAreaHorizontal end
 
-                local loadedY = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudInsetVertical")
-                if loadedY ~= nil then insetY = loadedY end
+                local loadedSafeAreaVertical = readXmlFloat(getXmlFloatFn, xmlFile,
+                    "vrSettings.hudSafeAreaVertical")
+                if loadedSafeAreaVertical ~= nil then safeAreaVertical = loadedSafeAreaVertical end
 
-                local loadedInsetTop = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudInsetTop")
-                if loadedInsetTop ~= nil then
-                    insetTop = self:clamp(loadedInsetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
+                for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
+                    local key = hudGroupSettingsKey(groupName)
+                    groupLayouts[groupName] = self:sanitizeHudGroupLayout(
+                        readXmlFloat(getXmlFloatFn, xmlFile, key .. "MarginHorizontal"),
+                        readXmlFloat(getXmlFloatFn, xmlFile, key .. "MarginVertical"),
+                        readXmlFloat(getXmlFloatFn, xmlFile, key .. "Scale"))
                 end
-
-                local loadedScale = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudUiScale")
-                if loadedScale ~= nil then scale = loadedScale end
 
                 local loadedDepth = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.hudConvergenceDepth")
@@ -246,20 +307,6 @@ function VRCompanion:loadConfiguration(xmlPath)
                     self.hudConvergenceDepth = loadedDepth
                 else
                     self.hudConvergenceDepth = self.DEFAULT_CONVERGENCE_DEPTH
-                end
-
-                local loadedFillUnder = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
-                    "vrSettings.fillLevelUnderVehicle")
-                if loadedFillUnder ~= nil then
-                    self.fillLevelUnderVehicle = loadedFillUnder
-                end
-
-                local loadedGap = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudFillLevelGap")
-                if loadedGap ~= nil then
-                    self.hudFillLevelGap = self:clamp(loadedGap, 0.0, 0.05)
-                else
-                    self.hudFillLevelGap = self.DEFAULT_HUD_FILL_LEVEL_GAP
                 end
 
                 local loadedShowNotification = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
@@ -280,6 +327,17 @@ function VRCompanion:loadConfiguration(xmlPath)
                     self.allowObliqueProjection = loadedAllowOblique
                 end
 
+                for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
+                    local group = (self.HUD_GROUPS or {})[groupName]
+                    if group ~= nil then
+                        local prefix = "vrSettings.hudGroups." .. groupName
+                        local loadedStreamlined = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile, prefix .. ".showStreamlined")
+                        local loadedFull = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile, prefix .. ".showFull")
+                        if loadedStreamlined ~= nil then group.streamlined = loadedStreamlined end
+                        if loadedFull ~= nil then group.full = loadedFull end
+                    end
+                end
+
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.snapTurnAngle")
                 if loadedSnapAngle ~= nil and loadedSnapAngle > 0 then
@@ -292,6 +350,16 @@ function VRCompanion:loadConfiguration(xmlPath)
                         self[field] = loadedNear
                     else
                         self[field] = self.DEFAULT_DLSS_NEAR_CLIPS[mode]
+                    end
+                end
+
+                -- The HUD state is saved by name; an unknown or missing one keeps the default
+                local loadedHudState = readXmlString(getXmlStringFn, xmlFile, "vrSettings.hudState")
+                if loadedHudState ~= nil then
+                    for state, name in pairs(self.HUD_STATE_NAMES) do
+                        if string.lower(name) == string.lower(loadedHudState) then
+                            persistedHudState = state
+                        end
                     end
                 end
 
@@ -336,12 +404,6 @@ function VRCompanion:loadConfiguration(xmlPath)
     if self.hudConvergenceDepth == nil then
         self.hudConvergenceDepth = self.DEFAULT_CONVERGENCE_DEPTH
     end
-    if self.hudFillLevelGap == nil then
-        self.hudFillLevelGap = self.DEFAULT_HUD_FILL_LEVEL_GAP
-    end
-    if self.fillLevelUnderVehicle == nil then
-        self.fillLevelUnderVehicle = self.DEFAULT_FILL_LEVEL_UNDER_VEHICLE
-    end
     if self.showHudLoadNotification == nil then
         self.showHudLoadNotification = self.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
     end
@@ -360,14 +422,16 @@ function VRCompanion:loadConfiguration(xmlPath)
         end
     end
 
-    self:configureHudInsets(insetX, insetY, scale, insetTop)
+    self.hudGroupLayout = groupLayouts
+    self.persistedHudState = persistedHudState
+    self:configureHudSafeArea(safeAreaHorizontal, safeAreaVertical)
 
     -- First run: create the user settings file from the values just applied
     if not loadedUser and userPath ~= nil then
         self:saveConfiguration(userPath)
     end
 
-    return self:getHudInsets()
+    return self:getHudSafeArea()
 end
 
 -- Export to Config subsystem table

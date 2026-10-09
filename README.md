@@ -27,7 +27,7 @@ FS25 VR is built as a hybrid two-tier architecture:
    - Consumes 6DOF head poses and asymmetric perspective projections from `VRBridge`.
    - Manages dual eye camera nodes and cyclopean spatial audio listener alignment.
    - Coordinates Sequential Dual-Pass (SDP) and Alternate Frame Rendering (AFR) pipelines.
-   - Features comprehensive VR HUD anchoring with configurable insets and IPD-scaled stereoscopic convergence depth.
+   - Features comprehensive VR HUD anchoring with a configurable HUD Safe Area, per-group HUD placement and IPD-scaled stereoscopic convergence depth.
    - Implements in-engine snap turn locomotion, 2D floating window view toggling, and reference space recentering.
 
 ```
@@ -83,10 +83,11 @@ FS25 VR is built as a hybrid two-tier architecture:
   - Context-aware motion vector handling ($1.0\times$ in Dual-Pass; in AFR, the per-eye correction, or $2.0\times$ scaling while it is off).
   - Synchronous discontinuity reset on teleports, snap turns, and view transitions.
 - **Dynamic In-Engine VR HUD**:
-  - Normalized viewport insets contract interface elements into the headset's optical sweet spot.
+  - The HUD is split into four HUD Groups (Map, Speedometer, Info, Controls), each positioned by its own margins and scale from a fixed home corner, so the interface sits in the headset's optical sweet spot.
   - Physical IPD-scaled stereoscopic convergence depth prevents eye strain.
   - Clean vertical stacking of fill levels and machine telemetry.
-  - Three-stage HUD display cycle: **Full HUD** $\rightarrow$ **Streamlined Telemetry** $\rightarrow$ **Hidden**.
+  - Three-stage HUD display cycle: **Full HUD** $\rightarrow$ **Streamlined HUD** $\rightarrow$ **Hidden**. The state you leave it in is saved and restored the next time a map loads; a first install starts **Hidden**.
+  - Four HUD Groups (Map, Speedometer with its fill levels, Info, Controls), each switchable on or off for the Streamlined and Full HUD with `vrHudGroupShow`. By default the Streamlined HUD shows only the Speedometer group and the Full HUD shows all four. The context action prompt shows in both.
 - **Floating Quad Layer for Menus**:
   - 2D menus, title screen, and map dialogs render cleanly onto a floating 3D quad layer in OpenXR space.
   - Alpha-blended hardware mouse cursor projected accurately onto the floating quad.
@@ -162,7 +163,9 @@ Press the tilde key (`` ` `` / `~`) to open the in-engine developer console:
 
 - `vrRenderingMode <afr|dualpass|toggle>`: Switch between Sequential Dual-Pass and Alternate Frame Rendering.
 - `vrObliqueProjection <true|false|toggle>`: Enable per-eye Oblique Frustum projection (default: `false`, symmetric).
-- `vrHudInsets <horizontal> <vertical> [scale] [top]`: Adjust normalized HUD margin insets and element scale (default: `0.30 0.22 0.82 0.22`).
+- `vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]`: Place one HUD Group and set its scale. Each group has a fixed home corner (Map bottom-left, Speedometer bottom-right with the fill levels under it, Info top-right, Controls top-left). The horizontal and vertical values are the distance, as a fraction of the screen, from the home corner's two edges to the group's outer edges, so a larger group grows inward. The Speedometer group always stacks its fill levels directly under the speedometer, right-aligned with it and a small fixed gap apart, and its vertical margin is measured to the bottom of the lowest fill level, however many fill levels there are. Margins clamp to `0.00`-`0.45` and the scale to `0.50`-`1.50`; the scale is multiplied by the game's own UI scale setting. Defaults for every group: `0.30 0.22 0.82`. The change applies immediately and is saved. Run without arguments to list every group's current margins and scale. The context action prompt is not a group: it stays centered at the bottom on the Speedometer group's vertical margin.
+- `vrHudSafeArea <horizontal> <vertical>`: Set the HUD Safe Area, one margin applied to the engine's global HUD anchors that keeps everything outside the HUD Groups (blinking warnings, notifications and other mods' HUDs) inside the lens. The horizontal margin clamps to `0.00`-`0.40` and the vertical margin (applied to both top and bottom) to `0.00`-`0.35`. Defaults: `0.30 0.22`. It does not move the HUD Groups. The change applies immediately and is saved; run without arguments to print the usage and the current values. The anchors are restored to the full screen on map unload and in 2D Floating Window Mode.
+- `vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>`: Choose which HUD Groups show in the Streamlined HUD and in the Full HUD (defaults: Streamlined = `speedometer` only, Full = all four groups). The Hidden HUD always shows nothing, and the context action prompt always shows in both states. Applies immediately and is saved; run with no arguments to list every group's current visibility. The HUD cycle notification lists the groups that are on in the new state, e.g. `VR HUD: Streamlined (Speedometer, Map)`.
 - HUD convergence depth is set via `<hudConvergenceDepth>` in `settings.xml` (default: `1.8`).
 - `vrSnapTurnAngle <degrees>`: Set snap turn rotational angle step (default: `90`).
 
@@ -237,6 +240,7 @@ For in-depth technical documentation, refer to the architecture records in [`doc
 - [`ADR-0019`](docs/adr/0019-begin-the-openxr-frame-before-the-engine-update.md): Begin the OpenXR Frame Before the Engine Update
 - [`ADR-0020`](docs/adr/0020-per-eye-motion-vector-correction-for-temporal-upscalers.md): Per-Eye Motion Vector Correction for Temporal Upscalers
 - [`ADR-0021`](docs/adr/0021-one-registered-vr-camera-for-both-eyes.md): One Registered VR Camera for Both Eyes
+- [`ADR-0022`](docs/adr/0022-per-group-hud-margins-and-a-separate-safe-area.md): Per-Group HUD Margins and a Separate Safe Area
 
 ---
 
