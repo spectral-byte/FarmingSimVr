@@ -52,10 +52,6 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
             <en>VR HUD Vertical Inset</en>
             <de>VR-HUD vertikaler Einzug</de>
         </text>
-        <text name="setting_vrHudUiScale">
-            <en>VR HUD UI Scale</en>
-            <de>VR-HUD Skalierung</de>
-        </text>
         <text name="setting_vrHudConvergenceDepth">
             <en>VR HUD Convergence Depth (Meters)</en>
             <de>VR-HUD Konvergenztiefe (Meter)</de>

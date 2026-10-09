@@ -138,7 +138,7 @@ function VRCompanion:loadMap(name)
     self.guiVisibilityInitialized = false
     self:pollGuiVisibility()
 
-    -- 7. Apply VR HUD Inset anchoring and UI scale foundation
+    -- 7. Apply the HUD Safe Area and place the HUD Groups
     if type(self.loadConfiguration) == "function" then
         self:loadConfiguration()
     end
@@ -155,7 +155,8 @@ function VRCompanion:loadMap(name)
 
     -- 9. Register developer and tuning console commands
     if addConsoleCommand ~= nil then
-        addConsoleCommand("vrHudInsets", "Set VR HUD insets: vrHudInsets <insetX> <insetY> [scale] [topInset]", "consoleCommandSetHudInsets", self)
+        addConsoleCommand("vrHudInsets", "Set the VR HUD Safe Area: vrHudInsets <insetX> <insetY> [topInset]", "consoleCommandSetHudInsets", self)
+        addConsoleCommand("vrHudGroup", "Set a VR HUD Group Margin and scale: vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]", "consoleCommandSetHudGroup", self)
         addConsoleCommand("vrHudTopInset", "Set VR HUD top inset: vrHudTopInset <topInset>", "consoleCommandSetHudTopInset", self)
         addConsoleCommand("vrHudInsetTop", "Set VR HUD top inset: vrHudInsetTop <topInset>", "consoleCommandSetHudTopInset", self)
         addConsoleCommand("vrHudState", "Set VR HUD state: vrHudState <0=Hidden | 1=Streamlined | 2=Full>", "consoleCommandSetHudState", self)
@@ -1008,6 +1009,7 @@ function VRCompanion:deleteMap()
     -- Remove console commands
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrHudInsets")
+        removeConsoleCommand("vrHudGroup")
         removeConsoleCommand("vrHudState")
         removeConsoleCommand("vrHudFillUnderVehicle")
         removeConsoleCommand("vrRecenterMode")

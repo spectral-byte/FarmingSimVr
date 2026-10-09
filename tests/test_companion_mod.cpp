@@ -2029,41 +2029,38 @@ TEST_F(CompanionModTest, DefinesAndCalculatesDefaultAndCustomVRHudInsets) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.DEFAULT_HUD_INSET_X == 0.30, "DEFAULT_HUD_INSET_X must be 0.30")
         assert(VRCompanion.DEFAULT_HUD_INSET_Y == 0.22, "DEFAULT_HUD_INSET_Y must be 0.22")
-        assert(VRCompanion.DEFAULT_HUD_UI_SCALE == 0.82, "DEFAULT_HUD_UI_SCALE must be 0.82")
+        assert(VRCompanion.DEFAULT_HUD_GROUP_SCALE == 0.82, "DEFAULT_HUD_GROUP_SCALE must be 0.82")
+        assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X == 0.30 and VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y == 0.22, "group margin defaults must be 0.30 / 0.22")
 
-        local left, right, bottom, top, scale = VRCompanion:calculateHudAnchors()
+        local left, right, bottom, top = VRCompanion:calculateHudAnchors()
         assert(math.abs(left - 0.30) < 0.0001, "left anchor default must be 0.30")
         assert(math.abs(right - 0.70) < 0.0001, "right anchor default must be 0.70")
         assert(math.abs(bottom - 0.22) < 0.0001, "bottom anchor default must be 0.22")
         assert(math.abs(top - 0.78) < 0.0001, "top anchor default must be 0.78")
-        assert(math.abs(scale - 0.82) < 0.0001, "scale multiplier default must be 0.82")
 
-        local cLeft, cRight, cBottom, cTop, cScale = VRCompanion:calculateHudAnchors(0.12, 0.08, 0.95)
+        local cLeft, cRight, cBottom, cTop = VRCompanion:calculateHudAnchors(0.12, 0.08)
         assert(math.abs(cLeft - 0.12) < 0.0001, "custom left anchor must be 0.12")
         assert(math.abs(cRight - 0.88) < 0.0001, "custom right anchor must be 0.88")
         assert(math.abs(cBottom - 0.08) < 0.0001, "custom bottom anchor must be 0.08")
         assert(math.abs(cTop - 0.92) < 0.0001, "custom top anchor must be 0.92")
-        assert(math.abs(cScale - 0.95) < 0.0001, "custom scale must be 0.95")
     )luau", "=verifyCalculations"), 0);
 }
 
-TEST_F(CompanionModTest, ClampsVRHudInsetsAndScaleWithinSafeBoundaries) {
+TEST_F(CompanionModTest, ClampsVRHudInsetsWithinSafeBoundaries) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        local minL, minR, minB, minT, minS = VRCompanion:calculateHudAnchors(-0.5, -0.5, 0.1)
+        local minL, minR, minB, minT = VRCompanion:calculateHudAnchors(-0.5, -0.5)
         assert(math.abs(minL - 0.0) < 0.0001, "negative insetX clamped to 0.0")
         assert(math.abs(minR - 1.0) < 0.0001, "right anchor clamped to 1.0")
         assert(math.abs(minB - 0.0) < 0.0001, "negative insetY clamped to 0.0")
         assert(math.abs(minT - 1.0) < 0.0001, "top anchor clamped to 1.0")
-        assert(math.abs(minS - 0.50) < 0.0001, "scale clamped to min 0.50")
 
-        local maxL, maxR, maxB, maxT, maxS = VRCompanion:calculateHudAnchors(0.9, 0.9, 3.0)
+        local maxL, maxR, maxB, maxT = VRCompanion:calculateHudAnchors(0.9, 0.9)
         assert(math.abs(maxL - 0.40) < 0.0001, "excessive insetX clamped to 0.40")
         assert(math.abs(maxR - 0.60) < 0.0001, "right anchor clamped to 0.60")
         assert(math.abs(maxB - 0.35) < 0.0001, "excessive insetY clamped to 0.35")
         assert(math.abs(maxT - 0.65) < 0.0001, "top anchor clamped to 0.65")
-        assert(math.abs(maxS - 1.50) < 0.0001, "scale clamped to max 1.50")
     )luau", "=verifyClamping"), 0);
 }
 
@@ -2071,28 +2068,28 @@ TEST_F(CompanionModTest, ExposesConfigurationWithGracefulFallbackToDefaults) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion:configureHudInsets(0.22, 0.14, 0.92)
+        VRCompanion:configureHudInsets(0.22, 0.14)
         local insets = VRCompanion:getHudInsets()
         assert(math.abs(insets.left - 0.22) < 0.0001, "insets.left must match")
         assert(math.abs(insets.right - 0.78) < 0.0001, "insets.right must match")
         assert(math.abs(insets.bottom - 0.14) < 0.0001, "insets.bottom must match")
         assert(math.abs(insets.top - 0.86) < 0.0001, "insets.top must match")
-        assert(math.abs(insets.scaleMultiplier - 0.92) < 0.0001, "insets.scaleMultiplier must match")
 
         -- Graceful fallback on missing/unspecified XML config
         VRCompanion.hudInsetX = nil
         VRCompanion.hudInsetY = nil
-        VRCompanion.hudUiScaleMultiplier = nil
         local fb = VRCompanion:loadConfiguration("missing_file.xml")
         assert(math.abs(fb.left - 0.30) < 0.0001, "fallback left must be default 0.30")
         assert(math.abs(fb.right - 0.70) < 0.0001, "fallback right must be default 0.70")
         assert(math.abs(fb.bottom - 0.22) < 0.0001, "fallback bottom must be default 0.22")
         assert(math.abs(fb.top - 0.78) < 0.0001, "fallback top must be default 0.78")
-        assert(math.abs(fb.scaleMultiplier - 0.82) < 0.0001, "fallback scale must be default 0.82")
+        local fbMap = VRCompanion:getHudGroupLayout("map")
+        assert(math.abs(fbMap.scale - 0.82) < 0.0001, "fallback group scale must be default 0.82")
+        assert(math.abs(fbMap.marginX - 0.30) < 0.0001 and math.abs(fbMap.marginY - 0.22) < 0.0001, "fallback group margins must be the defaults")
     )luau", "=verifyConfigApi"), 0);
 }
 
-TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad) {
+TEST_F(CompanionModTest, AppliesVRHudSafeAreaAndGroupMarginsToStandardDisplaysUponMapLoad) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -2126,7 +2123,7 @@ TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad
         }
         _G.g_currentMission = { hud = displays }
 
-        VRCompanion:configureHudInsets()
+        VRCompanion:loadConfiguration("missing_file.xml")
         VRCompanion:loadMap('testMap')
 
         -- Global anchors contracted
@@ -2135,8 +2132,7 @@ TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad
         assert(math.abs(_G.g_hudAnchorBottom - 0.22) < 0.0001, "g_hudAnchorBottom must be 0.22")
         assert(math.abs(_G.g_hudAnchorTop - 0.78) < 0.0001, "g_hudAnchorTop must be 0.78")
 
-        -- UI scale multiplier applied (0.82x)
-        assert(math.abs(VRCompanion.effectiveUiScale - 0.82) < 0.0001, "effectiveUiScale must be 0.82")
+        -- Group scale applied (0.82x)
         assert(displays.speedMeter.setScaleCalled == true, "SpeedMeterDisplay.setScale must be called")
         assert(displays.speedMeter.scale == 0.82, "SpeedMeterDisplay scale must be 0.82")
 
@@ -2151,7 +2147,7 @@ TEST_F(CompanionModTest, AppliesVRHudInsetsAndScaleToStandardDisplaysUponMapLoad
         assert(displays.speedMeter.position.x == 0.70 and displays.speedMeter.position.y == 0.22, "speedMeter bottom-right")
         assert(displays.inputHelp.position.x == 0.30 and displays.inputHelp.position.y == 0.78, "inputHelp top-left")
         assert(displays.gameInfo.position.x == 0.70 and displays.gameInfo.position.y == 0.78, "gameInfo top-right")
-        assert(displays.contextAction.position.x == 0.30 and displays.contextAction.position.y == 0.22, "contextAction bottom-left")
+        assert(displays.contextAction.position.x == 0.5 and displays.contextAction.position.y == 0.22, "contextAction centered on the speedometer bottom margin")
         assert(displays.ingameMap.position.x == 0.30 and displays.ingameMap.position.y == 0.22, "ingameMap bottom-left")
     )luau", "=verifyDisplaysUponMapLoad"), 0);
 }

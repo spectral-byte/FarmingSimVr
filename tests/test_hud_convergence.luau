@@ -28,6 +28,12 @@ end
 
 print("Running VR HUD Convergence Parity Tests...")
 
+-- Every setting back to its default (HUD Group Margins included), then the HUD Safe Area set
+local function useSafeArea(insetX, insetY)
+    VRCompanion:loadConfiguration("non_existent_file.xml")
+    VRCompanion:configureHudInsets(insetX, insetY)
+end
+
 -- Slice 1: Mathematical scaling, target depth, fallback, and boundary clamping
 test("DefinesConvergenceConstantsAndDefaults", function()
     assert(VRCompanion.DEFAULT_CONVERGENCE_DEPTH == 1.8, "DEFAULT_CONVERGENCE_DEPTH must be 1.8m")
@@ -132,7 +138,7 @@ end)
 
 -- Slice 3: Frame anchor updates and drift-free preservation
 test("UpdatesHorizontalAnchorsWithPositiveOffsetOnParity0", function()
-    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    useSafeArea(0.20, 0.16)
     _G.VRBridge = {
         getFrameParity = function() return 0 end,
         getIpd = function() return 0.064 end,
@@ -153,7 +159,7 @@ test("UpdatesHorizontalAnchorsWithPositiveOffsetOnParity0", function()
 end)
 
 test("UpdatesHorizontalAnchorsWithNegativeOffsetOnParity1", function()
-    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    useSafeArea(0.20, 0.16)
     _G.VRBridge = {
         getFrameParity = function() return 1 end,
         getIpd = function() return 0.064 end,
@@ -174,7 +180,7 @@ test("UpdatesHorizontalAnchorsWithNegativeOffsetOnParity1", function()
 end)
 
 test("MaintainsBaseAnchorsInvariantlyAcrossTenThousandFramesWithoutDrift", function()
-    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    useSafeArea(0.20, 0.16)
     local curParity = 0
     _G.VRBridge = {
         getFrameParity = function() return curParity end,
@@ -202,7 +208,7 @@ test("MaintainsBaseAnchorsInvariantlyAcrossTenThousandFramesWithoutDrift", funct
 end)
 
 test("RepositionsActiveHudDisplaysWithFrameConvergenceDisparity", function()
-    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    useSafeArea(0.20, 0.16)
     local curParity = 0
     _G.VRBridge = {
         getFrameParity = function() return curParity end,
@@ -225,16 +231,16 @@ test("RepositionsActiveHudDisplaysWithFrameConvergenceDisparity", function()
     }
     VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
-    -- Frame 0 (Parity 0 -> right aligned anchor shifts by +0.012: 0.80 + 0.012 = 0.812)
+    -- Frame 0 (Parity 0 -> the Speedometer group's right margin edge shifts by +0.012: 1 - 0.30 + 0.012 = 0.712)
     curParity = 0
     VRCompanion:updateHudConvergence()
     assert(mockSpeedMeter.position ~= nil)
-    assert(math.abs(mockSpeedMeter.position.x - 0.812) < 0.0001, "SpeedMeter aligned with parity 0 shifted right anchor")
+    assert(math.abs(mockSpeedMeter.position.x - 0.712) < 0.0001, "SpeedMeter aligned with parity 0 shifted margin edge")
 
-    -- Frame 1 (Parity 1 -> right aligned anchor shifts by -0.012: 0.80 - 0.012 = 0.788)
+    -- Frame 1 (Parity 1 -> shifts by -0.012: 1 - 0.30 - 0.012 = 0.688)
     curParity = 1
     VRCompanion:updateHudConvergence()
-    assert(math.abs(mockSpeedMeter.position.x - 0.788) < 0.0001, "SpeedMeter aligned with parity 1 shifted right anchor")
+    assert(math.abs(mockSpeedMeter.position.x - 0.688) < 0.0001, "SpeedMeter aligned with parity 1 shifted margin edge")
 
     _G.g_currentMission = nil
     _G.VRBridge = nil
@@ -242,7 +248,7 @@ end)
 
 -- HUD Groups (spec #50, ticket #51): the per-frame placement takes each display's home corner from its group
 test("ConvergencePlacementTakesTheHomeCornerFromTheDisplaysGroup", function()
-    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    useSafeArea(0.20, 0.16)
     VRCompanion.fillLevelUnderVehicle = false
     _G.VRBridge = {
         getFrameParity = function() return 0 end,
@@ -261,16 +267,16 @@ test("ConvergencePlacementTakesTheHomeCornerFromTheDisplaysGroup", function()
     VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
     VRCompanion:updateHudConvergence()
-    assert(math.abs(mockInfo.position.x - VRCompanion.hudAnchorRight) < 0.0001, "Info group is anchored to the right edge")
-    assert(math.abs(mockInfo.position.y - VRCompanion.hudAnchorTop) < 0.0001, "Info group is anchored to the top edge")
+    assert(math.abs(mockInfo.position.x - (1.0 - 0.30 + 0.012)) < 0.0001, "Info group is anchored to the right edge")
+    assert(math.abs(mockInfo.position.y - (1.0 - 0.22)) < 0.0001, "Info group is anchored to the top edge")
 
     local info = VRCompanion.HUD_GROUPS.info
     local origX, origY = info.alignX, info.alignY
     local ok, err = pcall(function()
         info.alignX, info.alignY = "left", "bottom"
         VRCompanion:updateHudConvergence()
-        assert(math.abs(mockInfo.position.x - VRCompanion.hudAnchorLeft) < 0.0001, "Moving the group's corner moves the display to the left edge")
-        assert(math.abs(mockInfo.position.y - VRCompanion.hudAnchorBottom) < 0.0001, "Moving the group's corner moves the display to the bottom edge")
+        assert(math.abs(mockInfo.position.x - (0.30 + 0.012)) < 0.0001, "Moving the group's corner moves the display to the left edge")
+        assert(math.abs(mockInfo.position.y - 0.22) < 0.0001, "Moving the group's corner moves the display to the bottom edge")
     end)
     info.alignX, info.alignY = origX, origY
 
@@ -280,7 +286,8 @@ test("ConvergencePlacementTakesTheHomeCornerFromTheDisplaysGroup", function()
 end)
 
 test("ConvergenceDisparitySynchronizesSpeedMeterAndFillLevelsUnderVehicleAcrossParity", function()
-    VRCompanion:configureHudInsets(0.35, 0.25, 0.50)
+    useSafeArea(0.20, 0.16)
+    VRCompanion:consoleCommandSetHudGroup("speedometer", "0.35", "0.25", "0.5")
     VRCompanion.fillLevelUnderVehicle = true
 
     local curParity = 0
@@ -315,24 +322,72 @@ test("ConvergenceDisparitySynchronizesSpeedMeterAndFillLevelsUnderVehicleAcrossP
     }
     VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
-    -- Frame 0: Left Eye (Parity 0 -> right anchor = 0.65 + 0.012 = 0.662)
+    -- Frame 0: Left Eye (Parity 0 -> the group's right margin edge = 0.65 + 0.012 = 0.662)
     curParity = 0
     VRCompanion:updateHudConvergence()
     assert(mockSpeedMeter.position ~= nil)
     assert(mockFill.position ~= nil)
-    assert(math.abs(mockSpeedMeter.position.x - 0.662) < 0.0001, "SpeedMeter must receive +0.012 disparity")
+    assert(math.abs(mockSpeedMeter.position.x - (0.662 - 0.10)) < 0.0001, "SpeedMeter must receive +0.012 disparity (0.662 - its 0.10 width)")
     assert(math.abs(mockFill.position.x - 0.582) < 0.0001, "FillLevels must receive matching +0.012 disparity (0.662 - 0.08 = 0.582)")
     assert(math.abs(mockFill.position.y - 0.218) < 0.0001, "FillLevels must be under vehicle element at 0.218")
 
     -- Frame 1: Right Eye (Parity 1 -> right anchor = 0.65 - 0.012 = 0.638)
     curParity = 1
     VRCompanion:updateHudConvergence()
-    assert(math.abs(mockSpeedMeter.position.x - 0.638) < 0.0001, "SpeedMeter must receive -0.012 disparity")
+    assert(math.abs(mockSpeedMeter.position.x - (0.638 - 0.10)) < 0.0001, "SpeedMeter must receive -0.012 disparity (0.638 - its 0.10 width)")
     assert(math.abs(mockFill.position.x - 0.558) < 0.0001, "FillLevels must receive matching -0.012 disparity (0.638 - 0.08 = 0.558)")
     assert(math.abs(mockFill.position.y - 0.218) < 0.0001, "FillLevels remains vertically invariant under vehicle")
 
     _G.g_currentMission = nil
     _G.VRBridge = nil
+end)
+
+test("ConvergenceShiftsEveryGroupAndTheContextActionByTheSameAmount", function()
+    useSafeArea(0.20, 0.16)
+    VRCompanion.fillLevelUnderVehicle = false
+    local consoleSet = function(...) VRCompanion:consoleCommandSetHudGroup(...) end
+    consoleSet("map", "0.05", "0.10", "1.0")
+    consoleSet("speedometer", "0.07", "0.12", "0.9")
+    consoleSet("info", "0.09", "0.14", "0.7")
+    consoleSet("controls", "0.11", "0.16", "0.6")
+    local curParity = 0
+    _G.VRBridge = {
+        getFrameParity = function() return curParity end,
+        getIpd = function() return 0.064 end,
+        isReady = function() return true end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+
+    local function mk()
+        return { width = 0.10, height = 0.05, position = nil, setPosition = function(self, x, y) self.position = { x = x, y = y } end }
+    end
+    local hud = { ingameMap = mk(), speedMeter = mk(), gameInfo = mk(), inputHelp = mk(), contextAction = mk() }
+    _G.g_currentMission = { hud = hud }
+    VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
+    local names = { "ingameMap", "speedMeter", "gameInfo", "inputHelp", "contextAction" }
+
+    curParity = 0
+    VRCompanion:updateHudConvergence()
+    local left = {}
+    for _, n in ipairs(names) do left[n] = { x = hud[n].position.x, y = hud[n].position.y } end
+    curParity = 1
+    VRCompanion:updateHudConvergence()
+    for _, n in ipairs(names) do
+        assert(math.abs((left[n].x - hud[n].position.x) - 0.024) < 0.0001, n .. " must shift by the full eye-to-eye disparity")
+        assert(math.abs(left[n].y - hud[n].position.y) < 0.0001, n .. " must not move vertically")
+    end
+    -- Margins still hold at the left eye's offset (+0.012)
+    assert(math.abs(left.ingameMap.x - (0.05 + 0.012)) < 0.0001, "map left margin")
+    assert(math.abs(left.speedMeter.x - (1.0 - 0.07 - 0.10 + 0.012)) < 0.0001, "speedometer right margin")
+    assert(math.abs(left.gameInfo.y - (1.0 - 0.14 - 0.05)) < 0.0001, "info top margin")
+    assert(math.abs(left.contextAction.x - (0.5 + 0.012)) < 0.0001 and math.abs(left.contextAction.y - 0.12) < 0.0001, "context action on the speedometer bottom margin")
+
+    VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+    _G.g_currentMission = nil
+    _G.VRBridge = nil
+    useSafeArea(0.30, 0.22)
 end)
 
 -- Hidden HUD: no repositioning, but convergence state keeps updating
@@ -362,7 +417,7 @@ local function makeCountingHud()
 end
 
 local function setupHiddenHudScene(parity)
-    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    useSafeArea(0.20, 0.16)
     VRCompanion.fillLevelUnderVehicle = true
     VRCompanion.is2DViewActive = false
     VRCompanion.activeFillLevelsDisplay = nil
@@ -420,11 +475,11 @@ test("SwitchingFromHiddenPositionsElementsWithCurrentConvergenceOffset", functio
     assert(hud.inputHelp.position ~= nil and hud.speedMeter.position ~= nil and hud.ingameMap.position ~= nil
         and hud.gameInfo.position ~= nil and hud.contextAction.position ~= nil and hud.fillLevels.position ~= nil,
         "Every element must be positioned immediately on leaving Hidden")
-    assert(math.abs(hud.inputHelp.position.x - 0.212) < 0.0001, "InputHelp must use shifted left anchor")
-    assert(math.abs(hud.gameInfo.position.x - 0.812) < 0.0001, "GameInfo must use shifted right anchor")
+    assert(math.abs(hud.inputHelp.position.x - 0.312) < 0.0001, "InputHelp must use its group's shifted left margin")
+    assert(math.abs(hud.gameInfo.position.x - (0.712 - 0.08)) < 0.0001, "GameInfo must use its group's shifted right margin edge")
     assert(math.abs(hud.contextAction.position.x - 0.512) < 0.0001, "ContextAction must carry the offset")
-    assert(math.abs(hud.ingameMap.position.x - 0.212) < 0.0001, "Map must use shifted left anchor")
-    assert(math.abs(hud.fillLevels.position.x - (0.812 - 0.08)) < 0.0001, "Fill levels must carry the offset")
+    assert(math.abs(hud.ingameMap.position.x - 0.312) < 0.0001, "Map must use its group's shifted left margin")
+    assert(math.abs(hud.fillLevels.position.x - (0.712 - 0.08)) < 0.0001, "Fill levels must carry the offset")
 
     -- Streamlined path too
     VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
@@ -432,7 +487,7 @@ test("SwitchingFromHiddenPositionsElementsWithCurrentConvergenceOffset", functio
     VRCompanion:updateHudConvergence()
     hud.speedMeter.position = nil
     VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
-    assert(hud.speedMeter.position ~= nil and math.abs(hud.speedMeter.position.x - 0.788) < 0.0001, "Streamlined must position with the current (-) offset")
+    assert(hud.speedMeter.position ~= nil and math.abs(hud.speedMeter.position.x - (0.688 - 0.08)) < 0.0001, "Streamlined must position with the current (-) offset")
     teardownHiddenHudScene()
 end)
 
@@ -447,13 +502,13 @@ test("VisibleStatesKeepRepositioningEveryUpdate", function()
     VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
     VRCompanion:updateHudConvergence()
     assert(calls.count > after, "Full update must reposition")
-    assert(math.abs(hud.speedMeter.position.x - 0.788) < 0.0001)
+    assert(math.abs(hud.speedMeter.position.x - (0.688 - 0.08)) < 0.0001)
     teardownHiddenHudScene()
 end)
 
 -- Slice 4: Pass-Through mode and disabled head tracking smooth reversion to zero
 test("PassThroughModeRevertsConvergenceOffsetSmoothlyToZero", function()
-    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    useSafeArea(0.20, 0.16)
     local curParity = 0
     _G.VRBridge = {
         getFrameParity = function() return curParity end,
@@ -495,7 +550,7 @@ test("PassThroughModeRevertsConvergenceOffsetSmoothlyToZero", function()
 end)
 
 test("DisabledHeadTrackingRevertsConvergenceOffsetSmoothlyToZero", function()
-    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    useSafeArea(0.20, 0.16)
     local curParity = 0
     _G.VRBridge = {
         getFrameParity = function() return curParity end,
@@ -589,7 +644,6 @@ test("MapLifecycleLoadsCustomDepthAndRestoresZeroOffsetOnUnload", function()
     _G.mockXmlData = {
         ["vrSettings.hudInsetHorizontal"] = 0.20,
         ["vrSettings.hudInsetVertical"] = 0.16,
-        ["vrSettings.hudUiScale"] = 0.88,
         ["vrSettings.hudConvergenceDepth"] = 2.0
     }
     _G.loadXMLFile = function(tag, path) return 123 end
@@ -635,7 +689,7 @@ test("MapLifecycleLoadsCustomDepthAndRestoresZeroOffsetOnUnload", function()
 end)
 
 test("MenuTransitionsPreserveConvergenceParityState", function()
-    VRCompanion:configureHudInsets(0.20, 0.16, 0.88)
+    useSafeArea(0.20, 0.16)
     local curParity = 0
     _G.VRBridge = {
         getFrameParity = function() return curParity end,

@@ -6,11 +6,10 @@
 VRCompanion = VRCompanion or {}
 VRCompanion.Config = VRCompanion.Config or {}
 
--- VR HUD Inset and UI Scale Constants
+-- HUD Safe Area constants (the engine's global HUD anchors, ADR-0022)
 VRCompanion.DEFAULT_HUD_INSET_X = 0.30
 VRCompanion.DEFAULT_HUD_INSET_Y = 0.22
 VRCompanion.DEFAULT_HUD_INSET_TOP = 0.22
-VRCompanion.DEFAULT_HUD_UI_SCALE = 0.82
 
 VRCompanion.MIN_HUD_INSET_X = 0.0
 VRCompanion.MAX_HUD_INSET_X = 0.40
@@ -18,8 +17,17 @@ VRCompanion.MIN_HUD_INSET_Y = 0.0
 VRCompanion.MAX_HUD_INSET_Y = 0.35
 VRCompanion.MIN_HUD_INSET_TOP = 0.0
 VRCompanion.MAX_HUD_INSET_TOP = 0.50
-VRCompanion.MIN_HUD_UI_SCALE = 0.50
-VRCompanion.MAX_HUD_UI_SCALE = 1.50
+
+-- HUD Group Margin and scale constants. Every group starts from the same defaults, which match
+-- where the HUD sat under the old global inset.
+VRCompanion.HUD_GROUP_NAMES = { "map", "speedometer", "info", "controls" }
+VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X = 0.30
+VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y = 0.22
+VRCompanion.DEFAULT_HUD_GROUP_SCALE = 0.82
+VRCompanion.MIN_HUD_GROUP_MARGIN = 0.0
+VRCompanion.MAX_HUD_GROUP_MARGIN = 0.45
+VRCompanion.MIN_HUD_GROUP_SCALE = 0.50
+VRCompanion.MAX_HUD_GROUP_SCALE = 1.50
 
 -- VR HUD Convergence Parity Constants
 VRCompanion.DEFAULT_CONVERGENCE_DEPTH = 1.8
@@ -33,6 +41,20 @@ VRCompanion.MIN_CONVERGENCE_DISPARITY = 0.0
 VRCompanion.MAX_CONVERGENCE_DISPARITY = 0.040
 VRCompanion.CONVERGENCE_PARALLAX_FACTOR = 0.3375
 VRCompanion.CONVERGENCE_SMOOTH_SPEED = 12.0
+
+-- Per-group HUD Group Margins and scale multipliers, by group name
+local function newDefaultHudGroupLayouts()
+    local layouts = {}
+    for _, name in ipairs(VRCompanion.HUD_GROUP_NAMES) do
+        layouts[name] = {
+            marginX = VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X,
+            marginY = VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y,
+            scale = VRCompanion.DEFAULT_HUD_GROUP_SCALE
+        }
+    end
+    return layouts
+end
+VRCompanion.hudGroupLayout = newDefaultHudGroupLayouts()
 
 -- VR Fill Level Element Positioning
 VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE = true
@@ -134,6 +156,20 @@ function VRCompanion:clamp(val, minVal, maxVal)
     return val
 end
 
+-- A group's margins and scale clamped to their ranges; anything not given falls back to its default
+function VRCompanion:sanitizeHudGroupLayout(marginX, marginY, scale)
+    return {
+        marginX = self:clamp(marginX or self.DEFAULT_HUD_GROUP_MARGIN_X, self.MIN_HUD_GROUP_MARGIN, self.MAX_HUD_GROUP_MARGIN),
+        marginY = self:clamp(marginY or self.DEFAULT_HUD_GROUP_MARGIN_Y, self.MIN_HUD_GROUP_MARGIN, self.MAX_HUD_GROUP_MARGIN),
+        scale = self:clamp(scale or self.DEFAULT_HUD_GROUP_SCALE, self.MIN_HUD_GROUP_SCALE, self.MAX_HUD_GROUP_SCALE)
+    }
+end
+
+-- Settings-file key prefix of a group, e.g. "vrSettings.hudGroupMap"
+local function hudGroupSettingsKey(groupName)
+    return "vrSettings.hudGroup" .. string.upper(string.sub(groupName, 1, 1)) .. string.sub(groupName, 2)
+end
+
 function VRCompanion:getUserSettingsPath()
     local getAppPathFn = getUserProfileAppPath or _G.getUserProfileAppPath
     if type(getAppPathFn) == "function" then
@@ -175,7 +211,14 @@ function VRCompanion:saveConfiguration(xmlPath)
         setXmlFloatFn(xmlFile, "vrSettings.hudInsetHorizontal", self.hudInsetX or self.DEFAULT_HUD_INSET_X)
         setXmlFloatFn(xmlFile, "vrSettings.hudInsetVertical", self.hudInsetY or self.DEFAULT_HUD_INSET_Y)
         setXmlFloatFn(xmlFile, "vrSettings.hudInsetTop", self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP)
-        setXmlFloatFn(xmlFile, "vrSettings.hudUiScale", self.hudUiScaleMultiplier or self.DEFAULT_HUD_UI_SCALE)
+        for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
+            local current = (self.hudGroupLayout or {})[groupName] or {}
+            local layout = self:sanitizeHudGroupLayout(current.marginX, current.marginY, current.scale)
+            local key = hudGroupSettingsKey(groupName)
+            setXmlFloatFn(xmlFile, key .. "MarginHorizontal", layout.marginX)
+            setXmlFloatFn(xmlFile, key .. "MarginVertical", layout.marginY)
+            setXmlFloatFn(xmlFile, key .. "Scale", layout.scale)
+        end
         setXmlFloatFn(xmlFile, "vrSettings.hudConvergenceDepth", self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH)
         if type(setXmlBoolFn) == "function" then
             setXmlBoolFn(xmlFile, "vrSettings.fillLevelUnderVehicle", self.fillLevelUnderVehicle == true)
@@ -208,8 +251,8 @@ end
 function VRCompanion:loadConfiguration(xmlPath)
     local insetX = self.DEFAULT_HUD_INSET_X
     local insetY = self.DEFAULT_HUD_INSET_Y
-    local scale = self.DEFAULT_HUD_UI_SCALE
     local insetTop = self.DEFAULT_HUD_INSET_TOP
+    local groupLayouts = newDefaultHudGroupLayouts()
     local renderingModeLoaded = false
 
     local loadXmlFn = loadXMLFile or _G.loadXMLFile
@@ -236,9 +279,13 @@ function VRCompanion:loadConfiguration(xmlPath)
                     insetTop = self:clamp(loadedInsetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
                 end
 
-                local loadedScale = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudUiScale")
-                if loadedScale ~= nil then scale = loadedScale end
+                for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
+                    local key = hudGroupSettingsKey(groupName)
+                    groupLayouts[groupName] = self:sanitizeHudGroupLayout(
+                        readXmlFloat(getXmlFloatFn, xmlFile, key .. "MarginHorizontal"),
+                        readXmlFloat(getXmlFloatFn, xmlFile, key .. "MarginVertical"),
+                        readXmlFloat(getXmlFloatFn, xmlFile, key .. "Scale"))
+                end
 
                 local loadedDepth = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.hudConvergenceDepth")
@@ -360,7 +407,8 @@ function VRCompanion:loadConfiguration(xmlPath)
         end
     end
 
-    self:configureHudInsets(insetX, insetY, scale, insetTop)
+    self.hudGroupLayout = groupLayouts
+    self:configureHudInsets(insetX, insetY, insetTop)
 
     -- First run: create the user settings file from the values just applied
     if not loadedUser and userPath ~= nil then

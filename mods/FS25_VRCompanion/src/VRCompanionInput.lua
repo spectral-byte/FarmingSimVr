@@ -184,30 +184,28 @@ function VRCompanion:registerActionEvents(force)
     end
 end
 
-function VRCompanion:consoleCommandSetHudInsets(insetXStr, insetYStr, scaleStr, topInsetStr)
+function VRCompanion:consoleCommandSetHudInsets(insetXStr, insetYStr, topInsetStr)
     local ix = tonumber(insetXStr)
     local iy = tonumber(insetYStr)
-    local sc = tonumber(scaleStr)
     local it = tonumber(topInsetStr)
     if ix == nil or iy == nil then
-        return string.format("Usage: vrHudInsets <insetX> <insetY> [scale] [topInset] (current: insetX=%.2f, insetY=%.2f, topInset=%.2f, scale=%.2f)",
+        return string.format("Usage: vrHudInsets <insetX> <insetY> [topInset] (HUD Safe Area, current: insetX=%.2f, insetY=%.2f, topInset=%.2f)",
             self.hudInsetX or self.DEFAULT_HUD_INSET_X,
             self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
-            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP,
-            self.hudUiScaleMultiplier or self.DEFAULT_HUD_UI_SCALE)
+            self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP)
     end
-    self:configureHudInsets(ix, iy, sc or self.hudUiScaleMultiplier, it or self.hudInsetTop or iy)
+    self:configureHudInsets(ix, iy, it or self.hudInsetTop or iy)
     self:applyHudInsets()
     self:saveConfiguration()
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
-            mission:showBlinkingWarning(string.format("VR HUD Insets: X=%.2f, Y=%.2f, Top=%.2f, Scale=%.2fx (Saved)",
-                self.hudInsetX, self.hudInsetY, self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP, self.effectiveUiScale), 2500)
+            mission:showBlinkingWarning(string.format("VR HUD Insets: X=%.2f, Y=%.2f, Top=%.2f (Saved)",
+                self.hudInsetX, self.hudInsetY, self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP), 2500)
         end)
     end
-    return string.format("VR HUD insets updated and saved: Left=%.2f, Right=%.2f, Bottom=%.2f, Top=%.2f, Scale=%.2fx",
-        self.hudAnchorLeft, self.hudAnchorRight, self.hudAnchorBottom, self.hudAnchorTop, self.effectiveUiScale)
+    return string.format("VR HUD insets updated and saved: Left=%.2f, Right=%.2f, Bottom=%.2f, Top=%.2f",
+        self.hudAnchorLeft, self.hudAnchorRight, self.hudAnchorBottom, self.hudAnchorTop)
 end
 
 function VRCompanion:consoleCommandSetHudTopInset(topInsetStr)
@@ -219,7 +217,7 @@ function VRCompanion:consoleCommandSetHudTopInset(topInsetStr)
     end
     local clampedTop = self:clamp(topVal, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
     self.hudInsetTop = clampedTop
-    self:configureHudInsets(self.hudInsetX, self.hudInsetY, self.hudUiScaleMultiplier, clampedTop)
+    self:configureHudInsets(self.hudInsetX, self.hudInsetY, clampedTop)
     self:applyHudInsets()
     self:saveConfiguration()
     local mission = g_currentMission or _G.g_currentMission
@@ -232,6 +230,51 @@ function VRCompanion:consoleCommandSetHudTopInset(topInsetStr)
     return string.format("VR HUD top inset set to: %.2f (top anchor: %.2f)", clampedTop, self.hudAnchorTop)
 end
 
+-- Usage text for vrHudGroup: the syntax followed by every group's current margins and scale
+function VRCompanion:getHudGroupUsage()
+    local lines = {
+        "Usage: vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]",
+        string.format("  margins %.2f to %.2f from the group's home corner, scale %.2f to %.2f",
+            self.MIN_HUD_GROUP_MARGIN, self.MAX_HUD_GROUP_MARGIN, self.MIN_HUD_GROUP_SCALE, self.MAX_HUD_GROUP_SCALE)
+    }
+    for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
+        local group = self.HUD_GROUPS[groupName]
+        local layout = self:getHudGroupLayout(groupName)
+        table.insert(lines, string.format("  %s (%s-%s): horizontal=%.2f, vertical=%.2f, scale=%.2f",
+            groupName, group.alignY, group.alignX, layout.marginX, layout.marginY, layout.scale))
+    end
+    return table.concat(lines, "\n")
+end
+
+function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, verticalStr, scaleStr)
+    local groupName = (groupStr ~= nil) and string.lower(tostring(groupStr)) or nil
+    local horizontal = tonumber(horizontalStr)
+    local vertical = tonumber(verticalStr)
+    local hasScale = (scaleStr ~= nil and scaleStr ~= "")
+    local scale = hasScale and tonumber(scaleStr) or nil
+    local function isNumber(v) return v ~= nil and v == v end
+    if groupName == nil or self.HUD_GROUPS[groupName] == nil
+        or not isNumber(horizontal) or not isNumber(vertical) or (hasScale and not isNumber(scale)) then
+        return self:getHudGroupUsage()
+    end
+
+    local layout = self:setHudGroupLayout(groupName, horizontal, vertical, scale)
+    -- 2D Floating Window Mode keeps the engine's layout; the margins apply on returning to VR
+    if not self.is2DViewActive then
+        self:repositionAllHudDisplays()
+    end
+    self:saveConfiguration()
+
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR HUD %s group: Horizontal=%.2f, Vertical=%.2f, Scale=%.2fx (Saved)",
+                groupName, layout.marginX, layout.marginY, layout.scale), 2500)
+        end)
+    end
+    return string.format("VR HUD %s group updated and saved: horizontal=%.2f, vertical=%.2f, scale=%.2f",
+        groupName, layout.marginX, layout.marginY, layout.scale)
+end
 function VRCompanion:consoleCommandSetHudState(stateStr)
     local st = tonumber(stateStr)
     if st == nil or st < 0 or st > 2 then
@@ -658,6 +701,7 @@ end
 -- Export to Input subsystem table
 VRCompanion.Input.registerActionEvents = function(self, ...) return VRCompanion.registerActionEvents(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudInsets = function(self, ...) return VRCompanion.consoleCommandSetHudInsets(VRCompanion, ...) end
+VRCompanion.Input.consoleCommandSetHudGroup = function(self, ...) return VRCompanion.consoleCommandSetHudGroup(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudTopInset = function(self, ...) return VRCompanion.consoleCommandSetHudTopInset(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudState = function(self, ...) return VRCompanion.consoleCommandSetHudState(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudFillUnderVehicle = function(self, ...) return VRCompanion.consoleCommandSetHudFillUnderVehicle(VRCompanion, ...) end

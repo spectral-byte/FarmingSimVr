@@ -1,7 +1,8 @@
 -- ====================================================================
 -- FS25 VR Companion Mod: HUD Subsystem
--- Manages in-engine VR HUD insets, UI scaling, stereoscopic convergence,
--- three-stage visibility state machine, and fill-level element repositioning.
+-- Manages in-engine VR HUD Group placement and scaling, the HUD Safe Area,
+-- stereoscopic convergence, the three-stage visibility state machine, and
+-- fill-level element repositioning.
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -29,7 +30,6 @@ if VRCompanion.hudState == nil then VRCompanion.hudState = VRCompanion.HUD_STATE
 if VRCompanion.hudInsetX == nil then VRCompanion.hudInsetX = VRCompanion.DEFAULT_HUD_INSET_X end
 if VRCompanion.hudInsetY == nil then VRCompanion.hudInsetY = VRCompanion.DEFAULT_HUD_INSET_Y end
 if VRCompanion.hudInsetTop == nil then VRCompanion.hudInsetTop = VRCompanion.DEFAULT_HUD_INSET_TOP end
-if VRCompanion.hudUiScaleMultiplier == nil then VRCompanion.hudUiScaleMultiplier = VRCompanion.DEFAULT_HUD_UI_SCALE end
 if VRCompanion.hudConvergenceDepth == nil then VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH end
 if VRCompanion.hudAnchorLeftBase == nil then VRCompanion.hudAnchorLeftBase = VRCompanion.DEFAULT_HUD_INSET_X end
 if VRCompanion.hudAnchorRightBase == nil then VRCompanion.hudAnchorRightBase = 1.0 - VRCompanion.DEFAULT_HUD_INSET_X end
@@ -39,7 +39,6 @@ if VRCompanion.hudAnchorLeft == nil then VRCompanion.hudAnchorLeft = VRCompanion
 if VRCompanion.hudAnchorRight == nil then VRCompanion.hudAnchorRight = VRCompanion.hudAnchorRightBase end
 if VRCompanion.hudAnchorBottom == nil then VRCompanion.hudAnchorBottom = VRCompanion.hudAnchorBottomBase end
 if VRCompanion.hudAnchorTop == nil then VRCompanion.hudAnchorTop = VRCompanion.hudAnchorTopBase end
-if VRCompanion.effectiveUiScale == nil then VRCompanion.effectiveUiScale = VRCompanion.DEFAULT_HUD_UI_SCALE end
 if VRCompanion.currentConvergenceOffset == nil then VRCompanion.currentConvergenceOffset = 0.0 end
 -- The four HUD Groups (CONTEXT.md, ADR-0022). Each group lists its engine displays and its
 -- fixed home corner, and says whether it shows in the Streamlined and Full HUD. Placement and
@@ -51,17 +50,91 @@ VRCompanion.HUD_GROUPS = {
     controls = { displays = { "InputHelpDisplay" }, alignX = "left", alignY = "top", streamlined = false, full = true }
 }
 
--- Not in any group: bottom-centered, and shown in both the Streamlined and Full HUD.
+-- Not in any group: bottom-centered on the Speedometer group's bottom margin, drawn at that
+-- group's scale, and shown in both the Streamlined and Full HUD.
 local CONTEXT_ACTION_DISPLAY = "ContextActionDisplay"
-local UNGROUPED_ALIGNMENT = { alignX = "left", alignY = "bottom" }
+local CONTEXT_ACTION_ANCHOR_GROUP = "speedometer"
 
+-- The group a display belongs to, and the group's name
 local function findHudGroup(displayName)
-    for _, group in pairs(VRCompanion.HUD_GROUPS) do
+    for groupName, group in pairs(VRCompanion.HUD_GROUPS) do
         for _, member in ipairs(group.displays) do
-            if member == displayName then return group end
+            if member == displayName then return group, groupName end
         end
     end
-    return nil
+    return nil, nil
+end
+
+-- A group's HUD Group Margins and scale multiplier, clamped to their ranges
+function VRCompanion:getHudGroupLayout(groupName)
+    local stored = (self.hudGroupLayout or {})[groupName] or {}
+    return self:sanitizeHudGroupLayout(stored.marginX, stored.marginY, stored.scale)
+end
+
+-- Sets a group's margins, and its scale when one is given. Returns the clamped layout, or nil for
+-- a name that is not a HUD Group.
+function VRCompanion:setHudGroupLayout(groupName, marginX, marginY, scale)
+    if self.HUD_GROUPS[groupName] == nil then return nil end
+    if self.hudGroupLayout == nil then self.hudGroupLayout = {} end
+    local current = self:getHudGroupLayout(groupName)
+    local layout = self:sanitizeHudGroupLayout(marginX, marginY, scale or current.scale)
+    self.hudGroupLayout[groupName] = layout
+    return layout
+end
+
+-- The game's own UI scale setting
+function VRCompanion:getHudBaseUiScale()
+    local gs = g_gameSettings or _G.g_gameSettings
+    local gsClass = GameSettings or _G.GameSettings
+    if gs ~= nil and type(gs.getValue) == "function" and gsClass ~= nil and gsClass.SETTING ~= nil and gsClass.SETTING.UI_SCALE ~= nil then
+        return gs:getValue(gsClass.SETTING.UI_SCALE) or 1.0
+    end
+    return 1.0
+end
+
+-- The scale a group is drawn at: the game's UI scale setting times the group's own scale
+function VRCompanion:getHudGroupScale(groupName)
+    return self:getHudBaseUiScale() * self:getHudGroupLayout(groupName).scale
+end
+
+-- Width and height of a display, 0 where it does not say
+local function getDisplaySize(display)
+    local w, h = 0, 0
+    if type(display.getWidth) == "function" then
+        local ok, v = pcall(display.getWidth, display)
+        if ok and type(v) == "number" then w = v end
+    elseif type(display.width) == "number" then
+        w = display.width
+    end
+    if type(display.getHeight) == "function" then
+        local ok, v = pcall(display.getHeight, display)
+        if ok and type(v) == "number" then h = v end
+    elseif type(display.height) == "number" then
+        h = display.height
+    end
+    return w, h
+end
+
+-- The scale a display is drawn at, taken from its group
+function VRCompanion:getHudDisplayScale(displayName)
+    local _, groupName = findHudGroup(displayName)
+    return self:getHudGroupScale(groupName or CONTEXT_ACTION_ANCHOR_GROUP)
+end
+
+-- Where a display's bottom-left corner goes: its group's outer edges sit at the group's margins
+-- from the home corner, with the display's width or height subtracted for right- and top-anchored
+-- groups. The convergence offset moves every display horizontally by the same amount.
+function VRCompanion:getHudDisplayPosition(display, displayName, convergenceOffset)
+    local offset = convergenceOffset or 0.0
+    local group, groupName = findHudGroup(displayName)
+    if group == nil then
+        return 0.5 + offset, self:getHudGroupLayout(CONTEXT_ACTION_ANCHOR_GROUP).marginY
+    end
+    local layout = self:getHudGroupLayout(groupName)
+    local w, h = getDisplaySize(display)
+    local x = (group.alignX == "right") and (1.0 - layout.marginX - w) or layout.marginX
+    local y = (group.alignY == "top") and (1.0 - layout.marginY - h) or layout.marginY
+    return x + offset, y
 end
 
 local HUD_HOOKED_CLASSES = {
@@ -201,10 +274,12 @@ function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
     end
 
     local currentOffset = offset or self.currentConvergenceOffset or 0.0
-    local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_INSET_X)
+    -- The fill levels sit under the speedometer, so they follow the Speedometer group's margins and scale
+    local speedometerLayout = self:getHudGroupLayout("speedometer")
+    local baseRight = 1.0 - speedometerLayout.marginX
     local shiftedRight = self:clamp(baseRight + currentOffset, 0.0, 1.0)
-    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
-    local uiScale = self.effectiveUiScale or self.DEFAULT_HUD_UI_SCALE
+    local baseBottom = speedometerLayout.marginY
+    local uiScale = self:getHudGroupScale("speedometer")
 
     local flHeight = nil
     if type(display.getHeight) == "function" then
@@ -268,9 +343,6 @@ function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
     end
 
     local flPosX = shiftedRight - flWidth
-    if self.hudAnchorLeft ~= nil and flPosX < self.hudAnchorLeft then
-        flPosX = self.hudAnchorLeft
-    end
 
     display.anchorX = flPosX
     display.anchorY = fillBottom
@@ -337,7 +409,8 @@ function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
     end
 
     if sm ~= nil and targetSmBottom ~= baseBottom and type(sm.setPosition) == "function" then
-        pcall(sm.setPosition, sm, shiftedRight, targetSmBottom)
+        local smWidth = getDisplaySize(sm)
+        pcall(sm.setPosition, sm, shiftedRight - smWidth, targetSmBottom)
     end
 
     return flPosX, fillBottom, targetSmBottom
@@ -430,40 +503,29 @@ function VRCompanion:repositionHudForConvergence()
     if hud == nil then return end
 
     local offset = self.currentConvergenceOffset or 0.0
-    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_INSET_Y
-    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_INSET_TOP)
-    local shiftedLeft = self.hudAnchorLeft
-    local shiftedRight = self.hudAnchorRight
 
     local sm = hud.speedMeter or hud.speedMeterDisplay
     local fl = self:getFillLevelsDisplay(hud)
-    local targetSmBottom = baseBottom
+    local liftedSmBottom = nil
 
     if fl ~= nil and self.fillLevelUnderVehicle then
-        local _, _, liftedSmBottom = self:positionFillLevelsUnderVehicle(fl, offset)
-        if liftedSmBottom ~= nil then
-            targetSmBottom = liftedSmBottom
-        end
+        local _, _, targetSmBottom = self:positionFillLevelsUnderVehicle(fl, offset)
+        liftedSmBottom = targetSmBottom
     end
 
-    -- Each display sits at its group's home corner. The speedometer's bottom may be lifted
-    -- above the fill levels.
-    local function placeAtHomeCorner(display, displayName, bottom)
+    -- Each display sits at its group's margins, shifted by the same convergence offset. The
+    -- speedometer's bottom may be lifted above the fill levels.
+    local function place(display, displayName, bottom)
         if display == nil or type(display.setPosition) ~= "function" then return end
-        local group = findHudGroup(displayName) or UNGROUPED_ALIGNMENT
-        local x = (group.alignX == "right") and shiftedRight or shiftedLeft
-        local y = (group.alignY == "top") and baseTop or (bottom or baseBottom)
-        pcall(display.setPosition, display, x, y)
+        local x, y = self:getHudDisplayPosition(display, displayName, offset)
+        pcall(display.setPosition, display, x, bottom or y)
     end
 
-    placeAtHomeCorner(sm, "SpeedMeterDisplay", targetSmBottom)
-    placeAtHomeCorner(hud.inputHelp or hud.inputHelpDisplay, "InputHelpDisplay")
-    placeAtHomeCorner(hud.gameInfo or hud.gameInfoDisplay, "GameInfoDisplay")
-    placeAtHomeCorner(hud.ingameMap or hud.ingameMapDisplay, "IngameMap")
-    local ca = hud.contextAction or hud.contextActionDisplay
-    if ca ~= nil and type(ca.setPosition) == "function" then
-        pcall(ca.setPosition, ca, 0.5 + offset, baseBottom)
-    end
+    place(sm, "SpeedMeterDisplay", liftedSmBottom)
+    place(hud.inputHelp or hud.inputHelpDisplay, "InputHelpDisplay")
+    place(hud.gameInfo or hud.gameInfoDisplay, "GameInfoDisplay")
+    place(hud.ingameMap or hud.ingameMapDisplay, "IngameMap")
+    place(hud.contextAction or hud.contextActionDisplay, CONTEXT_ACTION_DISPLAY)
 end
 
 function VRCompanion:getHudState()
@@ -599,7 +661,9 @@ function VRCompanion:onHudToggleAction(...)
     return self:cycleHudState()
 end
 
-function VRCompanion:calculateHudAnchors(insetX, insetY, scaleMultiplier, insetTop)
+-- The HUD Safe Area: the engine's global HUD anchors, which keep everything outside the HUD Groups
+-- (warnings, notifications, other mods' HUDs) inside the lens. It no longer places the groups.
+function VRCompanion:calculateHudAnchors(insetX, insetY, insetTop)
     local clampedInsetX = self:clamp(insetX or self.DEFAULT_HUD_INSET_X, self.MIN_HUD_INSET_X, self.MAX_HUD_INSET_X)
     local clampedInsetY = self:clamp(insetY or self.DEFAULT_HUD_INSET_Y, self.MIN_HUD_INSET_Y, self.MAX_HUD_INSET_Y)
     -- No top inset: the top edge follows an explicitly given vertical inset, else DEFAULT_HUD_INSET_TOP
@@ -608,18 +672,17 @@ function VRCompanion:calculateHudAnchors(insetX, insetY, scaleMultiplier, insetT
         rawInsetTop = (insetY ~= nil) and clampedInsetY or self.DEFAULT_HUD_INSET_TOP
     end
     local clampedInsetTop = self:clamp(rawInsetTop, self.MIN_HUD_INSET_TOP, self.MAX_HUD_INSET_TOP)
-    local clampedScale = self:clamp(scaleMultiplier or self.DEFAULT_HUD_UI_SCALE, self.MIN_HUD_UI_SCALE, self.MAX_HUD_UI_SCALE)
 
     local left = clampedInsetX
     local right = 1.0 - clampedInsetX
     local bottom = clampedInsetY
     local top = 1.0 - clampedInsetTop
 
-    return left, right, bottom, top, clampedScale
+    return left, right, bottom, top
 end
 
-function VRCompanion:configureHudInsets(insetX, insetY, scaleMultiplier, insetTop)
-    local left, right, bottom, top, scale = self:calculateHudAnchors(insetX, insetY, scaleMultiplier, insetTop)
+function VRCompanion:configureHudInsets(insetX, insetY, insetTop)
+    local left, right, bottom, top = self:calculateHudAnchors(insetX, insetY, insetTop)
     self.hudInsetX = self:clamp(insetX or self.DEFAULT_HUD_INSET_X, self.MIN_HUD_INSET_X, self.MAX_HUD_INSET_X)
     self.hudInsetY = self:clamp(insetY or self.DEFAULT_HUD_INSET_Y, self.MIN_HUD_INSET_Y, self.MAX_HUD_INSET_Y)
     if insetTop ~= nil then
@@ -629,7 +692,6 @@ function VRCompanion:configureHudInsets(insetX, insetY, scaleMultiplier, insetTo
     else
         self.hudInsetTop = self.DEFAULT_HUD_INSET_TOP
     end
-    self.hudUiScaleMultiplier = scale
     self.hudAnchorLeftBase = left
     self.hudAnchorRightBase = right
     self.hudAnchorBottomBase = bottom
@@ -638,7 +700,6 @@ function VRCompanion:configureHudInsets(insetX, insetY, scaleMultiplier, insetTo
     self.hudAnchorRight = right
     self.hudAnchorBottom = bottom
     self.hudAnchorTop = top
-    self.effectiveUiScale = scale
     self.currentConvergenceOffset = 0.0
 end
 
@@ -653,8 +714,6 @@ function VRCompanion:getHudInsets()
         insetX = self.hudInsetX or self.DEFAULT_HUD_INSET_X,
         insetY = self.hudInsetY or self.DEFAULT_HUD_INSET_Y,
         insetTop = self.hudInsetTop or self.hudInsetY or self.DEFAULT_HUD_INSET_TOP,
-        scaleMultiplier = self.hudUiScaleMultiplier or self.DEFAULT_HUD_UI_SCALE,
-        effectiveScale = self.effectiveUiScale or self.DEFAULT_HUD_UI_SCALE,
         convergenceOffset = self.currentConvergenceOffset or 0.0,
         convergenceDisparity = self.currentConvergenceDisparity or 0.0,
         convergenceDepth = self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH,
@@ -667,20 +726,22 @@ end
 function VRCompanion:positionHudDisplay(display, displayName)
     if display == nil then return end
 
+    local scale = self:getHudDisplayScale(displayName)
+
     if displayName == "FillLevelsDisplay" and self.fillLevelUnderVehicle then
         if type(display.setScale) == "function" then
-            pcall(function() display:setScale(self.effectiveUiScale) end)
+            pcall(function() display:setScale(scale) end)
         end
         self:positionFillLevelsUnderVehicle(display)
         return
     end
 
-    local anchorConfig = findHudGroup(displayName) or UNGROUPED_ALIGNMENT
-    local w = (type(display.getWidth) == "function" and display:getWidth()) or display.width or 0
-    local h = (type(display.getHeight) == "function" and display:getHeight()) or display.height or 0
+    -- Scale first, so the display's size is measured as it will be drawn
+    if type(display.setScale) == "function" then
+        pcall(function() display:setScale(scale) end)
+    end
 
-    local anchorX = (anchorConfig.alignX == "right") and (self.hudAnchorRight - w) or self.hudAnchorLeft
-    local anchorY = (anchorConfig.alignY == "top") and (self.hudAnchorTop - h) or self.hudAnchorBottom
+    local anchorX, anchorY = self:getHudDisplayPosition(display, displayName)
 
     display.anchorX = anchorX
     display.anchorY = anchorY
@@ -688,13 +749,10 @@ function VRCompanion:positionHudDisplay(display, displayName)
     display.anchorRight = self.hudAnchorRight
     display.anchorBottom = self.hudAnchorBottom
     display.anchorTop = self.hudAnchorTop
-    display.vrUiScale = self.effectiveUiScale
+    display.vrUiScale = scale
 
     if type(display.setPosition) == "function" then
         pcall(function() display:setPosition(anchorX, anchorY) end)
-    end
-    if type(display.setScale) == "function" then
-        pcall(function() display:setScale(self.effectiveUiScale) end)
     end
     if type(display.storeScaledValues) == "function" then
         pcall(function() display:storeScaledValues() end)
@@ -706,7 +764,6 @@ function VRCompanion:positionHudDisplay(display, displayName)
         pcall(function() display:updatePosition() end)
     end
 end
-
 function VRCompanion:repositionAllHudDisplays(hud)
     local targetHud = hud
     if targetHud == nil then
@@ -756,21 +813,14 @@ function VRCompanion:applyHudInsets()
     _G.g_hudAnchorBottom = self.hudAnchorBottom
     _G.g_hudAnchorTop = self.hudAnchorTop
 
-    local baseScale = 1.0
-    local gs = g_gameSettings or _G.g_gameSettings
-    local gsClass = GameSettings or _G.GameSettings
-    if gs ~= nil and type(gs.getValue) == "function" and gsClass ~= nil and gsClass.SETTING ~= nil and gsClass.SETTING.UI_SCALE ~= nil then
-        baseScale = gs:getValue(gsClass.SETTING.UI_SCALE) or 1.0
-    end
     if self.origUiScale == nil then
-        self.origUiScale = baseScale
+        self.origUiScale = self:getHudBaseUiScale()
     end
-    self.effectiveUiScale = baseScale * self.hudUiScaleMultiplier
 
     self:repositionAllHudDisplays()
 
-    print(string.format("[FS25_VR] Applied VR HUD Insets: Left=%.2f, Right=%.2f, Bottom=%.2f, Top=%.2f (UI Scale: %.2fx)",
-        self.hudAnchorLeft, self.hudAnchorRight, self.hudAnchorBottom, self.hudAnchorTop, self.effectiveUiScale))
+    print(string.format("[FS25_VR] Applied VR HUD Safe Area: Left=%.2f, Right=%.2f, Bottom=%.2f, Top=%.2f",
+        self.hudAnchorLeft, self.hudAnchorRight, self.hudAnchorBottom, self.hudAnchorTop))
 end
 
 function VRCompanion:restoreHudInsets(preserveOrigAnchors)
