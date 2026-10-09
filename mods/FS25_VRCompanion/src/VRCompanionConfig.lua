@@ -57,11 +57,9 @@ local function newDefaultHudGroupLayouts()
 end
 VRCompanion.hudGroupLayout = newDefaultHudGroupLayouts()
 
--- VR Fill Level Element Positioning
-VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE = true
-VRCompanion.fillLevelUnderVehicle = VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE
-VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP = 0.004
-VRCompanion.hudFillLevelGap = VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP
+-- Speedometer group stacking: the fixed gap between the speedometer and the fill levels, and between
+-- fill level rows, at scale 1.0. It is multiplied by the group's scale and is not adjustable.
+VRCompanion.HUD_FILL_LEVEL_GAP = 0.004
 
 -- VR HUD Notifications
 VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION = false
@@ -221,7 +219,6 @@ function VRCompanion:saveConfiguration(xmlPath)
         end
         setXmlFloatFn(xmlFile, "vrSettings.hudConvergenceDepth", self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH)
         if type(setXmlBoolFn) == "function" then
-            setXmlBoolFn(xmlFile, "vrSettings.fillLevelUnderVehicle", self.fillLevelUnderVehicle == true)
             setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
             setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
             setXmlBoolFn(xmlFile, "vrSettings.allowObliqueProjection", self.allowObliqueProjection == true)
@@ -240,7 +237,6 @@ function VRCompanion:saveConfiguration(xmlPath)
             local modeStr = (self.renderingMode == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "DualPass" or "AFR"
             setXmlStringFn(xmlFile, "vrSettings.renderingMode", modeStr)
         end
-        setXmlFloatFn(xmlFile, "vrSettings.hudFillLevelGap", self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP)
         setXmlFloatFn(xmlFile, "vrSettings.snapTurnAngle", self:getSnapTurnAngleDegrees())
         for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
             setXmlFloatFn(xmlFile, "vrSettings." .. field, self[field] or self.DEFAULT_DLSS_NEAR_CLIPS[mode])
@@ -302,20 +298,6 @@ function VRCompanion:loadConfiguration(xmlPath)
                     self.hudConvergenceDepth = loadedDepth
                 else
                     self.hudConvergenceDepth = self.DEFAULT_CONVERGENCE_DEPTH
-                end
-
-                local loadedFillUnder = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
-                    "vrSettings.fillLevelUnderVehicle")
-                if loadedFillUnder ~= nil then
-                    self.fillLevelUnderVehicle = loadedFillUnder
-                end
-
-                local loadedGap = readXmlFloat(getXmlFloatFn, xmlFile,
-                    "vrSettings.hudFillLevelGap")
-                if loadedGap ~= nil then
-                    self.hudFillLevelGap = self:clamp(loadedGap, 0.0, 0.05)
-                else
-                    self.hudFillLevelGap = self.DEFAULT_HUD_FILL_LEVEL_GAP
                 end
 
                 local loadedShowNotification = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
@@ -400,12 +382,6 @@ function VRCompanion:loadConfiguration(xmlPath)
 
     if self.hudConvergenceDepth == nil then
         self.hudConvergenceDepth = self.DEFAULT_CONVERGENCE_DEPTH
-    end
-    if self.hudFillLevelGap == nil then
-        self.hudFillLevelGap = self.DEFAULT_HUD_FILL_LEVEL_GAP
-    end
-    if self.fillLevelUnderVehicle == nil then
-        self.fillLevelUnderVehicle = self.DEFAULT_FILL_LEVEL_UNDER_VEHICLE
     end
     if self.showHudLoadNotification == nil then
         self.showHudLoadNotification = self.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION

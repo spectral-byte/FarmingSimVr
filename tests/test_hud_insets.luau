@@ -526,8 +526,6 @@ test("DefaultsMatchTheValuesPreviouslyYieldedByModDesc", function()
     assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y == 0.22, "group vertical margin default")
     assert(VRCompanion.DEFAULT_HUD_GROUP_SCALE == 0.82, "group scale default")
     assert(VRCompanion.DEFAULT_CONVERGENCE_DEPTH == 1.8, "convergence depth default")
-    assert(VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP == 0.004, "fill level gap default")
-    assert(VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE == true, "fill level under vehicle default")
     assert(VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION == false, "load notification default")
     assert(VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE == true, "recenter tracking default")
     assert(math.abs(VRCompanion.DEFAULT_SNAP_TURN_ANGLE - math.rad(90)) < 0.0001, "snap turn default")
@@ -566,8 +564,6 @@ test("SavedSettingsRoundTripThroughLoader", function()
     setGroup("info", 0.09, 0.10, 0.60)
     setGroup("controls", 0.11, 0.12, 1.40)
     VRCompanion.hudConvergenceDepth = 2.4
-    VRCompanion.hudFillLevelGap = 0.01
-    VRCompanion.fillLevelUnderVehicle = false
     VRCompanion.showHudLoadNotification = true
     VRCompanion.recenterVrTrackingSpace = false
     VRCompanion.allowObliqueProjection = true
@@ -582,8 +578,6 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion:configureHudSafeArea()
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do VRCompanion:setHudGroupLayout(groupName, 0.30, 0.22, 0.82) end
     VRCompanion.hudConvergenceDepth = nil
-    VRCompanion.hudFillLevelGap = nil
-    VRCompanion.fillLevelUnderVehicle = nil
     VRCompanion.showHudLoadNotification = nil
     VRCompanion.recenterVrTrackingSpace = nil
     VRCompanion.allowObliqueProjection = nil
@@ -605,8 +599,6 @@ test("SavedSettingsRoundTripThroughLoader", function()
         assert(near(layout.scale, expected[3]), groupName .. " scale must round-trip")
     end
     assert(math.abs(VRCompanion.hudConvergenceDepth - 2.4) < 0.0001, "convergence depth must round-trip")
-    assert(math.abs(VRCompanion.hudFillLevelGap - 0.01) < 0.0001, "fill level gap must round-trip")
-    assert(VRCompanion.fillLevelUnderVehicle == false, "fill level under vehicle must round-trip")
     assert(VRCompanion.showHudLoadNotification == true, "load notification must round-trip")
     assert(VRCompanion.recenterVrTrackingSpace == false, "recenter tracking must round-trip")
     assert(VRCompanion.allowObliqueProjection == true, "oblique projection must round-trip")
@@ -622,10 +614,8 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion.dlssNearClipOnFoot = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT
     VRCompanion.allowObliqueProjection = VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION
     VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
-    VRCompanion.fillLevelUnderVehicle = VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE
     VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
     VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
-    VRCompanion.hudFillLevelGap = VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP
     VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
     VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)
     VRCompanion:configureHudSafeArea()
@@ -782,8 +772,6 @@ test("RuntimeStateStartsFromDefaultConstants", function()
             assert(layout.scale == fresh.DEFAULT_HUD_GROUP_SCALE, groupName .. " scale starts at its default")
         end
         assert(fresh.hudConvergenceDepth == fresh.DEFAULT_CONVERGENCE_DEPTH, "convergence depth starts at its default")
-        assert(fresh.hudFillLevelGap == fresh.DEFAULT_HUD_FILL_LEVEL_GAP, "fill level gap starts at its default")
-        assert(fresh.fillLevelUnderVehicle == fresh.DEFAULT_FILL_LEVEL_UNDER_VEHICLE, "fill level under vehicle starts at its default")
         assert(fresh.showHudLoadNotification == fresh.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "load notification starts at its default")
         assert(fresh.recenterVrTrackingSpace == fresh.DEFAULT_RECENTER_VR_TRACKING_SPACE, "recenter tracking starts at its default")
         assert(fresh.snapTurnAngle == fresh.DEFAULT_SNAP_TURN_ANGLE, "snap turn angle starts at its default")
@@ -802,7 +790,7 @@ test("RuntimeStateStartsFromDefaultConstants", function()
     -- The runtime values are assigned from the constants, not from a second copy of the literal
     local fs = require("@lune/fs")
     local configSource = fs.readFile("mods/FS25_VRCompanion/src/VRCompanionConfig.lua")
-    for _, field in ipairs({ "fillLevelUnderVehicle", "showHudLoadNotification", "recenterVrTrackingSpace", "hudFillLevelGap", "allowObliqueProjection" }) do
+    for _, field in ipairs({ "showHudLoadNotification", "recenterVrTrackingSpace", "allowObliqueProjection" }) do
         local literal = string.match(configSource, "\nVRCompanion%." .. field .. " = ([%w%.]+)\n")
         assert(literal == nil or string.find(literal, "DEFAULT_", 1, true) ~= nil,
             string.format("VRCompanion.%s must be initialised from its DEFAULT_* constant, got %s", field, tostring(literal)))
@@ -832,8 +820,6 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     VRCompanion:configureHudSafeArea(0.10, 0.10)
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do VRCompanion:setHudGroupLayout(groupName, 0.01, 0.02, 1.30) end
     VRCompanion.hudConvergenceDepth = nil
-    VRCompanion.hudFillLevelGap = nil
-    VRCompanion.fillLevelUnderVehicle = nil
     VRCompanion.showHudLoadNotification = nil
     VRCompanion.recenterVrTrackingSpace = nil
     VRCompanion.allowObliqueProjection = nil
@@ -853,8 +839,6 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
         assert(near(layout.scale, VRCompanion.DEFAULT_HUD_GROUP_SCALE), groupName .. " scale default applied")
     end
     assert(VRCompanion.hudConvergenceDepth == VRCompanion.DEFAULT_CONVERGENCE_DEPTH, "convergence depth default applied")
-    assert(VRCompanion.hudFillLevelGap == VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP, "fill level gap default applied")
-    assert(VRCompanion.fillLevelUnderVehicle == VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE, "fill level under vehicle default applied")
     assert(VRCompanion.showHudLoadNotification == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "load notification default applied")
     assert(VRCompanion.recenterVrTrackingSpace == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "recenter tracking default applied")
     assert(VRCompanion.allowObliqueProjection == VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION, "oblique projection default applied")
@@ -877,8 +861,6 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
         assert(near(store[key .. "Scale"], VRCompanion.DEFAULT_HUD_GROUP_SCALE), "saved " .. groupName .. " scale")
     end
     assert(math.abs(store["vrSettings.hudConvergenceDepth"] - VRCompanion.DEFAULT_CONVERGENCE_DEPTH) < 0.0001, "saved convergence depth")
-    assert(math.abs(store["vrSettings.hudFillLevelGap"] - VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP) < 0.0001, "saved fill level gap")
-    assert(store["vrSettings.fillLevelUnderVehicle"] == VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE, "saved fill level under vehicle")
     assert(store["vrSettings.showHudLoadNotification"] == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "saved load notification")
     assert(store["vrSettings.recenterVrTrackingSpace"] == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "saved recenter tracking")
     assert(store["vrSettings.allowObliqueProjection"] == VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION, "saved oblique projection")
@@ -969,197 +951,149 @@ test("ResolvesFillLevelsDisplayAcrossAllHierarchyVariants", function()
     _G.g_fillLevelsDisplay = nil
 end)
 
-test("PositionsFillLevelsDirectlyUnderVehicleSpeedMeter", function()
-    resetHudSettings()
-    setGroup("speedometer", 0.35, 0.25, 0.50) -- User's exact configured settings
-    VRCompanion.fillLevelUnderVehicle = true
-
-    local mockSpeedMeter = {
-        name = "SpeedMeterDisplay",
-        width = 0.10,
-        height = 0.12,
-        setPosition = function(self, x, y) self.position = { x = x, y = y } end
-    }
-    local mockFill = {
-        name = "FillLevelsDisplay",
-        width = 0.08,
-        height = 0.03,
-        setPosition = function(self, x, y) self.position = { x = x, y = y } end
-    }
-
-    _G.g_currentMission = {
-        hud = {
-            speedMeter = mockSpeedMeter,
-            fillLevels = mockFill
-        }
-    }
-
-    local flPosX, fillBottom, targetSmBottom = VRCompanion:positionFillLevelsUnderVehicle(mockFill)
-
-    -- Right anchor = 1.0 - 0.35 = 0.65
-    -- SpeedMeter bottom = 0.25, smLowestY = 0.25
-    -- Fill width = 0.08, flPosX = shiftedRight - flWidth = 0.65 - 0.08 = 0.57 (so right boundary is at 0.65)
-    -- Fill height = 0.03, gap = 0.004 * 0.50 = 0.002
-    -- fillBottom = 0.25 - 0.002 - 0.03 = 0.218
-    assert(math.abs(flPosX - 0.57) < 0.0001, "FillLevels must position its right edge at shiftedRight 0.65")
-    assert(math.abs(fillBottom - 0.218) < 0.0001, "FillLevels must be positioned directly under SpeedMeter at 0.218")
-    assert(math.abs(targetSmBottom - 0.25) < 0.0001, "SpeedMeter stays at base bottom 0.25 when ample space exists")
-
-    assert(mockFill.position ~= nil)
-    assert(math.abs(mockFill.position.x - 0.57) < 0.0001)
-    assert(math.abs(mockFill.position.y - 0.218) < 0.0001)
-
-    _G.g_currentMission = nil
-end)
-
-test("AutoLiftsSpeedMeterWhenFillLevelsApproachBottomBoundary", function()
-    -- Minimal bottom margin: base bottom = 0.02, uiScale = 1.0
-    resetHudSettings()
-    setGroup("speedometer", 0.20, 0.02, 1.0)
-    VRCompanion.fillLevelUnderVehicle = true
-    VRCompanion.hudFillLevelGap = 0.004
-
-    local mockSmPos = nil
-    local mockSpeedMeter = {
-        width = 0.10,
-        setPosition = function(self, x, y) mockSmPos = { x = x, y = y } end
-    }
-    local mockFill = {
-        height = 0.04,
-        setPosition = function(self, x, y) self.position = { x = x, y = y } end
-    }
-
-    _G.g_currentMission = {
-        hud = {
-            speedMeter = mockSpeedMeter,
-            fillLevels = mockFill
-        }
-    }
-
-    local flPosX, fillBottom, targetSmBottom = VRCompanion:positionFillLevelsUnderVehicle(mockFill)
-
-    -- smLowestY = 0.02, gap = 0.004 * 1.0 = 0.004
-    -- fillBottom = 0.02 - 0.004 - 0.04 = -0.024 (< 0.015)
-    -- So fillBottom is clamped to min margin 0.015
-    -- targetSmBottom lifted to 0.015 + 0.04 + 0.004 = 0.059
-    assert(math.abs(fillBottom - 0.015) < 0.0001, "fillBottom clamped to min margin 0.015")
-    assert(math.abs(targetSmBottom - 0.059) < 0.0001, "targetSmBottom lifted to 0.059")
-    assert(mockSmPos ~= nil, "SpeedMeter must be repositioned to lifted height")
-    assert(math.abs(mockSmPos.y - 0.059) < 0.0001, "SpeedMeter positioned at lifted height")
-    assert(math.abs(mockSmPos.x - (0.80 - 0.10)) < 0.0001, "SpeedMeter keeps its outer right edge at the group's horizontal margin")
-
-    _G.g_currentMission = nil
-end)
-
-test("SavesAndLoadsFillLevelUnderVehicleConfiguration", function()
-    local savedData = {}
-    _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
-    _G.createFolder = function(folder) end
-    _G.createXMLFile = function(tag, path, rootNode) return 888 end
-    _G.setXMLFloat = function(xmlFile, key, val) savedData[key] = val end
-    _G.setXMLBool = function(xmlFile, key, val) savedData[key] = val end
-    _G.saveXMLFile = function(xmlFile) end
-    _G.delete = function(xmlFile) end
-
-    VRCompanion.fillLevelUnderVehicle = true
-    VRCompanion:saveConfiguration()
-    assert(savedData["vrSettings.fillLevelUnderVehicle"] == true, "fillLevelUnderVehicle must be saved to XML")
-
-    -- Test loading from XML
-    _G.loadXMLFile = function(tag, path) return 777 end
-    _G.getXMLFloat = function(xmlFile, key) return nil end
-    _G.getXMLBool = function(xmlFile, key)
-        if key == "vrSettings.fillLevelUnderVehicle" then return false end
-        return nil
+-- Speedometer group (spec #50, ticket #54): the fill levels are stacked directly under the speedometer
+local function makeStackHud(fillLevelCount)
+    local hud = makeHud()
+    hud.speedMeter = makeDisplay(0.10, 0.12)
+    hud.fillLevels = makeDisplay(0.08, 0.03)
+    if fillLevelCount ~= nil then
+        hud.fillLevels.fillLevelData = {}
+        for i = 1, fillLevelCount do hud.fillLevels.fillLevelData[i] = {} end
     end
+    VRCompanion.activeFillLevelsDisplay = nil
+    return hud
+end
 
-    VRCompanion:loadConfiguration("mockSettings.xml")
-    assert(VRCompanion.fillLevelUnderVehicle == false, "Must load false from XML when configured")
+test("StacksTheFillLevelsDirectlyUnderTheSpeedometerWithTheGroupsBottomMarginAtTheirBottom", function()
+    local hud = makeStackHud()
+    loadMapWith(hud)
+    setGroup("speedometer", 0.35, 0.25, 0.50)
 
-    -- Clean up mocks
-    _G.getUserProfileAppPath = nil
-    _G.createFolder = nil
-    _G.createXMLFile = nil
-    _G.setXMLFloat = nil
-    _G.setXMLBool = nil
-    _G.saveXMLFile = nil
-    _G.loadXMLFile = nil
-    _G.getXMLFloat = nil
-    _G.getXMLBool = nil
-    _G.delete = nil
+    -- Right edge at 1 - 0.35 = 0.65 for both; fill width 0.08, speedometer width 0.10
+    assert(near(hud.fillLevels.position.x, 0.57) and near(hud.fillLevels.position.x + 0.08, 0.65), "fill levels are right-aligned with the group's horizontal margin")
+    assert(near(hud.speedMeter.position.x + 0.10, 0.65), "the speedometer's right edge is on the same line as the fill levels'")
+    assert(near(hud.fillLevels.position.y, 0.25), "the bottom margin is measured to the bottom of the fill levels")
+    -- Fixed gap of 0.004 scaled by the group's scale 0.50 = 0.002, above the 0.03-high fill levels
+    assert(near(hud.speedMeter.position.y, 0.25 + 0.03 + 0.002), "the speedometer sits above the fill levels, one scaled gap clear of them")
+    unloadMap()
 end)
 
-test("ConsoleCommandTogglesFillLevelUnderVehicle", function()
-    VRCompanion.fillLevelUnderVehicle = false
-    local resultTrue = VRCompanion:consoleCommandSetHudFillUnderVehicle("true")
-    assert(VRCompanion.fillLevelUnderVehicle == true, "Console command should enable fillLevelUnderVehicle")
-    assert(string.find(resultTrue, "true") ~= nil, "Response should confirm true")
+test("MeasuresTheBottomMarginToTheLowestOfSeveralFillLevelsAndStacksTheSpeedometerAboveAllOfThem", function()
+    local hud = makeStackHud(3)
+    loadMapWith(hud)
+    setGroup("speedometer", 0.35, 0.25, 0.50)
 
-    local resultFalse = VRCompanion:consoleCommandSetHudFillUnderVehicle("false")
-    assert(VRCompanion.fillLevelUnderVehicle == false, "Console command should disable fillLevelUnderVehicle")
-    assert(string.find(resultFalse, "false") ~= nil, "Response should confirm false")
-
-    local usage = VRCompanion:consoleCommandSetHudFillUnderVehicle("invalid")
-    assert(string.find(usage, "Usage") ~= nil, "Invalid input should return usage string")
-
-    -- Reset back to default true
-    VRCompanion.fillLevelUnderVehicle = true
+    -- Three 0.03-high levels with two row gaps of 0.004 * 0.50 = 0.002 between them
+    assert(near(hud.fillLevels.position.y, 0.25), "the lowest fill level's bottom is on the bottom margin")
+    assert(near(hud.speedMeter.position.y, 0.25 + 3 * 0.03 + 2 * 0.002 + 0.002), "the speedometer clears all three fill levels by the scaled gap")
+    assert(near(hud.fillLevels.position.x + 0.08, 0.65) and near(hud.speedMeter.position.x + 0.10, 0.65), "right-aligned however many levels there are")
+    unloadMap()
 end)
 
-test("SavesAndLoadsHudFillLevelGapConfiguration", function()
-    local savedData = {}
-    _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
-    _G.createFolder = function(folder) end
-    _G.createXMLFile = function(tag, path, rootNode) return 888 end
-    _G.setXMLFloat = function(xmlFile, key, val) savedData[key] = val end
-    _G.setXMLBool = function(xmlFile, key, val) savedData[key] = val end
-    _G.saveXMLFile = function(xmlFile) end
-    _G.delete = function(xmlFile) end
+test("ChangingTheSpeedometerGroupsMarginsMovesTheSpeedometerAndTheFillLevelsTogether", function()
+    local hud = makeStackHud()
+    loadMapWith(hud)
+    setGroup("speedometer", 0.35, 0.25, 1.0)
+    local fillBefore = { x = hud.fillLevels.position.x, y = hud.fillLevels.position.y }
+    local smBefore = { x = hud.speedMeter.position.x, y = hud.speedMeter.position.y }
 
-    VRCompanion.hudFillLevelGap = 0.002
-    VRCompanion:saveConfiguration()
-    assert(math.abs((savedData["vrSettings.hudFillLevelGap"] or 0) - 0.002) < 0.0001, "hudFillLevelGap must be saved to XML")
+    setGroup("speedometer", 0.20, 0.10, 1.0)
+    assert(near(hud.fillLevels.position.x - fillBefore.x, 0.15) and near(hud.fillLevels.position.y - fillBefore.y, -0.15), "fill levels follow the new margins")
+    assert(near(hud.speedMeter.position.x - smBefore.x, 0.15) and near(hud.speedMeter.position.y - smBefore.y, -0.15), "the speedometer moves by exactly the same amount")
+    assert(near(hud.speedMeter.position.y - hud.fillLevels.position.y, 0.03 + 0.004), "the stack keeps its fixed gap")
+    unloadMap()
+end)
 
-    -- Test loading from XML
-    _G.loadXMLFile = function(tag, path) return 777 end
-    _G.getXMLFloat = function(xmlFile, key)
-        if key == "vrSettings.hudFillLevelGap" then return 0.006 end
-        return nil
+test("ScalesTheGapBetweenTheSpeedometerAndTheFillLevelsWithTheGroupsScale", function()
+    local hud = makeStackHud()
+    loadMapWith(hud)
+    setGroup("speedometer", 0.30, 0.20, 1.0)
+    assert(near(hud.speedMeter.position.y - (hud.fillLevels.position.y + 0.03), 0.004), "gap at scale 1.0")
+    setGroup("speedometer", 0.30, 0.20, 1.5)
+    assert(near(hud.speedMeter.position.y - (hud.fillLevels.position.y + 0.03), 0.006), "gap at scale 1.5")
+    unloadMap()
+end)
+
+test("DrawingTheFillLevelsRestacksTheSpeedometerWhenTheNumberOfFillLevelsChanges", function()
+    local hud = makeStackHud(1)
+    _G.FillLevelsDisplay = { draw = function() end }
+    loadMapWith(hud)
+    setGroup("speedometer", 0.35, 0.25, 0.50)
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+    assert(near(hud.speedMeter.position.y, 0.25 + 0.03 + 0.002), "one fill level")
+
+    -- An implement with three fill levels is attached: the next draw of the fill levels restacks the group
+    hud.fillLevels.fillLevelData = { {}, {}, {} }
+    _G.FillLevelsDisplay.draw(hud.fillLevels)
+    assert(near(hud.fillLevels.position.y, 0.25), "the lowest fill level stays on the bottom margin")
+    assert(near(hud.speedMeter.position.y, 0.25 + 3 * 0.03 + 2 * 0.002 + 0.002), "the speedometer rises to clear all three")
+
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+    unloadMap()
+    _G.FillLevelsDisplay = nil
+    VRCompanion.activeFillLevelsDisplay = nil
+end)
+
+test("KeepsTheFillLevelsOnTheBottomMarginWithoutLiftingTheSpeedometerAwayFromTheScreenEdge", function()
+    local hud = makeStackHud()
+    loadMapWith(hud)
+    setGroup("speedometer", 0.20, 0.0, 1.0)
+    assert(near(hud.fillLevels.position.y, 0.0), "a zero bottom margin puts the fill levels' bottom on the screen edge")
+    assert(near(hud.speedMeter.position.y, 0.03 + 0.004), "the speedometer is stacked above them, not pushed by an auto-lift")
+    unloadMap()
+end)
+
+test("PlacesTheFillLevelsAndSpeedometerStackWhenTheHudLeavesHidden", function()
+    local hud = makeStackHud()
+    loadMapWith(hud)
+    setGroup("speedometer", 0.35, 0.25, 0.50)
+    hud.fillLevels.position, hud.speedMeter.position = nil, nil
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+    assert(hud.fillLevels.position ~= nil and near(hud.fillLevels.position.y, 0.25), "fill levels on the bottom margin")
+    assert(hud.speedMeter.position ~= nil and near(hud.speedMeter.position.y, 0.25 + 0.03 + 0.002), "speedometer stacked above the fill levels")
+    VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+    unloadMap()
+end)
+
+test("FillLevelStackingHasNoSettingsOfItsOwn", function()
+    assert(VRCompanion.DEFAULT_FILL_LEVEL_UNDER_VEHICLE == nil and VRCompanion.fillLevelUnderVehicle == nil, "the fill-under-vehicle toggle is gone")
+    assert(VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP == nil and VRCompanion.hudFillLevelGap == nil, "the adjustable fill level gap is gone")
+    assert(VRCompanion.MIN_HUD_FILL_LEVEL_GAP == nil and VRCompanion.MAX_HUD_FILL_LEVEL_GAP == nil, "the fill level gap has no limits to adjust within")
+    assert(VRCompanion.consoleCommandSetHudFillUnderVehicle == nil and VRCompanion.consoleCommandSetHudFillGap == nil, "their console handlers are gone")
+end)
+
+test("NeverWritesTheRemovedFillLevelKeysAndIgnoresThemWhenLoading", function()
+    local store = {}
+    withMockedSettingsFile(store, function()
+        assert(VRCompanion:saveConfiguration("settings.xml") == true, "save must succeed")
+        assert(store["vrSettings.fillLevelUnderVehicle"] == nil, "the fill-under-vehicle key is not written")
+        assert(store["vrSettings.hudFillLevelGap"] == nil, "the fill level gap key is not written")
+
+        -- A settings file from an earlier release carrying both keys must not change the stack
+        store["vrSettings.fillLevelUnderVehicle"] = false
+        store["vrSettings.hudFillLevelGap"] = 0.05
+        VRCompanion:loadConfiguration("settings.xml")
+        local hud = makeStackHud()
+        loadMapWith(hud)
+        setGroup("speedometer", 0.30, 0.20, 1.0)
+        assert(near(hud.fillLevels.position.y, 0.20), "fill levels stay on the bottom margin whatever the old toggle said")
+        assert(near(hud.speedMeter.position.y, 0.20 + 0.03 + 0.004), "the old gap value does not change the fixed gap")
+        unloadMap()
+    end)
+end)
+
+test("RemovedFillLevelConsoleCommandsAreNotRegistered", function()
+    local registered = {}
+    _G.addConsoleCommand = function(cmd, desc, funcName) registered[cmd] = funcName end
+    _G.removeConsoleCommand = function() end
+    loadMapWith(makeHud())
+    assert(registered["vrHudGroup"] ~= nil, "the group command is still registered")
+    for _, cmd in ipairs({ "vrHudFillUnderVehicle", "vrHudFillGap", "vrHudFillLevelGap" }) do
+        assert(registered[cmd] == nil, cmd .. " must no longer be registered")
     end
-    _G.getXMLBool = function(xmlFile, key) return nil end
-
-    VRCompanion:loadConfiguration("mockSettings.xml")
-    assert(math.abs(VRCompanion.hudFillLevelGap - 0.006) < 0.0001, "Must load 0.006 from XML when configured")
-
-    -- Clean up mocks
-    _G.getUserProfileAppPath = nil
-    _G.createFolder = nil
-    _G.createXMLFile = nil
-    _G.setXMLFloat = nil
-    _G.setXMLBool = nil
-    _G.saveXMLFile = nil
-    _G.loadXMLFile = nil
-    _G.getXMLFloat = nil
-    _G.getXMLBool = nil
-    _G.delete = nil
-    VRCompanion.hudFillLevelGap = VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP
-end)
-
-test("ConsoleCommandSetsHudFillLevelGap", function()
-    VRCompanion.hudFillLevelGap = 0.004
-    local result = VRCompanion:consoleCommandSetHudFillGap("0.0025")
-    assert(math.abs(VRCompanion.hudFillLevelGap - 0.0025) < 0.0001, "Console command should set hudFillLevelGap to 0.0025")
-    assert(string.find(result, "0.0025") ~= nil, "Response should confirm 0.0025")
-
-    local usage = VRCompanion:consoleCommandSetHudFillGap("invalid")
-    assert(string.find(usage, "Usage") ~= nil, "Invalid input should return usage string")
-
-    -- Clamping test
-    VRCompanion:consoleCommandSetHudFillGap("0.10")
-    assert(math.abs(VRCompanion.hudFillLevelGap - 0.05) < 0.0001, "Should clamp gap to max 0.05")
-
-    -- Reset back to default
-    VRCompanion.hudFillLevelGap = VRCompanion.DEFAULT_HUD_FILL_LEVEL_GAP
+    unloadMap()
+    _G.addConsoleCommand = nil
+    _G.removeConsoleCommand = nil
 end)
 
 test("ConvergencePositionsTopGroupsFromTheirOwnVerticalMargins", function()

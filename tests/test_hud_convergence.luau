@@ -249,7 +249,6 @@ end)
 -- HUD Groups (spec #50, ticket #51): the per-frame placement takes each display's home corner from its group
 test("ConvergencePlacementTakesTheHomeCornerFromTheDisplaysGroup", function()
     useSafeArea(0.20, 0.16)
-    VRCompanion.fillLevelUnderVehicle = false
     _G.VRBridge = {
         getFrameParity = function() return 0 end,
         getIpd = function() return 0.064 end,
@@ -285,10 +284,10 @@ test("ConvergencePlacementTakesTheHomeCornerFromTheDisplaysGroup", function()
     assert(ok, err)
 end)
 
-test("ConvergenceDisparitySynchronizesSpeedMeterAndFillLevelsUnderVehicleAcrossParity", function()
+test("ConvergenceDisparitySynchronizesSpeedMeterAndStackedFillLevelsAcrossParity", function()
     useSafeArea(0.20, 0.16)
     VRCompanion:consoleCommandSetHudGroup("speedometer", "0.35", "0.25", "0.5")
-    VRCompanion.fillLevelUnderVehicle = true
+    VRCompanion.activeFillLevelsDisplay = nil
 
     local curParity = 0
     _G.VRBridge = {
@@ -329,14 +328,16 @@ test("ConvergenceDisparitySynchronizesSpeedMeterAndFillLevelsUnderVehicleAcrossP
     assert(mockFill.position ~= nil)
     assert(math.abs(mockSpeedMeter.position.x - (0.662 - 0.10)) < 0.0001, "SpeedMeter must receive +0.012 disparity (0.662 - its 0.10 width)")
     assert(math.abs(mockFill.position.x - 0.582) < 0.0001, "FillLevels must receive matching +0.012 disparity (0.662 - 0.08 = 0.582)")
-    assert(math.abs(mockFill.position.y - 0.218) < 0.0001, "FillLevels must be under vehicle element at 0.218")
+    assert(math.abs(mockFill.position.y - 0.25) < 0.0001, "FillLevels sit on the Speedometer group's bottom margin")
+    assert(math.abs(mockSpeedMeter.position.y - (0.25 + 0.03 + 0.002)) < 0.0001, "SpeedMeter is stacked above the fill levels, one scaled gap clear")
 
     -- Frame 1: Right Eye (Parity 1 -> right anchor = 0.65 - 0.012 = 0.638)
     curParity = 1
     VRCompanion:updateHudConvergence()
     assert(math.abs(mockSpeedMeter.position.x - (0.638 - 0.10)) < 0.0001, "SpeedMeter must receive -0.012 disparity (0.638 - its 0.10 width)")
     assert(math.abs(mockFill.position.x - 0.558) < 0.0001, "FillLevels must receive matching -0.012 disparity (0.638 - 0.08 = 0.558)")
-    assert(math.abs(mockFill.position.y - 0.218) < 0.0001, "FillLevels remains vertically invariant under vehicle")
+    assert(math.abs(mockFill.position.y - 0.25) < 0.0001, "FillLevels remain vertically invariant")
+    assert(math.abs(mockSpeedMeter.position.y - (0.25 + 0.03 + 0.002)) < 0.0001, "SpeedMeter remains vertically invariant")
 
     _G.g_currentMission = nil
     _G.VRBridge = nil
@@ -344,7 +345,6 @@ end)
 
 test("ConvergenceShiftsEveryGroupAndTheContextActionByTheSameAmount", function()
     useSafeArea(0.20, 0.16)
-    VRCompanion.fillLevelUnderVehicle = false
     local consoleSet = function(...) VRCompanion:consoleCommandSetHudGroup(...) end
     consoleSet("map", "0.05", "0.10", "1.0")
     consoleSet("speedometer", "0.07", "0.12", "0.9")
@@ -418,7 +418,6 @@ end
 
 local function setupHiddenHudScene(parity)
     useSafeArea(0.20, 0.16)
-    VRCompanion.fillLevelUnderVehicle = true
     VRCompanion.is2DViewActive = false
     VRCompanion.activeFillLevelsDisplay = nil
     _G.VRBridge = {
@@ -435,7 +434,6 @@ local function setupHiddenHudScene(parity)
 end
 
 local function teardownHiddenHudScene()
-    VRCompanion.fillLevelUnderVehicle = false
     VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
     VRCompanion.activeFillLevelsDisplay = nil
     _G.g_currentMission = nil

@@ -278,59 +278,6 @@ function VRCompanion:consoleCommandSetHudState(stateStr)
     return string.format("VR HUD state set to: %s (%d)", stateName, st)
 end
 
-function VRCompanion:consoleCommandSetHudFillUnderVehicle(enableStr)
-    local enable = nil
-    if enableStr ~= nil then
-        local lower = string.lower(tostring(enableStr))
-        if lower == "true" or lower == "1" or lower == "on" then
-            enable = true
-        elseif lower == "false" or lower == "0" or lower == "off" then
-            enable = false
-        end
-    end
-    if enable == nil then
-        return string.format("Usage: vrHudFillUnderVehicle <true|false> (current: %s)",
-            tostring(self.fillLevelUnderVehicle))
-    end
-    self.fillLevelUnderVehicle = enable
-    local mission = g_currentMission or _G.g_currentMission
-    local hud = (mission ~= nil) and mission.hud or nil
-    local fl = self:getFillLevelsDisplay(hud)
-    if fl ~= nil then
-        self:positionHudDisplay(fl, "FillLevelsDisplay")
-    end
-    self:saveConfiguration()
-    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
-        pcall(function()
-            mission:showBlinkingWarning(string.format("VR HUD: Fill Level Under Vehicle: %s (Saved)",
-                enable and "Enabled" or "Disabled"), 2500)
-        end)
-    end
-    return string.format("VR HUD fill level under vehicle set to: %s", tostring(enable))
-end
-
-function VRCompanion:consoleCommandSetHudFillGap(gapStr)
-    local gapVal = tonumber(gapStr)
-    if gapVal == nil then
-        return string.format("Usage: vrHudFillGap <gap> (0.0 to 0.05, current: %.4f)",
-            self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP)
-    end
-    self.hudFillLevelGap = self:clamp(gapVal, 0.0, 0.05)
-    local mission = g_currentMission or _G.g_currentMission
-    local hud = (mission ~= nil) and mission.hud or nil
-    local fl = self:getFillLevelsDisplay(hud)
-    if fl ~= nil then
-        self:positionHudDisplay(fl, "FillLevelsDisplay")
-    end
-    self:saveConfiguration()
-    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
-        pcall(function()
-            mission:showBlinkingWarning(string.format("VR HUD: Fill Level Gap: %.4f (Saved)", self.hudFillLevelGap), 2500)
-        end)
-    end
-    return string.format("VR HUD fill level gap set to: %.4f", self.hudFillLevelGap)
-end
-
 function VRCompanion:consoleCommandSetHudLoadNotification(enabledStr)
     if enabledStr == nil or enabledStr == "" then
         return string.format("Usage: vrHudLoadNotification <true|false> (current: %s)", tostring(self.showHudLoadNotification == true))
@@ -730,8 +677,6 @@ VRCompanion.Input.consoleCommandSetHudSafeArea = function(self, ...) return VRCo
 VRCompanion.Input.consoleCommandSetHudGroup = function(self, ...) return VRCompanion.consoleCommandSetHudGroup(VRCompanion, ...) end
 
 VRCompanion.Input.consoleCommandSetHudState = function(self, ...) return VRCompanion.consoleCommandSetHudState(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudFillUnderVehicle = function(self, ...) return VRCompanion.consoleCommandSetHudFillUnderVehicle(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudFillGap = function(self, ...) return VRCompanion.consoleCommandSetHudFillGap(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetHudLoadNotification = function(self, ...) return VRCompanion.consoleCommandSetHudLoadNotification(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetRecenterMode = function(self, ...) return VRCompanion.consoleCommandSetRecenterMode(VRCompanion, ...) end
 VRCompanion.Input.consoleCommandSetSnapTurnAngle = function(self, ...) return VRCompanion.consoleCommandSetSnapTurnAngle(VRCompanion, ...) end

@@ -2,7 +2,7 @@
 -- FS25 VR Companion Mod: HUD Subsystem
 -- Manages in-engine VR HUD Group placement and scaling, the HUD Safe Area,
 -- stereoscopic convergence, the three-stage visibility state machine, and
--- fill-level element repositioning.
+-- the Speedometer group's stack of fill levels under the speedometer.
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -127,7 +127,9 @@ end
 
 -- Where a display's bottom-left corner goes: its group's outer edges sit at the group's margins
 -- from the home corner, with the display's width or height subtracted for right- and top-anchored
--- groups. The convergence offset moves every display horizontally by the same amount.
+-- groups. The Speedometer group's bottom margin is measured to the bottom of the lowest fill level,
+-- so the fill levels sit on it and the speedometer stacks above them, one scaled gap clear. The
+-- convergence offset moves every display horizontally by the same amount.
 function VRCompanion:getHudDisplayPosition(display, displayName, convergenceOffset)
     local offset = convergenceOffset or 0.0
     local group, groupName = findHudGroup(displayName)
@@ -135,9 +137,21 @@ function VRCompanion:getHudDisplayPosition(display, displayName, convergenceOffs
         return 0.5 + offset, self:getHudGroupLayout(CONTEXT_ACTION_ANCHOR_GROUP).marginY
     end
     local layout = self:getHudGroupLayout(groupName)
-    local w, h = getDisplaySize(display)
+    local w, h
+    if displayName == "FillLevelsDisplay" then
+        w, h = self:getFillLevelsBlockSize(display)
+    else
+        w, h = getDisplaySize(display)
+    end
     local x = (group.alignX == "right") and (1.0 - layout.marginX - w) or layout.marginX
     local y = (group.alignY == "top") and (1.0 - layout.marginY - h) or layout.marginY
+    if displayName == "SpeedMeterDisplay" then
+        local fillLevels = self:getFillLevelsDisplay()
+        if fillLevels ~= nil then
+            local _, fillHeight = self:getFillLevelsBlockSize(fillLevels)
+            y = y + fillHeight + self.HUD_FILL_LEVEL_GAP * self:getHudGroupScale(groupName)
+        end
+    end
     return x + offset, y
 end
 
@@ -267,56 +281,43 @@ function VRCompanion:getFillLevelsDisplay(hud)
     return nil
 end
 
-function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
-    if display == nil then return end
-
-    local mission = g_currentMission or _G.g_currentMission
-    local hud = (mission ~= nil) and mission.hud or nil
-    local sm = nil
-    if hud ~= nil then
-        sm = hud.speedMeter or hud.speedMeterDisplay
-    end
-
-    local currentOffset = offset or self.currentConvergenceOffset or 0.0
-    -- The fill levels sit under the speedometer, so they follow the Speedometer group's margins and scale
-    local speedometerLayout = self:getHudGroupLayout("speedometer")
-    local baseRight = 1.0 - speedometerLayout.marginX
-    local shiftedRight = self:clamp(baseRight + currentOffset, 0.0, 1.0)
-    local baseBottom = speedometerLayout.marginY
+-- The fill levels display's width, and the height of all its fill levels as drawn at the Speedometer
+-- group's scale: one row per fill level, a fixed gap between rows.
+function VRCompanion:getFillLevelsBlockSize(display)
     local uiScale = self:getHudGroupScale("speedometer")
 
-    local flHeight = nil
+    local rowHeight = nil
     if type(display.getHeight) == "function" then
         local ok, h = pcall(display.getHeight, display)
-        if ok and type(h) == "number" and h > 0 then flHeight = h end
+        if ok and type(h) == "number" and h > 0 then rowHeight = h end
     end
-    if flHeight == nil and display.height ~= nil and type(display.height) == "number" and display.height > 0 then
-        flHeight = display.height
+    if rowHeight == nil and display.height ~= nil and type(display.height) == "number" and display.height > 0 then
+        rowHeight = display.height
     end
-    if flHeight == nil and display.bgLeft ~= nil and display.bgLeft.height ~= nil and display.bgLeft.height > 0 then
-        flHeight = display.bgLeft.height
+    if rowHeight == nil and display.bgLeft ~= nil and display.bgLeft.height ~= nil and display.bgLeft.height > 0 then
+        rowHeight = display.bgLeft.height
     end
-    if flHeight == nil and display.bgScale ~= nil and display.bgScale.height ~= nil and display.bgScale.height > 0 then
-        flHeight = display.bgScale.height
+    if rowHeight == nil and display.bgScale ~= nil and display.bgScale.height ~= nil and display.bgScale.height > 0 then
+        rowHeight = display.bgScale.height
     end
-    if flHeight == nil then
-        flHeight = 0.045 * uiScale
+    if rowHeight == nil then
+        rowHeight = 0.045 * uiScale
     end
 
-    local flWidth = nil
+    local width = nil
     if type(display.getWidth) == "function" then
         local ok, w = pcall(display.getWidth, display)
-        if ok and type(w) == "number" and w > 0 then flWidth = w end
+        if ok and type(w) == "number" and w > 0 then width = w end
     end
-    if flWidth == nil and display.width ~= nil and type(display.width) == "number" and display.width > 0 then
-        flWidth = display.width
+    if width == nil and display.width ~= nil and type(display.width) == "number" and display.width > 0 then
+        width = display.width
     end
-    if flWidth == nil and display.bgScale ~= nil and display.bgLeft ~= nil and display.bgRight ~= nil then
+    if width == nil and display.bgScale ~= nil and display.bgLeft ~= nil and display.bgRight ~= nil then
         local totalW = (display.bgLeft.width or 0) + (display.bgScale.width or 0) + (display.bgRight.width or 0)
-        if totalW > 0 then flWidth = totalW end
+        if totalW > 0 then width = totalW end
     end
-    if flWidth == nil then
-        flWidth = 0.12 * uiScale
+    if width == nil then
+        width = 0.12 * uiScale
     end
 
     local numLevels = 1
@@ -328,25 +329,19 @@ function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
             numLevels = math.max(1, #units)
         end
     end
-    local rowGap = 0.004 * uiScale
-    local totalFlHeight = numLevels * flHeight + math.max(0, numLevels - 1) * rowGap
+    local height = numLevels * rowHeight + math.max(0, numLevels - 1) * self.HUD_FILL_LEVEL_GAP * uiScale
+    return width, height
+end
 
-    local smLowestY = baseBottom
-    local gapMultiplier = self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP
-    local gap = gapMultiplier * uiScale
+-- Places the Speedometer group's stack: the fill levels right-aligned on the group's bottom margin,
+-- with the speedometer directly above them (see getHudDisplayPosition). Returns the fill levels'
+-- x and y and the speedometer's y.
+function VRCompanion:positionFillLevelsUnderSpeedometer(display, offset)
+    if display == nil then return end
 
-    local fillTop = smLowestY - gap
-    local fillBottom = fillTop - totalFlHeight
-    local targetSmBottom = baseBottom
-    local minMarginY = 0.015
-
-    if fillBottom < minMarginY then
-        fillBottom = minMarginY
-        smLowestY = fillBottom + totalFlHeight + gap
-        targetSmBottom = smLowestY
-    end
-
-    local flPosX = shiftedRight - flWidth
+    local currentOffset = offset or self.currentConvergenceOffset or 0.0
+    local uiScale = self:getHudGroupScale("speedometer")
+    local flPosX, fillBottom = self:getHudDisplayPosition(display, "FillLevelsDisplay", currentOffset)
 
     display.anchorX = flPosX
     display.anchorY = fillBottom
@@ -412,12 +407,17 @@ function VRCompanion:positionFillLevelsUnderVehicle(display, offset)
         end
     end
 
-    if sm ~= nil and targetSmBottom ~= baseBottom and type(sm.setPosition) == "function" then
-        local smWidth = getDisplaySize(sm)
-        pcall(sm.setPosition, sm, shiftedRight - smWidth, targetSmBottom)
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    local sm = (hud ~= nil) and (hud.speedMeter or hud.speedMeterDisplay) or nil
+    local smBottom = nil
+    if sm ~= nil and type(sm.setPosition) == "function" then
+        local smX
+        smX, smBottom = self:getHudDisplayPosition(sm, "SpeedMeterDisplay", currentOffset)
+        pcall(sm.setPosition, sm, smX, smBottom)
     end
 
-    return flPosX, fillBottom, targetSmBottom
+    return flPosX, fillBottom, smBottom
 end
 
 function VRCompanion:updateHudConvergence(dt)
@@ -508,24 +508,21 @@ function VRCompanion:repositionHudForConvergence()
 
     local offset = self.currentConvergenceOffset or 0.0
 
-    local sm = hud.speedMeter or hud.speedMeterDisplay
     local fl = self:getFillLevelsDisplay(hud)
-    local liftedSmBottom = nil
 
-    if fl ~= nil and self.fillLevelUnderVehicle then
-        local _, _, targetSmBottom = self:positionFillLevelsUnderVehicle(fl, offset)
-        liftedSmBottom = targetSmBottom
-    end
-
-    -- Each display sits at its group's margins, shifted by the same convergence offset. The
-    -- speedometer's bottom may be lifted above the fill levels.
-    local function place(display, displayName, bottom)
+    -- Each display sits at its group's margins, shifted by the same convergence offset
+    local function place(display, displayName)
         if display == nil or type(display.setPosition) ~= "function" then return end
         local x, y = self:getHudDisplayPosition(display, displayName, offset)
-        pcall(display.setPosition, display, x, bottom or y)
+        pcall(display.setPosition, display, x, y)
     end
 
-    place(sm, "SpeedMeterDisplay", liftedSmBottom)
+    -- The Speedometer group is one stack: the fill levels on the bottom margin, the speedometer above them
+    if fl ~= nil then
+        self:positionFillLevelsUnderSpeedometer(fl, offset)
+    else
+        place(hud.speedMeter or hud.speedMeterDisplay, "SpeedMeterDisplay")
+    end
     place(hud.inputHelp or hud.inputHelpDisplay, "InputHelpDisplay")
     place(hud.gameInfo or hud.gameInfoDisplay, "GameInfoDisplay")
     place(hud.ingameMap or hud.ingameMapDisplay, "IngameMap")
@@ -742,8 +739,6 @@ function VRCompanion:getHudSafeArea()
         convergenceOffset = self.currentConvergenceOffset or 0.0,
         convergenceDisparity = self.currentConvergenceDisparity or 0.0,
         convergenceDepth = self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH,
-        fillLevelUnderVehicle = (self.fillLevelUnderVehicle == true),
-        fillLevelGap = self.hudFillLevelGap or self.DEFAULT_HUD_FILL_LEVEL_GAP,
         showHudLoadNotification = (self.showHudLoadNotification == true)
     }
 end
@@ -752,17 +747,14 @@ function VRCompanion:positionHudDisplay(display, displayName)
 
     local scale = self:getHudDisplayScale(displayName)
 
-    if displayName == "FillLevelsDisplay" and self.fillLevelUnderVehicle then
-        if type(display.setScale) == "function" then
-            pcall(function() display:setScale(scale) end)
-        end
-        self:positionFillLevelsUnderVehicle(display)
-        return
-    end
-
     -- Scale first, so the display's size is measured as it will be drawn
     if type(display.setScale) == "function" then
         pcall(function() display:setScale(scale) end)
+    end
+
+    if displayName == "FillLevelsDisplay" then
+        self:positionFillLevelsUnderSpeedometer(display)
+        return
     end
 
     local anchorX, anchorY = self:getHudDisplayPosition(display, displayName)
@@ -796,6 +788,10 @@ function VRCompanion:repositionAllHudDisplays(hud)
     end
     if targetHud == nil then return end
 
+    -- The fill levels go first: the speedometer sits above them, so their size must be settled
+    local d6 = self:getFillLevelsDisplay(targetHud)
+    if d6 ~= nil then self:positionHudDisplay(d6, "FillLevelsDisplay") end
+
     local d1 = targetHud.speedMeter or targetHud.speedMeterDisplay
     if d1 ~= nil then self:positionHudDisplay(d1, "SpeedMeterDisplay") end
 
@@ -810,9 +806,6 @@ function VRCompanion:repositionAllHudDisplays(hud)
 
     local d5 = targetHud.ingameMap or targetHud.ingameMapDisplay
     if d5 ~= nil then self:positionHudDisplay(d5, "IngameMap") end
-
-    local d6 = self:getFillLevelsDisplay(targetHud)
-    if d6 ~= nil then self:positionHudDisplay(d6, "FillLevelsDisplay") end
 
     if type(targetHud.storeScaledValues) == "function" then
         pcall(function() targetHud:storeScaledValues() end)
@@ -956,8 +949,8 @@ function VRCompanion:hookHud()
                 hookMethod(cls, "draw", function(displaySelf, ...)
                     if displayName == "FillLevelsDisplay" then
                         self.activeFillLevelsDisplay = displaySelf
-                        if self.fillLevelUnderVehicle and self:getHudState() ~= self.HUD_STATE_HIDDEN then
-                            self:positionFillLevelsUnderVehicle(displaySelf)
+                        if self:getHudState() ~= self.HUD_STATE_HIDDEN and not self.is2DViewActive then
+                            self:positionFillLevelsUnderSpeedometer(displaySelf)
                         end
                         if not self.hasLoggedFillLevelsDisplayInfo then
                             self.hasLoggedFillLevelsDisplayInfo = true
@@ -1074,7 +1067,7 @@ VRCompanion.Hud.computeConvergenceDisparity = function(self, ...) return VRCompa
 VRCompanion.Hud.getConvergenceDisparity = function(self, ...) return VRCompanion.getConvergenceDisparity(VRCompanion, ...) end
 VRCompanion.Hud.getConvergenceOffset = function(self, ...) return VRCompanion.getConvergenceOffset(VRCompanion, ...) end
 VRCompanion.Hud.getFillLevelsDisplay = function(self, ...) return VRCompanion.getFillLevelsDisplay(VRCompanion, ...) end
-VRCompanion.Hud.positionFillLevelsUnderVehicle = function(self, ...) return VRCompanion.positionFillLevelsUnderVehicle(VRCompanion, ...) end
+VRCompanion.Hud.positionFillLevelsUnderSpeedometer = function(self, ...) return VRCompanion.positionFillLevelsUnderSpeedometer(VRCompanion, ...) end
 VRCompanion.Hud.updateHudConvergence = function(self, ...) return VRCompanion.updateHudConvergence(VRCompanion, ...) end
 VRCompanion.Hud.repositionHudForConvergence = function(self, ...) return VRCompanion.repositionHudForConvergence(VRCompanion, ...) end
 VRCompanion.Hud.getHudState =function(self, ...) return VRCompanion.getHudState(VRCompanion, ...) end
