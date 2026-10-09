@@ -1039,6 +1039,7 @@ function VRCompanion:dbgMapSnapshot(map, when)
     self.dbgMapSnaps = (self.dbgMapSnaps or 0) + 1
     if self.dbgMapSnaps > 12 then return end
     local o, m, l = map.overlay or {}, map.mapOverlay or {}, map.layout or {}
+    print(DBG_TAG .. string.format("probe counters: renderOverlay calls=%s Overlay:render calls=%s tagged map/layout method calls=%s", tostring(self.dbgRenderTotal), tostring(self.dbgOverlayRenders), tostring(self.dbgWrapCalls)))
     print(DBG_TAG .. string.format("map %s: frame=(%s,%s) content=(%s,%s;%sx%s) layout.screenMapPos=(%s,%s) layout.mapPos=(%s,%s) base=%s globals=(%s,%s)",
         when, dbgFmt(o.x), dbgFmt(o.y), dbgFmt(m.x), dbgFmt(m.y), dbgFmt(m.width), dbgFmt(m.height), dbgFmt(l.screenMapPosX), dbgFmt(l.screenMapPosY),
         dbgFmt(l.mapPosX), dbgFmt(l.mapPosY), tostring(self.dbgMapBase), dbgFmt(_G.g_safeFrameOffsetX), dbgFmt(_G.g_safeFrameOffsetY)))
@@ -1212,7 +1213,27 @@ function VRCompanion:dbgStartRenderProbe(map)
     end
     self.dbgRenderLogs = 0
     self.dbgMapStack = {}
+    self.dbgRenderTotal, self.dbgWrapCalls, self.dbgOverlayRenders = 0, 0, 0
+    -- Second probe on Overlay:render, which does not depend on the renderOverlay global being the one the engine calls
+    local overlayCls = _G.Overlay
+    if type(overlayCls) == "table" and type(overlayCls.render) == "function" then
+        local origRender = overlayCls.render
+        local renderWrapper = function(overlaySelf, ...)
+            self.dbgOverlayRenders = self.dbgOverlayRenders + 1
+            local depth = #self.dbgMapStack
+            if type(overlaySelf) == "table" and (ids[overlaySelf.overlayId] ~= nil or depth > 0) and self.hudDiagnostics and self.dbgRenderLogs < 60 then
+                self.dbgRenderLogs = self.dbgRenderLogs + 1
+                print(DBG_TAG .. string.format("Overlay:render [%s] %s id=%s x=%s y=%s offset=(%s,%s) size=%sx%s visible=%s a=%s", self.dbgMapStack[depth] or "outside map methods",
+                    tostring(ids[overlaySelf.overlayId] or "other"), tostring(overlaySelf.overlayId), dbgFmt(overlaySelf.x), dbgFmt(overlaySelf.y),
+                    dbgFmt(overlaySelf.offsetX), dbgFmt(overlaySelf.offsetY), dbgFmt(overlaySelf.width), dbgFmt(overlaySelf.height), tostring(overlaySelf.visible), dbgFmt(overlaySelf.a)))
+            end
+            return origRender(overlaySelf, ...)
+        end
+        overlayCls.render = renderWrapper
+        self.dbgWrapped = { { cls = overlayCls, key = "render", orig = origRender, wrapper = renderWrapper } }
+    end
     _G.renderOverlay = function(id, x, y, w, h, ...)
+        self.dbgRenderTotal = self.dbgRenderTotal + 1
         local depth = #self.dbgMapStack
         if (ids[id] ~= nil or depth > 0) and self.hudDiagnostics and self.dbgRenderLogs < 60 then
             self.dbgRenderLogs = self.dbgRenderLogs + 1
@@ -1223,7 +1244,7 @@ function VRCompanion:dbgStartRenderProbe(map)
     end
 
     -- Tag every map and layout method while it runs, so each render call names the method that made it
-    self.dbgWrapped = {}
+    self.dbgWrapped = self.dbgWrapped or {}
     local skip = { new = true, class = true, isa = true, superClass = true, copy = true }
     local classNames = { "IngameMap", "IngameMapLayout", "IngameMapLayoutNone", "IngameMapLayoutCircle", "IngameMapLayoutSquare", "IngameMapLayoutSquareLarge", "IngameMapLayoutFullscreen" }
     for _, className in ipairs(classNames) do
@@ -1237,6 +1258,7 @@ function VRCompanion:dbgStartRenderProbe(map)
                 local f = cls[k]
                 local label = className .. "." .. k
                 local wrapper = function(...)
+                    self.dbgWrapCalls = self.dbgWrapCalls + 1
                     local stack = self.dbgMapStack
                     stack[#stack + 1] = label
                     local r = table.pack(pcall(f, ...))
