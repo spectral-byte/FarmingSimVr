@@ -1057,6 +1057,21 @@ function VRCompanion:dbgMapSnapshot(map, when)
         dbgFmt(l.mapPosX), dbgFmt(l.mapPosY), tostring(self.dbgMapBase), dbgFmt(_G.g_safeFrameOffsetX), dbgFmt(_G.g_safeFrameOffsetY)))
 end
 
+-- Logs each overlay the map draw shifts: where the engine had it, where it goes, and its clip rectangle and UVs
+function VRCompanion:dbgShiftedRender(overlay, dx, dy, cx1, cy1, cx2, cy2)
+    self.dbgShiftLogs = (self.dbgShiftLogs or 0) + 1
+    if self.dbgShiftLogs > 24 then return end
+    local uvs = ""
+    if type(overlay.uvs) == "table" then
+        local parts = {}
+        for i = 1, math.min(#overlay.uvs, 8) do parts[#parts + 1] = dbgFmt(overlay.uvs[i]) end
+        uvs = table.concat(parts, ",")
+    end
+    print(DBG_TAG .. string.format("shifted render id=%s from=(%s,%s) to=(%s,%s) size=%sx%s clip=(%s,%s,%s,%s) uvs=%s rot=%s", tostring(overlay.overlayId),
+        dbgFmt(overlay.x), dbgFmt(overlay.y), dbgFmt(overlay.x + dx), dbgFmt(overlay.y + dy), dbgFmt(overlay.width), dbgFmt(overlay.height),
+        dbgFmt(cx1), dbgFmt(cy1), dbgFmt(cx2), dbgFmt(cy2), uvs, dbgFmt(overlay.rotation)))
+end
+
 function VRCompanion:dbgRecordPlacement(displayName, x, y)
     if not self.hudDiagnostics then return end
     self.dbgPlaced = self.dbgPlaced or {}
@@ -1299,7 +1314,7 @@ end
 
 function VRCompanion:setHudDiagnostics(enabled)
     self.hudDiagnostics = enabled == true
-    self.dbgDraws, self.dbgOverwrites, self.dbgFillSig, self.dbgFillLogs, self.dbgMapSnaps = {}, {}, nil, 0, 0
+    self.dbgDraws, self.dbgOverwrites, self.dbgFillSig, self.dbgFillLogs, self.dbgMapSnaps, self.dbgShiftLogs = {}, {}, nil, 0, 0, 0
     print(DBG_TAG .. "HUD diagnostics " .. (self.hudDiagnostics and "on" or "off"))
     self:dbgStopRenderProbe()
     if self.hudDiagnostics then
@@ -1422,6 +1437,7 @@ function VRCompanion:hookHud()
             if self.mapDrawDepth > 0 and (dx ~= 0.0 or dy ~= 0.0) and type(overlay) == "table"
                 and type(overlay.x) == "number" and type(overlay.y) == "number" then
                 local origX, origY = overlay.x, overlay.y
+                if self.hudDiagnostics then self:dbgShiftedRender(overlay, dx, dy, clipX1, clipY1, clipX2, clipY2) end -- [DEBUG-hudgrp]
                 overlay.x, overlay.y = origX + dx, origY + dy
                 if clipX1 ~= nil and clipY1 ~= nil and clipX2 ~= nil and clipY2 ~= nil then
                     clipX1, clipY1, clipX2, clipY2 = clipX1 + dx, clipY1 + dy, clipX2 + dx, clipY2 + dy
