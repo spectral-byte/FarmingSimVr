@@ -954,6 +954,67 @@ test("MapDrawIsShiftedFromTheEnginesCornerToTheMapGroup", function()
     end)
 end)
 
+-- The circular crop of the map is a 2D mask the layout sets in drawBefore at absolute screen coordinates, and its
+-- coordinates readout is drawn from the same layout fields, so both follow the shift as well (#56).
+test("MapMaskAndTextFollowTheMapGroup", function()
+    withGroupVisibilityHarness(function()
+        local savedLayout = VRCompanion.hudGroupLayout
+        local savedOffset, saved2D = VRCompanion.currentConvergenceOffset, VRCompanion.is2DViewActive
+        _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = 0.013, 0.0156
+        local masks, textAt = {}, {}
+        _G.set2DMaskFromOverlay = function(id, alphaOnly, x, y, w, h)
+            table.insert(masks, { id = id, alphaOnly = alphaOnly, x = x, y = y, w = w, h = h })
+        end
+        _G.Overlay = { render = function() end }
+        local layout = { overlayMask = 77, mapPosX = 0.02, mapPosY = 0.03, mapSizeX = 0.1, mapSizeY = 0.12 }
+        _G.IngameMapLayoutCircle = {
+            drawBefore = function(self)
+                -- the engine's own mask, at the corner
+                _G.set2DMaskFromOverlay(self.overlayMask, true, self.mapPosX, self.mapPosY, self.mapSizeX, self.mapSizeY)
+            end,
+            drawCoordinates = function(self) textAt = { x = self.mapPosX, y = self.mapPosY } end,
+            drawAfter = function() end
+        }
+        _G.IngameMap = {
+            draw = function(self)
+                _G.IngameMapLayoutCircle.drawBefore(layout)
+                _G.IngameMapLayoutCircle.drawCoordinates(layout)
+                _G.IngameMapLayoutCircle.drawAfter(layout)
+            end,
+            getIsVisible = function() return true end
+        }
+        _G.g_currentMission.hud = { ingameMap = _G.IngameMap }
+        VRCompanion:hookHud()
+        VRCompanion:setHudGroupLayout("map", 0.12, 0.34)
+        VRCompanion.currentConvergenceOffset = 0.01
+        VRCompanion.is2DViewActive = false
+        VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
+
+        local function near(a, b) return math.abs(a - b) < 0.0001 end
+        local dx, dy = 0.13 - 0.013, 0.34 - 0.0156
+
+        _G.IngameMap:draw()
+        local last = masks[#masks]
+        assert(last.id == 77 and last.alphaOnly == true, "the map's mask is set again on the same mask overlay")
+        assert(near(last.x, 0.02 + dx) and near(last.y, 0.03 + dy) and near(last.w, 0.1) and near(last.h, 0.12),
+            "the map's mask follows the Map group and keeps its size")
+        assert(near(textAt.x, 0.02 + dx) and near(textAt.y, 0.03 + dy), "the coordinates readout is drawn from the shifted position")
+        assert(layout.mapPosX == 0.02 and layout.mapPosY == 0.03, "the layout's own position is put back after drawing")
+
+        -- Nothing is changed where the engine's own position applies
+        VRCompanion.is2DViewActive = true
+        masks = {}
+        _G.IngameMap:draw()
+        assert(#masks == 1 and near(masks[1].x, 0.02) and near(textAt.x, 0.02), "2D Floating Window Mode keeps the engine's mask and text")
+
+        VRCompanion:unhookHud()
+        _G.IngameMap, _G.IngameMapLayoutCircle, _G.Overlay, _G.set2DMaskFromOverlay = nil, nil, nil, nil
+        _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = nil, nil
+        VRCompanion.hudGroupLayout = savedLayout
+        VRCompanion.currentConvergenceOffset, VRCompanion.is2DViewActive = savedOffset, saved2D
+    end)
+end)
+
 test("UnhookHudRestoresOriginalFunctionsCleanly", function()
     local origDrawCalled = false
     local origDraw = function(self) origDrawCalled = true end

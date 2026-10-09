@@ -975,6 +975,34 @@ function VRCompanion:runMapDraw(fn, ...)
     return table.unpack(results, 2, results.n)
 end
 
+-- The layout crops the map to its circle with a 2D mask it sets in drawBefore, at absolute screen
+-- coordinates taken from its own position fields. Natives cannot be intercepted from a mod, but they can
+-- be called: set the mask again over the engine's, with the rectangle shifted to the Map group.
+function VRCompanion:shiftMapMask(layout)
+    local dx, dy = self.mapDrawShiftX, self.mapDrawShiftY
+    local setMask = _G.set2DMaskFromOverlay
+    if (dx == 0.0 and dy == 0.0) or type(setMask) ~= "function" or type(layout) ~= "table" then return end
+    local id = layout.overlayMask
+    if type(id) ~= "number" or id == 0 then return end
+    if type(layout.mapPosX) ~= "number" or type(layout.mapPosY) ~= "number"
+        or type(layout.mapSizeX) ~= "number" or type(layout.mapSizeY) ~= "number" then return end
+    pcall(setMask, id, true, layout.mapPosX + dx, layout.mapPosY + dy, layout.mapSizeX, layout.mapSizeY)
+end
+
+-- Runs fn(layout, ...) with the layout's position fields moved to the Map group, for the text it draws
+function VRCompanion:callWithMapLayoutShifted(layout, fn, ...)
+    local dx, dy = self.mapDrawShiftX, self.mapDrawShiftY
+    if (dx == 0.0 and dy == 0.0) or type(layout) ~= "table" or type(layout.mapPosX) ~= "number" or type(layout.mapPosY) ~= "number" then
+        return fn(layout, ...)
+    end
+    local origX, origY = layout.mapPosX, layout.mapPosY
+    layout.mapPosX, layout.mapPosY = origX + dx, origY + dy
+    local results = table.pack(pcall(fn, layout, ...))
+    layout.mapPosX, layout.mapPosY = origX, origY
+    if not results[1] then error(results[2], 0) end
+    return table.unpack(results, 2, results.n)
+end
+
 -- [DEBUG-hudgrp] Temporary HUD diagnostics for the map (#56) and the fill levels flicker. Off unless
 -- the player runs "vrHudDiag on"; every line is tagged so the whole block can be removed with one grep.
 local DBG_TAG = "[FS25_VR] [DEBUG-hudgrp] "
@@ -1423,9 +1451,25 @@ function VRCompanion:hookHud()
             end
             for _, key in ipairs(drawMethods) do
                 local origMethod = cls[key]
-                hookMethod(cls, key, function(...)
-                    return self:runMapDraw(origMethod, ...)
-                end)
+                if className ~= "IngameMap" and key == "drawBefore" then
+                    -- The layout sets the map's circular mask here, at absolute coordinates: set it again shifted
+                    hookMethod(cls, key, function(...)
+                        local results = table.pack(self:runMapDraw(origMethod, ...))
+                        self:shiftMapMask((...))
+                        return table.unpack(results, 1, results.n)
+                    end)
+                elseif className ~= "IngameMap" and (key == "drawCoordinates" or key == "drawLatency") then
+                    -- The text is placed from the layout's own position fields
+                    hookMethod(cls, key, function(layout, ...)
+                        return self:runMapDraw(function(...)
+                            return self:callWithMapLayoutShifted(layout, origMethod, ...)
+                        end, layout, ...)
+                    end)
+                else
+                    hookMethod(cls, key, function(...)
+                        return self:runMapDraw(origMethod, ...)
+                    end)
+                end
             end
         end
     end
