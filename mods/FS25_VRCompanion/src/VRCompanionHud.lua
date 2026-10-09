@@ -352,6 +352,8 @@ function VRCompanion:positionFillLevelsUnderSpeedometer(display, offset)
     local uiScale = self:getHudGroupScale("speedometer")
     local flPosX, fillBottom = self:getHudDisplayPosition(display, "FillLevelsDisplay", currentOffset)
 
+    self:dbgRecordPlacement("FillLevelsDisplay", flPosX, fillBottom) -- [DEBUG-hudgrp]
+    self:dbgFillLevels(display, flPosX, fillBottom) -- [DEBUG-hudgrp]
     display.anchorX = flPosX
     display.anchorY = fillBottom
     display.anchorLeft = self.hudAnchorLeft
@@ -523,6 +525,7 @@ function VRCompanion:repositionHudForConvergence()
     local function place(display, displayName)
         if display == nil or type(display.setPosition) ~= "function" then return end
         local x, y = self:getHudDisplayPosition(display, displayName, offset)
+        self:dbgRecordPlacement(displayName, x, y) -- [DEBUG-hudgrp]
         pcall(display.setPosition, display, x, y)
     end
 
@@ -770,6 +773,7 @@ function VRCompanion:positionHudDisplay(display, displayName)
     -- The current convergence offset shifts every display, as it does in repositionHudForConvergence
     local anchorX, anchorY = self:getHudDisplayPosition(display, displayName, self.currentConvergenceOffset)
 
+    self:dbgRecordPlacement(displayName, anchorX, anchorY) -- [DEBUG-hudgrp]
     display.anchorX = anchorX
     display.anchorY = anchorY
     display.anchorLeft = self.hudAnchorLeft
@@ -933,6 +937,140 @@ function VRCompanion:restoreHudSafeArea(preserveOrigAnchors)
     print("[FS25_VR] Restored standard 2D HUD corner anchors.")
 end
 
+-- [DEBUG-hudgrp] Temporary HUD diagnostics for the map (#56) and the fill levels flicker. Off unless
+-- the player runs "vrHudDiag on"; every line is tagged so the whole block can be removed with one grep.
+local DBG_TAG = "[FS25_VR] [DEBUG-hudgrp] "
+local DBG_DISPLAY_NAMES = { "IngameMap", "FillLevelsDisplay", "SpeedMeterDisplay", "InputHelpDisplay", "GameInfoDisplay", "ContextActionDisplay" }
+
+local function dbgFmt(v)
+    if type(v) == "number" then return string.format("%.4f", v) end
+    return tostring(v)
+end
+
+local function dbgScalars(t)
+    local keys = {}
+    for k, v in pairs(t) do
+        local tv = type(v)
+        if tv == "number" or tv == "boolean" or (tv == "string" and #v < 40) then keys[#keys + 1] = tostring(k) end
+    end
+    table.sort(keys)
+    local parts = {}
+    for i = 1, math.min(#keys, 60) do
+        parts[#parts + 1] = keys[i] .. "=" .. dbgFmt(t[keys[i]])
+    end
+    return table.concat(parts, " ")
+end
+
+local function dbgCall(display, method)
+    if type(display[method]) ~= "function" then return "n/a" end
+    local ok, a, b = pcall(display[method], display)
+    if not ok then return "error" end
+    if b ~= nil then return dbgFmt(a) .. "," .. dbgFmt(b) end
+    return dbgFmt(a)
+end
+
+function VRCompanion:dbgFindDisplay(displayName, hud)
+    if displayName == "FillLevelsDisplay" then return self:getFillLevelsDisplay(hud) end
+    if displayName == "IngameMap" then return hud.ingameMap or hud.ingameMapDisplay end
+    if displayName == "SpeedMeterDisplay" then return hud.speedMeter or hud.speedMeterDisplay end
+    if displayName == "InputHelpDisplay" then return hud.inputHelp or hud.inputHelpDisplay end
+    if displayName == "GameInfoDisplay" then return hud.gameInfo or hud.gameInfoDisplay end
+    return hud.contextAction or hud.contextActionDisplay
+end
+
+function VRCompanion:dbgRecordPlacement(displayName, x, y)
+    if not self.hudDiagnostics then return end
+    self.dbgPlaced = self.dbgPlaced or {}
+    self.dbgPlaced[displayName] = { x = x, y = y }
+end
+
+-- Called at the top of every hooked draw, before the mod touches the display
+function VRCompanion:dbgDrawEntry(displayName, display)
+    if not self.hudDiagnostics then return end
+    self.dbgDraws = self.dbgDraws or {}
+    self.dbgOverwrites = self.dbgOverwrites or {}
+    local n = (self.dbgDraws[displayName] or 0) + 1
+    self.dbgDraws[displayName] = n
+    if n == 1 or n % 600 == 0 then
+        print(DBG_TAG .. string.format("draw #%d %s: x=%s y=%s isVisible=%s modVisible=%s hudState=%s", n, displayName,
+            dbgFmt(display.x), dbgFmt(display.y), tostring(display.isVisible), tostring(self:isDisplayVisible(displayName)), tostring(self:getHudState())))
+    end
+    local placed = self.dbgPlaced and self.dbgPlaced[displayName]
+    if placed ~= nil and type(display.x) == "number" and type(display.y) == "number"
+        and (math.abs(display.x - placed.x) > 0.0005 or math.abs(display.y - placed.y) > 0.0005) then
+        local count = (self.dbgOverwrites[displayName] or 0) + 1
+        self.dbgOverwrites[displayName] = count
+        if count <= 20 then
+            print(DBG_TAG .. string.format("ENGINE MOVED %s since the mod placed it: placed=(%s,%s) at draw=(%s,%s) (draw #%d)", displayName,
+                dbgFmt(placed.x), dbgFmt(placed.y), dbgFmt(display.x), dbgFmt(display.y), n))
+        end
+    end
+end
+
+-- Called at the end of every fill levels placement: logs whenever what the display reports changes
+function VRCompanion:dbgFillLevels(display, placedX, placedY)
+    if not self.hudDiagnostics then return end
+    local w, h = self:getFillLevelsBlockSize(display)
+    local smY = nil
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    local sm = hud and (hud.speedMeter or hud.speedMeterDisplay)
+    if sm ~= nil then
+        local _, y = self:getHudDisplayPosition(sm, "SpeedMeterDisplay", 0)
+        smY = y
+    end
+    local levels = (type(display.fillLevelData) == "table") and #display.fillLevelData or -1
+    local sig = string.format("levels=%d placed=(%s,%s) block=(%s,%s) engineSize=(%s;%s) speedometerY=%s isVisible=%s getIsVisible=%s modVisible=%s",
+        levels, dbgFmt(placedX), dbgFmt(placedY), dbgFmt(w), dbgFmt(h), dbgCall(display, "getWidth"), dbgCall(display, "getHeight"),
+        dbgFmt(smY), tostring(display.isVisible), dbgCall(display, "getIsVisible"), tostring(self:isDisplayVisible("FillLevelsDisplay")))
+    if sig ~= self.dbgFillSig then
+        self.dbgFillSig = sig
+        self.dbgFillLogs = (self.dbgFillLogs or 0) + 1
+        if self.dbgFillLogs <= 60 then
+            print(DBG_TAG .. "fill levels changed: " .. sig)
+        end
+    end
+end
+
+function VRCompanion:dbgDump()
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    if hud == nil then
+        print(DBG_TAG .. "no mission HUD")
+        return
+    end
+    print(DBG_TAG .. string.format("hudState=%s is2D=%s anchors L=%s R=%s B=%s T=%s convergenceOffset=%s", tostring(self:getHudState()),
+        tostring(self.is2DViewActive), dbgFmt(self.hudAnchorLeft), dbgFmt(self.hudAnchorRight), dbgFmt(self.hudAnchorBottom),
+        dbgFmt(self.hudAnchorTop), dbgFmt(self.currentConvergenceOffset)))
+    for _, name in ipairs(DBG_DISPLAY_NAMES) do
+        local display = self:dbgFindDisplay(name, hud)
+        local _, groupName = findHudGroup(name)
+        if display == nil then
+            print(DBG_TAG .. name .. ": display not found on the HUD")
+        else
+            local px, py = nil, nil
+            if groupName ~= nil or name == CONTEXT_ACTION_DISPLAY then
+                px, py = self:getHudDisplayPosition(display, name, self.currentConvergenceOffset)
+            end
+            print(DBG_TAG .. string.format("%s: group=%s wantedPos=(%s,%s) pos=(%s) size=(%s;%s) visible: isVisible=%s getIsVisible=%s modVisible=%s",
+                name, tostring(groupName), dbgFmt(px), dbgFmt(py), dbgCall(display, "getPosition"), dbgCall(display, "getWidth"),
+                dbgCall(display, "getHeight"), tostring(display.isVisible), dbgCall(display, "getIsVisible"), tostring(self:isDisplayVisible(name))))
+            print(DBG_TAG .. "  fields: " .. dbgScalars(display))
+            for _, sub in ipairs({ "layout", "overlay", "bgLeft", "bgScale", "bgRight", "mapElement", "mapOverlay", "terrainOverlay" }) do
+                if type(display[sub]) == "table" then
+                    print(DBG_TAG .. "  ." .. sub .. ": " .. dbgScalars(display[sub]))
+                end
+            end
+        end
+    end
+end
+
+function VRCompanion:setHudDiagnostics(enabled)
+    self.hudDiagnostics = enabled == true
+    self.dbgDraws, self.dbgOverwrites, self.dbgFillSig, self.dbgFillLogs = {}, {}, nil, 0
+    print(DBG_TAG .. "HUD diagnostics " .. (self.hudDiagnostics and "on" or "off"))
+end
+
 function VRCompanion:hookHud()
     if self.hudHooked then
         self:unhookHud()
@@ -959,6 +1097,7 @@ function VRCompanion:hookHud()
             if cls.draw ~= nil and type(cls.draw) == "function" then
                 local origDraw = cls.draw
                 hookMethod(cls, "draw", function(displaySelf, ...)
+                    self:dbgDrawEntry(displayName, displaySelf) -- [DEBUG-hudgrp]
                     if displayName == "FillLevelsDisplay" then
                         self.activeFillLevelsDisplay = displaySelf
                         if self:getHudState() ~= self.HUD_STATE_HIDDEN and not self.is2DViewActive then

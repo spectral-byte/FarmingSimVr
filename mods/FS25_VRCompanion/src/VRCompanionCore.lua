@@ -178,7 +178,8 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrDlssDiag","Trace DLSS evaluations to fs25_vr.log: vrDlssDiag [evaluations]", "consoleCommandDlssDiag", self)
         addConsoleCommand("vrRenderingMode", "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", "consoleCommandSetRenderingMode", self)
         addConsoleCommand("vrObliqueProjection", "Toggle Oblique Frustum projection: vrObliqueProjection <true|false|toggle>", "consoleCommandSetObliqueProjection", self)
-        addConsoleCommand("vrHudGroupShow", "Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", "consoleCommandHudGroupShow", self)
+        addConsoleCommand("vrHudDiag", "Temporary HUD diagnostics: vrHudDiag [on|off]", "consoleCommandHudDiag", self) -- [DEBUG-hudgrp]
+        addConsoleCommand("vrHudGroupShow","Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", "consoleCommandHudGroupShow", self)
     end
 
     if self.showHudLoadNotification == true then
@@ -1004,6 +1005,7 @@ function VRCompanion:deleteMap()
 
     -- Remove console commands
     if removeConsoleCommand ~= nil then
+        removeConsoleCommand("vrHudDiag") -- [DEBUG-hudgrp]
         removeConsoleCommand("vrHudSafeArea")
         removeConsoleCommand("vrHudGroup")
         removeConsoleCommand("vrHudState")
