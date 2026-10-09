@@ -945,6 +945,7 @@ local MAP_DRAW_CLASSES = { "IngameMap", "IngameMapLayout", "IngameMapLayoutNone"
     "IngameMapLayoutSquare", "IngameMapLayoutSquareLarge", "IngameMapLayoutFullscreen" }
 
 VRCompanion.mapDrawDepth = 0
+VRCompanion.mapHotspotDepth = 0
 VRCompanion.mapDrawShiftX = 0.0
 VRCompanion.mapDrawShiftY = 0.0
 
@@ -1442,6 +1443,7 @@ function VRCompanion:hookHud()
     self.mapEngineBaseX = _G.g_safeFrameOffsetX or 0.0
     self.mapEngineBaseY = _G.g_safeFrameOffsetY or 0.0
     self.mapDrawDepth = 0
+    self.mapHotspotDepth = 0
     for _, className in ipairs(MAP_DRAW_CLASSES) do
         local cls = getGlobalClass(className)
         if cls ~= nil then
@@ -1462,11 +1464,34 @@ function VRCompanion:hookHud()
                             return self:callWithMapLayoutShifted(layout, origMethod, ...)
                         end, layout, ...)
                     end)
+                elseif className == "IngameMap" and (string.find(key, "Hotspot", 1, true) or string.find(key, "PointsOfInterest", 1, true)) then
+                    -- Hotspots take their position from getMapObjectPosition, shifted below, so the overlay
+                    -- shift must not move them a second time
+                    hookMethod(cls, key, function(...)
+                        return self:runMapDraw(function(...)
+                            self.mapHotspotDepth = self.mapHotspotDepth + 1
+                            local results = table.pack(pcall(origMethod, ...))
+                            self.mapHotspotDepth = self.mapHotspotDepth - 1
+                            if not results[1] then error(results[2], 0) end
+                            return table.unpack(results, 2, results.n)
+                        end, ...)
+                    end)
                 else
                     hookMethod(cls, key, function(...)
                         return self:runMapDraw(origMethod, ...)
                     end)
                 end
+            end
+            -- Hotspots (fields, vehicles) are drawn with natives at the screen position the layout hands out
+            if type(cls.getMapObjectPosition) == "function" then
+                local origObjectPosition = cls.getMapObjectPosition
+                hookMethod(cls, "getMapObjectPosition", function(layout, ...)
+                    local x, y, rotation, visible = origObjectPosition(layout, ...)
+                    if self.mapDrawDepth > 0 and visible and type(x) == "number" and type(y) == "number" then
+                        x, y = x + self.mapDrawShiftX, y + self.mapDrawShiftY
+                    end
+                    return x, y, rotation, visible
+                end)
             end
         end
     end
@@ -1475,7 +1500,7 @@ function VRCompanion:hookHud()
         local origRender = overlayCls.render
         hookMethod(overlayCls, "render", function(overlay, clipX1, clipY1, clipX2, clipY2, ...)
             local dx, dy = self.mapDrawShiftX, self.mapDrawShiftY
-            if self.mapDrawDepth > 0 and (dx ~= 0.0 or dy ~= 0.0) and type(overlay) == "table"
+            if self.mapDrawDepth > 0 and self.mapHotspotDepth == 0 and (dx ~= 0.0 or dy ~= 0.0) and type(overlay) == "table"
                 and type(overlay.x) == "number" and type(overlay.y) == "number" then
                 local origX, origY = overlay.x, overlay.y
                 if self.hudDiagnostics then self:dbgShiftedRender(overlay, dx, dy, clipX1, clipY1, clipX2, clipY2) end -- [DEBUG-hudgrp]

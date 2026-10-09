@@ -1016,6 +1016,72 @@ test("MapMaskAndTextFollowTheMapGroup", function()
     end)
 end)
 
+-- Hotspots (fields, vehicles) are placed at the screen position the layout's getMapObjectPosition returns and
+-- then drawn with natives, so that position follows the Map group; hotspots that render through overlays are
+-- not shifted a second time by the overlay shift (#56).
+test("MapHotspotsAreDrawnAtTheMapGroupsPositionOnce", function()
+    withGroupVisibilityHarness(function()
+        local savedLayout = VRCompanion.hudGroupLayout
+        local savedOffset, saved2D = VRCompanion.currentConvergenceOffset, VRCompanion.is2DViewActive
+        _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = 0.013, 0.0156
+        local rendered, drawnAt = {}, {}
+        _G.Overlay = { render = function(overlay) table.insert(rendered, { x = overlay.x, y = overlay.y }) end }
+        local engineLayout = {}
+        _G.IngameMapLayoutCircle = {
+            getMapObjectPosition = function(self, objectX)
+                if objectX > 0.5 then return 0.0, 0.0, 0.0, false end
+                return 0.08, 0.11, 0.5, true
+            end
+        }
+        _G.IngameMap = {
+            -- like the engine: position from the layout, then draw the hotspot at it
+            drawHotspot = function(self, objectX, viaOverlay)
+                local x, y, rotation, visible = _G.IngameMapLayoutCircle.getMapObjectPosition(engineLayout, objectX)
+                if not visible then return end
+                drawnAt = { x = x, y = y, rotation = rotation }
+                if viaOverlay then _G.Overlay.render({ x = x, y = y }) end
+            end,
+            draw = function(self) end,
+            getIsVisible = function() return true end
+        }
+        _G.g_currentMission.hud = { ingameMap = _G.IngameMap }
+        VRCompanion:hookHud()
+        VRCompanion:setHudGroupLayout("map", 0.12, 0.34)
+        VRCompanion.currentConvergenceOffset = 0.01
+        VRCompanion.is2DViewActive = false
+        VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
+
+        local function near(a, b) return math.abs(a - b) < 0.0001 end
+        local dx, dy = 0.13 - 0.013, 0.34 - 0.0156
+
+        _G.IngameMap:drawHotspot(0.2)
+        assert(near(drawnAt.x, 0.08 + dx) and near(drawnAt.y, 0.11 + dy) and drawnAt.rotation == 0.5,
+            "a visible hotspot is placed at the Map group's position")
+
+        drawnAt = {}
+        _G.IngameMap:drawHotspot(0.9)
+        assert(drawnAt.x == nil, "a hotspot outside the map stays outside it")
+
+        rendered = {}
+        _G.IngameMap:drawHotspot(0.2, true)
+        assert(#rendered == 1 and near(rendered[1].x, 0.08 + dx) and near(rendered[1].y, 0.11 + dy),
+            "a hotspot drawn through an overlay is shifted once, not twice")
+
+        -- Outside the map's own drawing, and where the engine's position applies, nothing moves
+        local x, y = _G.IngameMapLayoutCircle.getMapObjectPosition(engineLayout, 0.2)
+        assert(near(x, 0.08) and near(y, 0.11), "positions asked outside a map draw are the engine's")
+        VRCompanion.is2DViewActive = true
+        _G.IngameMap:drawHotspot(0.2)
+        assert(near(drawnAt.x, 0.08) and near(drawnAt.y, 0.11), "2D Floating Window Mode keeps the engine's hotspot positions")
+
+        VRCompanion:unhookHud()
+        _G.IngameMap, _G.IngameMapLayoutCircle, _G.Overlay = nil, nil, nil
+        _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = nil, nil
+        VRCompanion.hudGroupLayout = savedLayout
+        VRCompanion.currentConvergenceOffset, VRCompanion.is2DViewActive = savedOffset, saved2D
+    end)
+end)
+
 test("UnhookHudRestoresOriginalFunctionsCleanly", function()
     local origDrawCalled = false
     local origDraw = function(self) origDrawCalled = true end
