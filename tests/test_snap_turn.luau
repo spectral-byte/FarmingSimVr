@@ -1296,11 +1296,11 @@ test("OutsideCameraSnapTurnStepsOrbitYawBySnapAngle", function()
     local orbitCam = orbitedOutsideCamera()
     controlOutsideCamera(orbitCam)
 
-    -- Snap right by 90 deg: 2.8 - pi/2
+    -- Snap right by 90 deg: 2.8 + pi/2, wrapped into [-pi, pi]
     local ok, newRot = VRCompanion:snapTurnRight(nil, 1000)
 
     VRCompanion:resetSnapTurnDebounce()
-    assert(ok == true and math.abs(newRot - (2.8 - math.pi * 0.5)) < 0.0001 and newRot == orbitCam.rotY,
+    assert(ok == true and math.abs(newRot - (2.8 + math.pi * 0.5 - 2 * math.pi)) < 0.0001 and newRot == orbitCam.rotY,
         string.format("Orbit yaw must step right by pi/2 and be reported, got ok = %s, rotY = %f, reported %s",
             tostring(ok), orbitCam.rotY, tostring(newRot)))
 end)
@@ -1334,11 +1334,12 @@ test("OutsideCameraSnapTurnKeepsOrbitYawWithinPlusMinusPi", function()
     local orbitCam = orbitedOutsideCamera()
     controlOutsideCamera(orbitCam)
 
-    -- Snap left from 2.8: 2.8 + pi/2 wraps to 2.8 + pi/2 - 2pi
+    -- Snap left from 2.8: 2.8 - pi/2 stays in range; snap right wraps (covered above), so start lower
+    orbitCam.rotY = -2.8
     VRCompanion:snapTurnLeft(nil, 1000)
 
     VRCompanion:resetSnapTurnDebounce()
-    assert(math.abs(orbitCam.rotY - (2.8 + math.pi * 0.5 - 2 * math.pi)) < 0.0001,
+    assert(math.abs(orbitCam.rotY - (-2.8 - math.pi * 0.5 + 2 * math.pi)) < 0.0001,
         string.format("Orbit yaw must be normalized into [-pi, pi], got %f", orbitCam.rotY))
 end)
 
@@ -1352,7 +1353,7 @@ test("OutsideCameraSnapTurnHonorsDebounce", function()
     assert(VRCompanion:snapTurnRight(nil, 1000) == true, "First snap turn must succeed")
     local ok, reason = VRCompanion:snapTurnRight(nil, 1100)
     assert(ok == false and reason == "debounced", "Snap turn within the cooldown must be debounced")
-    assert(math.abs(orbitCam.rotY - (-math.pi * 0.5)) < 0.0001, "Debounced snap turn must not move the orbit")
+    assert(math.abs(orbitCam.rotY - (math.pi * 0.5)) < 0.0001, "Debounced snap turn must not move the orbit")
     assert(calls.discontinuity == 1, "Debounced snap turn must not signal a discontinuity")
 
     VRCompanion:resetSnapTurnDebounce()

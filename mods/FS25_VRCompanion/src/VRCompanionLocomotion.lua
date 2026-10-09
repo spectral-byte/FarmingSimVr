@@ -497,7 +497,8 @@ function VRCompanion:snapTurnOutsideCamera(cam, direction, angleOverride, t)
         return false, "fixed_outside_camera"
     end
     local angle = angleOverride or self:getSnapTurnAngle()
-    cam.rotY = self:normalizeAngle((cam.rotY or 0) - direction * angle)
+    -- The orbit yaw turns the opposite way to the in-cab view yaw, so the sign is flipped
+    cam.rotY = self:normalizeAngle((cam.rotY or 0) + direction * angle)
     self:completeSnapTurn(t, "Outside camera", direction, angle, "orbit rotY", cam.rotY)
     return true, cam.rotY
 end
