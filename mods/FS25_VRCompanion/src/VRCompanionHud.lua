@@ -1080,7 +1080,7 @@ function VRCompanion:hookHud()
                     -- The layout sets the map's circular mask in drawBefore and places its text, both at absolute
                     -- coordinates taken from its own position fields, so they run with those fields moved
                     hookMethod(cls, key, function(layout, ...)
-                        return self:runMapDraw(function(...)
+                        return self:runMapDraw(function(_, ...)
                             return self:callWithMapLayoutShifted(layout, origMethod, ...)
                         end, layout, ...)
                     end)

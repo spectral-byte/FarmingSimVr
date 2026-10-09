@@ -972,13 +972,16 @@ test("MapMaskAndTextFollowTheMapGroup", function()
                 -- the engine's own mask, at the corner
                 _G.set2DMaskFromOverlay(self.overlayMask, true, self.mapPosX, self.mapPosY, self.mapSizeX, self.mapSizeY)
             end,
-            drawCoordinates = function(self) textAt = { x = self.mapPosX, y = self.mapPosY } end,
+            drawCoordinates = function(self, text)
+                assert(type(text) == "string", "drawCoordinates receives the text to draw, not an extra argument")
+                textAt = { x = self.mapPosX, y = self.mapPosY, text = text }
+            end,
             drawAfter = function() end
         }
         _G.IngameMap = {
             draw = function(self)
                 _G.IngameMapLayoutCircle.drawBefore(layout)
-                _G.IngameMapLayoutCircle.drawCoordinates(layout)
+                _G.IngameMapLayoutCircle.drawCoordinates(layout, "296.0, 344, 1271")
                 _G.IngameMapLayoutCircle.drawAfter(layout)
             end,
             getIsVisible = function() return true end
