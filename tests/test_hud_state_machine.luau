@@ -864,24 +864,31 @@ test("DrawVisibilityAndHudSetterHooksHonorGroupSettings", function()
     end)
 end)
 
--- The engine lays the map out from its background position (g_safeFrameOffsetX/Y), not from the position
--- the element was given, so moving only the element leaves the map's content behind (#56).
-test("MapIsLaidOutFromTheMapGroupsPositionNotTheEnginesSafeFrame", function()
+-- The engine builds the map's layout in the screen corner and draws its content, ring and north arrow
+-- there at absolute overlay positions that setPosition does not move, so the draw itself is shifted from
+-- the engine's corner to the Map group's position (#56).
+test("MapDrawIsShiftedFromTheEnginesCornerToTheMapGroup", function()
     withGroupVisibilityHarness(function()
         local savedLayout = VRCompanion.hudGroupLayout
         local savedOffset, saved2D = VRCompanion.currentConvergenceOffset, VRCompanion.is2DViewActive
-        _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = 0.0, 0.0
-        local seen = {}
-        local function record(name)
-            return function(self) seen[name] = { _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY } end
+        _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = 0.013, 0.0156
+        local rendered = {}
+        local origRender = function(overlay, cx1, cy1, cx2, cy2)
+            table.insert(rendered, { x = overlay.x, y = overlay.y, cx1 = cx1, cy1 = cy1, cx2 = cx2, cy2 = cy2 })
         end
+        _G.Overlay = { render = origRender }
+        local content = { x = -0.2637, y = -0.441 }
+        local ring = { x = 0.0156, y = 0.0187 }
+        local origDrawAfter = function() _G.Overlay.render(ring) end
+        _G.IngameMapLayoutCircle = { drawAfter = origDrawAfter }
         _G.IngameMap = {
-            draw = record("draw"), update = record("update"), setScale = record("setScale"),
-            storeScaledValues = record("storeScaledValues"), setLayout = record("setLayout"),
-            toggleSize = record("toggleSize"),
-            getBackgroundPosition = function() return _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY end,
+            draw = function(self)
+                _G.Overlay.render(content, 0.02, 0.03, 0.12, 0.14)
+                _G.IngameMapLayoutCircle.drawAfter({})
+            end,
             getIsVisible = function() return true end
         }
+        _G.g_currentMission.hud = { ingameMap = _G.IngameMap }
         VRCompanion:hookHud()
         VRCompanion:setHudGroupLayout("map", 0.12, 0.34)
         VRCompanion.currentConvergenceOffset = 0.01
@@ -889,38 +896,59 @@ test("MapIsLaidOutFromTheMapGroupsPositionNotTheEnginesSafeFrame", function()
         VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
 
         local function near(a, b) return math.abs(a - b) < 0.0001 end
-        for _, name in ipairs({ "draw", "update", "setScale", "storeScaledValues", "setLayout", "toggleSize" }) do
-            seen[name] = nil
-            _G.IngameMap[name](_G.IngameMap)
-            assert(seen[name] ~= nil and near(seen[name][1], 0.13) and near(seen[name][2], 0.34),
-                name .. " runs with the engine's background position at the Map group's margins plus the convergence offset")
-            assert(_G.g_safeFrameOffsetX == 0.0 and _G.g_safeFrameOffsetY == 0.0,
-                "the engine's background position is restored after " .. name)
+        local function drawMap()
+            rendered = {}
+            _G.IngameMap:draw()
+            return rendered[1], rendered[2]
         end
 
-        local bx, by = _G.IngameMap:getBackgroundPosition()
-        assert(near(bx, 0.13) and near(by, 0.34), "the map's background position is the Map group's position")
+        -- Shifted by the Map group's position (margins plus convergence offset) minus the engine's corner
+        local c, r = drawMap()
+        assert(near(c.x, -0.2637 + 0.117) and near(c.y, -0.441 + 0.3244), "the map content is shifted to the Map group")
+        assert(near(c.cx1, 0.02 + 0.117) and near(c.cy1, 0.03 + 0.3244) and near(c.cx2, 0.12 + 0.117) and near(c.cy2, 0.14 + 0.3244),
+            "the clip rectangle is shifted with the content")
+        assert(near(r.x, 0.0156 + 0.117) and near(r.y, 0.0187 + 0.3244), "the layout's ring is shifted with the content")
+        assert(content.x == -0.2637 and content.y == -0.441 and ring.x == 0.0156 and ring.y == 0.0187,
+            "the overlays are put back where the engine had them")
 
-        -- Moving the Map group moves the map's layout with it
+        -- Draws outside the map's own methods are not shifted
+        rendered = {}
+        _G.Overlay.render(ring)
+        assert(near(rendered[1].x, 0.0156) and near(rendered[1].y, 0.0187), "other overlays are drawn where the engine put them")
+
+        -- Changing the Map group's margins moves the map
         VRCompanion:setHudGroupLayout("map", 0.2, 0.25)
-        _G.IngameMap:draw()
-        assert(near(seen.draw[1], 0.21) and near(seen.draw[2], 0.25), "changing the Map group's margins moves the map's layout")
+        c, r = drawMap()
+        assert(near(r.x, 0.0156 + (0.21 - 0.013)) and near(r.y, 0.0187 + (0.25 - 0.0156)), "changing the Map group's margins moves the map")
 
-        -- Fullscreen, Hidden and 2D Floating Window Mode keep the engine's own position
+        -- Fullscreen, 2D Floating Window Mode and the Hidden HUD keep the engine's position
         _G.IngameMap.isFullscreen = true
-        _G.IngameMap:draw()
-        assert(seen.draw[1] == 0.0 and seen.draw[2] == 0.0, "the fullscreen map keeps the engine's position")
+        c, r = drawMap()
+        assert(near(r.x, 0.0156) and near(r.y, 0.0187), "the fullscreen map keeps the engine's position")
         _G.IngameMap.isFullscreen = false
         VRCompanion.is2DViewActive = true
-        _G.IngameMap:draw()
-        assert(seen.draw[1] == 0.0 and seen.draw[2] == 0.0, "2D Floating Window Mode keeps the engine's position")
+        c, r = drawMap()
+        assert(near(r.x, 0.0156) and near(r.y, 0.0187), "2D Floating Window Mode keeps the engine's position")
         VRCompanion.is2DViewActive = false
         VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
-        _G.IngameMap:draw()
-        assert(seen.draw[1] == 0.0 and seen.draw[2] == 0.0, "the Hidden HUD keeps the engine's position")
+        c, r = drawMap()
+        assert(c == nil, "the Hidden HUD draws no map")
+        VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
+
+        -- A draw that fails leaves later draws unshifted outside the map
+        VRCompanion:unhookHud()
+        _G.IngameMapLayoutCircle.drawAfter = function() error("draw failed") end
+        VRCompanion:hookHud()
+        assert(not pcall(function() _G.IngameMap:draw() end), "an error in the map's draw still propagates")
+        rendered = {}
+        _G.Overlay.render(ring)
+        assert(near(rendered[1].x, 0.0156), "overlays outside the map are not shifted after a failed map draw")
 
         VRCompanion:unhookHud()
-        _G.IngameMap, _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = nil, nil, nil
+        assert(_G.Overlay.render == origRender, "unhooking puts the overlay renderer back")
+        _G.IngameMapLayoutCircle.drawAfter = origDrawAfter
+        _G.IngameMap, _G.IngameMapLayoutCircle, _G.Overlay = nil, nil, nil
+        _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = nil, nil
         VRCompanion.hudGroupLayout = savedLayout
         VRCompanion.currentConvergenceOffset, VRCompanion.is2DViewActive = savedOffset, saved2D
     end)

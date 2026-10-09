@@ -937,28 +937,40 @@ function VRCompanion:restoreHudSafeArea(preserveOrigAnchors)
     print("[FS25_VR] Restored standard 2D HUD corner anchors.")
 end
 
--- The engine lays the map's content out from the element's background position, which it reads from
--- g_safeFrameOffsetX/Y rather than from where the element was placed. Placing only the element moves
--- the map's frame and leaves the content at the screen corner, outside the lens (#56). So the map's
--- layout and draw calls run with that position at the Map group's, the way ConstructionScreen shifts it.
-local MAP_BASE_POSITION_METHODS = { "draw", "update", "setScale", "storeScaledValues", "setLayout", "toggleSize" }
+-- The engine builds the map's layout in the screen corner (from g_safeFrameOffsetX/Y) and draws its
+-- content, ring, north arrow and hotspots there at absolute overlay positions that setPosition does not
+-- move, so placing only the element leaves them outside the lens (#56). While the map's draw methods run,
+-- every overlay rendered, and its clip rectangle, is shifted from the engine's corner to the Map group.
+local MAP_DRAW_CLASSES = { "IngameMap", "IngameMapLayout", "IngameMapLayoutNone", "IngameMapLayoutCircle",
+    "IngameMapLayoutSquare", "IngameMapLayoutSquareLarge", "IngameMapLayoutFullscreen" }
 
--- The Map group's position for the map's layout, or nil where the engine's own position applies:
--- the fullscreen map, the Hidden HUD and 2D Floating Window Mode
-function VRCompanion:getMapBasePosition(map)
+VRCompanion.mapDrawDepth = 0
+VRCompanion.mapDrawShiftX = 0.0
+VRCompanion.mapDrawShiftY = 0.0
+
+-- How far the map's draw moves from the engine's corner to the Map group, or nothing where the engine's
+-- own position applies: the fullscreen map, the Hidden HUD and 2D Floating Window Mode
+function VRCompanion:getMapDrawShift()
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    local map = hud and (hud.ingameMap or hud.ingameMapDisplay)
     if map == nil or map.isFullscreen == true then return nil end
     if self.is2DViewActive or self:getHudState() == self.HUD_STATE_HIDDEN then return nil end
-    return self:getHudDisplayPosition(map, "IngameMap", self.currentConvergenceOffset)
+    local x, y = self:getHudDisplayPosition(map, "IngameMap", self.currentConvergenceOffset)
+    return x - (self.mapEngineBaseX or 0.0), y - (self.mapEngineBaseY or 0.0)
 end
 
--- Runs fn(map, ...) with the engine's background position at the Map group's, then restores it
-function VRCompanion:callWithMapBasePosition(map, fn, ...)
-    local x, y = self:getMapBasePosition(map)
-    if x == nil then return fn(map, ...) end
-    local savedX, savedY = _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY
-    _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = x, y
-    local results = table.pack(pcall(fn, map, ...))
-    _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = savedX, savedY
+-- Runs fn(...) as part of the map's drawing, so the overlays it renders are shifted to the Map group
+function VRCompanion:runMapDraw(fn, ...)
+    if self.mapDrawDepth > 0 then
+        self.mapDrawDepth = self.mapDrawDepth + 1
+    else
+        local dx, dy = self:getMapDrawShift()
+        self.mapDrawShiftX, self.mapDrawShiftY = dx or 0.0, dy or 0.0
+        self.mapDrawDepth = 1
+    end
+    local results = table.pack(pcall(fn, ...))
+    self.mapDrawDepth = self.mapDrawDepth - 1
     if not results[1] then error(results[2], 0) end
     return table.unpack(results, 2, results.n)
 end
@@ -1353,10 +1365,10 @@ function VRCompanion:hookHud()
                     if displayName == "IngameMap" then
                         if self.hudDiagnostics then -- [DEBUG-hudgrp]
                             self:dbgMapSnapshot(displaySelf, "before draw")
-                            local mapBase = { self:getMapBasePosition(displaySelf) }
-                            self.dbgMapBase = mapBase[1] ~= nil and string.format("(%s,%s)", dbgFmt(mapBase[1]), dbgFmt(mapBase[2])) or "engine"
+                            local dx, dy = self:getMapDrawShift()
+                            self.dbgMapBase = dx ~= nil and string.format("shift=(%s,%s)", dbgFmt(dx), dbgFmt(dy)) or "engine"
                         end
-                        local r = table.pack(self:callWithMapBasePosition(displaySelf, origDraw, ...))
+                        local r = table.pack(self:runMapDraw(origDraw, displaySelf, ...))
                         if self.hudDiagnostics then self:dbgMapSnapshot(displaySelf, "after draw") end -- [DEBUG-hudgrp]
                         return table.unpack(r, 1, r.n)
                     end
@@ -1379,25 +1391,48 @@ function VRCompanion:hookHud()
         end
     end
 
-    -- The map's layout reads its position from the engine's background position, not from the element
-    local mapCls = getGlobalClass("IngameMap")
-    if mapCls ~= nil then
-        for _, methodName in ipairs(MAP_BASE_POSITION_METHODS) do
-            if methodName ~= "draw" and type(mapCls[methodName]) == "function" then
-                local origMethod = mapCls[methodName]
-                hookMethod(mapCls, methodName, function(mapSelf, ...)
-                    return self:callWithMapBasePosition(mapSelf, origMethod, ...)
+    -- The map draws at the engine's corner: its draw methods run as one map draw, during which
+    -- Overlay:render shifts every overlay and clip rectangle to the Map group's position
+    self.mapEngineBaseX = _G.g_safeFrameOffsetX or 0.0
+    self.mapEngineBaseY = _G.g_safeFrameOffsetY or 0.0
+    self.mapDrawDepth = 0
+    for _, className in ipairs(MAP_DRAW_CLASSES) do
+        local cls = getGlobalClass(className)
+        if cls ~= nil then
+            local drawMethods = {}
+            for key, value in pairs(cls) do
+                if type(key) == "string" and string.sub(key, 1, 4) == "draw" and type(value) == "function"
+                    and not (className == "IngameMap" and key == "draw") then -- IngameMap.draw is hooked above
+                    drawMethods[#drawMethods + 1] = key
+                end
+            end
+            for _, key in ipairs(drawMethods) do
+                local origMethod = cls[key]
+                hookMethod(cls, key, function(...)
+                    return self:runMapDraw(origMethod, ...)
                 end)
             end
         end
-        if type(mapCls.getBackgroundPosition) == "function" then
-            local origBackgroundPosition = mapCls.getBackgroundPosition
-            hookMethod(mapCls, "getBackgroundPosition", function(mapSelf, ...)
-                local x, y = self:getMapBasePosition(mapSelf)
-                if x ~= nil then return x, y end
-                return origBackgroundPosition(mapSelf, ...)
-            end)
-        end
+    end
+    local overlayCls = getGlobalClass("Overlay")
+    if overlayCls ~= nil and type(overlayCls.render) == "function" then
+        local origRender = overlayCls.render
+        hookMethod(overlayCls, "render", function(overlay, clipX1, clipY1, clipX2, clipY2, ...)
+            local dx, dy = self.mapDrawShiftX, self.mapDrawShiftY
+            if self.mapDrawDepth > 0 and (dx ~= 0.0 or dy ~= 0.0) and type(overlay) == "table"
+                and type(overlay.x) == "number" and type(overlay.y) == "number" then
+                local origX, origY = overlay.x, overlay.y
+                overlay.x, overlay.y = origX + dx, origY + dy
+                if clipX1 ~= nil and clipY1 ~= nil and clipX2 ~= nil and clipY2 ~= nil then
+                    clipX1, clipY1, clipX2, clipY2 = clipX1 + dx, clipY1 + dy, clipX2 + dx, clipY2 + dy
+                end
+                local results = table.pack(pcall(origRender, overlay, clipX1, clipY1, clipX2, clipY2, ...))
+                overlay.x, overlay.y = origX, origY
+                if not results[1] then error(results[2], 0) end
+                return table.unpack(results, 2, results.n)
+            end
+            return origRender(overlay, clipX1, clipY1, clipX2, clipY2, ...)
+        end)
     end
 
     local hudCls = getGlobalClass("HUD")
