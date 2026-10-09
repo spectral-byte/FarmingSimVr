@@ -937,6 +937,32 @@ function VRCompanion:restoreHudSafeArea(preserveOrigAnchors)
     print("[FS25_VR] Restored standard 2D HUD corner anchors.")
 end
 
+-- The engine lays the map's content out from the element's background position, which it reads from
+-- g_safeFrameOffsetX/Y rather than from where the element was placed. Placing only the element moves
+-- the map's frame and leaves the content at the screen corner, outside the lens (#56). So the map's
+-- layout and draw calls run with that position at the Map group's, the way ConstructionScreen shifts it.
+local MAP_BASE_POSITION_METHODS = { "draw", "update", "setScale", "storeScaledValues", "setLayout", "toggleSize" }
+
+-- The Map group's position for the map's layout, or nil where the engine's own position applies:
+-- the fullscreen map, the Hidden HUD and 2D Floating Window Mode
+function VRCompanion:getMapBasePosition(map)
+    if map == nil or map.isFullscreen == true then return nil end
+    if self.is2DViewActive or self:getHudState() == self.HUD_STATE_HIDDEN then return nil end
+    return self:getHudDisplayPosition(map, "IngameMap", self.currentConvergenceOffset)
+end
+
+-- Runs fn(map, ...) with the engine's background position at the Map group's, then restores it
+function VRCompanion:callWithMapBasePosition(map, fn, ...)
+    local x, y = self:getMapBasePosition(map)
+    if x == nil then return fn(map, ...) end
+    local savedX, savedY = _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY
+    _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = x, y
+    local results = table.pack(pcall(fn, map, ...))
+    _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = savedX, savedY
+    if not results[1] then error(results[2], 0) end
+    return table.unpack(results, 2, results.n)
+end
+
 -- [DEBUG-hudgrp] Temporary HUD diagnostics for the map (#56) and the fill levels flicker. Off unless
 -- the player runs "vrHudDiag on"; every line is tagged so the whole block can be removed with one grep.
 local DBG_TAG = "[FS25_VR] [DEBUG-hudgrp] "
@@ -1167,6 +1193,9 @@ function VRCompanion:hookHud()
                     if not self:isDisplayVisible(displayName) then
                         return
                     end
+                    if displayName == "IngameMap" then
+                        return self:callWithMapBasePosition(displaySelf, origDraw, ...)
+                    end
                     return origDraw(displaySelf, ...)
                 end)
             end
@@ -1183,6 +1212,27 @@ function VRCompanion:hookHud()
                     return origGetIsVisible(displaySelf, ...)
                 end)
             end
+        end
+    end
+
+    -- The map's layout reads its position from the engine's background position, not from the element
+    local mapCls = getGlobalClass("IngameMap")
+    if mapCls ~= nil then
+        for _, methodName in ipairs(MAP_BASE_POSITION_METHODS) do
+            if methodName ~= "draw" and type(mapCls[methodName]) == "function" then
+                local origMethod = mapCls[methodName]
+                hookMethod(mapCls, methodName, function(mapSelf, ...)
+                    return self:callWithMapBasePosition(mapSelf, origMethod, ...)
+                end)
+            end
+        end
+        if type(mapCls.getBackgroundPosition) == "function" then
+            local origBackgroundPosition = mapCls.getBackgroundPosition
+            hookMethod(mapCls, "getBackgroundPosition", function(mapSelf, ...)
+                local x, y = self:getMapBasePosition(mapSelf)
+                if x ~= nil then return x, y end
+                return origBackgroundPosition(mapSelf, ...)
+            end)
         end
     end
 

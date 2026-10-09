@@ -864,6 +864,68 @@ test("DrawVisibilityAndHudSetterHooksHonorGroupSettings", function()
     end)
 end)
 
+-- The engine lays the map out from its background position (g_safeFrameOffsetX/Y), not from the position
+-- the element was given, so moving only the element leaves the map's content behind (#56).
+test("MapIsLaidOutFromTheMapGroupsPositionNotTheEnginesSafeFrame", function()
+    withGroupVisibilityHarness(function()
+        local savedLayout = VRCompanion.hudGroupLayout
+        local savedOffset, saved2D = VRCompanion.currentConvergenceOffset, VRCompanion.is2DViewActive
+        _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = 0.0, 0.0
+        local seen = {}
+        local function record(name)
+            return function(self) seen[name] = { _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY } end
+        end
+        _G.IngameMap = {
+            draw = record("draw"), update = record("update"), setScale = record("setScale"),
+            storeScaledValues = record("storeScaledValues"), setLayout = record("setLayout"),
+            toggleSize = record("toggleSize"),
+            getBackgroundPosition = function() return _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY end,
+            getIsVisible = function() return true end
+        }
+        VRCompanion:hookHud()
+        VRCompanion:setHudGroupLayout("map", 0.12, 0.34)
+        VRCompanion.currentConvergenceOffset = 0.01
+        VRCompanion.is2DViewActive = false
+        VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
+
+        local function near(a, b) return math.abs(a - b) < 0.0001 end
+        for _, name in ipairs({ "draw", "update", "setScale", "storeScaledValues", "setLayout", "toggleSize" }) do
+            seen[name] = nil
+            _G.IngameMap[name](_G.IngameMap)
+            assert(seen[name] ~= nil and near(seen[name][1], 0.13) and near(seen[name][2], 0.34),
+                name .. " runs with the engine's background position at the Map group's margins plus the convergence offset")
+            assert(_G.g_safeFrameOffsetX == 0.0 and _G.g_safeFrameOffsetY == 0.0,
+                "the engine's background position is restored after " .. name)
+        end
+
+        local bx, by = _G.IngameMap:getBackgroundPosition()
+        assert(near(bx, 0.13) and near(by, 0.34), "the map's background position is the Map group's position")
+
+        -- Moving the Map group moves the map's layout with it
+        VRCompanion:setHudGroupLayout("map", 0.2, 0.25)
+        _G.IngameMap:draw()
+        assert(near(seen.draw[1], 0.21) and near(seen.draw[2], 0.25), "changing the Map group's margins moves the map's layout")
+
+        -- Fullscreen, Hidden and 2D Floating Window Mode keep the engine's own position
+        _G.IngameMap.isFullscreen = true
+        _G.IngameMap:draw()
+        assert(seen.draw[1] == 0.0 and seen.draw[2] == 0.0, "the fullscreen map keeps the engine's position")
+        _G.IngameMap.isFullscreen = false
+        VRCompanion.is2DViewActive = true
+        _G.IngameMap:draw()
+        assert(seen.draw[1] == 0.0 and seen.draw[2] == 0.0, "2D Floating Window Mode keeps the engine's position")
+        VRCompanion.is2DViewActive = false
+        VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN
+        _G.IngameMap:draw()
+        assert(seen.draw[1] == 0.0 and seen.draw[2] == 0.0, "the Hidden HUD keeps the engine's position")
+
+        VRCompanion:unhookHud()
+        _G.IngameMap, _G.g_safeFrameOffsetX, _G.g_safeFrameOffsetY = nil, nil, nil
+        VRCompanion.hudGroupLayout = savedLayout
+        VRCompanion.currentConvergenceOffset, VRCompanion.is2DViewActive = savedOffset, saved2D
+    end)
+end)
+
 test("UnhookHudRestoresOriginalFunctionsCleanly", function()
     local origDrawCalled = false
     local origDraw = function(self) origDrawCalled = true end
