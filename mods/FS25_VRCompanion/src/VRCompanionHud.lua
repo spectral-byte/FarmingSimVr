@@ -961,6 +961,36 @@ local function dbgScalars(t)
     return table.concat(parts, " ")
 end
 
+-- Names of the functions a display can call, own and inherited through the metatable chain
+local function dbgMethods(t)
+    local names, seen = {}, {}
+    local cur, level = t, 0
+    while type(cur) == "table" and level < 5 do
+        for k, v in pairs(cur) do
+            if type(v) == "function" and not seen[k] then
+                seen[k] = true
+                names[#names + 1] = tostring(k)
+            end
+        end
+        local ok, mt = pcall(getmetatable, cur)
+        if not ok or type(mt) ~= "table" or type(mt.__index) ~= "table" then break end
+        cur = mt.__index
+        level = level + 1
+    end
+    table.sort(names)
+    return string.sub(table.concat(names, " "), 1, 2500)
+end
+
+-- Names and kinds of the table-valued fields, to find where a display keeps its position
+local function dbgTables(t)
+    local names = {}
+    for k, v in pairs(t) do
+        if type(v) == "table" then names[#names + 1] = tostring(k) end
+    end
+    table.sort(names)
+    return table.concat(names, " ")
+end
+
 local function dbgCall(display, method)
     if type(display[method]) ~= "function" then return "n/a" end
     local ok, a, b = pcall(display[method], display)
@@ -992,8 +1022,12 @@ function VRCompanion:dbgDrawEntry(displayName, display)
     local n = (self.dbgDraws[displayName] or 0) + 1
     self.dbgDraws[displayName] = n
     if n == 1 or n % 600 == 0 then
-        print(DBG_TAG .. string.format("draw #%d %s: x=%s y=%s isVisible=%s modVisible=%s hudState=%s", n, displayName,
-            dbgFmt(display.x), dbgFmt(display.y), tostring(display.isVisible), tostring(self:isDisplayVisible(displayName)), tostring(self:getHudState())))
+        local mission = g_currentMission or _G.g_currentMission
+        local hud = (mission ~= nil) and mission.hud or nil
+        local found = hud and self:dbgFindDisplay(displayName, hud) or nil
+        print(DBG_TAG .. string.format("draw #%d %s: x=%s y=%s isVisible=%s modVisible=%s hudState=%s sameAsHudField=%s", n, displayName,
+            dbgFmt(display.x), dbgFmt(display.y), tostring(display.isVisible), tostring(self:isDisplayVisible(displayName)), tostring(self:getHudState()),
+            tostring(found == display)))
     end
     local placed = self.dbgPlaced and self.dbgPlaced[displayName]
     if placed ~= nil and type(display.x) == "number" and type(display.y) == "number"
@@ -1056,9 +1090,19 @@ function VRCompanion:dbgDump()
                 name, tostring(groupName), dbgFmt(px), dbgFmt(py), dbgCall(display, "getPosition"), dbgCall(display, "getWidth"),
                 dbgCall(display, "getHeight"), tostring(display.isVisible), dbgCall(display, "getIsVisible"), tostring(self:isDisplayVisible(name))))
             print(DBG_TAG .. "  fields: " .. dbgScalars(display))
-            for _, sub in ipairs({ "layout", "overlay", "bgLeft", "bgScale", "bgRight", "mapElement", "mapOverlay", "terrainOverlay" }) do
+            print(DBG_TAG .. "  tables: " .. dbgTables(display))
+            print(DBG_TAG .. "  methods: " .. dbgMethods(display))
+            for _, sub in ipairs({ "layout", "overlay", "bgLeft", "bgScale", "bgRight", "mapElement", "mapOverlay", "terrainOverlay", "iconZoom", "mapFrame", "frame", "mapScale" }) do
                 if type(display[sub]) == "table" then
                     print(DBG_TAG .. "  ." .. sub .. ": " .. dbgScalars(display[sub]))
+                end
+            end
+            if name == "IngameMap" then
+                -- The map keeps its position somewhere other than x/y: show every sub-table's numbers
+                for k, v in pairs(display) do
+                    if type(v) == "table" and type(k) == "string" then
+                        print(DBG_TAG .. "  .." .. k .. ": " .. dbgScalars(v))
+                    end
                 end
             end
         end
@@ -1069,6 +1113,9 @@ function VRCompanion:setHudDiagnostics(enabled)
     self.hudDiagnostics = enabled == true
     self.dbgDraws, self.dbgOverwrites, self.dbgFillSig, self.dbgFillLogs = {}, {}, nil, 0
     print(DBG_TAG .. "HUD diagnostics " .. (self.hudDiagnostics and "on" or "off"))
+    if self.hudDiagnostics then
+        self:dbgDump()
+    end
 end
 
 function VRCompanion:hookHud()
