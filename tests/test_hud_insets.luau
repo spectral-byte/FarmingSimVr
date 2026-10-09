@@ -591,6 +591,99 @@ test("SavedSettingsRoundTripThroughLoader", function()
     _G.delete = nil
 end)
 
+-- Per-group Streamlined and Full HUD visibility (spec #50, ticket #53)
+local function withMockedSettingsFile(store, fn)
+    _G.getUserProfileAppPath = function() return "C:/Users/test/Documents/My Games/FarmingSimulator2025/" end
+    _G.createFolder = function() end
+    _G.createXMLFile = function() return 999 end
+    _G.setXMLFloat = function(_, key, val) store[key] = val end
+    _G.setXMLBool = function(_, key, val) store[key] = val end
+    _G.setXMLString = function(_, key, val) store[key] = val end
+    _G.saveXMLFile = function() end
+    _G.loadXMLFile = function() return 555 end
+    _G.getXMLFloat = function(_, key) return store[key] end
+    _G.getXMLBool = function(_, key) return store[key] end
+    _G.getXMLString = function(_, key) return store[key] end
+    _G.delete = function() end
+    local ok, err = pcall(fn)
+    for _, name in ipairs({ "getUserProfileAppPath", "createFolder", "createXMLFile", "setXMLFloat", "setXMLBool",
+            "setXMLString", "saveXMLFile", "loadXMLFile", "getXMLFloat", "getXMLBool", "getXMLString", "delete" }) do
+        _G[name] = nil
+    end
+    assert(ok, err)
+end
+
+local function resetGroupVisibilityToDefaults()
+    for name, group in pairs(VRCompanion.HUD_GROUPS) do
+        group.streamlined = VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED[name]
+        group.full = VRCompanion.DEFAULT_HUD_GROUP_FULL[name]
+    end
+end
+
+test("GroupVisibilitySettingsRoundTripThroughSaveAndLoad", function()
+    local store = {}
+    withMockedSettingsFile(store, function()
+        VRCompanion.HUD_GROUPS.map.streamlined = true
+        VRCompanion.HUD_GROUPS.map.full = false
+        VRCompanion.HUD_GROUPS.speedometer.streamlined = false
+        VRCompanion.HUD_GROUPS.info.full = false
+        VRCompanion.HUD_GROUPS.controls.streamlined = true
+        assert(VRCompanion:saveConfiguration("settings.xml") == true, "save must succeed")
+        assert(store["vrSettings.hudGroups.map.showStreamlined"] == true, "map Streamlined key")
+        assert(store["vrSettings.hudGroups.map.showFull"] == false, "map Full key")
+        assert(store["vrSettings.hudGroups.speedometer.showStreamlined"] == false, "speedometer Streamlined key")
+        assert(store["vrSettings.hudGroups.speedometer.showFull"] == true, "speedometer Full key")
+        assert(store["vrSettings.hudGroups.info.showFull"] == false, "info Full key")
+        assert(store["vrSettings.hudGroups.controls.showStreamlined"] == true, "controls Streamlined key")
+
+        resetGroupVisibilityToDefaults()
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion:isDisplayVisible("IngameMap", VRCompanion.HUD_STATE_STREAMLINED) == true, "map Streamlined must round-trip")
+        assert(VRCompanion:isDisplayVisible("IngameMap", VRCompanion.HUD_STATE_FULL) == false, "map Full must round-trip")
+        assert(VRCompanion:isDisplayVisible("SpeedMeterDisplay", VRCompanion.HUD_STATE_STREAMLINED) == false, "speedometer Streamlined must round-trip")
+        assert(VRCompanion:isDisplayVisible("FillLevelsDisplay", VRCompanion.HUD_STATE_FULL) == true, "speedometer Full must round-trip")
+        assert(VRCompanion:isDisplayVisible("GameInfoDisplay", VRCompanion.HUD_STATE_FULL) == false, "info Full must round-trip")
+        assert(VRCompanion:isDisplayVisible("InputHelpDisplay", VRCompanion.HUD_STATE_STREAMLINED) == true, "controls Streamlined must round-trip")
+    end)
+    resetGroupVisibilityToDefaults()
+    VRCompanion:configureHudInsets()
+end)
+
+test("MissingGroupVisibilityKeysFallBackToDefaultConstants", function()
+    local store = {}
+    withMockedSettingsFile(store, function()
+        -- Only one key is present; a legacy file has none of them
+        for _, group in pairs(VRCompanion.HUD_GROUPS) do group.streamlined, group.full = true, false end
+        store["vrSettings.hudGroups.info.showStreamlined"] = true
+        VRCompanion:loadConfiguration("settings.xml")
+        for name, group in pairs(VRCompanion.HUD_GROUPS) do
+            local expectedStreamlined = (name == "info") or VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED[name]
+            assert(group.streamlined == expectedStreamlined, name .. " Streamlined falls back to its DEFAULT_* constant")
+            assert(group.full == VRCompanion.DEFAULT_HUD_GROUP_FULL[name], name .. " Full falls back to its DEFAULT_* constant")
+        end
+    end)
+    resetGroupVisibilityToDefaults()
+    VRCompanion:configureHudInsets()
+end)
+
+test("FirstRunSavesEveryGroupVisibilityDefault", function()
+    local store = {}
+    local savedFiles = 0
+    withMockedSettingsFile(store, function()
+        _G.loadXMLFile = function() return 0 end -- no settings.xml yet
+        _G.saveXMLFile = function() savedFiles = savedFiles + 1 end
+        for _, group in pairs(VRCompanion.HUD_GROUPS) do group.streamlined, group.full = true, false end
+        VRCompanion:loadConfiguration()
+        assert(savedFiles == 1, "first run must create the settings file")
+        for name, _ in pairs(VRCompanion.HUD_GROUPS) do
+            assert(store["vrSettings.hudGroups." .. name .. ".showStreamlined"] == VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED[name], name .. " saved Streamlined default")
+            assert(store["vrSettings.hudGroups." .. name .. ".showFull"] == VRCompanion.DEFAULT_HUD_GROUP_FULL[name], name .. " saved Full default")
+        end
+    end)
+    resetGroupVisibilityToDefaults()
+    VRCompanion:configureHudInsets()
+end)
+
 test("LoaderIgnoresAliasAndLegacyKeysNoReleaseWrote", function()
     _G.loadXMLFile = function() return 555 end
     _G.getXMLFloat = function(_, key)

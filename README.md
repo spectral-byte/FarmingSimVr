@@ -86,7 +86,8 @@ FS25 VR is built as a hybrid two-tier architecture:
   - The HUD is split into four HUD Groups (Map, Speedometer, Info, Controls), each positioned by its own margins and scale from a fixed home corner, so the interface sits in the headset's optical sweet spot.
   - Physical IPD-scaled stereoscopic convergence depth prevents eye strain.
   - Clean vertical stacking of fill levels and machine telemetry.
-  - Three-stage HUD display cycle: **Full HUD** $\rightarrow$ **Streamlined Telemetry** $\rightarrow$ **Hidden**.
+  - Three-stage HUD display cycle: **Full HUD** $\rightarrow$ **Streamlined HUD** $\rightarrow$ **Hidden**.
+  - Four HUD Groups (Map, Speedometer with its fill levels, Info, Controls), each switchable on or off for the Streamlined and Full HUD with `vrHudGroupShow`. By default the Streamlined HUD shows only the Speedometer group and the Full HUD shows all four. The context action prompt shows in both.
 - **Floating Quad Layer for Menus**:
   - 2D menus, title screen, and map dialogs render cleanly onto a floating 3D quad layer in OpenXR space.
   - Alpha-blended hardware mouse cursor projected accurately onto the floating quad.
@@ -164,6 +165,7 @@ Press the tilde key (`` ` `` / `~`) to open the in-engine developer console:
 - `vrObliqueProjection <true|false|toggle>`: Enable per-eye Oblique Frustum projection (default: `false`, symmetric).
 - `vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]`: Place one HUD Group and set its scale. Each group has a fixed home corner (Map bottom-left, Speedometer bottom-right with the fill levels under it, Info top-right, Controls top-left). The horizontal and vertical values are the distance, as a fraction of the screen, from the home corner's two edges to the group's outer edges, so a larger group grows inward. Margins clamp to `0.00`-`0.45` and the scale to `0.50`-`1.50`; the scale is multiplied by the game's own UI scale setting. Defaults for every group: `0.30 0.22 0.82`. The change applies immediately and is saved. Run without arguments to list every group's current margins and scale. The context action prompt is not a group: it stays centered at the bottom on the Speedometer group's vertical margin.
 - `vrHudInsets <horizontal> <vertical> [top]`: Adjust the HUD Safe Area, the margin applied to the engine's global HUD anchors that keeps warnings, notifications and other mods' HUDs inside the lens (default: `0.30 0.22 0.22`). It does not move the HUD Groups.
+- `vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>`: Choose which HUD Groups show in the Streamlined HUD and in the Full HUD (defaults: Streamlined = `speedometer` only, Full = all four groups). The Hidden HUD always shows nothing, and the context action prompt always shows in both states. Applies immediately and is saved; run with no arguments to list every group's current visibility. The HUD cycle notification lists the groups that are on in the new state, e.g. `VR HUD: Streamlined (Speedometer, Map)`.
 - HUD convergence depth is set via `<hudConvergenceDepth>` in `settings.xml` (default: `1.8`).
 - `vrSnapTurnAngle <degrees>`: Set snap turn rotational angle step (default: `90`).
 

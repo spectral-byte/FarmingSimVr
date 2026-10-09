@@ -362,6 +362,45 @@ function VRCompanion:consoleCommandSetHudLoadNotification(enabledStr)
     return string.format("VR HUD load notification set to: %s", tostring(enabled))
 end
 
+local function hudGroupShowUsage(self)
+    local lines = { "Usage: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>" }
+    for _, name in ipairs(self.HUD_GROUP_ORDER) do
+        local group = self.HUD_GROUPS[name]
+        table.insert(lines, string.format("  %s: streamlined=%s full=%s", name,
+            group.streamlined and "on" or "off", group.full and "on" or "off"))
+    end
+    return table.concat(lines, "\n")
+end
+
+function VRCompanion:consoleCommandHudGroupShow(groupStr, stateStr, onOffStr)
+    local groupName = (groupStr ~= nil) and string.lower(tostring(groupStr)) or nil
+    local stateName = (stateStr ~= nil) and string.lower(tostring(stateStr)) or nil
+    local onOff = (onOffStr ~= nil) and string.lower(tostring(onOffStr)) or nil
+
+    local enabled = nil
+    if onOff == "on" or onOff == "true" or onOff == "1" then
+        enabled = true
+    elseif onOff == "off" or onOff == "false" or onOff == "0" then
+        enabled = false
+    end
+    if groupName == nil or enabled == nil or not self:setHudGroupVisibility(groupName, stateName, enabled) then
+        return hudGroupShowUsage(self)
+    end
+
+    self:saveConfiguration()
+    local label = self:getHudGroupLabel(groupName)
+    local stateLabel = self:getHudGroupLabel(stateName)
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR HUD: %s group %s in %s HUD (Saved)",
+                label, enabled and "on" or "off", stateLabel), 2500)
+        end)
+    end
+    return string.format("VR HUD %s group (%s) %s in the %s HUD and saved.",
+        label, groupName, enabled and "shown" or "hidden", stateLabel)
+end
+
 function VRCompanion:consoleCommandSetRecenterMode(modeStr)
     local curMode = self:getRecenterMode()
     if modeStr == nil or modeStr == "" or string.lower(tostring(modeStr)) == "status" then
