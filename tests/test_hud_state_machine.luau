@@ -994,8 +994,9 @@ test("MapMaskAndTextFollowTheMapGroup", function()
         local dx, dy = 0.13 - 0.013, 0.34 - 0.0156
 
         _G.IngameMap:draw()
+        assert(#masks == 1, "the mod leaves setting the mask to the engine")
         local last = masks[#masks]
-        assert(last.id == 77 and last.alphaOnly == true, "the map's mask is set again on the same mask overlay")
+        assert(last.id == 77 and last.alphaOnly == true, "the engine sets its mask with its own arguments")
         assert(near(last.x, 0.02 + dx) and near(last.y, 0.03 + dy) and near(last.w, 0.1) and near(last.h, 0.12),
             "the map's mask follows the Map group and keeps its size")
         assert(near(textAt.x, 0.02 + dx) and near(textAt.y, 0.03 + dy), "the coordinates readout is drawn from the shifted position")

@@ -975,21 +975,9 @@ function VRCompanion:runMapDraw(fn, ...)
     return table.unpack(results, 2, results.n)
 end
 
--- The layout crops the map to its circle with a 2D mask it sets in drawBefore, at absolute screen
--- coordinates taken from its own position fields. Natives cannot be intercepted from a mod, but they can
--- be called: set the mask again over the engine's, with the rectangle shifted to the Map group.
-function VRCompanion:shiftMapMask(layout)
-    local dx, dy = self.mapDrawShiftX, self.mapDrawShiftY
-    local setMask = _G.set2DMaskFromOverlay
-    if (dx == 0.0 and dy == 0.0) or type(setMask) ~= "function" or type(layout) ~= "table" then return end
-    local id = layout.overlayMask
-    if type(id) ~= "number" or id == 0 then return end
-    if type(layout.mapPosX) ~= "number" or type(layout.mapPosY) ~= "number"
-        or type(layout.mapSizeX) ~= "number" or type(layout.mapSizeY) ~= "number" then return end
-    pcall(setMask, id, true, layout.mapPosX + dx, layout.mapPosY + dy, layout.mapSizeX, layout.mapSizeY)
-end
-
--- Runs fn(layout, ...) with the layout's position fields moved to the Map group, for the text it draws
+-- Runs fn(layout, ...) with the layout's position fields moved to the Map group. The layout crops the map
+-- to its circle with a native 2D mask it sets in drawBefore, which a mod cannot intercept, and draws its
+-- text with natives too, but both take their absolute coordinates from these fields.
 function VRCompanion:callWithMapLayoutShifted(layout, fn, ...)
     local dx, dy = self.mapDrawShiftX, self.mapDrawShiftY
     if (dx == 0.0 and dy == 0.0) or type(layout) ~= "table" or type(layout.mapPosX) ~= "number" or type(layout.mapPosY) ~= "number" then
@@ -1268,6 +1256,8 @@ function VRCompanion:dbgStartRenderProbe(map)
     end
     self.dbgRenderLogs = 0
     self.dbgMapStack = {}
+    self.dbgSeenRenders = {}
+    self.dbgObjectPosLogs = 0
     self.dbgRenderTotal, self.dbgWrapCalls, self.dbgOverlayRenders = 0, 0, 0
     -- Second probe on Overlay:render, which does not depend on the renderOverlay global being the one the engine calls
     local overlayCls = _G.Overlay
@@ -1276,7 +1266,10 @@ function VRCompanion:dbgStartRenderProbe(map)
         local renderWrapper = function(overlaySelf, ...)
             self.dbgOverlayRenders = self.dbgOverlayRenders + 1
             local depth = #self.dbgMapStack
-            if type(overlaySelf) == "table" and (ids[overlaySelf.overlayId] ~= nil or depth > 0) and self.hudDiagnostics and self.dbgRenderLogs < 60 then
+            local seenKey = (self.dbgMapStack[depth] or "outside") .. "#" .. tostring(type(overlaySelf) == "table" and overlaySelf.overlayId)
+            if type(overlaySelf) == "table" and (ids[overlaySelf.overlayId] ~= nil or depth > 0) and self.hudDiagnostics
+                and self.dbgRenderLogs < 80 and not self.dbgSeenRenders[seenKey] then
+                self.dbgSeenRenders[seenKey] = true
                 self.dbgRenderLogs = self.dbgRenderLogs + 1
                 print(DBG_TAG .. string.format("Overlay:render [%s] %s id=%s x=%s y=%s offset=(%s,%s) size=%sx%s visible=%s a=%s", self.dbgMapStack[depth] or "outside map methods",
                     tostring(ids[overlaySelf.overlayId] or "other"), tostring(overlaySelf.overlayId), dbgFmt(overlaySelf.x), dbgFmt(overlaySelf.y),
@@ -1302,6 +1295,12 @@ function VRCompanion:dbgStartRenderProbe(map)
     self.dbgWrapped = self.dbgWrapped or {}
     local skip = { new = true, class = true, isa = true, superClass = true, copy = true }
     local classNames = { "IngameMap", "IngameMapLayout", "IngameMapLayoutNone", "IngameMapLayoutCircle", "IngameMapLayoutSquare", "IngameMapLayoutSquareLarge", "IngameMapLayoutFullscreen" }
+    -- Hotspots (fields, vehicles) render themselves: tag their render methods too
+    for globalName, value in pairs(_G) do
+        if type(globalName) == "string" and string.find(globalName, "Hotspot$") and type(value) == "table" and type(value.render) == "function" then
+            classNames[#classNames + 1] = globalName
+        end
+    end
     for _, className in ipairs(classNames) do
         local cls = _G[className]
         if type(cls) == "table" then
@@ -1318,6 +1317,10 @@ function VRCompanion:dbgStartRenderProbe(map)
                     stack[#stack + 1] = label
                     local r = table.pack(pcall(f, ...))
                     stack[#stack] = nil
+                    if k == "getMapObjectPosition" and self.hudDiagnostics and self.dbgObjectPosLogs < 8 and r[1] then
+                        self.dbgObjectPosLogs = self.dbgObjectPosLogs + 1
+                        print(DBG_TAG .. string.format("%s(...) -> x=%s y=%s rot=%s visible=%s", label, dbgFmt(r[2]), dbgFmt(r[3]), dbgFmt(r[4]), tostring(r[5])))
+                    end
                     if not r[1] then error(r[2], 0) end
                     return table.unpack(r, 2, r.n)
                 end
@@ -1451,15 +1454,9 @@ function VRCompanion:hookHud()
             end
             for _, key in ipairs(drawMethods) do
                 local origMethod = cls[key]
-                if className ~= "IngameMap" and key == "drawBefore" then
-                    -- The layout sets the map's circular mask here, at absolute coordinates: set it again shifted
-                    hookMethod(cls, key, function(...)
-                        local results = table.pack(self:runMapDraw(origMethod, ...))
-                        self:shiftMapMask((...))
-                        return table.unpack(results, 1, results.n)
-                    end)
-                elseif className ~= "IngameMap" and (key == "drawCoordinates" or key == "drawLatency") then
-                    -- The text is placed from the layout's own position fields
+                if className ~= "IngameMap" and (key == "drawBefore" or key == "drawCoordinates" or key == "drawLatency") then
+                    -- The layout sets the map's circular mask in drawBefore and places its text, both at absolute
+                    -- coordinates taken from its own position fields, so they run with those fields moved
                     hookMethod(cls, key, function(layout, ...)
                         return self:runMapDraw(function(...)
                             return self:callWithMapLayoutShifted(layout, origMethod, ...)
