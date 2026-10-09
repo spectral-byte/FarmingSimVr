@@ -1034,6 +1034,16 @@ function VRCompanion:dbgFindDisplay(displayName, hud)
     return hud.contextAction or hud.contextActionDisplay
 end
 
+-- Logs the map's frame and content positions around a draw, a few times only
+function VRCompanion:dbgMapSnapshot(map, when)
+    self.dbgMapSnaps = (self.dbgMapSnaps or 0) + 1
+    if self.dbgMapSnaps > 12 then return end
+    local o, m, l = map.overlay or {}, map.mapOverlay or {}, map.layout or {}
+    print(DBG_TAG .. string.format("map %s: frame=(%s,%s) content=(%s,%s;%sx%s) layout.screenMapPos=(%s,%s) layout.mapPos=(%s,%s) base=%s globals=(%s,%s)",
+        when, dbgFmt(o.x), dbgFmt(o.y), dbgFmt(m.x), dbgFmt(m.y), dbgFmt(m.width), dbgFmt(m.height), dbgFmt(l.screenMapPosX), dbgFmt(l.screenMapPosY),
+        dbgFmt(l.mapPosX), dbgFmt(l.mapPosY), tostring(self.dbgMapBase), dbgFmt(_G.g_safeFrameOffsetX), dbgFmt(_G.g_safeFrameOffsetY)))
+end
+
 function VRCompanion:dbgRecordPlacement(displayName, x, y)
     if not self.hudDiagnostics then return end
     self.dbgPlaced = self.dbgPlaced or {}
@@ -1092,6 +1102,39 @@ function VRCompanion:dbgFillLevels(display, placedX, placedY)
     end
 end
 
+-- Function names on a class table and what its metatable looks like
+local function dbgClass(label, cls)
+    if type(cls) ~= "table" then
+        print(DBG_TAG .. "  class " .. label .. ": not a table (" .. type(cls) .. ")")
+        return
+    end
+    local names = {}
+    for k, v in pairs(cls) do
+        if type(v) == "function" then names[#names + 1] = tostring(k) end
+    end
+    table.sort(names)
+    local ok, mt = pcall(getmetatable, cls)
+    local mtInfo = (not ok) and "getmetatable error" or (mt == nil and "no metatable" or ("metatable __index=" .. type(mt.__index) .. " __metatable=" .. tostring(mt.__metatable)))
+    print(DBG_TAG .. "  class " .. label .. " (" .. mtInfo .. "): " .. string.sub(table.concat(names, " "), 1, 3000))
+end
+
+function VRCompanion:dbgDumpMapClasses(map)
+    dbgClass("IngameMap", _G.IngameMap)
+    local ok, mt = pcall(getmetatable, map)
+    if ok and type(mt) == "table" and type(mt.__index) == "table" then
+        dbgClass("IngameMap instance __index", mt.__index)
+        local ok2, mt2 = pcall(getmetatable, mt.__index)
+        if ok2 and type(mt2) == "table" and type(mt2.__index) == "table" then dbgClass("IngameMap superclass", mt2.__index) end
+    end
+    for _, name in ipairs({ "IngameMapLayout", "IngameMapLayoutNone", "IngameMapLayoutCircle", "IngameMapLayoutSquare", "IngameMapLayoutSquareLarge", "IngameMapLayoutFullscreen" }) do
+        dbgClass(name, _G[name])
+    end
+    if type(map.layout) == "table" then
+        local ok3, lmt = pcall(getmetatable, map.layout)
+        if ok3 and type(lmt) == "table" and type(lmt.__index) == "table" then dbgClass("current layout instance __index", lmt.__index) end
+    end
+end
+
 function VRCompanion:dbgDump()
     local mission = g_currentMission or _G.g_currentMission
     local hud = (mission ~= nil) and mission.hud or nil
@@ -1099,6 +1142,8 @@ function VRCompanion:dbgDump()
         print(DBG_TAG .. "no mission HUD")
         return
     end
+    local map = hud.ingameMap or hud.ingameMapDisplay
+    if map ~= nil then self:dbgDumpMapClasses(map) end
     print(DBG_TAG .. string.format("hudState=%s is2D=%s anchors L=%s R=%s B=%s T=%s convergenceOffset=%s", tostring(self:getHudState()),
         tostring(self.is2DViewActive), dbgFmt(self.hudAnchorLeft), dbgFmt(self.hudAnchorRight), dbgFmt(self.hudAnchorBottom),
         dbgFmt(self.hudAnchorTop), dbgFmt(self.currentConvergenceOffset)))
@@ -1137,7 +1182,7 @@ end
 
 function VRCompanion:setHudDiagnostics(enabled)
     self.hudDiagnostics = enabled == true
-    self.dbgDraws, self.dbgOverwrites, self.dbgFillSig, self.dbgFillLogs = {}, {}, nil, 0
+    self.dbgDraws, self.dbgOverwrites, self.dbgFillSig, self.dbgFillLogs, self.dbgMapSnaps = {}, {}, nil, 0, 0
     print(DBG_TAG .. "HUD diagnostics " .. (self.hudDiagnostics and "on" or "off"))
     if self.hudDiagnostics then
         self:dbgDump()
@@ -1194,7 +1239,14 @@ function VRCompanion:hookHud()
                         return
                     end
                     if displayName == "IngameMap" then
-                        return self:callWithMapBasePosition(displaySelf, origDraw, ...)
+                        if self.hudDiagnostics then -- [DEBUG-hudgrp]
+                            self:dbgMapSnapshot(displaySelf, "before draw")
+                            local mapBase = { self:getMapBasePosition(displaySelf) }
+                            self.dbgMapBase = mapBase[1] ~= nil and string.format("(%s,%s)", dbgFmt(mapBase[1]), dbgFmt(mapBase[2])) or "engine"
+                        end
+                        local r = table.pack(self:callWithMapBasePosition(displaySelf, origDraw, ...))
+                        if self.hudDiagnostics then self:dbgMapSnapshot(displaySelf, "after draw") end -- [DEBUG-hudgrp]
+                        return table.unpack(r, 1, r.n)
                     end
                     return origDraw(displaySelf, ...)
                 end)
