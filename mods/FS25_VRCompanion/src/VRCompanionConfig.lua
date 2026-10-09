@@ -21,6 +21,12 @@ VRCompanion.MAX_HUD_INSET_TOP = 0.50
 VRCompanion.MIN_HUD_UI_SCALE = 0.50
 VRCompanion.MAX_HUD_UI_SCALE = 1.50
 
+-- HUD Group visibility (CONTEXT.md, ADR-0022): which groups show in the Streamlined and the Full HUD.
+-- HUD_GROUP_ORDER is the order groups are listed in messages.
+VRCompanion.HUD_GROUP_ORDER = { "speedometer", "map", "info", "controls" }
+VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED = { map = false, speedometer = true, info = false, controls = false }
+VRCompanion.DEFAULT_HUD_GROUP_FULL = { map = true, speedometer = true, info = true, controls = true }
+
 -- VR HUD Convergence Parity Constants
 VRCompanion.DEFAULT_CONVERGENCE_DEPTH = 1.8
 VRCompanion.DEFAULT_CONVERGENCE_DISPARITY = 0.012
@@ -182,6 +188,14 @@ function VRCompanion:saveConfiguration(xmlPath)
             setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
             setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
             setXmlBoolFn(xmlFile, "vrSettings.allowObliqueProjection", self.allowObliqueProjection == true)
+            for _, groupName in ipairs(self.HUD_GROUP_ORDER) do
+                local group = (self.HUD_GROUPS or {})[groupName] or {}
+                local streamlined, full = group.streamlined, group.full
+                if streamlined == nil then streamlined = self.DEFAULT_HUD_GROUP_STREAMLINED[groupName] end
+                if full == nil then full = self.DEFAULT_HUD_GROUP_FULL[groupName] end
+                setXmlBoolFn(xmlFile, "vrSettings.hudGroups." .. groupName .. ".showStreamlined", streamlined == true)
+                setXmlBoolFn(xmlFile, "vrSettings.hudGroups." .. groupName .. ".showFull", full == true)
+            end
         end
         if type(setXmlStringFn) == "function" then
             -- Persist the mode last requested, not VRBridge's: while the compositor is active the bridge
@@ -211,6 +225,13 @@ function VRCompanion:loadConfiguration(xmlPath)
     local scale = self.DEFAULT_HUD_UI_SCALE
     local insetTop = self.DEFAULT_HUD_INSET_TOP
     local renderingModeLoaded = false
+
+    -- Group visibility starts from the defaults; the settings file overrides the keys it has
+    for _, groupName in ipairs(self.HUD_GROUP_ORDER) do
+        local group = self.HUD_GROUPS[groupName]
+        group.streamlined = self.DEFAULT_HUD_GROUP_STREAMLINED[groupName]
+        group.full = self.DEFAULT_HUD_GROUP_FULL[groupName]
+    end
 
     local loadXmlFn = loadXMLFile or _G.loadXMLFile
     local getXmlFloatFn = getXMLFloat or _G.getXMLFloat
@@ -278,6 +299,15 @@ function VRCompanion:loadConfiguration(xmlPath)
                     "vrSettings.allowObliqueProjection")
                 if loadedAllowOblique ~= nil then
                     self.allowObliqueProjection = loadedAllowOblique
+                end
+
+                for _, groupName in ipairs(self.HUD_GROUP_ORDER) do
+                    local group = self.HUD_GROUPS[groupName]
+                    local prefix = "vrSettings.hudGroups." .. groupName
+                    local loadedStreamlined = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile, prefix .. ".showStreamlined")
+                    local loadedFull = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile, prefix .. ".showFull")
+                    if loadedStreamlined ~= nil then group.streamlined = loadedStreamlined end
+                    if loadedFull ~= nil then group.full = loadedFull end
                 end
 
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,

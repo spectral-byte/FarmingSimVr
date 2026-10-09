@@ -45,11 +45,16 @@ if VRCompanion.currentConvergenceOffset == nil then VRCompanion.currentConvergen
 -- fixed home corner, and says whether it shows in the Streamlined and Full HUD. Placement and
 -- visibility both look a display up through its group. The context action display is in no group.
 VRCompanion.HUD_GROUPS = {
-    map = { displays = { "IngameMap" }, alignX = "left", alignY = "bottom", streamlined = false, full = true },
-    speedometer = { displays = { "SpeedMeterDisplay", "FillLevelsDisplay" }, alignX = "right", alignY = "bottom", streamlined = true, full = true },
-    info = { displays = { "GameInfoDisplay" }, alignX = "right", alignY = "top", streamlined = false, full = true },
-    controls = { displays = { "InputHelpDisplay" }, alignX = "left", alignY = "top", streamlined = false, full = true }
+    map = { displays = { "IngameMap" }, alignX = "left", alignY = "bottom" },
+    speedometer = { displays = { "SpeedMeterDisplay", "FillLevelsDisplay" }, alignX = "right", alignY = "bottom" },
+    info = { displays = { "GameInfoDisplay" }, alignX = "right", alignY = "top" },
+    controls = { displays = { "InputHelpDisplay" }, alignX = "left", alignY = "top" }
 }
+-- Visibility flags start at their DEFAULT_* constants (VRCompanionConfig.lua)
+for name, group in pairs(VRCompanion.HUD_GROUPS) do
+    group.streamlined = VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED[name]
+    group.full = VRCompanion.DEFAULT_HUD_GROUP_FULL[name]
+end
 
 -- Not in any group: bottom-centered, and shown in both the Streamlined and Full HUD.
 local CONTEXT_ACTION_DISPLAY = "ContextActionDisplay"
@@ -581,18 +586,53 @@ function VRCompanion:cycleHudState()
 
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
-        local desc = "All Off"
-        if nextState == self.HUD_STATE_STREAMLINED then
-            desc = "Vehicle Telemetry Only"
-        elseif nextState == self.HUD_STATE_FULL then
-            desc = "All Elements On"
+        local message = string.format("VR HUD: %s", stateName)
+        if nextState ~= self.HUD_STATE_HIDDEN then
+            local groupLabels = {}
+            for _, name in ipairs(self:getEnabledHudGroups(nextState)) do
+                table.insert(groupLabels, self:getHudGroupLabel(name))
+            end
+            message = string.format("%s (%s)", message, (#groupLabels > 0) and table.concat(groupLabels, ", ") or "none")
         end
         pcall(function()
-            mission:showBlinkingWarning(string.format("VR HUD: %s (%s)", stateName, desc), 2500)
+            mission:showBlinkingWarning(message, 2500)
         end)
     end
 
     return nextState
+end
+
+-- Display label of a group name, e.g. "speedometer" -> "Speedometer".
+function VRCompanion:getHudGroupLabel(groupName)
+    return (string.gsub(groupName, "^%l", string.upper))
+end
+
+-- The group names that show in a HUD state, in HUD_GROUP_ORDER. Hidden has none.
+function VRCompanion:getEnabledHudGroups(state)
+    local enabled = {}
+    if state ~= self.HUD_STATE_STREAMLINED and state ~= self.HUD_STATE_FULL then
+        return enabled
+    end
+    local flag = (state == self.HUD_STATE_STREAMLINED) and "streamlined" or "full"
+    for _, name in ipairs(self.HUD_GROUP_ORDER) do
+        local group = self.HUD_GROUPS[name]
+        if group ~= nil and group[flag] == true then
+            table.insert(enabled, name)
+        end
+    end
+    return enabled
+end
+
+-- Turns a group on or off for the Streamlined ("streamlined") or Full ("full") HUD and applies it
+-- to the displays at once. Returns false when the group or state name is unknown.
+function VRCompanion:setHudGroupVisibility(groupName, stateName, enabled)
+    local group = self.HUD_GROUPS[groupName]
+    if group == nil or (stateName ~= "streamlined" and stateName ~= "full") then
+        return false
+    end
+    group[stateName] = (enabled == true)
+    self:applyHudState(self:getHudState())
+    return true
 end
 
 function VRCompanion:onHudToggleAction(...)
@@ -1007,7 +1047,9 @@ VRCompanion.Hud.getHudState =function(self, ...) return VRCompanion.getHudState(
 VRCompanion.Hud.isDisplayVisible = function(self, ...) return VRCompanion.isDisplayVisible(VRCompanion, ...) end
 VRCompanion.Hud.applyHudState = function(self, ...) return VRCompanion.applyHudState(VRCompanion, ...) end
 VRCompanion.Hud.setHudState = function(self, ...) return VRCompanion.setHudState(VRCompanion, ...) end
-VRCompanion.Hud.cycleHudState = function(self, ...) return VRCompanion.cycleHudState(VRCompanion, ...) end
+VRCompanion.Hud.getEnabledHudGroups = function(self, ...) return VRCompanion.getEnabledHudGroups(VRCompanion, ...) end
+VRCompanion.Hud.setHudGroupVisibility = function(self, ...) return VRCompanion.setHudGroupVisibility(VRCompanion, ...) end
+VRCompanion.Hud.cycleHudState =function(self, ...) return VRCompanion.cycleHudState(VRCompanion, ...) end
 VRCompanion.Hud.onHudToggleAction = function(self, ...) return VRCompanion.onHudToggleAction(VRCompanion, ...) end
 VRCompanion.Hud.calculateHudAnchors = function(self, ...) return VRCompanion.calculateHudAnchors(VRCompanion, ...) end
 VRCompanion.Hud.configureHudInsets = function(self, ...) return VRCompanion.configureHudInsets(VRCompanion, ...) end

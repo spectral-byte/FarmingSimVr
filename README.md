@@ -86,7 +86,8 @@ FS25 VR is built as a hybrid two-tier architecture:
   - Normalized viewport insets contract interface elements into the headset's optical sweet spot.
   - Physical IPD-scaled stereoscopic convergence depth prevents eye strain.
   - Clean vertical stacking of fill levels and machine telemetry.
-  - Three-stage HUD display cycle: **Full HUD** $\rightarrow$ **Streamlined Telemetry** $\rightarrow$ **Hidden**.
+  - Three-stage HUD display cycle: **Full HUD** $\rightarrow$ **Streamlined HUD** $\rightarrow$ **Hidden**.
+  - Four HUD Groups (Map, Speedometer with its fill levels, Info, Controls), each switchable on or off for the Streamlined and Full HUD with `vrHudGroupShow`. By default the Streamlined HUD shows only the Speedometer group and the Full HUD shows all four. The context action prompt shows in both.
 - **Floating Quad Layer for Menus**:
   - 2D menus, title screen, and map dialogs render cleanly onto a floating 3D quad layer in OpenXR space.
   - Alpha-blended hardware mouse cursor projected accurately onto the floating quad.
@@ -163,6 +164,7 @@ Press the tilde key (`` ` `` / `~`) to open the in-engine developer console:
 - `vrRenderingMode <afr|dualpass|toggle>`: Switch between Sequential Dual-Pass and Alternate Frame Rendering.
 - `vrObliqueProjection <true|false|toggle>`: Enable per-eye Oblique Frustum projection (default: `false`, symmetric).
 - `vrHudInsets <horizontal> <vertical> [scale] [top]`: Adjust normalized HUD margin insets and element scale (default: `0.30 0.22 0.82 0.22`).
+- `vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>`: Choose which HUD Groups show in the Streamlined HUD and in the Full HUD (defaults: Streamlined = `speedometer` only, Full = all four groups). The Hidden HUD always shows nothing, and the context action prompt always shows in both states. Applies immediately and is saved; run with no arguments to list every group's current visibility. The HUD cycle notification lists the groups that are on in the new state, e.g. `VR HUD: Streamlined (Speedometer, Map)`.
 - HUD convergence depth is set via `<hudConvergenceDepth>` in `settings.xml` (default: `1.8`).
 - `vrSnapTurnAngle <degrees>`: Set snap turn rotational angle step (default: `90`).
 

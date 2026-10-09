@@ -164,6 +164,33 @@ test("DefinesTheFourHudGroupsWithTheirMemberDisplaysAndHomeCorners", function()
     assert(count == 4, "There are exactly four HUD Groups")
 end)
 
+-- Per-group visibility (spec #50, ticket #53)
+test("GroupVisibilityDefaultsComeFromDefaultConstants", function()
+    local streamlinedDefaults = VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED
+    local fullDefaults = VRCompanion.DEFAULT_HUD_GROUP_FULL
+    assert(type(streamlinedDefaults) == "table" and type(fullDefaults) == "table", "per-group visibility defaults must be DEFAULT_* constants")
+
+    -- Streamlined = Speedometer group only; Full = all four groups
+    for name, _ in pairs(VRCompanion.HUD_GROUPS) do
+        assert(streamlinedDefaults[name] == (name == "speedometer"), name .. " Streamlined default")
+        assert(fullDefaults[name] == true, name .. " Full default")
+    end
+
+    -- A fresh copy of the mod starts every group at those defaults
+    local saved = _G.VRCompanion
+    _G.VRCompanion = nil
+    local ok, err = pcall(function()
+        loadCompanionMod()
+        local fresh = _G.VRCompanion
+        for name, group in pairs(fresh.HUD_GROUPS) do
+            assert(group.streamlined == fresh.DEFAULT_HUD_GROUP_STREAMLINED[name], name .. " starts at its Streamlined default")
+            assert(group.full == fresh.DEFAULT_HUD_GROUP_FULL[name], name .. " starts at its Full default")
+        end
+    end)
+    _G.VRCompanion = saved
+    assert(ok, tostring(err))
+end)
+
 test("DisplayVisibilityFollowsItsGroupsFlagsInStreamlinedAndFull", function()
     local info = VRCompanion.HUD_GROUPS.info
     local origStreamlined, origFull = info.streamlined, info.full
@@ -208,6 +235,170 @@ test("ContextActionVisibilityIsIndependentOfTheGroups", function()
         VRCompanion.HUD_GROUPS[name].streamlined, VRCompanion.HUD_GROUPS[name].full = flags[1], flags[2]
     end
     assert(ok, err)
+end)
+
+-- Runs fn with the group flags restored to their defaults afterwards and the settings file and
+-- the on-screen warning mocked. Returns what the game would have observed.
+local function withGroupVisibilityHarness(fn)
+    local savedFlags = {}
+    for name, group in pairs(VRCompanion.HUD_GROUPS) do
+        savedFlags[name] = { group.streamlined, group.full }
+    end
+    local origState = VRCompanion:getHudState()
+    local store, saveCount, warnings = {}, 0, {}
+    _G.getUserProfileAppPath = function() return "C:/Users/test/Documents/My Games/FarmingSimulator2025/" end
+    _G.createFolder = function() end
+    _G.createXMLFile = function() return 999 end
+    _G.setXMLFloat = function(_, key, val) store[key] = val end
+    _G.setXMLBool = function(_, key, val) store[key] = val end
+    _G.setXMLString = function(_, key, val) store[key] = val end
+    _G.saveXMLFile = function() saveCount = saveCount + 1 end
+    _G.delete = function() end
+    _G.g_currentMission = {
+        hud = nil,
+        showBlinkingWarning = function(self, msg, duration) table.insert(warnings, msg) end
+    }
+    local ok, err = pcall(fn, { store = store, warnings = warnings, saveCount = function() return saveCount end })
+    for name, flags in pairs(savedFlags) do
+        VRCompanion.HUD_GROUPS[name].streamlined, VRCompanion.HUD_GROUPS[name].full = flags[1], flags[2]
+    end
+    VRCompanion:setHudState(origState)
+    _G.getUserProfileAppPath, _G.createFolder, _G.createXMLFile = nil, nil, nil
+    _G.setXMLFloat, _G.setXMLBool, _G.setXMLString, _G.saveXMLFile, _G.delete = nil, nil, nil, nil, nil
+    _G.g_currentMission = nil
+    assert(ok, err)
+end
+
+test("VrHudGroupShowAppliesSavesAndConfirms", function()
+    withGroupVisibilityHarness(function(observed)
+        local function mockDisplay() return { isVisible = false, setIsVisible = function(self, v) self.isVisible = v end } end
+        local hud = {
+            setIsVisible = function(self, v) self.isVisible = v end,
+            speedMeter = mockDisplay(), fillLevels = mockDisplay(), contextAction = mockDisplay(),
+            inputHelp = mockDisplay(), ingameMap = mockDisplay(), gameInfo = mockDisplay()
+        }
+        _G.g_currentMission.hud = hud
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
+        assert(hud.ingameMap.isVisible == false, "the map starts out of the Streamlined HUD")
+
+        -- Map on in Streamlined: applies at once, saves, and confirms on screen
+        local result = VRCompanion:consoleCommandHudGroupShow("map", "streamlined", "on")
+        assert(hud.ingameMap.isVisible == true, "the change must apply immediately")
+        assert(VRCompanion:isDisplayVisible("IngameMap", VRCompanion.HUD_STATE_STREAMLINED) == true)
+        assert(VRCompanion:isDisplayVisible("IngameMap", VRCompanion.HUD_STATE_FULL) == true, "Full flag is untouched")
+        assert(observed.saveCount() == 1, "the change must be saved")
+        assert(observed.store["vrSettings.hudGroups.map.showStreamlined"] == true, "saved Streamlined flag")
+        assert(observed.store["vrSettings.hudGroups.map.showFull"] == true, "saved Full flag")
+        assert(#observed.warnings == 1 and string.find(observed.warnings[1], "Map", 1, true) ~= nil, "on-screen confirmation names the group")
+        assert(type(result) == "string" and string.find(result, "map", 1, true) ~= nil, "console result confirms the change")
+
+        -- A group may be on in Streamlined but off in Full
+        VRCompanion:consoleCommandHudGroupShow("map", "full", "off")
+        assert(VRCompanion:isDisplayVisible("IngameMap", VRCompanion.HUD_STATE_STREAMLINED) == true)
+        assert(VRCompanion:isDisplayVisible("IngameMap", VRCompanion.HUD_STATE_FULL) == false)
+        assert(observed.store["vrSettings.hudGroups.map.showFull"] == false, "saved Full flag off")
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+        assert(hud.ingameMap.isVisible == false, "map is out of the Full HUD")
+        assert(hud.speedMeter.isVisible == true, "other groups keep their flags")
+
+        -- The speedometer group's flag governs both its displays; the context action prompt ignores it
+        VRCompanion:consoleCommandHudGroupShow("speedometer", "full", "off")
+        assert(hud.speedMeter.isVisible == false and hud.fillLevels.isVisible == false, "both speedometer displays follow the group")
+        assert(hud.contextAction.isVisible == true, "context action stays visible in Full")
+
+        -- Hidden shows nothing whatever the flags say
+        for name, _ in pairs(VRCompanion.HUD_GROUPS) do
+            VRCompanion:consoleCommandHudGroupShow(name, "streamlined", "on")
+            VRCompanion:consoleCommandHudGroupShow(name, "full", "on")
+        end
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+        for _, displayName in ipairs({ "SpeedMeterDisplay", "FillLevelsDisplay", "IngameMap", "InputHelpDisplay", "GameInfoDisplay", "ContextActionDisplay" }) do
+            assert(VRCompanion:isDisplayVisible(displayName) == false, displayName .. " must be hidden in Hidden whatever the flags")
+        end
+        VRCompanion:consoleCommandHudGroupShow("info", "streamlined", "off")
+        assert(hud.gameInfo.isVisible == false and hud.isVisible == false, "changing a flag while Hidden shows nothing")
+    end)
+end)
+
+test("VrHudGroupShowWithBadArgumentsPrintsUsageAndEveryGroupsVisibility", function()
+    withGroupVisibilityHarness(function(observed)
+        VRCompanion.HUD_GROUPS.info.streamlined = true
+        VRCompanion.HUD_GROUPS.info.full = false
+
+        local attempts = {
+            { },
+            { "map" },
+            { "map", "streamlined" },
+            { "castle", "streamlined", "on" },
+            { "map", "hidden", "on" },
+            { "map", "streamlined", "maybe" },
+        }
+        for _, args in ipairs(attempts) do
+            local result = VRCompanion:consoleCommandHudGroupShow(args[1], args[2], args[3])
+            assert(string.find(result, "Usage: vrHudGroupShow", 1, true) ~= nil, "usage expected for " .. table.concat(args, " "))
+            for _, name in ipairs({ "map", "speedometer", "info", "controls" }) do
+                assert(string.find(result, name, 1, true) ~= nil, name .. " must be listed with its visibility")
+            end
+        end
+        -- Current values appear: info is Streamlined on, Full off
+        local result = VRCompanion:consoleCommandHudGroupShow()
+        assert(string.find(result, "info: streamlined=on full=off", 1, true) ~= nil, "current visibility listed: " .. result)
+        assert(string.find(result, "speedometer: streamlined=on full=on", 1, true) ~= nil, "default speedometer visibility listed")
+        assert(string.find(result, "map: streamlined=off full=on", 1, true) ~= nil, "default map visibility listed")
+
+        assert(observed.saveCount() == 0, "invalid input must not save")
+        assert(#observed.warnings == 0, "invalid input must not show a confirmation")
+        assert(VRCompanion.HUD_GROUPS.map.streamlined == false and VRCompanion.HUD_GROUPS.map.full == true, "invalid input must not change flags")
+    end)
+end)
+
+test("VrHudGroupShowAcceptsWordsAndNumbersForOnOff", function()
+    withGroupVisibilityHarness(function()
+        VRCompanion:consoleCommandHudGroupShow("controls", "streamlined", "true")
+        assert(VRCompanion.HUD_GROUPS.controls.streamlined == true)
+        VRCompanion:consoleCommandHudGroupShow("CONTROLS", "Streamlined", "0")
+        assert(VRCompanion.HUD_GROUPS.controls.streamlined == false)
+        VRCompanion:consoleCommandHudGroupShow("controls", "full", "false")
+        assert(VRCompanion.HUD_GROUPS.controls.full == false)
+        VRCompanion:consoleCommandHudGroupShow("controls", "full", "1")
+        assert(VRCompanion.HUD_GROUPS.controls.full == true)
+    end)
+end)
+
+test("VrHudGroupShowIsRegisteredAsAConsoleCommand", function()
+    local registered = {}
+    local orig = _G.addConsoleCommand
+    _G.addConsoleCommand = function(cmd, desc, fnName, target) registered[cmd] = fnName end
+    VRCompanion:loadMap("mapUS")
+    _G.addConsoleCommand = orig
+    assert(registered.vrHudGroupShow == "consoleCommandHudGroupShow", "vrHudGroupShow must be registered")
+    VRCompanion:deleteMap()
+end)
+
+test("HudCycleNotificationListsTheGroupsThatAreOnInTheNewState", function()
+    withGroupVisibilityHarness(function(observed)
+        local function cycleTo(state)
+            VRCompanion.lastHudToggleTime = nil
+            VRCompanion:setHudState((state + 2) % 3)
+            VRCompanion.lastHudToggleTime = nil
+            VRCompanion:cycleHudState()
+            return observed.warnings[#observed.warnings]
+        end
+
+        assert(cycleTo(VRCompanion.HUD_STATE_STREAMLINED) == "VR HUD: Streamlined (Speedometer)", "default Streamlined lists only the speedometer group")
+        assert(cycleTo(VRCompanion.HUD_STATE_FULL) == "VR HUD: Full (Speedometer, Map, Info, Controls)", "default Full lists all four groups")
+        assert(cycleTo(VRCompanion.HUD_STATE_HIDDEN) == "VR HUD: Hidden", "Hidden lists no groups")
+
+        VRCompanion.HUD_GROUPS.map.streamlined = true
+        assert(cycleTo(VRCompanion.HUD_STATE_STREAMLINED) == "VR HUD: Streamlined (Speedometer, Map)", "custom Streamlined lists the enabled groups")
+
+        VRCompanion.HUD_GROUPS.info.full = false
+        VRCompanion.HUD_GROUPS.controls.full = false
+        assert(cycleTo(VRCompanion.HUD_STATE_FULL) == "VR HUD: Full (Speedometer, Map)", "custom Full lists the enabled groups")
+
+        for _, group in pairs(VRCompanion.HUD_GROUPS) do group.streamlined = false end
+        assert(cycleTo(VRCompanion.HUD_STATE_STREAMLINED) == "VR HUD: Streamlined (none)", "a state with no groups says so")
+    end)
 end)
 
 -- Slice 3: HUD visibility and display state application
@@ -635,6 +826,42 @@ test("HooksNativeEngineHudDisplaysAndSuppressesFilteredComponentsOnDraw", functi
     -- Clean up hooks
     VRCompanion:unhookHud()
     assert(VRCompanion.hudHooked == false, "hudHooked must be false after unhookHud()")
+end)
+
+test("DrawVisibilityAndHudSetterHooksHonorGroupSettings", function()
+    withGroupVisibilityHarness(function()
+        local draws = { IngameMap = 0, GameInfoDisplay = 0 }
+        local setterArgs = {}
+        _G.IngameMap = { draw = function() draws.IngameMap = draws.IngameMap + 1 end, getIsVisible = function() return true end }
+        _G.GameInfoDisplay = { draw = function() draws.GameInfoDisplay = draws.GameInfoDisplay + 1 end, getIsVisible = function() return true end }
+        _G.HUD = {
+            draw = function() end,
+            setIngameMapVisible = function(self, vis) setterArgs.map = vis end,
+            setGameInfoVisible = function(self, vis) setterArgs.info = vis end
+        }
+        VRCompanion:hookHud()
+
+        -- Map on in Streamlined, info off in Full
+        VRCompanion.HUD_GROUPS.map.streamlined = true
+        VRCompanion.HUD_GROUPS.info.full = false
+
+        VRCompanion.hudState = VRCompanion.HUD_STATE_STREAMLINED
+        _G.IngameMap:draw()
+        _G.HUD:setIngameMapVisible(true)
+        assert(draws.IngameMap == 1, "the map draws in Streamlined when its group is on")
+        assert(_G.IngameMap:getIsVisible() == true, "the map reports visible in Streamlined when its group is on")
+        assert(setterArgs.map == true, "the HUD setter passes the engine's value through for an enabled group")
+
+        VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
+        _G.GameInfoDisplay:draw()
+        _G.HUD:setGameInfoVisible(true)
+        assert(draws.GameInfoDisplay == 0, "the info display is suppressed in Full when its group is off")
+        assert(_G.GameInfoDisplay:getIsVisible() == false, "the info display reports hidden in Full when its group is off")
+        assert(setterArgs.info == false, "the HUD setter forces an off group hidden")
+
+        VRCompanion:unhookHud()
+        _G.IngameMap, _G.GameInfoDisplay, _G.HUD = nil, nil, nil
+    end)
 end)
 
 test("UnhookHudRestoresOriginalFunctionsCleanly", function()
