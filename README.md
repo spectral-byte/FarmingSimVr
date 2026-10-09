@@ -1,10 +1,10 @@
 # Farming Simulator 25 VR (FS25 VR)
 
-[![CI](https://github.com/jacoch17/FarmingSimVr/actions/workflows/ci.yml/badge.svg)](https://github.com/jacoch17/FarmingSimVr/actions/workflows/ci.yml)
+[![CI](https://github.com/spectral-byte/FarmingSimVr/actions/workflows/ci.yml/badge.svg)](https://github.com/spectral-byte/FarmingSimVr/actions/workflows/ci.yml)
 [![OpenXR](https://img.shields.io/badge/OpenXR-1.0-blue.svg)]()
 [![DirectX](https://img.shields.io/badge/Direct3D-12-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey.svg)]()
-[![Release](https://img.shields.io/badge/release-v1.0.0-success.svg)](https://github.com/jacoch17/FarmingSimVr/releases)
+[![Release](https://img.shields.io/badge/release-v1.0.0-success.svg)](https://github.com/spectral-byte/FarmingSimVr/releases)
 
 High-performance virtual reality modding architecture for **Farming Simulator 25** running on GIANTS Engine 10 under Direct3D 12. Seamlessly interfaces GIANTS Engine 10 with any standard OpenXR runtime (Meta Quest Link/AirLink, Virtual Desktop, SteamVR, Pimax, Bigscreen Beyond).
 
@@ -185,7 +185,7 @@ Press the tilde key (`` ` `` / `~`) to open the in-engine developer console:
 
 ```powershell
 # Clone repository
-git clone https://github.com/jacoch17/FarmingSimVr.git
+git clone https://github.com/spectral-byte/FarmingSimVr.git
 cd FarmingSimVr
 
 # Configure CMake with Ninja. RelWithDebInfo is the shipped configuration: full

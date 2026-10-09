@@ -164,7 +164,7 @@ FS25 VR is free software licensed under the GNU General Public License v3.0;
 see LICENSE. Bundled third-party library licenses are in THIRD_PARTY_NOTICES.txt.
 
 For full documentation and source code, visit:
-https://github.com/jacoch17/FarmingSimVr
+https://github.com/spectral-byte/FarmingSimVr
 "@
 
 Set-Content -Path "$bundleDir\README.txt" -Value $readmeContent -Encoding utf8
