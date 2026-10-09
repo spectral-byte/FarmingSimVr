@@ -60,6 +60,11 @@ VRCompanion.hudGroupLayout = newDefaultHudGroupLayouts()
 -- fill level rows, at scale 1.0. It is multiplied by the group's scale and is not adjustable.
 VRCompanion.HUD_FILL_LEVEL_GAP = 0.004
 
+-- The HUD state (Hidden, Streamlined or Full) a map starts in: the one the player last chose, saved between
+-- sessions. A first install starts Hidden (VRCompanion.HUD_STATE_HIDDEN).
+VRCompanion.DEFAULT_HUD_STATE = 0
+VRCompanion.persistedHudState = VRCompanion.DEFAULT_HUD_STATE
+
 -- VR HUD Notifications
 VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION = false
 VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
@@ -235,6 +240,8 @@ function VRCompanion:saveConfiguration(xmlPath)
             -- only queues a change until the next frame boundary, so it still reports the old mode here.
             local modeStr = (self.renderingMode == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "DualPass" or "AFR"
             setXmlStringFn(xmlFile, "vrSettings.renderingMode", modeStr)
+            setXmlStringFn(xmlFile, "vrSettings.hudState",
+                self.HUD_STATE_NAMES[self.persistedHudState] or self.HUD_STATE_NAMES[self.DEFAULT_HUD_STATE])
         end
         setXmlFloatFn(xmlFile, "vrSettings.snapTurnAngle", self:getSnapTurnAngleDegrees())
         for mode, field in pairs(self.DLSS_NEAR_CLIP_FIELDS) do
@@ -255,6 +262,7 @@ function VRCompanion:loadConfiguration(xmlPath)
     local safeAreaHorizontal = self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL
     local safeAreaVertical = self.DEFAULT_HUD_SAFE_AREA_VERTICAL
     local groupLayouts = newDefaultHudGroupLayouts()
+    local persistedHudState = self.DEFAULT_HUD_STATE
     local renderingModeLoaded = false
 
     -- Group visibility starts from the defaults; the settings file overrides the keys it has
@@ -345,6 +353,16 @@ function VRCompanion:loadConfiguration(xmlPath)
                     end
                 end
 
+                -- The HUD state is saved by name; an unknown or missing one keeps the default
+                local loadedHudState = readXmlString(getXmlStringFn, xmlFile, "vrSettings.hudState")
+                if loadedHudState ~= nil then
+                    for state, name in pairs(self.HUD_STATE_NAMES) do
+                        if string.lower(name) == string.lower(loadedHudState) then
+                            persistedHudState = state
+                        end
+                    end
+                end
+
                 local loadedMode = readXmlString(getXmlStringFn, xmlFile,
                     "vrSettings.renderingMode")
                 if loadedMode ~= nil and loadedMode ~= "" then
@@ -405,6 +423,7 @@ function VRCompanion:loadConfiguration(xmlPath)
     end
 
     self.hudGroupLayout = groupLayouts
+    self.persistedHudState = persistedHudState
     self:configureHudSafeArea(safeAreaHorizontal, safeAreaVertical)
 
     -- First run: create the user settings file from the values just applied

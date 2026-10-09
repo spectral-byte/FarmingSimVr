@@ -271,6 +271,9 @@ function VRCompanion:consoleCommandSetHudState(stateStr)
         return "Usage: vrHudState <0=Hidden | 1=Streamlined | 2=Full>"
     end
     self:setHudState(st)
+    -- The next map starts in the state the player last chose
+    self.persistedHudState = st
+    self:saveConfiguration()
     local stateName = self.HUD_STATE_NAMES[st] or tostring(st)
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then

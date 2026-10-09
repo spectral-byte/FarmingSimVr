@@ -148,9 +148,9 @@ function VRCompanion:loadMap(name)
     -- 7a. Send the loaded DLSS near plane for the starting camera
     self:applyDlssNearClip(true)
 
-    -- 8. Initialize HUD state to Hidden for full VR immersion (Issue #25)
+    -- 8. Start in the HUD state the player last chose; a first install starts Hidden for full VR immersion (Issue #25)
     if type(self.setHudState) == "function" then
-        self:setHudState(self.HUD_STATE_HIDDEN)
+        self:setHudState(self.persistedHudState or self.DEFAULT_HUD_STATE)
     end
 
     -- 9. Register developer and tuning console commands

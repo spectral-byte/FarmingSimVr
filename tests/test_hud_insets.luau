@@ -726,6 +726,60 @@ test("FirstRunSavesEveryGroupVisibilityDefault", function()
     VRCompanion:configureHudSafeArea()
 end)
 
+-- The HUD state (Hidden, Streamlined, Full) the player last chose is saved and restored between sessions;
+-- a first install starts Hidden.
+test("HudStateRoundTripsThroughSaveAndLoadAndDefaultsToHidden", function()
+    local store = {}
+    withMockedSettingsFile(store, function()
+        assert(VRCompanion.DEFAULT_HUD_STATE == VRCompanion.HUD_STATE_HIDDEN, "a first install starts with the HUD Hidden")
+        assert(VRCompanion.persistedHudState == VRCompanion.DEFAULT_HUD_STATE, "the saved HUD state starts at its default")
+
+        VRCompanion.persistedHudState = VRCompanion.HUD_STATE_FULL
+        assert(VRCompanion:saveConfiguration("settings.xml") == true, "save must succeed")
+        assert(store["vrSettings.hudState"] == "Full", "the HUD state is saved by name")
+
+        VRCompanion.persistedHudState = VRCompanion.HUD_STATE_HIDDEN
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion.persistedHudState == VRCompanion.HUD_STATE_FULL, "Full must round-trip")
+
+        store["vrSettings.hudState"] = "Streamlined"
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion.persistedHudState == VRCompanion.HUD_STATE_STREAMLINED, "Streamlined must load")
+
+        store["vrSettings.hudState"] = "streamlined"
+        VRCompanion.persistedHudState = VRCompanion.HUD_STATE_FULL
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion.persistedHudState == VRCompanion.HUD_STATE_STREAMLINED, "the name is not case sensitive")
+
+        store["vrSettings.hudState"] = "nonsense"
+        VRCompanion.persistedHudState = VRCompanion.HUD_STATE_FULL
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion.persistedHudState == VRCompanion.DEFAULT_HUD_STATE, "an unknown name falls back to the default")
+
+        store["vrSettings.hudState"] = nil -- a settings file from before the HUD state was saved
+        VRCompanion.persistedHudState = VRCompanion.HUD_STATE_FULL
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion.persistedHudState == VRCompanion.DEFAULT_HUD_STATE, "a missing key falls back to the default")
+    end)
+    VRCompanion.persistedHudState = VRCompanion.DEFAULT_HUD_STATE
+    resetGroupVisibilityToDefaults()
+    VRCompanion:configureHudSafeArea()
+end)
+
+test("FirstRunSavesTheHiddenHudState", function()
+    local store = {}
+    withMockedSettingsFile(store, function()
+        _G.loadXMLFile = function() return 0 end -- no settings.xml yet
+        VRCompanion.persistedHudState = VRCompanion.HUD_STATE_FULL
+        VRCompanion:loadConfiguration()
+        assert(VRCompanion.persistedHudState == VRCompanion.HUD_STATE_HIDDEN, "no settings file starts Hidden")
+        assert(store["vrSettings.hudState"] == "Hidden", "the first run saves the default HUD state")
+    end)
+    VRCompanion.persistedHudState = VRCompanion.DEFAULT_HUD_STATE
+    resetGroupVisibilityToDefaults()
+    VRCompanion:configureHudSafeArea()
+end)
+
 test("LoaderIgnoresAliasAndLegacyKeysNoReleaseWrote", function()
     _G.loadXMLFile = function() return 555 end
     _G.getXMLFloat = function(_, key)

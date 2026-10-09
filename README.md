@@ -86,7 +86,7 @@ FS25 VR is built as a hybrid two-tier architecture:
   - The HUD is split into four HUD Groups (Map, Speedometer, Info, Controls), each positioned by its own margins and scale from a fixed home corner, so the interface sits in the headset's optical sweet spot.
   - Physical IPD-scaled stereoscopic convergence depth prevents eye strain.
   - Clean vertical stacking of fill levels and machine telemetry.
-  - Three-stage HUD display cycle: **Full HUD** $\rightarrow$ **Streamlined HUD** $\rightarrow$ **Hidden**.
+  - Three-stage HUD display cycle: **Full HUD** $\rightarrow$ **Streamlined HUD** $\rightarrow$ **Hidden**. The state you leave it in is saved and restored the next time a map loads; a first install starts **Hidden**.
   - Four HUD Groups (Map, Speedometer with its fill levels, Info, Controls), each switchable on or off for the Streamlined and Full HUD with `vrHudGroupShow`. By default the Streamlined HUD shows only the Speedometer group and the Full HUD shows all four. The context action prompt shows in both.
 - **Floating Quad Layer for Menus**:
   - 2D menus, title screen, and map dialogs render cleanly onto a floating 3D quad layer in OpenXR space.

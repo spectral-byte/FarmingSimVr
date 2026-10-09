@@ -864,6 +864,34 @@ test("DrawVisibilityAndHudSetterHooksHonorGroupSettings", function()
     end)
 end)
 
+-- The state the player picks is saved; the Full the mod forces while a map is unloaded is not.
+test("CyclingAndSettingTheHudStateSaveItButUnloadingDoesNot", function()
+    withGroupVisibilityHarness(function(observed)
+        local savedPersisted, savedTime = VRCompanion.persistedHudState, _G.g_time
+        _G.g_time = nil
+        VRCompanion.lastHudToggleTime = nil
+        VRCompanion.persistedHudState = VRCompanion.HUD_STATE_HIDDEN
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+
+        VRCompanion:cycleHudState()
+        assert(observed.store["vrSettings.hudState"] == "Streamlined", "the HUD Toggle Action saves the new state")
+        VRCompanion:cycleHudState()
+        assert(observed.store["vrSettings.hudState"] == "Full", "cycling again saves Full")
+
+        VRCompanion:consoleCommandSetHudState("0")
+        assert(observed.store["vrSettings.hudState"] == "Hidden", "vrHudState saves the state it sets")
+        assert(VRCompanion.persistedHudState == VRCompanion.HUD_STATE_HIDDEN, "the saved state follows the player's choice")
+
+        -- What map unload does: show everything again for the 2D interface, without changing the saved choice
+        VRCompanion:consoleCommandSetHudState("1")
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+        VRCompanion:saveConfiguration()
+        assert(observed.store["vrSettings.hudState"] == "Streamlined", "forcing Full on unload does not change the saved state")
+
+        VRCompanion.persistedHudState, _G.g_time = savedPersisted, savedTime
+    end)
+end)
+
 -- The engine builds the map's layout in the screen corner and draws its content, ring and north arrow
 -- there at absolute overlay positions that setPosition does not move, so the draw itself is shifted from
 -- the engine's corner to the Map group's position (#56).

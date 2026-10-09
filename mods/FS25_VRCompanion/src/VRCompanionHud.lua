@@ -648,6 +648,9 @@ function VRCompanion:cycleHudState()
     local curState = self:getHudState()
     local nextState = (curState + 1) % 3
     self:setHudState(nextState)
+    -- The next map starts in the state the player last chose
+    self.persistedHudState = nextState
+    self:saveConfiguration()
     local stateName = (self.HUD_STATE_NAMES and self.HUD_STATE_NAMES[nextState]) or tostring(nextState)
     print(string.format("[FS25_VR] HUD state changed: %s (%d)", stateName, nextState))
 

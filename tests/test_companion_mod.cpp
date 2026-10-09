@@ -2484,6 +2484,50 @@ TEST_F(CompanionModTest, LoadMapDefaultsToHiddenAndRegistersHudToggleAction) {
     )luau", "=verifyLoadMapAndLifecycle"), 0);
 }
 
+TEST_F(CompanionModTest, LoadMapRestoresTheSavedHudStateAndUnloadKeepsIt) {
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local store = { ["vrSettings.hudState"] = "Streamlined" }
+        _G.getUserProfileAppPath = function() return "C:/Users/test/Documents/My Games/FarmingSimulator2025/" end
+        _G.createFolder = function() end
+        _G.createXMLFile = function() return 999 end
+        _G.setXMLFloat = function(_, key, val) store[key] = val end
+        _G.setXMLBool = function(_, key, val) store[key] = val end
+        _G.setXMLString = function(_, key, val) store[key] = val end
+        _G.saveXMLFile = function() end
+        _G.loadXMLFile = function() return 555 end
+        _G.getXMLFloat = function() return nil end
+        _G.getXMLBool = function() return nil end
+        _G.getXMLString = function(_, key) return store[key] end
+        _G.delete = function() end
+
+        local function mockDisplay() return { isVisible = true, setIsVisible = function(self, v) self.isVisible = v end } end
+        local mockHud = {
+            isVisible = true,
+            setIsVisible = function(self, vis) self.isVisible = vis end,
+            speedMeter = mockDisplay(), inputHelp = mockDisplay(), gameInfo = mockDisplay(),
+            contextAction = mockDisplay(), ingameMap = mockDisplay()
+        }
+        _G.g_currentMission = { hud = mockHud }
+
+        VRCompanion:loadMap('mapUS')
+        assert(VRCompanion:getHudState() == 1, "the saved Streamlined state is restored on loadMap")
+        assert(mockHud.isVisible == true, "the HUD is shown for a saved state other than Hidden")
+
+        VRCompanion:deleteMap()
+        assert(VRCompanion:getHudState() == 2, "unloading shows the full HUD for the 2D interface")
+        assert(store["vrSettings.hudState"] == "Streamlined", "unloading does not overwrite the saved state")
+        assert(VRCompanion.persistedHudState == 1, "the saved choice is still Streamlined")
+
+        -- No saved state: a first install starts Hidden
+        store["vrSettings.hudState"] = nil
+        VRCompanion:loadMap('mapUS')
+        assert(VRCompanion:getHudState() == 0, "an unsaved HUD state starts Hidden")
+        VRCompanion:deleteMap()
+    )luau", "=verifySavedHudStateOnLoadMap"), 0);
+}
+
 TEST_F(CompanionModTest, GuiMenuTransitionsPreserveUserSelectedHudState) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
