@@ -1211,22 +1211,52 @@ function VRCompanion:dbgStartRenderProbe(map)
         return
     end
     self.dbgRenderLogs = 0
+    self.dbgMapStack = {}
     _G.renderOverlay = function(id, x, y, w, h, ...)
-        local label = ids[id]
-        if label ~= nil and self.hudDiagnostics and self.dbgRenderLogs < 30 then
+        local depth = #self.dbgMapStack
+        if (ids[id] ~= nil or depth > 0) and self.hudDiagnostics and self.dbgRenderLogs < 60 then
             self.dbgRenderLogs = self.dbgRenderLogs + 1
-            print(DBG_TAG .. string.format("renderOverlay %s id=%s x=%s y=%s w=%s h=%s safeFrame=(%s,%s)", label, tostring(id), dbgFmt(x), dbgFmt(y), dbgFmt(w), dbgFmt(h),
-                dbgFmt(_G.g_safeFrameOffsetX), dbgFmt(_G.g_safeFrameOffsetY)))
-            if self.dbgRenderLogs <= 3 then
-                local ok, trace = pcall(debug.traceback, "", 2)
-                print(DBG_TAG .. "  called from: " .. (ok and tostring(trace):gsub("\n", " <- ") or "no traceback"))
-            end
+            print(DBG_TAG .. string.format("renderOverlay [%s] %s id=%s x=%s y=%s w=%s h=%s safeFrame=(%s,%s)", self.dbgMapStack[depth] or "outside map methods",
+                tostring(ids[id] or "other"), tostring(id), dbgFmt(x), dbgFmt(y), dbgFmt(w), dbgFmt(h), dbgFmt(_G.g_safeFrameOffsetX), dbgFmt(_G.g_safeFrameOffsetY)))
         end
         return orig(id, x, y, w, h, ...)
+    end
+
+    -- Tag every map and layout method while it runs, so each render call names the method that made it
+    self.dbgWrapped = {}
+    local skip = { new = true, class = true, isa = true, superClass = true, copy = true }
+    local classNames = { "IngameMap", "IngameMapLayout", "IngameMapLayoutNone", "IngameMapLayoutCircle", "IngameMapLayoutSquare", "IngameMapLayoutSquareLarge", "IngameMapLayoutFullscreen" }
+    for _, className in ipairs(classNames) do
+        local cls = _G[className]
+        if type(cls) == "table" then
+            local names = {}
+            for k, v in pairs(cls) do
+                if type(v) == "function" and not skip[k] then names[#names + 1] = k end
+            end
+            for _, k in ipairs(names) do
+                local f = cls[k]
+                local label = className .. "." .. k
+                local wrapper = function(...)
+                    local stack = self.dbgMapStack
+                    stack[#stack + 1] = label
+                    local r = table.pack(pcall(f, ...))
+                    stack[#stack] = nil
+                    if not r[1] then error(r[2], 0) end
+                    return table.unpack(r, 2, r.n)
+                end
+                cls[k] = wrapper
+                self.dbgWrapped[#self.dbgWrapped + 1] = { cls = cls, key = k, orig = f, wrapper = wrapper }
+            end
+        end
     end
 end
 
 function VRCompanion:dbgStopRenderProbe()
+    -- Only undo a wrapper that is still the one installed, so a later unhookHud is not overwritten
+    for _, w in ipairs(self.dbgWrapped or {}) do
+        if w.cls[w.key] == w.wrapper then w.cls[w.key] = w.orig end
+    end
+    self.dbgWrapped = nil
     if self.dbgOrigRenderOverlay ~= nil then
         _G.renderOverlay = self.dbgOrigRenderOverlay
         self.dbgOrigRenderOverlay = nil
