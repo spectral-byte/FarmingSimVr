@@ -57,6 +57,12 @@ jobs:
       - name: Build (Injector DLL and tests)
         run: cmake --build build --target dxgi fs25_vr_tests
 
+      # The Injector is built against the static C runtime; fail if the built dxgi.dll
+      # imports VCRUNTIME140/MSVCP140/api-ms-win-crt-* (players would need the VC++ redistributable).
+      - name: Verify Injector imports no VC++ runtime DLLs
+        shell: pwsh
+        run: scripts/check_injector_imports.ps1 build\dxgi.dll
+
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 120
 

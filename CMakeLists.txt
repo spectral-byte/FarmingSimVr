@@ -20,6 +20,14 @@ if(MSVC)
     set(CMAKE_C_FLAGS_RELWITHDEBINFO "/Zi /O2 /Ob2 /DNDEBUG" CACHE STRING "RelWithDebInfo C flags (full inlining)" FORCE)
 endif()
 
+# Static MSVC runtime (/MT): the Injector must not import VCRUNTIME140.dll, MSVCP140.dll or the
+# api-ms-win-crt-* DLLs, so players need no VC++ redistributable. Set before FetchContent so the
+# statically linked dependencies and the test executable use the same runtime as the Injector.
+# CI verifies the built dxgi.dll with scripts/check_injector_imports.ps1.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 include(FetchContent)
 
 # Fetch OpenXR-SDK
@@ -33,6 +41,11 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(OpenXR)
+# The OpenXR static loader pins itself to the dynamic CRT; put it on the Injector's static runtime.
+if(MSVC)
+    set_target_properties(openxr_loader PROPERTIES
+        MSVC_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}")
+endif()
 
 # Fetch GoogleTest for TDD
 FetchContent_Declare(
@@ -41,7 +54,8 @@ FetchContent_Declare(
     GIT_TAG v1.15.2
     GIT_SHALLOW TRUE
 )
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+# GoogleTest must follow the static runtime chosen above (the test executable and the Injector agree).
+set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 # Fetch Luau for in-process Luau VM interaction and TDD

@@ -17,6 +17,9 @@ if (-not (Test-Path $builtDll)) {
     Write-Error "build\dxgi.dll not found. Build project first (ninja -C build dxgi)."
 }
 
+# Only ship an Injector that needs no VC++ redistributable (static C runtime).
+& (Join-Path $PSScriptRoot "check_injector_imports.ps1") $builtDll
+
 # Read the release version from modDesc
 [xml]$modDesc = Get-Content $modDescPath -Raw
 $version = $modDesc.modDesc.version
