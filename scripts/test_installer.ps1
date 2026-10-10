@@ -10,7 +10,9 @@
 # drive it with Install-Fs25Vr / Uninstall-Fs25Vr (both always clean up via Remove-TestWorld),
 # assert with the Assert-* helpers.
 param(
-    [string]$SetupExe = ""
+    [string]$SetupExe = "",
+    # Only run the cases whose name matches this wildcard (e.g. "*override*"); all cases when empty.
+    [string]$Filter = ""
 )
 $ErrorActionPreference = "Stop"
 
@@ -37,20 +39,33 @@ $uninstallKeyPath = if ($isAdmin) { "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVer
 $stagedInjector = Join-Path $releaseDir "dxgi.dll"
 $stagedMod = Join-Path $releaseDir "FS25_VRCompanion.zip"
 
-# A game.xml shaped like the game's, used as the untouched-settings baseline.
+# A game.xml shaped like the game's (<game><graphic><display>), used as the untouched-settings baseline.
+# It holds the display width, height and fullscreen mode only; the mods directory override lives in
+# gameSettings.xml, not here.
 $sampleGameXml = @"
-<?xml version="1.0" encoding="utf-8" standalone="no" ?>
-<gameSettings>
-    <modsDirectoryOverride active="false" directory=""/>
-    <gameplay>
-        <fullscreenMode>fullscreen</fullscreenMode>
-    </gameplay>
-    <display>
-        <width>2560</width>
-        <height>1440</height>
-    </display>
+<?xml version="1.0" encoding="UTF-8"?>
+<game>
+    <graphic>
+        <display>
+            <width>2560</width>
+            <height>1440</height>
+            <fullscreenMode>fullscreen</fullscreenMode>
+        </display>
+    </graphic>
+</game>
+"@
+
+# A gameSettings.xml shaped like the game's: the mods directory override is its second line, here in
+# the state a real machine has after the player once looked at the setting (inactive, directory left over).
+$sampleGameSettingsXml = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<gameSettings revision="15">
+    <modsDirectoryOverride active="false" directory="C:/Temp"/>
+    <defaultMultiplayerPort>10823</defaultMultiplayerPort>
+    <isHeadTrackingEnabled>true</isHeadTrackingEnabled>
 </gameSettings>
 "@
+$sampleOverrideElement = '<modsDirectoryOverride active="false" directory="C:/Temp"/>'
 
 # ---------------------------------------------------------------------------------------------
 # World helpers
@@ -73,12 +88,14 @@ function New-FakeGame($world) {
     Set-Content -Path (Join-Path $x64 "FarmingSimulator2025Game.exe") -Value "not a real game" -Encoding ascii
 }
 
-# <Documents>\My Games\FarmingSimulator2025 with a game.xml and a modSettings folder holding VR settings.
-function New-FakeDocuments($world, [string]$gameXml = $sampleGameXml) {
+# <Documents>\My Games\FarmingSimulator2025 with a game.xml (display settings), a gameSettings.xml (holds
+# the mods directory override) and a modSettings folder holding VR settings. Pass $null to leave a file out.
+function New-FakeDocuments($world, [string]$gameXml = $sampleGameXml, [string]$gameSettingsXml = $sampleGameSettingsXml) {
     $myGames = Join-Path $world.Documents "My Games\FarmingSimulator2025"
     New-Item -ItemType Directory -Path (Join-Path $myGames "modSettings\FS25_VRCompanion") -Force | Out-Null
     Set-Content -Path (Join-Path $myGames "modSettings\FS25_VRCompanion\settings.xml") -Value "<settings/>" -Encoding ascii
     if ($gameXml) { [IO.File]::WriteAllText((Join-Path $myGames "game.xml"), $gameXml, (New-Object Text.UTF8Encoding $false)) }
+    if ($gameSettingsXml) { [IO.File]::WriteAllText((Join-Path $myGames "gameSettings.xml"), $gameSettingsXml, (New-Object Text.UTF8Encoding $false)) }
 }
 
 # A game.xml in the shape the game really writes (UTF-8 with BOM, CRLF line endings, 4-space indent;
@@ -142,6 +159,7 @@ function Get-GamePaths($world) {
         DefaultMods  = Join-Path $myGames "mods"
         ModZip       = Join-Path $myGames "mods\FS25_VRCompanion.zip"
         GameXml      = Join-Path $myGames "game.xml"
+        GameSettingsXml = Join-Path $myGames "gameSettings.xml"
         GameXmlBackup = Join-Path $myGames "game.xml.fs25vr-backup"
         ModSettings  = Join-Path $myGames "modSettings\FS25_VRCompanion\settings.xml"
     }
@@ -265,6 +283,7 @@ function Assert-SameBytes([string]$path, [byte[]]$expected, [string]$what) {
 
 $failures = New-Object Collections.Generic.List[string]
 function Test-Case([string]$name, [scriptblock]$body) {
+    if ($Filter -and $name -notlike $Filter) { return }
     $world = New-TestWorld
     try {
         & $body $world
@@ -391,22 +410,23 @@ Test-Case "A silent uninstall while the game is running fails and changes nothin
 }
 
 # --- Mods directory override (ticket #64) ---------------------------------------------------
+# The override lives in gameSettings.xml (<modsDirectoryOverride active="..." directory="..."/>), not in
+# game.xml. game.xml only holds the display settings the Render Resolution step edits.
 
-# A game.xml whose mods directory override element is set as given (the rest is the sample baseline).
-function New-GameXmlWithOverride([string]$active, [string]$directory) {
-    $old = '<modsDirectoryOverride active="false" directory=""/>'
-    $new = "<modsDirectoryOverride active=`"$active`" directory=`"$directory`"/>"
-    Assert-True $sampleGameXml.Contains($old) "The sample game.xml no longer holds the expected override element."
-    $sampleGameXml.Replace($old, $new)
+# A gameSettings.xml whose mods directory override element is set as given (the rest is the sample baseline).
+function New-GameSettingsWithOverride([string]$active, [string]$directory) {
+    Assert-True $sampleGameSettingsXml.Contains($sampleOverrideElement) "The sample gameSettings.xml no longer holds the expected override element."
+    $sampleGameSettingsXml.Replace($sampleOverrideElement, "<modsDirectoryOverride active=`"$active`" directory=`"$directory`"/>")
 }
 
-Test-Case "Active mods directory override: the mod lands in the override folder, not the default one" {
+Test-Case "Active mods directory override in gameSettings.xml: the mod lands in the override folder, not the default one" {
     param($world)
     New-FakeGame $world
     $override = Join-Path $world.Root "Moved mods"         # spaces on purpose; does not exist yet
-    New-FakeDocuments $world (New-GameXmlWithOverride "true" $override)
+    New-FakeDocuments $world $sampleGameXml (New-GameSettingsWithOverride "true" $override)
     $p = Get-GamePaths $world
     $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
+    $settingsBefore = [IO.File]::ReadAllBytes($p.GameSettingsXml)
 
     $exit = Install-Fs25Vr $world
     Assert-True ($exit -eq 0) "Setup exited with $exit."
@@ -414,16 +434,17 @@ Test-Case "Active mods directory override: the mod lands in the override folder,
     Assert-SameFile (Join-Path $override "FS25_VRCompanion.zip") $stagedMod "Companion Mod zip in the override folder"
     Assert-Missing $p.ModZip "Companion Mod zip in the default mods folder"
     Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
-    Assert-SameBytes $p.GameXml $gameXmlBefore "game.xml (the override element)"
+    Assert-SameBytes $p.GameSettingsXml $settingsBefore "gameSettings.xml (the override element)"
+    Assert-SameBytes $p.GameXml $gameXmlBefore "game.xml"
 }
 
 Test-Case "Uninstall removes the mod from the override folder and leaves the override alone" {
     param($world)
     New-FakeGame $world
     $override = Join-Path $world.Root "Moved mods"
-    New-FakeDocuments $world (New-GameXmlWithOverride "true" $override)
+    New-FakeDocuments $world $sampleGameXml (New-GameSettingsWithOverride "true" $override)
     $p = Get-GamePaths $world
-    $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
+    $settingsBefore = [IO.File]::ReadAllBytes($p.GameSettingsXml)
     $exit = Install-Fs25Vr $world
     Assert-True ($exit -eq 0) "Setup exited with $exit."
     Assert-Exists (Join-Path $override "FS25_VRCompanion.zip") "Companion Mod zip in the override folder"
@@ -433,14 +454,14 @@ Test-Case "Uninstall removes the mod from the override folder and leaves the ove
     Assert-Missing (Join-Path $override "FS25_VRCompanion.zip") "Companion Mod zip in the override folder"
     Assert-Missing $p.ModZip "Companion Mod zip in the default mods folder"
     Assert-Missing $p.Injector "Injector"
-    Assert-SameBytes $p.GameXml $gameXmlBefore "game.xml (the override element)"
+    Assert-SameBytes $p.GameSettingsXml $settingsBefore "gameSettings.xml (the override element)"
 }
 
 Test-Case "Inactive mods directory override with a directory set: the default mods folder is used" {
     param($world)
     New-FakeGame $world
     $override = Join-Path $world.Root "Moved mods"
-    New-FakeDocuments $world (New-GameXmlWithOverride "false" $override)
+    New-FakeDocuments $world $sampleGameXml (New-GameSettingsWithOverride "false" $override)
     $p = Get-GamePaths $world
 
     $exit = Install-Fs25Vr $world
@@ -450,22 +471,35 @@ Test-Case "Inactive mods directory override with a directory set: the default mo
     Assert-Missing (Join-Path $override "FS25_VRCompanion.zip") "Companion Mod zip in the inactive override folder"
 }
 
-Test-Case "No mods directory override element at all: the default mods folder is used" {
+Test-Case "No mods directory override element at all in gameSettings.xml: the default mods folder is used" {
     param($world)
     New-FakeGame $world
-    New-FakeDocuments $world ($sampleGameXml.Replace('<modsDirectoryOverride active="false" directory=""/>', ''))
+    New-FakeDocuments $world $sampleGameXml ($sampleGameSettingsXml.Replace($sampleOverrideElement, ''))
     $p = Get-GamePaths $world
 
     $exit = Install-Fs25Vr $world
     Assert-True ($exit -eq 0) "Setup exited with $exit."
 
     Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
+}
+
+Test-Case "No gameSettings.xml at all: the default mods folder is used" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world $sampleGameXml $null
+    $p = Get-GamePaths $world
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+
+    Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
+    Assert-Missing $p.GameSettingsXml "gameSettings.xml"
 }
 
 Test-Case "Active override with an empty directory: the default mods folder is used" {
     param($world)
     New-FakeGame $world
-    New-FakeDocuments $world (New-GameXmlWithOverride "true" "")
+    New-FakeDocuments $world $sampleGameXml (New-GameSettingsWithOverride "true" "")
     $p = Get-GamePaths $world
 
     $exit = Install-Fs25Vr $world
@@ -474,6 +508,40 @@ Test-Case "Active override with an empty directory: the default mods folder is u
     Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
 }
 
+Test-Case "An override element in game.xml is ignored: only gameSettings.xml holds the mods directory override" {
+    param($world)
+    New-FakeGame $world
+    $elsewhere = Join-Path $world.Root "Wrong place"
+    $gameXmlWithOverride = $sampleGameXml.Replace("<graphic>", "<modsDirectoryOverride active=`"true`" directory=`"$elsewhere`"/>`r`n    <graphic>")
+    Assert-True ($gameXmlWithOverride -ne $sampleGameXml) "The sample game.xml no longer holds the expected <graphic> element."
+    New-FakeDocuments $world $gameXmlWithOverride
+    $p = Get-GamePaths $world
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+
+    Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
+    Assert-Missing (Join-Path $elsewhere "FS25_VRCompanion.zip") "Companion Mod zip in the folder named by game.xml"
+}
+
+Test-Case "Active override plus a Render Resolution: the mod goes to the override, game.xml gets the resolution, gameSettings.xml is unchanged" {
+    param($world)
+    New-FakeGame $world
+    $override = Join-Path $world.Root "Moved mods"
+    New-FakeDocuments $world $sampleGameXml (New-GameSettingsWithOverride "true" $override)
+    $p = Get-GamePaths $world
+    $settingsBefore = [IO.File]::ReadAllBytes($p.GameSettingsXml)
+
+    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+
+    Assert-SameFile (Join-Path $override "FS25_VRCompanion.zip") $stagedMod "Companion Mod zip in the override folder"
+    Assert-SameBytes $p.GameSettingsXml $settingsBefore "gameSettings.xml"
+    $gameXml = [IO.File]::ReadAllText($p.GameXml)
+    Assert-True ($gameXml.Contains("<width>4000</width>") -and $gameXml.Contains("<height>2500</height>") -and $gameXml.Contains("<fullscreenMode>windowed</fullscreenMode>")) `
+        "game.xml does not hold the Render Resolution 4000x2500 windowed."
+    Assert-Exists $p.GameXmlBackup "game.xml.fs25vr-backup"
+}
 # ---------------------------------------------------------------------------------------------
 # Existing dxgi.dll and upgrade helpers (ticket #65)
 # ---------------------------------------------------------------------------------------------

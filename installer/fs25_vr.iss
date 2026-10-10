@@ -160,16 +160,16 @@ begin
   Result := AddBackslash(GetDocumentsDir) + 'My Games\FarmingSimulator2025';
 end;
 
-{ The directory of the game's active mods directory override in game.xml, or '' when game.xml is
-  missing/unreadable or has no override element, or the override is inactive or has no directory.
-  The file is only read, never written. }
+{ The directory of the game's active mods directory override in gameSettings.xml (not game.xml, which
+  only holds the display settings), or '' when gameSettings.xml is missing/unreadable or has no override
+  element, or the override is inactive or has no directory. The file is only read, never written. }
 function GetModsDirOverride: String;
 var
   Doc, Node, ActiveAttr, DirAttr: Variant;
   Path: String;
 begin
   Result := '';
-  Path := AddBackslash(GetMyGamesDir) + 'game.xml';
+  Path := AddBackslash(GetMyGamesDir) + 'gameSettings.xml';
   if not FileExists(Path) then
     Exit;
   try
