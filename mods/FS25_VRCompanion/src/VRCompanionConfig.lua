@@ -13,13 +13,16 @@ VRCompanion.MIN_HUD_SAFE_AREA = 0.0
 VRCompanion.MAX_HUD_SAFE_AREA_HORIZONTAL = 0.40
 VRCompanion.MAX_HUD_SAFE_AREA_VERTICAL = 0.35
 
--- HUD Group Margin and scale constants. Every group starts from the same defaults, which match
--- where the HUD sat before the groups existed. HUD_GROUP_NAMES is the one ordered list of groups:
+-- HUD Group Margin and scale constants. HUD_GROUP_NAMES is the one ordered list of groups:
 -- layout, visibility, save/load and listing in messages all follow it.
 VRCompanion.HUD_GROUP_NAMES = { "speedometer", "map", "info", "controls" }
-VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X = 0.30
-VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y = 0.22
-VRCompanion.DEFAULT_HUD_GROUP_SCALE = 0.82
+-- Each group's default margins and scale: the layout a first install starts with, tuned in the headset
+VRCompanion.DEFAULT_HUD_GROUP_LAYOUTS = {
+    speedometer = { marginX = 0.30, marginY = 0.20, scale = 0.82 },
+    map = { marginX = 0.30, marginY = 0.22, scale = 0.82 },
+    info = { marginX = 0.30, marginY = 0.30, scale = 0.82 },
+    controls = { marginX = 0.30, marginY = 0.30, scale = 0.82 },
+}
 VRCompanion.MIN_HUD_GROUP_MARGIN = 0.0
 VRCompanion.MAX_HUD_GROUP_MARGIN = 0.45
 VRCompanion.MIN_HUD_GROUP_SCALE = 0.50
@@ -51,11 +54,8 @@ VRCompanion.CONVERGENCE_SMOOTH_SPEED = 12.0
 local function newDefaultHudGroupLayouts()
     local layouts = {}
     for _, name in ipairs(VRCompanion.HUD_GROUP_NAMES) do
-        layouts[name] = {
-            marginX = VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X,
-            marginY = VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y,
-            scale = VRCompanion.DEFAULT_HUD_GROUP_SCALE
-        }
+        local defaults = VRCompanion.DEFAULT_HUD_GROUP_LAYOUTS[name]
+        layouts[name] = { marginX = defaults.marginX, marginY = defaults.marginY, scale = defaults.scale }
     end
     return layouts
 end
@@ -164,12 +164,13 @@ function VRCompanion:clamp(val, minVal, maxVal)
     return val
 end
 
--- A group's margins and scale clamped to their ranges; anything not given falls back to its default
-function VRCompanion:sanitizeHudGroupLayout(marginX, marginY, scale)
+-- A group's margins and scale clamped to their ranges; anything not given falls back to that group's default
+function VRCompanion:sanitizeHudGroupLayout(groupName, marginX, marginY, scale)
+    local defaults = self.DEFAULT_HUD_GROUP_LAYOUTS[groupName]
     return {
-        marginX = self:clamp(marginX or self.DEFAULT_HUD_GROUP_MARGIN_X, self.MIN_HUD_GROUP_MARGIN, self.MAX_HUD_GROUP_MARGIN),
-        marginY = self:clamp(marginY or self.DEFAULT_HUD_GROUP_MARGIN_Y, self.MIN_HUD_GROUP_MARGIN, self.MAX_HUD_GROUP_MARGIN),
-        scale = self:clamp(scale or self.DEFAULT_HUD_GROUP_SCALE, self.MIN_HUD_GROUP_SCALE, self.MAX_HUD_GROUP_SCALE)
+        marginX = self:clamp(marginX or defaults.marginX, self.MIN_HUD_GROUP_MARGIN, self.MAX_HUD_GROUP_MARGIN),
+        marginY = self:clamp(marginY or defaults.marginY, self.MIN_HUD_GROUP_MARGIN, self.MAX_HUD_GROUP_MARGIN),
+        scale = self:clamp(scale or defaults.scale, self.MIN_HUD_GROUP_SCALE, self.MAX_HUD_GROUP_SCALE)
     }
 end
 
@@ -220,7 +221,7 @@ function VRCompanion:saveConfiguration(xmlPath)
         setXmlFloatFn(xmlFile, "vrSettings.hudSafeAreaVertical", self.hudSafeAreaVertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
         for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
             local current = (self.hudGroupLayout or {})[groupName] or {}
-            local layout = self:sanitizeHudGroupLayout(current.marginX, current.marginY, current.scale)
+            local layout = self:sanitizeHudGroupLayout(groupName, current.marginX, current.marginY, current.scale)
             local key = hudGroupSettingsKey(groupName)
             setXmlFloatFn(xmlFile, key .. "MarginHorizontal", layout.marginX)
             setXmlFloatFn(xmlFile, key .. "MarginVertical", layout.marginY)
@@ -302,7 +303,7 @@ function VRCompanion:loadConfiguration(xmlPath)
 
                 for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
                     local key = hudGroupSettingsKey(groupName)
-                    groupLayouts[groupName] = self:sanitizeHudGroupLayout(
+                    groupLayouts[groupName] = self:sanitizeHudGroupLayout(groupName,
                         readXmlFloat(getXmlFloatFn, xmlFile, key .. "MarginHorizontal"),
                         readXmlFloat(getXmlFloatFn, xmlFile, key .. "MarginVertical"),
                         readXmlFloat(getXmlFloatFn, xmlFile, key .. "Scale"))

@@ -209,10 +209,24 @@ test("HudSafeAreaWithOneKeyMissingKeepsTheOtherDefault", function()
     resetHudSettings()
 end)
 -- Slice 3: HUD Groups are placed by their own HUD Group Margins
+-- Each group's default margins and scale, as { horizontal, vertical, scale }
+local DEFAULT_GROUP_LAYOUTS = {
+    speedometer = { 0.30, 0.20, 0.82 },
+    map = { 0.30, 0.22, 0.82 },
+    info = { 0.30, 0.30, 0.82 },
+    controls = { 0.30, 0.30, 0.82 },
+}
+local function isDefaultGroupLayout(groupName, layout)
+    local expected = DEFAULT_GROUP_LAYOUTS[groupName]
+    return near(layout.marginX, expected[1]) and near(layout.marginY, expected[2]) and near(layout.scale, expected[3])
+end
+
 test("DefinesTheGroupMarginAndScaleDefaultsOnce", function()
-    assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X == 0.30, "horizontal group margin default")
-    assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y == 0.22, "vertical group margin default")
-    assert(VRCompanion.DEFAULT_HUD_GROUP_SCALE == 0.82, "group scale default")
+    for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do
+        assert(isDefaultGroupLayout(groupName, VRCompanion.DEFAULT_HUD_GROUP_LAYOUTS[groupName]), groupName .. " group default margins and scale")
+    end
+    assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X == nil and VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y == nil
+        and VRCompanion.DEFAULT_HUD_GROUP_SCALE == nil, "the shared group defaults are replaced by each group's own")
     assert(VRCompanion.MIN_HUD_GROUP_MARGIN == 0.0 and VRCompanion.MAX_HUD_GROUP_MARGIN == 0.45, "group margins clamp to 0-0.45")
     assert(VRCompanion.MIN_HUD_GROUP_SCALE == 0.50 and VRCompanion.MAX_HUD_GROUP_SCALE == 1.50, "group scale clamps to 0.50-1.50")
     assert(VRCompanion.DEFAULT_HUD_UI_SCALE == nil and VRCompanion.MIN_HUD_UI_SCALE == nil and VRCompanion.MAX_HUD_UI_SCALE == nil,
@@ -232,13 +246,13 @@ test("PlacesEveryGroupAtItsDefaultMarginsUponMapLoad", function()
     -- Map group, bottom-left: left and bottom edges sit at the margins
     assert(near(hud.ingameMap.position.x, 0.30) and near(hud.ingameMap.position.y, 0.22), "map at its bottom-left margins")
     -- Speedometer group, bottom-right: the display's width is subtracted from 1 - margin
-    assert(near(hud.speedMeter.position.x, 1.0 - 0.30 - 0.15) and near(hud.speedMeter.position.y, 0.22), "speedometer at its bottom-right margins")
+    assert(near(hud.speedMeter.position.x, 1.0 - 0.30 - 0.15) and near(hud.speedMeter.position.y, 0.20), "speedometer at its bottom-right margins")
     -- Info group, top-right: width and height are subtracted
-    assert(near(hud.gameInfo.position.x, 1.0 - 0.30 - 0.20) and near(hud.gameInfo.position.y, 1.0 - 0.22 - 0.12), "info at its top-right margins")
+    assert(near(hud.gameInfo.position.x, 1.0 - 0.30 - 0.20) and near(hud.gameInfo.position.y, 1.0 - 0.30 - 0.12), "info at its top-right margins")
     -- Controls group, top-left: the height is subtracted
-    assert(near(hud.inputHelp.position.x, 0.30) and near(hud.inputHelp.position.y, 1.0 - 0.22 - 0.30), "controls at its top-left margins")
+    assert(near(hud.inputHelp.position.x, 0.30) and near(hud.inputHelp.position.y, 1.0 - 0.30 - 0.30), "controls at its top-left margins")
     -- The context action prompt is centered on the Speedometer group's bottom margin
-    assert(near(hud.contextAction.position.x, 0.5) and near(hud.contextAction.position.y, 0.22), "context action centered at the speedometer bottom margin")
+    assert(near(hud.contextAction.position.x, 0.5) and near(hud.contextAction.position.y, 0.20), "context action centered at the speedometer bottom margin")
 
     for _, name in ipairs(DISPLAY_NAMES) do
         local display = hud[name]
@@ -347,22 +361,22 @@ test("PositionsIndividualDisplaysViaHelper", function()
     VRCompanion:positionHudDisplay(sm, "SpeedMeterDisplay")
     assert(sm.stored == true, "positionHudDisplay must trigger storeScaledValues")
     assert(near(sm.anchorX, 0.55), "SpeedMeter anchorX must be 1 - 0.30 - width")
-    assert(near(sm.anchorY, 0.22), "SpeedMeter anchorY must be 0.22")
+    assert(near(sm.anchorY, 0.20), "SpeedMeter anchorY must be 0.20")
 
     local ih = { height = 0.30 }
     VRCompanion:positionHudDisplay(ih, "InputHelpDisplay")
     assert(near(ih.anchorX, 0.30), "InputHelp anchorX must be 0.30")
-    assert(near(ih.anchorY, 0.48), "InputHelp anchorY must be 1 - 0.22 - height")
+    assert(near(ih.anchorY, 0.40), "InputHelp anchorY must be 1 - 0.30 - height")
 
     local gi = {}
     VRCompanion:positionHudDisplay(gi, "GameInfoDisplay")
     assert(near(gi.anchorX, 0.70), "GameInfo anchorX must be 0.70")
-    assert(near(gi.anchorY, 0.78), "GameInfo anchorY must be 0.78")
+    assert(near(gi.anchorY, 0.70), "GameInfo anchorY must be 0.70")
 
     local ca = {}
     VRCompanion:positionHudDisplay(ca, "ContextActionDisplay")
     assert(near(ca.anchorX, 0.5), "ContextAction anchorX must be centered")
-    assert(near(ca.anchorY, 0.22), "ContextAction anchorY must be the speedometer bottom margin")
+    assert(near(ca.anchorY, 0.20), "ContextAction anchorY must be the speedometer bottom margin")
 
     local map = {}
     VRCompanion:positionHudDisplay(map, "IngameMap")
@@ -380,7 +394,7 @@ test("PlacesADisplayAtItsGroupsHomeCorner", function()
         local gi = { width = 0.20, height = 0.12 }
         VRCompanion:positionHudDisplay(gi, "GameInfoDisplay")
         assert(near(gi.anchorX, 0.30), "Info display follows its group's left edge")
-        assert(near(gi.anchorY, 0.22), "Info display follows its group's bottom edge")
+        assert(near(gi.anchorY, 0.30), "Info display follows its group's bottom edge")
     end)
     info.alignX, info.alignY = origX, origY
     assert(ok, err)
@@ -453,10 +467,11 @@ test("SavesConfigurationToXmlFile", function()
     assert(near(savedData["vrSettings.hudGroupInfoMarginHorizontal"], 0.11), "Saved info group horizontal margin")
     assert(near(savedData["vrSettings.hudGroupInfoMarginVertical"], 0.12), "Saved info group vertical margin")
     assert(near(savedData["vrSettings.hudGroupInfoScale"], 0.90), "Saved info group scale")
-    for _, groupName in ipairs({ "Map", "Speedometer", "Controls" }) do
-        assert(near(savedData["vrSettings.hudGroup" .. groupName .. "MarginHorizontal"], 0.30), groupName .. " horizontal margin saved at its default")
-        assert(near(savedData["vrSettings.hudGroup" .. groupName .. "MarginVertical"], 0.22), groupName .. " vertical margin saved at its default")
-        assert(near(savedData["vrSettings.hudGroup" .. groupName .. "Scale"], 0.82), groupName .. " scale saved at its default")
+    for groupName, key in pairs({ map = "Map", speedometer = "Speedometer", controls = "Controls" }) do
+        local expected = DEFAULT_GROUP_LAYOUTS[groupName]
+        assert(near(savedData["vrSettings.hudGroup" .. key .. "MarginHorizontal"], expected[1]), groupName .. " horizontal margin saved at its default")
+        assert(near(savedData["vrSettings.hudGroup" .. key .. "MarginVertical"], expected[2]), groupName .. " vertical margin saved at its default")
+        assert(near(savedData["vrSettings.hudGroup" .. key .. "Scale"], expected[3]), groupName .. " scale saved at its default")
     end
     assert(math.abs(savedData["vrSettings.hudConvergenceDepth"] - 1.9) < 0.0001, "Saved hudConvergenceDepth should be 1.9")
     assert(fileSaved == true, "saveXMLFile must be invoked")
@@ -503,7 +518,7 @@ test("LoadsUserSettingsXmlWithoutReadingModDesc", function()
     local map = VRCompanion:getHudGroupLayout("map")
     assert(near(map.marginX, 0.12) and near(map.marginY, 0.34) and near(map.scale, 0.75), "User settings set the map group's margins and scale")
     local controls = VRCompanion:getHudGroupLayout("controls")
-    assert(near(controls.marginX, 0.30) and near(controls.marginY, 0.22), "A group with no saved margins keeps the defaults")
+    assert(near(controls.marginX, 0.30) and near(controls.marginY, 0.30), "A group with no saved margins keeps the defaults")
     assert(near(controls.scale, 1.50), "A saved scale is clamped to the maximum")
     local speedometer = VRCompanion:getHudGroupLayout("speedometer")
     assert(near(speedometer.scale, 0.82), "The removed hudUiScale key is ignored rather than applied to the groups")
@@ -522,9 +537,9 @@ end)
 test("DefaultsMatchTheValuesPreviouslyYieldedByModDesc", function()
     assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL == 0.30, "HUD Safe Area horizontal default")
     assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL == 0.22, "HUD Safe Area vertical default")
-    assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X == 0.30, "group horizontal margin default")
-    assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y == 0.22, "group vertical margin default")
-    assert(VRCompanion.DEFAULT_HUD_GROUP_SCALE == 0.82, "group scale default")
+    for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do
+        assert(isDefaultGroupLayout(groupName, VRCompanion.DEFAULT_HUD_GROUP_LAYOUTS[groupName]), groupName .. " group layout default")
+    end
     assert(VRCompanion.DEFAULT_CONVERGENCE_DEPTH == 1.8, "convergence depth default")
     assert(VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION == false, "load notification default")
     assert(VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE == true, "recenter tracking default")
@@ -843,10 +858,10 @@ test("RuntimeStateStartsFromDefaultConstants", function()
         assert(math.abs(fresh.hudAnchorLeftBase - fresh.DEFAULT_HUD_SAFE_AREA_HORIZONTAL) < 0.0001, "left anchor starts at the horizontal default")
         assert(math.abs(fresh.hudAnchorTopBase - (1.0 - fresh.DEFAULT_HUD_SAFE_AREA_VERTICAL)) < 0.0001, "top anchor starts at the vertical default")
         for _, groupName in ipairs(fresh.HUD_GROUP_NAMES) do
-            local layout = fresh.hudGroupLayout[groupName]
-            assert(layout.marginX == fresh.DEFAULT_HUD_GROUP_MARGIN_X, groupName .. " horizontal margin starts at its default")
-            assert(layout.marginY == fresh.DEFAULT_HUD_GROUP_MARGIN_Y, groupName .. " vertical margin starts at its default")
-            assert(layout.scale == fresh.DEFAULT_HUD_GROUP_SCALE, groupName .. " scale starts at its default")
+            local layout, defaults = fresh.hudGroupLayout[groupName], fresh.DEFAULT_HUD_GROUP_LAYOUTS[groupName]
+            assert(layout.marginX == defaults.marginX, groupName .. " horizontal margin starts at its default")
+            assert(layout.marginY == defaults.marginY, groupName .. " vertical margin starts at its default")
+            assert(layout.scale == defaults.scale, groupName .. " scale starts at its default")
         end
         assert(fresh.hudConvergenceDepth == fresh.DEFAULT_CONVERGENCE_DEPTH, "convergence depth starts at its default")
         assert(fresh.showHudLoadNotification == fresh.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "load notification starts at its default")
@@ -910,10 +925,7 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     assert(math.abs(safeArea.horizontal - VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL) < 0.0001, "HUD Safe Area horizontal default applied")
     assert(math.abs(safeArea.vertical - VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL) < 0.0001, "HUD Safe Area vertical default applied")
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do
-        local layout = VRCompanion:getHudGroupLayout(groupName)
-        assert(near(layout.marginX, VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X), groupName .. " horizontal margin default applied")
-        assert(near(layout.marginY, VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y), groupName .. " vertical margin default applied")
-        assert(near(layout.scale, VRCompanion.DEFAULT_HUD_GROUP_SCALE), groupName .. " scale default applied")
+        assert(isDefaultGroupLayout(groupName, VRCompanion:getHudGroupLayout(groupName)), groupName .. " margins and scale default applied")
     end
     assert(VRCompanion.hudConvergenceDepth == VRCompanion.DEFAULT_CONVERGENCE_DEPTH, "convergence depth default applied")
     assert(VRCompanion.showHudLoadNotification == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "load notification default applied")
@@ -931,11 +943,10 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     assert(store["vrSettings.hudInsetHorizontal"] == nil and store["vrSettings.hudInsetVertical"] == nil
         and store["vrSettings.hudInsetTop"] == nil, "the removed inset keys are not written")
     assert(store["vrSettings.hudUiScale"] == nil, "the removed UI scale key is not written")
-    for _, groupName in ipairs({ "Map", "Speedometer", "Info", "Controls" }) do
-        local key = "vrSettings.hudGroup" .. groupName
-        assert(near(store[key .. "MarginHorizontal"], VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X), "saved " .. groupName .. " horizontal margin")
-        assert(near(store[key .. "MarginVertical"], VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y), "saved " .. groupName .. " vertical margin")
-        assert(near(store[key .. "Scale"], VRCompanion.DEFAULT_HUD_GROUP_SCALE), "saved " .. groupName .. " scale")
+    for groupName, keyName in pairs({ map = "Map", speedometer = "Speedometer", info = "Info", controls = "Controls" }) do
+        local key = "vrSettings.hudGroup" .. keyName
+        local saved = { marginX = store[key .. "MarginHorizontal"], marginY = store[key .. "MarginVertical"], scale = store[key .. "Scale"] }
+        assert(isDefaultGroupLayout(groupName, saved), "saved " .. groupName .. " margins and scale")
     end
     assert(math.abs(store["vrSettings.hudConvergenceDepth"] - VRCompanion.DEFAULT_CONVERGENCE_DEPTH) < 0.0001, "saved convergence depth")
     assert(store["vrSettings.showHudLoadNotification"] == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "saved load notification")
@@ -1470,8 +1481,7 @@ test("GroupLayoutsStartFromTheDefaultsWhenTheSettingsFileHasNoGroupKeys", functi
     _G.delete = function() end
     VRCompanion:loadConfiguration("settings.xml")
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do
-        local layout = VRCompanion:getHudGroupLayout(groupName)
-        assert(near(layout.marginX, 0.30) and near(layout.marginY, 0.22) and near(layout.scale, 0.82), groupName .. " falls back to the defaults")
+        assert(isDefaultGroupLayout(groupName, VRCompanion:getHudGroupLayout(groupName)), groupName .. " falls back to the defaults")
     end
     _G.loadXMLFile = nil
     _G.getXMLFloat = nil

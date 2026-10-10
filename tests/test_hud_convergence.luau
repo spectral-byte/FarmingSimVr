@@ -267,7 +267,7 @@ test("ConvergencePlacementTakesTheHomeCornerFromTheDisplaysGroup", function()
 
     VRCompanion:updateHudConvergence()
     assert(math.abs(mockInfo.position.x - (1.0 - 0.30 + 0.012)) < 0.0001, "Info group is anchored to the right edge")
-    assert(math.abs(mockInfo.position.y - (1.0 - 0.22)) < 0.0001, "Info group is anchored to the top edge")
+    assert(math.abs(mockInfo.position.y - (1.0 - 0.30)) < 0.0001, "Info group is anchored to the top edge")
 
     local info = VRCompanion.HUD_GROUPS.info
     local origX, origY = info.alignX, info.alignY
@@ -275,7 +275,7 @@ test("ConvergencePlacementTakesTheHomeCornerFromTheDisplaysGroup", function()
         info.alignX, info.alignY = "left", "bottom"
         VRCompanion:updateHudConvergence()
         assert(math.abs(mockInfo.position.x - (0.30 + 0.012)) < 0.0001, "Moving the group's corner moves the display to the left edge")
-        assert(math.abs(mockInfo.position.y - 0.22) < 0.0001, "Moving the group's corner moves the display to the bottom edge")
+        assert(math.abs(mockInfo.position.y - 0.30) < 0.0001, "Moving the group's corner moves the display to the bottom edge")
     end)
     info.alignX, info.alignY = origX, origY
 

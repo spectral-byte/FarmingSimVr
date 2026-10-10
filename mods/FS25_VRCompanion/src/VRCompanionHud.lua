@@ -76,7 +76,7 @@ end
 -- A group's HUD Group Margins and scale multiplier, clamped to their ranges
 function VRCompanion:getHudGroupLayout(groupName)
     local stored = (self.hudGroupLayout or {})[groupName] or {}
-    return self:sanitizeHudGroupLayout(stored.marginX, stored.marginY, stored.scale)
+    return self:sanitizeHudGroupLayout(groupName, stored.marginX, stored.marginY, stored.scale)
 end
 
 -- Sets a group's margins, and its scale when one is given. Returns the clamped layout, or nil for
@@ -85,7 +85,7 @@ function VRCompanion:setHudGroupLayout(groupName, marginX, marginY, scale)
     if self.HUD_GROUPS[groupName] == nil then return nil end
     if self.hudGroupLayout == nil then self.hudGroupLayout = {} end
     local current = self:getHudGroupLayout(groupName)
-    local layout = self:sanitizeHudGroupLayout(marginX, marginY, scale or current.scale)
+    local layout = self:sanitizeHudGroupLayout(groupName, marginX, marginY, scale or current.scale)
     self.hudGroupLayout[groupName] = layout
     return layout
 end
