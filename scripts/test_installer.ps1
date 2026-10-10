@@ -867,6 +867,22 @@ Test-Case "A game.xml without display elements leaves a foreign dxgi.dll where i
     Assert-ForeignDxgiUntouched $world $foreign "after a game.xml without display elements"
 }
 
+Test-Case "A failure while placing files leaves game.xml unedited and no Render Resolution record" {
+    param($world)
+    New-FakeGame $world
+    Set-RealGameXml $world
+    $p = Get-GamePaths $world
+    $original = [IO.File]::ReadAllBytes($p.GameXml)
+    # A file where the mods folder must go: the Companion Mod cannot be placed, so Setup fails after validation.
+    Set-Content -Path $p.DefaultMods -Value "in the way" -Encoding ascii
+
+    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")
+    Assert-True ($exit -ne 0) "Setup succeeded although the Companion Mod could not be placed."
+    Assert-SameBytes $p.GameXml $original "game.xml after a failed install"
+    Assert-Missing $p.GameXmlBackup "game.xml.fs25vr-backup after a failed install"
+    Assert-True ($null -eq (Get-RenderResolutionRecord)) "A Render Resolution record was written for a failed install."
+}
+
 Test-Case "Applying again keeps the first backup and the first originals; applying after an in-game change records the new originals" {
     param($world)
     # A Documents path with non-ASCII characters checks that the record survives the round trip

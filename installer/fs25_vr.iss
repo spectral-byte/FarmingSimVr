@@ -612,13 +612,16 @@ begin
       Result := 'Could not back up ' + Path + ' to ' + R.Backup;
       Exit;
     end;
-  if not SaveStringToFile(Path, Raw, False) then
+  { The record goes first: if writing game.xml then fails, the record names values game.xml does not
+    hold and the uninstall leaves game.xml alone. The other way round, game.xml could be changed
+    with nothing recorded to undo it. }
+  if not SaveRenderResolutionRecord(R) then
   begin
-    Result := 'Could not write ' + Path;
+    Result := 'Could not record the Render Resolution change in ' + GetRenderResolutionRecordPath;
     Exit;
   end;
-  if not SaveRenderResolutionRecord(R) then
-    Result := 'Could not record the Render Resolution change in ' + GetRenderResolutionRecordPath;
+  if not SaveStringToFile(Path, Raw, False) then
+    Result := 'Could not write ' + Path;
 end;
 
 { Uninstall (ticket #69): undo the Render Resolution change, but only while it is still ours. Without
@@ -814,12 +817,14 @@ begin
   RenderHeight := H;
 end;
 
-{ Before any file is placed, so a failure leaves the game folder and mods folder as they were. }
+{ After the files are placed (PrepareToInstall has already checked everything that can be checked), so
+  a failure while placing files, such as a full disk, never leaves game.xml edited for an install that
+  was rolled back. }
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Problem: String;
 begin
-  if (CurStep = ssInstall) and RenderApply then
+  if (CurStep = ssPostInstall) and RenderApply then
   begin
     Problem := ApplyRenderResolution(RenderWidth, RenderHeight);
     if Problem <> '' then
