@@ -96,10 +96,22 @@ $readmeContent = @"
 
 RECOMMENDED: USE THE INSTALLER
 --------------------------------------------------------------------------------
-Run FS25_VR_v${version}_Setup.exe (published next to this zip on the GitHub Release)
-and browse to your Farming Simulator 25 folder (the one containing
-x64\FarmingSimulator2025Game.exe). It places the files below for you and adds
-FS25 VR to Add/Remove Programs for uninstalling.
+Run FS25_VR_v${version}_Setup.exe (published next to this zip on the GitHub Release).
+It finds your Farming Simulator 25 folder (Steam, Epic Games or GIANTS) and
+pre-selects it; if there are several you pick one, and if none is found you
+browse to the folder that contains x64\FarmingSimulator2025Game.exe. It places the
+files below for you and adds FS25 VR to Add/Remove Programs for uninstalling.
+Close the game first.
+
+- Render Resolution page: optionally tick "Set the game's Render Resolution" and
+  enter your headset's per-eye width and height (640 to 8192). The Installer sets
+  the game to windowed mode at that size and keeps a copy of your game.xml as
+  game.xml.fs25vr-backup. Launch the game once first if there is no game.xml yet.
+- Silent install: FS25_VR_v${version}_Setup.exe /VERYSILENT /DIR="<game folder>"
+  Add /FS25VR_RESOLUTION=WxH (for example /FS25VR_RESOLUTION=4000x2500) to set the
+  Render Resolution without the wizard page. An invalid value fails the install.
+- A dxgi.dll that is not part of FS25 VR (for example ReShade) is moved to
+  dxgi.dll.fs25vr-backup before FS25 VR is installed.
 
 Windows may show "Windows protected your PC" because the Installer is not
 code-signed yet. This is expected: click "More info", then "Run anyway".
@@ -170,7 +182,9 @@ UNINSTALLATION
 --------------------------------------------------------------------------------
 - Installed with the Installer: uninstall "FS25 VR" from Add/Remove Programs.
   It removes dxgi.dll, FS25_VRCompanion.zip and fs25_vr.log, and keeps your VR
-  settings in modSettings.
+  settings in modSettings. It puts back the dxgi.dll it moved aside, and restores
+  your original Render Resolution unless you changed the width, height or
+  fullscreen mode in the game since. game.xml.fs25vr-backup stays.
 - Installed manually:
   Delete 'dxgi.dll' from the game's 'x64' folder, and
   delete 'FS25_VRCompanion.zip' from your 'mods' folder.

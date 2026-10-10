@@ -113,13 +113,16 @@ FS25 VR is built as a hybrid two-tier architecture:
 
 1. Download **`FS25_VR_v<version>_Setup.exe`** from the [latest release](https://github.com/spectral-byte/FarmingSimVr/releases) and run it. It asks for administrator rights.
 2. The Installer looks for your game in Steam (every Steam library, including ones on other drives), Epic Games and the GIANTS standalone version. One installation is pre-selected; with several you pick one. If yours was not found, **Browse...** to the folder that contains `x64\FarmingSimulator2025Game.exe`. The Installer refuses any other folder, and it refuses Microsoft Store / Game Pass installs as unsupported.
-3. Finish the wizard. The Installer copies `dxgi.dll` into the game's `x64` folder and `FS25_VRCompanion.zip` (not extracted) into `Documents\My Games\FarmingSimulator2025\mods`. It follows your Documents folder if OneDrive has moved it.
-4. Continue with [Step 3: Launch the Game](#step-3-launch-the-game).
+3. The optional **Render Resolution** page can set the game's Render Resolution to your headset's per-eye resolution. It is unticked by default; tick it and enter the width and height (whole numbers from 640 to 8192). The fields start with the values from your `game.xml`. The Installer sets the game to windowed mode with that size and first saves your `game.xml` as `game.xml.fs25vr-backup`. If you have never launched the game, there is no `game.xml` yet: launch Farming Simulator 25 once, then run the Installer again.
+4. Finish the wizard. The Installer copies `dxgi.dll` into the game's `x64` folder and `FS25_VRCompanion.zip` (not extracted) into `Documents\My Games\FarmingSimulator2025\mods`. It follows your Documents folder if OneDrive has moved it, and uses your mods directory override if you set one in the game. If the game folder already holds a `dxgi.dll` that is not part of FS25 VR (for example ReShade), the Installer warns you and moves it to `dxgi.dll.fs25vr-backup` first. The game must be closed.
+5. Continue with [Step 3: Launch the Game](#step-3-launch-the-game).
+
+For unattended installs, run the Setup exe with `/VERYSILENT /DIR="<game folder>"`. Add `/FS25VR_RESOLUTION=<width>x<height>` (for example `/FS25VR_RESOLUTION=4000x2500`) to set the Render Resolution without the wizard page; an invalid value fails the install before anything is changed, and with no `game.xml` the resolution is skipped.
 
 > [!NOTE]
 > **"Windows protected your PC"**: the Installer is not code-signed yet, so Windows SmartScreen warns about it. This is expected. Click **More info**, then **Run anyway**.
 
-To uninstall, use **FS25 VR** under *Settings > Apps > Installed apps* (Add/Remove Programs). It removes `dxgi.dll`, the Companion Mod zip and `fs25_vr.log` from the `x64` folder, and keeps your VR settings in `modSettings`.
+To uninstall, use **FS25 VR** under *Settings > Apps > Installed apps* (Add/Remove Programs). It removes `dxgi.dll`, the Companion Mod zip and `fs25_vr.log`, and keeps your VR settings in `modSettings`. It puts back the `dxgi.dll` the Installer moved aside (from `dxgi.dll.fs25vr-backup`), and restores your original Render Resolution if you set one, unless you changed the width, height or fullscreen mode in the game since. `game.xml.fs25vr-backup` is left in place.
 
 ### Manual Installation
 
