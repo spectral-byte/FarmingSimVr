@@ -110,6 +110,22 @@ FS25 VR is built as a hybrid two-tier architecture:
   - Pimax headsets (via PimaxXR / OpenXR runtime)
 - **Software Prerequisites**: Microsoft Visual C++ 2015â€“2022 Redistributable (x64)
 
+### Recommended: Install with the Installer
+
+1. Download **`FS25_VR_v<version>_Setup.exe`** from the [latest release](https://github.com/spectral-byte/FarmingSimVr/releases) and run it. It asks for administrator rights.
+2. Browse to your Farming Simulator 25 game folder, the one that contains `x64\FarmingSimulator2025Game.exe`. The Installer refuses any other folder.
+3. Finish the wizard. The Installer copies `dxgi.dll` into the game's `x64` folder and `FS25_VRCompanion.zip` (not extracted) into `Documents\My Games\FarmingSimulator2025\mods`. It follows your Documents folder if OneDrive has moved it.
+4. Continue with [Step 3: Launch the Game](#step-3-launch-the-game).
+
+> [!NOTE]
+> **"Windows protected your PC"**: the Installer is not code-signed yet, so Windows SmartScreen warns about it. This is expected. Click **More info**, then **Run anyway**.
+
+To uninstall, use **FS25 VR** under *Settings > Apps > Installed apps* (Add/Remove Programs). It removes `dxgi.dll`, the Companion Mod zip and `fs25_vr.log` from the `x64` folder, and keeps your VR settings in `modSettings`.
+
+### Manual Installation
+
+If you prefer to copy the files yourself, use the zip bundle from the same release and follow Steps 1 and 2, then Step 3.
+
 ### Step 1: Install the Native Injector (`dxgi.dll`)
 
 1. Locate your Farming Simulator 25 installation folder:
@@ -200,6 +216,17 @@ ninja -C build dxgi fs25_vr_tests
 
 # Run automated unit and integration tests
 ctest --test-dir build --output-on-failure
+```
+
+### Packaging a Release (zip bundle and Installer)
+
+```powershell
+# Needs Inno Setup 6 (https://jrsoftware.org/isinfo.php, or `choco install innosetup`).
+# Builds the zip bundle and FS25_VR_v<version>_Setup.exe from the same staged files into build\release
+.\scripts\package_release.ps1
+
+# Silently installs and uninstalls the Setup exe against a fake game folder and Documents folder, then checks the files
+.\scripts\test_installer.ps1
 ```
 
 ### Packaging and Deploying the Companion Mod

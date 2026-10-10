@@ -91,7 +91,17 @@ $readmeContent = @"
   Virtual Reality for GIANTS Engine 10 under Direct3D 12
 ================================================================================
 
-QUICK INSTALLATION INSTRUCTIONS
+RECOMMENDED: USE THE INSTALLER
+--------------------------------------------------------------------------------
+Run FS25_VR_v${version}_Setup.exe (published next to this zip on the GitHub Release)
+and browse to your Farming Simulator 25 folder (the one containing
+x64\FarmingSimulator2025Game.exe). It places the files below for you and adds
+FS25 VR to Add/Remove Programs for uninstalling.
+
+Windows may show "Windows protected your PC" because the Installer is not
+code-signed yet. This is expected: click "More info", then "Run anyway".
+
+MANUAL INSTALLATION INSTRUCTIONS
 --------------------------------------------------------------------------------
 
 1. INSTALL INJECTOR DLL:
@@ -155,8 +165,12 @@ Documents\My Games\FarmingSimulator2025\modSettings\FS25_VRCompanion\settings.xm
 
 UNINSTALLATION
 --------------------------------------------------------------------------------
-- Delete 'dxgi.dll' from the game's 'x64' folder.
-- Delete 'FS25_VRCompanion.zip' from your 'mods' folder.
+- Installed with the Installer: uninstall "FS25 VR" from Add/Remove Programs.
+  It removes dxgi.dll, FS25_VRCompanion.zip and fs25_vr.log, and keeps your VR
+  settings in modSettings.
+- Installed manually:
+  Delete 'dxgi.dll' from the game's 'x64' folder, and
+  delete 'FS25_VRCompanion.zip' from your 'mods' folder.
 
 LICENSE
 --------------------------------------------------------------------------------
@@ -179,5 +193,25 @@ try {
 } finally {
     Pop-Location
 }
+
+# Build the Installer from the same staged bundle folder, so it carries the identical binaries,
+# LICENSE and THIRD_PARTY_NOTICES as the zip bundle. Inno Setup's compiler is not on PATH by default.
+$iscc = @(
+    (Get-Command ISCC.exe -ErrorAction SilentlyContinue | ForEach-Object { $_.Source }),
+    "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+    "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+if (-not $iscc) {
+    Write-Error "Inno Setup compiler (ISCC.exe) not found. Install Inno Setup 6 (choco install innosetup)."
+}
+& $iscc "/DAppVersion=$version" "/DStageDir=$bundleDir" "/DOutputDir=$releaseDir" (Join-Path $repoRoot "installer\fs25_vr.iss")
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Inno Setup failed to build the Installer (exit code $LASTEXITCODE)."
+}
+$setupExe = Join-Path $releaseDir "${bundleName}_Setup.exe"
+if (-not (Test-Path $setupExe)) {
+    Write-Error "Expected $setupExe was not produced."
+}
+Write-Host "[Package] Built $setupExe"
 
 Write-Host "Release packaging complete! Files located in: $releaseDir"
