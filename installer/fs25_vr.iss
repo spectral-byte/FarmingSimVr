@@ -41,7 +41,9 @@
 ;   real settings); otherwise the values found in game.xml become the new Original* values.
 ;   Pascal helpers in [Code]: TRenderResolutionRecord, GetRenderResolutionRecordPath,
 ;   LoadRenderResolutionRecord (usable from the uninstaller), ReadDisplaySettings, WriteDisplaySettings.
-;   The uninstall does not delete the record; #69 should do so after restoring.
+;   The uninstall (ticket #69, RestoreRenderResolution) applies that rule to the game.xml named in the
+;   record, then deletes the record. It never touches game.xml.fs25vr-backup or the Companion Mod's
+;   modSettings. With no record (the Installer never set a Render Resolution) it does nothing.
 ;
 ; English only, requires admin, unsigned (spec #61).
 
@@ -110,6 +112,9 @@ Source: "{#StageDir}\THIRD_PARTY_NOTICES.txt"; DestDir: "{commonappdata}\FS25 VR
 [UninstallDelete]
 ; Written by the Injector while the game runs. modSettings (the VR settings) is deliberately kept.
 Type: files; Name: "{app}\x64\fs25_vr.log"
+; The folder holding the uninstaller, the notices and (while a Render Resolution is applied) its record is
+; created by the Installer's own code before Inno places files in it, so Inno would leave it behind empty.
+Type: dirifempty; Name: "{commonappdata}\FS25 VR"
 
 [Code]
 function IsGameFolder(Dir: String): Boolean;
@@ -344,8 +349,14 @@ begin
     Log('Could not restore ' + Backup + ' as dxgi.dll.');
 end;
 
+procedure RestoreRenderResolution; forward;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
+  { Before Inno removes the files, so the record is gone and its folder (common appdata, FS25 VR)
+    is removed along with them. }
+  if CurUninstallStep = usUninstall then
+    RestoreRenderResolution;
   if CurUninstallStep = usPostUninstall then
     RestoreForeignDxgi(ExpandConstant('{app}'));
 end;
@@ -610,6 +621,41 @@ begin
     Result := 'Could not record the Render Resolution change in ' + GetRenderResolutionRecordPath;
 end;
 
+{ Uninstall (ticket #69): undo the Render Resolution change, but only while it is still ours. Without
+  the Injector there is no window clamping (ADR-0014), so a headset-sized window would be left behind.
+  If game.xml's display width, height and fullscreen mode all still equal what the Installer wrote, the
+  recorded originals are written back; if the player changed any of them, game.xml is left alone. The
+  game.xml named in the record is used (the uninstaller does not get the /FS25VR_DOCUMENTS switch). The
+  game.xml backup is never touched. The record is deleted once handled. Failures are logged, never
+  shown: the rest of the uninstall must go on. }
+procedure RestoreRenderResolution;
+var
+  R: TRenderResolutionRecord;
+  Raw: AnsiString;
+  CurW, CurH, CurMode: String;
+begin
+  if not LoadRenderResolutionRecord(R) then Exit;   { never set, nothing to undo }
+
+  if not FileExists(R.GameXml) then
+    Log('Render Resolution: ' + R.GameXml + ' is gone; nothing to restore.')
+  else if not LoadStringFromFile(R.GameXml, Raw) then
+    Log('Render Resolution: could not read ' + R.GameXml + '; leaving it alone.')
+  else if not ReadDisplaySettingsFrom(Raw, CurW, CurH, CurMode) then
+    Log('Render Resolution: ' + R.GameXml + ' has no display width, height and fullscreen mode; leaving it alone.')
+  else if (CurW <> R.WrittenWidth) or (CurH <> R.WrittenHeight) or (CurMode <> R.WrittenFullscreenMode) then
+    Log('Render Resolution: ' + R.GameXml + ' was changed since install (' + CurW + 'x' + CurH + ' ' + CurMode +
+        '); leaving it alone.')
+  else if not (SetDisplayElement(Raw, 'width', R.OriginalWidth) and SetDisplayElement(Raw, 'height', R.OriginalHeight) and
+               SetDisplayElement(Raw, 'fullscreenMode', R.OriginalFullscreenMode)) then
+    Log('Render Resolution: could not edit ' + R.GameXml + '; leaving it alone.')
+  else if not SaveStringToFile(R.GameXml, Raw, False) then
+    Log('Render Resolution: could not write ' + R.GameXml + '.')
+  else
+    Log('Render Resolution: restored ' + R.OriginalWidth + 'x' + R.OriginalHeight + ' ' + R.OriginalFullscreenMode + ' in ' + R.GameXml + '.');
+
+  if not DeleteFile(GetRenderResolutionRecordPath) then
+    Log('Render Resolution: could not delete ' + GetRenderResolutionRecordPath + '.');
+end;
 var
   RenderPage: TWizardPage;
   RenderCheck: TNewCheckBox;

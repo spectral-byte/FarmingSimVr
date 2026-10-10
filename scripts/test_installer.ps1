@@ -254,7 +254,7 @@ function Get-RenderResolutionRecord {
 function Remove-TestWorld($world) {
     Stop-StandInGame      # a running game would (rightly) block the cleanup uninstall
     if (Get-UninstallEntry) { try { Uninstall-Fs25Vr } catch { Write-Warning "Cleanup uninstall failed: $_" } }
-    Remove-Item $recordPath -Force -ErrorAction SilentlyContinue   # the uninstall leaves it for #69 to read
+    Remove-Item $recordPath -Force -ErrorAction SilentlyContinue   # in case a case failed before the uninstall removed it
     Remove-Item $world.Root -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -282,11 +282,12 @@ function Assert-SameBytes([string]$path, [byte[]]$expected, [string]$what) {
 # ---------------------------------------------------------------------------------------------
 
 $failures = New-Object Collections.Generic.List[string]
-function Test-Case([string]$name, [scriptblock]$body) {
+# $data (optional) is handed to the body as its second argument, for cases generated in a loop.
+function Test-Case([string]$name, [scriptblock]$body, $data = $null) {
     if ($Filter -and $name -notlike $Filter) { return }
     $world = New-TestWorld
     try {
-        & $body $world
+        & $body $world $data
         Write-Host "[PASS] $name"
     } catch {
         Write-Host "[FAIL] $name -- $($_.Exception.Message)"
@@ -859,6 +860,97 @@ Test-Case "Applying again keeps the first backup and the first originals; applyi
     Assert-True ($r.OriginalWidth -eq "1920" -and $r.OriginalHeight -eq "1080" -and $r.OriginalFullscreenMode -eq "windowed_fullscreen") `
         "After an in-game change the record's originals are $($r.OriginalWidth)x$($r.OriginalHeight) $($r.OriginalFullscreenMode), expected 1920x1080 windowed_fullscreen."
     Assert-SameBytes $p.GameXmlBackup $firstOriginal "game.xml.fs25vr-backup after the third apply"
+}
+
+# --- Uninstall restores the Render Resolution (#69) ---------------------------------------------
+
+Test-Case "Uninstall restores the original width, height and fullscreen mode when game.xml still holds what the Installer wrote" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world $null $null                    # only the modSettings VR settings
+    Set-RealGameXml $world "2560" "1440" "fullscreen"
+    $p = Get-GamePaths $world
+    $original = [IO.File]::ReadAllBytes($p.GameXml)
+    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")) -eq 0) "Setup failed."
+    Assert-SameBytes $p.GameXml (Get-GameXmlBytes (New-RealGameXml "4000" "2500" "windowed")) "game.xml after install"
+
+    Uninstall-Fs25Vr
+
+    Assert-SameBytes $p.GameXml $original "game.xml after uninstall (the originals restored, nothing else changed)"
+    Assert-SameBytes $p.GameXmlBackup $original "game.xml.fs25vr-backup (kept)"
+    Assert-True ($null -eq (Get-RenderResolutionRecord)) "The Render Resolution record was not deleted by the uninstall."
+    Assert-Missing (Split-Path -Parent $recordPath) "The Installer's common application data folder"
+    Assert-Exists $p.ModSettings "modSettings VR settings"
+    Assert-Missing $p.Injector "Injector"
+}
+
+Test-Case "Uninstall restores the originals recorded by the first apply after a second apply" {
+    param($world)
+    New-FakeGame $world
+    Set-RealGameXml $world "2560" "1440" "fullscreen"
+    $p = Get-GamePaths $world
+    $original = [IO.File]::ReadAllBytes($p.GameXml)
+    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")) -eq 0) "First Setup failed."
+    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=5000x3000")) -eq 0) "Second Setup failed."
+
+    Uninstall-Fs25Vr
+
+    Assert-SameBytes $p.GameXml $original "game.xml after uninstall"
+}
+
+# Each of the three values on its own: a change to any one means the player's choice wins.
+foreach ($changed in @(
+        @{ Name = "width";           W = "3000"; H = "2500"; Mode = "windowed" },
+        @{ Name = "height";          W = "4000"; H = "1800"; Mode = "windowed" },
+        @{ Name = "fullscreen mode"; W = "4000"; H = "2500"; Mode = "windowed_fullscreen" })) {
+    Test-Case "Uninstall leaves game.xml alone when the $($changed.Name) was changed since install, and keeps the backup" {
+        param($world, $c)
+        New-FakeGame $world
+        Set-RealGameXml $world "2560" "1440" "fullscreen"
+        $p = Get-GamePaths $world
+        $original = [IO.File]::ReadAllBytes($p.GameXml)
+        Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")) -eq 0) "Setup failed."
+        Set-RealGameXml $world $c.W $c.H $c.Mode          # the player changed it in the game
+        $current = [IO.File]::ReadAllBytes($p.GameXml)
+
+        Uninstall-Fs25Vr
+
+        Assert-SameBytes $p.GameXml $current "game.xml after uninstall (the player's current $($c.Name))"
+        Assert-SameBytes $p.GameXmlBackup $original "game.xml.fs25vr-backup (kept)"
+        Assert-True ($null -eq (Get-RenderResolutionRecord)) "The Render Resolution record was not deleted by the uninstall."
+        Assert-Missing $p.Injector "Injector"
+    } $changed
+}
+
+Test-Case "Uninstall leaves game.xml alone when the Installer never set a Render Resolution" {
+    param($world)
+    New-FakeGame $world
+    Set-RealGameXml $world "4000" "2500" "windowed"       # the player's own values, even if they look like a headset size
+    $p = Get-GamePaths $world
+    $before = [IO.File]::ReadAllBytes($p.GameXml)
+    Assert-True ((Install-Fs25Vr $world) -eq 0) "Setup failed."
+
+    Uninstall-Fs25Vr
+
+    Assert-SameBytes $p.GameXml $before "game.xml after uninstall"
+    Assert-Missing $p.GameXmlBackup "game.xml.fs25vr-backup (none was ever made)"
+    Assert-Missing $p.Injector "Injector"
+}
+
+Test-Case "Uninstall copes with a game.xml that is gone and still removes the record" {
+    param($world)
+    New-FakeGame $world
+    Set-RealGameXml $world
+    $p = Get-GamePaths $world
+    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")) -eq 0) "Setup failed."
+    Remove-Item $p.GameXml -Force
+
+    Uninstall-Fs25Vr
+
+    Assert-Missing $p.GameXml "game.xml (the uninstall must not create it)"
+    Assert-Exists $p.GameXmlBackup "game.xml.fs25vr-backup"
+    Assert-True ($null -eq (Get-RenderResolutionRecord)) "The Render Resolution record was not deleted by the uninstall."
+    Assert-Missing $p.Injector "Injector"
 }
 
 if ($failures.Count -gt 0) {
