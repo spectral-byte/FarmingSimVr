@@ -12,7 +12,7 @@
 ;                                game.xml the install succeeds and the resolution is skipped (logged).
 ;                                In a wizard run it pre-ticks and pre-fills the Render Resolution page.
 ;
-; Render Resolution (spec #61, ticket #66)
+; Render Resolution
 ;   The game's settings file is <Documents>\My Games\FarmingSimulator2025\game.xml. It is NOT
 ;   gameSettings.xml (that one holds modsDirectoryOverride). Shape of game.xml (UTF-8 with a BOM, CRLF
 ;   line endings, 4-space indent):
@@ -27,25 +27,25 @@
 ;   identical. Before the first edit ever, game.xml is copied to game.xml.fs25vr-backup next to it; an
 ;   existing backup is never overwritten.
 ;
-; Render Resolution record (read by the uninstall restore, ticket #69)
+; Render Resolution record (read again by later installs and by the uninstall restore)
 ;   {commonappdata}\FS25 VR\render-resolution.ini, next to the uninstaller. UTF-8 with a BOM, one
 ;   Key=Value per line after a [RenderResolution] header:
 ;     GameXml=<full path of the game.xml that was edited>
 ;     Backup=<full path of game.xml.fs25vr-backup>
 ;     OriginalWidth= OriginalHeight= OriginalFullscreenMode=      what game.xml held before the Installer
 ;     WrittenWidth=  WrittenHeight=  WrittenFullscreenMode=       what the Installer wrote
-;   Restore rule for #69: if game.xml's display width, height and fullscreenMode all still equal the
+;   Restore rule: if game.xml's display width, height and fullscreenMode all still equal the
 ;   Written* values, write the Original* values back; otherwise leave game.xml alone. The record is
 ;   only written when an edit is applied. When an Installer run applies again and game.xml still holds
 ;   the previous Written* values, the Original* values are carried over (so they stay the player's
 ;   real settings); otherwise the values found in game.xml become the new Original* values.
 ;   Pascal helpers in [Code]: TRenderResolutionRecord, GetRenderResolutionRecordPath,
 ;   LoadRenderResolutionRecord (usable from the uninstaller), ReadDisplaySettings, WriteDisplaySettings.
-;   The uninstall (ticket #69, RestoreRenderResolution) applies that rule to the game.xml named in the
+;   The uninstall (RestoreRenderResolution) applies that rule to the game.xml named in the
 ;   record, then deletes the record. It never touches game.xml.fs25vr-backup or the Companion Mod's
 ;   modSettings. With no record (the Installer never set a Render Resolution) it does nothing.
 ;
-; English only, requires admin, unsigned (spec #61).
+; English only, requires admin, unsigned (see docs/adr/0024-unsigned-inno-setup-installer.md).
 
 #ifndef AppVersion
   #error AppVersion is not defined. Build with scripts\package_release.ps1 (or pass /DAppVersion=...).
@@ -361,7 +361,7 @@ begin
     RestoreForeignDxgi(ExpandConstant('{app}'));
 end;
 
-{ ---- Render Resolution (ticket #66; file formats are described at the top of this script) ---- }
+{ ---- Render Resolution (file formats are described at the top of this script) ---- }
 
 const
   RenderMinSize = 640;
@@ -624,7 +624,7 @@ begin
     Result := 'Could not write ' + Path;
 end;
 
-{ Uninstall (ticket #69): undo the Render Resolution change, but only while it is still ours. Without
+{ Uninstall: undo the Render Resolution change, but only while it is still ours. Without
   the Injector there is no window clamping (ADR-0014), so a headset-sized window would be left behind.
   If game.xml's display width, height and fullscreen mode all still equal what the Installer wrote, the
   recorded originals are written back; if the player changed any of them, game.xml is left alone. The

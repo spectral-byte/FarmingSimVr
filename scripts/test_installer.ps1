@@ -237,8 +237,8 @@ function Stop-StandInGame {
     if ($script:standIn) { $script:standIn.WaitForExit(10000) | Out-Null; $script:standIn = $null }
 }
 
-# Where the Installer records the Render Resolution it changed, for the uninstall restore (#69): a text file
-# next to the uninstaller (see the Render Resolution record in installer\fs25_vr.iss).
+# Where the Installer records the Render Resolution it changed, for later installs and the uninstall restore:
+# a text file next to the uninstaller (see the Render Resolution record in installer\fs25_vr.iss).
 $recordPath = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) "FS25 VR\render-resolution.ini"
 # Reads the record into a hashtable of key -> value, or $null when there is none.
 function Get-RenderResolutionRecord {
@@ -410,7 +410,7 @@ Test-Case "A silent uninstall while the game is running fails and changes nothin
     Assert-Missing $p.ModZip "Companion Mod zip"
 }
 
-# --- Mods directory override (ticket #64) ---------------------------------------------------
+# --- Mods directory override ----------------------------------------------------------------
 # The override lives in gameSettings.xml (<modsDirectoryOverride active="..." directory="..."/>), not in
 # game.xml. game.xml only holds the display settings the Render Resolution step edits.
 
@@ -544,7 +544,7 @@ Test-Case "Active override plus a Render Resolution: the mod goes to the overrid
     Assert-Exists $p.GameXmlBackup "game.xml.fs25vr-backup"
 }
 # ---------------------------------------------------------------------------------------------
-# Existing dxgi.dll and upgrade helpers (ticket #65)
+# Existing dxgi.dll and upgrade helpers
 # ---------------------------------------------------------------------------------------------
 
 # Runs an Installer exe silently like Install-Fs25Vr, but for any Setup exe, and optionally without
@@ -589,7 +589,7 @@ $foreignWarning = "not part of FS25 VR"
 function Get-ForeignDxgiBytes { [IO.File]::ReadAllBytes((Join-Path $env:SystemRoot "System32\dxgi.dll")) }
 
 # ---------------------------------------------------------------------------------------------
-# Cases: existing dxgi.dll and upgrade (ticket #65)
+# Cases: existing dxgi.dll and upgrade
 # ---------------------------------------------------------------------------------------------
 
 Test-Case "A foreign dxgi.dll is warned about, backed up on install and restored on uninstall" {
@@ -730,7 +730,7 @@ Test-Case "A Microsoft Store folder under WindowsApps is refused as unsupported"
     Assert-Missing $p.Injector "Injector"
 }
 
-# --- Render Resolution (#66) ---------------------------------------------------------------------
+# --- Render Resolution ---------------------------------------------------------------------------
 
 Test-Case "Render Resolution WxH writes width, height and windowed, changes nothing else, backs up game.xml once and records the values" {
     param($world)
@@ -914,7 +914,7 @@ Test-Case "Applying again keeps the first backup and the first originals; applyi
     Assert-SameBytes $p.GameXmlBackup $firstOriginal "game.xml.fs25vr-backup after the third apply"
 }
 
-# --- Uninstall restores the Render Resolution (#69) ---------------------------------------------
+# --- Uninstall restores the Render Resolution ---------------------------------------------------
 
 Test-Case "Uninstall restores the original width, height and fullscreen mode when game.xml still holds what the Installer wrote" {
     param($world)

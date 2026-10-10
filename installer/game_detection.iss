@@ -1,4 +1,4 @@
-// Game installation detection for the Installer (spec #61, ticket #67). Textually #included into the
+// Game installation detection for the Installer. Textually #included into the
 // [Code] section of fs25_vr.iss, after IsGameFolder (which it uses). Pascal Script, not ISPP.
 // 
 // Detection is not automated in CI: it reads the real machine. Keep it small and check it by hand
