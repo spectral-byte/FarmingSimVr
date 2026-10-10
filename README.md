@@ -108,7 +108,6 @@ FS25 VR is built as a hybrid two-tier architecture:
   - Meta Quest 2 / 3 / Pro (via Quest Link, AirLink, or Virtual Desktop)
   - Valve Index, HTC Vive, Bigscreen Beyond (via SteamVR)
   - Pimax headsets (via PimaxXR / OpenXR runtime)
-- **Software Prerequisites**: Microsoft Visual C++ 2015â€“2022 Redistributable (x64)
 
 ### Recommended: Install with the Installer
 
