@@ -110,6 +110,8 @@ Close the game first.
 - Silent install: FS25_VR_v${version}_Setup.exe /VERYSILENT /DIR="<game folder>"
   Add /FS25VR_RESOLUTION=WxH (for example /FS25VR_RESOLUTION=4000x2500) to set the
   Render Resolution without the wizard page. An invalid value fails the install.
+  If game.xml can't be edited (for example it is read-only), FS25 VR stays
+  installed and Setup exits with code 20.
   A silent run over an existing install upgrades it and never asks anything.
 - A dxgi.dll that is not part of FS25 VR (for example ReShade) is moved to
   dxgi.dll.fs25vr-backup before FS25 VR is installed.
@@ -188,7 +190,8 @@ UNINSTALLATION
   and exits with its exit code (non-zero if FS25 VR is not installed or the game
   is running).
   Uninstalling removes dxgi.dll, FS25_VRCompanion.zip and fs25_vr.log, and keeps
-  your VR settings in modSettings. It puts back the dxgi.dll it moved aside, and
+  your VR settings in modSettings. It puts back the dxgi.dll it moved aside (or
+  keeps a dxgi.dll you installed over FS25 VR's since), and
   restores your original Render Resolution unless you changed the width, height
   or fullscreen mode in the game since. game.xml.fs25vr-backup stays.
 - Installed manually:

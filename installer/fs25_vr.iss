@@ -10,6 +10,8 @@
 ;                                Whole numbers from 640 to 8192, e.g. /FS25VR_RESOLUTION=4000x2500.
 ;                                An invalid value fails the install before anything is placed. With no
 ;                                game.xml the install succeeds and the resolution is skipped (logged).
+;                                If game.xml can't be edited once the files are placed (read-only, locked),
+;                                the install is kept and Setup exits with code 20 (logged).
 ;                                In a wizard run it pre-ticks and pre-fills the Render Resolution page.
 ;   /FS25VR_UNINSTALL            runs the existing uninstaller unattended instead of installing (no /DIR needed),
 ;                                waits for it and exits with its exit code. With nothing installed it logs
@@ -100,7 +102,9 @@ UninstallFilesDir={commonappdata}\FS25 VR
 ; without a UAC prompt from a non-elevated shell; the wizard never offers it.
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=commandline
-; The mods folder lives under the user's Documents (a user area) even though we run elevated.
+; The mods folder and game.xml live under the player's Documents (a user area) even though we run
+; elevated. GetDocumentsDir asks the player's own process for that folder instead of using {userdocs},
+; which is the administrator's when a standard user elevates with an administrator's credentials.
 UsedUserAreasWarning=no
 
 [Messages]
@@ -158,13 +162,69 @@ begin
   InitializeRenderResolutionPage;
 end;
 
-{ The user's Documents folder (honors OneDrive redirection through the known folder), unless the
-  hidden test-only /FS25VR_DOCUMENTS switch replaces it. }
+{ Asks a process of the user who started Setup (normally not elevated) for their Documents folder. That
+  process writes the answer into a folder in Setup's temporary folder, which belongs to the account Setup
+  runs as, so the folder is opened to Authenticated Users first; it goes away with the temporary folder.
+  '' (logged) when that fails. }
+function QueryOriginalUserDocuments: String;
+var
+  ProbeDir, ProbeFile, PsPath: String;
+  Lines: TArrayOfString;
+  Code: Integer;
+begin
+  Result := '';
+  ProbeDir := ExpandConstant('{tmp}\documents-probe');
+  ProbeFile := ProbeDir + '\documents.txt';
+  if not ForceDirectories(ProbeDir) then
+  begin
+    Log('Could not create ' + ProbeDir + ' to ask for the Documents folder.');
+    Exit;
+  end;
+  if not Exec(ExpandConstant('{sys}\icacls.exe'), AddQuotes(ProbeDir) + ' /grant *S-1-5-11:(OI)(CI)M', '',
+              SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
+    Log('Could not open ' + ProbeDir + ' to the original user (icacls exit code ' + IntToStr(Code) + ').');
+  { A single-quoted PowerShell string: a quote in the path is doubled. }
+  PsPath := ProbeFile;
+  StringChangeEx(PsPath, '''', '''''', True);
+  try
+    if not ExecAsOriginalUser(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+         '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "[IO.File]::WriteAllText(''' + PsPath +
+         ''', [Environment]::GetFolderPath(''MyDocuments''))"', '', SW_HIDE, ewWaitUntilTerminated, Code) then
+      Log('Could not ask the original user for their Documents folder: ' + SysErrorMessage(Code))
+    else if Code <> 0 then
+      Log('Asking the original user for their Documents folder failed with exit code ' + IntToStr(Code) + '.');
+  except
+    Log('Could not ask the original user for their Documents folder: ' + GetExceptionMessage);
+  end;
+  if LoadStringsFromFile(ProbeFile, Lines) and (GetArrayLength(Lines) > 0) then
+    Result := Trim(Lines[0]);
+  if (Result <> '') and not DirExists(Result) then
+  begin
+    Log('The original user''s Documents folder ' + Result + ' does not exist.');
+    Result := '';
+  end;
+end;
+
+var
+  DocumentsDir: String;   { GetDocumentsDir's answer, worked out once }
+
+{ The Documents folder of the player who started Setup (honors OneDrive redirection through the known
+  folder), unless the hidden test-only /FS25VR_DOCUMENTS switch replaces it. In administrative install mode
+  Setup may run as another account than the player's (a standard user who elevates with an administrator's
+  credentials), and the userdocs constant is then the administrator's Documents; so the player's own
+  process is asked, with userdocs as the fallback. Install only (the uninstaller works from recorded paths). }
 function GetDocumentsDir: String;
 begin
-  Result := ExpandConstant('{param:FS25VR_DOCUMENTS|}');
-  if Result = '' then
-    Result := ExpandConstant('{userdocs}');
+  if DocumentsDir = '' then
+  begin
+    DocumentsDir := ExpandConstant('{param:FS25VR_DOCUMENTS|}');
+    if (DocumentsDir = '') and IsAdminInstallMode then
+      DocumentsDir := QueryOriginalUserDocuments;
+    if DocumentsDir = '' then
+      DocumentsDir := ExpandConstant('{userdocs}');
+    Log('Documents folder: ' + DocumentsDir);
+  end;
+  Result := DocumentsDir;
 end;
 
 function GetMyGamesDir: String;
@@ -273,7 +333,11 @@ end;
 
 const
   BackupSuffix = '.fs25vr-backup';
+  { A dxgi.dll the player put in place of ours after installing, kept from the uninstall's file removal. }
+  KeepSuffix = '.fs25vr-keep';
   OurProductName = 'FS25 VR';  { ProductName in the Injector's version resource: src\dxgi.rc.in }
+  LegacyLogFileName = 'fs25_vr.log';
+  LegacyLogFileNameUtf16 = 'f'#0's'#0'2'#0'5'#0'_'#0'v'#0'r'#0'.'#0'l'#0'o'#0'g'#0;
   ForeignDxgiMessage =
     'The game folder already contains a dxgi.dll that is not part of FS25 VR (for example ReShade).' + #13#10#13#10 +
     'It is moved to dxgi.dll.fs25vr-backup before FS25 VR is installed, and restored when FS25 VR is uninstalled.';
@@ -311,10 +375,31 @@ begin
   Result := Trim(Result);
 end;
 
+{ An Injector from before the version resource (the v1.0.0 zip bundle and builds up to this Installer)
+  has no ProductName. It carries the name of the log file it writes, fs25_vr.log, as text (ASCII in v1.0.0,
+  UTF-16 in later builds), which no other dxgi.dll does. }
+function IsLegacyInjector(FileName: String): Boolean;
+var
+  Raw: AnsiString;
+begin
+  Result := LoadStringFromFile(FileName, Raw) and
+            ((Pos(LegacyLogFileName, Raw) > 0) or (Pos(LegacyLogFileNameUtf16, Raw) > 0));
+end;
+
 function IsOurInjector(FileName: String): Boolean;
 begin
   Result := GetProductName(FileName) = OurProductName;
+  if not Result then
+  begin
+    Result := IsLegacyInjector(FileName);
+    if Result then
+      Log(FileName + ' is an FS25 VR Injector from before the Installer.');
+  end;
 end;
+
+var
+  MovedDxgiGameDir: String;  { the game folder whose foreign dxgi.dll PrepareExistingDxgi moved aside }
+  FilesPlaced: Boolean;      { set at ssPostInstall: from then on the uninstaller puts that dxgi.dll back }
 
 { Called from PrepareToInstall for the chosen game folder. Moves a foreign dxgi.dll aside (warning
   the player) and returns '' on success; returns the reason when it can't be done safely. }
@@ -335,17 +420,50 @@ begin
   Log(ForeignDxgiMessage);
   if not WizardSilent then
     MsgBox(ForeignDxgiMessage, mbInformation, MB_OK);
-  if not RenameFile(Dxgi, Backup) then
+  if RenameFile(Dxgi, Backup) then
+    MovedDxgiGameDir := GameDir
+  else
     Result := 'Could not move ' + Dxgi + ' to ' + Backup + '. Close any program using it and try again.';
 end;
 
-{ Uninstall: put the player's original dxgi.dll back once ours is gone. }
+{ Uninstall, before Inno removes the files: Inno deletes x64\dxgi.dll by name, whatever it is by then. If
+  the player has replaced our Injector since (for example by installing ReShade), move theirs out of the
+  way so it survives; RestoreForeignDxgi puts it back. }
+procedure SetAsideReplacedDxgi(GameDir: String);
+var
+  Dxgi, Keep: String;
+begin
+  Dxgi := AddBackslash(GameDir) + 'x64\dxgi.dll';
+  Keep := Dxgi + KeepSuffix;
+  if not FileExists(Dxgi) or IsOurInjector(Dxgi) then Exit;
+  if FileExists(Keep) then
+    Log(Dxgi + ' is no longer ours, but ' + Keep + ' already exists; the uninstall removes it.')
+  else if RenameFile(Dxgi, Keep) then
+    Log(Dxgi + ' is no longer ours (replaced since install); keeping it.')
+  else
+    Log('Could not move ' + Dxgi + ' to ' + Keep + '; the uninstall removes it.');
+end;
+
+{ Uninstall, and a rolled-back install: put the player's dxgi.dll back once ours is gone. One the player
+  put there after installing (set aside by SetAsideReplacedDxgi) wins over the older one moved aside at
+  install, which then stays under its backup name. }
 procedure RestoreForeignDxgi(GameDir: String);
 var
-  Dxgi, Backup: String;
+  Dxgi, Backup, Keep: String;
 begin
   Dxgi := AddBackslash(GameDir) + 'x64\dxgi.dll';
   Backup := Dxgi + BackupSuffix;
+  Keep := Dxgi + KeepSuffix;
+  if FileExists(Keep) then
+  begin
+    if FileExists(Dxgi) then
+      Log('dxgi.dll is still in place; leaving ' + Keep + ' where it is.')
+    else if not RenameFile(Keep, Dxgi) then
+      Log('Could not restore ' + Keep + ' as dxgi.dll.')
+    else if FileExists(Backup) then
+      Log('Kept the dxgi.dll that replaced FS25 VR; the one moved aside at install stays as ' + Backup + '.');
+    Exit;
+  end;
   if not FileExists(Backup) then Exit;
   if FileExists(Dxgi) then
   begin
@@ -361,9 +479,12 @@ procedure RestoreRenderResolution; forward;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   { Before Inno removes the files, so the record is gone and its folder (common appdata, FS25 VR)
-    is removed along with them. }
+    is removed along with them, and so a dxgi.dll that is no longer ours is out of the way of the removal. }
   if CurUninstallStep = usUninstall then
+  begin
     RestoreRenderResolution;
+    SetAsideReplacedDxgi(ExpandConstant('{app}'));
+  end;
   if CurUninstallStep = usPostUninstall then
     RestoreForeignDxgi(ExpandConstant('{app}'));
 end;
@@ -437,9 +558,9 @@ function BytesToText(const Raw: AnsiString): String;
 var
   I: Integer;
 begin
-  Result := '';
+  SetLength(Result, Length(Raw));
   for I := 1 to Length(Raw) do
-    Result := Result + Chr(Ord(Raw[I]));
+    Result[I] := Chr(Ord(Raw[I]));
 end;
 
 { Finds the text of <Tag>...</Tag> inside the (first) <display> element. }
@@ -472,17 +593,30 @@ begin
   if Result then Value := Trim(Copy(Text, S, L));
 end;
 
-{ Replaces the text of <Tag> inside <display> with NewValue, leaving every other byte as it is. }
-function SetDisplayElement(var Raw: AnsiString; const Tag, NewValue: String): Boolean;
+{ Replaces the text of <Tag> inside <display> with NewValue in both Raw and its BytesToText copy Text,
+  leaving every other byte as it is. Text is edited alongside so it need not be rebuilt for the next tag. }
+function SetDisplayElement(var Raw: AnsiString; var Text: String; const Tag, NewValue: String): Boolean;
 var
   S, L: Integer;
 begin
-  Result := LocateDisplayElement(BytesToText(Raw), Tag, S, L);
+  Result := LocateDisplayElement(Text, Tag, S, L);
   if Result then
   begin
     Delete(Raw, S, L);
     Insert(AnsiString(NewValue), Raw, S);
+    Delete(Text, S, L);
+    Insert(NewValue, Text, S);
   end;
+end;
+
+{ Sets the display width, height and fullscreen mode in Raw. False (Raw partly edited) if one is missing. }
+function SetDisplaySettings(var Raw: AnsiString; const W, H, Mode: String): Boolean;
+var
+  Text: String;
+begin
+  Text := BytesToText(Raw);
+  Result := SetDisplayElement(Raw, Text, 'width', W) and SetDisplayElement(Raw, Text, 'height', H) and
+            SetDisplayElement(Raw, Text, 'fullscreenMode', Mode);
 end;
 
 function ReadDisplaySettingsFrom(const Raw: AnsiString; var W, H, Mode: String): Boolean;
@@ -570,7 +704,7 @@ var
   Raw: AnsiString;
   Path, CurW, CurH, CurMode: String;
   R, Old: TRenderResolutionRecord;
-  CarryOver: Boolean;
+  HadOld, CarryOver: Boolean;
 begin
   Result := '';
   Path := GetGameXmlPath;
@@ -591,7 +725,8 @@ begin
   R.WrittenHeight := IntToStr(H);
   R.WrittenFullscreenMode := RenderWindowedMode;
   { If game.xml still holds what an earlier run wrote, the originals stay the player's real settings. }
-  CarryOver := LoadRenderResolutionRecord(Old) and SameText(Old.GameXml, Path) and (Old.WrittenWidth = CurW) and
+  HadOld := LoadRenderResolutionRecord(Old);
+  CarryOver := HadOld and SameText(Old.GameXml, Path) and (Old.WrittenWidth = CurW) and
                (Old.WrittenHeight = CurH) and (Old.WrittenFullscreenMode = CurMode);
   if CarryOver then
   begin
@@ -606,8 +741,7 @@ begin
     R.OriginalFullscreenMode := CurMode;
   end;
 
-  if not (SetDisplayElement(Raw, 'width', R.WrittenWidth) and SetDisplayElement(Raw, 'height', R.WrittenHeight) and
-          SetDisplayElement(Raw, 'fullscreenMode', R.WrittenFullscreenMode)) then
+  if not SetDisplaySettings(Raw, R.WrittenWidth, R.WrittenHeight, R.WrittenFullscreenMode) then
   begin
     Result := RenderUnreadableMessage;
     Exit;
@@ -628,7 +762,15 @@ begin
     Exit;
   end;
   if not SaveStringToFile(Path, Raw, False) then
+  begin
     Result := 'Could not write ' + Path;
+    { game.xml is as it was, so the record goes back to describing it: the earlier record (whose values
+      the uninstall may still restore), or none. }
+    if HadOld then
+      SaveRenderResolutionRecord(Old)
+    else
+      DeleteFile(GetRenderResolutionRecordPath);
+  end;
 end;
 
 { Uninstall: undo the Render Resolution change, but only while it is still ours. Without
@@ -655,8 +797,7 @@ begin
   else if (CurW <> R.WrittenWidth) or (CurH <> R.WrittenHeight) or (CurMode <> R.WrittenFullscreenMode) then
     Log('Render Resolution: ' + R.GameXml + ' was changed since install (' + CurW + 'x' + CurH + ' ' + CurMode +
         '); leaving it alone.')
-  else if not (SetDisplayElement(Raw, 'width', R.OriginalWidth) and SetDisplayElement(Raw, 'height', R.OriginalHeight) and
-               SetDisplayElement(Raw, 'fullscreenMode', R.OriginalFullscreenMode)) then
+  else if not SetDisplaySettings(Raw, R.OriginalWidth, R.OriginalHeight, R.OriginalFullscreenMode) then
     Log('Render Resolution: could not edit ' + R.GameXml + '; leaving it alone.')
   else if not SaveStringToFile(R.GameXml, Raw, False) then
     Log('Render Resolution: could not write ' + R.GameXml + '.')
@@ -824,22 +965,55 @@ begin
   RenderHeight := H;
 end;
 
-{ After the files are placed (PrepareToInstall has already checked everything that can be checked), so
-  a failure while placing files, such as a full disk, never leaves game.xml edited for an install that
-  was rolled back. }
+const
+  RenderResolutionFailedExitCode = 20;
+
+var
+  RenderFailed: Boolean;
+
+{ The Render Resolution is applied after the files are placed (PrepareToInstall has already checked
+  everything that can be checked), so a failure while placing files, such as a full disk, never leaves
+  game.xml edited for an install that was rolled back. A failure here comes too late to fail the install
+  (Abort does not stop Setup at ssPostInstall): the install is kept, the player is told, and Setup ends
+  with RenderResolutionFailedExitCode (GetCustomSetupExitCode) so scripts notice. }
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Problem: String;
 begin
-  if (CurStep = ssPostInstall) and RenderApply then
+  if CurStep = ssPostInstall then
   begin
-    Problem := ApplyRenderResolution(RenderWidth, RenderHeight);
-    if Problem <> '' then
+    FilesPlaced := True;
+    if RenderApply then
     begin
-      Log(Problem);
-      if not WizardSilent then MsgBox(Problem, mbError, MB_OK);
-      Abort;
+      Problem := ApplyRenderResolution(RenderWidth, RenderHeight);
+      if Problem <> '' then
+      begin
+        RenderFailed := True;
+        Log('The Render Resolution was not set: ' + Problem);
+        if not WizardSilent then
+          MsgBox('FS25 VR is installed, but the Render Resolution was not set:' + #13#10#13#10 + Problem, mbError, MB_OK);
+      end;
     end;
+  end;
+end;
+
+function GetCustomSetupExitCode: Integer;
+begin
+  if RenderFailed then
+    Result := RenderResolutionFailedExitCode
+  else
+    Result := 0;
+end;
+
+{ A foreign dxgi.dll was moved aside but the files were never placed (the install was cancelled, or
+  failed while placing files and was rolled back): no uninstaller is registered to put it back, so put
+  it back now. }
+procedure DeinitializeSetup;
+begin
+  if (MovedDxgiGameDir <> '') and not FilesPlaced then
+  begin
+    Log('The install did not finish; putting back the dxgi.dll that was moved aside.');
+    RestoreForeignDxgi(MovedDxgiGameDir);
   end;
 end;
 
@@ -856,39 +1030,27 @@ begin
   if Result then Result := RenderPageNextOk(CurPageID);
 end;
 
-{ Also covers silent installs, where there is no directory page. A silent Setup must not wait on a
-  message box, so it logs the reason and aborts; an interactive one shows the message.
-  Everything that can refuse the install runs first (game folder, game running, Render Resolution
-  input and game.xml); only then is the player's own dxgi.dll moved aside. Nothing is registered to
-  put that file back if the install fails, so it must not be moved before the last check has passed. }
+{ Also covers silent installs, where there is no directory page. Everything that can refuse the install
+  runs first (game folder, game running, Render Resolution input and game.xml); only then is the player's
+  own dxgi.dll moved aside, so a refusal never leaves it moved.
+  A refusal is returned, so a wizard run stops on the Preparing to Install page with the reason (Back
+  and Cancel stay available). A silent run must not wait on a message box, but for a returned reason
+  Inno shows one unless /SUPPRESSMSGBOXES is given; so a silent run logs the reason and raises Abort
+  instead, which ends Setup the same way Inno's own handling of a returned reason does after its box. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := GameFolderProblem(WizardDirValue);
-  if (Result <> '') and WizardSilent then
+  if (Result = '') and not EnsureGameNotRunning(WizardSilent) then
+    Result := CloseGameMessage;
+  if Result = '' then
+    Result := PrepareRenderResolution;
+  if Result = '' then
+    Result := PrepareExistingDxgi(WizardDirValue);
+  if Result <> '' then
   begin
     Log(Result);
-    Abort;
-  end;
-  if (Result = '') and not EnsureGameNotRunning(WizardSilent) then
-    Abort;
-
-  if Result = '' then
-  begin
-    Result := PrepareRenderResolution;
-    if (Result <> '') and WizardSilent then
-    begin
-      Log(Result);
+    if WizardSilent then
       Abort;
-    end;
-  end;
-  if Result = '' then
-  begin
-    Result := PrepareExistingDxgi(WizardDirValue);
-    if (Result <> '') and WizardSilent then
-    begin
-      Log(Result);
-      Abort;
-    end;
   end;
 end;
 
@@ -1033,7 +1195,10 @@ begin
   if HasCommandLineSwitch(UninstallSwitch) then
   begin
     ExitCode := UninstallThroughSwitch;
-    ExitProcess(ExitCode);   { Setup has no other way to end with the uninstaller's exit code }
+    { Setup has no other way to end with the uninstaller's exit code. ExitProcess skips Setup's own
+      cleanup, so remove its temporary folder first. }
+    DelTree(ExpandConstant('{tmp}'), True, True, True);
+    ExitProcess(ExitCode);
     Result := False;
     Exit;
   end;
@@ -1042,8 +1207,8 @@ begin
   case AskUpgradeOrUninstall of
     IDNO:
       begin
-        ExitCode := RunExistingUninstaller(Exe, '', SW_SHOWNORMAL);
-        ExitProcess(ExitCode);
+        { The player sees the uninstaller's own windows; Setup just ends normally afterwards. }
+        RunExistingUninstaller(Exe, '', SW_SHOWNORMAL);
         Result := False;
       end;
     IDCANCEL:

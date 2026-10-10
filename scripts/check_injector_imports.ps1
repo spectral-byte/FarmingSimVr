@@ -1,5 +1,5 @@
 # Verifies that the built Injector does not import the Microsoft C/C++ runtime DLLs
-# (VCRUNTIME140*.dll, MSVCP140*.dll, api-ms-win-crt-*.dll), i.e. that it is built
+# (VCRUNTIME140*.dll, MSVCP140*.dll, CONCRT140.dll, api-ms-win-crt-*.dll), i.e. that it is built
 # against the static runtime and needs no VC++ redistributable on the player's machine.
 # Reads the PE import tables (regular and delay-load) directly, so it needs no
 # Visual Studio tools and checks the built artifact rather than a CMake flag.
@@ -78,7 +78,8 @@ Write-Host "$Dll imports:"
 foreach ($name in $imports) { Write-Host "  $name" }
 
 $forbidden = @($imports | Where-Object {
-    $_ -match '^(VCRUNTIME140(_1)?|MSVCP140(_\d+)?|CONCRT140|api-ms-win-crt-.+)\.dll$'
+    # Every redistributable DLL: VCRUNTIME140_1/_THREADS, MSVCP140_1/_2/_atomic_wait/_codecvt_ids, ...
+    $_ -match '^(VCRUNTIME140(_\w+)?|MSVCP140(_\w+)?|CONCRT140|api-ms-win-crt-.+)\.dll$'
 })
 if ($forbidden.Count -gt 0) {
     Write-Error ("$Dll imports the C/C++ runtime DLLs: " + ($forbidden -join ", ") +

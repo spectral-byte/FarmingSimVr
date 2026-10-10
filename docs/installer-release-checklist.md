@@ -71,6 +71,20 @@ Use a machine or VM where you can install the game from each store, and uninstal
 - [ ] With FS25 VR not installed, the dialog does not appear.
 - [ ] `FS25_VR_v<version>_Setup.exe /VERYSILENT` over an existing install upgrades without any dialog.
 
+## 10. Game running, interactive
+
+- [ ] Start the game, then run the Installer and go through the wizard. At **Install** a box asks you to close the game. Choose **Cancel**: the wizard stops on the Preparing to Install page showing "Close Farming Simulator 25 to continue." with **Back** and **Cancel** available, and nothing was installed.
+- [ ] Close the game, click **Back** and **Install** again: the install goes through.
+
+## 11. Standard user elevating with another account
+
+`scripts\test_installer.ps1` replaces the Documents folder with a fake one, so it never asks the player's own process where Documents is.
+
+- [ ] On a Windows account that is not an administrator, launch the game once so `Documents\My Games\FarmingSimulator2025\game.xml` exists, then run the Installer with `/LOG` and enter an administrator's credentials at the UAC prompt.
+- [ ] The log has `Documents folder: <the standard user's Documents>`, not the administrator's.
+- [ ] Finish the install with the Render Resolution ticked: `FS25_VRCompanion.zip` is in the standard user's `mods` folder and their `game.xml` has the new width and height. Nothing was added to the administrator's `Documents\My Games`.
+- [ ] Uninstall: the zip is gone from the standard user's `mods` folder and their `game.xml` has its original values again.
+
 ## After the checklist
 
 Record the Installer version and the date you ran it in the release notes draft, together with any item you could not run (for example "no Epic machine available").

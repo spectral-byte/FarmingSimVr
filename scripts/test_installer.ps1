@@ -619,6 +619,81 @@ Test-Case "Our own older dxgi.dll is overwritten with no warning and no backup" 
     Assert-True (-not ((Get-LastSetupLog $world) -match $foreignWarning)) "Setup warned about our own dxgi.dll."
 }
 
+# An Injector from before the version resource (the v1.0.0 zip bundle carries "fs25_vr.log" as ASCII,
+# later builds as UTF-16) is ours too: no warning, no backup, so uninstall can't put it back.
+foreach ($encoding in @("ASCII", "UTF-16")) {
+    Test-Case "An FS25 VR Injector from before the Installer ($encoding log name, no version resource) is overwritten with no warning and no backup" {
+        param($world, $encoding)
+        New-FakeGame $world
+        New-FakeDocuments $world
+        $p = Get-GamePaths $world
+        $text = if ($encoding -eq "ASCII") { [Text.Encoding]::ASCII } else { [Text.Encoding]::Unicode }
+        [IO.File]::WriteAllBytes($p.Injector, [byte[]]((1..200) + $text.GetBytes("fs25_vr.log") + (1..200)))
+
+        Assert-InstallSucceeds $world
+        Assert-True (-not ((Get-LastSetupLog $world) -match $foreignWarning)) "Setup warned about an FS25 VR Injector from before the Installer."
+        Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
+        Assert-Missing "$($p.Injector).fs25vr-backup" "A dxgi.dll.fs25vr-backup of an FS25 VR Injector"
+
+        Uninstall-Fs25Vr
+        Assert-Missing $p.Injector "Injector after uninstall (the old FS25 VR Injector must not come back)"
+    } $encoding
+}
+
+Test-Case "A dxgi.dll that replaced ours after install survives the uninstall" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    Assert-InstallSucceeds $world
+    $replacement = Get-ForeignDxgiBytes
+    [IO.File]::WriteAllBytes($p.Injector, $replacement)      # e.g. ReShade installed over FS25 VR
+
+    Uninstall-Fs25Vr
+
+    Assert-SameBytes $p.Injector $replacement "The dxgi.dll that replaced ours"
+    Assert-Missing "$($p.Injector).fs25vr-keep" "dxgi.dll.fs25vr-keep after uninstall"
+    Assert-Missing "$($p.Injector).fs25vr-backup" "dxgi.dll.fs25vr-backup after uninstall"
+}
+
+Test-Case "A dxgi.dll that replaced ours wins over the one moved aside at install, which stays as the backup" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    $backup = "$($p.Injector).fs25vr-backup"
+    $original = [byte[]](1..200)
+    [IO.File]::WriteAllBytes($p.Injector, $original)
+    Assert-InstallSucceeds $world
+    Assert-SameBytes $backup $original "dxgi.dll.fs25vr-backup after install"
+    $replacement = Get-ForeignDxgiBytes
+    [IO.File]::WriteAllBytes($p.Injector, $replacement)
+
+    Uninstall-Fs25Vr
+
+    Assert-SameBytes $p.Injector $replacement "The dxgi.dll that replaced ours"
+    Assert-SameBytes $backup $original "The dxgi.dll moved aside at install, still under its backup name"
+    Assert-Missing "$($p.Injector).fs25vr-keep" "dxgi.dll.fs25vr-keep after uninstall"
+}
+
+Test-Case "A failure while placing files puts a foreign dxgi.dll that was moved aside back" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    $foreign = Get-ForeignDxgiBytes
+    [IO.File]::WriteAllBytes($p.Injector, $foreign)
+    # A file where the mods folder must go: the Companion Mod cannot be placed, so Setup rolls back after
+    # the foreign dxgi.dll was moved aside.
+    Set-Content -Path $p.DefaultMods -Value "in the way" -Encoding ascii
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -ne 0) "Setup succeeded although the Companion Mod could not be placed."
+    Assert-SameBytes $p.Injector $foreign "The foreign dxgi.dll after a rolled-back install"
+    Assert-Missing "$($p.Injector).fs25vr-backup" "dxgi.dll.fs25vr-backup after a rolled-back install"
+    Assert-True ($null -eq (Get-UninstallEntry)) "A rolled-back install was registered in Add/Remove Programs."
+}
+
 Test-Case "An existing dxgi.dll.fs25vr-backup survives an upgrade untouched and is still restored on uninstall" {
     param($world)
     New-FakeGame $world
@@ -868,6 +943,46 @@ Test-Case "A failure while placing files leaves game.xml unedited and no Render 
     Assert-True ($null -eq (Get-RenderResolutionRecord)) "A Render Resolution record was written for a failed install."
 }
 
+# Exit code Setup ends with when the files are placed but game.xml could not be edited (fs25_vr.iss).
+$renderResolutionFailedExitCode = 20
+
+Test-Case "A game.xml that can't be written after the files are placed keeps the install, leaves game.xml and the record alone, and exits with 20" {
+    param($world)
+    New-FakeGame $world
+    Set-RealGameXml $world
+    $p = Get-GamePaths $world
+    $original = [IO.File]::ReadAllBytes($p.GameXml)
+    Set-ItemProperty -Path $p.GameXml -Name IsReadOnly -Value $true     # readable, so validation passes
+
+    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")
+    Assert-True ($exit -eq $renderResolutionFailedExitCode) "Setup exited with $exit, expected $renderResolutionFailedExitCode."
+    Assert-True ((Get-LastSetupLog $world) -match "The Render Resolution was not set") "Setup did not log that the Render Resolution was not set."
+    Assert-SameBytes $p.GameXml $original "game.xml"
+    Assert-True ($null -eq (Get-RenderResolutionRecord)) "A Render Resolution record names values game.xml does not hold."
+    Assert-SameFile $p.Injector $stagedInjector "Injector (the install is kept)"
+    Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip (the install is kept)"
+    Assert-True ($null -ne (Get-UninstallEntry)) "The kept install is not registered in Add/Remove Programs."
+}
+
+Test-Case "A game.xml that can't be written on a second apply keeps the first record, so uninstall still restores the originals" {
+    param($world)
+    New-FakeGame $world
+    Set-RealGameXml $world "2560" "1440" "fullscreen"
+    $p = Get-GamePaths $world
+    $original = [IO.File]::ReadAllBytes($p.GameXml)
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=4000x2500") "First Setup"
+    Set-ItemProperty -Path $p.GameXml -Name IsReadOnly -Value $true
+
+    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=3000x2000")
+    Assert-True ($exit -eq $renderResolutionFailedExitCode) "Second Setup exited with $exit, expected $renderResolutionFailedExitCode."
+    $r = Get-RenderResolutionRecord
+    Assert-True ($null -ne $r -and $r.WrittenWidth -eq "4000" -and $r.WrittenHeight -eq "2500") "The record no longer describes the first apply."
+
+    Set-ItemProperty -Path $p.GameXml -Name IsReadOnly -Value $false
+    Uninstall-Fs25Vr
+    Assert-SameBytes $p.GameXml $original "game.xml after uninstall (the originals restored)"
+}
+
 Test-Case "Applying again keeps the first backup and the first originals; applying after an in-game change records the new originals" {
     param($world)
     # A Documents path with non-ASCII characters checks that the record survives the round trip
@@ -1005,9 +1120,19 @@ function Invoke-SetupWithArgs($world, [string[]]$setupArgs) {
     if (-not $isAdmin) { $all += "/CURRENTUSER" }
     Wait-GuardedProcess (Start-Process -FilePath $SetupExe -ArgumentList $all -PassThru) "Setup"
 }
-# Setup /FS25VR_UNINSTALL, run the way CI would. It must not need /DIR.
+# Setup /FS25VR_UNINSTALL, run the way CI would. It must not need /DIR. Setup ends itself early for this
+# switch, so also check that it left none of its temporary is-*.tmp folders behind. (The uninstaller's own
+# is-*-uninstall.tmp folder is removed by its temporary copy a moment after Setup returns; not checked.)
+function Get-SetupTempFolders {
+    @(Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter "is-*.tmp" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike "*-uninstall.tmp" } | ForEach-Object FullName)
+}
 function Invoke-SetupUninstall($world, [string[]]$extraArgs = @()) {
-    Invoke-SetupWithArgs $world (@("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/FS25VR_UNINSTALL") + $extraArgs)
+    $before = Get-SetupTempFolders
+    $exit = Invoke-SetupWithArgs $world (@("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/FS25VR_UNINSTALL") + $extraArgs)
+    $left = @(Get-SetupTempFolders | Where-Object { $before -notcontains $_ })
+    Assert-True ($left.Count -eq 0) "Setup /FS25VR_UNINSTALL left its temporary folder behind: $($left -join ', ')"
+    $exit
 }
 
 Test-Case "Setup /FS25VR_UNINSTALL uninstalls: removes the Injector, the mod zip and fs25_vr.log, keeps modSettings and unregisters" {
