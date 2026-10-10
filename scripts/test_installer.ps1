@@ -172,7 +172,7 @@ function Get-GamePaths($world) {
 function Get-UninstallEntry { Get-ItemProperty -Path $uninstallKeyPath -ErrorAction SilentlyContinue }
 
 # Waits for a process, but never forever: a stray dialog in a silent run must fail the case, not hang CI.
-function Wait-Process-Guarded($process, [string]$what, [int]$timeoutSeconds = 120) {
+function Wait-GuardedProcess($process, [string]$what, [int]$timeoutSeconds = 120) {
     if (-not $process.WaitForExit($timeoutSeconds * 1000)) {
         Get-Process | Where-Object { $_.Name -like "FS25_VR_v*_Setup*" -or $_.Name -like "unins*" } | Stop-Process -Force -ErrorAction SilentlyContinue
         throw "$what did not finish within $timeoutSeconds seconds (a dialog is probably waiting for input)."
@@ -188,7 +188,7 @@ function Install-Fs25Vr($world, [string[]]$extraArgs = @()) {
               "/FS25VR_DOCUMENTS=`"$($world.Documents)`"")
     if (-not $isAdmin) { $setupArgs += "/CURRENTUSER" }
     $setupArgs += $extraArgs
-    Wait-Process-Guarded (Start-Process -FilePath $SetupExe -ArgumentList $setupArgs -PassThru) "Setup"
+    Wait-GuardedProcess (Start-Process -FilePath $SetupExe -ArgumentList $setupArgs -PassThru) "Setup"
 }
 
 # Runs the registered uninstaller silently and waits until it is really gone: Inno's uninstaller
@@ -197,7 +197,7 @@ function Uninstall-Fs25Vr {
     $entry = Get-UninstallEntry
     if (-not $entry) { throw "FS25 VR is not registered in Add/Remove Programs; nothing to uninstall." }
     $uninstaller = $entry.UninstallString.Trim('"')
-    Wait-Process-Guarded (Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru) "Uninstaller" | Out-Null
+    Wait-GuardedProcess (Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru) "Uninstaller" | Out-Null
     $deadline = (Get-Date).AddSeconds(60)
     while ((Get-UninstallEntry) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
     if (Get-UninstallEntry) { throw "Uninstall did not finish within 60 seconds." }
@@ -214,7 +214,7 @@ function Invoke-Uninstaller {
     $entry = Get-UninstallEntry
     if (-not $entry) { throw "FS25 VR is not registered in Add/Remove Programs; nothing to uninstall." }
     $uninstaller = $entry.UninstallString.Trim('"')
-    $exit = Wait-Process-Guarded (Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru) "Uninstaller"
+    $exit = Wait-GuardedProcess (Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru) "Uninstaller"
     $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Process -Name "_iu*", "unins*" -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
     $exit
@@ -263,6 +263,11 @@ function Remove-TestWorld($world) {
 # ---------------------------------------------------------------------------------------------
 
 function Assert-True([bool]$condition, [string]$message) { if (-not $condition) { throw $message } }
+# Runs Setup silently (see Install-Fs25Vr) and fails the case unless it exits with 0.
+function Assert-InstallSucceeds($world, [string[]]$extraArgs = @(), [string]$what = "Setup") {
+    $exit = Install-Fs25Vr $world $extraArgs
+    Assert-True ($exit -eq 0) "$what exited with $exit."
+}
 function Assert-Exists([string]$path, [string]$what) { Assert-True (Test-Path $path) "$what should exist: $path" }
 function Assert-Missing([string]$path, [string]$what) { Assert-True (-not (Test-Path $path)) "$what should not exist: $path" }
 function Assert-SameFile([string]$actual, [string]$expected, [string]$what) {
@@ -311,8 +316,7 @@ Test-Case "Clean install places the Injector and the Companion Mod and leaves ga
     $p = Get-GamePaths $world
     $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
 
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
 
     Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
     Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
@@ -329,8 +333,7 @@ Test-Case "Uninstall removes the Injector, the mod zip and fs25_vr.log and keeps
     New-FakeGame $world
     New-FakeDocuments $world
     $p = Get-GamePaths $world
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
     Set-Content -Path $p.Log -Value "written by the Injector while the game ran" -Encoding ascii
     $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
 
@@ -380,8 +383,7 @@ Test-Case "A silent install while the game is running fails and changes nothing"
 
     # Once the game has closed, the same install goes through.
     Stop-StandInGame
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit after the game closed."
+    Assert-InstallSucceeds $world @() "Setup after the game closed"
     Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
 }
 
@@ -390,8 +392,7 @@ Test-Case "A silent uninstall while the game is running fails and changes nothin
     New-FakeGame $world
     New-FakeDocuments $world
     $p = Get-GamePaths $world
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
     $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
     Start-StandInGame $world
 
@@ -429,8 +430,7 @@ Test-Case "Active mods directory override in gameSettings.xml: the mod lands in 
     $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
     $settingsBefore = [IO.File]::ReadAllBytes($p.GameSettingsXml)
 
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
 
     Assert-SameFile (Join-Path $override "FS25_VRCompanion.zip") $stagedMod "Companion Mod zip in the override folder"
     Assert-Missing $p.ModZip "Companion Mod zip in the default mods folder"
@@ -446,8 +446,7 @@ Test-Case "Uninstall removes the mod from the override folder and leaves the ove
     New-FakeDocuments $world $sampleGameXml (New-GameSettingsWithOverride "true" $override)
     $p = Get-GamePaths $world
     $settingsBefore = [IO.File]::ReadAllBytes($p.GameSettingsXml)
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
     Assert-Exists (Join-Path $override "FS25_VRCompanion.zip") "Companion Mod zip in the override folder"
 
     Uninstall-Fs25Vr
@@ -465,8 +464,7 @@ Test-Case "Inactive mods directory override with a directory set: the default mo
     New-FakeDocuments $world $sampleGameXml (New-GameSettingsWithOverride "false" $override)
     $p = Get-GamePaths $world
 
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
 
     Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
     Assert-Missing (Join-Path $override "FS25_VRCompanion.zip") "Companion Mod zip in the inactive override folder"
@@ -478,8 +476,7 @@ Test-Case "No mods directory override element at all in gameSettings.xml: the de
     New-FakeDocuments $world $sampleGameXml ($sampleGameSettingsXml.Replace($sampleOverrideElement, ''))
     $p = Get-GamePaths $world
 
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
 
     Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
 }
@@ -490,8 +487,7 @@ Test-Case "No gameSettings.xml at all: the default mods folder is used" {
     New-FakeDocuments $world $sampleGameXml $null
     $p = Get-GamePaths $world
 
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
 
     Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
     Assert-Missing $p.GameSettingsXml "gameSettings.xml"
@@ -503,8 +499,7 @@ Test-Case "Active override with an empty directory: the default mods folder is u
     New-FakeDocuments $world $sampleGameXml (New-GameSettingsWithOverride "true" "")
     $p = Get-GamePaths $world
 
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
 
     Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
 }
@@ -518,8 +513,7 @@ Test-Case "An override element in game.xml is ignored: only gameSettings.xml hol
     New-FakeDocuments $world $gameXmlWithOverride
     $p = Get-GamePaths $world
 
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
 
     Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
     Assert-Missing (Join-Path $elsewhere "FS25_VRCompanion.zip") "Companion Mod zip in the folder named by game.xml"
@@ -533,8 +527,7 @@ Test-Case "Active override plus a Render Resolution: the mod goes to the overrid
     $p = Get-GamePaths $world
     $settingsBefore = [IO.File]::ReadAllBytes($p.GameSettingsXml)
 
-    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=4000x2500")
 
     Assert-SameFile (Join-Path $override "FS25_VRCompanion.zip") $stagedMod "Companion Mod zip in the override folder"
     Assert-SameBytes $p.GameSettingsXml $settingsBefore "gameSettings.xml"
@@ -556,7 +549,7 @@ function Invoke-SetupExe([string]$exe, $world, [string[]]$extraArgs = @(), [swit
     if (-not $NoDir) { $setupArgs += "/DIR=`"$($world.Game)`"" }
     if (-not $isAdmin) { $setupArgs += "/CURRENTUSER" }
     $setupArgs += $extraArgs
-    Wait-Process-Guarded (Start-Process -FilePath $exe -ArgumentList $setupArgs -PassThru) "Setup"
+    Wait-GuardedProcess (Start-Process -FilePath $exe -ArgumentList $setupArgs -PassThru) "Setup"
 }
 
 # The text of the newest Setup log in the world (each Invoke-SetupExe run writes its own log).
@@ -601,8 +594,7 @@ Test-Case "A foreign dxgi.dll is warned about, backed up on install and restored
     $foreign = Get-ForeignDxgiBytes
     [IO.File]::WriteAllBytes($p.Injector, $foreign)
 
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
     Assert-True ((Get-LastSetupLog $world) -match $foreignWarning) "Setup did not warn about the foreign dxgi.dll."
     Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
     Assert-SameBytes $backup $foreign "dxgi.dll.fs25vr-backup (the foreign dxgi.dll)"
@@ -621,8 +613,7 @@ Test-Case "Our own older dxgi.dll is overwritten with no warning and no backup" 
     # An older build of ours: same version resource, different bytes.
     [IO.File]::WriteAllBytes($p.Injector, [byte[]]([IO.File]::ReadAllBytes($stagedInjector) + [byte[]](1..64)))
 
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
     Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
     Assert-Missing "$($p.Injector).fs25vr-backup" "A dxgi.dll.fs25vr-backup of our own older Injector"
     Assert-True (-not ((Get-LastSetupLog $world) -match $foreignWarning)) "Setup warned about our own dxgi.dll."
@@ -636,8 +627,7 @@ Test-Case "An existing dxgi.dll.fs25vr-backup survives an upgrade untouched and 
     $backup = "$($p.Injector).fs25vr-backup"
     $foreign = Get-ForeignDxgiBytes
     [IO.File]::WriteAllBytes($p.Injector, $foreign)
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "First Setup exited with $exit."
+    Assert-InstallSucceeds $world @() "First Setup"
     Assert-SameBytes $backup $foreign "dxgi.dll.fs25vr-backup after the first install"
 
     $newer = New-NewerSetup $world
@@ -677,8 +667,7 @@ Test-Case "A newer Installer upgrades under one Add/Remove Programs entry and pr
     New-FakeGame $world
     New-FakeDocuments $world
     $p = Get-GamePaths $world
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "First Setup exited with $exit."
+    Assert-InstallSucceeds $world @() "First Setup"
     # Make the upgrade visible: remove what the first install placed.
     Remove-Item $p.Injector, $p.ModZip -Force
 
@@ -698,7 +687,7 @@ Test-Case "A newer Installer upgrades under one Add/Remove Programs entry and pr
 
 # Game installation detection reads the real machine, so only the Game Pass rejection is automated;
 # the rest is docs\installer-release-checklist.md. A silent run must refuse a Store folder with a
-# logged reason, never a message box (Wait-Process-Guarded fails the case if a dialog hangs Setup).
+# logged reason, never a message box (Wait-GuardedProcess fails the case if a dialog hangs Setup).
 Test-Case "A Game Pass folder (XboxGames\...\Content with MicrosoftGame.config) is refused as unsupported" {
     param($world)
     $world.Game = Join-Path $world.Root "XboxGames\Farming Simulator 25\Content"
@@ -739,8 +728,7 @@ Test-Case "Render Resolution WxH writes width, height and windowed, changes noth
     $p = Get-GamePaths $world
     $original = [IO.File]::ReadAllBytes($p.GameXml)
 
-    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=4000x2500")
 
     $expected = Get-GameXmlBytes (New-RealGameXml "4000" "2500" "windowed")
     Assert-SameBytes $p.GameXml $expected "game.xml (only width, height and fullscreenMode may differ)"
@@ -762,8 +750,7 @@ Test-Case "Without /FS25VR_RESOLUTION game.xml is untouched and no backup or rec
     $p = Get-GamePaths $world
     $original = [IO.File]::ReadAllBytes($p.GameXml)
 
-    $exit = Install-Fs25Vr $world
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world
 
     Assert-SameBytes $p.GameXml $original "game.xml"
     Assert-Missing $p.GameXmlBackup "game.xml.fs25vr-backup"
@@ -776,8 +763,7 @@ Test-Case "Render Resolution accepts the 640 and 8192 limits" {
     Set-RealGameXml $world
     $p = Get-GamePaths $world
 
-    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=640x8192")
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=640x8192")
     Assert-SameBytes $p.GameXml (Get-GameXmlBytes (New-RealGameXml "640" "8192" "windowed")) "game.xml"
 }
 
@@ -806,8 +792,7 @@ Test-Case "With no game.xml the install succeeds, the resolution is skipped and 
     New-FakeDocuments $world $null          # My Games and modSettings exist, game.xml does not
     $p = Get-GamePaths $world
 
-    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")
-    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=4000x2500")
 
     Assert-Missing $p.GameXml "game.xml"
     Assert-Missing $p.GameXmlBackup "game.xml.fs25vr-backup"
@@ -893,8 +878,8 @@ Test-Case "Applying again keeps the first backup and the first originals; applyi
     $p = Get-GamePaths $world
     $firstOriginal = [IO.File]::ReadAllBytes($p.GameXml)
 
-    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")) -eq 0) "First Setup failed."
-    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=5000x3000")) -eq 0) "Second Setup (upgrade) failed."
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=4000x2500") "First Setup"
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=5000x3000") "Second Setup"
 
     Assert-SameBytes $p.GameXml (Get-GameXmlBytes (New-RealGameXml "5000" "3000" "windowed")) "game.xml after the second apply"
     Assert-SameBytes $p.GameXmlBackup $firstOriginal "game.xml.fs25vr-backup (must still be the very first original)"
@@ -907,7 +892,7 @@ Test-Case "Applying again keeps the first backup and the first originals; applyi
 
     # The player changes the resolution in the game, then applies again: those are the new originals.
     Set-RealGameXml $world "1920" "1080" "windowed_fullscreen"
-    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4500x2800")) -eq 0) "Third Setup failed."
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=4500x2800") "Third Setup"
     $r = Get-RenderResolutionRecord
     Assert-True ($r.OriginalWidth -eq "1920" -and $r.OriginalHeight -eq "1080" -and $r.OriginalFullscreenMode -eq "windowed_fullscreen") `
         "After an in-game change the record's originals are $($r.OriginalWidth)x$($r.OriginalHeight) $($r.OriginalFullscreenMode), expected 1920x1080 windowed_fullscreen."
@@ -923,7 +908,7 @@ Test-Case "Uninstall restores the original width, height and fullscreen mode whe
     Set-RealGameXml $world "2560" "1440" "fullscreen"
     $p = Get-GamePaths $world
     $original = [IO.File]::ReadAllBytes($p.GameXml)
-    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")) -eq 0) "Setup failed."
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=4000x2500") "Setup"
     Assert-SameBytes $p.GameXml (Get-GameXmlBytes (New-RealGameXml "4000" "2500" "windowed")) "game.xml after install"
 
     Uninstall-Fs25Vr
@@ -942,8 +927,8 @@ Test-Case "Uninstall restores the originals recorded by the first apply after a 
     Set-RealGameXml $world "2560" "1440" "fullscreen"
     $p = Get-GamePaths $world
     $original = [IO.File]::ReadAllBytes($p.GameXml)
-    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")) -eq 0) "First Setup failed."
-    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=5000x3000")) -eq 0) "Second Setup failed."
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=4000x2500") "First Setup"
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=5000x3000") "Second Setup"
 
     Uninstall-Fs25Vr
 
@@ -961,7 +946,7 @@ foreach ($changed in @(
         Set-RealGameXml $world "2560" "1440" "fullscreen"
         $p = Get-GamePaths $world
         $original = [IO.File]::ReadAllBytes($p.GameXml)
-        Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")) -eq 0) "Setup failed."
+        Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=4000x2500") "Setup"
         Set-RealGameXml $world $c.W $c.H $c.Mode          # the player changed it in the game
         $current = [IO.File]::ReadAllBytes($p.GameXml)
 
@@ -980,7 +965,7 @@ Test-Case "Uninstall leaves game.xml alone when the Installer never set a Render
     Set-RealGameXml $world "4000" "2500" "windowed"       # the player's own values, even if they look like a headset size
     $p = Get-GamePaths $world
     $before = [IO.File]::ReadAllBytes($p.GameXml)
-    Assert-True ((Install-Fs25Vr $world) -eq 0) "Setup failed."
+    Assert-InstallSucceeds $world @() "Setup"
 
     Uninstall-Fs25Vr
 
@@ -994,7 +979,7 @@ Test-Case "Uninstall copes with a game.xml that is gone and still removes the re
     New-FakeGame $world
     Set-RealGameXml $world
     $p = Get-GamePaths $world
-    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")) -eq 0) "Setup failed."
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=4000x2500") "Setup"
     Remove-Item $p.GameXml -Force
 
     Uninstall-Fs25Vr

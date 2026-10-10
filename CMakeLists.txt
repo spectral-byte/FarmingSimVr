@@ -41,7 +41,8 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(OpenXR)
-# The OpenXR static loader pins itself to the dynamic CRT; put it on the Injector's static runtime.
+# As a static library the OpenXR loader sets its own MSVC_RUNTIME_LIBRARY to the dynamic CRT, which
+# overrides CMAKE_MSVC_RUNTIME_LIBRARY above; set it back to the Injector's static runtime.
 if(MSVC)
     set_target_properties(openxr_loader PROPERTIES
         MSVC_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}")
