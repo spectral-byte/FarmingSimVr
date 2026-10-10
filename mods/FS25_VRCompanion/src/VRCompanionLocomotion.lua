@@ -550,7 +550,6 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
     local setTranslationFn = setTranslation or (_G and _G.setTranslation)
     local getTranslationFn = getTranslation or (_G and _G.getTranslation)
     local localToLocalFn = localToLocal or (_G and _G.localToLocal)
-    local localRotationToLocalFn = localRotationToLocal or (_G and _G.localRotationToLocal)
 
     local camParent = 0
     if type(getParentFn) == "function" then
@@ -582,7 +581,10 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
     end
 
     local cabTransX, cabTransY, cabTransZ = 0, 0, 0
-    local cabRotX, cabRotY, cabRotZ = 0, 0, 0
+    -- The head tracking node's rotation in camParent's space, read as a quaternion (see
+    -- getRotationInSpace), else the turned view's yaw
+    local baseYaw = targetHeadRotY
+    local cabQx, cabQy, cabQz, cabQw = nil, nil, nil, nil
 
     if cam.headTrackingNode ~= nil and camParent ~= 0 then
         if type(localToLocalFn) == "function" then
@@ -593,23 +595,16 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
                 if ok and gx ~= nil then cabTransX, cabTransY, cabTransZ = gx, gy, gz end
             end
         end
-        if type(localRotationToLocalFn) == "function" then
-            cabRotX, cabRotY, cabRotZ = localRotationToLocalFn(cam.headTrackingNode, camParent, 0, 0, 0)
-        else
-            cabRotX = 0
-            cabRotY = targetHeadRotY
-            cabRotZ = 0
-        end
+        cabQx, cabQy, cabQz, cabQw = self:getRotationInSpace(cam.headTrackingNode, camParent)
     else
         cabTransX = cam.origTransX or cam.transX or 0
         cabTransY = cam.origTransY or cam.transY or 0
         cabTransZ = cam.origTransZ or cam.transZ or 0
 
-        local combYaw = self:normalizeAngle((cam.origRotY or math.pi) + lookYaw)
-
-        cabRotX = 0
-        cabRotY = combYaw
-        cabRotZ = 0
+        baseYaw = self:normalizeAngle((cam.origRotY or math.pi) + lookYaw)
+    end
+    if cabQw == nil then
+        cabQx, cabQy, cabQz, cabQw = self:yawQuaternion(baseYaw)
     end
 
     if type(setTranslationFn) == "function" then
@@ -624,17 +619,21 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
             setTranslationFn(self.cyclopeanAudioListenerNode, cabTransX, cabTransY, cabTransZ)
         end
     end
-    if type(setRotationFn) == "function" then
-        setRotationFn(cam.cameraNode, cabRotX, cabRotY, cabRotZ)
-        if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
-            setRotationFn(self.cameraNodeLeft, cabRotX, cabRotY, cabRotZ)
-        end
-        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
-            setRotationFn(self.cameraNodeRight, cabRotX, cabRotY, cabRotZ)
-        end
-        if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
-            setRotationFn(self.cyclopeanAudioListenerNode, cabRotX, cabRotY, cabRotZ)
-        end
+    self:setRealignedRotation(cam.cameraNode, cabQx, cabQy, cabQz, cabQw)
+end
+
+-- Gives an engine camera, the Dual Eye Camera Nodes and the Cyclopean Audio Listener Node the
+-- same local rotation
+function VRCompanion:setRealignedRotation(camNode, qx, qy, qz, qw)
+    self:setNodeQuaternion(camNode, qx, qy, qz, qw)
+    if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
+        self:setNodeQuaternion(self.cameraNodeLeft, qx, qy, qz, qw)
+    end
+    if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
+        self:setNodeQuaternion(self.cameraNodeRight, qx, qy, qz, qw)
+    end
+    if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
+        self:setNodeQuaternion(self.cyclopeanAudioListenerNode, qx, qy, qz, qw)
     end
 end
 
@@ -650,21 +649,22 @@ function VRCompanion:realignPlayerCameraToRoot(cam)
     end
 
     local finalTx, finalTy, finalTz = 0, 0, 0
-    local finalRotX, finalRotY, finalRotZ = 0, 0, 0
+    -- The head tracking node's rotation in camParent's space, else a half turn to face forward
+    local finalQx, finalQy, finalQz, finalQw = nil, nil, nil, nil
 
     if cam.vrHeadTrackingNode ~= nil and camParent ~= 0 then
         if type(localToLocal) == "function" then
             finalTx, finalTy, finalTz = localToLocal(cam.vrHeadTrackingNode, camParent, 0, 0, 0)
         end
-        if type(localRotationToLocal) == "function" then
-            finalRotX, finalRotY, finalRotZ = localRotationToLocal(cam.vrHeadTrackingNode, camParent, 0, 0, 0)
-        end
+        finalQx, finalQy, finalQz, finalQw = self:getRotationInSpace(cam.vrHeadTrackingNode, camParent)
     else
         local base = self:getPlayerBaseTranslation(cam)
         finalTx = base.x or base[1] or 0
         finalTy = base.y or base[2] or 0
         finalTz = base.z or base[3] or 0
-        finalRotY = math.pi
+    end
+    if finalQw == nil then
+        finalQx, finalQy, finalQz, finalQw = self:yawQuaternion(math.pi)
     end
 
     if type(setTranslation) == "function" then
@@ -679,18 +679,7 @@ function VRCompanion:realignPlayerCameraToRoot(cam)
             setTranslation(self.cyclopeanAudioListenerNode, finalTx, finalTy, finalTz)
         end
     end
-    if type(setRotation) == "function" then
-        setRotation(activeCamNode, finalRotX, finalRotY, finalRotZ)
-        if self.cameraNodeLeft ~= nil and self.cameraNodeLeft ~= 0 then
-            setRotation(self.cameraNodeLeft, finalRotX, finalRotY, finalRotZ)
-        end
-        if self.cameraNodeRight ~= nil and self.cameraNodeRight ~= 0 then
-            setRotation(self.cameraNodeRight, finalRotX, finalRotY, finalRotZ)
-        end
-        if self.cyclopeanAudioListenerNode ~= nil and self.cyclopeanAudioListenerNode ~= 0 then
-            setRotation(self.cyclopeanAudioListenerNode, finalRotX, finalRotY, finalRotZ)
-        end
-    end
+    self:setRealignedRotation(activeCamNode, finalQx, finalQy, finalQz, finalQw)
 end
 
 -- Swings an Outside Camera's orbit back to forward: orbit yaw and pitch go back to the camera's

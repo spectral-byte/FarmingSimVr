@@ -671,7 +671,7 @@ TEST_F(CompanionModTest, OnFootPlayerCameraAppliesSmooth6DOFTrackingWhileWalking
 
         assert(_G.playerCamTransforms.rotation ~= nil, "player rotation must be set")
         assert(math.abs(_G.playerCamTransforms.rotation.rx - 0.12) < 0.001, "pitch mismatch")
-        assert(math.abs(_G.playerCamTransforms.rotation.ry - (0.18 + math.pi)) < 0.001, "yaw mismatch")
+        assert(math.abs(VRCompanion:normalizeAngle(_G.playerCamTransforms.rotation.ry - (0.18 + math.pi))) < 0.001, "yaw mismatch")
         assert(math.abs(_G.playerCamTransforms.rotation.rz - (-0.01)) < 0.001, "roll mismatch")
     )", "=verifyPlayerCam"), 0);
 }
@@ -1411,7 +1411,7 @@ TEST_F(CompanionModTest, HooksPlayerCameraUpdatePositionAndDispatchesOnFoot6DOFT
         assert(math.abs(_G.cameraTranslations[777].y - (1.8 + 0.2)) < 0.01, "height must include base + pose.y")
         assert(_G.cameraRotations[777] ~= nil, "setRotation must be called on firstPersonCamera")
         assert(math.abs(_G.cameraRotations[777].x - 0.05) < 0.005, "pitch must be applied")
-        assert(math.abs(_G.cameraRotations[777].y - (0.10 + math.pi)) < 0.005, "yaw must be applied")
+        assert(math.abs(VRCompanion:normalizeAngle(_G.cameraRotations[777].y - (0.10 + math.pi))) < 0.005, "yaw must be applied")
     )luau", "=verifyPlayerCameraHookDispatched"), 0);
 
     // Test deleteMap restores original updatePosition
@@ -1460,7 +1460,7 @@ TEST_F(CompanionModTest, FallsBackToEngineTrackIRWhenVRBridgePoseUnavailable) {
         assert(math.abs(_G.cameraTranslations[888].y - (1.75 + 0.08)) < 0.001, "TrackIR y translation applied")
         assert(_G.cameraRotations[888] ~= nil, "rotation must be set via TrackIR fallback")
         assert(math.abs(_G.cameraRotations[888].x - 0.12) < 0.001, "TrackIR pitch applied")
-        assert(math.abs(_G.cameraRotations[888].y - (0.25 + math.pi)) < 0.001, "TrackIR yaw applied")
+        assert(math.abs(VRCompanion:normalizeAngle(_G.cameraRotations[888].y - (0.25 + math.pi))) < 0.001, "TrackIR yaw applied")
     )luau", "=verifyTrackIrApplied"), 0);
 }
 
@@ -1927,6 +1927,17 @@ TEST_F(CompanionModTest, OnFootMovementDirectionAndCameraLookVectorAreCollinear)
             end
             local diffY = srcY - dstY
             return rx, ry + diffY, rz
+        end
+
+        -- World rotation as a quaternion (Y rotation only, as above)
+        function getWorldQuaternion(node)
+            local totalY = 0
+            local cur = node
+            while cur ~= 0 and nodes[cur] do
+                totalY = totalY + (nodes[cur].rot[2] or 0)
+                cur = nodes[cur].parent
+            end
+            return 0, math.sin(totalY * 0.5), 0, math.cos(totalY * 0.5)
         end
 
         function localToLocal(srcNode, dstNode, x, y, z)

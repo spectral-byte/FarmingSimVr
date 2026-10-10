@@ -41,8 +41,9 @@ local function wrap(angle)
 end
 
 -- --------------------------------------------------------------------
--- Mock GIANTS scene graph: nodes with a parent, a local translation and a local
--- Euler rotation composed as R = Ry * Rx * Rz. Cameras look along local -Z.
+-- Mock GIANTS scene graph: nodes with a parent, a local translation and a local rotation,
+-- set as Euler angles (read in the engine's convention, below) or as a quaternion. Cameras look
+-- along local -Z.
 -- --------------------------------------------------------------------
 local ROOT = 1
 local scene = {}
@@ -101,6 +102,37 @@ local function transpose(m)
     return { { m[1][1], m[2][1], m[3][1] }, { m[1][2], m[2][2], m[3][2] }, { m[1][3], m[2][3], m[3][3] } }
 end
 
+local function quatMatrix(q)
+    local x, y, z, w = q[1], q[2], q[3], q[4]
+    return {
+        { 1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w) },
+        { 2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w) },
+        { 2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y) },
+    }
+end
+
+local function matQuat(m)
+    local trace = m[1][1] + m[2][2] + m[3][3]
+    if trace > 0 then
+        local s = math.sqrt(trace + 1) * 2
+        return (m[3][2] - m[2][3]) / s, (m[1][3] - m[3][1]) / s, (m[2][1] - m[1][2]) / s, 0.25 * s
+    elseif m[1][1] > m[2][2] and m[1][1] > m[3][3] then
+        local s = math.sqrt(1 + m[1][1] - m[2][2] - m[3][3]) * 2
+        return 0.25 * s, (m[1][2] + m[2][1]) / s, (m[1][3] + m[3][1]) / s, (m[3][2] - m[2][3]) / s
+    elseif m[2][2] > m[3][3] then
+        local s = math.sqrt(1 + m[2][2] - m[1][1] - m[3][3]) * 2
+        return (m[1][2] + m[2][1]) / s, 0.25 * s, (m[2][3] + m[3][2]) / s, (m[1][3] - m[3][1]) / s
+    end
+    local s = math.sqrt(1 + m[3][3] - m[1][1] - m[2][2]) * 2
+    return (m[1][3] + m[3][1]) / s, (m[2][3] + m[3][2]) / s, 0.25 * s, (m[2][1] - m[1][2]) / s
+end
+
+-- A node's local rotation: its quaternion when last set by one, else its Euler angles
+local function localRotation(n)
+    if n.q ~= nil then return quatMatrix(n.q) end
+    return rotMatrix(n.r[1], n.r[2], n.r[3])
+end
+
 local function matApply(m, x, y, z)
     return m[1][1] * x + m[1][2] * y + m[1][3] * z,
         m[2][1] * x + m[2][2] * y + m[2][3] * z,
@@ -112,7 +144,7 @@ local function worldTransform(id)
     if n == nil then
         return rotMatrix(0, 0, 0), 0, 0, 0
     end
-    local r = rotMatrix(n.r[1], n.r[2], n.r[3])
+    local r = localRotation(n)
     local x, y, z = n.t[1], n.t[2], n.t[3]
     if n.parent ~= 0 and scene[n.parent] ~= nil then
         local pr, px, py, pz = worldTransform(n.parent)
@@ -173,6 +205,12 @@ local function installSceneGraph()
         logEngineWrite("setRotation", node)
         if scene[node] == nil then addNode(node, 0, { 0, 0, 0 }, { 0, 0, 0 }) end
         scene[node].r = { rx, ry, rz }
+        scene[node].q = nil
+    end
+    _G.setQuaternion = function(node, x, y, z, w)
+        logEngineWrite("setQuaternion", node)
+        if scene[node] == nil then addNode(node, 0, { 0, 0, 0 }, { 0, 0, 0 }) end
+        scene[node].q = { x, y, z, w }
     end
     _G.getTranslation = function(node)
         local n = scene[node]
@@ -182,6 +220,7 @@ local function installSceneGraph()
     _G.getRotation = function(node)
         local n = scene[node]
         if n == nil then return 0, 0, 0 end
+        if n.q ~= nil then return eulerOf(quatMatrix(n.q)) end
         return n.r[1], n.r[2], n.r[3]
     end
     _G.getWorldTranslation = function(node)
@@ -190,6 +229,9 @@ local function installSceneGraph()
     end
     _G.getWorldRotation = function(node)
         return eulerOf((worldTransform(node)))
+    end
+    _G.getWorldQuaternion = function(node)
+        return matQuat((worldTransform(node)))
     end
     _G.localDirectionToWorld = function(node, x, y, z)
         local m = worldTransform(node)
@@ -263,8 +305,9 @@ local function gameActivates(node)
 end
 
 local function removeSceneGraph()
-    for _, name in ipairs({ "getRootNode", "getParent", "link", "setTranslation", "setRotation",
-        "getTranslation", "getRotation", "getWorldTranslation", "getWorldRotation", "localDirectionToWorld", "localToLocal", "localRotationToLocal",
+    for _, name in ipairs({ "getRootNode", "getParent", "link", "setTranslation", "setRotation", "setQuaternion",
+        "getTranslation", "getRotation", "getWorldTranslation", "getWorldRotation", "getWorldQuaternion",
+        "localDirectionToWorld", "localToLocal", "localRotationToLocal",
         "createCamera", "createTransformGroup", "setFovY", "getFovY", "getNearClip", "getFarClip", "setNearClip", "setFarClip",
         "setProjectionOffset", "getProjectionOffset", "setAudioListener", "g_cameraManager",
         "setCamera", "getCamera", "g_currentMission", "VRBridge", "FSBaseMission" }) do
@@ -496,7 +539,7 @@ local function tiltedPose()
     return { isValid = true, x = 0.1, y = -0.05, z = 0.15, pitch = -0.2, yaw = 0.5, roll = -0.06, qx = 0, qy = 0, qz = 0, qw = 1 }
 end
 
-test("HeadRotationComposesOnTheLevelBaseInTheEnginesOwnEulerConvention", function()
+test("HeadRotationComposesOnTheLevelBaseInAnyEngineEulerConvention", function()
     for _, order in ipairs({ "YXZ", "ZYX" }) do
         eulerOrder = order
         local state = { mode = "AFR", parity = 0,
@@ -507,9 +550,10 @@ test("HeadRotationComposesOnTheLevelBaseInTheEnginesOwnEulerConvention", functio
 
         local ok, err = pcall(function()
             VRCompanion:onVehicleCameraUpdate(cam, 16.6)
-            -- The level base turned to the camera's heading, then the head's rotation read the way
-            -- the engine reads Euler angles (as the cab composes it through localRotationToLocal)
-            local expected = matMul(axisRotation("Y", engineCameraHeading()), rotMatrix(0.2, 0.3, 0.25))
+            -- The level base turned to the camera's heading, then the head's rotation as VRBridge
+            -- reports it, R = Ry(yaw) * Rx(pitch) * Rz(roll), whatever the engine's convention
+            local head = matMul(axisRotation("Y", 0.3), matMul(axisRotation("X", 0.2), axisRotation("Z", 0.25)))
+            local expected = matMul(axisRotation("Y", engineCameraHeading()), head)
             local actual = worldTransform(bound)
             for i = 1, 3 do
                 for j = 1, 3 do

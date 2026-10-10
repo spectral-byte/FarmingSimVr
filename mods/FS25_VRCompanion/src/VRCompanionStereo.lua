@@ -48,6 +48,75 @@ local function rotateVectorByQuaternion(qx, qy, qz, qw, vx, vy, vz)
     return rx, ry, rz
 end
 
+-- Hamilton product a * b: the rotation b followed by the rotation a
+local function multiplyQuaternions(ax, ay, az, aw, bx, by, bz, bw)
+    return aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz
+end
+
+-- Quaternion of a head pose's Euler angles, composed R = Ry(yaw) * Rx(pitch) * Rz(roll) as
+-- VRBridge derives them from the headset's orientation
+local function headPoseQuaternion(pitch, yaw, roll)
+    local cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
+    local cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
+    local cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
+    -- Ry(yaw) * Rx(pitch), then * Rz(roll)
+    return multiplyQuaternions(cy * sp, sy * cp, -sy * sp, cy * cp, 0, 0, sr, cr)
+end
+
+-- The Euler angles of headPoseQuaternion, R = Ry(yaw) * Rx(pitch) * Rz(roll)
+local function headPoseEuler(qx, qy, qz, qw)
+    local sinPitch = math.max(-1, math.min(1, 2 * (qw * qx - qy * qz)))
+    return math.asin(sinPitch),
+        math.atan2(2 * (qw * qy + qx * qz), 1 - 2 * (qx * qx + qy * qy)),
+        math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qx * qx + qz * qz))
+end
+
+-- Quaternion of a turn by yaw about the up axis
+function VRCompanion:yawQuaternion(yaw)
+    return 0, math.sin(yaw * 0.5), 0, math.cos(yaw * 0.5)
+end
+
+-- Rotation of node in spaceNode's space as a quaternion, from the engine's world quaternions so
+-- no Euler angles are read back. Euler angles read back from the engine are unreliable: each
+-- convention has a singular orientation where they lose the pitch (with the yaw as the middle
+-- angle, as the engine has it, a yaw of 90 degrees). nil when the engine can't report world
+-- quaternions.
+function VRCompanion:getRotationInSpace(node, spaceNode)
+    local getWorldQuaternionFn = getWorldQuaternion or (_G and _G.getWorldQuaternion)
+    if type(getWorldQuaternionFn) ~= "function" then return nil end
+    local nx, ny, nz, nw = getWorldQuaternionFn(node)
+    if nw == nil then return nil end
+    if spaceNode == nil or spaceNode == 0 then return nx, ny, nz, nw end
+    local sx, sy, sz, sw = getWorldQuaternionFn(spaceNode)
+    if sw == nil then return nil end
+    return multiplyQuaternions(-sx, -sy, -sz, sw, nx, ny, nz, nw)
+end
+
+-- Sets node's local rotation from a quaternion. setQuaternion takes no Euler angles, so the
+-- engine's convention and its singularity never come into it; Euler angles composed
+-- R = Ry * Rx * Rz are only the fallback for an engine without it.
+function VRCompanion:setNodeQuaternion(node, qx, qy, qz, qw)
+    local setQuaternionFn = setQuaternion or (_G and _G.setQuaternion)
+    if type(setQuaternionFn) == "function" then
+        setQuaternionFn(node, qx, qy, qz, qw)
+        return
+    end
+    local setRotationFn = setRotation or (_G and _G.setRotation)
+    if type(setRotationFn) == "function" then
+        setRotationFn(node, headPoseEuler(qx, qy, qz, qw))
+    end
+end
+
+-- The head pose's rotation composed onto a base rotation (bx, by, bz, bw): the pose's frame
+-- turned by the base
+function VRCompanion:composeHeadRotation(pose, bx, by, bz, bw)
+    local hx, hy, hz, hw = headPoseQuaternion(pose.pitch or 0, pose.yaw or 0, pose.roll or 0)
+    return multiplyQuaternions(bx, by, bz, bw, hx, hy, hz, hw)
+end
+
 function VRCompanion:getRenderingMode()
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge ~= nil then
@@ -901,17 +970,16 @@ end
 -- centre of the head and the active eye at the eye position, gives that eye the lens of
 -- referenceCamNode, applies its Oblique Frustum projection and binds it for rendering, for
 -- whichever Stereo Presentation Mode is active. All transforms are in parentNode's space and
--- share one rotation. referenceCamNode is the engine camera the eye renders in place of: it seeds
--- node creation, lends its lens and is the mono fallback target when no left eye node exists. stereoRequested (the
+-- share one rotation, the quaternion (qx, qy, qz, qw). referenceCamNode is the engine camera
+-- the eye renders in place of: it seeds node creation, lends its lens and is the mono fallback target when no left eye node exists. stereoRequested (the
 -- bridge's requiresAfrFallback: the mod renders the eyes itself) asks for the eyeIndex eye; it is
 -- still overridden to mono, left eye, while a GUI menu or 2D Floating Window Mode is shown.
 -- Allocates nothing.
 function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
-        headX, headY, headZ, eyeX, eyeY, eyeZ, rotX, rotY, rotZ, eyeIndex, eyeProj, stereoRequested)
+        headX, headY, headZ, eyeX, eyeY, eyeZ, qx, qy, qz, qw, eyeIndex, eyeProj, stereoRequested)
     local getParentFn = getParent or (_G and _G.getParent)
     local linkFn = link or (_G and _G.link)
     local setTranslationFn = setTranslation or (_G and _G.setTranslation)
-    local setRotationFn = setRotation or (_G and _G.setRotation)
 
     self:ensureDualEyeCameraNodes(referenceCamNode)
     self:ensureCyclopeanAudioListener(referenceCamNode)
@@ -932,9 +1000,7 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
         if type(setTranslationFn) == "function" then
             setTranslationFn(self.cyclopeanAudioListenerNode, headX, headY, headZ)
         end
-        if type(setRotationFn) == "function" then
-            setRotationFn(self.cyclopeanAudioListenerNode, rotX, rotY, rotZ)
-        end
+        self:setNodeQuaternion(self.cyclopeanAudioListenerNode, qx, qy, qz, qw)
         local setAudioListenerFn = setAudioListener or (_G and _G.setAudioListener)
         if type(setAudioListenerFn) == "function" then
             setAudioListenerFn(self.cyclopeanAudioListenerNode)
@@ -953,9 +1019,7 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
             if type(setTranslationFn) == "function" then
                 setTranslationFn(activeEyeCam, eyeX, eyeY, eyeZ)
             end
-            if type(setRotationFn) == "function" then
-                setRotationFn(activeEyeCam, rotX, rotY, rotZ)
-            end
+            self:setNodeQuaternion(activeEyeCam, qx, qy, qz, qw)
             self:bindRenderingCamera(activeEyeCam)
             self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
         end
@@ -970,9 +1034,7 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
             if type(setTranslationFn) == "function" then
                 setTranslationFn(targetNode, eyeX, eyeY, eyeZ)
             end
-            if type(setRotationFn) == "function" then
-                setRotationFn(targetNode, rotX, rotY, rotZ)
-            end
+            self:setNodeQuaternion(targetNode, qx, qy, qz, qw)
             self:bindRenderingCamera(targetNode)
         end
     end
@@ -1026,20 +1088,18 @@ end
 function VRCompanion:showEngineCameraView(camNode, eyeIndex, eyeProj, stereoRequested)
     local getRootNodeFn = getRootNode or (_G and _G.getRootNode)
     local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
-    local getWorldRotationFn = getWorldRotation or (_G and _G.getWorldRotation)
-    if type(getRootNodeFn) ~= "function" or type(getWorldTranslationFn) ~= "function"
-        or type(getWorldRotationFn) ~= "function" then
+    if type(getRootNodeFn) ~= "function" or type(getWorldTranslationFn) ~= "function" then
         self:renderThroughEngineCamera(camNode)
         return
     end
     local rootNode = getRootNodeFn()
-    if rootNode == nil or rootNode == 0 then
+    local qx, qy, qz, qw = self:getRotationInSpace(camNode, nil)
+    if rootNode == nil or rootNode == 0 or qw == nil then
         self:renderThroughEngineCamera(camNode)
         return
     end
     local x, y, z = getWorldTranslationFn(camNode)
-    local rotX, rotY, rotZ = getWorldRotationFn(camNode)
-    self:placeAndBindEyes(camNode, rootNode, x, y, z, x, y, z, rotX, rotY, rotZ, eyeIndex, eyeProj, stereoRequested)
+    self:placeAndBindEyes(camNode, rootNode, x, y, z, x, y, z, qx, qy, qz, qw, eyeIndex, eyeProj, stereoRequested)
 end
 
 -- Renders through the game's own camera again and takes the Dual Eye Camera Nodes off the camera
@@ -1101,15 +1161,15 @@ function VRCompanion:onOutsideCameraUpdate(cam)
     local tx, ty, tz = pose.x or 0, pose.y or 0, pose.z or 0
     local offX, offY, offZ = self:computeEyeOffset(pose, eyeIndex, afrFallback)
 
-    -- The head pose goes on a level base node turned only by the heading, so the engine composes
-    -- the head rotation in its own Euler convention, as the cab does on its head tracking node
+    -- The head pose goes on a level base node turned only by the heading
     local baseNode = self:placeOutsideCameraBase(rootNode, baseX, baseY, baseZ, heading)
     if baseNode == nil then
         self:showEngineCameraView(camNode, eyeIndex, eyeProj, afrFallback)
         return
     end
+    local qx, qy, qz, qw = self:composeHeadRotation(pose, 0, 0, 0, 1)
     self:placeAndBindEyes(camNode, baseNode, tx, ty, tz, tx + offX, ty + offY, tz + offZ,
-        pose.pitch or 0, pose.yaw or 0, pose.roll or 0, eyeIndex, eyeProj, afrFallback)
+        qx, qy, qz, qw, eyeIndex, eyeProj, afrFallback)
 end
 
 -- Places the Outside Camera's level base, a transform group under the world root owned by the
@@ -1201,7 +1261,6 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     local setTranslationFn = setTranslation or (_G and _G.setTranslation)
     local getTranslationFn = getTranslation or (_G and _G.getTranslation)
     local localToLocalFn = localToLocal or (_G and _G.localToLocal)
-    local localRotationToLocalFn = localRotationToLocal or (_G and _G.localRotationToLocal)
     local createTransformGroupFn = createTransformGroup or (_G and _G.createTransformGroup)
     local linkFn = link or (_G and _G.link)
 
@@ -1257,8 +1316,12 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     end
 
     local cabTransX, cabTransY, cabTransZ = eyeTx, eyeTy, eyeTz
-    local cabRotX, cabRotY, cabRotZ = pitch, yaw, roll
     local midCabTransX, midCabTransY, midCabTransZ = tx, ty, tz
+    -- The rotation the head pose turns on, in camParent's space: the head tracking node's, else
+    -- the turned view's yaw. Composed as quaternions: Euler angles read back from the engine
+    -- lose the head's pitch when it looks a quarter turn to the side.
+    local baseYaw = targetHeadRotY
+    local baseQx, baseQy, baseQz, baseQw = nil, nil, nil, nil
 
     if cam.headTrackingNode ~= nil and camParent ~= 0 then
         if type(localToLocalFn) == "function" then
@@ -1287,14 +1350,7 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
             midCabTransZ = nodeTransZ + rotMidTz
         end
 
-        if type(localRotationToLocalFn) == "function" then
-            cabRotX, cabRotY, cabRotZ = localRotationToLocalFn(cam.headTrackingNode, camParent, pitch, yaw, roll)
-        else
-            local combYaw = (type(self.normalizeAngle) == "function" and self:normalizeAngle(targetHeadRotY + yaw)) or (targetHeadRotY + yaw)
-            cabRotX = pitch
-            cabRotY = combYaw
-            cabRotZ = roll
-        end
+        baseQx, baseQy, baseQz, baseQw = self:getRotationInSpace(cam.headTrackingNode, camParent)
     else
         -- Fallback to driver seat anchor baseline when no dedicated headTrackingNode is assigned
         local baseX = cam.origTransX or cam.transX or 0
@@ -1318,22 +1374,22 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         midCabTransY = baseY + rotMidTy
         midCabTransZ = baseZ + rotMidTz
 
-        local combYaw = (type(self.normalizeAngle) == "function" and self:normalizeAngle(totalGazeYaw + yaw)) or (totalGazeYaw + yaw)
-        cabRotX = pitch
-        cabRotY = combYaw
-        cabRotZ = roll
+        baseYaw = totalGazeYaw
     end
+
+    if baseQw == nil then
+        baseQx, baseQy, baseQz, baseQw = self:yawQuaternion(baseYaw)
+    end
+    local cabQx, cabQy, cabQz, cabQw = self:composeHeadRotation(pose, baseQx, baseQy, baseQz, baseQw)
 
     self:placeAndBindEyes(cam.cameraNode, camParent,
         midCabTransX, midCabTransY, midCabTransZ, cabTransX, cabTransY, cabTransZ,
-        cabRotX, cabRotY, cabRotZ, eyeIndex, eyeProj, afrFallback)
+        cabQx, cabQy, cabQz, cabQw, eyeIndex, eyeProj, afrFallback)
 
     if type(setTranslationFn) == "function" then
         setTranslationFn(cam.cameraNode, cabTransX, cabTransY, cabTransZ)
     end
-    if type(setRotationFn) == "function" then
-        setRotationFn(cam.cameraNode, cabRotX, cabRotY, cabRotZ)
-    end
+    self:setNodeQuaternion(cam.cameraNode, cabQx, cabQy, cabQz, cabQw)
 
     self.vehCamTicks = (self.vehCamTicks or 0) + 1
     if self.vehCamTicks == 1 or self.vehCamTicks % 300 == 0 then
@@ -1421,17 +1477,17 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
     end
 
     local finalTx, finalTy, finalTz = eyeTx, eyeTy, eyeTz
-    local finalRotX, finalRotY, finalRotZ = pitch, yaw, roll
     local finalMidTx, finalMidTy, finalMidTz = tx, ty, tz
+    -- The rotation the head pose turns on, in camParent's space: the head tracking node's, else a
+    -- half turn to face forward. Composed as quaternions, as in the cab.
+    local baseQx, baseQy, baseQz, baseQw = nil, nil, nil, nil
 
     if cam.vrHeadTrackingNode ~= nil and camParent ~= 0 then
         if type(localToLocal) == "function" then
             finalTx, finalTy, finalTz = localToLocal(cam.vrHeadTrackingNode, camParent, eyeTx, eyeTy, eyeTz)
             finalMidTx, finalMidTy, finalMidTz = localToLocal(cam.vrHeadTrackingNode, camParent, tx, ty, tz)
         end
-        if type(localRotationToLocal) == "function" then
-            finalRotX, finalRotY, finalRotZ = localRotationToLocal(cam.vrHeadTrackingNode, camParent, pitch, yaw, roll)
-        end
+        baseQx, baseQy, baseQz, baseQw = self:getRotationInSpace(cam.vrHeadTrackingNode, camParent)
     else
         local base = (type(self.getPlayerBaseTranslation) == "function" and self:getPlayerBaseTranslation(cam)) or {0, 0, 0}
         local bx = base.x or base[1] or 0
@@ -1444,22 +1500,21 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
         finalMidTx = bx + tx
         finalMidTy = by + ty
         finalMidTz = bz + tz
-
-        finalRotX = pitch
-        finalRotY = yaw + math.pi
-        finalRotZ = roll
     end
+
+    if baseQw == nil then
+        baseQx, baseQy, baseQz, baseQw = self:yawQuaternion(math.pi)
+    end
+    local finalQx, finalQy, finalQz, finalQw = self:composeHeadRotation(pose, baseQx, baseQy, baseQz, baseQw)
 
     self:placeAndBindEyes(activeCamNode, camParent,
         finalMidTx, finalMidTy, finalMidTz, finalTx, finalTy, finalTz,
-        finalRotX, finalRotY, finalRotZ, eyeIndex, eyeProj, afrFallback)
+        finalQx, finalQy, finalQz, finalQw, eyeIndex, eyeProj, afrFallback)
 
     if type(setTranslation) == "function" then
         setTranslation(activeCamNode, finalTx, finalTy, finalTz)
     end
-    if type(setRotation) == "function" then
-        setRotation(activeCamNode, finalRotX, finalRotY, finalRotZ)
-    end
+    self:setNodeQuaternion(activeCamNode, finalQx, finalQy, finalQz, finalQw)
 
     self.playerCamTicks = (self.playerCamTicks or 0) + 1
     if self.playerCamTicks == 1 or self.playerCamTicks % 300 == 0 then
