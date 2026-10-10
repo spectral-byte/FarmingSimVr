@@ -990,6 +990,134 @@ Test-Case "Uninstall copes with a game.xml that is gone and still removes the re
     Assert-Missing $p.Injector "Injector"
 }
 
+# --- Setup offers to uninstall --------------------------------------------------------------------
+# Running the Setup exe while FS25 VR is installed asks (interactive runs only) whether to upgrade,
+# uninstall or cancel; the question needs a person, so only the unattended parts are automated here
+# (see docs\installer-release-checklist.md for the dialog). /FS25VR_UNINSTALL runs the existing
+# uninstaller unattended through Setup; silent runs never ask and keep upgrading.
+
+# Runs the Setup exe with exactly these arguments (plus /LOG, /FS25VR_DOCUMENTS and, outside an elevated
+# shell, /CURRENTUSER) and returns its exit code. Unlike Install-Fs25Vr it does not add /SUPPRESSMSGBOXES
+# or /DIR, so a message box the Installer should not show would hang and fail the case.
+function Invoke-SetupWithArgs($world, [string[]]$setupArgs) {
+    $all = @("/LOG=`"$($world.Root)\setup-$([guid]::NewGuid().ToString('N').Substring(0, 6)).log`"",
+             "/FS25VR_DOCUMENTS=`"$($world.Documents)`"") + $setupArgs
+    if (-not $isAdmin) { $all += "/CURRENTUSER" }
+    Wait-GuardedProcess (Start-Process -FilePath $SetupExe -ArgumentList $all -PassThru) "Setup"
+}
+# Setup /FS25VR_UNINSTALL, run the way CI would. It must not need /DIR.
+function Invoke-SetupUninstall($world, [string[]]$extraArgs = @()) {
+    Invoke-SetupWithArgs $world (@("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/FS25VR_UNINSTALL") + $extraArgs)
+}
+
+Test-Case "Setup /FS25VR_UNINSTALL uninstalls: removes the Injector, the mod zip and fs25_vr.log, keeps modSettings and unregisters" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    Assert-InstallSucceeds $world
+    Set-Content -Path $p.Log -Value "written by the Injector while the game ran" -Encoding ascii
+    $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
+
+    $exit = Invoke-SetupUninstall $world
+    Assert-True ($exit -eq 0) "Setup /FS25VR_UNINSTALL exited with $exit."
+
+    # Checked right away: Setup must wait until the uninstaller is completely done.
+    Assert-Missing $p.Injector "Injector"
+    Assert-Missing $p.ModZip "Companion Mod zip"
+    Assert-Missing $p.Log "fs25_vr.log"
+    Assert-Exists $p.ModSettings "modSettings VR settings"
+    Assert-Exists (Join-Path $world.Game "x64\FarmingSimulator2025Game.exe") "The game executable"
+    Assert-SameBytes $p.GameXml $gameXmlBefore "game.xml"
+    Assert-True ($null -eq (Get-UninstallEntry)) "FS25 VR is still registered in Add/Remove Programs."
+    Assert-Missing (Split-Path -Parent $recordPath) "The Installer's common application data folder (uninstaller and notices)"
+}
+
+Test-Case "Setup /FS25VR_UNINSTALL does what the uninstaller does: restores the foreign dxgi.dll and the Render Resolution" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world $null $null
+    Set-RealGameXml $world "2560" "1440" "fullscreen"
+    $p = Get-GamePaths $world
+    $backup = "$($p.Injector).fs25vr-backup"
+    $foreign = Get-ForeignDxgiBytes
+    [IO.File]::WriteAllBytes($p.Injector, $foreign)
+    $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
+    Assert-InstallSucceeds $world @("/FS25VR_RESOLUTION=4000x2500")
+    Assert-SameBytes $p.GameXml (Get-GameXmlBytes (New-RealGameXml "4000" "2500" "windowed")) "game.xml after install"
+
+    $exit = Invoke-SetupUninstall $world
+    Assert-True ($exit -eq 0) "Setup /FS25VR_UNINSTALL exited with $exit."
+
+    Assert-SameBytes $p.Injector $foreign "The foreign dxgi.dll restored"
+    Assert-Missing $backup "dxgi.dll.fs25vr-backup"
+    Assert-Missing $p.ModZip "Companion Mod zip"
+    Assert-SameBytes $p.GameXml $gameXmlBefore "game.xml (the Render Resolution restored)"
+    Assert-Exists $p.GameXmlBackup "game.xml.fs25vr-backup (kept)"
+    Assert-True ($null -eq (Get-RenderResolutionRecord)) "The Render Resolution record was not deleted."
+    Assert-Exists $p.ModSettings "modSettings VR settings"
+    Assert-True ($null -eq (Get-UninstallEntry)) "FS25 VR is still registered in Add/Remove Programs."
+}
+
+Test-Case "Setup /FS25VR_UNINSTALL with FS25 VR not installed fails with a logged reason and changes nothing" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+
+    $exit = Invoke-SetupUninstall $world        # a message box here would hang and fail the case
+    Assert-True ($exit -ne 0) "Setup /FS25VR_UNINSTALL succeeded although FS25 VR is not installed."
+    Assert-True ((Get-LastSetupLog $world) -match "FS25 VR is not installed") "Setup did not log that FS25 VR is not installed."
+
+    Assert-Missing $p.Injector "Injector"
+    Assert-Missing $p.ModZip "Companion Mod zip"
+    Assert-True ($null -eq (Get-UninstallEntry)) "FS25 VR was registered by an uninstall request."
+}
+
+Test-Case "Setup /FS25VR_UNINSTALL while the game is running fails and changes nothing" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    Assert-InstallSucceeds $world
+    Start-StandInGame $world
+
+    $exit = Invoke-SetupUninstall $world
+    Assert-True ($exit -ne 0) "Setup /FS25VR_UNINSTALL succeeded while Farming Simulator 25 was running."
+
+    Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
+    Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip"
+    Assert-True ($null -ne (Get-UninstallEntry)) "A refused uninstall removed the Add/Remove Programs entry."
+
+    # Once the game has closed, the same request goes through.
+    Stop-StandInGame
+    $exit = Invoke-SetupUninstall $world
+    Assert-True ($exit -eq 0) "Setup /FS25VR_UNINSTALL after the game closed exited with $exit."
+    Assert-Missing $p.Injector "Injector"
+    Assert-Missing $p.ModZip "Companion Mod zip"
+    Assert-True ($null -eq (Get-UninstallEntry)) "FS25 VR is still registered in Add/Remove Programs."
+}
+
+# Silent runs never show the upgrade/uninstall question. These run WITHOUT /SUPPRESSMSGBOXES (which would
+# answer the question for them), so a question shown anyway hangs Setup and fails the case.
+foreach ($mode in @("/VERYSILENT", "/SILENT")) {
+    Test-Case "Setup $mode over an existing install upgrades without asking" {
+        param($world, $mode)
+        New-FakeGame $world
+        New-FakeDocuments $world
+        $p = Get-GamePaths $world
+        Assert-InstallSucceeds $world @() "First Setup"
+        Remove-Item $p.Injector, $p.ModZip -Force      # make the second run visible
+
+        $exit = Invoke-SetupWithArgs $world @($mode, "/NORESTART", "/DIR=`"$($world.Game)`"")
+        Assert-True ($exit -eq 0) "Setup $mode over an existing install exited with $exit."
+
+        Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
+        Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip"
+        Assert-True ($null -ne (Get-UninstallEntry)) "FS25 VR is no longer registered after the upgrade."
+    } $mode
+}
+
 if ($failures.Count -gt 0) {
     Write-Error "$($failures.Count) installer test(s) failed: $($failures -join '; ')"
 }
