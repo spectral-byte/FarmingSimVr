@@ -81,6 +81,58 @@ function New-FakeDocuments($world, [string]$gameXml = $sampleGameXml) {
     if ($gameXml) { [IO.File]::WriteAllText((Join-Path $myGames "game.xml"), $gameXml, (New-Object Text.UTF8Encoding $false)) }
 }
 
+# A game.xml in the shape the game really writes (UTF-8 with BOM, CRLF line endings, 4-space indent;
+# copied from a real FS25 game.xml). The display <width>, <height> and <fullscreenMode> are the elements
+# the Render Resolution step edits; <previousWidth>, <previousHeight> and <previousFullscreenMode> sit next
+# to them and must stay as they are. The expected file after an edit is rendered from this same template
+# with different numbers, so the assertions do not depend on how the Installer edits.
+function New-RealGameXml([string]$width = "2560", [string]$height = "1440", [string]$mode = "fullscreen") {
+    $text = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<game>
+    <language>-1</language>
+    <graphic>
+        <display>
+            <width>$width</width>
+            <height>$height</height>
+            <brightness>1</brightness>
+            <fullscreenMode>$mode</fullscreenMode>
+            <vsync adaptive="true">false</vsync>
+            <userConfirmed>true</userConfirmed>
+            <previousWidth>3840</previousWidth>
+            <previousHeight>2160</previousHeight>
+            <scaling>1.000000</scaling>
+            <hdrOutput>true</hdrOutput>
+            <previousFullscreenMode>windowed_fullscreen</previousFullscreenMode>
+        </display>
+        <scalability>
+            <performanceClass>Very High</performanceClass>
+            <postProcessAA>FSR3</postProcessAA>
+        </scalability>
+        <renderer>D3D_12</renderer>
+    </graphic>
+    <audio enable="true" volume="1.000000"/>
+    <!-- NONASCII -->
+    <startMode>1</startMode>
+</game>
+
+"@
+    # Real non-ASCII text (this script stays ASCII), so UTF-8 multi-byte sequences sit in the file and
+    # must survive an edit byte for byte.
+    $text = $text.Replace("NONASCII", ("Gr" + [char]0xF6 + [char]0xDF + "e " + [char]0x20AC))
+    $text.Replace("`r`n", "`n").Replace("`n", "`r`n")
+}
+function Get-GameXmlBytes([string]$text) {
+    $bom = [byte[]](0xEF, 0xBB, 0xBF)
+    $bom + [Text.Encoding]::UTF8.GetBytes($text)
+}
+# game.xml as the game writes it, in place of the plain file New-FakeDocuments makes.
+function Set-RealGameXml($world, [string]$width = "2560", [string]$height = "1440", [string]$mode = "fullscreen") {
+    $p = Get-GamePaths $world
+    New-Item -ItemType Directory -Path $p.MyGames -Force | Out-Null
+    [IO.File]::WriteAllBytes($p.GameXml, (Get-GameXmlBytes (New-RealGameXml $width $height $mode)))
+}
+
 function Get-GamePaths($world) {
     $myGames = Join-Path $world.Documents "My Games\FarmingSimulator2025"
     [pscustomobject]@{
@@ -90,6 +142,7 @@ function Get-GamePaths($world) {
         DefaultMods  = Join-Path $myGames "mods"
         ModZip       = Join-Path $myGames "mods\FS25_VRCompanion.zip"
         GameXml      = Join-Path $myGames "game.xml"
+        GameXmlBackup = Join-Path $myGames "game.xml.fs25vr-backup"
         ModSettings  = Join-Path $myGames "modSettings\FS25_VRCompanion\settings.xml"
     }
 }
@@ -132,9 +185,23 @@ function Uninstall-Fs25Vr {
     if (Get-UninstallEntry) { throw "Uninstall did not finish within 60 seconds." }
 }
 
+# Where the Installer records the Render Resolution it changed, for the uninstall restore (#69): a text file
+# next to the uninstaller (see the Render Resolution record in installer\fs25_vr.iss).
+$recordPath = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) "FS25 VR\render-resolution.ini"
+# Reads the record into a hashtable of key -> value, or $null when there is none.
+function Get-RenderResolutionRecord {
+    if (-not (Test-Path $recordPath)) { return $null }
+    $record = @{}
+    foreach ($line in [IO.File]::ReadAllLines($recordPath)) {
+        if ($line -match '^([A-Za-z]+)=(.*)$') { $record[$Matches[1]] = $Matches[2] }
+    }
+    $record
+}
+
 # Always leave the machine clean, whether or not the case passed.
 function Remove-TestWorld($world) {
     if (Get-UninstallEntry) { try { Uninstall-Fs25Vr } catch { Write-Warning "Cleanup uninstall failed: $_" } }
+    Remove-Item $recordPath -Force -ErrorAction SilentlyContinue   # the uninstall leaves it for #69 to read
     Remove-Item $world.Root -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -236,6 +303,138 @@ Test-Case "A folder without x64\FarmingSimulator2025Game.exe is refused" {
     Assert-Missing $p.Injector "Injector"
     Assert-Missing $p.ModZip "Companion Mod zip"
     Assert-True ($null -eq (Get-UninstallEntry)) "A refused install was still registered in Add/Remove Programs."
+}
+
+# --- Render Resolution (#66) ---------------------------------------------------------------------
+
+Test-Case "Render Resolution WxH writes width, height and windowed, changes nothing else, backs up game.xml once and records the values" {
+    param($world)
+    New-FakeGame $world
+    Set-RealGameXml $world "2560" "1440" "fullscreen"
+    $p = Get-GamePaths $world
+    $original = [IO.File]::ReadAllBytes($p.GameXml)
+
+    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+
+    $expected = Get-GameXmlBytes (New-RealGameXml "4000" "2500" "windowed")
+    Assert-SameBytes $p.GameXml $expected "game.xml (only width, height and fullscreenMode may differ)"
+    Assert-SameBytes $p.GameXmlBackup $original "game.xml.fs25vr-backup (the untouched original)"
+
+    $r = Get-RenderResolutionRecord
+    Assert-True ($null -ne $r) "No Render Resolution record was written at $recordPath."
+    Assert-True ($r.GameXml -eq $p.GameXml) "Record GameXml is '$($r.GameXml)', expected '$($p.GameXml)'."
+    Assert-True ($r.OriginalWidth -eq "2560" -and $r.OriginalHeight -eq "1440" -and $r.OriginalFullscreenMode -eq "fullscreen") `
+        "Record originals are $($r.OriginalWidth)x$($r.OriginalHeight) $($r.OriginalFullscreenMode), expected 2560x1440 fullscreen."
+    Assert-True ($r.WrittenWidth -eq "4000" -and $r.WrittenHeight -eq "2500" -and $r.WrittenFullscreenMode -eq "windowed") `
+        "Record written values are $($r.WrittenWidth)x$($r.WrittenHeight) $($r.WrittenFullscreenMode), expected 4000x2500 windowed."
+}
+
+Test-Case "Without /FS25VR_RESOLUTION game.xml is untouched and no backup or record is made" {
+    param($world)
+    New-FakeGame $world
+    Set-RealGameXml $world
+    $p = Get-GamePaths $world
+    $original = [IO.File]::ReadAllBytes($p.GameXml)
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+
+    Assert-SameBytes $p.GameXml $original "game.xml"
+    Assert-Missing $p.GameXmlBackup "game.xml.fs25vr-backup"
+    Assert-True ($null -eq (Get-RenderResolutionRecord)) "A Render Resolution record was written although no resolution was applied."
+}
+
+Test-Case "Render Resolution accepts the 640 and 8192 limits" {
+    param($world)
+    New-FakeGame $world
+    Set-RealGameXml $world
+    $p = Get-GamePaths $world
+
+    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=640x8192")
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-SameBytes $p.GameXml (Get-GameXmlBytes (New-RealGameXml "640" "8192" "windowed")) "game.xml"
+}
+
+Test-Case "Render Resolution values that are not whole numbers from 640 to 8192 are rejected before anything is placed" {
+    param($world)
+    New-FakeGame $world
+    Set-RealGameXml $world
+    $p = Get-GamePaths $world
+    $original = [IO.File]::ReadAllBytes($p.GameXml)
+
+    foreach ($bad in @("639x1440", "2560x639", "8193x1440", "2560x8193", "0x0", "abcxdef", "2560x", "x1440", "2560",
+                       "2560x1440x3", "25.5x1440", "-2560x1440", "2560x 1440", "1e3x1440", "99999999999x1440")) {
+        $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=`"$bad`"")
+        Assert-True ($exit -ne 0) "Setup accepted /FS25VR_RESOLUTION=$bad."
+        Assert-SameBytes $p.GameXml $original "game.xml after /FS25VR_RESOLUTION=$bad"
+        Assert-Missing $p.GameXmlBackup "game.xml.fs25vr-backup after /FS25VR_RESOLUTION=$bad"
+        Assert-Missing $p.Injector "Injector after /FS25VR_RESOLUTION=$bad"
+        Assert-True ($null -eq (Get-RenderResolutionRecord)) "A record was written for /FS25VR_RESOLUTION=$bad."
+        Assert-True ($null -eq (Get-UninstallEntry)) "A rejected install was registered for /FS25VR_RESOLUTION=$bad."
+    }
+}
+
+Test-Case "With no game.xml the install succeeds, the resolution is skipped and no game.xml is created" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world $null          # My Games and modSettings exist, game.xml does not
+    $p = Get-GamePaths $world
+
+    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+
+    Assert-Missing $p.GameXml "game.xml"
+    Assert-Missing $p.GameXmlBackup "game.xml.fs25vr-backup"
+    Assert-True ($null -eq (Get-RenderResolutionRecord)) "A record was written although there was no game.xml."
+    Assert-SameFile $p.Injector $stagedInjector "Injector"
+    Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip"
+}
+
+Test-Case "A game.xml without display width, height and fullscreenMode fails the install and is left alone" {
+    param($world)
+    New-FakeGame $world
+    $p = Get-GamePaths $world
+    New-Item -ItemType Directory -Path $p.MyGames -Force | Out-Null
+    $odd = [Text.Encoding]::UTF8.GetBytes("<game><graphic><display><brightness>1</brightness></display></graphic></game>")
+    [IO.File]::WriteAllBytes($p.GameXml, $odd)
+
+    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")
+    Assert-True ($exit -ne 0) "Setup applied a resolution to a game.xml with no width, height and fullscreenMode."
+    Assert-SameBytes $p.GameXml $odd "game.xml"
+    Assert-Missing $p.GameXmlBackup "game.xml.fs25vr-backup"
+    Assert-Missing $p.Injector "Injector"
+}
+
+Test-Case "Applying again keeps the first backup and the first originals; applying after an in-game change records the new originals" {
+    param($world)
+    # A Documents path with non-ASCII characters checks that the record survives the round trip
+    # (the Installer re-reads it to decide which originals to keep).
+    $world.Documents = Join-Path $world.Root ("Dokumente " + [char]0xF6 + [char]0x20AC)
+    New-FakeGame $world
+    Set-RealGameXml $world "2560" "1440" "fullscreen"
+    $p = Get-GamePaths $world
+    $firstOriginal = [IO.File]::ReadAllBytes($p.GameXml)
+
+    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")) -eq 0) "First Setup failed."
+    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=5000x3000")) -eq 0) "Second Setup (upgrade) failed."
+
+    Assert-SameBytes $p.GameXml (Get-GameXmlBytes (New-RealGameXml "5000" "3000" "windowed")) "game.xml after the second apply"
+    Assert-SameBytes $p.GameXmlBackup $firstOriginal "game.xml.fs25vr-backup (must still be the very first original)"
+    $r = Get-RenderResolutionRecord
+    Assert-True ($r.GameXml -eq $p.GameXml) "Record GameXml is '$($r.GameXml)', expected '$($p.GameXml)'."
+    Assert-True ($r.OriginalWidth -eq "2560" -and $r.OriginalHeight -eq "1440" -and $r.OriginalFullscreenMode -eq "fullscreen") `
+        "After a second apply the record's originals are $($r.OriginalWidth)x$($r.OriginalHeight) $($r.OriginalFullscreenMode), expected the first original 2560x1440 fullscreen."
+    Assert-True ($r.WrittenWidth -eq "5000" -and $r.WrittenHeight -eq "3000" -and $r.WrittenFullscreenMode -eq "windowed") `
+        "Record written values are $($r.WrittenWidth)x$($r.WrittenHeight) $($r.WrittenFullscreenMode), expected 5000x3000 windowed."
+
+    # The player changes the resolution in the game, then applies again: those are the new originals.
+    Set-RealGameXml $world "1920" "1080" "windowed_fullscreen"
+    Assert-True ((Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4500x2800")) -eq 0) "Third Setup failed."
+    $r = Get-RenderResolutionRecord
+    Assert-True ($r.OriginalWidth -eq "1920" -and $r.OriginalHeight -eq "1080" -and $r.OriginalFullscreenMode -eq "windowed_fullscreen") `
+        "After an in-game change the record's originals are $($r.OriginalWidth)x$($r.OriginalHeight) $($r.OriginalFullscreenMode), expected 1920x1080 windowed_fullscreen."
+    Assert-SameBytes $p.GameXmlBackup $firstOriginal "game.xml.fs25vr-backup after the third apply"
 }
 
 if ($failures.Count -gt 0) {
