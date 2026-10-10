@@ -12,6 +12,10 @@ _Avoid_: Wrapper, loader, hook DLL
 The in-engine Luau script mod executing inside GIANTS Engine 10 that manipulates camera transforms and asymmetric frustum projections.
 _Avoid_: Script hook, Lua plugin
 
+**Installer**:
+The setup program a player runs to place the Injector into a chosen game installation and the Companion Mod into their mods folder, and to remove both again. Never part of the running game.
+_Avoid_: Injector installer, setup script, launcher
+
 **VRBridge**:
 The global Luau table injected into GIANTS Engine 10 by the Injector that exposes OpenXR view state, asymmetric projection parameters, and frame synchronization flags to the Companion Mod.
 _Avoid_: Tracking bridge, shared memory buffer, IPC pipe
@@ -123,6 +127,10 @@ _Avoid_: History purge, buffer clear, DLSS reset trigger
 **Cyclopean Audio Listener Node**:
 The stationary in-engine transform node positioned at the midpoint between the player's eyes to which the spatial audio listener is bound, isolating spatial acoustics from alternating eye camera hops.
 _Avoid_: Neutral audio node, center ear node, mono listener node
+
+**Render Resolution**:
+The width and height the engine allocates its backbuffer at, taken from the game's display settings. Under Resolution Decoupling it is independent of the Desktop Mirror Window size, so it can match the headset's per-eye resolution even when no monitor supports that size.
+_Avoid_: Game resolution, screen resolution, window size
 
 **Headset-Native Target Upscaling**:
 The operational configuration where temporal upscaler output dimensions are matched directly to the decoupled OpenXR recommended eye resolution rather than the desktop mirror window.
