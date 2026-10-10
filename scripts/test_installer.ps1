@@ -831,6 +831,42 @@ Test-Case "A game.xml without display width, height and fullscreenMode fails the
     Assert-Missing $p.Injector "Injector"
 }
 
+# A failed install must leave the player's own dxgi.dll (ReShade, ...) exactly where it was: under its
+# original name, with no backup made, because nothing is registered to put it back.
+function Assert-ForeignDxgiUntouched($world, [byte[]]$foreign, [string]$when) {
+    $p = Get-GamePaths $world
+    Assert-SameBytes $p.Injector $foreign "The foreign dxgi.dll in x64 $when"
+    Assert-Missing "$($p.Injector).fs25vr-backup" "dxgi.dll.fs25vr-backup $when"
+    Assert-True ($null -eq (Get-UninstallEntry)) "A failed install was registered in Add/Remove Programs $when."
+}
+
+Test-Case "A rejected /FS25VR_RESOLUTION leaves a foreign dxgi.dll where it was and makes no backup" {
+    param($world)
+    New-FakeGame $world
+    Set-RealGameXml $world
+    $p = Get-GamePaths $world
+    $foreign = Get-ForeignDxgiBytes
+    [IO.File]::WriteAllBytes($p.Injector, $foreign)
+
+    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=639x1440")
+    Assert-True ($exit -ne 0) "Setup accepted /FS25VR_RESOLUTION=639x1440."
+    Assert-ForeignDxgiUntouched $world $foreign "after a rejected /FS25VR_RESOLUTION"
+}
+
+Test-Case "A game.xml without display elements leaves a foreign dxgi.dll where it was and makes no backup" {
+    param($world)
+    New-FakeGame $world
+    $p = Get-GamePaths $world
+    New-Item -ItemType Directory -Path $p.MyGames -Force | Out-Null
+    [IO.File]::WriteAllBytes($p.GameXml, [Text.Encoding]::UTF8.GetBytes("<game><graphic><display><brightness>1</brightness></display></graphic></game>"))
+    $foreign = Get-ForeignDxgiBytes
+    [IO.File]::WriteAllBytes($p.Injector, $foreign)
+
+    $exit = Install-Fs25Vr $world @("/FS25VR_RESOLUTION=4000x2500")
+    Assert-True ($exit -ne 0) "Setup applied a resolution to a game.xml with no display elements."
+    Assert-ForeignDxgiUntouched $world $foreign "after a game.xml without display elements"
+}
+
 Test-Case "Applying again keeps the first backup and the first originals; applying after an in-game change records the new originals" {
     param($world)
     # A Documents path with non-ASCII characters checks that the record survives the round trip

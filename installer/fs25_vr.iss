@@ -845,7 +845,10 @@ begin
 end;
 
 { Also covers silent installs, where there is no directory page. A silent Setup must not wait on a
-  message box, so it logs the reason and aborts; an interactive one shows the message. }
+  message box, so it logs the reason and aborts; an interactive one shows the message.
+  Everything that can refuse the install runs first (game folder, game running, Render Resolution
+  input and game.xml); only then is the player's own dxgi.dll moved aside. Nothing is registered to
+  put that file back if the install fails, so it must not be moved before the last check has passed. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := GameFolderProblem(WizardDirValue);
@@ -859,7 +862,7 @@ begin
 
   if Result = '' then
   begin
-    Result := PrepareExistingDxgi(WizardDirValue);
+    Result := PrepareRenderResolution;
     if (Result <> '') and WizardSilent then
     begin
       Log(Result);
@@ -868,7 +871,7 @@ begin
   end;
   if Result = '' then
   begin
-    Result := PrepareRenderResolution;
+    Result := PrepareExistingDxgi(WizardDirValue);
     if (Result <> '') and WizardSilent then
     begin
       Log(Result);
