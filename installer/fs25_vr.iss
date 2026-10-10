@@ -45,7 +45,7 @@
 ;   record, then deletes the record. It never touches game.xml.fs25vr-backup or the Companion Mod's
 ;   modSettings. With no record (the Installer never set a Render Resolution) it does nothing.
 ;
-; English only, requires admin, unsigned (see docs/adr/0024-unsigned-inno-setup-installer.md).
+; English only, requires admin, unsigned (see docs/adr/0024-unsigned-inno-setup-installer-and-static-runtime-injector.md).
 
 #ifndef AppVersion
   #error AppVersion is not defined. Build with scripts\package_release.ps1 (or pass /DAppVersion=...).
