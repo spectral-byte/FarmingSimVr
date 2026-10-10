@@ -14,7 +14,7 @@ Both paths composed the head pose onto the head tracking node with `localRotatio
 - `setQuaternion` places the Dual Eye Camera Nodes, the Cyclopean Audio Listener Node and the game's own camera. The view shown while head tracking is lost, the Outside Camera on its level base and the recenter realignment use the same path.
 
 ## Status
-Proposed. The Luau suite `test_head_rotation.luau` covers the cab and on-foot paths at every head yaw against a mock engine in both conventions, modelling the precision loss at the singularity. Awaiting confirmation in the headset.
+Accepted. Verified in the headset: the view keeps pitching when looking a quarter turn to the side. The Luau suite `test_head_rotation.luau` covers the cab and on-foot paths at every head yaw against a mock engine in both conventions, modelling the precision loss at the singularity.
 
 ## Considered Options
 - **Keep `localRotationToLocal` and fix the angle order** (rejected: the read-back still loses the pitch at the singularity).
