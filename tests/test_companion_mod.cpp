@@ -2040,8 +2040,9 @@ TEST_F(CompanionModTest, DefinesAndCalculatesDefaultAndCustomVRHudSafeArea) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL == 0.30, "DEFAULT_HUD_SAFE_AREA_HORIZONTAL must be 0.30")
         assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL == 0.22, "DEFAULT_HUD_SAFE_AREA_VERTICAL must be 0.22")
-        assert(VRCompanion.DEFAULT_HUD_GROUP_SCALE == 0.82, "DEFAULT_HUD_GROUP_SCALE must be 0.82")
-        assert(VRCompanion.DEFAULT_HUD_GROUP_MARGIN_X == 0.30 and VRCompanion.DEFAULT_HUD_GROUP_MARGIN_Y == 0.22, "group margin defaults must be 0.30 / 0.22")
+        local mapDefaults = VRCompanion.DEFAULT_HUD_GROUP_LAYOUTS.map
+        assert(mapDefaults.scale == 0.82, "the map group's default scale must be 0.82")
+        assert(mapDefaults.marginX == 0.30 and mapDefaults.marginY == 0.22, "the map group's default margins must be 0.30 / 0.22")
 
         local left, right, bottom, top = VRCompanion:calculateHudAnchors()
         assert(math.abs(left - 0.30) < 0.0001, "left anchor default must be 0.30")
@@ -2153,10 +2154,11 @@ TEST_F(CompanionModTest, AppliesVRHudSafeAreaAndGroupMarginsToStandardDisplaysUp
         assert(displays.ingameMap.storeScaledValuesCalled == true, "ingameMap storeScaledValues called")
 
         -- Display positioning coordinates
-        assert(displays.speedMeter.position.x == 0.70 and displays.speedMeter.position.y == 0.22, "speedMeter bottom-right")
-        assert(displays.inputHelp.position.x == 0.30 and displays.inputHelp.position.y == 0.78, "inputHelp top-left")
-        assert(displays.gameInfo.position.x == 0.70 and displays.gameInfo.position.y == 0.78, "gameInfo top-right")
-        assert(displays.contextAction.position.x == 0.5 and displays.contextAction.position.y == 0.22, "contextAction centered on the speedometer bottom margin")
+        local function near(a, b) return math.abs(a - b) < 0.0001 end
+        assert(near(displays.speedMeter.position.x, 0.70) and near(displays.speedMeter.position.y, 0.20), "speedMeter bottom-right")
+        assert(near(displays.inputHelp.position.x, 0.30) and near(displays.inputHelp.position.y, 0.70), "inputHelp top-left")
+        assert(near(displays.gameInfo.position.x, 0.70) and near(displays.gameInfo.position.y, 0.70), "gameInfo top-right")
+        assert(near(displays.contextAction.position.x, 0.5) and near(displays.contextAction.position.y, 0.20), "contextAction centered on the speedometer bottom margin")
         assert(displays.ingameMap.position.x == 0.30 and displays.ingameMap.position.y == 0.22, "ingameMap bottom-left")
     )luau", "=verifyDisplaysUponMapLoad"), 0);
 }
