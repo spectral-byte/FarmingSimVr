@@ -112,7 +112,7 @@ FS25 VR is built as a hybrid two-tier architecture:
 ### Recommended: Install with the Installer
 
 1. Download **`FS25_VR_v<version>_Setup.exe`** from the [latest release](https://github.com/spectral-byte/FarmingSimVr/releases) and run it. It asks for administrator rights.
-2. Browse to your Farming Simulator 25 game folder, the one that contains `x64\FarmingSimulator2025Game.exe`. The Installer refuses any other folder.
+2. The Installer looks for your game in Steam (every Steam library, including ones on other drives), Epic Games and the GIANTS standalone version. One installation is pre-selected; with several you pick one. If yours was not found, **Browse...** to the folder that contains `x64\FarmingSimulator2025Game.exe`. The Installer refuses any other folder, and it refuses Microsoft Store / Game Pass installs as unsupported.
 3. Finish the wizard. The Installer copies `dxgi.dll` into the game's `x64` folder and `FS25_VRCompanion.zip` (not extracted) into `Documents\My Games\FarmingSimulator2025\mods`. It follows your Documents folder if OneDrive has moved it.
 4. Continue with [Step 3: Launch the Game](#step-3-launch-the-game).
 
@@ -227,6 +227,8 @@ ctest --test-dir build --output-on-failure
 # Silently installs and uninstalls the Setup exe against a fake game folder and Documents folder, then checks the files
 .\scripts\test_installer.ps1
 ```
+
+CI cannot check how the Installer finds the game (Steam libraries, Epic, GIANTS standalone), so run the manual [installer release checklist](docs/installer-release-checklist.md) before publishing a release.
 
 ### Packaging and Deploying the Companion Mod
 

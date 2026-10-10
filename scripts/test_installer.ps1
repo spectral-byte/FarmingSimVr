@@ -238,6 +238,40 @@ Test-Case "A folder without x64\FarmingSimulator2025Game.exe is refused" {
     Assert-True ($null -eq (Get-UninstallEntry)) "A refused install was still registered in Add/Remove Programs."
 }
 
+# Game installation detection reads the real machine, so only the Game Pass rejection is automated;
+# the rest is docs\installer-release-checklist.md. A silent run must refuse a Store folder with a
+# logged reason, never a message box (Wait-Process-Guarded fails the case if a dialog hangs Setup).
+Test-Case "A Game Pass folder (XboxGames\...\Content with MicrosoftGame.config) is refused as unsupported" {
+    param($world)
+    $world.Game = Join-Path $world.Root "XboxGames\Farming Simulator 25\Content"
+    New-FakeGame $world
+    Set-Content -Path (Join-Path $world.Game "MicrosoftGame.config") -Value "<Game/>" -Encoding ascii
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -ne 0) "Setup accepted a Game Pass folder."
+    $setupLog = Get-Content "$($world.Root)\setup.log" -Raw
+    Assert-True ($setupLog -match "Game Pass installations of Farming Simulator 25 are not supported") "Setup did not say that Game Pass is unsupported."
+
+    Assert-Missing $p.Injector "Injector"
+    Assert-Missing $p.ModZip "Companion Mod zip"
+    Assert-True ($null -eq (Get-UninstallEntry)) "A refused install was still registered in Add/Remove Programs."
+}
+
+Test-Case "A Microsoft Store folder under WindowsApps is refused as unsupported" {
+    param($world)
+    $world.Game = Join-Path $world.Root "WindowsApps\GIANTSSoftware.FarmingSimulator25_1.0_x64__abc"
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -ne 0) "Setup accepted a Microsoft Store folder."
+    Assert-True ((Get-Content "$($world.Root)\setup.log" -Raw) -match "are not supported") "Setup did not say that the Microsoft Store version is unsupported."
+    Assert-Missing $p.Injector "Injector"
+}
+
 if ($failures.Count -gt 0) {
     Write-Error "$($failures.Count) installer test(s) failed: $($failures -join '; ')"
 }

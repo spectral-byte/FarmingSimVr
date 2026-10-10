@@ -82,6 +82,27 @@ const
     'This folder is not a Farming Simulator 25 installation.' + #13#10#13#10 +
     'Choose the folder that contains x64\FarmingSimulator2025Game.exe.';
 
+{ Game installation detection (Steam libraries, Epic manifests, GIANTS standalone, the Game Pass
+  rejection and the picker page): see game_detection.iss. }
+#include "game_detection.iss"
+
+{ Empty when Dir can be installed to; otherwise the reason it cannot. A Microsoft Store / Game Pass
+  folder is reported as unsupported rather than as "not a Farming Simulator 25 installation". }
+function GameFolderProblem(Dir: String): String;
+begin
+  if IsStoreFolder(Dir) then
+    Result := StoreFolderMessage
+  else if not IsGameFolder(Dir) then
+    Result := NotGameFolderMessage
+  else
+    Result := '';
+end;
+
+procedure InitializeWizard;
+begin
+  InitGameDetection;
+end;
+
 { The user's Documents folder (honors OneDrive redirection through the known folder), unless the
   hidden test-only /FS25VR_DOCUMENTS switch replaces it. }
 function GetDocumentsDir: String;
@@ -99,10 +120,11 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
+  AcceptPickedInstallation(CurPageID);
   if (CurPageID = wpSelectDir) and not WizardSilent then
-    if not IsGameFolder(WizardDirValue) then
+    if GameFolderProblem(WizardDirValue) <> '' then
     begin
-      MsgBox(NotGameFolderMessage, mbError, MB_OK);
+      MsgBox(GameFolderProblem(WizardDirValue), mbError, MB_OK);
       Result := False;
     end;
 end;
@@ -111,14 +133,10 @@ end;
   message box, so it logs the reason and aborts; an interactive one shows the message. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  Result := '';
-  if not IsGameFolder(WizardDirValue) then
+  Result := GameFolderProblem(WizardDirValue);
+  if (Result <> '') and WizardSilent then
   begin
-    if WizardSilent then
-    begin
-      Log(NotGameFolderMessage);
-      Abort;
-    end;
-    Result := NotGameFolderMessage;
+    Log(Result);
+    Abort;
   end;
 end;
