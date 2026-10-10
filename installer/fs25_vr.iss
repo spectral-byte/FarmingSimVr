@@ -11,6 +11,13 @@
 ;                                An invalid value fails the install before anything is placed. With no
 ;                                game.xml the install succeeds and the resolution is skipped (logged).
 ;                                In a wizard run it pre-ticks and pre-fills the Render Resolution page.
+;   /FS25VR_UNINSTALL            runs the existing uninstaller unattended instead of installing (no /DIR needed),
+;                                waits for it and exits with its exit code. With nothing installed it logs
+;                                "FS25 VR is not installed" and exits 1. Setup shows no window and
+;                                no message box for it.
+;
+; Running Setup interactively while FS25 VR is installed first asks: Upgrade or reinstall / Uninstall / Cancel
+; (see "Uninstalling through the Setup exe" in [Code]). Silent runs never ask and keep upgrading.
 ;
 ; Render Resolution
 ;   The game's settings file is <Documents>\My Games\FarmingSimulator2025\game.xml. It is NOT
@@ -889,4 +896,157 @@ end;
 function InitializeUninstall: Boolean;
 begin
   Result := EnsureGameNotRunning(UninstallSilent);
+end;
+
+{ ---- Uninstalling through the Setup exe ----
+  Running Setup while FS25 VR is installed asks first (interactive runs only): upgrade or reinstall, uninstall,
+  or cancel. Uninstall starts the existing uninstaller with its normal windows and Setup ends. A silent run
+  never asks and goes on upgrading. /FS25VR_UNINSTALL runs the existing uninstaller unattended instead of
+  installing, waits until it has finished and ends with its exit code (1 when FS25 VR is not installed),
+  so scripts and CI can uninstall with the same exe they installed with. Both go through the uninstaller
+  Inno registered (the UninstallString of the Add/Remove Programs entry), so everything the uninstaller
+  does (the game-running check, the restores) happens exactly as when it is started from Windows Settings. }
+
+procedure ExitProcess(uExitCode: Cardinal);
+  external 'ExitProcess@kernel32.dll stdcall';
+
+const
+  UninstallSwitch = 'FS25VR_UNINSTALL';
+  UninstallWaitMilliseconds = 60000;
+  NotInstalledMessage = 'FS25 VR is not installed, so there is nothing to uninstall.';
+
+{ /Name or -Name on the command line (Inno's own param constant only finds the /Name=value form). }
+function HasCommandLineSwitch(const Name: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if SameText(ParamStr(I), '/' + Name) or SameText(ParamStr(I), '-' + Name) then
+      Result := True;
+end;
+
+{ True when Setup must never show a question. WizardSilent is not relied on alone because this runs in
+  InitializeSetup, before the wizard exists. }
+function IsUnattendedRun: Boolean;
+begin
+  Result := WizardSilent or HasCommandLineSwitch('SILENT') or HasCommandLineSwitch('VERYSILENT');
+end;
+
+function QueryUninstallString(RootKey: Integer; var Value: String): Boolean;
+begin
+  Value := '';
+  Result := RegQueryStringValue(RootKey, UninstallKey, 'UninstallString', Value) and (Trim(Value) <> '');
+end;
+
+{ The uninstaller of an existing FS25 VR install, from Inno's Add/Remove Programs entry. Looks in the
+  machine and the current user hive, in the 64-bit and the 32-bit view of each. False (with a log line)
+  when there is no entry or the uninstaller it names is gone. }
+function FindExistingUninstaller(var Exe: String): Boolean;
+var
+  Value: String;
+  Found: Boolean;
+begin
+  Exe := '';
+  Found := QueryUninstallString(HKLM64, Value);
+  if not Found then Found := QueryUninstallString(HKLM32, Value);
+  if not Found then Found := QueryUninstallString(HKCU64, Value);
+  if not Found then Found := QueryUninstallString(HKCU32, Value);
+  Result := False;
+  if not Found then Exit;
+  Exe := RemoveQuotes(Trim(Value));
+  if FileExists(Exe) then
+    Result := True
+  else
+    Log('The uninstaller registered for FS25 VR is missing: ' + Exe);
+end;
+
+{ Runs the uninstaller, waits for it and returns its exit code (1 if it could not be started). Inno's
+  uninstaller hands the work to a temporary copy and exits when that copy removes the original, last of
+  all; so after a success wait until the original is really gone before reporting it. }
+function RunExistingUninstaller(const Exe, Params: String; ShowCmd: Integer): Integer;
+var
+  Code, Waited: Integer;
+begin
+  Log('Running the uninstaller ' + Exe + ' ' + Params);
+  if not Exec(Exe, Params, '', ShowCmd, ewWaitUntilTerminated, Code) then
+  begin
+    Log('Could not start the uninstaller: ' + SysErrorMessage(Code));
+    Result := 1;
+    Exit;
+  end;
+  Log('The uninstaller finished with exit code ' + IntToStr(Code) + '.');
+  Result := Code;
+  if Code = 0 then
+  begin
+    Waited := 0;
+    while FileExists(Exe) and (Waited < UninstallWaitMilliseconds) do
+    begin
+      Sleep(250);
+      Waited := Waited + 250;
+    end;
+    if FileExists(Exe) then
+      Log('The uninstaller is still there after ' + IntToStr(UninstallWaitMilliseconds div 1000) + ' seconds.');
+  end;
+end;
+
+{ /FS25VR_UNINSTALL: very silent (plain /SILENT when Setup itself was given /SILENT, which only adds a
+  progress window), never asking, never restarting. Returns the exit code Setup ends with. }
+function UninstallThroughSwitch: Integer;
+var
+  Exe, Params: String;
+begin
+  if not FindExistingUninstaller(Exe) then
+  begin
+    Log(NotInstalledMessage);
+    Result := 1;
+    Exit;
+  end;
+  if HasCommandLineSwitch('SILENT') and not HasCommandLineSwitch('VERYSILENT') then
+    Params := '/SILENT'
+  else
+    Params := '/VERYSILENT';
+  Result := RunExistingUninstaller(Exe, Params + ' /SUPPRESSMSGBOXES /NORESTART', SW_HIDE);
+end;
+
+{ IDYES = upgrade or reinstall, IDNO = uninstall, IDCANCEL = cancel (also the window's close button).
+  Only called for interactive runs: /SUPPRESSMSGBOXES does nothing without /SILENT or /VERYSILENT. }
+function AskUpgradeOrUninstall: Integer;
+var
+  Labels: TArrayOfString;
+begin
+  { Each label is the button text, a line break, then the note under it. (Built here because a line
+    that starts with "[" is read as a section header.) }
+  SetArrayLength(Labels, 2);
+  Labels[0] := 'Upgrade or reinstall' + #13#10 + 'Install this version over the existing one.';
+  Labels[1] := 'Uninstall' + #13#10 + 'Remove FS25 VR from this computer.';
+  Result := TaskDialogMsgBox('FS25 VR is already installed', 'What do you want to do?',
+    mbConfirmation, MB_YESNOCANCEL, Labels, 0);
+end;
+
+function InitializeSetup: Boolean;
+var
+  Exe: String;
+  ExitCode: Integer;
+begin
+  Result := True;
+  if HasCommandLineSwitch(UninstallSwitch) then
+  begin
+    ExitCode := UninstallThroughSwitch;
+    ExitProcess(ExitCode);   { Setup has no other way to end with the uninstaller's exit code }
+    Result := False;
+    Exit;
+  end;
+  if IsUnattendedRun then Exit;
+  if not FindExistingUninstaller(Exe) then Exit;
+  case AskUpgradeOrUninstall of
+    IDNO:
+      begin
+        ExitCode := RunExistingUninstaller(Exe, '', SW_SHOWNORMAL);
+        ExitProcess(ExitCode);
+        Result := False;
+      end;
+    IDCANCEL:
+      Result := False;
+  end;
 end;

@@ -60,6 +60,17 @@ Use a machine or VM where you can install the game from each store, and uninstal
 - [ ] Browse to a Game Pass copy of the game (`C:\XboxGames\Farming Simulator 25\Content`, or a folder under `WindowsApps`) and click **Next**: a message says Microsoft Store / Game Pass installations are not supported. The wizard stays on the page.
 - [ ] A silent run against the same folder (`/VERYSILENT /DIR="..."`) exits with a non-zero code, shows no message box, and the log contains the same message. (`scripts\test_installer.ps1` automates this with fake folders; this item checks it against a real Game Pass install.)
 
+## 9. Setup offers to uninstall
+
+`scripts\test_installer.ps1` automates `/FS25VR_UNINSTALL` and the silent upgrade; the question itself needs a person.
+
+- [ ] With FS25 VR installed, run the Installer (double-click). Before any wizard page, a dialog says FS25 VR is already installed and offers **Upgrade or reinstall**, **Uninstall** and **Cancel**.
+- [ ] **Cancel** (and the window's close button) ends Setup; FS25 VR is still installed and nothing changed.
+- [ ] **Upgrade or reinstall** continues with the normal wizard (item 7: the previous folder is pre-selected).
+- [ ] **Uninstall** opens the normal uninstaller (its own confirmation and "uninstall complete" message), and Setup shows no wizard. Afterwards `dxgi.dll` and the Companion Mod zip are gone. With the game running, the uninstaller asks you to close it.
+- [ ] With FS25 VR not installed, the dialog does not appear.
+- [ ] `FS25_VR_v<version>_Setup.exe /VERYSILENT` over an existing install upgrades without any dialog.
+
 ## After the checklist
 
 Record the Installer version and the date you ran it in the release notes draft, together with any item you could not run (for example "no Epic machine available").
