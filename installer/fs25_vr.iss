@@ -91,9 +91,57 @@ begin
     Result := ExpandConstant('{userdocs}');
 end;
 
+function GetMyGamesDir: String;
+begin
+  Result := AddBackslash(GetDocumentsDir) + 'My Games\FarmingSimulator2025';
+end;
+
+{ The directory of the game's active mods directory override in game.xml, or '' when game.xml is
+  missing/unreadable or has no override element, or the override is inactive or has no directory.
+  The file is only read, never written. }
+function GetModsDirOverride: String;
+var
+  Doc, Node, ActiveAttr, DirAttr: Variant;
+  Path: String;
+begin
+  Result := '';
+  Path := AddBackslash(GetMyGamesDir) + 'game.xml';
+  if not FileExists(Path) then
+    Exit;
+  try
+    Doc := CreateOleObject('Msxml2.DOMDocument.6.0');
+    Doc.async := False;
+    if not Doc.load(Path) then
+      Exit;
+    Node := Doc.selectSingleNode('//modsDirectoryOverride');
+    if VarIsNull(Node) or VarIsEmpty(Node) then
+      Exit;
+    ActiveAttr := Node.getAttribute('active');
+    DirAttr := Node.getAttribute('directory');
+    if VarIsNull(ActiveAttr) or VarIsNull(DirAttr) then
+      Exit;
+    if CompareText(Trim(String(ActiveAttr)), 'true') <> 0 then
+      Exit;
+    Result := Trim(String(DirAttr));
+    StringChangeEx(Result, '/', '\', True);
+    if Result <> '' then
+      Result := RemoveBackslashUnlessRoot(Result);
+  except
+    Log('Could not read the mods directory override from ' + Path + ': ' + GetExceptionMessage);
+    Result := '';
+  end;
+end;
+
+{ Where the Companion Mod goes: the active mods directory override if there is one, else the
+  default mods folder. Inno records the resolved path with the file, so uninstall removes the mod
+  from wherever it was installed. }
 function GetModsDir(Param: String): String;
 begin
-  Result := AddBackslash(GetDocumentsDir) + 'My Games\FarmingSimulator2025\mods';
+  Result := GetModsDirOverride;
+  if Result = '' then
+    Result := AddBackslash(GetMyGamesDir) + 'mods'
+  else
+    Log('Mods directory override is active; installing the Companion Mod into ' + Result);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

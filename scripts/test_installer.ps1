@@ -238,6 +238,90 @@ Test-Case "A folder without x64\FarmingSimulator2025Game.exe is refused" {
     Assert-True ($null -eq (Get-UninstallEntry)) "A refused install was still registered in Add/Remove Programs."
 }
 
+# --- Mods directory override (ticket #64) ---------------------------------------------------
+
+# A game.xml whose mods directory override element is set as given (the rest is the sample baseline).
+function New-GameXmlWithOverride([string]$active, [string]$directory) {
+    $old = '<modsDirectoryOverride active="false" directory=""/>'
+    $new = "<modsDirectoryOverride active=`"$active`" directory=`"$directory`"/>"
+    Assert-True $sampleGameXml.Contains($old) "The sample game.xml no longer holds the expected override element."
+    $sampleGameXml.Replace($old, $new)
+}
+
+Test-Case "Active mods directory override: the mod lands in the override folder, not the default one" {
+    param($world)
+    New-FakeGame $world
+    $override = Join-Path $world.Root "Moved mods"         # spaces on purpose; does not exist yet
+    New-FakeDocuments $world (New-GameXmlWithOverride "true" $override)
+    $p = Get-GamePaths $world
+    $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+
+    Assert-SameFile (Join-Path $override "FS25_VRCompanion.zip") $stagedMod "Companion Mod zip in the override folder"
+    Assert-Missing $p.ModZip "Companion Mod zip in the default mods folder"
+    Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
+    Assert-SameBytes $p.GameXml $gameXmlBefore "game.xml (the override element)"
+}
+
+Test-Case "Uninstall removes the mod from the override folder and leaves the override alone" {
+    param($world)
+    New-FakeGame $world
+    $override = Join-Path $world.Root "Moved mods"
+    New-FakeDocuments $world (New-GameXmlWithOverride "true" $override)
+    $p = Get-GamePaths $world
+    $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-Exists (Join-Path $override "FS25_VRCompanion.zip") "Companion Mod zip in the override folder"
+
+    Uninstall-Fs25Vr
+
+    Assert-Missing (Join-Path $override "FS25_VRCompanion.zip") "Companion Mod zip in the override folder"
+    Assert-Missing $p.ModZip "Companion Mod zip in the default mods folder"
+    Assert-Missing $p.Injector "Injector"
+    Assert-SameBytes $p.GameXml $gameXmlBefore "game.xml (the override element)"
+}
+
+Test-Case "Inactive mods directory override with a directory set: the default mods folder is used" {
+    param($world)
+    New-FakeGame $world
+    $override = Join-Path $world.Root "Moved mods"
+    New-FakeDocuments $world (New-GameXmlWithOverride "false" $override)
+    $p = Get-GamePaths $world
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+
+    Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
+    Assert-Missing (Join-Path $override "FS25_VRCompanion.zip") "Companion Mod zip in the inactive override folder"
+}
+
+Test-Case "No mods directory override element at all: the default mods folder is used" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world ($sampleGameXml.Replace('<modsDirectoryOverride active="false" directory=""/>', ''))
+    $p = Get-GamePaths $world
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+
+    Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
+}
+
+Test-Case "Active override with an empty directory: the default mods folder is used" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world (New-GameXmlWithOverride "true" "")
+    $p = Get-GamePaths $world
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+
+    Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip in the default mods folder"
+}
+
 if ($failures.Count -gt 0) {
     Write-Error "$($failures.Count) installer test(s) failed: $($failures -join '; ')"
 }
