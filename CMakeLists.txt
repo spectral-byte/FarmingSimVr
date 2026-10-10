@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
-project(FarmingSimVr LANGUAGES C CXX)
+project(FarmingSimVr LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -148,10 +148,26 @@ target_compile_definitions(fs25_vr_core PUBLIC
     WIN32_LEAN_AND_MEAN
 )
 
+# Version resource of the Injector: "FS25 VR" product identity (the Installer uses it to tell our
+# dxgi.dll from a foreign one) and the Companion Mod's version from modDesc.xml.
+set(FS25VR_MODDESC "${CMAKE_CURRENT_SOURCE_DIR}/mods/FS25_VRCompanion/modDesc.xml")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FS25VR_MODDESC}")
+file(READ "${FS25VR_MODDESC}" FS25VR_MODDESC_TEXT)
+if(NOT FS25VR_MODDESC_TEXT MATCHES "<version>([0-9]+(\\.[0-9]+)*)</version>")
+    message(FATAL_ERROR "No numeric <version> found in ${FS25VR_MODDESC}")
+endif()
+set(FS25VR_VERSION "${CMAKE_MATCH_1}")
+# VERSIONINFO needs exactly four numbers.
+string(REPLACE "." ";" FS25VR_VERSION_PARTS "${FS25VR_VERSION}.0.0.0")
+list(SUBLIST FS25VR_VERSION_PARTS 0 4 FS25VR_VERSION_PARTS)
+string(REPLACE ";" "," FS25VR_VERSION_COMMA "${FS25VR_VERSION_PARTS}")
+configure_file(src/dxgi.rc.in "${CMAKE_CURRENT_BINARY_DIR}/dxgi.rc" @ONLY)
+
 # DXGI Proxy DLL target
 add_library(dxgi SHARED
     src/dllmain.cpp
     src/proxy/dxgi_exports.def
+    "${CMAKE_CURRENT_BINARY_DIR}/dxgi.rc"
 )
 
 target_link_libraries(dxgi PRIVATE fs25_vr_core)

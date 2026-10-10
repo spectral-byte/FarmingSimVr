@@ -130,6 +130,10 @@ function Uninstall-Fs25Vr {
     $deadline = (Get-Date).AddSeconds(60)
     while ((Get-UninstallEntry) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
     if (Get-UninstallEntry) { throw "Uninstall did not finish within 60 seconds." }
+    # The registry entry goes first; the uninstaller's own [Code] (restoring a backed-up dxgi.dll, ...)
+    # runs after it. The uninstaller deletes itself last, so wait for that.
+    while ((Test-Path $uninstaller) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    if (Test-Path $uninstaller) { throw "The uninstaller was still running after 60 seconds." }
 }
 
 # Always leave the machine clean, whether or not the case passed.
@@ -236,6 +240,159 @@ Test-Case "A folder without x64\FarmingSimulator2025Game.exe is refused" {
     Assert-Missing $p.Injector "Injector"
     Assert-Missing $p.ModZip "Companion Mod zip"
     Assert-True ($null -eq (Get-UninstallEntry)) "A refused install was still registered in Add/Remove Programs."
+}
+
+# ---------------------------------------------------------------------------------------------
+# Existing dxgi.dll and upgrade helpers (ticket #65)
+# ---------------------------------------------------------------------------------------------
+
+# Runs an Installer exe silently like Install-Fs25Vr, but for any Setup exe, and optionally without
+# /DIR so the Installer has to pick the game folder itself (the previously used one on an upgrade).
+function Invoke-SetupExe([string]$exe, $world, [string[]]$extraArgs = @(), [switch]$NoDir) {
+    $setupArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+              "/LOG=`"$($world.Root)\setup-$([guid]::NewGuid().ToString('N').Substring(0, 6)).log`"",
+              "/FS25VR_DOCUMENTS=`"$($world.Documents)`"")
+    if (-not $NoDir) { $setupArgs += "/DIR=`"$($world.Game)`"" }
+    if (-not $isAdmin) { $setupArgs += "/CURRENTUSER" }
+    $setupArgs += $extraArgs
+    Wait-Process-Guarded (Start-Process -FilePath $exe -ArgumentList $setupArgs -PassThru) "Setup"
+}
+
+# The text of the newest Setup log in the world (each Invoke-SetupExe run writes its own log).
+function Get-LastSetupLog($world) {
+    $log = Get-ChildItem $world.Root -Filter "setup*.log" | Sort-Object LastWriteTime | Select-Object -Last 1
+    if (-not $log) { throw "No Setup log found in $($world.Root)." }
+    Get-Content $log.FullName -Raw
+}
+
+# A "newer" Installer: the same script and staged files compiled with a higher version number.
+function New-NewerSetup($world, [string]$version = "99.0.0.0") {
+    $iscc = @(
+        (Get-Command ISCC.exe -ErrorAction SilentlyContinue | ForEach-Object { $_.Source }),
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+    ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+    if (-not $iscc) { throw "Inno Setup compiler (ISCC.exe) not found; needed to build a newer Installer for the upgrade tests." }
+    $stageDir = Get-ChildItem $releaseDir -Directory -Filter "FS25_VR_v*" | Select-Object -First 1
+    if (-not $stageDir) { throw "No staged FS25_VR_v* folder in $releaseDir." }
+    $outDir = Join-Path $world.Root "newer-setup"
+    & $iscc "/Q" "/DAppVersion=$version" "/DStageDir=$($stageDir.FullName)" "/DOutputDir=$outDir" (Join-Path $repoRoot "installer\fs25_vr.iss")
+    if ($LASTEXITCODE -ne 0) { throw "ISCC failed to build the newer Installer (exit code $LASTEXITCODE)." }
+    (Get-ChildItem $outDir -Filter "*_Setup.exe" | Select-Object -First 1).FullName
+}
+
+# Marker text the Installer logs when it moves a foreign dxgi.dll aside.
+$foreignWarning = "not part of FS25 VR"
+
+# A real dxgi.dll that is not ours: the copy of Windows' own one (it has a version resource, just a different product).
+function Get-ForeignDxgiBytes { [IO.File]::ReadAllBytes((Join-Path $env:SystemRoot "System32\dxgi.dll")) }
+
+# ---------------------------------------------------------------------------------------------
+# Cases: existing dxgi.dll and upgrade (ticket #65)
+# ---------------------------------------------------------------------------------------------
+
+Test-Case "A foreign dxgi.dll is warned about, backed up on install and restored on uninstall" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    $backup = "$($p.Injector).fs25vr-backup"
+    $foreign = Get-ForeignDxgiBytes
+    [IO.File]::WriteAllBytes($p.Injector, $foreign)
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-True ((Get-LastSetupLog $world) -match $foreignWarning) "Setup did not warn about the foreign dxgi.dll."
+    Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
+    Assert-SameBytes $backup $foreign "dxgi.dll.fs25vr-backup (the foreign dxgi.dll)"
+
+    Uninstall-Fs25Vr
+
+    Assert-SameBytes $p.Injector $foreign "The foreign dxgi.dll restored on uninstall"
+    Assert-Missing $backup "dxgi.dll.fs25vr-backup after uninstall"
+}
+
+Test-Case "Our own older dxgi.dll is overwritten with no warning and no backup" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    # An older build of ours: same version resource, different bytes.
+    [IO.File]::WriteAllBytes($p.Injector, [byte[]]([IO.File]::ReadAllBytes($stagedInjector) + [byte[]](1..64)))
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
+    Assert-Missing "$($p.Injector).fs25vr-backup" "A dxgi.dll.fs25vr-backup of our own older Injector"
+    Assert-True (-not ((Get-LastSetupLog $world) -match $foreignWarning)) "Setup warned about our own dxgi.dll."
+}
+
+Test-Case "An existing dxgi.dll.fs25vr-backup survives an upgrade untouched and is still restored on uninstall" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    $backup = "$($p.Injector).fs25vr-backup"
+    $foreign = Get-ForeignDxgiBytes
+    [IO.File]::WriteAllBytes($p.Injector, $foreign)
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "First Setup exited with $exit."
+    Assert-SameBytes $backup $foreign "dxgi.dll.fs25vr-backup after the first install"
+
+    $newer = New-NewerSetup $world
+    $exit = Invoke-SetupExe $newer $world
+    Assert-True ($exit -eq 0) "Upgrade Setup exited with $exit."
+    Assert-True (-not ((Get-LastSetupLog $world) -match $foreignWarning)) "The upgrade warned about a foreign dxgi.dll although only ours is installed."
+    Assert-SameFile $p.Injector $stagedInjector "Injector after the upgrade"
+    Assert-SameBytes $backup $foreign "dxgi.dll.fs25vr-backup after the upgrade"
+
+    Uninstall-Fs25Vr
+
+    Assert-SameBytes $p.Injector $foreign "The original foreign dxgi.dll restored on uninstall"
+    Assert-Missing $backup "dxgi.dll.fs25vr-backup after uninstall"
+}
+
+Test-Case "A foreign dxgi.dll never replaces an existing dxgi.dll.fs25vr-backup" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    $backup = "$($p.Injector).fs25vr-backup"
+    $original = [byte[]](1..200)
+    $another = Get-ForeignDxgiBytes
+    [IO.File]::WriteAllBytes($backup, $original)
+    [IO.File]::WriteAllBytes($p.Injector, $another)
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -ne 0) "Setup went on although it had nowhere safe to move the foreign dxgi.dll."
+    Assert-SameBytes $backup $original "The existing dxgi.dll.fs25vr-backup"
+    Assert-SameBytes $p.Injector $another "The foreign dxgi.dll"
+    Assert-Missing $p.ModZip "Companion Mod zip"
+    Assert-True ($null -eq (Get-UninstallEntry)) "A refused install was still registered in Add/Remove Programs."
+}
+
+Test-Case "A newer Installer upgrades under one Add/Remove Programs entry and pre-selects the previous game folder" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "First Setup exited with $exit."
+    # Make the upgrade visible: remove what the first install placed.
+    Remove-Item $p.Injector, $p.ModZip -Force
+
+    $newer = New-NewerSetup $world
+    $exit = Invoke-SetupExe $newer $world -NoDir      # no /DIR: the Installer must offer the previous folder
+    Assert-True ($exit -eq 0) "Upgrade Setup exited with $exit."
+
+    Assert-SameFile $p.Injector $stagedInjector "Injector in the previously used game folder"
+    Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip"
+    $entry = Get-UninstallEntry
+    Assert-True ($null -ne $entry) "FS25 VR is not registered in Add/Remove Programs after the upgrade."
+    Assert-True ($entry.DisplayVersion -eq "99.0.0.0") "Add/Remove Programs shows version '$($entry.DisplayVersion)', expected 99.0.0.0."
+    $parent = Split-Path -Parent $uninstallKeyPath
+    $entries = @(Get-ChildItem $parent | Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -eq "FS25 VR" })
+    Assert-True ($entries.Count -eq 1) "Expected one FS25 VR entry in Add/Remove Programs, found $($entries.Count)."
 }
 
 if ($failures.Count -gt 0) {

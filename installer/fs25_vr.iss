@@ -42,6 +42,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 DefaultDirName={autopf}\Farming Simulator 2025
 DirExistsWarning=no
 AppendDefaultDirName=no
+; Upgrades: with the fixed AppId above, a newer Installer starts on the game folder used last time.
+; Precedence for the folder shown/used: /DIR= on the command line, then that previous folder, then
+; DefaultDirName (which game detection may refine). Inno applies this order itself.
+UsePreviousAppDir=yes
 DisableProgramGroupPage=yes
 LicenseFile={#StageDir}\LICENSE
 ; Keep the uninstaller out of the game folder.
@@ -96,6 +100,102 @@ begin
   Result := AddBackslash(GetDocumentsDir) + 'My Games\FarmingSimulator2025\mods';
 end;
 
+{ ---- An existing dxgi.dll in the game's x64 folder ----
+  Ours (recognised by its version resource) is simply overwritten. Anything else, such as ReShade, is
+  moved to dxgi.dll.fs25vr-backup first and put back by the uninstaller. An existing backup is never
+  overwritten, so an upgrade can't replace the player's original DLL with an older copy of ours. }
+
+const
+  BackupSuffix = '.fs25vr-backup';
+  OurProductName = 'FS25 VR';  { ProductName in the Injector's version resource: src\dxgi.rc.in }
+  ForeignDxgiMessage =
+    'The game folder already contains a dxgi.dll that is not part of FS25 VR (for example ReShade).' + #13#10#13#10 +
+    'It is moved to dxgi.dll.fs25vr-backup before FS25 VR is installed, and restored when FS25 VR is uninstalled.';
+  ForeignDxgiBlockedMessage =
+    'The game folder contains a dxgi.dll that is not part of FS25 VR, and dxgi.dll.fs25vr-backup already exists, ' +
+    'so there is nowhere safe to move it.' + #13#10#13#10 +
+    'Move or rename one of the two files in the x64 folder, then run the installer again.';
+
+function GetFileVersionInfoSizeW(FileName: String; var Handle: Cardinal): Cardinal;
+  external 'GetFileVersionInfoSizeW@version.dll stdcall';
+function GetFileVersionInfoW(FileName: String; Handle, Len: Cardinal; Data: AnsiString): Boolean;
+  external 'GetFileVersionInfoW@version.dll stdcall';
+function VerQueryValueW(Block: AnsiString; SubBlock: String; var Value: Cardinal; var Len: Cardinal): Boolean;
+  external 'VerQueryValueW@version.dll stdcall';
+function lstrcpynW(Dest: String; Source: Cardinal; MaxLen: Integer): Cardinal;
+  external 'lstrcpynW@kernel32.dll stdcall';
+
+{ The English ProductName string of a file's version resource, or '' if it has none. }
+function GetProductName(FileName: String): String;
+var
+  Handle, Size, ValuePtr, ValueLen: Cardinal;
+  Data: AnsiString;
+begin
+  Result := '';
+  Size := GetFileVersionInfoSizeW(FileName, Handle);
+  if Size = 0 then Exit;
+  SetLength(Data, Size);
+  if not GetFileVersionInfoW(FileName, 0, Size, Data) then Exit;
+  if not VerQueryValueW(Data, '\StringFileInfo\040904b0\ProductName', ValuePtr, ValueLen) then Exit;
+  if (ValuePtr = 0) or (ValueLen = 0) then Exit;
+  SetLength(Result, ValueLen);
+  lstrcpynW(Result, ValuePtr, ValueLen + 1);
+  { ValueLen counts the terminating null; cut the string at it }
+  if Pos(#0, Result) > 0 then Result := Copy(Result, 1, Pos(#0, Result) - 1);
+  Result := Trim(Result);
+end;
+
+function IsOurInjector(FileName: String): Boolean;
+begin
+  Result := GetProductName(FileName) = OurProductName;
+end;
+
+{ Called from PrepareToInstall for the chosen game folder. Moves a foreign dxgi.dll aside (warning
+  the player) and returns '' on success; returns the reason when it can't be done safely. }
+function PrepareExistingDxgi(GameDir: String): String;
+var
+  Dxgi, Backup: String;
+begin
+  Result := '';
+  Dxgi := AddBackslash(GameDir) + 'x64\dxgi.dll';
+  Backup := Dxgi + BackupSuffix;
+  if not FileExists(Dxgi) then Exit;
+  if IsOurInjector(Dxgi) then Exit;
+  if FileExists(Backup) then
+  begin
+    Result := ForeignDxgiBlockedMessage;
+    Exit;
+  end;
+  Log(ForeignDxgiMessage);
+  if not WizardSilent then
+    MsgBox(ForeignDxgiMessage, mbInformation, MB_OK);
+  if not RenameFile(Dxgi, Backup) then
+    Result := 'Could not move ' + Dxgi + ' to ' + Backup + '. Close any program using it and try again.';
+end;
+
+{ Uninstall: put the player's original dxgi.dll back once ours is gone. }
+procedure RestoreForeignDxgi(GameDir: String);
+var
+  Dxgi, Backup: String;
+begin
+  Dxgi := AddBackslash(GameDir) + 'x64\dxgi.dll';
+  Backup := Dxgi + BackupSuffix;
+  if not FileExists(Backup) then Exit;
+  if FileExists(Dxgi) then
+  begin
+    Log('dxgi.dll is still in place; leaving ' + Backup + ' where it is.');
+    Exit;
+  end;
+  if not RenameFile(Backup, Dxgi) then
+    Log('Could not restore ' + Backup + ' as dxgi.dll.');
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    RestoreForeignDxgi(ExpandConstant('{app}'));
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
@@ -120,5 +220,15 @@ begin
       Abort;
     end;
     Result := NotGameFolderMessage;
+  end;
+
+  if Result = '' then
+  begin
+    Result := PrepareExistingDxgi(WizardDirValue);
+    if (Result <> '') and WizardSilent then
+    begin
+      Log(Result);
+      Abort;
+    end;
   end;
 end;
