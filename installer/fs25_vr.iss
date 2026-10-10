@@ -42,6 +42,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 DefaultDirName={autopf}\Farming Simulator 2025
 DirExistsWarning=no
 AppendDefaultDirName=no
+; Upgrades: with the fixed AppId above, a newer Installer starts on the game folder used last time.
+; Precedence for the folder shown/used: /DIR= on the command line, then that previous folder, then
+; DefaultDirName (which game detection may refine). Inno applies this order itself.
+UsePreviousAppDir=yes
 DisableProgramGroupPage=yes
 LicenseFile={#StageDir}\LICENSE
 ; Keep the uninstaller out of the game folder.
@@ -112,9 +116,199 @@ begin
     Result := ExpandConstant('{userdocs}');
 end;
 
+function GetMyGamesDir: String;
+begin
+  Result := AddBackslash(GetDocumentsDir) + 'My Games\FarmingSimulator2025';
+end;
+
+{ The directory of the game's active mods directory override in game.xml, or '' when game.xml is
+  missing/unreadable or has no override element, or the override is inactive or has no directory.
+  The file is only read, never written. }
+function GetModsDirOverride: String;
+var
+  Doc, Node, ActiveAttr, DirAttr: Variant;
+  Path: String;
+begin
+  Result := '';
+  Path := AddBackslash(GetMyGamesDir) + 'game.xml';
+  if not FileExists(Path) then
+    Exit;
+  try
+    Doc := CreateOleObject('Msxml2.DOMDocument.6.0');
+    Doc.async := False;
+    if not Doc.load(Path) then
+      Exit;
+    Node := Doc.selectSingleNode('//modsDirectoryOverride');
+    if VarIsNull(Node) or VarIsEmpty(Node) then
+      Exit;
+    ActiveAttr := Node.getAttribute('active');
+    DirAttr := Node.getAttribute('directory');
+    if VarIsNull(ActiveAttr) or VarIsNull(DirAttr) then
+      Exit;
+    if CompareText(Trim(String(ActiveAttr)), 'true') <> 0 then
+      Exit;
+    Result := Trim(String(DirAttr));
+    StringChangeEx(Result, '/', '\', True);
+    if Result <> '' then
+      Result := RemoveBackslashUnlessRoot(Result);
+  except
+    Log('Could not read the mods directory override from ' + Path + ': ' + GetExceptionMessage);
+    Result := '';
+  end;
+end;
+
+{ Where the Companion Mod goes: the active mods directory override if there is one, else the
+  default mods folder. Inno records the resolved path with the file, so uninstall removes the mod
+  from wherever it was installed. }
 function GetModsDir(Param: String): String;
 begin
-  Result := AddBackslash(GetDocumentsDir) + 'My Games\FarmingSimulator2025\mods';
+  Result := GetModsDirOverride;
+  if Result = '' then
+    Result := AddBackslash(GetMyGamesDir) + 'mods'
+  else
+    Log('Mods directory override is active; installing the Companion Mod into ' + Result);
+end;
+
+const
+  GameProcessName = 'FarmingSimulator2025Game.exe';
+  CloseGameMessage = 'Close Farming Simulator 25 to continue.';
+
+{ True if a process whose image name is FarmingSimulator2025Game.exe is running (any installation,
+  any user: the Installer must not run while the game holds dxgi.dll or can rewrite game.xml). WMI
+  gives the image name without needing process handles. If WMI cannot be queried we cannot tell, so
+  we log it and carry on rather than block every install. }
+function IsGameRunning: Boolean;
+var
+  Locator, Service, Processes: Variant;
+begin
+  Result := False;
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Service := Locator.ConnectServer('.', 'root\CIMV2');
+    Processes := Service.ExecQuery('SELECT ProcessId FROM Win32_Process WHERE Name = ''' + GameProcessName + '''');
+    Result := Processes.Count > 0;
+  except
+    Log('Could not check whether ' + GameProcessName + ' is running: ' + GetExceptionMessage);
+  end;
+end;
+
+{ Shared by install and uninstall. Returns True when the game is not running (possibly after the
+  player closed it and chose Retry). Returns False when the caller must stop: the player chose Cancel,
+  or this is a silent run, which logs the reason and fails instead of waiting. A silent run must never
+  show a message box. /SUPPRESSMSGBOXES without /SILENT answers Cancel, so it cannot loop forever. }
+function EnsureGameNotRunning(Silent: Boolean): Boolean;
+begin
+  Result := True;
+  while IsGameRunning do
+  begin
+    Log(CloseGameMessage);
+    if Silent then
+    begin
+      Result := False;
+      Exit;
+    end;
+    if SuppressibleMsgBox(CloseGameMessage, mbError, MB_RETRYCANCEL, IDCANCEL) <> IDRETRY then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+end;
+
+{ ---- An existing dxgi.dll in the game's x64 folder ----
+  Ours (recognised by its version resource) is simply overwritten. Anything else, such as ReShade, is
+  moved to dxgi.dll.fs25vr-backup first and put back by the uninstaller. An existing backup is never
+  overwritten, so an upgrade can't replace the player's original DLL with an older copy of ours. }
+
+const
+  BackupSuffix = '.fs25vr-backup';
+  OurProductName = 'FS25 VR';  { ProductName in the Injector's version resource: src\dxgi.rc.in }
+  ForeignDxgiMessage =
+    'The game folder already contains a dxgi.dll that is not part of FS25 VR (for example ReShade).' + #13#10#13#10 +
+    'It is moved to dxgi.dll.fs25vr-backup before FS25 VR is installed, and restored when FS25 VR is uninstalled.';
+  ForeignDxgiBlockedMessage =
+    'The game folder contains a dxgi.dll that is not part of FS25 VR, and dxgi.dll.fs25vr-backup already exists, ' +
+    'so there is nowhere safe to move it.' + #13#10#13#10 +
+    'Move or rename one of the two files in the x64 folder, then run the installer again.';
+
+function GetFileVersionInfoSizeW(FileName: String; var Handle: Cardinal): Cardinal;
+  external 'GetFileVersionInfoSizeW@version.dll stdcall';
+function GetFileVersionInfoW(FileName: String; Handle, Len: Cardinal; Data: AnsiString): Boolean;
+  external 'GetFileVersionInfoW@version.dll stdcall';
+function VerQueryValueW(Block: AnsiString; SubBlock: String; var Value: Cardinal; var Len: Cardinal): Boolean;
+  external 'VerQueryValueW@version.dll stdcall';
+function lstrcpynW(Dest: String; Source: Cardinal; MaxLen: Integer): Cardinal;
+  external 'lstrcpynW@kernel32.dll stdcall';
+
+{ The English ProductName string of a file's version resource, or '' if it has none. }
+function GetProductName(FileName: String): String;
+var
+  Handle, Size, ValuePtr, ValueLen: Cardinal;
+  Data: AnsiString;
+begin
+  Result := '';
+  Size := GetFileVersionInfoSizeW(FileName, Handle);
+  if Size = 0 then Exit;
+  SetLength(Data, Size);
+  if not GetFileVersionInfoW(FileName, 0, Size, Data) then Exit;
+  if not VerQueryValueW(Data, '\StringFileInfo\040904b0\ProductName', ValuePtr, ValueLen) then Exit;
+  if (ValuePtr = 0) or (ValueLen = 0) then Exit;
+  SetLength(Result, ValueLen);
+  lstrcpynW(Result, ValuePtr, ValueLen + 1);
+  { ValueLen counts the terminating null; cut the string at it }
+  if Pos(#0, Result) > 0 then Result := Copy(Result, 1, Pos(#0, Result) - 1);
+  Result := Trim(Result);
+end;
+
+function IsOurInjector(FileName: String): Boolean;
+begin
+  Result := GetProductName(FileName) = OurProductName;
+end;
+
+{ Called from PrepareToInstall for the chosen game folder. Moves a foreign dxgi.dll aside (warning
+  the player) and returns '' on success; returns the reason when it can't be done safely. }
+function PrepareExistingDxgi(GameDir: String): String;
+var
+  Dxgi, Backup: String;
+begin
+  Result := '';
+  Dxgi := AddBackslash(GameDir) + 'x64\dxgi.dll';
+  Backup := Dxgi + BackupSuffix;
+  if not FileExists(Dxgi) then Exit;
+  if IsOurInjector(Dxgi) then Exit;
+  if FileExists(Backup) then
+  begin
+    Result := ForeignDxgiBlockedMessage;
+    Exit;
+  end;
+  Log(ForeignDxgiMessage);
+  if not WizardSilent then
+    MsgBox(ForeignDxgiMessage, mbInformation, MB_OK);
+  if not RenameFile(Dxgi, Backup) then
+    Result := 'Could not move ' + Dxgi + ' to ' + Backup + '. Close any program using it and try again.';
+end;
+
+{ Uninstall: put the player's original dxgi.dll back once ours is gone. }
+procedure RestoreForeignDxgi(GameDir: String);
+var
+  Dxgi, Backup: String;
+begin
+  Dxgi := AddBackslash(GameDir) + 'x64\dxgi.dll';
+  Backup := Dxgi + BackupSuffix;
+  if not FileExists(Backup) then Exit;
+  if FileExists(Dxgi) then
+  begin
+    Log('dxgi.dll is still in place; leaving ' + Backup + ' where it is.');
+    Exit;
+  end;
+  if not RenameFile(Backup, Dxgi) then
+    Log('Could not restore ' + Backup + ' as dxgi.dll.');
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    RestoreForeignDxgi(ExpandConstant('{app}'));
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -139,4 +333,22 @@ begin
     Log(Result);
     Abort;
   end;
+  if (Result = '') and not EnsureGameNotRunning(WizardSilent) then
+    Abort;
+
+  if Result = '' then
+  begin
+    Result := PrepareExistingDxgi(WizardDirValue);
+    if (Result <> '') and WizardSilent then
+    begin
+      Log(Result);
+      Abort;
+    end;
+  end;
+end;
+
+{ Uninstall must not run over a live game either (it holds dxgi.dll and rewrites game.xml on exit). }
+function InitializeUninstall: Boolean;
+begin
+  Result := EnsureGameNotRunning(UninstallSilent);
 end;
