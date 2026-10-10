@@ -589,8 +589,13 @@ function VRCompanion:applyHudState(state)
         { display = hud.ingameMap or hud.ingameMapDisplay, name = "IngameMap" },
         { display = hud.gameInfo or hud.gameInfoDisplay, name = "GameInfoDisplay" }
     }
+    -- The input help's own visibility is the game's minimized/maximized toggle (F1), so a shown
+    -- Controls group keeps the player's choice instead of always opening maximized
+    local inputHelpVis = self:isDisplayVisible("InputHelpDisplay", state) and self.controlsExpanded ~= false
+
     for _, entry in ipairs(displays) do
         local vis = self:isDisplayVisible(entry.name, state)
+        if entry.name == "InputHelpDisplay" then vis = inputHelpVis end
         setDisplayVisible(entry.display, vis)
     end
 
@@ -611,7 +616,6 @@ function VRCompanion:applyHudState(state)
         end
     end
 
-    local inputHelpVis = self:isDisplayVisible("InputHelpDisplay", state)
     local ingameMapVis = self:isDisplayVisible("IngameMap", state)
     local gameInfoVis = self:isDisplayVisible("GameInfoDisplay", state)
 
@@ -703,6 +707,27 @@ function VRCompanion:setHudGroupVisibility(groupName, stateName, enabled)
     group[stateName] = (enabled == true)
     self:applyHudState(self:getHudState())
     return true
+end
+
+-- Remembers the game setting the input help shown (maximized) or hidden (minimized), which is how
+-- its help toggle (F1) works, and saves it when it changes. Only a change while the Controls group is
+-- shown and no menu is open is the player's: the mod hides the input help in the other HUD states, and
+-- menus such as the construction screen open it for as long as they are up.
+function VRCompanion:rememberControlsExpanded(isExpanded)
+    if type(isExpanded) ~= "boolean" or not self:isDisplayVisible("InputHelpDisplay") then
+        return
+    end
+    -- Asked of the GUI directly: a menu opens the input help as it opens, before isMenuVisible is next polled
+    local menuOpen = self.isMenuVisible == true
+    local gui = g_gui or _G.g_gui
+    if gui ~= nil and type(gui.getIsGuiVisible) == "function" then
+        local ok, visible = pcall(gui.getIsGuiVisible, gui)
+        if ok and visible == true then menuOpen = true end
+    end
+    if menuOpen then return end
+    if self.controlsExpanded == isExpanded then return end
+    self.controlsExpanded = isExpanded
+    self:saveConfiguration()
 end
 
 function VRCompanion:onHudToggleAction(...)
@@ -1058,6 +1083,15 @@ function VRCompanion:hookHud()
                     return origGetIsVisible(displaySelf, ...)
                 end)
             end
+
+            -- The help toggle (F1) may set the input help's visibility directly rather than through the HUD
+            if displayName == "InputHelpDisplay" and type(cls.setVisible) == "function" then
+                local origSetVisible = cls.setVisible
+                hookMethod(cls, "setVisible", function(displaySelf, isVisible, ...)
+                    self:rememberControlsExpanded(isVisible)
+                    return origSetVisible(displaySelf, isVisible, ...)
+                end)
+            end
         end
     end
 
@@ -1178,6 +1212,9 @@ function VRCompanion:hookHud()
             if target[mName] ~= nil and type(target[mName]) == "function" then
                 local origSetter = target[mName]
                 hookMethod(target, mName, function(hudSelf, isVisible, ...)
+                    if dName == "InputHelpDisplay" then
+                        self:rememberControlsExpanded(isVisible)
+                    end
                     if not self:isDisplayVisible(dName) then
                         return origSetter(hudSelf, false, ...)
                     end
@@ -1235,6 +1272,7 @@ VRCompanion.Hud.applyHudState = function(self, ...) return VRCompanion.applyHudS
 VRCompanion.Hud.setHudState = function(self, ...) return VRCompanion.setHudState(VRCompanion, ...) end
 VRCompanion.Hud.getEnabledHudGroups = function(self, ...) return VRCompanion.getEnabledHudGroups(VRCompanion, ...) end
 VRCompanion.Hud.setHudGroupVisibility = function(self, ...) return VRCompanion.setHudGroupVisibility(VRCompanion, ...) end
+VRCompanion.Hud.rememberControlsExpanded = function(self, ...) return VRCompanion.rememberControlsExpanded(VRCompanion, ...) end
 VRCompanion.Hud.cycleHudState = function(self, ...) return VRCompanion.cycleHudState(VRCompanion, ...) end
 VRCompanion.Hud.onHudToggleAction = function(self, ...) return VRCompanion.onHudToggleAction(VRCompanion, ...) end
 VRCompanion.Hud.calculateHudAnchors = function(self, ...) return VRCompanion.calculateHudAnchors(VRCompanion, ...) end

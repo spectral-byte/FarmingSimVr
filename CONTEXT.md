@@ -57,7 +57,7 @@ The bindable in-engine input action that toggles or pulses the visibility of the
 _Avoid_: Show HUD button, HUD keybind, UI switch
 
 **HUD Group**:
-One of the four independently placed clusters of engine HUD elements, each fixed to a home screen corner: the Map group (bottom-left), the Speedometer group with its fill levels (bottom-right), the Info group with clock and money (top-right), and the Controls group of input help (top-left). Each has its own HUD Group Margin, scale, and visibility in the Streamlined and Full HUD.
+One of the four independently placed clusters of engine HUD elements, each fixed to a home screen corner: the Map group (bottom-left), the Speedometer group with its fill levels (bottom-right), the Info group with clock and money (top-right), and the Controls group of input help (top-left). Each has its own HUD Group Margin, scale, and visibility in the Streamlined and Full HUD. The Controls group also keeps whether the player has it maximized or minimized with the game's help toggle (F1), across HUD states and sessions.
 _Avoid_: HUD element, HUD panel, widget
 
 **HUD Group Margin**:

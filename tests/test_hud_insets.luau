@@ -766,6 +766,29 @@ test("HudStateRoundTripsThroughSaveAndLoadAndDefaultsToHidden", function()
     VRCompanion:configureHudSafeArea()
 end)
 
+-- Whether the Controls group is maximized or minimized (F1) is saved too; a first install starts maximized.
+test("ControlsExpandedRoundTripsThroughSaveAndLoadAndDefaultsToMaximized", function()
+    local store = {}
+    withMockedSettingsFile(store, function()
+        assert(VRCompanion.DEFAULT_CONTROLS_EXPANDED == true, "a first install shows the controls maximized")
+
+        VRCompanion.controlsExpanded = false
+        assert(VRCompanion:saveConfiguration("settings.xml") == true, "save must succeed")
+        assert(store["vrSettings.hudGroups.controls.expanded"] == false, "minimized is saved")
+
+        VRCompanion.controlsExpanded = true
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion.controlsExpanded == false, "minimized must round-trip")
+
+        store["vrSettings.hudGroups.controls.expanded"] = nil -- a settings file from before it was saved
+        VRCompanion:loadConfiguration("settings.xml")
+        assert(VRCompanion.controlsExpanded == true, "a missing key falls back to maximized")
+    end)
+    VRCompanion.controlsExpanded = VRCompanion.DEFAULT_CONTROLS_EXPANDED
+    resetGroupVisibilityToDefaults()
+    VRCompanion:configureHudSafeArea()
+end)
+
 test("FirstRunSavesTheHiddenHudState", function()
     local store = {}
     withMockedSettingsFile(store, function()
