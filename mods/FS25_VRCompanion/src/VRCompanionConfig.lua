@@ -29,6 +29,11 @@ VRCompanion.MAX_HUD_GROUP_SCALE = 1.50
 VRCompanion.DEFAULT_HUD_GROUP_STREAMLINED = { map = false, speedometer = true, info = false, controls = false }
 VRCompanion.DEFAULT_HUD_GROUP_FULL = { map = true, speedometer = true, info = true, controls = true }
 
+-- Whether the Controls group shows its full list of controls (maximized) or is minimized, as the
+-- player last chose with the game's help toggle (F1). Saved between sessions; starts maximized.
+VRCompanion.DEFAULT_CONTROLS_EXPANDED = true
+VRCompanion.controlsExpanded = VRCompanion.DEFAULT_CONTROLS_EXPANDED
+
 -- VR HUD Convergence Parity Constants
 VRCompanion.DEFAULT_CONVERGENCE_DEPTH = 1.8
 VRCompanion.DEFAULT_CONVERGENCE_DISPARITY = 0.012
@@ -234,6 +239,7 @@ function VRCompanion:saveConfiguration(xmlPath)
                 setXmlBoolFn(xmlFile, "vrSettings.hudGroups." .. groupName .. ".showStreamlined", streamlined == true)
                 setXmlBoolFn(xmlFile, "vrSettings.hudGroups." .. groupName .. ".showFull", full == true)
             end
+            setXmlBoolFn(xmlFile, "vrSettings.hudGroups.controls.expanded", self.controlsExpanded ~= false)
         end
         if type(setXmlStringFn) == "function" then
             -- Persist the mode last requested, not VRBridge's: while the compositor is active the bridge
@@ -263,6 +269,7 @@ function VRCompanion:loadConfiguration(xmlPath)
     local safeAreaVertical = self.DEFAULT_HUD_SAFE_AREA_VERTICAL
     local groupLayouts = newDefaultHudGroupLayouts()
     local persistedHudState = self.DEFAULT_HUD_STATE
+    local controlsExpanded = self.DEFAULT_CONTROLS_EXPANDED
     local renderingModeLoaded = false
 
     -- Group visibility starts from the defaults; the settings file overrides the keys it has
@@ -337,6 +344,10 @@ function VRCompanion:loadConfiguration(xmlPath)
                         if loadedFull ~= nil then group.full = loadedFull end
                     end
                 end
+
+                local loadedControlsExpanded = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
+                    "vrSettings.hudGroups.controls.expanded")
+                if loadedControlsExpanded ~= nil then controlsExpanded = loadedControlsExpanded end
 
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.snapTurnAngle")
@@ -424,6 +435,7 @@ function VRCompanion:loadConfiguration(xmlPath)
 
     self.hudGroupLayout = groupLayouts
     self.persistedHudState = persistedHudState
+    self.controlsExpanded = controlsExpanded
     self:configureHudSafeArea(safeAreaHorizontal, safeAreaVertical)
 
     -- First run: create the user settings file from the values just applied

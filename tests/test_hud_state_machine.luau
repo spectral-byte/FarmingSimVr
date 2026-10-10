@@ -864,6 +864,60 @@ test("DrawVisibilityAndHudSetterHooksHonorGroupSettings", function()
     end)
 end)
 
+-- The game's help toggle (F1) minimizes the controls by hiding the input help. Cycling the HUD back to Full
+-- keeps that choice instead of opening the controls maximized, and the choice is saved.
+test("ControlsKeepThePlayersMinimizedOrMaximizedChoiceAcrossHudStates", function()
+    withGroupVisibilityHarness(function(observed)
+        local savedExpanded = VRCompanion.controlsExpanded
+        VRCompanion.controlsExpanded = true
+        local guiVisible = false
+        _G.g_gui = { getIsGuiVisible = function() return guiVisible end }
+        _G.InputHelpDisplay = { setVisible = function(self, vis) self.isVisible = vis end }
+        local inputHelp = setmetatable({ isVisible = true }, { __index = _G.InputHelpDisplay })
+        local hud = {
+            setIsVisible = function(self, vis) self.isVisible = vis end,
+            inputHelp = inputHelp,
+            setInputHelpVisible = function(self, vis) self.inputHelp:setVisible(vis) end
+        }
+        _G.g_currentMission.hud = hud
+        local function f1() hud:setInputHelpVisible(not inputHelp.isVisible) end
+        VRCompanion:hookHud()
+
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+        assert(inputHelp.isVisible == true, "the controls start maximized")
+
+        f1()
+        assert(inputHelp.isVisible == false, "F1 minimizes the controls in Full")
+        assert(VRCompanion.controlsExpanded == false, "the minimized choice is remembered")
+        assert(observed.store["vrSettings.hudGroups.controls.expanded"] == false, "and saved")
+
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_STREAMLINED)
+        f1()
+        assert(inputHelp.isVisible == false, "the controls stay hidden in Streamlined")
+        assert(VRCompanion.controlsExpanded == false, "F1 while the Controls group is hidden is not the player's choice")
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+        assert(inputHelp.isVisible == false, "back in Full the controls are still minimized")
+
+        guiVisible = true
+        hud:setInputHelpVisible(true)
+        assert(VRCompanion.controlsExpanded == false, "a menu opening the controls is not the player's choice")
+        guiVisible = false
+        VRCompanion:applyHudState()
+        assert(inputHelp.isVisible == false, "closing the menu returns the controls to minimized")
+
+        f1()
+        assert(VRCompanion.controlsExpanded == true and inputHelp.isVisible == true, "F1 maximizes the controls again")
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL)
+        assert(inputHelp.isVisible == true, "and Full keeps them maximized")
+
+        VRCompanion:unhookHud()
+        _G.InputHelpDisplay, _G.g_gui = nil, nil
+        VRCompanion.controlsExpanded = savedExpanded
+    end)
+end)
+
 -- The state the player picks is saved; the Full the mod forces while a map is unloaded is not.
 test("CyclingAndSettingTheHudStateSaveItButUnloadingDoesNot", function()
     withGroupVisibilityHarness(function(observed)
