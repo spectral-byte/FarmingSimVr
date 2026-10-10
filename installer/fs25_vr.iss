@@ -96,6 +96,52 @@ begin
   Result := AddBackslash(GetDocumentsDir) + 'My Games\FarmingSimulator2025\mods';
 end;
 
+const
+  GameProcessName = 'FarmingSimulator2025Game.exe';
+  CloseGameMessage = 'Close Farming Simulator 25 to continue.';
+
+{ True if a process whose image name is FarmingSimulator2025Game.exe is running (any installation,
+  any user: the Installer must not run while the game holds dxgi.dll or can rewrite game.xml). WMI
+  gives the image name without needing process handles. If WMI cannot be queried we cannot tell, so
+  we log it and carry on rather than block every install. }
+function IsGameRunning: Boolean;
+var
+  Locator, Service, Processes: Variant;
+begin
+  Result := False;
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Service := Locator.ConnectServer('.', 'root\CIMV2');
+    Processes := Service.ExecQuery('SELECT ProcessId FROM Win32_Process WHERE Name = ''' + GameProcessName + '''');
+    Result := Processes.Count > 0;
+  except
+    Log('Could not check whether ' + GameProcessName + ' is running: ' + GetExceptionMessage);
+  end;
+end;
+
+{ Shared by install and uninstall. Returns True when the game is not running (possibly after the
+  player closed it and chose Retry). Returns False when the caller must stop: the player chose Cancel,
+  or this is a silent run, which logs the reason and fails instead of waiting. A silent run must never
+  show a message box. /SUPPRESSMSGBOXES without /SILENT answers Cancel, so it cannot loop forever. }
+function EnsureGameNotRunning(Silent: Boolean): Boolean;
+begin
+  Result := True;
+  while IsGameRunning do
+  begin
+    Log(CloseGameMessage);
+    if Silent then
+    begin
+      Result := False;
+      Exit;
+    end;
+    if SuppressibleMsgBox(CloseGameMessage, mbError, MB_RETRYCANCEL, IDCANCEL) <> IDRETRY then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
@@ -121,4 +167,12 @@ begin
     end;
     Result := NotGameFolderMessage;
   end;
+  if (Result = '') and not EnsureGameNotRunning(WizardSilent) then
+    Abort;
+end;
+
+{ Uninstall must not run over a live game either (it holds dxgi.dll and rewrites game.xml on exit). }
+function InitializeUninstall: Boolean;
+begin
+  Result := EnsureGameNotRunning(UninstallSilent);
 end;

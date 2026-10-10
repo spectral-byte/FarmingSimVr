@@ -132,8 +132,39 @@ function Uninstall-Fs25Vr {
     if (Get-UninstallEntry) { throw "Uninstall did not finish within 60 seconds." }
 }
 
+# Runs the registered uninstaller silently once and returns its exit code, without requiring that it
+# succeeds (Uninstall-Fs25Vr throws unless the Add/Remove Programs entry disappears). Then waits for
+# Inno's temporary second-phase copy to be gone, so the files can be inspected.
+function Invoke-Uninstaller {
+    $entry = Get-UninstallEntry
+    if (-not $entry) { throw "FS25 VR is not registered in Add/Remove Programs; nothing to uninstall." }
+    $uninstaller = $entry.UninstallString.Trim('"')
+    $exit = Wait-Process-Guarded (Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru) "Uninstaller"
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Process -Name "_iu*", "unins*" -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    $exit
+}
+
+# A stand-in for the running game: a copy of a harmless Windows exe named FarmingSimulator2025Game.exe,
+# running for a long time. The Installer must detect the game by process image name, so this is enough.
+$script:standIn = $null
+function Start-StandInGame($world) {
+    $exe = Join-Path $world.Root "standin\FarmingSimulator2025Game.exe"
+    New-Item -ItemType Directory -Path (Split-Path $exe) -Force | Out-Null
+    Copy-Item (Join-Path $env:SystemRoot "System32\PING.EXE") $exe -Force
+    $script:standIn = Start-Process -FilePath $exe -ArgumentList @("-n", "600", "127.0.0.1") -WindowStyle Hidden -PassThru
+    $deadline = (Get-Date).AddSeconds(10)
+    while (-not (Get-Process -Name "FarmingSimulator2025Game" -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    Assert-True ($null -ne (Get-Process -Name "FarmingSimulator2025Game" -ErrorAction SilentlyContinue)) "The stand-in game process did not start."
+}
+function Stop-StandInGame {
+    Get-Process -Name "FarmingSimulator2025Game" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    if ($script:standIn) { $script:standIn.WaitForExit(10000) | Out-Null; $script:standIn = $null }
+}
+
 # Always leave the machine clean, whether or not the case passed.
 function Remove-TestWorld($world) {
+    Stop-StandInGame      # a running game would (rightly) block the cleanup uninstall
     if (Get-UninstallEntry) { try { Uninstall-Fs25Vr } catch { Write-Warning "Cleanup uninstall failed: $_" } }
     Remove-Item $world.Root -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -236,6 +267,56 @@ Test-Case "A folder without x64\FarmingSimulator2025Game.exe is refused" {
     Assert-Missing $p.Injector "Injector"
     Assert-Missing $p.ModZip "Companion Mod zip"
     Assert-True ($null -eq (Get-UninstallEntry)) "A refused install was still registered in Add/Remove Programs."
+}
+
+Test-Case "A silent install while the game is running fails and changes nothing" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
+    Start-StandInGame $world
+
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -ne 0) "Setup succeeded while Farming Simulator 25 was running."
+    Assert-True ((Get-Content "$($world.Root)\setup.log" -Raw) -match "Close Farming Simulator 25 to continue") "Setup did not say why it refused to run."
+
+    Assert-Missing $p.Injector "Injector"
+    Assert-Missing $p.ModZip "Companion Mod zip"
+    Assert-Missing $p.DefaultMods "mods folder"
+    Assert-SameBytes $p.GameXml $gameXmlBefore "game.xml"
+    Assert-True ($null -eq (Get-UninstallEntry)) "A refused install was still registered in Add/Remove Programs."
+
+    # Once the game has closed, the same install goes through.
+    Stop-StandInGame
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit after the game closed."
+    Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
+}
+
+Test-Case "A silent uninstall while the game is running fails and changes nothing" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    $exit = Install-Fs25Vr $world
+    Assert-True ($exit -eq 0) "Setup exited with $exit."
+    $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
+    Start-StandInGame $world
+
+    $exit = Invoke-Uninstaller
+    Assert-True ($exit -ne 0) "The uninstaller succeeded while Farming Simulator 25 was running."
+
+    Assert-SameFile $p.Injector $stagedInjector "Injector (dxgi.dll in x64)"
+    Assert-SameFile $p.ModZip $stagedMod "Companion Mod zip"
+    Assert-SameBytes $p.GameXml $gameXmlBefore "game.xml"
+    Assert-True ($null -ne (Get-UninstallEntry)) "A refused uninstall removed the Add/Remove Programs entry."
+
+    # Once the game has closed, the same uninstall goes through.
+    Stop-StandInGame
+    Uninstall-Fs25Vr
+    Assert-Missing $p.Injector "Injector"
+    Assert-Missing $p.ModZip "Companion Mod zip"
 }
 
 if ($failures.Count -gt 0) {
