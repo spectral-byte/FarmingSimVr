@@ -89,6 +89,10 @@ TEST_F(LuauTestSuiteTest, TestDualPassPacing) {
     RunSuite("tests/test_dual_pass_pacing.luau");
 }
 
+TEST_F(LuauTestSuiteTest, TestHeadRotation) {
+    RunSuite("tests/test_head_rotation.luau");
+}
+
 TEST_F(LuauTestSuiteTest, TestHudConvergence) {
     RunSuite("tests/test_hud_convergence.luau");
 }
