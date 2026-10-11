@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Superseded PR pushes are cancelled; every push to main keeps its own result.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject proprietary files
+        shell: pwsh
+        run: scripts/check_proprietary.ps1
+
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # Fetched dependencies (OpenXR-SDK, GoogleTest, Luau) live outside the
+      # build tree so they can be cached across runs. Only the sources and the
+      # FetchContent stamps are cached; the *-build trees are rebuilt anyway.
+      # Keyed on CMakeLists.txt, where the pinned dependency tags are declared.
+      - name: Cache fetched dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .deps/*-src
+            .deps/*-subbuild
+          key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DFETCHCONTENT_BASE_DIR="${{ github.workspace }}/.deps"
+
+      # The shipped configuration compiles with full inlining (/Ob2); fail if the
+      # cache says otherwise (e.g. CMake's default /Ob1 crept back in).
+      - name: Verify full inlining
+        shell: pwsh
+        run: scripts/check_build_config.ps1 build
+
+      - name: Build (Injector DLL and tests)
+        run: cmake --build build --target dxgi fs25_vr_tests
+
+      # The Injector is built against the static C runtime; fail if the built dxgi.dll
+      # imports VCRUNTIME140/MSVCP140/api-ms-win-crt-* (players would need the VC++ redistributable).
+      - name: Verify Injector imports no VC++ runtime DLLs
+        shell: pwsh
+        run: scripts/check_injector_imports.ps1 build\dxgi.dll
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 120
+
+      # ctest runs each test in its own process; a single-process run catches
+      # state leaking between tests through process-wide state (the hook
+      # registries and InjectorRuntime::Instance()).
+      - name: Test (single process)
+        run: build\fs25_vr_tests.exe --gtest_brief=1
+
+      # Build the Installer exactly as a release does (the zip bundle and the Setup exe from the
+      # same staged files), then drive it silently against a fake game folder.
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Package release (zip bundle and Installer)
+        shell: pwsh
+        run: scripts/package_release.ps1
+
+      - name: Test Installer (silent install and uninstall)
+        shell: pwsh
+        run: scripts/test_installer.ps1
+
+      - name: Upload dxgi.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: dxgi-dll
+          path: |
+            build/dxgi.dll
+            build/dxgi.pdb
+          if-no-files-found: error
+
+      - name: Upload Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: build/release/FS25_VR_v*_Setup.exe
+          if-no-files-found: error

@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<modDesc descVersion="105">
+    <author>FS25 VR Team</author>
+    <version>1.0.0.0</version>
+    <title>
+        <en>FS25 VR Companion Mod</en>
+        <de>FS25 VR Begleit-Mod</de>
+    </title>
+    <description>
+<en><![CDATA[In-engine Luau Companion Mod for Farming Simulator 25 Virtual Reality.
+Interfaces directly with the native Injector via the in-process VRBridge table,
+coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
+</en>
+    </description>
+    <multiplayer supported="true"/>
+    <iconFilename>icon_vr.png</iconFilename>
+    <extraSourceFiles>
+        <sourceFile filename="src/VRCompanionConfig.lua"/>
+        <sourceFile filename="src/VRCompanionCore.lua"/>
+        <sourceFile filename="src/VRCompanionStereo.lua"/>
+        <sourceFile filename="src/VRCompanionLocomotion.lua"/>
+        <sourceFile filename="src/VRCompanionHud.lua"/>
+        <sourceFile filename="src/VRCompanionInput.lua"/>
+        <sourceFile filename="src/VRCompanion.lua"/>
+    </extraSourceFiles>
+    <l10n>
+        <text name="input_VR_RECENTER_VIEW">
+            <en>Recenter VR View</en>
+            <de>VR-Ansicht zentrieren</de>
+        </text>
+        <text name="input_VR_HUD_TOGGLE">
+            <en>Toggle VR HUD Mode</en>
+            <de>VR-HUD-Modus umschalten</de>
+        </text>
+        <text name="input_VR_SNAP_TURN_LEFT">
+            <en>VR Snap Turn Left</en>
+            <de>VR-Blickdrehung links</de>
+        </text>
+        <text name="input_VR_SNAP_TURN_RIGHT">
+            <en>VR Snap Turn Right</en>
+            <de>VR-Blickdrehung rechts</de>
+        </text>
+        <text name="input_VR_TOGGLE_VIEW">
+            <en>Toggle VR View Mode</en>
+            <de>VR-Ansichtsmodus umschalten</de>
+        </text>
+        <text name="setting_vrHudConvergenceDepth">
+            <en>VR HUD Convergence Depth (Meters)</en>
+            <de>VR-HUD Konvergenztiefe (Meter)</de>
+        </text>
+        <text name="setting_vrShowHudLoadNotification">
+            <en>Show VR HUD Map Load Alert</en>
+            <de>VR-HUD Kartenladehinweis anzeigen</de>
+        </text>
+        <text name="setting_recenterVrTrackingSpace">
+            <en>Recenter VR Tracking Space upon Recenter</en>
+            <de>VR-Trackingraum bei Ansichtszentrierung zurücksetzen</de>
+        </text>
+        <text name="setting_vrSnapTurnAngle">
+            <en>VR Snap Turn Angle (Degrees)</en>
+            <de>VR-Blickdrehungswinkel (Grad)</de>
+        </text>
+    </l10n>
+    <actions>
+        <action name="VR_RECENTER_VIEW" category="ONFOOT VEHICLE"/>
+        <action name="VR_HUD_TOGGLE" category="ONFOOT VEHICLE"/>
+        <action name="VR_SNAP_TURN_LEFT" category="ONFOOT VEHICLE"/>
+        <action name="VR_SNAP_TURN_RIGHT" category="ONFOOT VEHICLE"/>
+        <action name="VR_TOGGLE_VIEW" category="ONFOOT VEHICLE"/>
+    </actions>
+    <inputBinding>
+        <actionBinding action="VR_RECENTER_VIEW">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad5"/>
+            <binding device="GAMEPAD_DEFAULT" input="BUTTON_11"/>
+        </actionBinding>
+        <actionBinding action="VR_HUD_TOGGLE">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_rctrl KEY_h"/>
+            <binding device="GAMEPAD_DEFAULT" input="BUTTON_10"/>
+        </actionBinding>
+        <actionBinding action="VR_SNAP_TURN_LEFT">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad4"/>
+            <binding device="GAMEPAD_DEFAULT" input="BUTTON_5"/>
+        </actionBinding>
+        <actionBinding action="VR_SNAP_TURN_RIGHT">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad6"/>
+            <binding device="GAMEPAD_DEFAULT" input="BUTTON_6"/>
+        </actionBinding>
+        <actionBinding action="VR_TOGGLE_VIEW">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_rctrl KEY_v"/>
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad0"/>
+            <binding device="GAMEPAD_DEFAULT" input="BUTTON_9"/>
+        </actionBinding>
+    </inputBinding>
+</modDesc>

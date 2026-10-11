@@ -1,0 +1,42 @@
+# Operating System Files
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+.DS_Store
+.Spotlight-V100
+.Trashes
+
+# Editor directories and files
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build artifacts
+build/
+Testing/
+bin/
+out/
+scratch/
+*.log
+*.exe
+*.dll
+*.lib
+*.pdb
+*.exp
+*.zip
+*.obj
+.deps/
+
+# Local agent tooling (per-machine, not part of the project)
+.claude/
+.agents/
+skills-lock.json
+
+# Proprietary / third-party reference scripts (keep local copies only, never commit)
+/dataS/
+/reference/

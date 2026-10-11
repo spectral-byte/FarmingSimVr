@@ -1,0 +1,283 @@
+# Farming Simulator 25 VR (FS25 VR)
+
+[![CI](https://github.com/spectral-byte/FarmingSimVr/actions/workflows/ci.yml/badge.svg)](https://github.com/spectral-byte/FarmingSimVr/actions/workflows/ci.yml)
+[![OpenXR](https://img.shields.io/badge/OpenXR-1.0-blue.svg)]()
+[![DirectX](https://img.shields.io/badge/Direct3D-12-orange.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey.svg)]()
+[![Release](https://img.shields.io/badge/release-v1.0.0-success.svg)](https://github.com/spectral-byte/FarmingSimVr/releases)
+
+High-performance virtual reality modding architecture for **Farming Simulator 25** running on GIANTS Engine 10 under Direct3D 12. Seamlessly interfaces GIANTS Engine 10 with any standard OpenXR runtime (Meta Quest Link/AirLink, Virtual Desktop, SteamVR, Pimax, Bigscreen Beyond).
+
+---
+
+## Architecture Overview
+
+FS25 VR is built as a hybrid two-tier architecture:
+
+1. **Native Direct3D 12 Proxy Injector (`dxgi.dll`)**:
+   - Intercepts DXGI swapchain presentation and hooks into the DirectX 12 rendering pipeline.
+   - Initializes and manages the OpenXR session lifecycle, reference spaces, swapchain images, and compositor submission.
+   - Virtualizes temporal upscalers (NVIDIA DLSS / NGX) with dual feature contexts to completely eliminate stereoscopic history ghosting.
+   - Provides an OpenXR floating quad layer for 2D UI menus and dialogs with hardware-accurate alpha-blended mouse cursor injection.
+   - Automatically decouples desktop mirror window rendering from native headset display resolution.
+   - Intercepts the in-process Luau VM state and injects the global `VRBridge` state and synchronization table.
+
+2. **In-Engine Luau Companion Mod (`FS25_VRCompanion.zip`)**:
+   - Executes directly inside GIANTS Engine 10's Luau environment.
+   - Consumes 6DOF head poses and asymmetric perspective projections from `VRBridge`.
+   - Manages dual eye camera nodes and cyclopean spatial audio listener alignment.
+   - Coordinates Sequential Dual-Pass (SDP) and Alternate Frame Rendering (AFR) pipelines.
+   - Features comprehensive VR HUD anchoring with a configurable HUD Safe Area, per-group HUD placement and IPD-scaled stereoscopic convergence depth.
+   - Implements in-engine snap turn locomotion, 2D floating window view toggling, and reference space recentering.
+
+```
+       +-------------------------------------------------------------+
+       |                  GIANTS Engine 10 (FS25)                    |
+       |                                                             |
+       |  +------------------------+      +-----------------------+  |
+       |  |  FS25_VRCompanion.zip  |      |   Direct3D 12 Engine  |  |
+       |  |   (In-Engine Luau)     |      |      Render Loop      |  |
+       |  +-----------+------------+      +-----------+-----------+  |
+       +--------------|-------------------------------|--------------+
+                      |                               |
+          VRBridge    | Interception                  | DXGI Present
+          State Table |                               | Interception
+                      v                               v
+       +-------------------------------------------------------------+
+       |                      dxgi.dll (Proxy)                       |
+       |                                                             |
+       |  +-------------------+  +------------------+  +----------+  |
+       |  | Luau Interceptor  |  | Virtual NGX DLSS |  | D3D12    |  |
+       |  | & VRBridge Sync   |  | Dual Context     |  | Pipeline |  |
+       |  +-------------------+  +------------------+  +----+-----+  |
+       +----------------------------------------------------|--------+
+                                                            |
+                                               xrEndFrame   v
+                                             +-----------------------+
+                                             |     OpenXR Runtime    |
+                                             |  (Quest / SteamVR)    |
+                                             +-----------------------+
+```
+
+---
+
+## Key Features
+
+- **Stereo Presentation Modes**:
+  - **Sequential Dual-Pass (SDP)**: Renders left and right eye perspectives sequentially within a single logical compositor frame. The second sub-pass clamps the Lua simulation delta time to zero ($\Delta t = 0$), so both eyes show the same game state. Use DLSS/DLAA (see the support matrix below). Default mode; recommended for high-end systems (RTX 3080/4080/4090).
+  - **Alternate Frame Rendering (AFR)**: Alternates left and right eye perspectives on sequential engine frames for lightweight GPU load on midrange graphics cards. Opt-in via `vrRenderingMode afr`.
+  - Dynamically switchable via console command or configuration settings with seamless discontinuity flushing.
+  - **Upscaler support per Stereo Presentation Mode**:
+
+    | Upscaler | Sequential Dual-Pass | Alternate Frame Rendering |
+    |---|---|---|
+    | DLSS / DLAA | Supported. Per-eye history with per-eye motion vector correction (`vrDlssMvFix`, ADR-0020): sharp, no ghosting. The eye rendered in the second sub-pass may smear slightly on moving objects. | Supported. Per-eye history with the same motion vector correction (`vrDlssMvFix`); object motion is scaled by the two-frame stride. `vrDlssMvScale` (2.0x default) applies only while the correction is off. |
+    | FSR3 | Supported. Per-eye history with the same per-eye motion vector correction as DLSS (`vrDlssMvFix`, ADR-0020), using the conventions in FSR3's own dispatch description: sharp, no ghosting once the correction is on. The second-sub-pass object-motion caveat applies. | Per-eye history with the same motion vector correction (`vrDlssMvFix`); object motion is scaled by the two-frame stride. |
+    | In-engine TAA | Not supported in VR: one history is shared across eyes and ghosts. Use DLSS/DLAA or FSR3. | Not supported in VR (ghosts). |
+
+    `vrDlssMvFix on|off` switches the per-eye motion vector correction for DLSS and FSR3 (the `vrDlssMv*` names cover both upscalers; `vrDlssMvScale` is DLSS only) (on by default; with it off, FSR3 under Sequential Dual-Pass has per-eye history but soft fine texture). `vrDlssDepthModel infinite|finite` (default infinite) picks the depth model the DLSS correction reads the engine depth with (FSR3 reads its own create flags). `vrDlssNearClipCab`, `vrDlssNearClipOutside` and `vrDlssNearClipOnFoot` (each `<m|auto>`) set the near plane the DLSS correction unprojects with for one camera mode: a vehicle's inside camera, its other cameras, and on foot, because the renderer's near plane differs between them (FSR3 reads the real near from its dispatch description). The defaults are 0.1 m in the cab, `auto` on outside cameras and 0.15 m on foot; `auto` (or `0`) estimates it from the engine's motion vectors. The Companion Mod switches to the matching value as you enter, leave or change camera, `vrDlssNearClip <m|auto>` sets all three, and the values are saved to `settings.xml`. `vrDlssDiag` also logs a one-time `[Diag] MvProjection` line with the projection fed to the correction (FSR3 shows the dispatch fields next to the camera record), and logs FSR3 dispatches and, while the correction is on, the motion vector self-check for them.
+- **6DOF Head Tracking**: Positional and rotational tracking for both on-foot locomotion and vehicle cockpits with collinear translation and decoupled look yaw rotation.
+- **Symmetric Projection (default) with opt-in Oblique Frustum**: The Injector submits an aspect-matched symmetric FOV and the Companion Mod applies no projection offset by default. Per-eye asymmetric offsets computed from headset optics are available via `vrObliqueProjection true` or `<allowObliqueProjection>true</allowObliqueProjection>` in `settings.xml` (see ADR-0005).
+- **Temporal Upscaler Virtualization**:
+  - Isolated left and right `NVSDK_NGX_Handle` instances.
+  - Context-aware motion vector handling ($1.0\times$ in Dual-Pass; in AFR, the per-eye correction, or $2.0\times$ scaling while it is off).
+  - Synchronous discontinuity reset on teleports, snap turns, and view transitions.
+- **Dynamic In-Engine VR HUD**:
+  - The HUD is split into four HUD Groups (Map, Speedometer, Info, Controls), each positioned by its own margins and scale from a fixed home corner, so the interface sits in the headset's optical sweet spot.
+  - Physical IPD-scaled stereoscopic convergence depth prevents eye strain.
+  - Clean vertical stacking of fill levels and machine telemetry.
+  - Three-stage HUD display cycle: **Full HUD** $\rightarrow$ **Streamlined HUD** $\rightarrow$ **Hidden**. The state you leave it in is saved and restored the next time a map loads; a first install starts **Hidden**.
+  - Four HUD Groups (Map, Speedometer with its fill levels, Info, Controls), each switchable on or off for the Streamlined and Full HUD with `vrHudGroupShow`. By default the Streamlined HUD shows only the Speedometer group and the Full HUD shows all four. The context action prompt shows in both.
+- **Floating Quad Layer for Menus**:
+  - 2D menus, title screen, and map dialogs render cleanly onto a floating 3D quad layer in OpenXR space.
+  - Alpha-blended hardware mouse cursor projected accurately onto the floating quad.
+  - Dynamic quad centering and 6DOF background showroom tracking.
+- **In-Engine 2D View Toggle**: Instant hotkey toggle between full 3D VR and a 2D floating virtual screen for comfortable cutscene or menu viewing.
+- **Snap Turn Locomotion**: Instant rotational increments (configurable 30Â°, 45Â°, 90Â°) for both on-foot walking and in-cab vehicle driving.
+- **Desktop Mirror Window Decoupling**: Renders at native headset resolution while maintaining an unscaled, clamped desktop mirror window without aspect ratio distortion.
+
+---
+
+## Installation Guide
+
+### System Requirements
+
+- **Operating System**: Windows 10 or 11 (64-bit)
+- **Game**: Farming Simulator 25 (Direct3D 12)
+- **VR Headset**: Any PC VR headset with OpenXR support:
+  - Meta Quest 2 / 3 / Pro (via Quest Link, AirLink, or Virtual Desktop)
+  - Valve Index, HTC Vive, Bigscreen Beyond (via SteamVR)
+  - Pimax headsets (via PimaxXR / OpenXR runtime)
+
+### Recommended: Install with the Installer
+
+1. Download **`FS25_VR_v<version>_Setup.exe`** from the [latest release](https://github.com/spectral-byte/FarmingSimVr/releases) and run it. It asks for administrator rights.
+2. The Installer looks for your game in Steam (every Steam library, including ones on other drives), Epic Games and the GIANTS standalone version. One installation is pre-selected; with several you pick one. If yours was not found, **Browse...** to the folder that contains `x64\FarmingSimulator2025Game.exe`. The Installer refuses any other folder, and it refuses Microsoft Store / Game Pass installs as unsupported.
+3. The optional **Render Resolution** page can set the game's Render Resolution to your headset's per-eye resolution. It is unticked by default; tick it and enter the width and height (whole numbers from 640 to 8192). The fields start with the values from your `game.xml`. The Installer sets the game to windowed mode with that size and first saves your `game.xml` as `game.xml.fs25vr-backup`. If you have never launched the game, there is no `game.xml` yet: launch Farming Simulator 25 once, then run the Installer again.
+4. Finish the wizard. The Installer copies `dxgi.dll` into the game's `x64` folder and `FS25_VRCompanion.zip` (not extracted) into `Documents\My Games\FarmingSimulator2025\mods`. It follows your Documents folder if OneDrive has moved it, and uses your mods directory override if you set one in the game. If the game folder already holds a `dxgi.dll` that is not part of FS25 VR (for example ReShade), the Installer warns you and moves it to `dxgi.dll.fs25vr-backup` first. The game must be closed.
+5. Continue with [Step 3: Launch the Game](#step-3-launch-the-game).
+
+For unattended installs, run the Setup exe with `/VERYSILENT /DIR="<game folder>"`. Add `/FS25VR_RESOLUTION=<width>x<height>` (for example `/FS25VR_RESOLUTION=4000x2500`) to set the Render Resolution without the wizard page; an invalid value fails the install before anything is changed, and with no `game.xml` the resolution is skipped. If `game.xml` can't be edited once the files are placed (for example because it is read-only), FS25 VR stays installed and Setup exits with code 20. A silent run over an existing install upgrades it and never asks anything.
+
+> [!NOTE]
+> **"Windows protected your PC"**: the Installer is not code-signed yet, so Windows SmartScreen warns about it. This is expected. Click **More info**, then **Run anyway**.
+
+To uninstall, run the Setup exe again and choose **Uninstall** when it asks what to do (the other choices are **Upgrade or reinstall** and **Cancel**), or use **FS25 VR** under *Settings > Apps > Installed apps* (Add/Remove Programs). For scripts, `FS25_VR_v<version>_Setup.exe /FS25VR_UNINSTALL` runs the uninstaller unattended and exits with its exit code (non-zero if FS25 VR is not installed or the game is running). Uninstalling removes `dxgi.dll`, the Companion Mod zip and `fs25_vr.log`, and keeps your VR settings in `modSettings`. It puts back the `dxgi.dll` the Installer moved aside (from `dxgi.dll.fs25vr-backup`), keeps a `dxgi.dll` that you installed over FS25 VR's since (that one wins, and the backup stays), and restores your original Render Resolution if you set one, unless you changed the width, height or fullscreen mode in the game since. `game.xml.fs25vr-backup` is left in place.
+
+### Manual Installation
+
+If you prefer to copy the files yourself, use the zip bundle from the same release and follow Steps 1 and 2, then Step 3.
+
+### Step 1: Install the Native Injector (`dxgi.dll`)
+
+1. Locate your Farming Simulator 25 installation folder:
+   - **Steam**: `C:\Program Files (x86)\Steam\steamapps\common\Farming Simulator 25\`
+   - **GIANTS Standalone**: `C:\Program Files\Farming Simulator 2025\`
+   - **Epic Games**: `C:\Program Files\Epic Games\FarmingSimulator25\`
+2. Open the **`x64`** subdirectory (where `FarmingSimulator2025Game.exe` is located).
+3. Copy **`dxgi.dll`** into this **`x64`** folder.
+
+> [!NOTE]
+> `dxgi.dll` acts as a DirectX 12 proxy library. To uninstall or disable VR, simply rename or delete `dxgi.dll` from the `x64` folder.
+
+### Step 2: Install the Companion Mod (`FS25_VRCompanion.zip`)
+
+1. Locate your Farming Simulator 25 mods directory:
+   - `Documents\My Games\FarmingSimulator2025\mods\`
+2. Copy **`FS25_VRCompanion.zip`** into this `mods` directory.
+   - **Do NOT unzip this file!** Farming Simulator reads mod archives directly in `.zip` format.
+
+### Step 3: Launch the Game
+
+1. Connect your VR headset and verify your OpenXR runtime is running (e.g. Meta Quest Link app, SteamVR, or Virtual Desktop).
+2. Launch Farming Simulator 25 normally (e.g. from Steam or desktop shortcut).
+3. When loading or starting a Career / Savegame, make sure **FS25 VR Companion Mod** is checked / enabled in the Mod Selection list.
+4. Put on your headset and enter the virtual farm!
+
+---
+
+## Controls and Keybindings
+
+| Action | Keyboard Binding | Gamepad Binding | Description |
+| :--- | :--- | :--- | :--- |
+| **Recenter VR View** | `NumPad 5` | `R3 / Right Stick Click (Button 11)` | Re-zeros head translation and tracking space |
+| **Toggle VR View Mode** | `Right Ctrl + V` or `NumPad 0` | `L3 / Left Stick Click (Button 9)` | Toggles between 3D VR and 2D Floating Window |
+| **Toggle VR HUD Mode** | `Right Ctrl + H` | `Button 10` | Cycles Full $\rightarrow$ Streamlined $\rightarrow$ Hidden HUD |
+| **VR Snap Turn Left** | `NumPad 4` | `LB / Left Bumper (Button 5)` | Instant left rotation increment |
+| **VR Snap Turn Right** | `NumPad 6` | `RB / Right Bumper (Button 6)` | Instant right rotation increment |
+
+> All keybindings can also be customized in the in-game Controls Options menu under the **FS25 VR** category.
+
+---
+
+## Settings & Console Commands
+
+VR settings are automatically persisted to:  
+`Documents\My Games\FarmingSimulator2025\modSettings\FS25_VRCompanion\settings.xml`
+
+### In-Game Console Commands
+
+Press the tilde key (`` ` `` / `~`) to open the in-engine developer console:
+
+- `vrRenderingMode <afr|dualpass|toggle>`: Switch between Sequential Dual-Pass and Alternate Frame Rendering.
+- `vrObliqueProjection <true|false|toggle>`: Enable per-eye Oblique Frustum projection (default: `false`, symmetric).
+- `vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]`: Place one HUD Group and set its scale. Each group has a fixed home corner (Map bottom-left, Speedometer bottom-right with the fill levels under it, Info top-right, Controls top-left). The horizontal and vertical values are the distance, as a fraction of the screen, from the home corner's two edges to the group's outer edges, so a larger group grows inward. The Speedometer group always stacks its fill levels directly under the speedometer, right-aligned with it and a small fixed gap apart, and its vertical margin is measured to the bottom of the lowest fill level, however many fill levels there are. Margins clamp to `0.00`-`0.45` and the scale to `0.50`-`1.50`; the scale is multiplied by the game's own UI scale setting. Defaults: Speedometer `0.30 0.20 0.82`, Map `0.30 0.22 0.82`, Info `0.30 0.30 0.82`, Controls `0.30 0.30 0.82`. The change applies immediately and is saved. Run without arguments to list every group's current margins and scale. The context action prompt is not a group: it stays centered at the bottom on the Speedometer group's vertical margin.
+- `vrHudSafeArea <horizontal> <vertical>`: Set the HUD Safe Area, one margin applied to the engine's global HUD anchors that keeps everything outside the HUD Groups (blinking warnings, notifications and other mods' HUDs) inside the lens. The horizontal margin clamps to `0.00`-`0.40` and the vertical margin (applied to both top and bottom) to `0.00`-`0.35`. Defaults: `0.30 0.22`. It does not move the HUD Groups. The change applies immediately and is saved; run without arguments to print the usage and the current values. The anchors are restored to the full screen on map unload and in 2D Floating Window Mode.
+- `vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>`: Choose which HUD Groups show in the Streamlined HUD and in the Full HUD (defaults: Streamlined = `speedometer` only, Full = all four groups). The Hidden HUD always shows nothing, and the context action prompt always shows in both states. Applies immediately and is saved; run with no arguments to list every group's current visibility. The HUD cycle notification lists the groups that are on in the new state, e.g. `VR HUD: Streamlined (Speedometer, Map)`.
+- HUD convergence depth is set via `<hudConvergenceDepth>` in `settings.xml` (default: `1.8`).
+- `vrSnapTurnAngle <degrees>`: Set snap turn rotational angle step (default: `90`).
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+- Windows 10/11 64-bit
+- Visual Studio 2022 or Build Tools with C++20 standard library and MSVC v143+
+- CMake 3.20+
+- Ninja build system
+- Git
+
+### Build Instructions
+
+```powershell
+# Clone repository
+git clone https://github.com/spectral-byte/FarmingSimVr.git
+cd FarmingSimVr
+
+# Configure CMake with Ninja. RelWithDebInfo is the shipped configuration: full
+# inlining (/Ob2, set in CMakeLists.txt) plus a dxgi.pdb for symbols.
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+# Build Injector DLL and Test Executable
+ninja -C build dxgi fs25_vr_tests
+
+# Confirm the build tree uses the shipped configuration (also run by CI and the packaging script)
+.\scripts\check_build_config.ps1 build
+
+# Run automated unit and integration tests
+ctest --test-dir build --output-on-failure
+```
+
+### Packaging a Release (zip bundle and Installer)
+
+```powershell
+# Needs Inno Setup 6 (https://jrsoftware.org/isinfo.php, or `choco install innosetup`).
+# Builds the zip bundle and FS25_VR_v<version>_Setup.exe from the same staged files into build\release
+.\scripts\package_release.ps1
+
+# Silently installs and uninstalls the Setup exe against a fake game folder and Documents folder, then checks the files
+.\scripts\test_installer.ps1
+```
+
+CI cannot check how the Installer finds the game (Steam libraries, Epic, GIANTS standalone), so run the manual [installer release checklist](docs/installer-release-checklist.md) before publishing a release.
+
+### Packaging and Deploying the Companion Mod
+
+```powershell
+# Using tar.exe to preserve POSIX directory entries required by GIANTS Engine
+cd mods\FS25_VRCompanion
+tar.exe -a -cf ..\..\build\FS25_VRCompanion.zip modDesc.xml icon_vr.png src/*.lua
+
+# Or use the automated deployment script to build the zip and deploy directly to game directories:
+.\scripts\deploy.ps1
+```
+
+---
+
+## Architecture Decision Records (ADRs)
+
+For in-depth technical documentation, refer to the architecture records in [`docs/adr/`](docs/adr/):
+
+- [`ADR-0001`](docs/adr/0001-hybrid-injector-and-companion-mod-architecture.md): Hybrid Injector and In-Engine Companion Mod via VRBridge
+- [`ADR-0002`](docs/adr/0002-in-process-luau-state-interception.md): In-Process Luau State Interception & VRBridge Table Injection
+- [`ADR-0003`](docs/adr/0003-afr-frame-pacing-and-telemetry-probe.md): Alternate Frame Rendering (AFR) Pacing & Telemetry Probe (probe superseded by ADR-0017)
+- [`ADR-0004`](docs/adr/0004-graceful-openxr-pass-through-fallback.md): Graceful OpenXR Pass-Through Fallback
+- [`ADR-0005`](docs/adr/0005-oblique-frustum-projection-via-vrbridge.md): Oblique Frustum Projection via VRBridge
+- [`ADR-0006`](docs/adr/0006-openxr-floating-quad-layer-for-menus.md): OpenXR Floating Quad Layer for Menus
+- [`ADR-0007`](docs/adr/0007-in-game-gui-menu-detection-and-quad-layer-switching.md): In-Game GUI Menu Detection and Quad Layer Switching
+- [`ADR-0008`](docs/adr/0008-dynamic-quad-centering-and-background-camera-tracking.md): Dynamic Quad Centering and Background 6DOF Camera Tracking
+- [`ADR-0009`](docs/adr/0009-openxr-alpha-blended-mouse-cursor-layer.md): OpenXR Alpha-Blended Mouse Cursor Quad Layer for Menus
+- [`ADR-0010`](docs/adr/0010-in-engine-vr-hud-inset-and-convergence-parity.md): In-Engine VR HUD Inset and Convergence Parity
+- [`ADR-0011`](docs/adr/0011-openxr-reference-space-recentering.md): OpenXR Reference Space Recentering via poseInReferenceSpace
+- [`ADR-0012`](docs/adr/0012-in-engine-snap-turn-locomotion.md): In-Engine Snap Turn Locomotion
+- [`ADR-0013`](docs/adr/0013-in-engine-2d-floating-window-view-toggle.md): In-Engine 2D Floating Window View Toggle
+- [`ADR-0014`](docs/adr/0014-desktop-mirror-window-resolution-decoupling.md): Desktop Mirror Window Resolution Decoupling
+- [`ADR-0015`](docs/adr/0015-sequential-dual-pass-stereo-presentation-pipeline.md): Sequential Dual-Pass Stereo Presentation Pipeline
+- [`ADR-0016`](docs/adr/0016-dual-feature-context-virtualization-for-temporal-upscalers.md): Dual Feature Context Virtualization for Temporal Upscalers
+- [`ADR-0017`](docs/adr/0017-retire-the-d3d12-telemetry-probe.md): Retire the D3D12 Telemetry Probe
+- [`ADR-0018`](docs/adr/0018-lua-and-present-share-one-thread.md): Companion Mod Calls and Present Run on One Thread
+- [`ADR-0019`](docs/adr/0019-begin-the-openxr-frame-before-the-engine-update.md): Begin the OpenXR Frame Before the Engine Update
+- [`ADR-0020`](docs/adr/0020-per-eye-motion-vector-correction-for-temporal-upscalers.md): Per-Eye Motion Vector Correction for Temporal Upscalers
+- [`ADR-0021`](docs/adr/0021-one-registered-vr-camera-for-both-eyes.md): One Registered VR Camera for Both Eyes
+- [`ADR-0022`](docs/adr/0022-per-group-hud-margins-and-a-separate-safe-area.md): Per-Group HUD Margins and a Separate Safe Area
+
+---
+
+## License & Credits
+
+Copyright (C) 2026 spectral-byte.  
+Developed by the **FS25 VR Team** and licensed under the [GNU General Public License v3.0](LICENSE). Built with Khronos OpenXR, Luau, MinHook, and GoogleTest.  
+Release bundles include `THIRD_PARTY_NOTICES.txt` with the licenses of the libraries linked into `dxgi.dll`.  
+Farming Simulator 25 is a trademark of GIANTS Software GmbH.

@@ -1,0 +1,22 @@
+LIBRARY "dxgi"
+EXPORTS
+    ApplyCompatResolutionQuirking = Proxy_ApplyCompatResolutionQuirking
+    CompatString = Proxy_CompatString
+    CompatValue = Proxy_CompatValue
+    CreateDXGIFactory = Proxy_CreateDXGIFactory
+    CreateDXGIFactory1 = Proxy_CreateDXGIFactory1
+    CreateDXGIFactory2 = Proxy_CreateDXGIFactory2
+    DXGID3D10CreateDevice = Proxy_DXGID3D10CreateDevice
+    DXGID3D10CreateLayeredDevice = Proxy_DXGID3D10CreateLayeredDevice
+    DXGID3D10GetLayeredDeviceSize = Proxy_DXGID3D10GetLayeredDeviceSize
+    DXGID3D10RegisterLayers = Proxy_DXGID3D10RegisterLayers
+    DXGIDeclareAdapterRemovalSupport = Proxy_DXGIDeclareAdapterRemovalSupport
+    DXGIDisableVBlankVirtualization = Proxy_DXGIDisableVBlankVirtualization
+    DXGIDumpJournal = Proxy_DXGIDumpJournal
+    DXGIGetDebugInterface1 = Proxy_DXGIGetDebugInterface1
+    DXGIReportAdapterConfiguration = Proxy_DXGIReportAdapterConfiguration
+    PIXBeginCapture = Proxy_PIXBeginCapture
+    PIXEndCapture = Proxy_PIXEndCapture
+    PIXGetCaptureState = Proxy_PIXGetCaptureState
+    SetAppCompatStringPointer = Proxy_SetAppCompatStringPointer
+    UpdateHMDEmulationStatus = Proxy_UpdateHMDEmulationStatus
