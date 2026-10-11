@@ -84,8 +84,6 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrHudGroup <map\|speedometer\|info\|controls> <horizontal> <vertical> [scale]` | Place and scale a HUD group |
 | `vrHudGroupShow <group> <streamlined\|full> <on\|off>` | Choose which groups show in each HUD state |
 | `vrHudSafeArea <horizontal> <vertical>` | Keep other HUD elements (warnings, notifications, other mods) inside the lens |
-| `vrObliqueProjection <true\|false\|toggle>` | Per-eye asymmetric projection (default off) |
-| `vrDlssMvFix <on\|off>` | Per-eye motion vector correction for DLSS and FSR3 (default on) |
 
 `hudConvergenceDepth` (default `1.8`) is set in `settings.xml` only. The remaining `vrDlss*` tuning commands are explained in [ADR-0020](docs/adr/0020-per-eye-motion-vector-correction-for-temporal-upscalers.md).
 
