@@ -1,4 +1,4 @@
-# Fails if proprietary GIANTS scripts or third-party mod files are tracked (#95).
+# Fails if proprietary GIANTS scripts or third-party mod files are tracked.
 # Checks tracked files only, so local ignored copies under dataS/ or reference/ are fine.
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
@@ -10,7 +10,7 @@ $problems += @(git grep -n -I -F -e "GIANTS Software GmbH, Confidential" -e "Cop
 if ($LASTEXITCODE -gt 1) { Write-Error "git grep failed with exit code $LASTEXITCODE." }
 
 if ($problems.Count) {
-    Write-Host "Proprietary or third-party files are tracked; remove them (see issue #95):"
+    Write-Host "Proprietary or third-party files are tracked; remove them:"
     $problems | ForEach-Object { Write-Host "  $_" }
     exit 1
 }

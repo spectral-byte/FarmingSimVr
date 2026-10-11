@@ -1,5 +1,5 @@
 -- ====================================================================
--- Test Suite for In-Cab Vehicle Snap Turn, State & Debounce (Issue #35)
+-- Test Suite for In-Cab Vehicle Snap Turn, State & Debounce
 -- ====================================================================
 
 -- Mock GIANTS Engine globals before loading VRCompanion
@@ -27,7 +27,7 @@ local function test(name, fn)
     end
 end
 
-print("Running In-Cab Snap Turn, State & Debounce Tests (Issue #35)...")
+print("Running In-Cab Snap Turn, State & Debounce Tests...")
 
 -- Slice 1: Core Snap Turn State Machine Defaults & Configuration
 test("SnapTurnStateMachineDefaultsAndConfigurableTurnAngle", function()
@@ -1063,7 +1063,7 @@ test("InEngineActionEventRegistrationForSnapTurnLeftAndRight", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
--- Slice 17: XML Configuration Loading and Saving of <snapTurnAngle> (Issue #37)
+-- Slice 17: XML Configuration Loading and Saving of <snapTurnAngle>
 test("SavesAndLoadsSnapTurnAngleConfiguration", function()
     local savedData = {}
     _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
@@ -1123,7 +1123,7 @@ test("SavesAndLoadsSnapTurnAngleConfiguration", function()
     VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
 end)
 
--- Slice 18: Runtime Console Command vrSnapTurnAngle <degrees> (Issue #37)
+-- Slice 18: Runtime Console Command vrSnapTurnAngle <degrees>
 test("ConsoleCommandQueriesAndSetsSnapTurnAngle", function()
     local savedData = {}
     _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
@@ -1209,7 +1209,7 @@ test("ConsoleCommandQueriesAndSetsSnapTurnAngle", function()
     VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
 end)
 
--- Slice 19: modDesc.xml Schema, Action Bindings, L10n & Settings Invariants (Issue #37)
+-- Slice 19: modDesc.xml Schema, Action Bindings, L10n & Settings Invariants
 test("ModDescDeclaresSnapTurnActionsBindingsL10nAndSettings", function()
     local modDescContent = fs.readFile("mods/FS25_VRCompanion/modDesc.xml")
 
@@ -1248,12 +1248,12 @@ test("ModDescDeclaresSnapTurnActionsBindingsL10nAndSettings", function()
     assert(string.find(modDescContent, "VR%-Blickdrehung rechts") ~= nil, "Must have German translation for snap turn right")
     assert(string.find(modDescContent, "VR%-Blickdrehungswinkel") ~= nil, "Must have German translation for snap turn angle setting")
 
-    -- 4. Defaults live in the DEFAULT_* constants, not in modDesc.xml (Issue #83)
+    -- 4. Defaults live in the DEFAULT_* constants, not in modDesc.xml
     assert(string.find(modDescContent, "<vrSettings>", 1, true) == nil, "modDesc.xml must not define a <vrSettings> default block")
 end)
 
 -- ====================================================================
--- Outside Camera Snap Turn and Recenter Action (Issue #46)
+-- Outside Camera Snap Turn and Recenter Action
 -- ====================================================================
 
 -- Fake VRBridge that counts discontinuity signals and recenters

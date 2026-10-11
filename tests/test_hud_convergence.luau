@@ -1,5 +1,5 @@
 -- ====================================================================
--- Test Suite for VR HUD Convergence Parity (Issue #27)
+-- Test Suite for VR HUD Convergence Parity
 -- ====================================================================
 
 -- Mock GIANTS Engine globals before loading VRCompanion
@@ -776,7 +776,7 @@ test("MenuTransitionsPreserveConvergenceParityState", function()
     _G.VRBridge = nil
 end)
 
--- Issue #10: the pass-through and head-tracking checks resolve once per update
+-- The pass-through and head-tracking checks resolve once per update
 local function withProbedUpdate(probe)
     local real = VRCompanion.updateHudConvergence
     VRCompanion.updateHudConvergence = function(self, dt)

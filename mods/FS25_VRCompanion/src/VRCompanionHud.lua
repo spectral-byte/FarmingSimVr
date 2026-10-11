@@ -963,7 +963,7 @@ end
 
 -- The engine builds the map's layout in the screen corner (from g_safeFrameOffsetX/Y) and draws its
 -- content, ring, north arrow and hotspots there at absolute overlay positions that setPosition does not
--- move, so placing only the element leaves them outside the lens (#56). While the map's draw methods run,
+-- move, so placing only the element leaves them outside the lens. While the map's draw methods run,
 -- every overlay rendered, and its clip rectangle, is shifted from the engine's corner to the Map group.
 local MAP_DRAW_CLASSES = { "IngameMap", "IngameMapLayout", "IngameMapLayoutNone", "IngameMapLayoutCircle",
     "IngameMapLayoutSquare", "IngameMapLayoutSquareLarge", "IngameMapLayoutFullscreen" }

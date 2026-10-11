@@ -73,7 +73,7 @@ public:
     // (1 means the contexts strictly alternated).
     uint32_t GetDiagLongestContextRun() const;
 
-    // Motion vector correction (#38). Under Sequential Dual-Pass an upscale dispatch for an eye context
+    // Motion vector correction. Under Sequential Dual-Pass an upscale dispatch for an eye context
     // first runs the same motion vector pass as DLSS, then FSR3 reads the corrected texture for that one
     // call and the game's dispatch description is restored. The switch is the DLSS one (vrDlssMvFix on the
     // NGX interceptor); the pass, and its disable-on-failure, are this interceptor's own.

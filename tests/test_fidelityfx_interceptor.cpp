@@ -456,7 +456,7 @@ TEST_F(FidelityFxInterceptorTest, DispatchesOfOtherTypesOnAVirtualContextGoToThe
     EXPECT_EQ(s_dispatchDescs[0], &other);
 }
 
-// ---- Reading the dispatch's conventions (#38) ----
+// ---- Reading the dispatch's conventions ----
 
 constexpr uint32_t kSupportedCreateFlags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_DEPTH_INVERTED;
 
@@ -568,7 +568,7 @@ TEST(FfxMvConventionsTest, ConventionsTheCorrectionCannotHonourAreReportedAsUnsu
     EXPECT_EQ(ReadFfxMvConventions(kSupportedCreateFlags | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE, desc).unsupportedReason, nullptr);
 }
 
-// ---- Motion vector correction (#38) ----
+// ---- Motion vector correction ----
 
 class FfxFakeMvPass : public IMotionVectorPass {
 public:

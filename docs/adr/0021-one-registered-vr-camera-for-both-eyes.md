@@ -3,7 +3,7 @@
 Amends [ADR-0015](0015-sequential-dual-pass-stereo-presentation-pipeline.md) and [ADR-0016](0016-dual-feature-context-virtualization-for-temporal-upscalers.md).
 
 ## Context and Decision
-ADR-0016 has the Companion Mod alternate two distinct scene-graph camera nodes (`cameraNodeLeft`, `cameraNodeRight`), and ADR-0015's sub-passes activate one or the other. Making the Outside Camera render through those nodes (#43) showed in the headset that they had never rendered:
+ADR-0016 has the Companion Mod alternate two distinct scene-graph camera nodes (`cameraNodeLeft`, `cameraNodeRight`), and ADR-0015's sub-passes activate one or the other. Making the Outside Camera render through those nodes showed in the headset that they had never rendered:
 
 - **The game's camera manager ignores cameras it didn't register.** `g_cameraManager:setActiveCamera` silently did nothing for the eye nodes. `getCamera()` always reported the game's own camera. The cab and on-foot views only looked right because those paths also write the head pose into the game's camera.
 - **The global `setCamera` is the game's deprecation wrapper.** It logs "Use g_cameraManager:setActiveCamera(cameraNode) instead of setCamera(cameraNode)!" on every call and didn't render the eye nodes either.

@@ -1,5 +1,5 @@
 -- ====================================================================
--- Test Suite for Sequential Dual-Pass Pacing & Camera Switching (Issue #56)
+-- Test Suite for Sequential Dual-Pass Pacing & Camera Switching
 -- ====================================================================
 
 -- Mock GIANTS Engine globals before loading VRCompanion
@@ -744,7 +744,7 @@ test("RailroadVehicleAndSubclassSpeedGuardsPreventDivideByZero", function()
     _G.Locomotive = nil
 end)
 
--- Slice 12b: Per-frame update must not rescan _G / mission vehicles (Issue #9)
+-- Slice 12b: Per-frame update must not rescan _G / mission vehicles
 test("UpdateDoesNotScanGlobalTableEveryFrameWithoutFerry", function()
     _G.Vehicle = { updateVehicleSpeed = function(self, dt) return 1 end }
     _G.Ferry = nil

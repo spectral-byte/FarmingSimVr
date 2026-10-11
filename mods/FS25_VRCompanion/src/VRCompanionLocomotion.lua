@@ -18,7 +18,7 @@ VRCompanion.RECENTER_MODES = VRCompanion.RECENTER_MODES or {
     VEHICLE_ONLY = "VehicleOnly"
 }
 
--- VR Snap Turn Locomotion Configuration (Issue #35)
+-- VR Snap Turn Locomotion Configuration
 VRCompanion.DEFAULT_SNAP_TURN_ANGLE = math.pi * 0.5 -- 90 degrees (pi/2 radians)
 if VRCompanion.snapTurnAngle == nil then
     VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE

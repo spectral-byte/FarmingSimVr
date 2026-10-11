@@ -1801,7 +1801,7 @@ TEST_F(DlssEvaluationTest, DiagnosticTraceReportsTheResolvedCamerasAndWhichAreMi
     MockReleaseFeature(virtualHandle);
 }
 
-// ---- Motion vector self-check (#34) ----
+// ---- Motion vector self-check ----
 
 class MvSelfCheckTest : public MvPassEvaluationTest {
 protected:
@@ -1967,7 +1967,7 @@ TEST_F(MvSelfCheckTest, TheRawVectorRangeIsLoggedOncePerArming) {
     EXPECT_EQ(count(), 2u);
 }
 
-// ---- Per-eye motion vector correction (#35) ----
+// ---- Per-eye motion vector correction ----
 
 class MvCorrectionEvaluationTest : public MvSelfCheckTest {
 protected:
@@ -2054,7 +2054,7 @@ TEST_F(MvCorrectionEvaluationTest, SequentialDualPassScaleMultiplierIsPartOfTheS
     EXPECT_FLOAT_EQ(m_pass->corrections[0].mvScaleX, 0.5f);
 }
 
-// ---- AFR uses the correction instead of eye-stride scaling (#36) ----
+// ---- AFR uses the correction instead of eye-stride scaling ----
 
 class MvCorrectionAfrEvaluationTest : public MvCorrectionEvaluationTest {
 protected:

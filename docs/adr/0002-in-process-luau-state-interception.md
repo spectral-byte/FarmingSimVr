@@ -24,7 +24,7 @@ The Injector calls its own statically linked Luau VM on the game's `lua_State*`,
 
 **Build configuration.** Struct layouts also depend on `luaconf.h` knobs, which the release fingerprint cannot see: `LUA_VECTOR_SIZE`/`LUA_EXTRA_SIZE` (size of every `TValue`), and `LUA_UTAG_LIMIT`, `LUA_LUTAG_LIMIT`, `LUA_SIZECLASSES` and `LUA_MEMORY_CATEGORIES` (size of `global_State`). They cannot be read from the stripped executable. The Injector `static_assert`s the stock values (3, 1, 128, 128, 40, 256) in `luau_interceptor.cpp`, so its side cannot drift silently. The engine's side is evidenced by the in-game check: a `TValue` size mismatch (16 vs 24 bytes) would misindex the game's stack on the first injected push.
 
-**In-game verification.** On 2026-10-04 VRBridge injection was confirmed working in game (issue #79's acceptance check). All nine fingerprint markers were confirmed present, as whole NUL-delimited strings, in the executable of that game build (dated 2026-09-29).
+**In-game verification.** On 2026-10-04 VRBridge injection was confirmed working in game (the acceptance check for this approach). All nine fingerprint markers were confirmed present, as whole NUL-delimited strings, in the executable of that game build (dated 2026-09-29).
 
 **Decision.**
 1. The Injector now pins Luau **0.662** (previously 0.650, which did not match).

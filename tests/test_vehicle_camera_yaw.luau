@@ -1,5 +1,5 @@
 -- ====================================================================
--- Test Suite for Vehicle In-Cab Mouse & Controller Yaw View Rotation (Issue #29)
+-- Test Suite for Vehicle In-Cab Mouse & Controller Yaw View Rotation
 -- ====================================================================
 
 -- Mock GIANTS Engine globals before loading VRCompanion

@@ -1,5 +1,5 @@
 -- ====================================================================
--- Test Suite for In-Engine 2D Floating Window Mode & Camera / HUD Decoupling (Issue #40)
+-- Test Suite for In-Engine 2D Floating Window Mode & Camera / HUD Decoupling
 -- ====================================================================
 
 -- Mock GIANTS Engine globals before loading VRCompanion
@@ -77,7 +77,7 @@ local function test(name, fn)
     end
 end
 
-print("Running In-Engine 2D Floating Window Mode Tests (Issue #40)...")
+print("Running In-Engine 2D Floating Window Mode Tests...")
 
 -- Slice 1: State Tracking and VRBridge Synchronization
 test("Is2DViewActiveStateTrackingAndSynchronization", function()
@@ -391,7 +391,7 @@ test("ConsoleCommandsManage2DViewMode", function()
     VRCompanion:set2DViewActive(false)
 end)
 
--- Slice 10: Toggle View Action Registration & deleteMap Cleanup (Issue #41)
+-- Slice 10: Toggle View Action Registration & deleteMap Cleanup
 test("ToggleViewActionRegistrationAndCleanup", function()
     local registeredEvents = {}
     _G.g_inputBinding = {
@@ -418,7 +418,7 @@ test("ToggleViewActionRegistrationAndCleanup", function()
     assert(VRCompanion.toggleViewActionEventId == nil, "toggleViewActionEventId must be cleared by deleteMap")
 end)
 
--- Slice 11: Toggle View Action Debounce & Silent Execution (Issue #41)
+-- Slice 11: Toggle View Action Debounce & Silent Execution
 test("ToggleViewActionDebounceAndSilentExecution", function()
     local warningCalls = 0
     _G.g_currentMission = {
@@ -451,7 +451,7 @@ test("ToggleViewActionDebounceAndSilentExecution", function()
     assert(warningCalls == 0, "No warning on returning to 3D mode")
 end)
 
--- Slice 12: Recenter in 2D Mode Realigns Floating Quad Without Touching Camera (Issue #41)
+-- Slice 12: Recenter in 2D Mode Realigns Floating Quad Without Touching Camera
 test("RecenterIn2DModeRealignsFloatingQuadWithoutResettingVehicleOrientation", function()
     local alignMenuQuadCalls = 0
     local recenterCalls = 0

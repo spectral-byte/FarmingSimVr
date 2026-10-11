@@ -379,7 +379,7 @@ TEST(MvReprojectionTest, RawRangeCoversValidSamplesOnlyAndAccountingSkipsSkipped
     EXPECT_DOUBLE_EQ(none.rawMinX, 0.0);
 }
 
-// ---- Per-eye correction (#35) ----
+// ---- Per-eye correction ----
 // Scene: pixel (150, 25) of the 200x100 render, centre (150.5, 25.5), 2 m deep: camera-space point
 // (2.02, 0.98, -2). Seen from a camera 1 m to the right it lands at pixel (125.5, 25.5), 25 pixels to the
 // left, so a static point's engine vector (previous frame = right eye, 1 m aside) is (-25, 0).
@@ -725,7 +725,7 @@ TEST(MvCorrectionTest, AStaticPointStillCorrectsToZeroUnderAMixedSignScale) {
     EXPECT_NEAR(y, 0.0f, 1e-4f);
 }
 
-// ---- AFR (#36) ----
+// ---- AFR ----
 // Under AFR the previous frame is the other eye and the same eye's previous frame is two frames back. The
 // simulation advances every frame, so the engine's object motion covers one frame where the same-eye
 // history is two frames back: object motion takes the eye-stride factor, camera motion does not.

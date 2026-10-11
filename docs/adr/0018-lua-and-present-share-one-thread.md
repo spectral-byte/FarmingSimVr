@@ -1,7 +1,7 @@
 # Companion Mod Calls and Present Run on One Thread
 
 ## Context and Decision
-Issue #80 asked whether Companion Mod (Luau) calls into `VRBridge` and swapchain `Present` run on different threads, because VRBridge mixes atomic and plain fields, a Recenter Action recreates the local reference space that frame submission uses, and the menu quad pose is written from Lua and read at present. ADR-0015 mentions a 3-thread asynchronous render pool, which suggested a possible data race.
+The question was whether Companion Mod (Luau) calls into `VRBridge` and swapchain `Present` run on different threads, because VRBridge mixes atomic and plain fields, a Recenter Action recreates the local reference space that frame submission uses, and the menu quad pose is written from Lua and read at present. ADR-0015 mentions a 3-thread asynchronous render pool, which suggested a possible data race.
 
 `ThreadTrace` logged the thread ID at the Lua calls `VRBridge.recenter`, `setMenuVisible`, `set2DViewActive`, `setRenderingMode` and `getHeadPose`, and at `DxgiProxy::OnPresent`, in a real VR session. The Lua calls and Present reported the same thread ID.
 

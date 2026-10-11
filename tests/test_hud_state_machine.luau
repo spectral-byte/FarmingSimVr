@@ -1,5 +1,5 @@
 -- ====================================================================
--- Test Suite for VR HUD Toggle Action & State Machine (Issue #25)
+-- Test Suite for VR HUD Toggle Action & State Machine
 -- ====================================================================
 
 local fs = require("@lune/fs")
@@ -703,7 +703,7 @@ test("PreservesSelectedHudStateWhenTransitioningThroughGuiMenus", function()
     assert(mockHud.isVisible == false, "HUD must remain hidden after exiting menu")
 end)
 
--- Slice 6: Component visibility hooks into native engine HUD display interfaces (Issue #26)
+-- Slice 6: Component visibility hooks into native engine HUD display interfaces
 test("HooksNativeEngineHudDisplaysAndSuppressesFilteredComponentsOnDraw", function()
     -- Set up mock global display classes
     local draws = {
@@ -948,7 +948,7 @@ end)
 
 -- The engine builds the map's layout in the screen corner and draws its content, ring and north arrow
 -- there at absolute overlay positions that setPosition does not move, so the draw itself is shifted from
--- the engine's corner to the Map group's position (#56).
+-- the engine's corner to the Map group's position.
 test("MapDrawIsShiftedFromTheEnginesCornerToTheMapGroup", function()
     withGroupVisibilityHarness(function()
         local savedLayout = VRCompanion.hudGroupLayout
@@ -1037,7 +1037,7 @@ test("MapDrawIsShiftedFromTheEnginesCornerToTheMapGroup", function()
 end)
 
 -- The circular crop of the map is a 2D mask the layout sets in drawBefore at absolute screen coordinates, and its
--- coordinates readout is drawn from the same layout fields, so both follow the shift as well (#56).
+-- coordinates readout is drawn from the same layout fields, so both follow the shift as well.
 test("MapMaskAndTextFollowTheMapGroup", function()
     withGroupVisibilityHarness(function()
         local savedLayout = VRCompanion.hudGroupLayout
@@ -1103,7 +1103,7 @@ end)
 
 -- Hotspots (fields, vehicles) are placed at the screen position the layout's getMapObjectPosition returns and
 -- then drawn with natives, so that position follows the Map group; hotspots that render through overlays are
--- not shifted a second time by the overlay shift (#56).
+-- not shifted a second time by the overlay shift.
 test("MapHotspotsAreDrawnAtTheMapGroupsPositionOnce", function()
     withGroupVisibilityHarness(function()
         local savedLayout = VRCompanion.hudGroupLayout

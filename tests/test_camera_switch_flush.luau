@@ -1,5 +1,5 @@
 -- ====================================================================
--- Test Suite: Discontinuity Flush on every vehicle camera switch (Issue #45)
+-- Test Suite: Discontinuity Flush on every vehicle camera switch
 -- ====================================================================
 -- Drives the Companion Mod through the engine's vehicle camera change hook
 -- (Enterable.setActiveCameraIndex, wrapped by hookEnterable) and asserts on the

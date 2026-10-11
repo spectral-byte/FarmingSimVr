@@ -533,7 +533,7 @@ test("LoadsUserSettingsXmlWithoutReadingModDesc", function()
     _G.delete = nil
 end)
 
--- Issue #83: every default is defined exactly once, in the DEFAULT_* constants
+-- Every default is defined exactly once, in the DEFAULT_* constants
 test("DefaultsMatchTheValuesPreviouslyYieldedByModDesc", function()
     assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL == 0.30, "HUD Safe Area horizontal default")
     assert(VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL == 0.22, "HUD Safe Area vertical default")

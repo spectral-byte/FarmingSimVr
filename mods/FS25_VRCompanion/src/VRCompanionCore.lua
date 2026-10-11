@@ -61,7 +61,7 @@ function VRCompanion:loadMap(name)
         if handshakeResult and handshakeResult.success == true then
             self.handshakeComplete = true
 
-            -- Query and synchronize native rendering mode state (Issue #54)
+            -- Query and synchronize native rendering mode state
             local nativeMode = handshakeResult.renderingMode
             if nativeMode == nil and type(VRBridge.getRenderingMode) == "function" then
                 nativeMode = VRBridge.getRenderingMode()
@@ -120,7 +120,7 @@ function VRCompanion:loadMap(name)
     end
     self:hookMissionUpdate()
 
-    -- 4a. Initialize Dual Eye Camera Nodes and Cyclopean Audio Listener (Issue #49)
+    -- 4a. Initialize Dual Eye Camera Nodes and Cyclopean Audio Listener
     if type(self.initDualEyeCameraNodes) == "function" then
         self:initDualEyeCameraNodes()
     end
@@ -148,7 +148,7 @@ function VRCompanion:loadMap(name)
     -- 7a. Send the loaded DLSS near plane for the starting camera
     self:applyDlssNearClip(true)
 
-    -- 8. Start in the HUD state the player last chose; a first install starts Hidden for full VR immersion (Issue #25)
+    -- 8. Start in the HUD state the player last chose; a first install starts Hidden for full VR immersion
     if type(self.setHudState) == "function" then
         self:setHudState(self.persistedHudState or self.DEFAULT_HUD_STATE)
     end
@@ -945,7 +945,7 @@ function VRCompanion:deleteMap()
         VRBridge.onMapUnload()
     end
 
-    -- Restore HUD state and visibility to standard 2D Full (Issue #25)
+    -- Restore HUD state and visibility to standard 2D Full
     if type(self.setHudState) == "function" then
         self:setHudState(self.HUD_STATE_FULL)
     end

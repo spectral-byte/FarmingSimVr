@@ -1,5 +1,5 @@
 -- ====================================================================
--- Test Suite: Companion Mod reuses head pose / eye projection tables (Issue #12)
+-- Test Suite: Companion Mod reuses head pose / eye projection tables
 -- VRBridge fills a caller-supplied table in place, so per-frame reads must not allocate.
 -- ====================================================================
 
@@ -101,7 +101,7 @@ local function count(set)
     return n
 end
 
-print("Running Reusable Pose/Projection Table Tests (Issue #12)...")
+print("Running Reusable Pose/Projection Table Tests...")
 
 test("HeadPoseReadsReuseOneTableAcrossCalls", function()
     local before = poseCalls

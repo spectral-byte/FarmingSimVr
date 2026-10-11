@@ -22,7 +22,7 @@ end
 VRCompanion.subPassIndex = VRCompanion.subPassIndex or 0
 VRCompanion.accumulatedPass1Dt = VRCompanion.accumulatedPass1Dt or 0.0
 
--- VR View Mode Toggle Configuration (Issue #41)
+-- VR View Mode Toggle Configuration
 VRCompanion.DEFAULT_TOGGLE_VIEW_DEBOUNCE_MS = 250
 if VRCompanion.toggleViewDebounceMs == nil then
     VRCompanion.toggleViewDebounceMs = VRCompanion.DEFAULT_TOGGLE_VIEW_DEBOUNCE_MS

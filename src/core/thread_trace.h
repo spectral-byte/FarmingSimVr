@@ -6,7 +6,7 @@
 namespace fs25vr {
 
 // Records which thread reaches a call site, to establish and then guard the Lua/Present
-// thread model (issue #80, ADR-0018). Logs the first thread seen and any later change, so
+// thread model (ADR-0018). Logs the first thread seen and any later change, so
 // a steady-state frame loop adds no log lines. A change means the single-thread model no
 // longer holds, so it is logged as a warning; after kMaxChangeLogs changes the site goes
 // quiet, so threads that alternate every frame can't flood the log from the present path.
