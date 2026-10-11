@@ -30,7 +30,7 @@ Two parts work together:
 
 ## Installation
 
-**Requirements**: Windows 10/11 (64-bit), Farming Simulator 25 (Steam, Epic or GIANTS standalone, not Microsoft Store/Game Pass), and an OpenXR-capable PC VR headset.
+**Requirements**: Windows 10/11 (64-bit), Farming Simulator 25 (Steam, Epic or GIANTS standalone), and an OpenXR-capable PC VR headset.
 
 ### Installer (recommended)
 
