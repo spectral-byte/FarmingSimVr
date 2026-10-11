@@ -44,8 +44,6 @@ The Installer copies `dxgi.dll` to the game's `x64` folder and `FS25_VRCompanion
 > [!NOTE]
 > The Installer isn't code-signed yet, so Windows SmartScreen will warn you. Click **More info**, then **Run anyway**.
 
-**Silent install**: `FS25_VR_v<version>_Setup.exe /VERYSILENT /DIR="<game folder>"`, optionally with `/FS25VR_RESOLUTION=<width>x<height>`. Setup exits with code 20 if `game.xml` couldn't be edited; VR stays installed.
-
 **Uninstall**: run the Setup exe again and choose **Uninstall**, or use *Settings > Apps > Installed apps*. For scripts, use `/FS25VR_UNINSTALL`. This removes `dxgi.dll`, the mod zip and `fs25_vr.log`, restores your backed-up `dxgi.dll` and Render Resolution, and keeps your VR settings.
 
 ### Manual install
