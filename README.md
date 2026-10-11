@@ -85,45 +85,8 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrHudGroupShow <group> <streamlined\|full> <on\|off>` | Choose which groups show in each HUD state |
 | `vrHudSafeArea <horizontal> <vertical>` | Keep other HUD elements (warnings, notifications, other mods) inside the lens |
 
-`hudConvergenceDepth` (default `1.8`) is set in `settings.xml` only. The remaining `vrDlss*` tuning commands are explained in [ADR-0020](docs/adr/0020-per-eye-motion-vector-correction-for-temporal-upscalers.md).
+`hudConvergenceDepth` (default `1.8`) is set in `settings.xml` only.
 
-## Building from source
-
-Requires Windows 10/11, Visual Studio 2022 (MSVC v143+) or Build Tools, CMake 3.20+, Ninja and Git.
-
-```powershell
-git clone https://github.com/spectral-byte/FarmingSimVr.git
-cd FarmingSimVr
-
-# RelWithDebInfo is the shipped configuration
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-ninja -C build dxgi fs25_vr_tests
-
-# Verify the build tree uses the shipped configuration
-.\scripts\check_build_config.ps1 build
-
-# Run tests
-ctest --test-dir build --output-on-failure
-```
-
-**Release bundle and Installer** (needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
-
-```powershell
-.\scripts\package_release.ps1   # builds the zip and Setup exe into build\release
-.\scripts\test_installer.ps1    # silent install/uninstall against a fake game folder
-```
-
-Before publishing a release, run through the [installer release checklist](docs/installer-release-checklist.md).
-
-**Companion Mod only**:
-
-```powershell
-.\scripts\deploy.ps1   # zips the mod and deploys it to the game directories
-```
-
-## Documentation
-
-Design decisions are recorded as Architecture Decision Records in [`docs/adr/`](docs/adr/).
 
 ## License
 
