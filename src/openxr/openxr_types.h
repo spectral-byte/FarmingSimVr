@@ -26,10 +26,15 @@ struct HeadPose {
 // One hand's Motion Controller state as the Companion Mod sees it (VRBridge.getHandState).
 // Hand ids: 0 = left, 1 = right. `aim` is the aim pose in the head pose's convention: the same
 // reference space (the Recenter-aware local space) and the same predicted display time as the
-// head pose. An untracked hand reports tracked = false, a default aim pose and zeroed inputs.
+// head pose. `gripPose` is the grip pose (where a Virtual Hand is drawn) in the same convention, with
+// its own `gripTracked` flag: it is untracked whenever the hand is, and also when the runtime refuses
+// the grip pose or can not locate it. An untracked hand reports tracked = false, a default aim pose,
+// an untracked default grip pose and zeroed inputs.
 struct HandState {
     bool tracked = false;
     HeadPose aim;
+    bool gripTracked = false;
+    HeadPose gripPose;
     float trigger = 0.0f;       // 0..1
     float grip = 0.0f;          // 0..1
     float thumbX = 0.0f;        // -1..1, +1 = right

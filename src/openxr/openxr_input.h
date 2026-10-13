@@ -45,7 +45,7 @@ public:
     // (hands untracked); that is not an error.
     void Sync(IOpenXrDispatch& dispatch, XrSession session);
 
-    // Locates each hand's aim space against `baseSpace` at `time`. Run after Sync().
+    // Locates each hand's aim and grip spaces against `baseSpace` at `time`. Run after Sync().
     void LocatePoses(IOpenXrDispatch& dispatch, XrSpace baseSpace, XrTime time);
 
     const HandState& Get(uint32_t hand) const {
@@ -77,9 +77,11 @@ private:
     XrAction m_menuAction = XR_NULL_HANDLE;
     XrAction m_hapticAction = XR_NULL_HANDLE;
     std::array<XrSpace, kHandCount> m_aimSpaces{};
+    std::array<XrSpace, kHandCount> m_gripSpaces{};
     std::array<HandState, kHandCount> m_hands{};
     // Whether the pose action was active at the last sync (a controller that is off is inactive).
     std::array<bool, kHandCount> m_poseActive{};
+    std::array<bool, kHandCount> m_gripPoseActive{};
 
     bool CreateAction(IOpenXrDispatch& dispatch, const char* name, const char* localizedName,
                       XrActionType type, XrAction* out);

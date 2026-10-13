@@ -209,10 +209,19 @@ struct FakeTrackedHeadset {
 
     // Places a hand's aim pose in the runtime's tracking origin (before Recenter re-bases it) and
     // switches the controller on or off. Only position and orientation of `pose` are used.
+    // The grip pose follows the aim pose until SetHandGripPose gives it a pose of its own.
     void SetHandPose(uint32_t hand, const HeadPose& pose, bool tracked = true) {
         auto& sim = runtime->controllers.hands[hand & 1];
         sim.pose = FakeOpenXrTracking::ToXrPose(pose);
+        sim.gripPose = sim.pose;
         sim.tracked = tracked;
+    }
+    // Places a hand's grip pose apart from its aim pose in the tracking origin. `tracked = false` makes
+    // the grip pose alone untracked: the controller (and so the aim pose) stays on.
+    void SetHandGripPose(uint32_t hand, const HeadPose& pose, bool tracked = true) {
+        auto& sim = runtime->controllers.hands[hand & 1];
+        sim.gripPose = FakeOpenXrTracking::ToXrPose(pose);
+        sim.gripTracked = tracked;
     }
     void SetHandTracked(uint32_t hand, bool tracked) { runtime->controllers.hands[hand & 1].tracked = tracked; }
     void SetHandInputs(uint32_t hand, const FakeOpenXrControllers::Inputs& inputs) {
