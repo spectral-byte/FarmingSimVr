@@ -21,6 +21,12 @@
 -- blink, action text and its own execute path, which one trigger pull runs once (and every frame while
 -- the trigger is held on an analog Click Point).
 --
+-- The Pointer Ray controls selection only while it has control of the pointer (whichever of the desk
+-- mouse and the Pointer Hand moved last; VRCompanion:isPointerRayInControl). While the mouse has
+-- control Interactive Control selects by its own mouse test exactly as without Motion Controllers, the
+-- Pointer Ray is not drawn and the trigger clicks nothing; a trigger pulled in that time does not click
+-- (or keep an analog Click Point acting) once the hand moves, only a new pull does.
+--
 -- Later tickets build on:
 --   VRCompanion:onClickPointEvent(kind, clickPoint)   optional hook, called with "selected" (the
 --       selected Click Point changed, clickPoint may be nil) and "clicked" (a click was executed)
@@ -52,6 +58,7 @@ local function newState()
         points = setmetatable({}, { __mode = "k" }),  -- [clickPoint] = update count when last seen active
         updates = 0,
         selected = nil,
+        pullArmed = false,    -- the trigger went down while the ray had control and is still down
     }
 end
 
@@ -86,10 +93,11 @@ local function isPointActive(point)
     return point.activated == true
 end
 
--- Who selects Click Points: the Pointer Ray whenever the Pointer Hand is in use and the ray could be
--- placed in the world. The hand-over between the ray and the desk mouse replaces this one function.
+-- Who selects Click Points: the Pointer Ray while it has control of the pointer (the Pointer Hand moved
+-- after the desk mouse did, see VRCompanion:isPointerRayInControl) and could be placed in the world;
+-- otherwise Interactive Control's own mouse selection, untouched.
 local function rayControlsSelection(self)
-    return state.installed and self:getPointerRay() ~= nil
+    return state.installed and self:isPointerRayInControl() and self:getPointerRay() ~= nil
 end
 
 local function notify(self, kind, point)
@@ -210,6 +218,13 @@ end
 -- acting every update while the trigger is held.
 local function clickSelected(self)
     local pressed, held = self:getPointerTrigger()
+    -- Only a pull that went down while the ray had control can keep an analog Click Point acting; one
+    -- that began under the mouse never turns into a click when the hand moves later.
+    if pressed then
+        state.pullArmed = true
+    elseif not held then
+        state.pullArmed = false
+    end
     local selected = state.selected
     if selected == nil or not (pressed or held) then return end
     local manager = currentManager()
@@ -218,7 +233,7 @@ local function clickSelected(self)
     if controller == nil then return end
     if selected.interactiveController ~= nil and controller ~= selected.interactiveController then return end
     local analog = type(controller.isAnalog) == "function" and controller:isAnalog() == true
-    if pressed or analog then
+    if pressed or (analog and state.pullArmed) then
         pcall(manager.onActionEventExecute, manager)
         notify(self, "clicked", selected)
     end
@@ -249,8 +264,11 @@ function VRCompanion:updateInteractiveControl(dt)
     end
     if ray ~= nil then
         clickSelected(self)
+    else
+        state.pullArmed = false
     end
-    return live > 0, hx, hy, hz
+    -- With the mouse in control there is nothing for the ray to hit: it is not drawn.
+    return ray ~= nil and live > 0, hx, hy, hz
 end
 
 -- Map unload (and the end of a session): hands Interactive Control back exactly as found.
