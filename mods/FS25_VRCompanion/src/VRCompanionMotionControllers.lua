@@ -19,6 +19,10 @@
 --     pitch, yaw, roll   radians  and predicted display time as VRBridge.getHeadPose (follows the
 --     qx, qy, qz, qw              Recenter Action). Compose it into the world exactly like the head.
 --     isValid, isPositionTracked, isOrientationTracked   booleans, as in getHeadPose
+--     gripPoseTracked    boolean  the grip pose (where a Virtual Hand is drawn) is located; its own flag, false
+--                                 whenever the hand is untracked and also when the runtime refuses the grip pose
+--     gripPoseX/Y/Z, gripPosePitch/Yaw/Roll, gripPoseQx/Qy/Qz/Qw   the grip pose, same conventions, reference
+--                                 space and predicted display time as the aim pose above (identity when untracked)
 --     trigger, grip      0..1     analog value (Khronos simple controller profile: select/click as trigger)
 --     thumbX, thumbY     -1..1    thumbstick (Vive: trackpad); +X right, +Y up
 --     thumbClick         boolean  thumbstick (Vive: trackpad) click
@@ -162,6 +166,9 @@ local function untrackedHand()
         tracked = false,
         x = 0, y = 0, z = 0, pitch = 0, yaw = 0, roll = 0, qx = 0, qy = 0, qz = 0, qw = 1,
         isValid = false, isPositionTracked = false, isOrientationTracked = false,
+        gripPoseTracked = false,
+        gripPoseX = 0, gripPoseY = 0, gripPoseZ = 0, gripPosePitch = 0, gripPoseYaw = 0, gripPoseRoll = 0,
+        gripPoseQx = 0, gripPoseQy = 0, gripPoseQz = 0, gripPoseQw = 1,
         trigger = 0, grip = 0, thumbX = 0, thumbY = 0,
         thumbClick = false, buttonLower = false, buttonUpper = false, menu = false,
     }
@@ -711,7 +718,23 @@ function VRCompanion:consoleCommandMotionControllerStatus()
     return self:getMotionControllerStatus()
 end
 
--- Why pointing may not work, in one line: the ray, who controls the pointer and Interactive Control support.
+-- One hand's aim pose and grip pose with whether each is tracked, e.g.
+-- "aim (0.30, 1.20, -0.40) tracked, grip not tracked". Positions are head-relative metres.
+local function describeHandPoses(hand)
+    local pose = state.hands[hand]
+    local aim = "aim not tracked"
+    if pose.tracked == true then
+        aim = string.format("aim (%.2f, %.2f, %.2f) tracked", pose.x, pose.y, pose.z)
+    end
+    local grip = "grip not tracked"
+    if pose.gripPoseTracked == true then
+        grip = string.format("grip (%.2f, %.2f, %.2f) tracked", pose.gripPoseX, pose.gripPoseY, pose.gripPoseZ)
+    end
+    return aim .. ", " .. grip
+end
+
+-- Why pointing may not work, in one line: the ray, who controls the pointer and Interactive Control support,
+-- then each hand's aim pose and grip pose.
 function VRCompanion:getPointerDiagnostics()
     local icText = "Interactive Control support: not available"
     if type(self.getInteractiveControlDiagnostics) == "function" then
@@ -719,10 +742,10 @@ function VRCompanion:getPointerDiagnostics()
     end
     local pointer = state.pointerHand
     local trigger = pointer ~= nil and state.hands[pointer].trigger or 0
-    return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s",
+    return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s | Left hand: %s | Right hand: %s",
         tostring(state.rayReason or "not updated yet"),
         pointer == 0 and "left" or pointer == 1 and "right" or "none", trigger,
-        self:getPointerOwner(), icText)
+        self:getPointerOwner(), icText, describeHandPoses(0), describeHandPoses(1))
 end
 
 function VRCompanion:consoleCommandPointerDiagnostics()

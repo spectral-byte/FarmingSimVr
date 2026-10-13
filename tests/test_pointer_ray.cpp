@@ -163,6 +163,30 @@ TEST_F(CompanionModTest, VrPointerDiagnosticsSaysWhyPointingWorksOrNot) {
     EXPECT_NE(aimed.find("selected: yes"), std::string::npos) << aimed;
 }
 
+TEST_F(CompanionModTest, VrPointerDiagnosticsPrintsEachHandsGripPoseNextToItsAimPoseAndWhetherTheyAreTracked) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+
+    // Left: aim and grip are different places, both tracked. Right: the controller is on, only its grip
+    // pose is lost.
+    headset.SetHandPose(kLeft, HandAt(-0.30f, 1.10f, -0.35f));
+    headset.SetHandGripPose(kLeft, HandAt(-0.32f, 1.05f, -0.25f));
+    headset.SetHandPose(kRight, HandAt(0.30f, 1.20f, -0.40f));
+    headset.SetHandGripPose(kRight, HandAt(0.28f, 1.15f, -0.30f), /*tracked=*/false);
+    FRAMES(1);
+    std::string report = EvalLua(L, "runCommand('vrPointerDiagnostics')");
+    EXPECT_NE(report.find("Left hand: aim (-0.30, 1.10, -0.35) tracked, grip (-0.32, 1.05, -0.25) tracked"), std::string::npos) << report;
+    EXPECT_NE(report.find("Right hand: aim (0.30, 1.20, -0.40) tracked, grip not tracked"), std::string::npos) << report;
+
+    // A controller that is off has neither.
+    headset.SetHandPose(kRight, HandAt(0.30f, 1.20f, -0.40f), /*tracked=*/false);
+    FRAMES(1);
+    report = EvalLua(L, "runCommand('vrPointerDiagnostics')");
+    EXPECT_NE(report.find("Right hand: aim not tracked, grip not tracked"), std::string::npos) << report;
+    EXPECT_NE(report.find("Pointer Ray:"), std::string::npos) << "the existing report is still there: " << report;
+}
+
 TEST_F(CompanionModTest, ThePointerRayIsPlacedWhileTheEnginesHeadTrackingReadsOff) {
     // In the game isHeadTrackingActive() reads false (the engine's own setting) while the mod places the head
     // itself, so it must not stop the ray (seen in the headset: "the head is not placed in the world").
