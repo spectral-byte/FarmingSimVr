@@ -4,7 +4,7 @@
 Motion Controllers drive the Pointer Ray, clicks on Click Points and menus, Snap Turn, the Recenter Action and the HUD Toggle Action. The game has no VR input of its own, so every Motion Controller input has to come from the Injector's OpenXR session. OpenXR lets an application declare either game-level actions (such as "click" or "snap turn left") or plain device inputs, and the runtime's binding screen remaps whatever is declared.
 
 **The Injector declares a fixed set of raw inputs per hand and passes their state to the Companion Mod through VRBridge. The Companion Mod decides what each one does.**
-- Per hand: the aim pose, trigger and grip values, the thumbstick axes and click, two face buttons and the menu button, plus whether the hand is tracked.
+- Per hand: the aim pose (where the Pointer Ray starts), the grip pose (where a Virtual Hand is drawn), trigger and grip values, the thumbstick axes and click, two face buttons and the menu button, plus whether the hand is tracked.
 - VRBridge also takes haptic pulse requests from the Companion Mod for either hand.
 - The Injector declares the action set and its suggested bindings once, when it creates the session, since OpenXR allows attaching action sets only once per session. It declares them whether or not the feature is on. `vrMotionControllers off` makes the Companion Mod ignore the input; it never changes the session.
 - Which Motion Controller is the Pointer Hand, what the trigger does in the world or in a menu, the button mappings and their saved settings all live in the Companion Mod, like the rest of the VR behaviour.

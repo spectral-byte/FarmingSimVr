@@ -152,6 +152,10 @@ _Avoid_: Dominant hand, main hand, laser hand
 The ray from the Pointer Hand that selects what the player is aiming at: a Click Point, or the cursor position on a menu or 2D Floating Window Mode quad. It is shown only while the Pointer Hand is tracked and in use and there is something it could select.
 _Avoid_: Laser, beam, raycast, gaze pointer
 
+**Virtual Hand**:
+A gloved hand drawn in the 3D world where a Motion Controller is held, its fingers curling with the trigger and grip, one per Motion Controller, shown while that Motion Controller is in use and Motion Controllers are switched on. Like the Pointer Ray, it appears on foot, in the cab and in an Outside Camera, never in a menu or 2D Floating Window Mode. Only the player holding the Motion Controllers sees their Virtual Hands; other players in multiplayer do not.
+_Avoid_: Hand model, controller model, avatar hand
+
 **Click Point**:
 A clickable target the Interactive Control mod places in a cab, on a vehicle's exterior, or on a placed object such as a building, shown as an icon.
 _Avoid_: IC button, hotspot, interactive point
