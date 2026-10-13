@@ -198,6 +198,7 @@ add_executable(fs25_vr_tests
     tests/test_luau_interceptor.cpp
     tests/test_companion_mod.cpp
     tests/test_motion_controllers.cpp
+    tests/test_pointer_ray.cpp
     tests/test_menu_pointer_panel.cpp
     tests/test_menu_pointer.cpp
     tests/test_controller_button_mappings.cpp

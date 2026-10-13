@@ -54,6 +54,12 @@
 --       called by this module (hand moves; mouseEvent listener; sampling g_inputBinding:getMousePosition)
 --       and callable from tests or other modules that see either one move.
 --
+--   The Pointer Ray (ticket #73; see "The Pointer Ray" below, and VRCompanionInteractiveControl.lua)
+--     VRCompanion:getPointerRay() -> table | nil   world origin / direction of the ray this update
+--     VRCompanion:getPointerTrigger() -> pressed, held   the Pointer Hand's trigger (hysteresis 0.6 / 0.4)
+--     VRCompanion.pointerConeDegrees               saved by `vrPointerCone <degrees>` (default 5)
+--     VRCompanion:draw()                           the line and dot, drawn from the update's end points
+--
 --   Time: every time in this module is VRCompanion:getCurrentTimeMs(), i.e. the global g_time in
 --   milliseconds (a wall clock only when g_time is nil). Tests drive it by assigning _G.g_time.
 --
@@ -98,6 +104,20 @@ VRCompanion.MOTION_CONTROLLER_IN_USE_MS = 3000
 VRCompanion.MOTION_CONTROLLER_MOVE_DISTANCE = 0.01
 VRCompanion.MOTION_CONTROLLER_MOVE_ANGLE = 0.035
 
+-- vrPointerCone <degrees>: saved. A Click Point is selected only within this angle of the Pointer Ray's
+-- centre, measured at the hand.
+VRCompanion.DEFAULT_POINTER_CONE_DEGREES = 5
+VRCompanion.MIN_POINTER_CONE_DEGREES = 0.5
+VRCompanion.MAX_POINTER_CONE_DEGREES = 45
+VRCompanion.pointerConeDegrees = VRCompanion.DEFAULT_POINTER_CONE_DEGREES
+
+-- The trigger counts as pulled above PRESS and as released below RELEASE (hysteresis against a
+-- trigger that rests half-way).
+VRCompanion.POINTER_TRIGGER_PRESS = 0.6
+VRCompanion.POINTER_TRIGGER_RELEASE = 0.4
+-- Length of the drawn Pointer Ray (m) while it ends on nothing.
+VRCompanion.POINTER_RAY_LENGTH = 3
+
 local HANDS = { 0, 1 }
 
 -- State of the subsystem. Rebuilt by resetMotionControllers().
@@ -106,6 +126,10 @@ local function newState()
         hands = {},      -- [hand] = table filled in place by VRBridge.getHandState
         motion = {},     -- [hand] = { ref = {x,y,z,qx,qy,qz,qw} | nil, lastMovedMs = number | nil }
         inUse = {},      -- [hand] = boolean
+        triggerDown = {},     -- [hand] = trigger is pulled (with hysteresis)
+        triggerPressed = {},  -- [hand] = it went down this update
+        ray = { valid = false, ox = 0, oy = 0, oz = 0, dx = 0, dy = 0, dz = -1 },
+        headScratch = nil,    -- table VRBridge.getHeadPose fills in place
         pointerHand = nil,
         ignoredCleared = false,  -- controller input was ignored and the cached hands were already cleared
         bridgeMissing = false,   -- the Injector offers no VRBridge.getHandState
@@ -141,6 +165,8 @@ local function initHands()
         state.hands[hand] = untrackedHand()
         state.motion[hand] = {}
         state.inUse[hand] = false
+        state.triggerDown[hand] = false
+        state.triggerPressed[hand] = false
     end
 end
 initHands()
@@ -200,8 +226,11 @@ local function clearHands()
         end
         state.motion[hand] = {}
         state.inUse[hand] = false
+        state.triggerDown[hand] = false
+        state.triggerPressed[hand] = false
     end
     state.pointerHand = nil
+    state.ray.valid = false
     VRCompanion.pointerHand = nil
 end
 
@@ -284,6 +313,7 @@ function VRCompanion:updateMotionControllers(dt)
     local getHandState = bridgeCall()
     state.bridgeMissing = (getHandState == nil)
     if getHandState == nil then
+        state.ray.valid = false
         updatePointerUsers(self, dt)
         return
     end
@@ -319,6 +349,14 @@ function VRCompanion:updateMotionControllers(dt)
             end
         end
         state.inUse[hand] = inUse
+
+        -- Trigger: pulled above PRESS, released below RELEASE; "pressed" is the update it went down.
+        local wasDown = state.triggerDown[hand]
+        local value = current.trigger or 0
+        local isDown = value >= (wasDown and self.POINTER_TRIGGER_RELEASE or self.POINTER_TRIGGER_PRESS)
+        if current.tracked ~= true then isDown = false end
+        state.triggerDown[hand] = isDown
+        state.triggerPressed[hand] = isDown and not wasDown
     end
     state.pointerHand = choosePointerHand()
     self.pointerHand = state.pointerHand
@@ -327,6 +365,7 @@ function VRCompanion:updateMotionControllers(dt)
         self:notePointerRayMoved()
     end
     if type(self.processControllerButtons) == "function" then self:processControllerButtons() end
+    self:updatePointerRay(dt)
     updatePointerUsers(self, dt)
 end
 
@@ -337,6 +376,135 @@ function VRCompanion:resetMotionControllerMovement()
         state.motion[hand].ref = nil
     end
 end
+
+-- ---- The Pointer Ray ------------------------------------------------------------------------------
+-- The ray starts at the Pointer Hand's aim pose in the world. A hand pose is in the head pose's
+-- tracking space, so it is carried into the world the way the head is: the Cyclopean Audio Listener
+-- Node sits at the head's centre with the head's full world rotation (all three camera paths place it,
+-- through Snap Turn and the Recenter Action), so the hand's offset and direction relative to the head
+-- are rotated by the listener's world rotation and added to its world position. Anchoring at the head
+-- centre keeps the ray the same in both eyes.
+--
+--   VRCompanion:getPointerRay() -> table | nil   the ray this update, or nil when there is none:
+--     ox, oy, oz (origin, world), dx, dy, dz (unit direction), visible (drawn), ex, ey, ez (end point)
+--     Read it, never keep or edit it.
+--   VRCompanion:getPointerTrigger() -> pressed, held   the Pointer Hand's trigger this update
+--   VRCompanion:draw()                           the engine calls it per rendered frame (per eye under AFR)
+
+local function qmul(ax, ay, az, aw, bx, by, bz, bw)
+    return aw * bx + ax * bw + ay * bz - az * by,
+           aw * by - ax * bz + ay * bw + az * bx,
+           aw * bz + ax * by - ay * bx + az * bw,
+           aw * bw - ax * bx - ay * by - az * bz
+end
+
+-- Rotates (x, y, z) by the unit quaternion (qx, qy, qz, qw).
+local function qrotate(qx, qy, qz, qw, x, y, z)
+    local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
+    return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
+end
+
+-- Whether the head is currently placed in the world by the mod's own camera chain; otherwise the
+-- listener node says nothing about where the player's head is.
+local function headIsPlacedInTheWorld(self)
+    if self.isMenuVisible or self.is2DViewActive or self.trackedCameraShown == false then return false end
+    if type(self.isPassThroughMode) == "function" and self:isPassThroughMode() then return false end
+    if type(self.isHeadTrackingActive) == "function" and not self:isHeadTrackingActive() then return false end
+    return true
+end
+
+-- Fills state.ray.o* / d* for the Pointer Hand; false when it cannot be placed.
+local function placePointerRay(self, hand)
+    local ray = state.ray
+    local pose = state.hands[hand]
+    local listener = self.cyclopeanAudioListenerNode
+    local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
+    local getWorldQuaternionFn = getWorldQuaternion or (_G and _G.getWorldQuaternion)
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if pose.tracked ~= true or listener == nil or listener == 0 or not headIsPlacedInTheWorld(self)
+        or type(getWorldTranslationFn) ~= "function" or type(getWorldQuaternionFn) ~= "function"
+        or bridge == nil or type(bridge.getHeadPose) ~= "function" then
+        return false
+    end
+    state.headScratch = state.headScratch or {}
+    local head = bridge.getHeadPose(state.headScratch)
+    if type(head) ~= "table" then return false end
+    state.headScratch = head
+    if head.isValid ~= true or head.qw == nil then return false end
+
+    -- Hand offset and aim direction in the head's frame.
+    local hx, hy, hz, hw = -head.qx, -head.qy, -head.qz, head.qw
+    local offX, offY, offZ = qrotate(hx, hy, hz, hw, pose.x - head.x, pose.y - head.y, pose.z - head.z)
+    local fx, fy, fz = qrotate(pose.qx, pose.qy, pose.qz, pose.qw, 0, 0, -1)
+    fx, fy, fz = qrotate(hx, hy, hz, hw, fx, fy, fz)
+
+    -- ... and in the world, through the head's world placement.
+    local lx, ly, lz = getWorldTranslationFn(listener)
+    local lqx, lqy, lqz, lqw = getWorldQuaternionFn(listener)
+    if lx == nil or lqw == nil then return false end
+    local wx, wy, wz = qrotate(lqx, lqy, lqz, lqw, offX, offY, offZ)
+    ray.ox, ray.oy, ray.oz = lx + wx, ly + wy, lz + wz
+    local dx, dy, dz = qrotate(lqx, lqy, lqz, lqw, fx, fy, fz)
+    local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if length < 0.5 then return false end
+    ray.dx, ray.dy, ray.dz = dx / length, dy / length, dz / length
+    return true
+end
+
+-- Called at the end of every updateMotionControllers. Places the ray, lets Interactive Control select
+-- and click, and settles what is drawn.
+function VRCompanion:updatePointerRay(dt)
+    local ray = state.ray
+    ray.valid = false
+    ray.visible = false
+    local hand = state.pointerHand
+    if hand ~= nil then
+        ray.valid = placePointerRay(self, hand)
+    end
+    local hasTarget, hitX, hitY, hitZ = false, nil, nil, nil
+    if type(self.updateInteractiveControl) == "function" then
+        hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt)
+    end
+    if ray.valid and hasTarget then
+        ray.visible = true
+        if hitX ~= nil then
+            ray.ex, ray.ey, ray.ez = hitX, hitY, hitZ
+        else
+            local length = self.POINTER_RAY_LENGTH
+            ray.ex, ray.ey, ray.ez = ray.ox + ray.dx * length, ray.oy + ray.dy * length, ray.oz + ray.dz * length
+        end
+    end
+end
+
+function VRCompanion:getPointerRay()
+    if state.ray.valid then return state.ray end
+    return nil
+end
+
+-- The Pointer Hand's trigger: pressed (it went down this update), held (it is down).
+function VRCompanion:getPointerTrigger()
+    local hand = state.pointerHand
+    if hand == nil then return false, false end
+    return state.triggerPressed[hand] == true, state.triggerDown[hand] == true
+end
+
+-- A line from the hand with a dot where it lands, drawn with the engine's debug drawing from the end
+-- points settled in the update: under AFR the update and the draw both run per rendered frame, under
+-- Sequential Dual-Pass the one update's ray is drawn in each pass.
+function VRCompanion:draw()
+    local ray = state.ray
+    if not ray.visible then return end
+    local drawLine = drawDebugLine or (_G and _G.drawDebugLine)
+    local drawPoint = drawDebugPoint or (_G and _G.drawDebugPoint)
+    local r, g, b = 0.25, 0.85, 1.0
+    if type(drawLine) == "function" then
+        drawLine(ray.ox, ray.oy, ray.oz, r, g, b, ray.ex, ray.ey, ray.ez, r, g, b, false)
+    end
+    if type(drawPoint) == "function" then
+        drawPoint(ray.ex, ray.ey, ray.ez, 1.0, 1.0, 1.0, 1.0, false)
+    end
+end
+
 -- ---- Settings, persistence, console commands ------------------------------------------------
 
 local SETTING_KEY_ENABLED = "vrSettings.motionControllers"
@@ -363,6 +531,7 @@ function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
     if type(xml.setBool) == "function" then
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.motionControllersEnabled ~= false)
     end
+    self:savePointerConeSetting(xmlFile, xml)
     if type(self.saveControllerMapSettings) == "function" then self:saveControllerMapSettings(xmlFile, xml) end
 end
 
@@ -380,7 +549,48 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
     if loaded ~= nil then
         self.motionControllersEnabled = loaded
     end
+    self:loadPointerConeSetting(xmlFile, xml)
     if type(self.loadControllerMapSettings) == "function" then self:loadControllerMapSettings(xmlFile, xml) end
+end
+
+-- vrPointerCone: the cone (degrees) inside which a Click Point is selected.
+local SETTING_KEY_CONE = "vrSettings.pointerConeDegrees"
+
+local function validPointerCone(self, degrees)
+    return type(degrees) == "number" and degrees >= self.MIN_POINTER_CONE_DEGREES and degrees <= self.MAX_POINTER_CONE_DEGREES
+end
+
+function VRCompanion:savePointerConeSetting(xmlFile, xml)
+    if type(xml.setFloat) == "function" then
+        xml.setFloat(xmlFile, SETTING_KEY_CONE, self.pointerConeDegrees)
+    end
+end
+
+function VRCompanion:loadPointerConeSetting(xmlFile, xml)
+    if type(xml.getFloat) ~= "function" then return end
+    local degrees = xml.getFloat(xmlFile, SETTING_KEY_CONE)
+    if validPointerCone(self, degrees) then
+        self.pointerConeDegrees = degrees
+    end
+end
+
+function VRCompanion:consoleCommandSetPointerCone(arg)
+    local usage = string.format("Usage: vrPointerCone <degrees, %s to %s> (saved)",
+        tostring(self.MIN_POINTER_CONE_DEGREES), tostring(self.MAX_POINTER_CONE_DEGREES))
+    if arg == nil or arg == "" then
+        return string.format("Pointer Ray cone: %s degrees (default %s). %s",
+            tostring(self.pointerConeDegrees), tostring(self.DEFAULT_POINTER_CONE_DEGREES), usage)
+    end
+    local degrees = tonumber(arg)
+    if not validPointerCone(self, degrees) then
+        return usage
+    end
+    self.pointerConeDegrees = degrees
+    if type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
+    print(string.format("[FS25_VR] Pointer Ray cone set to: %s degrees", tostring(degrees)))
+    return string.format("Pointer Ray cone set to: %s degrees (Saved)", tostring(degrees))
 end
 
 function VRCompanion:consoleCommandSetMotionControllers(arg)
@@ -428,6 +638,7 @@ function VRCompanion:registerMotionControllerConsoleCommands()
     if addConsoleCommand == nil then return end
     addConsoleCommand("vrMotionControllers", "Turn Motion Controller input on or off (saved; the Injector's session is untouched): vrMotionControllers [on|off]", "consoleCommandSetMotionControllers", self)
     addConsoleCommand("vrMotionControllerStatus", "Report each Motion Controller's tracked and in-use state and the Pointer Hand: vrMotionControllerStatus", "consoleCommandMotionControllerStatus", self)
+    addConsoleCommand("vrPointerCone", "How wide (degrees) the cone around the Pointer Ray is inside which the nearest Click Point is selected (saved): vrPointerCone [degrees]", "consoleCommandSetPointerCone", self)
     if type(self.registerControllerMapConsoleCommands) == "function" then self:registerControllerMapConsoleCommands() end
 end
 
@@ -439,7 +650,9 @@ function VRCompanion:resetMotionControllers()
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrMotionControllers")
         removeConsoleCommand("vrMotionControllerStatus")
+        removeConsoleCommand("vrPointerCone")
     end
+    if type(self.resetInteractiveControlSupport) == "function" then self:resetInteractiveControlSupport() end
     state = newState()
     initHands()
     self.pointerHand = nil
@@ -458,5 +671,9 @@ VRCompanion.MotionControllers.notePointerMouseMoved = function(self, ...) return
 VRCompanion.MotionControllers.mouseEvent = function(self, ...) return VRCompanion.mouseEvent(VRCompanion, ...) end
 VRCompanion.MotionControllers.updateMotionControllers =function(self, ...) return VRCompanion.updateMotionControllers(VRCompanion, ...) end
 VRCompanion.MotionControllers.resetMotionControllerMovement = function(self, ...) return VRCompanion.resetMotionControllerMovement(VRCompanion, ...) end
+VRCompanion.MotionControllers.consoleCommandSetPointerCone = function(self, ...) return VRCompanion.consoleCommandSetPointerCone(VRCompanion, ...) end
+VRCompanion.MotionControllers.getPointerRay = function(self, ...) return VRCompanion.getPointerRay(VRCompanion, ...) end
+VRCompanion.MotionControllers.getPointerTrigger = function(self, ...) return VRCompanion.getPointerTrigger(VRCompanion, ...) end
+VRCompanion.MotionControllers.draw = function(self, ...) return VRCompanion.draw(VRCompanion, ...) end
 
 return VRCompanion.MotionControllers

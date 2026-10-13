@@ -86,6 +86,7 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrHudSafeArea <horizontal> <vertical>` | Keep other HUD elements (warnings, notifications, other mods) inside the lens |
 | `vrMotionControllers <on\|off>` | Use Motion Controllers (default `on`, saved). `off` makes the mod ignore controller input |
 | `vrMotionControllerStatus` | Report each Motion Controller's tracked and in-use state and the Pointer Hand |
+| `vrPointerCone <degrees>` | How wide a cone around the Pointer Ray selects the nearest Interactive Control Click Point (default `5`, saved) |
 
 ### Motion Controller buttons
 
