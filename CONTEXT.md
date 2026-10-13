@@ -139,3 +139,19 @@ _Avoid_: VR DLSS resolution, mirror scaling, headset supersampling target
 **Single-Context Bypass**:
 The operational state where dual upscaler multiplexing is suspended during monoscopic presentation (such as 2D Floating Window Mode or GUI menus) and all frames are routed to a single feature handle.
 _Avoid_: Mono upscaler fallback, 2D bypass, menu pass-through
+
+**Motion Controller**:
+A tracked handheld VR input device, one per hand. The player may set it down at any time and keep driving with a wheel, gamepad, or keyboard.
+_Avoid_: VR controller, wand, hand controller, controller (in the Interactive Control mod a "controller" is a switch or lever)
+
+**Pointer Hand**:
+The Motion Controller currently pointing. It moves on its own to whichever Motion Controller the player is using, so neither hand is fixed as the pointer. Only the Pointer Hand casts a Pointer Ray.
+_Avoid_: Dominant hand, main hand, laser hand
+
+**Pointer Ray**:
+The ray from the Pointer Hand that selects what the player is aiming at: a Click Point, or the cursor position on a menu or 2D Floating Window Mode quad. It is shown only while the Pointer Hand is tracked and in use and there is something it could select.
+_Avoid_: Laser, beam, raycast, gaze pointer
+
+**Click Point**:
+A clickable target the Interactive Control mod places in a cab, on a vehicle's exterior, or on a placed object such as a building, shown as an icon.
+_Avoid_: IC button, hotspot, interactive point
