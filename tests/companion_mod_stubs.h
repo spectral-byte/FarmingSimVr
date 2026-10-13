@@ -6,7 +6,10 @@
 //   kStubSceneGraph          a small scene graph (nodes, parents, local and world transforms) with the
 //                            engine's node functions, and StubScene.cab / StubScene.onFoot building a
 //                            camera chain the real Companion Mod drives
-//   kStubModelLoading        the engine's model loading and node functions the Virtual Hands use (StubModel), on top of\n//                            the scene graph: a loadable hand model, clones, visibility, scale, world transforms, shadow\n//                            flags, and a model that is missing or fails to load\n//   kStubInteractiveControl  a stand-in for the Interactive Control mod's Click Point class and manager
+//   kStubModelLoading        the engine's model loading and node functions the Virtual Hands use (StubModel), on top of
+//                            the scene graph: a loadable hand model with finger joints, clones, visibility, scale, world
+//                            transforms, joint rotations, shadow flags, and a model that is missing, failing or lacking joints
+//   kStubInteractiveControl  a stand-in for the Interactive Control mod's Click Point class and manager
 //                            (StubIC), with a mismatched variant
 //
 // They model only the names and shapes the Companion Mod depends on (ADR-0026). Nothing here is
@@ -182,9 +185,15 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 //   StubModel.isShown(node)               the node and every ancestor are visible (and it exists)
 //   StubModel.scale(node) -> x, y, z      StubModel.castsShadow(node) -> true when any shape below casts one
 //   StubModel.isLinkedToScene(node)       the node's ancestors lead up to the scene root
+//   StubModel.missingJoints               set of joint names (e.g. { index2 = true }) the next loaded model lacks
+//   StubModel.joint(hand, name) -> node   the finger joint below a hand node, or nil ("thumb1".."little3")
+//   StubModel.curl(hand, name) -> radians how far the joint is rotated from its rest pose about its own X axis
+//                                         (positive = toward the palm); errors when the joint turned about any other axis
+// Every joint of the stub model rests in a slightly bent pose that is NOT the identity rotation (each segment a
+// different X angle, plus a small Y and Z twist), so a curl that ignored the model's rest pose would show.
 // Nodes are visible, unscaled and (for shapes) casting shadows by default, like freshly loaded ones.
 inline constexpr const char* kStubModelLoading = R"luau(
-    StubModel = { fileExists = true, failLoad = false, loads = {}, clones = {}, deleted = {} }
+    StubModel = { fileExists = true, failLoad = false, missingJoints = {}, loads = {}, clones = {}, deleted = {} }
     local nodes = StubScene.nodes
     local function qmul(ax, ay, az, aw, bx, by, bz, bw)
         return aw * bx + ax * bw + ay * bz - az * by,
@@ -246,7 +255,15 @@ inline constexpr const char* kStubModelLoading = R"luau(
         nodes[mesh].castShadow = true
         for _, finger in ipairs({ "thumb", "index", "middle", "ring", "little" }) do
             local parent = hand
-            for segment = 1, 3 do parent = StubScene.newNode(finger .. segment, parent) end
+            for segment = 1, 3 do
+                local name = finger .. segment
+                if not StubModel.missingJoints[name] then
+                    -- the model's relaxed pose: bent a little more at each segment, with a small twist
+                    parent = StubScene.newNode(name, parent, 0, 0, 0, 0.15 * segment, 0.1, -0.05)
+                    local n = nodes[parent]
+                    n.restQx, n.restQy, n.restQz, n.restQw = n.qx, n.qy, n.qz, n.qw
+                end
+            end
         end
         return fileRoot
     end
@@ -261,6 +278,7 @@ inline constexpr const char* kStubModelLoading = R"luau(
         local copy = StubScene.newNode(source.name, parent, source.x, source.y, source.z)
         local n = nodes[copy]
         n.qx, n.qy, n.qz, n.qw = source.qx, source.qy, source.qz, source.qw
+        n.restQx, n.restQy, n.restQz, n.restQw = source.restQx, source.restQy, source.restQz, source.restQw
         n.isShape, n.castShadow, n.visible = source.isShape, source.castShadow, source.visible
         n.sx, n.sy, n.sz = source.sx, source.sy, source.sz
         for _, childId in ipairs(childrenOf(id)) do copyTree(childId, copy) end
@@ -279,6 +297,27 @@ inline constexpr const char* kStubModelLoading = R"luau(
         StubModel.deleted[id] = true
     end
 
+    _G.getQuaternion = function(id) local n = nodes[id]; return n.qx, n.qy, n.qz, n.qw end
+
+    function StubModel.joint(id, name)
+        if nodes[id] == nil then return nil end
+        for _, childId in ipairs(childrenOf(id)) do
+            if nodes[childId].name == name then return childId end
+            local found = StubModel.joint(childId, name)
+            if found ~= nil then return found end
+        end
+        return nil
+    end
+    function StubModel.curl(hand, name)
+        local id = StubModel.joint(hand, name)
+        assert(id ~= nil, name .. " is not in the model")
+        local n = nodes[id]
+        -- rotation from the rest pose to now, in the joint's own frame: conj(rest) * current
+        local x, y, z, w = qmul(-n.restQx, -n.restQy, -n.restQz, n.restQw, n.qx, n.qy, n.qz, n.qw)
+        assert(math.abs(y) < 1e-4 and math.abs(z) < 1e-4,
+            string.format("%s turned about an axis other than its local X (%.4f %.4f %.4f %.4f)", name, x, y, z, w))
+        return 2 * math.atan2(x, w)
+    end
     function StubModel.scale(id) return getScale(id) end
     function StubModel.isShown(id)
         while id ~= nil and id ~= 0 do
