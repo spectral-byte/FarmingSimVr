@@ -21,8 +21,16 @@ Changes made for FS25 VR (CC BY asks for changes to be indicated):
     right Virtual Hand as its mirror image (see VRCompanionVirtualHands.lua).
   * In VirtualHandLeft.i3d: the externalShapesFile now names the shapes file
     that actually ships (VirtualHandLeft.i3d.shapes) and shadow casting of the
-    shape is switched off (castsShadows="false"). The mesh, the rig and the
-    materials are unchanged.
+    shape is switched off (castsShadows="false"). The mesh (the .shapes file),
+    the bone names and hierarchy, the bone positions and the materials are
+    unchanged.
+  * The rig was corrected. The GIANTS Blender exporter writes every bone's
+    rotation 90 degrees short about X, which piles up down each finger: the
+    first export composed to a skeleton about a fifth the size of the mesh.
+    The bone rotations in VirtualHandLeft.i3d are now the armature's own
+    parent-relative rotations, so the bones compose to the rest pose of the
+    armature in "Gloved Hand LP.blend" (scripts/export_virtual_hand.py re-exports
+    it; scripts/check_virtual_hand_rig.ps1 checks it).
   * The Companion Mod scales and turns the model onto the OpenXR grip pose
     at run time; nothing about that is stored in the files.
 
