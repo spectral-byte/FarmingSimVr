@@ -600,7 +600,7 @@ TEST_F(CompanionModTest, TheDiagnosticsCommandsReportEachVirtualHandAndWhyItIsHi
 namespace {
 
 // Reads how far each finger of a Virtual Hand is curled, from the joints' rotations away from the model's rest
-// pose (StubModel.curl: radians about the joint's own X axis, positive toward the palm).
+// pose (StubModel.curl: radians toward the palm).
 constexpr const char* kCurlReaders = R"luau(
     _G.FINGERS = { "thumb", "index", "middle", "ring", "little" }
     -- the curl of the three joints of one finger of "left" / "right", as { joint1, joint2, joint3 }
@@ -709,7 +709,7 @@ TEST_F(CompanionModTest, LettingGoRestoresTheModelsRelaxedPoseAndTheThumbNeverMo
         local hand = StubModel.hands().right
         for segment = 1, 3 do
             local x, y, z, w = getQuaternion(StubModel.joint(hand, 'index' .. segment))
-            assert(math.abs(y) > 0.01 and math.abs(z) > 0.01 and w < 0.999, "the rest pose of index" .. segment .. " is a bent, twisted one")
+            assert(math.abs(x) > 0.1 and math.abs(y) + math.abs(z) > 0.01 and w < 0.999, "the rest pose of index" .. segment .. " is a bent, twisted one")
         end
         for _, finger in ipairs(FINGERS) do assertStill('right', finger, 'open hand') end
         _G.thumbRest = { getQuaternion(StubModel.joint(hand, 'thumb2')) }
@@ -747,7 +747,7 @@ TEST_F(CompanionModTest, TheMirroredLeftHandCurlsOnItsOwnInputsAndTheRightHandIs
         local lx = StubModel.scale(StubModel.hands().left)
         assert(lx == -1, "this is the mirrored hand")
         _G.leftFull = fingerCurl('left', 'index')
-        for segment = 1, 3 do assert(leftFull[segment] > math.rad(30), "the left index finger curls toward the palm (positive)") end
+        for segment = 1, 3 do assert(leftFull[segment] > math.rad(30), "the left index finger curls toward the palm") end
         for _, finger in ipairs({ 'middle', 'ring', 'little' }) do
             assertFinger('left', finger, function(segment) return leftFull[segment] end, 'left grip, same amount as the trigger')
         end

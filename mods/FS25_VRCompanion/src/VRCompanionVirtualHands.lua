@@ -67,6 +67,14 @@ VRCompanion.VIRTUAL_HAND_MODEL = "models/VirtualHandLeft.i3d"
 -- into a fist the way a real one does (knuckle about 80, middle joint about 100, tip about 65).
 VRCompanion.FINGER_CURL_DEGREES = { 80, 100, 65 }
 
+-- Which way a curl turns a joint about its own X axis for THIS model: -1, a NEGATIVE rotation about local X is
+-- toward the palm (+1 would be the opposite model). The Gloved Hand's bones run along their local -Z with a
+-- bone-axis turn of about -90 degrees about X relative to their parent, and its relaxed rest pose already flexes
+-- every finger joint further in the NEGATIVE direction (index Lower.001 -95.9, Middle.001 -104.8, Top.001
+-- -111.2 degrees about X, against the -90 of the bone axis). The Blender file agrees: the same bends are toward
+-- the side the palm faces (-Z in Blender). Flip this one number if a headset check shows fingers bending back.
+VRCompanion.FINGER_CURL_DIRECTION = -1
+
 local HANDS = { 0, 1 }
 local HAND_NAMES = { [0] = "left", [1] = "right" }
 
@@ -259,7 +267,7 @@ local function curlFingers(entry, pose)
     local degrees = VRCompanion.FINGER_CURL_DEGREES
     for _, joint in ipairs(entry.joints or {}) do
         local value = math.max(0, math.min(1, tonumber(pose[joint.input]) or 0))
-        local half = math.rad(degrees[joint.segment]) * value * 0.5
+        local half = VRCompanion.FINGER_CURL_DIRECTION * math.rad(degrees[joint.segment]) * value * 0.5
         local bx, bw = math.sin(half), math.cos(half)  -- the turn about X, as a quaternion
         -- rest * turn: the turn happens in the joint's own frame
         setQuaternion(joint.node, VRCompanion.multiplyQuaternions(joint.restX, joint.restY, joint.restZ, joint.restW,

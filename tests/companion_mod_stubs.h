@@ -189,10 +189,12 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 //                                         next loaded model lacks
 //   StubModel.joint(hand, name) -> node   the finger joint below a hand node, or nil ("thumb1".."little3": finger
 //                                         and curl segment, looked up in that finger's own subtree)
-//   StubModel.curl(hand, name) -> radians how far the joint is rotated from its rest pose about its own X axis
-//                                         (positive = toward the palm); errors when the joint turned about any other axis
+//   StubModel.curl(hand, name) -> radians how far the joint is curled from its rest pose, TOWARD THE PALM, which for
+//                                         this model (as for the shipped one) is a NEGATIVE rotation about the joint's own
+//                                         X axis; errors when the joint turned about any other axis
 // Every joint of the stub model rests in a slightly bent pose that is NOT the identity rotation (each segment a
-// different X angle, plus a small Y and Z twist), so a curl that ignored the model's rest pose would show.
+// different X angle around the model's -90 degree bone-axis turn, plus a small Y and Z twist), so a curl that
+// ignored the model's rest pose would show.
 // Nodes are visible, unscaled and (for shapes) casting shadows by default, like freshly loaded ones.
 inline constexpr const char* kStubModelLoading = R"luau(
     StubModel = { fileExists = true, failLoad = false, missingJoints = {}, loads = {}, clones = {}, deleted = {} }
@@ -274,8 +276,10 @@ inline constexpr const char* kStubModelLoading = R"luau(
             local parent = palm
             for index, name in ipairs(STUB_FINGERS[finger]) do
                 if not StubModel.missingJoints[name] then
-                    -- the model's relaxed pose: bent a little more at each segment, with a small twist
-                    parent = StubScene.newNode(name, parent, 0, 0, 0, 0.15 * index, 0.1, -0.05)
+                    -- the model's relaxed pose, like the shipped one's: the bone-axis turn of -90 degrees about X
+                    -- (every bone has it), flexed a little more at each segment (a NEGATIVE turn about X is toward
+                    -- the palm in this model), with a small twist
+                    parent = StubScene.newNode(name, parent, 0, 0, 0, -1.5708 - 0.1 * index, 0.1, -0.05)
                     local n = nodes[parent]
                     n.restQx, n.restQy, n.restQz, n.restQw = n.qx, n.qy, n.qz, n.qw
                 end
@@ -351,7 +355,8 @@ inline constexpr const char* kStubModelLoading = R"luau(
         local x, y, z, w = qmul(-n.restQx, -n.restQy, -n.restQz, n.restQw, n.qx, n.qy, n.qz, n.qw)
         assert(math.abs(y) < 1e-4 and math.abs(z) < 1e-4,
             string.format("%s turned about an axis other than its local X (%.4f %.4f %.4f %.4f)", name, x, y, z, w))
-        return 2 * math.atan2(x, w)
+        -- a negative turn about X flexes this model's fingers toward the palm, so that is a positive curl
+        return -2 * math.atan2(x, w)
     end
     function StubModel.scale(id) return getScale(id) end
     function StubModel.isShown(id)
