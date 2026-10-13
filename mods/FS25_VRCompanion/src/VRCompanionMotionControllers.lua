@@ -42,6 +42,18 @@
 --     When false the mod ignores controller input: hands report untracked, none is in use, there is
 --     no Pointer Hand. The Injector session and its action set are never touched by this setting.
 --
+--   Who controls the pointer (ticket #74; read by menus, and by Interactive Control selection later)
+--     The pointer is the cursor / selection the player aims: either the desk mouse or the Pointer Ray.
+--     Whichever moved last controls it. Starts with the mouse; the ray takes control when the Pointer
+--     Hand moves (the same "moved" that puts a hand in use), the mouse takes it back when it moves.
+--     VRCompanion:getPointerController() -> "mouse" | "ray"   (VRCompanion.POINTER_CONTROL_MOUSE / _RAY)
+--       "ray" only while the ray is the last mover AND a Pointer Hand is in use (so Motion Controllers
+--       off, an untracked hand and the 3 s idle timeout all read as "mouse").
+--     VRCompanion:isPointerRayInControl() -> boolean   (getPointerController() == "ray")
+--     VRCompanion:notePointerRayMoved() / VRCompanion:notePointerMouseMoved()   hand the control over;
+--       called by this module (hand moves; mouseEvent listener; sampling g_inputBinding:getMousePosition)
+--       and callable from tests or other modules that see either one move.
+--
 --   Time: every time in this module is VRCompanion:getCurrentTimeMs(), i.e. the global g_time in
 --   milliseconds (a wall clock only when g_time is nil). Tests drive it by assigning _G.g_time.
 --
@@ -52,6 +64,8 @@
 --     Config.lua  saveConfiguration -> saveMotionControllerSettings(...)
 --                 loadConfiguration -> loadMotionControllerSettings(...)
 --     Locomotion  onRecenterAction -> resetMotionControllerMovement() (a recenter moves every pose)
+--     MenuPointer updateMotionControllers -> updateMenuPointer(dt) at the end of every update, and
+--                 resetMotionControllers -> resetMenuPointer() (VRCompanionMenuPointer.lua)
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -60,6 +74,12 @@ VRCompanion.MotionControllers = VRCompanion.MotionControllers or {}
 VRCompanion.MOTION_HAND_LEFT = 0
 VRCompanion.MOTION_HAND_RIGHT = 1
 VRCompanion.pointerHand = nil
+
+-- The two things that can control the pointer (see "Who controls the pointer" above).
+VRCompanion.POINTER_CONTROL_MOUSE = "mouse"
+VRCompanion.POINTER_CONTROL_RAY = "ray"
+-- The desk mouse counts as moved when its normalized position changes by more than this (about a pixel).
+VRCompanion.POINTER_MOUSE_MOVE_EPSILON = 0.0005
 
 -- rMotionControllers on|off: saved, default on. Off makes the mod ignore controller input; it never
 -- touches the Injector's session or action set.
@@ -85,6 +105,9 @@ local function newState()
         pointerHand = nil,
         ignoredCleared = false,  -- controller input was ignored and the cached hands were already cleared
         bridgeMissing = false,   -- the Injector offers no VRBridge.getHandState
+        pointerController = VRCompanion.POINTER_CONTROL_MOUSE,  -- see "Who controls the pointer"
+        mousePosition = nil,     -- {x, y}: where the desk mouse was last seen
+        movedThisUpdate = {},    -- [hand] = true when the hand's aim moved far enough to count this update
     }
 end
 
@@ -178,13 +201,77 @@ local function clearHands()
     VRCompanion.pointerHand = nil
 end
 
+-- ---- Who controls the pointer ---------------------------------------------------------------
+-- One place for "desk mouse or Pointer Ray: whichever moved last" (see the header for the API).
+
+function VRCompanion:notePointerRayMoved()
+    state.pointerController = self.POINTER_CONTROL_RAY
+end
+
+function VRCompanion:notePointerMouseMoved()
+    state.pointerController = self.POINTER_CONTROL_MOUSE
+end
+
+function VRCompanion:getPointerController()
+    if state.pointerController == self.POINTER_CONTROL_RAY and state.pointerHand ~= nil
+        and self.motionControllersEnabled ~= false then
+        return self.POINTER_CONTROL_RAY
+    end
+    return self.POINTER_CONTROL_MOUSE
+end
+
+function VRCompanion:isPointerRayInControl()
+    return self:getPointerController() == self.POINTER_CONTROL_RAY
+end
+
+-- The desk mouse was seen at (x, y), either reported by the engine (isEvent: any event is the player
+-- using the mouse) or sampled (a first sample only learns where it is). It took control when it moved.
+local function noteDeskMouse(self, x, y, isEvent)
+    if type(x) ~= "number" or type(y) ~= "number" then return end
+    local last = state.mousePosition
+    state.mousePosition = { x = x, y = y }
+    local moved = isEvent
+    if last ~= nil then
+        local epsilon = self.POINTER_MOUSE_MOVE_EPSILON
+        moved = moved or math.abs(x - last.x) > epsilon or math.abs(y - last.y) > epsilon
+    end
+    if moved then
+        self:notePointerMouseMoved()
+    end
+end
+
+-- The engine tells mod listeners about the desk mouse. The mod's own synthetic GUI events never come
+-- through here, so they never look like the mouse moving.
+function VRCompanion:mouseEvent(posX, posY, isDown, isUp, button)
+    noteDeskMouse(self, posX, posY, true)
+end
+
+-- Sampling covers an engine that does not deliver mouseEvent to the mod in this screen.
+local function sampleDeskMouse(self)
+    local inputBinding = g_inputBinding or (_G and _G.g_inputBinding)
+    if inputBinding == nil or type(inputBinding.getMousePosition) ~= "function" then return end
+    local ok, x, y = pcall(inputBinding.getMousePosition, inputBinding)
+    if ok then
+        noteDeskMouse(self, x, y, false)
+    end
+end
+
+-- What reads the pointer after the hands were polled (menus); a single guarded call.
+local function updatePointerUsers(self, dt)
+    if type(self.updateMenuPointer) == "function" then
+        self:updateMenuPointer(dt)
+    end
+end
+
 function VRCompanion:updateMotionControllers(dt)
+    sampleDeskMouse(self)
     if self.motionControllersEnabled == false then
         -- Controller input is ignored: nothing is polled, and the hands read as untracked.
         if not state.ignoredCleared then
             clearHands()
             state.ignoredCleared = true
         end
+        updatePointerUsers(self, dt)
         return
     end
     state.ignoredCleared = false
@@ -192,9 +279,11 @@ function VRCompanion:updateMotionControllers(dt)
     local getHandState = bridgeCall()
     state.bridgeMissing = (getHandState == nil)
     if getHandState == nil then
+        updatePointerUsers(self, dt)
         return
     end
     local now = self:getCurrentTimeMs()
+    state.movedThisUpdate = {}
     for _, hand in ipairs(HANDS) do
         -- The bridge fills a table in place once it holds every field, and otherwise hands back a
         -- complete one that is adopted here, so nothing is allocated per frame.
@@ -206,8 +295,11 @@ function VRCompanion:updateMotionControllers(dt)
         local current = state.hands[hand]
         local motion = state.motion[hand]
         if current.tracked == true then
-            if movedFromReference(motion, current) and now ~= nil then
-                motion.lastMovedMs = now
+            if movedFromReference(motion, current) then
+                state.movedThisUpdate[hand] = true
+                if now ~= nil then
+                    motion.lastMovedMs = now
+                end
             end
         else
             motion.ref = nil
@@ -225,6 +317,11 @@ function VRCompanion:updateMotionControllers(dt)
     end
     state.pointerHand = choosePointerHand()
     self.pointerHand = state.pointerHand
+    -- The Pointer Hand moving is the ray moving: it takes the pointer from the desk mouse.
+    if state.pointerHand ~= nil and state.movedThisUpdate[state.pointerHand] then
+        self:notePointerRayMoved()
+    end
+    updatePointerUsers(self, dt)
 end
 
 -- A Recenter Action moves the origin every pose is measured from. Hands lying still must not look
@@ -327,6 +424,9 @@ end
 
 -- Map unload: forget everything seen this session. The saved setting stays as it is.
 function VRCompanion:resetMotionControllers()
+    if type(self.resetMenuPointer) == "function" then
+        self:resetMenuPointer()
+    end
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrMotionControllers")
         removeConsoleCommand("vrMotionControllerStatus")
@@ -341,7 +441,12 @@ VRCompanion.MotionControllers.isHandInUse = function(self, ...) return VRCompani
 VRCompanion.MotionControllers.getPointerHand = function(self, ...) return VRCompanion.getPointerHand(VRCompanion, ...) end
 VRCompanion.MotionControllers.consoleCommandSetMotionControllers = function(self, ...) return VRCompanion.consoleCommandSetMotionControllers(VRCompanion, ...) end
 VRCompanion.MotionControllers.consoleCommandMotionControllerStatus = function(self, ...) return VRCompanion.consoleCommandMotionControllerStatus(VRCompanion, ...) end
-VRCompanion.MotionControllers.updateMotionControllers = function(self, ...) return VRCompanion.updateMotionControllers(VRCompanion, ...) end
+VRCompanion.MotionControllers.getPointerController = function(self, ...) return VRCompanion.getPointerController(VRCompanion, ...) end
+VRCompanion.MotionControllers.isPointerRayInControl = function(self, ...) return VRCompanion.isPointerRayInControl(VRCompanion, ...) end
+VRCompanion.MotionControllers.notePointerRayMoved = function(self, ...) return VRCompanion.notePointerRayMoved(VRCompanion, ...) end
+VRCompanion.MotionControllers.notePointerMouseMoved = function(self, ...) return VRCompanion.notePointerMouseMoved(VRCompanion, ...) end
+VRCompanion.MotionControllers.mouseEvent = function(self, ...) return VRCompanion.mouseEvent(VRCompanion, ...) end
+VRCompanion.MotionControllers.updateMotionControllers =function(self, ...) return VRCompanion.updateMotionControllers(VRCompanion, ...) end
 VRCompanion.MotionControllers.resetMotionControllerMovement = function(self, ...) return VRCompanion.resetMotionControllerMovement(VRCompanion, ...) end
 
 return VRCompanion.MotionControllers
