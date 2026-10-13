@@ -226,6 +226,13 @@ HandState VRBridge::GetHandState(uint32_t hand) {
     return {};
 }
 
+bool VRBridge::PulseHaptic(uint32_t hand, float durationMs, float strength) {
+    if (m_openXrManager) {
+        return m_openXrManager->PulseHaptic(hand, durationMs / 1000.0, strength);
+    }
+    return false;
+}
+
 PanelHit VRBridge::GetPanelHit(uint32_t hand) {
     if (m_openXrManager && (m_menuVisible || m_2dViewActive)) {
         return m_openXrManager->GetPanelHit(hand);
@@ -423,6 +430,25 @@ int VRBridge::Lua_GetHandState(lua_State* L) {
     } else {
         PushHandStateTable(L, state);
     }
+    return 1;
+}
+
+// VRBridge.pulseHaptic(hand, durationMs, strength) -> boolean. A short vibration on one Motion
+// Controller: hand is 0 / 1 / "left" / "right" (as getHandState), durationMs the pulse length in
+// milliseconds, strength 0..1. Returns whether a pulse was played; false (and nothing happens) when
+// the runtime offers no controllers, the action set was refused, or an argument is missing or invalid.
+int VRBridge::Lua_PulseHaptic(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.pulseHaptic");
+    uint32_t hand = kInvalidHand;
+    const int firstType = lua_type(L, 1);
+    if (firstType == LUA_TNUMBER || firstType == LUA_TSTRING) {
+        ParseHandAndOutputArgs(L, hand);  // takes the first scalar argument, which is the hand
+    }
+    const float durationMs = lua_isnumber(L, 2) ? static_cast<float>(lua_tonumber(L, 2)) : 0.0f;
+    const float strength = lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : 0.0f;
+    lua_pushboolean(L, self->PulseHaptic(hand, durationMs, strength) ? 1 : 0);
     return 1;
 }
 

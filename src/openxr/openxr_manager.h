@@ -87,6 +87,11 @@ public:
     // One hand's state (0 = left, 1 = right), located at the head pose's predicted display time in
     // the same Recenter-aware reference space. Untracked defaults when the action set is unavailable.
     HandState GetHandState(uint32_t hand);
+    // A short vibration on one hand (0 = left, 1 = right): `durationSeconds` long at `amplitude`
+    // (clamped to 0..1) at the runtime's default frequency. False, and nothing played, for a hand that
+    // does not exist, a duration of zero or less, an unavailable action set, or a runtime that fails
+    // the call; never an error for the session.
+    bool PulseHaptic(uint32_t hand, double durationSeconds, float amplitude);
 
     EyeProjection PollEyeProjection(uint32_t eyeIndex = 0, XrTime time = 0);
     bool LocateActiveViews(XrTime time = 0);

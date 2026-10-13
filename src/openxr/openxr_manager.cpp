@@ -629,6 +629,16 @@ HandState OpenXrManager::GetHandState(uint32_t hand) {
     }
     return m_input.Get(hand);
 }
+
+bool OpenXrManager::PulseHaptic(uint32_t hand, double durationSeconds, float amplitude) {
+    if (m_state != OpenXrState::Active || m_session == XR_NULL_HANDLE || !(durationSeconds > 0.0)) {
+        return false;
+    }
+    const float strength = std::min(1.0f, std::max(0.0f, amplitude));
+    const double nanoseconds = std::min(durationSeconds * 1.0e9, 1.0e10);  // at most 10 s
+    return m_input.PulseHaptic(*m_dispatch, m_session, hand, static_cast<int64_t>(std::llround(nanoseconds)), strength);
+}
+
 void OpenXrManager::Recenter() {
     ClearRenderPoses();
     Vector3 recenterPos = m_rawPose.position;

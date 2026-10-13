@@ -41,6 +41,9 @@ public:
     // One Motion Controller's state (0 = left, 1 = right); untracked defaults without a runtime,
     // when the runtime refused the action set, or for any other hand id. Does not touch the render-pose records.
     HandState GetHandState(uint32_t hand);
+    // A short vibration on one hand (0 = left, 1 = right): `durationMs` long at `strength` (0..1).
+    // False when nothing played: no runtime, the action set was refused, or an unknown hand.
+    bool PulseHaptic(uint32_t hand, float durationMs, float strength);
     // Where one hand's ray lands on the visible menu / 2D Floating Window Mode panel, in normalized
     // panel coordinates (PanelHit). A miss when no panel is showing, the hand is untracked or there is
     // no runtime. The Injector owns the panel pose and size, so the geometry stays here (ADR-0006, ADR-0008).
@@ -115,6 +118,7 @@ public:
     static int Lua_RequiresAfrFallback(lua_State* L);
     static int Lua_GetHeadPose(lua_State* L);
     static int Lua_GetHandState(lua_State* L);
+    static int Lua_PulseHaptic(lua_State* L);
     static int Lua_Recenter(lua_State* L);
     static int Lua_AlignMenuQuad(lua_State* L);
     static int Lua_GetPanelHit(lua_State* L);
@@ -175,6 +179,7 @@ public:
         {"getRequiresAfrFallback", &Lua_RequiresAfrFallback},
         {"getHeadPose", &Lua_GetHeadPose},
         {"getHandState", &Lua_GetHandState},
+        {"pulseHaptic", &Lua_PulseHaptic},
         {"recenter", &Lua_Recenter},
         {"getEyeProjection", &Lua_GetEyeProjection},
         {"getFrameParity", &Lua_GetFrameParity},
