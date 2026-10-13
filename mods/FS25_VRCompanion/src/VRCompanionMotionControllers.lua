@@ -62,7 +62,11 @@
 --       and callable from tests or other modules that see either one move.
 --
 --   The Pointer Ray (see "The Pointer Ray" below, and VRCompanionInteractiveControl.lua)
---     VRCompanion:getPointerRay() -> table | nil   world origin / direction of the ray this update
+--     VRCompanion:getPointerRay() -> table | nil   world origin / direction of the ray this update: it starts at the
+--                                                  Pointer Hand's index fingertip and runs along the finger
+--     VRCompanion:getPointerRayInTrackingSpace(hand) -> ox, oy, oz, dx, dy, dz, source | nil   the same ray before
+--                                                  the head carries it into the world (for the menu / 2D panel hit)
+--     VRCompanion.POINTER_RAY_FOLLOWS_FINGER_DIRECTION  true (default): along the finger; false: keeps the aim direction
 --     VRCompanion:getPointerTrigger() -> pressed, held   the Pointer Hand's trigger (hysteresis 0.6 / 0.4)
 --     VRCompanion.pointerConeDegrees               saved by `vrPointerCone <degrees>` (default 5)
 --     VRCompanion:draw()                           the line and dot, drawn from the update's end points
@@ -145,6 +149,7 @@ local function newState()
         triggerPressed = {},  -- [hand] = it went down this update
         triggerConsumed = {}, -- [hand] = a Pointer Hand switch took this pull: it counts for nothing until let go
         ray = { valid = false, ox = 0, oy = 0, oz = 0, dx = 0, dy = 0, dz = -1 },
+        fingerLogged = {},    -- [hand] = the line about the ray starting at the index finger was logged this map
         headScratch = nil,    -- table VRBridge.getHeadPose fills in place
         pointerHand = nil,
         ignoredCleared = false,  -- Motion Controller input was ignored and the cached hands were already cleared
@@ -431,7 +436,8 @@ function VRCompanion:resetMotionControllerMovement()
 end
 
 -- ---- The Pointer Ray ------------------------------------------------------------------------------
--- The ray starts at the Pointer Hand's aim pose in the world. A hand pose is in the head pose's
+-- The ray starts at the index fingertip of the Pointer Hand in the world and runs along the finger (below: "The
+-- Pointer Ray on the index finger"); the aim pose is only the fallback. A hand pose is in the head pose's
 -- tracking space, so it is carried into the world the way the head is: the Cyclopean Audio Listener
 -- Node sits at the head's centre with the head's full world rotation (all three camera paths place it,
 -- through Snap Turn and the Recenter Action), so the hand's offset and direction relative to the head
@@ -530,22 +536,118 @@ function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out)
     return true
 end
 
--- Fills state.ray.o* / d* for the Pointer Hand; false when it cannot be placed.
+-- ---- The Pointer Ray on the index finger -------------------------------------------------------------------
+-- The ray starts at the index fingertip of the hand and runs along the finger: a fixed offset in the grip frame
+-- (VRCompanion.VIRTUAL_HAND_POINTER, VRCompanionVirtualHands.lua, the relaxed finger of the glove, so the ray does not
+-- twitch as the trigger curls the finger) applied to the GRIP pose. It does not depend on Virtual Hands being shown or
+-- their model loaded. Only when the grip pose is not tracked (a runtime that refuses it) does the ray start at the aim
+-- pose and run along its -Z axis, as it did before the ray moved to the finger.
+--
+-- VRCompanion.POINTER_RAY_FOLLOWS_FINGER_DIRECTION  true (default): the ray runs along the finger. false: it keeps the
+--     aim pose's direction (-Z) and only starts at the fingertip.
+--   VRCompanion:getPointerRayInTrackingSpace(hand) -> ox, oy, oz, dx, dy, dz, source | nil   the same ray in the
+--     tracking space the hand poses are in (before the head carries it into the world), for the Injector's menu and 2D
+--     panel hit test; source is "index finger" or "aim pose"; nil while the hand is not tracked.
+VRCompanion.POINTER_RAY_FOLLOWS_FINGER_DIRECTION = true
+
+local SOURCE_FINGER = "index finger"
+local SOURCE_AIM = "aim pose"
+
+-- The fingertip offset of a hand (VRCompanion.VIRTUAL_HAND_POINTER), or nil when the table is not there.
+local function pointerOffset(self, hand)
+    local offsets = self.VIRTUAL_HAND_POINTER
+    if type(offsets) ~= "table" then return nil end
+    local offset = hand == self.MOTION_HAND_RIGHT and offsets.right or offsets.left
+    if type(offset) ~= "table" or type(offset.tip) ~= "table" or type(offset.direction) ~= "table" then return nil end
+    return offset
+end
+
+-- The ray of a hand whose grip pose (gx..gqw) and aim rotation (aqx..aqw) are given in one frame (tracking space or
+-- the world): the fingertip as origin and the finger (or the aim -Z axis) as direction. Not normalized.
+local function fingerRay(self, offset, gx, gy, gz, gqx, gqy, gqz, gqw, aqx, aqy, aqz, aqw)
+    local tip, direction = offset.tip, offset.direction
+    local tx, ty, tz = qrotate(gqx, gqy, gqz, gqw, tip.x, tip.y, tip.z)
+    local dx, dy, dz
+    if self.POINTER_RAY_FOLLOWS_FINGER_DIRECTION ~= false then
+        dx, dy, dz = qrotate(gqx, gqy, gqz, gqw, direction.x, direction.y, direction.z)
+    else
+        dx, dy, dz = qrotate(aqx, aqy, aqz, aqw, 0, 0, -1)
+    end
+    return gx + tx, gy + ty, gz + tz, dx, dy, dz
+end
+
+function VRCompanion:getPointerRayInTrackingSpace(hand)
+    local pose = state.hands[hand]
+    if pose == nil or pose.tracked ~= true then return nil end
+    local offset = pointerOffset(self, hand)
+    local ox, oy, oz, dx, dy, dz, source
+    if offset ~= nil and pose.gripPoseTracked == true then
+        ox, oy, oz, dx, dy, dz = fingerRay(self, offset, pose.gripPoseX, pose.gripPoseY, pose.gripPoseZ,
+            pose.gripPoseQx, pose.gripPoseQy, pose.gripPoseQz, pose.gripPoseQw, pose.qx, pose.qy, pose.qz, pose.qw)
+        source = SOURCE_FINGER
+    else
+        ox, oy, oz = pose.x, pose.y, pose.z
+        dx, dy, dz = qrotate(pose.qx, pose.qy, pose.qz, pose.qw, 0, 0, -1)
+        source = SOURCE_AIM
+    end
+    local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if length < 0.5 then return nil end
+    return ox, oy, oz, dx / length, dy / length, dz / length, source
+end
+
+-- The angle in degrees between the finger's direction and the aim pose's direction (-Z) of a hand, or nil when the
+-- hand has no tracked grip pose and aim pose.
+local function fingerAimAngleDegrees(self, hand)
+    local pose = state.hands[hand]
+    local offset = pointerOffset(self, hand)
+    if offset == nil or pose.tracked ~= true or pose.gripPoseTracked ~= true then return nil end
+    local direction = offset.direction
+    local fx, fy, fz = qrotate(pose.gripPoseQx, pose.gripPoseQy, pose.gripPoseQz, pose.gripPoseQw, direction.x, direction.y, direction.z)
+    local ax, ay, az = qrotate(pose.qx, pose.qy, pose.qz, pose.qw, 0, 0, -1)
+    local lengths = math.sqrt(fx * fx + fy * fy + fz * fz) * math.sqrt(ax * ax + ay * ay + az * az)
+    if lengths < 1e-6 then return nil end
+    local cosine = math.max(-1, math.min(1, (fx * ax + fy * ay + fz * az) / lengths))
+    return math.deg(math.acos(cosine))
+end
+
+-- Fills state.ray.o* / d* for the Pointer Hand; true and where it starts from ("index finger" or "aim pose"), or
+-- false and why it cannot be placed.
 local function placePointerRay(self, hand)
     local ray = state.ray
     local pose = state.hands[hand]
     if pose.tracked ~= true then return false, "the Pointer Hand is not tracked" end
+    local offset = pointerOffset(self, hand)
+    local fromFinger = offset ~= nil and pose.gripPoseTracked == true
+    local ok, reason
+
+    -- The aim pose in the world: where the ray starts and runs when there is no grip pose, and the direction it
+    -- keeps when it is not to follow the finger.
     state.rayPose = state.rayPose or {}
-    local world = state.rayPose
-    local ok, reason = self:headRelativePoseToWorld(pose.x, pose.y, pose.z, pose.qx, pose.qy, pose.qz, pose.qw, world)
-    if not ok then return false, reason end
-    ray.ox, ray.oy, ray.oz = world.x, world.y, world.z
-    -- The ray runs along the aim pose's -Z axis.
-    local dx, dy, dz = qrotate(world.qx, world.qy, world.qz, world.qw, 0, 0, -1)
+    local aim = state.rayPose
+    if not fromFinger or self.POINTER_RAY_FOLLOWS_FINGER_DIRECTION == false then
+        ok, reason = self:headRelativePoseToWorld(pose.x, pose.y, pose.z, pose.qx, pose.qy, pose.qz, pose.qw, aim)
+        if not ok then return false, reason end
+    end
+
+    local ox, oy, oz, dx, dy, dz
+    if fromFinger then
+        state.rayGripPose = state.rayGripPose or {}
+        local grip = state.rayGripPose
+        ok, reason = self:headRelativePoseToWorld(pose.gripPoseX, pose.gripPoseY, pose.gripPoseZ,
+            pose.gripPoseQx, pose.gripPoseQy, pose.gripPoseQz, pose.gripPoseQw, grip)
+        if not ok then return false, reason end
+        ox, oy, oz, dx, dy, dz = fingerRay(self, offset, grip.x, grip.y, grip.z, grip.qx, grip.qy, grip.qz, grip.qw,
+            aim.qx, aim.qy, aim.qz, aim.qw)
+    else
+        -- The ray runs along the aim pose's -Z axis.
+        ox, oy, oz = aim.x, aim.y, aim.z
+        dx, dy, dz = qrotate(aim.qx, aim.qy, aim.qz, aim.qw, 0, 0, -1)
+    end
     local length = math.sqrt(dx * dx + dy * dy + dz * dz)
     if length < 0.5 then return false, "the hand's aim direction is degenerate" end
+    ray.ox, ray.oy, ray.oz = ox, oy, oz
     ray.dx, ray.dy, ray.dz = dx / length, dy / length, dz / length
-    return true
+    return true, fromFinger and SOURCE_FINGER or SOURCE_AIM
 end
 
 -- Called at the end of every updateMotionControllers. Places the ray, lets Interactive Control select
@@ -556,14 +658,28 @@ function VRCompanion:updatePointerRay(dt)
     ray.visible = false
     local hand = state.pointerHand
     local reason = "there is no Pointer Hand (no hand in use)"
+    local source = nil
     if hand ~= nil then
         ray.valid, reason = placePointerRay(self, hand)
-        if ray.valid then reason = "placed" end
+        if ray.valid then
+            source = reason
+            reason = source == SOURCE_FINGER and "placed" or "placed from the aim pose (the grip pose is not tracked)"
+        end
     end
     -- Logged when it changes, so a session where pointing does not work says why in the game log.
     if reason ~= state.rayReason then
         state.rayReason = reason
         print("[FS25_VR] Pointer Ray: " .. reason)
+    end
+    -- Once per hand, the first time the ray is placed from its index finger: how far the finger points from where the
+    -- runtime aims the controller, so a headset session shows whether pointing along the finger feels sane.
+    if source == SOURCE_FINGER and not state.fingerLogged[hand] then
+        state.fingerLogged[hand] = true
+        local angle = fingerAimAngleDegrees(self, hand)
+        print(string.format("[FS25_VR] Pointer Ray: from the index finger (%s hand), the finger points %.1f degrees from the aim direction; the ray %s",
+            hand == self.MOTION_HAND_RIGHT and "right" or "left", angle or 0,
+            self.POINTER_RAY_FOLLOWS_FINGER_DIRECTION ~= false and "runs along the finger"
+                or "keeps the aim direction (POINTER_RAY_FOLLOWS_FINGER_DIRECTION is false)"))
     end
     local hasTarget, hitX, hitY, hitZ = false, nil, nil, nil
     if type(self.updateInteractiveControl) == "function" then
@@ -772,9 +888,10 @@ function VRCompanion:consoleCommandMotionControllerStatus()
     return self:getMotionControllerStatus()
 end
 
--- One hand's aim pose and grip pose with whether each is tracked, e.g.
--- "aim (0.30, 1.20, -0.40) tracked, grip not tracked". Positions are head-relative metres.
-local function describeHandPoses(hand)
+-- One hand's aim pose and grip pose with whether each is tracked, and when both are, how far the index finger points
+-- from the aim direction, e.g. "aim (0.30, 1.20, -0.40) tracked, grip (0.28, 1.15, -0.30) tracked, finger 23.4 degrees
+-- from aim". Positions are tracking-space metres.
+local function describeHandPoses(self, hand)
     local pose = state.hands[hand]
     local aim = "aim not tracked"
     if pose.tracked == true then
@@ -784,7 +901,9 @@ local function describeHandPoses(hand)
     if pose.gripPoseTracked == true then
         grip = string.format("grip (%.2f, %.2f, %.2f) tracked", pose.gripPoseX, pose.gripPoseY, pose.gripPoseZ)
     end
-    return aim .. ", " .. grip
+    local angle = fingerAimAngleDegrees(self, hand)
+    local finger = angle ~= nil and string.format(", finger %.1f degrees from aim", angle) or ""
+    return aim .. ", " .. grip .. finger
 end
 
 -- Why pointing may not work, in one line: the ray, who controls the pointer and Interactive Control support,
@@ -803,7 +922,7 @@ function VRCompanion:getPointerDiagnostics()
     return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s | Left hand: %s | Right hand: %s%s",
         tostring(state.rayReason or "not updated yet"),
         pointer == 0 and "left" or pointer == 1 and "right" or "none", trigger,
-        self:getPointerOwner(), icText, describeHandPoses(0), describeHandPoses(1), virtualHandsText)
+        self:getPointerOwner(), icText, describeHandPoses(self, 0), describeHandPoses(self, 1), virtualHandsText)
 end
 
 function VRCompanion:consoleCommandPointerDiagnostics()

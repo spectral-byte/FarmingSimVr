@@ -593,9 +593,9 @@ TEST_F(CompanionModTest, AMissingHandModelLogsOnceAndLeavesNoVirtualHandsWhilePo
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     ASSERT_EQ(RunLuauChunk(L, "StubModel.fileExists = false; StubIC.addPoint('lights', -0.3, 1.5, 2.3)", "=noModelFile"), 0);
     SetGameTime(10000);
-    headset.SetHandPose(kRight, HandAt(0.2f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.2f, 0.0f, -0.3f));
     FRAMES(1);
-    headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.3f, 0.0f, -0.3f));
     FRAMES(30);
     ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=menu"), 0);
     FRAMES(3);
@@ -654,9 +654,9 @@ TEST_F(CompanionModTest, AHandModelThatFailsToLoadLogsOnceAndLeavesNoVirtualHand
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     ASSERT_EQ(RunLuauChunk(L, "StubModel.failLoad = true; StubIC.addPoint('lights', -0.3, 1.5, 2.3)", "=failingModel"), 0);
     SetGameTime(10000);
-    headset.SetHandPose(kRight, HandAt(0.2f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.2f, 0.0f, -0.3f));
     FRAMES(1);
-    headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.3f, 0.0f, -0.3f));
     FRAMES(30);
 
     EXPECT_EQ(EvalLua(L, "#StubModel.clones"), "0");
@@ -1298,32 +1298,35 @@ TEST_F(CompanionModTest, AFullCurlOfEachShippedModelFoldsEveryFingerTowardThePal
         }
     }
 }
-TEST_F(CompanionModTest, PullingTheTriggerAndSqueezingTheGripLeavesThePointerRayOriginAndTheClickAsTheyWere) {
+TEST_F(CompanionModTest, PullingTheTriggerAndSqueezingTheGripLeavesThePointerRayAtTheFingertipAndTheClickAsTheyWere) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     ASSERT_EQ(RunLuauChunk(L, kCurlReaders, "=curlReaders"), 0);
-    // The hand is held 0.3 m right of and 0.3 m ahead of the head, pointing straight ahead: in the world the
-    // ray starts at (-0.3, 1.5, 0.3) and runs along +Z (the grip pose is somewhere else on the hand).
-    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('lights', -0.3, 1.5, 2.3)", "=clickPoint"), 0);
     SetGameTime(10000);
     PICK_UP(kRight, 0.30f, 0.0f, -0.30f, 0.25f, -0.10f, -0.20f);
     FRAMES(3);
 
-    // The ray starts at the aim pose, however the fingers are curled.
+    // The ray starts at the relaxed index fingertip of the right hand, 0.0052 m to the right, 0.0905 m along the fingers and
+    // 0.0441 m toward the thumb of the grip pose (the grip pose here is not turned), and runs along the finger,
+    // whatever the fingers are doing: the cab turns tracking space by a half turn about Y.
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local ray = VRCompanion:getPointerRay()
         assert(ray ~= nil, "a Pointer Ray")
-        local ex, ey, ez = expectedOrigin({ x = 0, y = 0, z = 0, yaw = 0 }, math.pi, 0.30, 0.0, -0.30)
-        assert(near(ray.ox, ex) and near(ray.oy, ey) and near(ray.oz, ez), string.format("the ray starts at the aim pose before the pull: %.3f %.3f %.3f vs %.3f %.3f %.3f", ray.ox, ray.oy, ray.oz, ex, ey, ez))
-        _G.originBefore = { ray.ox, ray.oy, ray.oz }
+        local ex, ey, ez = expectedOrigin({ x = 0, y = 0, z = 0, yaw = 0 }, math.pi, 0.25 + 0.0052, -0.10 - 0.0905, -0.20 - 0.0441)
+        assert(near(ray.ox, ex) and near(ray.oy, ey) and near(ray.oz, ez), string.format("the ray starts at the fingertip before the pull: %.3f %.3f %.3f vs %.3f %.3f %.3f", ray.ox, ray.oy, ray.oz, ex, ey, ez))
+        local dx, dy, dz = turnedY(math.pi, -0.3349, -0.9232, -0.1885)
+        assert(math.abs(ray.dx - dx) < 2e-3 and math.abs(ray.dy - dy) < 2e-3 and math.abs(ray.dz - dz) < 2e-3, "and runs along the finger")
+        _G.originBefore = { ray.ox, ray.oy, ray.oz, ray.dx, ray.dy, ray.dz }
+        -- a Click Point on the ray, two metres along the finger
+        StubIC.addPoint('lights', ray.ox + ray.dx * 2, ray.oy + ray.dy * 2, ray.oz + ray.dz * 2)
     )luau", "=rayBefore"), 0);
 
     headset.SetHandInputs(kRight, Squeeze(0.45f, 1.0f));  // a trigger part way down: curled, but not a click
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local ray = VRCompanion:getPointerRay()
-        for i, v in ipairs({ ray.ox, ray.oy, ray.oz }) do assert(near(v, originBefore[i]), "the ray origin did not move with the fingers") end
+        for i, v in ipairs({ ray.ox, ray.oy, ray.oz, ray.dx, ray.dy, ray.dz }) do assert(near(v, originBefore[i]), "the ray did not move with the fingers") end
         assert(fingerCurl('right', 'index')[1] > 0, "the index finger is curling")
     )luau", "=rayDuring"), 0);
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "lights") << "the Click Point is aimed at";
@@ -1333,4 +1336,41 @@ TEST_F(CompanionModTest, PullingTheTriggerAndSqueezingTheGripLeavesThePointerRay
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "StubIC.executed[1]"), "lights") << "the full pull clicks the Click Point as it always did";
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1");
+}
+
+// The Pointer Ray starts at the index fingertip of the glove and runs along its finger from the knuckle
+// (VRCompanion.VIRTUAL_HAND_POINTER). The table is derived offline from the glove's mesh with the same model-to-grip offset
+// the hand is drawn with, so it must still agree with the knuckle bone, as the hand puts it into the grip frame, and with
+// the glove's mesh. Nudging VIRTUAL_HAND_MODEL_TO_GRIP without deriving the table again fails here.
+TEST_F(CompanionModTest, TheRaysFingertipAndDirectionAreTheIndexFingerOfTheGloveFromItsKnuckleInBothGripFrames) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    PICK_UP(kLeft, -0.30f, -0.20f, -0.40f, -0.25f, -0.10f, -0.20f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        for _, which in ipairs({ "left", "right" }) do
+            local hand = StubModel.hands()[which]
+            local pointer = VRCompanion.VIRTUAL_HAND_POINTER[which]
+            local kx, ky, kz = StubModel.jointInGripFrame(hand, "index1")  -- the index knuckle (Lower.001)
+            local tip, direction = pointer.tip, pointer.direction
+            local vx, vy, vz = tip.x - kx, tip.y - ky, tip.z - kz
+            local length = math.sqrt(vx * vx + vy * vy + vz * vz)
+            -- a real index finger is 0.07 to 0.08 m from the knuckle joint to the tip
+            assert(length > 0.065 and length < 0.09, which .. string.format(": the fingertip is %.4f m from the knuckle", length))
+            -- the direction is the way from the knuckle to the tip, to within a degree or two
+            local cosine = (vx * direction.x + vy * direction.y + vz * direction.z) / length
+            assert(cosine > math.cos(math.rad(2)), which .. string.format(": the direction is %.1f degrees off the knuckle to tip line", math.deg(math.acos(math.min(1, cosine)))))
+            assert(math.abs(direction.x ^ 2 + direction.y ^ 2 + direction.z ^ 2 - 1) < 1e-3, which .. ": the direction is a unit vector")
+            -- it runs toward the fingertips (-Y) and a little toward the thumb, as the index finger does
+            assert(direction.y < -0.85, which .. ": the finger runs along -Y")
+            assert(direction.z < 0, which .. ": and leans toward the thumb (-Z)")
+            -- the tip is at the end of the glove finger: inside the glove's box, near its far end along the fingers
+            local minX, minY, minZ, maxX, maxY, maxZ = StubModel.meshBoundsInGripFrame(hand)
+            assert(tip.x > minX and tip.x < maxX and tip.y > minY and tip.y < maxY and tip.z > minZ and tip.z < maxZ, which .. ": the fingertip is inside the glove")
+            assert(tip.y - minY < 0.03, which .. string.format(": the fingertip is %.3f m from the far end of the glove (the middle finger is a little longer)", tip.y - minY))
+        end
+    )luau", "=pointerOffset"), 0);
 }

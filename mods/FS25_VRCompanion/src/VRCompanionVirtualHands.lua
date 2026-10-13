@@ -14,7 +14,8 @@
 --     Mode, the tracked camera is shown, no Pass-Through Mode). The engine's own head-tracking setting
 --     is not a gate: it reads false in the real game.
 --
--- WHERE: the hand's GRIP pose (not its aim pose, which is where the Pointer Ray starts), carried into the
+-- WHERE: the hand's GRIP pose (not its aim pose, which is only the Pointer Ray's fallback: the ray starts at this
+-- hand's index fingertip, VRCompanion.VIRTUAL_HAND_POINTER), carried into the
 -- world by VRCompanion:headRelativePoseToWorld, the same transform the Pointer Ray uses. It is placed once
 -- per update, so under Sequential Dual-Pass both eye passes see the same placement and under Alternate
 -- Frame Rendering each rendered frame places it again.
@@ -61,6 +62,7 @@
 --   VRCompanion.modDirectory                 the Companion Mod's folder (set when the mod is loaded)
 --   VRCompanion.VIRTUAL_HAND_FINGERS         the joint table: per curling finger its input, base bone and three joints
 --   VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP   { left = , right = } rotation and grip origin (metres) that carry each model onto the grip frame
+--   VRCompanion.VIRTUAL_HAND_POINTER         { left = , right = } index fingertip and finger direction in the grip frame: where the Pointer Ray starts and runs
 --   VRCompanion.FINGER_CURL_DEGREES          full curl (value 1) of segment 1, 2 and 3 of a finger, in degrees
 --   VRCompanion.FINGER_CURL_DIRECTION        -1: toward the palm is a negative rotation about a joint's local X
 --   VRCompanion:updateVirtualHands(dt)       once per update, called by updateMotionControllers
@@ -154,6 +156,45 @@ local LEFT_MODEL_TO_GRIP = {
 VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP = {
     left = LEFT_MODEL_TO_GRIP,
     right = mirroredAcrossX(LEFT_MODEL_TO_GRIP),
+}
+
+-- THE POINTER RAY ON THE HAND: the Pointer Ray starts at the index fingertip of the Virtual Hand and runs along the
+-- index finger. Both are a FIXED offset in the grip frame of a hand (so they ride on the GRIP pose, through the same
+-- head-relative-to-world transform as the hand itself): the tip is the end of the glove's index finger and the
+-- direction is the unit vector from the index knuckle joint (the Lower.001 bone) to that tip. It is the RELAXED rest
+-- pose of the glove that is measured, never the curled bones, so the ray does not twitch when the trigger curls the
+-- finger. Metres, in the grip frame of the LEFT hand; the right hand is the left with grip-frame X negated, the same
+-- mirror as VIRTUAL_HAND_MODEL_TO_GRIP (grip X = out of a left palm, -Y toward the fingertips, -Z little finger to thumb).
+-- The ray applies this whenever it is placed, whether or not Virtual Hands are shown or their model loaded.
+--
+-- Derived by scripts/derive_virtual_hand_pointer.py (Blender 5.2, headless, on Gloved Hand LP.blend, the same file and
+-- the same model-to-grip rotation and origin as above; re-run it when VIRTUAL_HAND_MODEL_TO_GRIP changes):
+--   * the index finger is the set of mesh vertices whose strongest skin weight is Lower.001, Middle.001 or Top.001
+--     (188 vertices); every pose bone is the identity, so the mesh is the relaxed rest pose the .i3d bones compose to;
+--   * the tip is the centre of the last 3 mm of that mesh along the finger (9 vertices; the single furthest vertex is
+--     1.3 mm from it), at model (0.0476, -0.0210, -0.1255) m in the file's axes; the knuckle joint (Lower.001) is at
+--     model (0.0330, 0.0048, -0.0543) m, so the finger from knuckle to tip is 0.077 m long (a real index finger from
+--     the knuckle joint is 0.07 to 0.08 m);
+--   * both carried onto the grip frame by  R (p - o)  with the LEFT_MODEL_TO_GRIP rotation and origin below: the tip at
+--     (-0.0052, -0.0905, -0.0441) and the knuckle at (-0.0311, -0.0193, -0.0295) (the model's bone, as the Virtual Hand
+--     puts it there), the direction (0.3349, -0.9232, -0.1885). The finger therefore runs 22.6 degrees off the grip
+--     frame's -Y toward +X, because the relaxed glove finger is curled a little toward the palm.
+-- UNCERTAINTY: the direction does not depend on how the tip is defined to within about 1.4 degrees (to the furthest
+-- vertex 0.7, to the end of the Top.001 bone 1.4); measured to the Top.001 joint origin instead it would be 6.4 degrees
+-- off, which is why the joint is not used. The tip is good to about 5 mm (the glove finger is 10 mm across). Whether the
+-- glove's fingertip sits where the player's real fingertip is depends on the same estimate of the grip origin as the
+-- hand itself (+-0.02 m along the hand, +-0.01 m out of the palm, see above), which the headset check tunes.
+-- A test checks this table against the model's knuckle bone in the grip frame.
+local LEFT_POINTER = {
+    tip = { x = -0.0052, y = -0.0905, z = -0.0441 },
+    direction = { x = 0.3349, y = -0.9232, z = -0.1885 },
+}
+VRCompanion.VIRTUAL_HAND_POINTER = {
+    left = LEFT_POINTER,
+    right = {
+        tip = { x = -LEFT_POINTER.tip.x, y = LEFT_POINTER.tip.y, z = LEFT_POINTER.tip.z },
+        direction = { x = -LEFT_POINTER.direction.x, y = LEFT_POINTER.direction.y, z = LEFT_POINTER.direction.z },
+    },
 }
 
 -- Which way a curl turns a joint about its own X axis for THIS model: -1, a NEGATIVE rotation about local X is

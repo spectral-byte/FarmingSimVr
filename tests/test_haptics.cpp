@@ -49,8 +49,9 @@ constexpr const char* kConsoleStubs = R"luau(
 )luau";
 
 // A cab at the world origin and an Interactive Control release the Companion Mod supports. The player
-// sits at (0, 1.5, 0) looking along world +Z, so a hand held at (x, y, -z) from the head points along
-// +Z from world (-x, 1.5 + y, +z). "center" is straight ahead of a hand held at (+-0.3, 0, -0.3) and
+// sits at (0, 1.5, 0) looking along world +Z, so a hand whose index fingertip is held at (x, y, -z) from the head and
+// points straight ahead has its ray start at world (-x, 1.5 + y, +z) and run along +Z. "center" is straight
+// ahead of a fingertip held at (+-0.3, 0, -0.3) and
 // "threeDegrees" lies 3 degrees off that ray's centre, still inside the default 5 degree cone.
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge) {
     ASSERT_TRUE(bridge.Inject(L));
@@ -122,13 +123,14 @@ TEST(OpenXrManagerTest, PulseHapticIsHarmlessWhenTheRuntimeRefusedTheActionSetOr
 #define FRAMES(count) \
     for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
 
-// The hand is picked up (it moves) and held so that its ray runs along +Z from the given spot.
+// The hand is picked up (it moves) and held so that its index fingertip is at the given spot and its finger runs
+// straight ahead (SetHandPointing), so the ray runs along +Z from there.
 #define PICK_UP_AND_AIM(hand, x, y, z) \
     do { \
         SetGameTime(10000); \
-        headset.SetHandPose((hand), HandAt((x) - 0.1f, (y), (z))); \
+        headset.SetHandPointing((hand), HandAt((x) - 0.1f, (y), (z))); \
         FRAMES(1); \
-        headset.SetHandPose((hand), HandAt((x), (y), (z))); \
+        headset.SetHandPointing((hand), HandAt((x), (y), (z))); \
         FRAMES(1); \
     } while (0)
 
@@ -256,7 +258,7 @@ TEST_F(CompanionModTest, PulsesGoToTheLeftHandWhenItIsThePointerHandAndNeverToTh
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     ASSERT_NO_FATAL_FAILURE(AddCenterAndThreeDegrees(L));
     // The right Motion Controller is on and tracked but lies still, so it is not in use.
-    headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.3f, 0.0f, -0.3f));
 
     PICK_UP_AND_AIM(kLeft, 0.3f, 0.0f, -0.3f);
     FRAMES(2);
