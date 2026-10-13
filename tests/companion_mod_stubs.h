@@ -172,18 +172,26 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 
 // ---- Model loading ---------------------------------------------------------------------------------------
 // Run after kStubSceneGraph. The engine functions the Virtual Hands call to bring in their model, with a
-// hand model in the shape the model contract describes (a file root whose first child is the hand's root
-// node, with the finger joints below it and one shape).
+// stand-in for the shipped Gloved Hand (VirtualHandLeft.i3d): a file root whose first child is the hand's root
+// node, with the Wrist > Hand > finger bone chains below it, one shape with the real mesh's bounds, and the real
+// bone names and (roughly) positions in the file's own units.
 //
 //   StubModel.fileExists (default true)   what fileExists() answers for the model file
 //   StubModel.failLoad (default false)    loadI3DFile answers 0 (and a failure reason) although the file exists
 //   StubModel.loads                       { { filename, root } } per loadI3DFile call that reached the "engine"
 //   StubModel.clones                      node ids of every clone() of a node (the hands), in order
 //   StubModel.deleted                     node id -> true for every deleted node
-//   StubModel.hands() -> { left = node, right = node }   the cloned hand nodes, told apart by mirroring
-//                         (the left clone is the right model scaled -1 along X); a missing one is nil
+//   StubModel.hands() -> { left = node, right = node }   the hands' holder nodes (named virtualHand_left and
+//                         virtualHand_right by the mod): each holder is placed at its grip pose, so its local space is the
+//                         grip pose frame and everything of the hand hangs below it; a missing one is nil
+//   StubModel.model(hand) -> node         the cloned model below a hand's holder
+//   StubModel.isMirrored(node)            the node is a mirror image of the model as loaded (its scale and its ancestors'
+//                                         scales multiply to a negative number)
+//   StubModel.pointInAncestor(node, ancestor, x, y, z) -> x, y, z   a point of a node's local space in an ancestor's
+//   StubModel.jointInGripFrame(hand, "index1") -> x, y, z   where a joint is, in the grip pose frame of the hand
+//   StubModel.meshBoundsInGripFrame(hand) -> minX, minY, minZ, maxX, maxY, maxZ   the box around the glove mesh there
 //   StubModel.isShown(node)               the node and every ancestor are visible (and it exists)
-//   StubModel.scale(node) -> x, y, z      StubModel.castsShadow(node) -> true when any shape below casts one
+//   StubModel.castsShadow(node) -> true when any shape below casts one
 //   StubModel.isLinkedToScene(node)       the node's ancestors lead up to the scene root
 //   StubModel.missingJoints               set of node names of the model's file (e.g. { ["Middle.001"] = true }) the
 //                                         next loaded model lacks
@@ -264,22 +272,44 @@ inline constexpr const char* kStubModelLoading = R"luau(
     -- the order the file lists the fingers below the Hand bone
     local STUB_FINGER_ORDER = { "index", "middle", "little", "ring", "thumb" }
 
+    -- The shipped model's geometry, in the file's own units (about 2.1 units from the wrist to the middle
+    -- fingertip, a real hand being about 0.19 m) and in the file's own axes: fingers along -Z, the palm facing -Y
+    -- (the back of the hand +Y), the thumb on the +X side (it is a LEFT hand). The numbers are the model's bone
+    -- positions and mesh bounds as the Blender file gives them, in the exporter's Y-up axes.
+    local STUB_WRIST = { 0.0630, 0.0551, 0.9691 }                  -- the Wrist bone
+    local STUB_PALM = { 0.0630, 0.0551, 0.5246 }                   -- the Hand bone, the wrist crease of the glove
+    local STUB_FINGER_BASE = { 0.0695, 0.0551, -0.1343 }           -- where all five base bones start
+    local STUB_KNUCKLE = {                                         -- the first curl joint of each finger
+        index = { 0.3777, 0.0551, -0.6210 }, middle = { 0.1051, 0.0551, -0.7313 },
+        ring = { -0.1674, 0.0551, -0.6794 }, little = { -0.3816, 0.0551, -0.6307 },
+        thumb = { 0.5854, 0.0551, 0.0182 },
+    }
+    local STUB_MESH_BOUNDS = { min = { -0.6331, -0.2843, -1.6223 }, max = { 1.0737, 0.3675, 1.1760 } }  -- glove and arm stub
+    local function sub3(a, b) return a[1] - b[1], a[2] - b[2], a[3] - b[3] end
+
     local function buildHand()
         local fileRoot = StubScene.newNode("virtualHandFile", 0)
         local root = StubScene.newNode("Hand.002", fileRoot)  -- the file's first child, the hand's root node
         local mesh = StubScene.newNode("HandModel.001", root)
         nodes[mesh].isShape = true
         nodes[mesh].castShadow = true
-        local wrist = StubScene.newNode("Wrist", root)
-        local palm = StubScene.newNode("Hand", wrist)
+        nodes[mesh].bounds = STUB_MESH_BOUNDS
+        local wrist = StubScene.newNode("Wrist", root, STUB_WRIST[1], STUB_WRIST[2], STUB_WRIST[3])
+        local palm = StubScene.newNode("Hand", wrist, sub3(STUB_PALM, STUB_WRIST))
         for _, finger in ipairs(STUB_FINGER_ORDER) do
-            local parent = palm
-            for index, name in ipairs(STUB_FINGERS[finger]) do
+            local parent = palm  -- a base bone the model lacks leaves its joints hanging off the palm
+            if not StubModel.missingJoints[STUB_FINGERS[finger][1]] then
+                parent = StubScene.newNode(STUB_FINGERS[finger][1], palm, sub3(STUB_FINGER_BASE, STUB_PALM))
+            end
+            for index = 1, 3 do
+                local name = STUB_FINGERS[finger][index + 1]
                 if not StubModel.missingJoints[name] then
                     -- the model's relaxed pose, like the shipped one's: the bone-axis turn of -90 degrees about X
                     -- (every bone has it), flexed a little more at each segment (a NEGATIVE turn about X is toward
-                    -- the palm in this model), with a small twist
-                    parent = StubScene.newNode(name, parent, 0, 0, 0, -1.5708 - 0.1 * index, 0.1, -0.05)
+                    -- the palm in this model), with a small twist. The first joint sits at the finger's knuckle.
+                    local x, y, z = 0, 0, 0
+                    if index == 1 then x, y, z = sub3(STUB_KNUCKLE[finger], STUB_FINGER_BASE) end
+                    parent = StubScene.newNode(name, parent, x, y, z, -1.5708 - 0.1 * index, 0.1, -0.05)
                     local n = nodes[parent]
                     n.restQx, n.restQy, n.restQz, n.restQw = n.qx, n.qy, n.qz, n.qw
                 end
@@ -299,7 +329,7 @@ inline constexpr const char* kStubModelLoading = R"luau(
         local n = nodes[copy]
         n.qx, n.qy, n.qz, n.qw = source.qx, source.qy, source.qz, source.qw
         n.restQx, n.restQy, n.restQz, n.restQw = source.restQx, source.restQy, source.restQz, source.restQw
-        n.isShape, n.castShadow, n.visible = source.isShape, source.castShadow, source.visible
+        n.isShape, n.castShadow, n.visible, n.bounds = source.isShape, source.castShadow, source.visible, source.bounds
         n.sx, n.sy, n.sz = source.sx, source.sy, source.sz
         for _, childId in ipairs(childrenOf(id)) do copyTree(childId, copy) end
         return copy
@@ -358,7 +388,6 @@ inline constexpr const char* kStubModelLoading = R"luau(
         -- a negative turn about X flexes this model's fingers toward the palm, so that is a positive curl
         return -2 * math.atan2(x, w)
     end
-    function StubModel.scale(id) return getScale(id) end
     function StubModel.isShown(id)
         while id ~= nil and id ~= 0 do
             local n = nodes[id]
@@ -384,15 +413,91 @@ inline constexpr const char* kStubModelLoading = R"luau(
         end
         return false
     end
+    -- the node of a clone's ancestors that hangs off the scene root: the hand's holder (the grip pose frame)
+    local function holderOf(id)
+        while nodes[id] ~= nil and nodes[id].parent ~= getRootNode() and nodes[id].parent ~= 0 do id = nodes[id].parent end
+        return id
+    end
+    -- The Virtual Hands, told apart by their holder's name (the mod names them virtualHand_left / virtualHand_right).
+    -- A hand is its holder: that node is placed at the grip pose, and everything of the hand hangs below it.
     function StubModel.hands()
         local found = {}
         for _, id in ipairs(StubModel.clones) do
             if nodes[id] ~= nil then
-                local sx = getScale(id)
-                if sx < 0 then found.left = id else found.right = id end
+                local holder = holderOf(id)
+                local name = nodes[holder].name
+                if name == "virtualHand_left" then found.left = holder end
+                if name == "virtualHand_right" then found.right = holder end
             end
         end
         return found
+    end
+    -- the cloned model of a hand (its Hand.002 root node), wherever the mod hung it below the holder
+    function StubModel.model(hand)
+        for _, id in ipairs(StubModel.clones) do
+            if nodes[id] ~= nil and holderOf(id) == hand then return id end
+        end
+        return nil
+    end
+    -- true when the node is a mirror image of its model as loaded: the scales of the node and its ancestors
+    -- multiply to a negative number
+    function StubModel.isMirrored(id)
+        local sign = 1
+        while nodes[id] ~= nil and id ~= 0 do
+            local sx, sy, sz = getScale(id)
+            if sx * sy * sz < 0 then sign = -sign end
+            id = nodes[id].parent
+        end
+        return sign < 0
+    end
+    -- a point given in the local space of a node, in the local space of one of its ancestors (scale, then
+    -- rotation, then translation, node by node)
+    function StubModel.pointInAncestor(id, ancestor, x, y, z)
+        while id ~= ancestor do
+            local n = nodes[id]
+            assert(n ~= nil and id ~= 0, "the second node is not an ancestor of the first")
+            x, y, z = qrotate(n.qx, n.qy, n.qz, n.qw, x * (n.sx or 1), y * (n.sy or 1), z * (n.sz or 1))
+            x, y, z = x + n.x, y + n.y, z + n.z
+            id = n.parent
+        end
+        return x, y, z
+    end
+    -- where a finger joint (see StubModel.joint) is, in the local space of the hand's holder: the grip pose frame
+    function StubModel.jointInGripFrame(hand, joint)
+        local id = StubModel.joint(hand, joint)
+        assert(id ~= nil, joint .. " is not in the model")
+        return StubModel.pointInAncestor(id, hand, 0, 0, 0)
+    end
+    -- where a bone of the model (by the node's own name in the file, e.g. "Hand" for the wrist crease) is, in the grip frame
+    function StubModel.boneInGripFrame(hand, nodeName)
+        local id = findByName(hand, nodeName)
+        assert(id ~= nil, nodeName .. " is not in the model")
+        return StubModel.pointInAncestor(id, hand, 0, 0, 0)
+    end
+    -- the box around the glove mesh, in the grip pose frame: min x, y, z then max x, y, z (the box of its eight corners)
+    function StubModel.meshBoundsInGripFrame(hand)
+        local function findMesh(id)
+            if nodes[id].bounds then return id end
+            for _, childId in ipairs(childrenOf(id)) do
+                local found = findMesh(childId)
+                if found then return found end
+            end
+        end
+        local mesh = findMesh(hand)
+        assert(mesh ~= nil, "the hand has a mesh")
+        local b = nodes[mesh].bounds
+        local lo, hi = { math.huge, math.huge, math.huge }, { -math.huge, -math.huge, -math.huge }
+        for _, x in ipairs({ b.min[1], b.max[1] }) do
+            for _, y in ipairs({ b.min[2], b.max[2] }) do
+                for _, z in ipairs({ b.min[3], b.max[3] }) do
+                    local gx, gy, gz = StubModel.pointInAncestor(mesh, hand, x, y, z)
+                    for i, v in ipairs({ gx, gy, gz }) do
+                        lo[i], hi[i] = math.min(lo[i], v), math.max(hi[i], v)
+                    end
+                end
+            end
+        end
+        return lo[1], lo[2], lo[3], hi[1], hi[2], hi[3]
     end
 )luau";
 // ---- Interactive Control ------------------------------------------------------------------------------

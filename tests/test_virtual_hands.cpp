@@ -427,7 +427,10 @@ TEST_F(CompanionModTest, VirtualHandsAreOnePlacementForBothPassesUnderSequential
     )luau", "=sameInBothPasses"), 0);
 }
 
-TEST_F(CompanionModTest, TheLeftVirtualHandIsTheRightHandModelMirroredAndNeitherCastsShadows) {
+// The shipped model is a LEFT hand, so the left Virtual Hand is the model as it is and the right one its mirror
+// image. The mirror is across the grip pose frame's X plane (both hands' grip frames have the same axes), which
+// turns a left hand into a right hand and leaves the finger and thumb directions of the frame alone.
+TEST_F(CompanionModTest, TheRightVirtualHandIsTheLeftHandModelMirroredAcrossTheGripFrameAndNeitherCastsShadows) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
@@ -437,15 +440,84 @@ TEST_F(CompanionModTest, TheLeftVirtualHandIsTheRightHandModelMirroredAndNeither
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local hands = StubModel.hands()
-        assert(hands.left ~= nil and hands.right ~= nil, "a clone for each hand")
+        assert(hands.left ~= nil and hands.right ~= nil, "a hand for each Motion Controller")
         assert(#StubModel.clones == 2, "two clones in all")
-        local lx, ly, lz = StubModel.scale(hands.left)
-        local rx, ry, rz = StubModel.scale(hands.right)
-        assert(lx == -1 and ly == 1 and lz == 1, "the left hand is the model mirrored along X")
-        assert(rx == 1 and ry == 1 and rz == 1, "the right hand is the model as it is")
+        local left, right = StubModel.model(hands.left), StubModel.model(hands.right)
+        assert(not StubModel.isMirrored(left), "the left hand is the model as it is")
+        assert(StubModel.isMirrored(right), "the right hand is the model mirrored")
         assert(not StubModel.castsShadow(hands.left) and not StubModel.castsShadow(hands.right), "neither hand casts shadows")
         assert(StubModel.isLinkedToScene(hands.left) and StubModel.isLinkedToScene(hands.right), "both are in the scene")
+
+        -- Every part of the right hand is where the left hand's counterpart is with the grip frame's X negated
+        -- (a mirror across the model's own X plane would negate the thumb-to-little-finger axis instead).
+        for _, joint in ipairs({ "index1", "middle1", "ring1", "little1", "thumb1", "index3" }) do
+            local lx, ly, lz = StubModel.jointInGripFrame(hands.left, joint)
+            local rx, ry, rz = StubModel.jointInGripFrame(hands.right, joint)
+            assert(near(rx, -lx) and near(ry, ly) and near(rz, lz),
+                string.format("%s: left at %.3f %.3f %.3f, right at %.3f %.3f %.3f", joint, lx, ly, lz, rx, ry, rz))
+        end
+        local lo = { StubModel.meshBoundsInGripFrame(hands.left) }
+        local ro = { StubModel.meshBoundsInGripFrame(hands.right) }
+        assert(near(ro[1], -lo[4]) and near(ro[4], -lo[1]) and near(ro[2], lo[2]) and near(ro[5], lo[5]) and near(ro[3], lo[3]) and near(ro[6], lo[6]),
+            "the glove mesh of the right hand is the left one mirrored in X")
     )luau", "=mirrored"), 0);
+}
+
+// The grip pose frame (OpenXR, as ticket #84 states it): origin at the centre of the tube the closed non-thumb
+// fingers form, -Z from the little finger toward the thumb, +X the palm normal pointing INTO the palm for a right
+// hand (so out of the palm for a left hand). The fingers then point along -Y. The hand is real-world size.
+TEST_F(CompanionModTest, BothVirtualHandsSitInTheGripPoseFrameAtRealHandSize) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    PICK_UP(kLeft, -0.30f, -0.20f, -0.40f, -0.25f, -0.10f, -0.20f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local function grip(hand, joint) return StubModel.jointInGripFrame(StubModel.hands()[hand], joint) end
+        for _, which in ipairs({ "left", "right" }) do
+            local hand = StubModel.hands()[which]
+            local where = which .. " hand: "
+
+            -- the fingers point along -Y: from the wrist (the Hand bone) to the middle finger's knuckle
+            local handX, handY, handZ = StubModel.boneInGripFrame(hand, "Hand")
+            local mx, my, mz = grip(which, "middle1")
+            local dx, dy, dz = mx - handX, my - handY, mz - handZ
+            assert(dy < -0.06 and math.abs(dx) < 0.5 * math.abs(dy) and math.abs(dz) < 0.5 * math.abs(dy),
+                where .. string.format("from the wrist to the middle knuckle is %.3f %.3f %.3f: the fingers must run along -Y", dx, dy, dz))
+
+            -- -Z runs from the little finger toward the thumb: the index finger is on the -Z side of the little finger
+            local ix, iy, iz = grip(which, "index1")
+            local lx, ly, lz = grip(which, "little1")
+            assert(iz - lz < -0.04 and math.abs(ix - lx) < 0.5 * math.abs(iz - lz) and math.abs(iy - ly) < 0.5 * math.abs(iz - lz),
+                where .. string.format("little finger at %.3f %.3f %.3f, index finger at %.3f %.3f %.3f: -Z must run from little finger toward the thumb", lx, ly, lz, ix, iy, iz))
+            local tx, ty, tz = grip(which, "thumb1")
+            assert(tz < iz, where .. "the thumb is further along -Z than the index finger")
+
+            -- the origin is the tube the four fingers close around: between the knuckles' span across, and between
+            -- the wrist and the knuckles along the hand
+            local rz = select(3, grip(which, "ring1"))
+            local firstZ, lastZ = math.min(iz, lz, mz, rz), math.max(iz, lz, mz, rz)
+            assert(firstZ < 0 and lastZ > 0, where .. string.format("the origin is not across the knuckle row (%.3f .. %.3f)", firstZ, lastZ))
+            assert(handY > 0 and my < 0, where .. string.format("the origin is not between the wrist (%.3f) and the knuckles (%.3f)", handY, my))
+
+            -- the palm normal: the glove lies behind the origin along it, in the hollow of the fist (+X is out of
+            -- the palm of a left hand, into the palm of a right hand)
+            local minX, minY, minZ, maxX, maxY, maxZ = StubModel.meshBoundsInGripFrame(hand)
+            if which == "left" then
+                assert(maxX < 0.012 and minX < -0.03, where .. string.format("the glove spans x %.3f .. %.3f: it must lie on the -X side of the origin", minX, maxX))
+            else
+                assert(minX > -0.012 and maxX > 0.03, where .. string.format("the glove spans x %.3f .. %.3f: it must lie on the +X side of the origin", minX, maxX))
+            end
+
+            -- real-world size: wrist and the stub of arm to the fingertips, thumb to little finger, thickness
+            local length, width, thickness = maxY - minY, maxZ - minZ, maxX - minX
+            assert(length > 0.18 and length < 0.32, where .. string.format("the glove is %.3f m long", length))
+            assert(width > 0.10 and width < 0.18, where .. string.format("the glove is %.3f m wide", width))
+            assert(thickness > 0.03 and thickness < 0.09, where .. string.format("the glove is %.3f m thick", thickness))
+        end
+    )luau", "=gripFrame"), 0);
 }
 
 TEST_F(CompanionModTest, TheHandModelIsLoadedOncePerMapAndDeletedWhenTheMapUnloads) {
@@ -731,7 +803,7 @@ TEST_F(CompanionModTest, LettingGoRestoresTheModelsRelaxedPoseAndTheThumbNeverMo
     )luau", "=openAgain"), 0);
 }
 
-TEST_F(CompanionModTest, TheMirroredLeftHandCurlsOnItsOwnInputsAndTheRightHandIsNotAffected) {
+TEST_F(CompanionModTest, TheMirroredRightHandCurlsOnItsOwnInputsAndTheLeftHandIsNotAffected) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
@@ -744,8 +816,7 @@ TEST_F(CompanionModTest, TheMirroredLeftHandCurlsOnItsOwnInputsAndTheRightHandIs
     headset.SetHandInputs(kRight, Squeeze(0.0f, 0.0f));
     FRAMES(1);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        local lx = StubModel.scale(StubModel.hands().left)
-        assert(lx == -1, "this is the mirrored hand")
+        assert(StubModel.isMirrored(StubModel.model(StubModel.hands().right)), "the right hand is the mirrored one")
         _G.leftFull = fingerCurl('left', 'index')
         for segment = 1, 3 do assert(leftFull[segment] > math.rad(30), "the left index finger curls toward the palm") end
         for _, finger in ipairs({ 'middle', 'ring', 'little' }) do
