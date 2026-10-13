@@ -84,6 +84,8 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrHudGroup <map\|speedometer\|info\|controls> <horizontal> <vertical> [scale]` | Place and scale a HUD group |
 | `vrHudGroupShow <group> <streamlined\|full> <on\|off>` | Choose which groups show in each HUD state |
 | `vrHudSafeArea <horizontal> <vertical>` | Keep other HUD elements (warnings, notifications, other mods) inside the lens |
+| `vrMotionControllers <on\|off>` | Use Motion Controllers (default `on`, saved). `off` makes the mod ignore controller input |
+| `vrMotionControllerStatus` | Report each Motion Controller's tracked and in-use state and the Pointer Hand |
 
 `hudConvergenceDepth` (default `1.8`) is set in `settings.xml` only.
 
