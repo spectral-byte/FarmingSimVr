@@ -261,11 +261,11 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
     end
 
     function StubIC.tick()
-        for _, point in ipairs(StubIC.points) do point:update(true, false, true) end
+        for _, point in ipairs(StubIC.points or {}) do point:update(true, false, true) end
     end
 
     function StubIC.selected()
-        for _, point in ipairs(StubIC.points) do
+        for _, point in ipairs(StubIC.points or {}) do
             if point:isExecutable() then return point.name end
         end
         return nil

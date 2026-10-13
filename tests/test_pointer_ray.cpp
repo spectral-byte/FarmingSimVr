@@ -601,3 +601,166 @@ TEST_F(CompanionModTest, ClickPointsOnAVehicleExteriorAndOnAPlacedObjectCanBeCli
     FRAMES(1);
     EXPECT_EQ(EvalLua(L, "StubIC.executed[2]"), "gateControl");
 }
+
+// ---- Interactive Control missing, mismatched, or taking over from the mouse ----
+
+namespace {
+int CountWarnings() {
+    int count = 0;
+    for (const auto& line : s_capturedLogs) {
+        if (line.find("Interactive Control support disabled") != std::string::npos) ++count;
+    }
+    return count;
+}
+} // namespace
+
+TEST_F(CompanionModTest, WithoutInteractiveControlTheModWarnsExactlyOnceAndDrawsNothing) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, nullptr));
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(30);  // NextFrame fails the test if the update raises an error
+    EXPECT_EQ(CountWarnings(), 1);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "1") << "the Pointer Hand itself is unaffected";
+    ASSERT_EQ(RunLuauChunk(L, "drawPass(); assert(#debugLines == 0 and #debugPoints == 0)", "=nothingDrawn"), 0);
+}
+
+TEST_F(CompanionModTest, NoWarningWhileNoMotionControllerIsTrackedOrWhileMotionControllersAreOff) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, nullptr));
+    SetGameTime(10000);
+    headset.SetHandTracked(kLeft, false);
+    headset.SetHandTracked(kRight, false);
+    FRAMES(5);
+    EXPECT_EQ(CountWarnings(), 0) << "a player without Motion Controllers is never told about Interactive Control";
+
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrMotionControllers', 'off')", "=off"), 0);
+    headset.SetHandTracked(kRight, true);
+    FRAMES(5);
+    EXPECT_EQ(CountWarnings(), 0) << "with Motion Controllers off the Interactive Control support is never looked at";
+}
+
+TEST_F(CompanionModTest, AClickPointClassMissingAFunctionWarnsOnceAndLeavesInteractiveControlAlone) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "renamedUpdateClickable"));
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.addPoint('switch', -0.3, 1.5, 2.3, { screenX = 0.4, screenY = 0.6 })
+        _G.originalUpdate = StubIC.Point.update
+        _G.originalSetActivated = StubIC.Point.setActivated
+    )luau", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(30);
+    EXPECT_EQ(CountWarnings(), 1);
+    bool namesTheFunction = false;
+    for (const auto& line : s_capturedLogs) {
+        if (line.find("Interactive Control support disabled") != std::string::npos && line.find("updateClickable") != std::string::npos) namesTheFunction = true;
+    }
+    EXPECT_TRUE(namesTheFunction) << "the warning says what is missing";
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(StubIC.Point.update == originalUpdate and StubIC.Point.setActivated == originalSetActivated, "no function was wrapped")
+        assert(#StubIC.executed == 0, "the trigger clicked nothing")
+        -- Interactive Control still works with its mouse.
+        StubIC.mouseX, StubIC.mouseY = 0.4, 0.6
+        StubIC.tick()
+        assert(StubIC.selected() == 'switch', "its own mouse selection is unchanged")
+        drawPass()
+        assert(#debugLines == 0, "no ray without Click Point support")
+    )luau", "=interactiveControlUnchanged"), 0);
+}
+
+TEST_F(CompanionModTest, AManagerMissingItsExecuteFunctionWarnsOnceAndWrapsNothing) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "missingExecute"));
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.addPoint('switch', -0.3, 1.5, 2.3)
+        _G.originalUpdateClickable = StubIC.Point.updateClickable
+    )luau", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(20);
+    EXPECT_EQ(CountWarnings(), 1);
+    ASSERT_EQ(RunLuauChunk(L, "assert(StubIC.Point.updateClickable == originalUpdateClickable)", "=unwrapped"), 0);
+}
+
+TEST_F(CompanionModTest, TheMouseKeepsSelectingUntilThePointerHandIsInUseAndTakesOverAgainWhenItRests) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    // One Click Point under the desk mouse (screen 0.4, 0.6), far from where the ray will point.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.addPoint('underMouse', 30, 1.5, 2.3, { screenX = 0.4, screenY = 0.6 })
+        StubIC.mouseX, StubIC.mouseY = 0.4, 0.6
+    )luau", "=underMouse"), 0);
+    SetGameTime(10000);
+    headset.SetHandPose(kRight, HandAt(0.2f, 0.0f, -0.3f));
+    FRAMES(4);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "underMouse") << "controllers lying still: the mouse selects";
+    EXPECT_EQ(EvalLua(L, "StubIC.blinks.underMouse ~= nil"), "true");
+
+    headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    FRAMES(4);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "1");
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "nil") << "the Pointer Ray selects now, and it is not on the Click Point";
+
+    AdvanceGameTime(3100);
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "nil");
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "underMouse") << "the mouse selects again";
+}
+
+TEST_F(CompanionModTest, InteractiveControlKeepsItsHoverBlinkOnTheClickPointTheRaySelected) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.addPoint('aimedAt', -0.3, 1.5, 2.3, { screenX = 0.2, screenY = 0.2 })
+        StubIC.addPoint('other', -2.3, 1.5, 2.3, { screenX = 0.8, screenY = 0.8 })
+    )luau", "=addPoints"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(6);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert((StubIC.blinks.aimedAt or 0) >= 3, "the selected Click Point blinks as hovered")
+        assert(StubIC.blinks.other == nil, "the other one does not")
+    )luau", "=blinks"), 0);
+}
+
+TEST_F(CompanionModTest, UnloadingTheMapHandsInteractiveControlBackExactlyAsFound) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.addPoint('switch', -0.3, 1.5, 2.3)
+        _G.originals = {}
+        for _, name in ipairs({ 'update', 'updateClickable', 'setActivated' }) do originals[name] = StubIC.Point[name] end
+    )luau", "=remember"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(3);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        for name, original in pairs(originals) do assert(StubIC.Point[name] ~= original, name .. " is wrapped while the support is on") end
+        VRCompanion:deleteMap()
+        for name, original in pairs(originals) do assert(StubIC.Point[name] == original, name .. " is back as found") end
+    )luau", "=unload"), 0);
+}
+
+TEST_F(CompanionModTest, AClickPointInteractiveControlStoppedUpdatingIsNoLongerSelectedOrDrawnToward) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('switch', -0.3, 1.5, 2.3)", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(3);
+    ASSERT_EQ(RunLuauChunk(L, "drawPass(); assert(#debugLines == 1, 'drawn while it updates')", "=whileUpdating"), 0);
+
+    // The player climbs out: Interactive Control no longer updates the vehicle's Click Points, and
+    // they stay marked active, but nobody can click them any more.
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.points = {}", "=vehicleGone"), 0);
+    FRAMES(5);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "drawPass(); assert(#debugLines == 0, 'hidden once nothing updates it'); assert(#StubIC.executed == 0)", "=afterwards"), 0);
+}
