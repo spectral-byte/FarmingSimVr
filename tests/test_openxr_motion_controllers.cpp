@@ -159,6 +159,8 @@ void ExpectRefusalLeavesHeadTrackingAlone(const std::function<void(Controllers&)
         const HandState state = manager->GetHandState(hand);
         EXPECT_FALSE(state.tracked);
         EXPECT_FALSE(state.aim.isValid);
+        EXPECT_FALSE(state.gripTracked);
+        EXPECT_FALSE(state.gripPose.isValid);
         EXPECT_FLOAT_EQ(state.trigger, 0.0f);
     }
     EXPECT_TRUE(manager->EndFrame());
@@ -175,6 +177,40 @@ TEST(OpenXrManagerTest, RefusedActionSetStepLeavesSessionAndHeadTrackingUnchange
     ExpectRefusalLeavesHeadTrackingAlone([](Controllers& c) { c.suggestBindingsResult = XR_ERROR_RUNTIME_FAILURE; }, "xrSuggestInteractionProfileBindings");
     ExpectRefusalLeavesHeadTrackingAlone([](Controllers& c) { c.attachResult = XR_ERROR_RUNTIME_FAILURE; }, "xrAttachSessionActionSets");
     ExpectRefusalLeavesHeadTrackingAlone([](Controllers& c) { c.createActionSpaceResult = XR_ERROR_RUNTIME_FAILURE; }, "xrCreateActionSpace");
+}
+
+// A runtime that refuses only the grip pose must leave the aim pose, the inputs, head tracking and
+// presentation alone: the grip pose just reports untracked.
+void ExpectGripRefusalLeavesTheRestAlone(const std::function<void(Controllers&)>& refuse, const char* what) {
+    SCOPED_TRACE(what);
+    auto runtime = std::make_shared<FakeOpenXrRuntime>();
+    refuse(runtime->controllers);
+    auto manager = std::make_shared<OpenXrManager>(runtime);
+    ASSERT_TRUE(manager->Initialize());
+    ASSERT_TRUE(manager->CreateSession());
+    ASSERT_TRUE(manager->CreateTrackingSpaces());
+    manager->PollEvents();
+    EXPECT_TRUE(manager->IsSessionRunning());
+    EXPECT_TRUE(manager->HasMotionControllerActions()) << "the rest of the action set is still usable";
+
+    runtime->tracking.SetHeadPose(PoseAt(0.1f, 1.6f, -0.2f));
+    runtime->controllers.hands[1].pose = FakeOpenXrTracking::ToXrPose(PoseAt(0.3f, 1.2f, -0.4f));
+    runtime->controllers.hands[1].inputs.trigger = 0.5f;
+    ASSERT_TRUE(manager->BeginFrame());
+    EXPECT_TRUE(manager->PollHeadPose().isValid);
+    const HandState hand = manager->GetHandState(1);
+    EXPECT_TRUE(hand.tracked);
+    EXPECT_FLOAT_EQ(hand.aim.position.x, 0.3f);
+    EXPECT_FLOAT_EQ(hand.trigger, 0.5f);
+    EXPECT_FALSE(hand.gripTracked);
+    EXPECT_FALSE(hand.gripPose.isValid);
+    EXPECT_TRUE(manager->EndFrame());
+    manager->Shutdown();
+}
+
+TEST(OpenXrManagerTest, ARuntimeThatRefusesTheGripPoseStillTracksTheAimPoseAndTheInputs) {
+    ExpectGripRefusalLeavesTheRestAlone([](Controllers& c) { c.createGripActionResult = XR_ERROR_RUNTIME_FAILURE; }, "grip pose action");
+    ExpectGripRefusalLeavesTheRestAlone([](Controllers& c) { c.createGripActionSpaceResult = XR_ERROR_RUNTIME_FAILURE; }, "grip pose action space");
 }
 
 TEST(OpenXrManagerTest, PartiallyDeclaredActionSetIsReleasedWhenALaterStepIsRefused) {
@@ -464,8 +500,59 @@ TEST(OpenXrManagerTest, AnUntrackedControllerReportsUntrackedWithZeroedInputs) {
     const HandState hand = headset.manager->GetHandState(0);
     EXPECT_FALSE(hand.tracked);
     EXPECT_FALSE(hand.aim.isValid);
+    EXPECT_FALSE(hand.gripTracked) << "a controller that is off has no grip pose either";
     EXPECT_FLOAT_EQ(hand.trigger, 0.0f);
     EXPECT_FALSE(hand.menu);
+}
+
+TEST(OpenXrManagerTest, AGripPoseThatIsAloneUntrackedLeavesTheControllerTracked) {
+    FakeTrackedHeadset headset;
+    headset.SetHandPose(1, PoseAt(0.3f, 1.2f, -0.4f));
+    headset.SetHandGripPose(1, PoseAt(0.3f, 1.1f, -0.3f), /*tracked=*/false);
+    Controllers::Inputs held;
+    held.trigger = 0.5f;
+    headset.SetHandInputs(1, held);
+
+    headset.NextFrame();
+
+    const HandState hand = headset.manager->GetHandState(1);
+    EXPECT_TRUE(hand.tracked);
+    EXPECT_TRUE(hand.aim.isValid);
+    EXPECT_FLOAT_EQ(hand.trigger, 0.5f);
+    EXPECT_FALSE(hand.gripTracked);
+    EXPECT_FALSE(hand.gripPose.isValid);
+    EXPECT_FLOAT_EQ(hand.gripPose.position.y, 0.0f) << "an untracked grip pose is the default pose";
+    // The other hand keeps its own grip pose.
+    EXPECT_TRUE(headset.manager->GetHandState(0).gripTracked);
+
+    headset.SetHandGripPose(1, PoseAt(0.3f, 1.1f, -0.3f), /*tracked=*/true);
+    headset.NextFrame();
+    EXPECT_TRUE(headset.manager->GetHandState(1).gripTracked);
+}
+
+TEST(OpenXrManagerTest, AnUnfocusedSessionAnOutOfRangeHandAndPassThroughReportTheGripPoseUntracked) {
+    FakeTrackedHeadset headset;
+    headset.SetHandPose(1, PoseAt(0.0f, 1.0f, -0.3f));
+    headset.NextFrame();
+    ASSERT_TRUE(headset.manager->GetHandState(1).gripTracked);
+
+    EXPECT_FALSE(headset.manager->GetHandState(2).gripTracked);
+    EXPECT_FALSE(headset.manager->GetHandState(1000).gripTracked);
+
+    headset.runtime->controllers.syncActionsResult = XR_SESSION_NOT_FOCUSED;
+    headset.NextFrame();
+    EXPECT_FALSE(headset.manager->GetHandState(1).gripTracked);
+    EXPECT_FALSE(headset.manager->GetHandState(1).gripPose.isValid);
+
+    auto runtime = std::make_shared<FakeOpenXrRuntime>();
+    OpenXrManager manager(runtime);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    runtime->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    manager.PollEvents();
+    ASSERT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.GetHandState(0).gripTracked);
+    EXPECT_FALSE(manager.GetHandState(1).gripTracked);
 }
 
 TEST(OpenXrManagerTest, ASessionThatIsNotFocusedReportsNoInputWithoutAnError) {

@@ -47,6 +47,8 @@ public:
     std::set<std::string> unsupportedProfiles;       // these profiles fail with XR_ERROR_PATH_UNSUPPORTED
     XrResult attachResult = XR_SUCCESS;
     XrResult createActionSpaceResult = XR_SUCCESS;
+    XrResult createGripActionResult = XR_SUCCESS;       // only the grip pose action
+    XrResult createGripActionSpaceResult = XR_SUCCESS;  // only the grip pose action's spaces
     XrResult syncActionsResult = XR_SUCCESS;         // e.g. XR_SESSION_NOT_FOCUSED
     XrResult applyHapticResult = XR_SUCCESS;
 
@@ -123,6 +125,9 @@ public:
     XrResult CreateAction(XrActionSet actionSet, const XrActionCreateInfo* createInfo, XrAction* action) {
         if (createActionResult != XR_SUCCESS) return createActionResult;
         if (!createInfo || !action || m_liveActionSets.count(actionSet) == 0) return XR_ERROR_HANDLE_INVALID;
+        if (createGripActionResult != XR_SUCCESS && std::string(createInfo->actionName) == OpenXrInput::kGripPoseAction) {
+            return createGripActionResult;
+        }
         ActionRecord record;
         record.name = createInfo->actionName;
         record.type = createInfo->actionType;
@@ -175,6 +180,9 @@ public:
         }
         const int hand = HandOf(createInfo->subactionPath);
         if (hand < 0) return XR_ERROR_PATH_UNSUPPORTED;
+        if (createGripActionSpaceResult != XR_SUCCESS && it->second.name == OpenXrInput::kGripPoseAction) {
+            return createGripActionSpaceResult;
+        }
         static uintptr_t s_spaceHandle = 0xAC7A0001;
         XrSpace handle = reinterpret_cast<XrSpace>(s_spaceHandle++);
         m_actionSpaces[handle] = { hand, it->second.name };
