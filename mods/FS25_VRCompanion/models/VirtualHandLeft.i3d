@@ -23,40 +23,40 @@
   <Scene>
     <TransformGroup name="Hand.002" nodeId="5">
       <Shape name="HandModel.001" shapeId="1" nodeId="6" castsShadows="false" receiveShadows="true" skinBindNodeIds="7 8 25 26 27 28 9 10 11 12 13 14 15 16 21 22 23 24 17 18 19 20" materialIds="1,2"/>
-      <TransformGroup name="Wrist" translation="0.0629653 0.0550946 0.969075" rotation="5.28222e-06 -1.25938e-12 1.36604e-05" nodeId="7">
-        <TransformGroup name="Hand" translation="-1.76557e-09 -1.76856e-10 -0.444487" rotation="-6.35277e-06 -0.564293 -3.60697e-06" nodeId="8">
-          <TransformGroup name="Index Finger" translation="2.28252e-09 -2.15196e-09 -0.65891" rotation="-7.91083e-06 -31.7832 6.58695e-06" nodeId="9">
-            <TransformGroup name="Lower.001" translation="2.80208e-08 -4.09032e-09 -0.576101" rotation="-5.86344 19.0318 0.0138157" nodeId="10">
-              <TransformGroup name="Middle.001" translation="2.65786e-08 -5.58794e-09 -0.325696" rotation="-14.7671 3.10435 -0.305041" nodeId="11">
-                <TransformGroup name="Top.001" translation="-7.10133e-08 3.72529e-09 -0.318453" rotation="-21.2238 -1.78701 0.303658" nodeId="12"/>
+      <TransformGroup name="Wrist" translation="0.00550946 0.00482078 0.084794" rotation="5.48802e-06 -1.30845e-12 1.36604e-05" nodeId="7">
+        <TransformGroup name="Hand" translation="2.18042e-10 2.89098e-10 -0.0388926" rotation="-6.51231e-06 -0.564293 -3.60495e-06" nodeId="8">
+          <TransformGroup name="Index Finger" translation="-1.40795e-10 -3.84099e-10 -0.0576546" rotation="-7.96527e-06 -31.7832 6.61562e-06" nodeId="9">
+            <TransformGroup name="Lower.001" translation="-1.79734e-09 2.94022e-10 -0.0504089" rotation="-5.86343 19.0318 0.0138163" nodeId="10">
+              <TransformGroup name="Middle.001" translation="1.22594e-09 -1.80444e-09 -0.0284984" rotation="-14.7671 3.10435 -0.305043" nodeId="11">
+                <TransformGroup name="Top.001" translation="-1.00408e-09 -6.98492e-09 -0.0278647" rotation="-21.2238 -1.78702 0.303661" nodeId="12"/>
               </TransformGroup>
             </TransformGroup>
           </TransformGroup>
-          <TransformGroup name="Middle Finger" translation="2.28252e-09 -2.15196e-09 -0.65891" rotation="7.04318e-07 -2.85693 -4.6585e-06" nodeId="13">
-            <TransformGroup name="Lower.002" translation="-5.99853e-09 1.68852e-09 -0.598086" rotation="-3.82497 -1.3596 0.00617514" nodeId="14">
-              <TransformGroup name="Middle.002" translation="-8.03902e-09 1.22236e-09 -0.351131" rotation="-16.9952 -0.645616 -0.368002" nodeId="15">
-                <TransformGroup name="Top.002" translation="-1.22527e-08 1.67638e-08 -0.299041" rotation="-17.8419 4.20034 1.99591" nodeId="16"/>
+          <TransformGroup name="Middle Finger" translation="-1.40795e-10 -3.84099e-10 -0.0576546" rotation="6.57985e-07 -2.85693 -4.65619e-06" nodeId="13">
+            <TransformGroup name="Lower.002" translation="-4.78305e-10 -3.85187e-11 -0.0523325" rotation="-3.82497 -1.3596 0.00617513" nodeId="14">
+              <TransformGroup name="Middle.002" translation="1.36055e-10 -3.7835e-10 -0.0307239" rotation="-16.9952 -0.645615 -0.368002" nodeId="15">
+                <TransformGroup name="Top.002" translation="-7.45786e-10 -2.73576e-09 -0.0261661" rotation="-17.8419 4.20034 1.99591" nodeId="16"/>
               </TransformGroup>
             </TransformGroup>
           </TransformGroup>
-          <TransformGroup name="Pinky" translation="2.28252e-09 -2.15196e-09 -0.65891" rotation="1.11419e-05 42.8193 5.34303e-06" nodeId="17">
-            <TransformGroup name="Lower.004" translation="-4.71391e-09 -1.25535e-10 -0.670714" rotation="-8.31128 -20.9025 0.969258" nodeId="18">
-              <TransformGroup name="Middle.004" translation="1.76951e-08 -2.04891e-08 -0.159482" rotation="-16.119 3.00526 -1.86187" nodeId="19">
-                <TransformGroup name="Top.004" translation="-7.45058e-09 -4.47035e-08 -0.267027" rotation="-21.2419 0.337392 1.3942" nodeId="20"/>
+          <TransformGroup name="Pinky" translation="-1.40795e-10 -3.84099e-10 -0.0576546" rotation="1.10788e-05 42.8193 5.30015e-06" nodeId="17">
+            <TransformGroup name="Lower.004" translation="-3.99383e-11 5.01243e-10 -0.0586875" rotation="-8.31128 -20.9025 0.969256" nodeId="18">
+              <TransformGroup name="Middle.004" translation="9.7134e-10 6.98492e-10 -0.0139547" rotation="-16.119 3.00524 -1.86187" nodeId="19">
+                <TransformGroup name="Top.004" translation="-3.40515e-09 -9.31323e-10 -0.0233649" rotation="-21.2419 0.337409 1.39419" nodeId="20"/>
               </TransformGroup>
             </TransformGroup>
           </TransformGroup>
-          <TransformGroup name="Ring Finger" translation="2.28252e-09 -2.15196e-09 -0.65891" rotation="3.99375e-06 24.0504 -2.37879e-06" nodeId="21">
-            <TransformGroup name="Lower.003" translation="-1.60396e-08 5.19671e-09 -0.594343" rotation="-2.78148 -18.7088 -0.0260852" nodeId="22">
-              <TransformGroup name="Middle.003" translation="-2.47383e-09 -4.19095e-09 -0.273965" rotation="-21.4896 -0.147155 0.401653" nodeId="23">
-                <TransformGroup name="Top.003" translation="-5.12227e-09 5.4948e-08 -0.316888" rotation="-14.244 -0.918293 0.429044" nodeId="24"/>
+          <TransformGroup name="Ring Finger" translation="-1.40795e-10 -3.84099e-10 -0.0576546" rotation="3.94307e-06 24.0504 -2.39944e-06" nodeId="21">
+            <TransformGroup name="Lower.003" translation="5.52315e-10 2.21882e-10 -0.052005" rotation="-2.78148 -18.7088 -0.0260851" nodeId="22">
+              <TransformGroup name="Middle.003" translation="6.63931e-11 -2.6921e-10 -0.0239719" rotation="-21.4896 -0.147155 0.401654" nodeId="23">
+                <TransformGroup name="Top.003" translation="-6.18456e-11 5.00586e-09 -0.0277277" rotation="-14.244 -0.918285 0.429043" nodeId="24"/>
               </TransformGroup>
             </TransformGroup>
           </TransformGroup>
-          <TransformGroup name="Thumb" translation="2.28252e-09 -2.15196e-09 -0.65891" rotation="-2.06031e-05 -105.903 1.11453e-05" nodeId="25">
-            <TransformGroup name="Lower" translation="-1.95742e-08 2.30809e-09 -0.537971" rotation="-9.09714 58.2478 -0.232479" nodeId="26">
-              <TransformGroup name="Middle" translation="9.68976e-09 -6.51926e-09 -0.284216" rotation="-7.1809 17.7063 2.17288" nodeId="27">
-                <TransformGroup name="Top" translation="3.58559e-08 0 -0.325075" rotation="-10.9697 3.33984 0.98493" nodeId="28"/>
+          <TransformGroup name="Thumb" translation="-1.40795e-10 -3.84099e-10 -0.0576546" rotation="-2.04343e-05 -105.903 1.09829e-05" nodeId="25">
+            <TransformGroup name="Lower" translation="-1.68946e-09 -6.36231e-10 -0.0470724" rotation="-9.09714 58.2478 -0.232479" nodeId="26">
+              <TransformGroup name="Middle" translation="1.77897e-09 1.62981e-09 -0.0248689" rotation="-7.1809 17.7063 2.17288" nodeId="27">
+                <TransformGroup name="Top" translation="-2.09548e-09 4.65661e-10 -0.028444" rotation="-10.9697 3.33984 0.98493" nodeId="28"/>
               </TransformGroup>
             </TransformGroup>
           </TransformGroup>
