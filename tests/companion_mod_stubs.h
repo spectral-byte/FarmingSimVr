@@ -6,7 +6,7 @@
 //   kStubSceneGraph          a small scene graph (nodes, parents, local and world transforms) with the
 //                            engine's node functions, and StubScene.cab / StubScene.onFoot building a
 //                            camera chain the real Companion Mod drives
-//   kStubInteractiveControl  a stand-in for the Interactive Control mod's Click Point class and manager
+//   kStubModelLoading        the engine's model loading and node functions the Virtual Hands use (StubModel), on top of\n//                            the scene graph: a loadable hand model, clones, visibility, scale, world transforms, shadow\n//                            flags, and a model that is missing or fails to load\n//   kStubInteractiveControl  a stand-in for the Interactive Control mod's Click Point class and manager
 //                            (StubIC), with a mismatched variant
 //
 // They model only the names and shapes the Companion Mod depends on (ADR-0026). Nothing here is
@@ -31,6 +31,7 @@
 inline constexpr const char* kStubSceneGraph = R"luau(
     StubScene = {}
     local nodes = {}
+    StubScene.nodes = nodes
     local nextId = 1000
 
     local function qmul(ax, ay, az, aw, bx, by, bz, bw)
@@ -166,6 +167,155 @@ inline constexpr const char* kStubSceneGraph = R"luau(
     end
 )luau";
 
+// ---- Model loading ---------------------------------------------------------------------------------------
+// Run after kStubSceneGraph. The engine functions the Virtual Hands call to bring in their model, with a
+// hand model in the shape the model contract describes (a file root whose first child is the hand's root
+// node, with the finger joints below it and one shape).
+//
+//   StubModel.fileExists (default true)   what fileExists() answers for the model file
+//   StubModel.failLoad (default false)    loadI3DFile answers 0 (and a failure reason) although the file exists
+//   StubModel.loads                       { { filename, root } } per loadI3DFile call that reached the "engine"
+//   StubModel.clones                      node ids of every clone() of a node (the hands), in order
+//   StubModel.deleted                     node id -> true for every deleted node
+//   StubModel.hands() -> { left = node, right = node }   the cloned hand nodes, told apart by mirroring
+//                         (the left clone is the right model scaled -1 along X); a missing one is nil
+//   StubModel.isShown(node)               the node and every ancestor are visible (and it exists)
+//   StubModel.scale(node) -> x, y, z      StubModel.castsShadow(node) -> true when any shape below casts one
+//   StubModel.isLinkedToScene(node)       the node's ancestors lead up to the scene root
+// Nodes are visible, unscaled and (for shapes) casting shadows by default, like freshly loaded ones.
+inline constexpr const char* kStubModelLoading = R"luau(
+    StubModel = { fileExists = true, failLoad = false, loads = {}, clones = {}, deleted = {} }
+    local nodes = StubScene.nodes
+    local function qmul(ax, ay, az, aw, bx, by, bz, bw)
+        return aw * bx + ax * bw + ay * bz - az * by,
+               aw * by - ax * bz + ay * bw + az * bx,
+               aw * bz + ax * by - ay * bx + az * bw,
+               aw * bw - ax * bx - ay * by - az * bz
+    end
+    local function qrotate(qx, qy, qz, qw, x, y, z)
+        local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
+        return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
+    end
+    local function childrenOf(id)
+        local list = {}
+        for childId, node in pairs(nodes) do
+            if node.parent == id then table.insert(list, childId) end
+        end
+        table.sort(list)
+        return list
+    end
+
+    _G.ClassIds = { SHAPE = 1 }
+    _G.fileExists = function(filename) return StubModel.fileExists end
+    _G.entityExists = function(id) return nodes[id] ~= nil end
+    _G.getHasClassId = function(id, classId) return nodes[id] ~= nil and classId == 1 and nodes[id].isShape == true end
+    _G.getNumOfChildren = function(id) return #childrenOf(id) end
+    _G.getChildAt = function(id, index) return childrenOf(id)[index + 1] or 0 end
+    _G.getName = function(id) return nodes[id] and nodes[id].name or "" end
+    _G.getChild = function(id, name)
+        for _, childId in ipairs(childrenOf(id)) do
+            if nodes[childId].name == name then return childId end
+        end
+        return 0
+    end
+    _G.unlink = function(id) if nodes[id] then nodes[id].parent = 0 end end
+    _G.setVisibility = function(id, visible) if nodes[id] then nodes[id].visible = visible end end
+    _G.getVisibility = function(id) return nodes[id] ~= nil and nodes[id].visible ~= false end
+    _G.setScale = function(id, x, y, z) if nodes[id] then nodes[id].sx, nodes[id].sy, nodes[id].sz = x, y, z end end
+    _G.getScale = function(id) local n = nodes[id]; return n.sx or 1, n.sy or 1, n.sz or 1 end
+    _G.setShapeCastShadowmap = function(id, cast) if nodes[id] then nodes[id].castShadow = cast end end
+    _G.setWorldTranslation = function(id, x, y, z)
+        local n = nodes[id]
+        if n == nil then return end
+        if n.parent == 0 or nodes[n.parent] == nil then n.x, n.y, n.z = x, y, z return end
+        n.x, n.y, n.z = localToLocal(0, n.parent, x, y, z)
+    end
+    _G.setWorldQuaternion = function(id, qx, qy, qz, qw)
+        local n = nodes[id]
+        if n == nil then return end
+        if n.parent == 0 or nodes[n.parent] == nil then n.qx, n.qy, n.qz, n.qw = qx, qy, qz, qw return end
+        local px, py, pz, pw = getWorldQuaternion(n.parent)
+        n.qx, n.qy, n.qz, n.qw = qmul(-px, -py, -pz, pw, qx, qy, qz, qw)
+    end
+
+    local function buildHand()
+        local fileRoot = StubScene.newNode("virtualHandFile", 0)
+        local hand = StubScene.newNode("virtualHandRight", fileRoot)
+        local mesh = StubScene.newNode("glove", hand)
+        nodes[mesh].isShape = true
+        nodes[mesh].castShadow = true
+        for _, finger in ipairs({ "thumb", "index", "middle", "ring", "little" }) do
+            local parent = hand
+            for segment = 1, 3 do parent = StubScene.newNode(finger .. segment, parent) end
+        end
+        return fileRoot
+    end
+    _G.loadI3DFile = function(filename, addPhysics, callOnCreate)
+        if not StubModel.fileExists or StubModel.failLoad then return 0, 1 end
+        local root = buildHand()
+        table.insert(StubModel.loads, { filename = filename, root = root, addPhysics = addPhysics, callOnCreate = callOnCreate })
+        return root, 0
+    end
+    local function copyTree(id, parent)
+        local source = nodes[id]
+        local copy = StubScene.newNode(source.name, parent, source.x, source.y, source.z)
+        local n = nodes[copy]
+        n.qx, n.qy, n.qz, n.qw = source.qx, source.qy, source.qz, source.qw
+        n.isShape, n.castShadow, n.visible = source.isShape, source.castShadow, source.visible
+        n.sx, n.sy, n.sz = source.sx, source.sy, source.sz
+        for _, childId in ipairs(childrenOf(id)) do copyTree(childId, copy) end
+        return copy
+    end
+    _G.clone = function(id, groupUnderParent, callOnCreate)
+        if nodes[id] == nil then return 0 end
+        local copy = copyTree(id, groupUnderParent and nodes[id].parent or 0)
+        table.insert(StubModel.clones, copy)
+        return copy
+    end
+    _G.delete = function(id)
+        if nodes[id] == nil then return end
+        for _, childId in ipairs(childrenOf(id)) do _G.delete(childId) end
+        nodes[id] = nil
+        StubModel.deleted[id] = true
+    end
+
+    function StubModel.scale(id) return getScale(id) end
+    function StubModel.isShown(id)
+        while id ~= nil and id ~= 0 do
+            local n = nodes[id]
+            if n == nil or n.visible == false then return false end
+            id = n.parent
+        end
+        return true
+    end
+    function StubModel.isLinkedToScene(id)
+        while id ~= nil and id ~= 0 do
+            if nodes[id] == nil then return false end
+            if id == getRootNode() then return true end
+            id = nodes[id].parent
+        end
+        return false
+    end
+    function StubModel.castsShadow(id)
+        local n = nodes[id]
+        if n == nil then return false end
+        if n.isShape and n.castShadow then return true end
+        for _, childId in ipairs(childrenOf(id)) do
+            if StubModel.castsShadow(childId) then return true end
+        end
+        return false
+    end
+    function StubModel.hands()
+        local found = {}
+        for _, id in ipairs(StubModel.clones) do
+            if nodes[id] ~= nil then
+                local sx = getScale(id)
+                if sx < 0 then found.left = id else found.right = id end
+            end
+        end
+        return found
+    end
+)luau";
 // ---- Interactive Control ------------------------------------------------------------------------------
 // StubIC.install(variant)  installs the globals the Companion Mod looks at, in the release-1.2.0.1 shape
 //   variants: nil / "ok", "renamedUpdateClickable" (the Click Point class lacks updateClickable),
