@@ -132,7 +132,9 @@ function VRCompanion:updateMenuPointer(dt)
     end
     local hit = state.hit or {}
 
+    -- A pull that switched the Pointer Hand to this hand is not a click, even held on.
     local trigger = self:getHandState(hand).trigger or 0
+    if self:isPointerTriggerConsumed() then trigger = 0 end
     local pulled, released = false, false
     if state.triggerHeld then
         if trigger < self.MENU_TRIGGER_RELEASE then
