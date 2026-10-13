@@ -6,6 +6,7 @@
 #include "openxr_types.h"
 #include "core/math_utils.h"
 #include "core/raii_utils.h"
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <string>
@@ -146,6 +147,26 @@ public:
     XrExtent2Df GetMenuQuadSize() const { return ComputeMenuQuadSize(); }
     void ResetMenuQuadSettings() { m_menuQuadDistance = 1.5f; m_hasCustomMenuQuadSize = false; m_hasMenuQuadPose = false; }
 
+    // Where the ray of `hand` (0 = left, 1 = right) lands on the panel the next SubmitMenuQuad()
+    // submits, in normalized panel coordinates (see PanelHit). The hand's aim pose and the layer are
+    // both in the Recenter-aware local space, so the test holds across a Recenter. No hit for an
+    // untracked hand. Whether a panel is visible is the caller's (VRBridge's) knowledge.
+    PanelHit GetPanelHit(uint32_t hand);
+    // Pure ray (origin, -Z of rayOrientation) against a quad of `quadSize` at `quadPose`; the quad
+    // is hit from its front side only, like it is seen.
+    static PanelHit ComputeQuadRayHit(const XrPosef& quadPose, const XrExtent2Df& quadSize,
+                                      const Vector3& rayOrigin, const Quaternion& rayOrientation);
+
+    // While active the drawn cursor sits at (u, v) in PanelHit coordinates (clamped onto the panel)
+    // and MirrorWindowController ignores the Win32 cursor: the Pointer Ray has control of the cursor.
+    // Inactive means the desk mouse has it.
+    void SetPointerCursorOverride(bool active, float u = 0.0f, float v = 0.0f) {
+        m_pointerCursor.active = active;
+        m_pointerCursor.u = std::fmin(1.0f, std::fmax(0.0f, u));
+        m_pointerCursor.v = std::fmin(1.0f, std::fmax(0.0f, v));
+    }
+    const PointerCursorOverride& GetPointerCursorOverride() const { return m_pointerCursor; }
+
     uint64_t GetSubmittedQuadFrameCount() const { return m_submittedQuadFrameCount; }
     void ResetSubmittedQuadFrameCount() { m_submittedQuadFrameCount = 0; }
     const XrCompositionLayerQuad& GetLastSubmittedQuadLayer() const { return m_lastSubmittedQuadLayer; }
@@ -252,6 +273,7 @@ private:
     bool m_handPosesStale = false;
     void RefreshHandState(XrTime time, bool resync);
     MenuCursorState m_menuCursorState;
+    PointerCursorOverride m_pointerCursor;
     float m_ipd = 0.064f;
     uint64_t m_submittedFramePairCount = 0;
     uint64_t m_submittedQuadFrameCount = 0;

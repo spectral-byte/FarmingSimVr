@@ -1234,6 +1234,8 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "setMenuVisible",
         "getIsMenuVisible",
         "alignMenuQuad",
+        "getPanelHit",
+        "setMenuCursor",
         "set2DViewActive",
         "getIs2DViewActive",
         "getRenderingMode",

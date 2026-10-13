@@ -39,6 +39,24 @@ struct HandState {
     bool buttonUpper = false;   // upper face button: Touch Y (left) / B (right), Index B
     bool menu = false;          // menu button (Touch left only; Index has none)
 };
+// Where a Motion Controller's ray lands on the floating menu / 2D Floating Window Mode panel.
+// u runs left to right and v top to bottom, both 0..1 (the drawn cursor's convention, which is not
+// the game's GUI convention: the GUI's y runs bottom to top). A miss has hit = false and zeros.
+struct PanelHit {
+    bool hit = false;
+    float u = 0.0f;
+    float v = 0.0f;
+    float distance = 0.0f;  // metres along the ray
+};
+
+// The drawn menu cursor placed by the Pointer Ray instead of the desk mouse (ADR-0009). While active,
+// the cursor layer is drawn at (u, v) in PanelHit coordinates and the Win32 cursor is ignored.
+struct PointerCursorOverride {
+    bool active = false;
+    float u = 0.0f;
+    float v = 0.0f;
+};
+
 struct EyeSwapchain {
     XrSwapchain handle = XR_NULL_HANDLE;
     uint32_t width = 0;
