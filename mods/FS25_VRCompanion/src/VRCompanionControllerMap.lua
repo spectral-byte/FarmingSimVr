@@ -110,6 +110,16 @@ function VRCompanion:processControllerButtons()
         end
     end
 
+    -- The lower face button is also back / close in a menu (VRCompanionMenuPointer.lua): while a menu
+    -- is showing, a world action the player put on it (recenter, HUD toggle) yields to that.
+    if self.isMenuVisible == true then
+        for action, input in pairs(self.controllerMap) do
+            if input == "buttonLower" then
+                pressed[action] = nil
+            end
+        end
+    end
+
     if snapDirection < 0 then
         self:onSnapTurnLeftAction()
     elseif snapDirection > 0 then
