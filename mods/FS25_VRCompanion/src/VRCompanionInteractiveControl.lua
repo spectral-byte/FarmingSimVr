@@ -27,9 +27,10 @@
 -- Pointer Ray is not drawn and the trigger clicks nothing; a trigger pulled in that time does not click
 -- (or keep an analog Click Point acting) once the hand moves, only a new pull does.
 --
--- Later tickets build on:
+-- Other modules build on:
 --   VRCompanion:onClickPointEvent(kind, clickPoint)   optional hook, called with "selected" (the
---       selected Click Point changed, clickPoint may be nil) and "clicked" (a click was executed)
+--       selected Click Point changed, clickPoint may be nil) and "clicked" (a trigger pull was executed:
+--       once per pull, not on every frame an analog Click Point keeps acting)
 --   rayControlsSelection()                            the one place that decides whether the Pointer
 --       Ray, rather than the mouse, selects Click Points
 -- ====================================================================
@@ -56,6 +57,7 @@ local function newState()
         originals = {},
         wrappers = {},
         points = setmetatable({}, { __mode = "k" }),  -- [clickPoint] = update count when last seen active
+        refused = setmetatable({}, { __mode = "k" }), -- [clickPoint] = update count when Interactive Control last refused it a mouse test
         updates = 0,
         selected = nil,
         autoOn = nil,         -- see "Interactive Control switches on while the Pointer Hand is in use"
@@ -137,6 +139,16 @@ local function installWrappers(self, class)
     -- the original as if the mouse were on it (so its hover blink and icon logic run) and every other
     -- Click Point as if the mouse were nowhere; the ray's choice is then final.
     wrappers.updateClickable = function(point, mx, my, ...)
+        -- Interactive Control asks for a test with no mouse position when it will not let this Click Point
+        -- be pointed at (a static outdoor one facing away from the camera): it is then not clickable,
+        -- whatever the ray says, and selectFromRay leaves it out. Everything else that decides whether
+        -- a Click Point can be executed (its folding / animation / forced-state conditions and the
+        -- indoor or outdoor mode) is isActivated, which selection already requires.
+        if mx == nil or my == nil then
+            state.refused[point] = state.updates
+            return originals.updateClickable(point, mx, my, ...)
+        end
+        state.refused[point] = nil
         if not rayControlsSelection(self) then
             return originals.updateClickable(point, mx, my, ...)
         end
@@ -197,6 +209,8 @@ local function selectFromRay(self, ray)
     for point, seen in pairs(state.points) do
         if state.updates - seen > STALE_UPDATES or not isPointActive(point) then
             state.points[point] = nil
+        elseif state.refused[point] ~= nil and state.updates - state.refused[point] <= STALE_UPDATES then
+            -- Interactive Control will not let the pointer have this Click Point right now.
         else
             live = live + 1
             if ray ~= nil and point.node ~= nil and type(getWorldTranslationFn) == "function" then
@@ -216,7 +230,7 @@ local function selectFromRay(self, ray)
 end
 
 -- One trigger pull runs Interactive Control's own execute path once; an analog Click Point keeps
--- acting every update while the trigger is held.
+-- acting every update while the trigger is held. Only the pull itself is a click event (the haptic pulse).
 local function clickSelected(self)
     local pressed, held = self:getPointerTrigger()
     -- Only a pull that went down while the ray had control can keep an analog Click Point acting; one
@@ -236,7 +250,7 @@ local function clickSelected(self)
     local analog = type(controller.isAnalog) == "function" and controller:isAnalog() == true
     if pressed or (analog and state.pullArmed) then
         pcall(manager.onActionEventExecute, manager)
-        notify(self, "clicked", selected)
+        if pressed then notify(self, "clicked", selected) end
     end
 end
 

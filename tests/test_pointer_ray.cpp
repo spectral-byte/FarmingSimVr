@@ -1,4 +1,4 @@
-// The Pointer Ray and Interactive Control Click Points (spec #71, ticket #73), seen from outside: the
+// The Pointer Ray and Interactive Control Click Points (spec #71), seen from outside: the
 // real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with a stand-in for the
 // Interactive Control mod (companion_mod_stubs.h). The test moves the fake Motion Controllers and the
 // game clock, drives frames the way the game would (camera update, Interactive Control's own update,
@@ -114,7 +114,7 @@ void PreFrame(lua_State* L) {
 #define FRAMES(count) \
     for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
 
-// The Pointer Hand: picks the controller up (it moves) and aims it along the given pose.
+// The Pointer Hand: picks the Motion Controller up (it moves) and aims it along the given pose.
 #define PICK_UP_AND_AIM(hand, x, y, z) \
     do { \
         SetGameTime(10000); \
@@ -235,6 +235,35 @@ TEST_F(CompanionModTest, OnePullClicksOnceHoldingKeepsOnlyAnAnalogClickPointActi
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "6") << "and not after the trigger is let go";
 }
 
+TEST_F(CompanionModTest, AClickPointInteractiveControlWillNotTestIsNeverSelectedByTheRay) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    // Interactive Control tests a static outdoor Click Point that faces away from the camera with no
+    // mouse position, so it can never be clicked. It is nearest the ray's centre here.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.addPoint('away', -0.3, 1.5, 2.3, { facesAway = true })
+        StubIC.addPoint('threeDegrees', -0.3 + 0.1048, 1.5, 2.3)
+    )luau", "=addPoints"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "threeDegrees") << "the ray falls back to the Click Point Interactive Control allows";
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "table.concat(StubIC.executed, ',')"), "threeDegrees");
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+
+    // With only the Click Point that faces away in the cone nothing is selected, clicked or drawn.
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.points[2].inRange = false; StubIC.executed = {}", "=hideSecond"), 0);
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "nil");
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0");
+}
+
 TEST_F(CompanionModTest, ATriggerThatRestsHalfWayNeitherClicksNorStopsAHoldFlickering) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
@@ -262,7 +291,7 @@ TEST_F(CompanionModTest, AClickDoesNotHappenWhenTheTriggerWasAlreadyDownBeforeTh
     SetGameTime(10000);
     headset.SetHandInputs(kRight, Trigger(1.0f));
     headset.SetHandPose(kRight, HandAt(0.2f, 0.0f, -0.3f));
-    FRAMES(2);  // trigger held, controller still: not in use, nothing to click with
+    FRAMES(2);  // trigger held, Motion Controller still: not in use, nothing to click with
     headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
     FRAMES(3);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "1");
@@ -331,10 +360,10 @@ TEST_F(CompanionModTest, ThePointerRayIsHiddenWithoutActiveClickPointsWithoutAPo
     FRAMES(1);
     EXPECT_EQ(drawn(), "2") << "back when tracking returns while the hand is still in use";
 
-    AdvanceGameTime(3100);  // the controller lies still for more than 3 s
+    AdvanceGameTime(3100);  // the Motion Controller lies still for more than 3 s
     FRAMES(1);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "nil");
-    EXPECT_EQ(drawn(), "0") << "a controller left lying still has no ray";
+    EXPECT_EQ(drawn(), "0") << "a Motion Controller left lying still has no ray";
 }
 
 // Where a hand held at (hx, hy, hz) from a head at the origin of the tracking space is in the world,
@@ -699,7 +728,7 @@ TEST_F(CompanionModTest, TheMouseKeepsSelectingUntilThePointerHandIsInUseAndTake
     SetGameTime(10000);
     headset.SetHandPose(kRight, HandAt(0.2f, 0.0f, -0.3f));
     FRAMES(4);
-    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "underMouse") << "controllers lying still: the mouse selects";
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "underMouse") << "Motion Controllers lying still: the mouse selects";
     EXPECT_EQ(EvalLua(L, "StubIC.blinks.underMouse ~= nil"), "true");
 
     headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));

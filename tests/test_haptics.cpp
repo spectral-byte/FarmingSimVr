@@ -1,8 +1,8 @@
-// Haptic pulses on the Pointer Hand (spec #71, ticket #76). Two layers, both seen from outside:
+// Haptic pulses on the Pointer Hand (spec #71). Two layers, both seen from outside:
 //  - OpenXrManagerTest: OpenXrManager::PulseHaptic against FakeOpenXrRuntime, which records every
 //    pulse the runtime was asked to play (hand, duration in nanoseconds, amplitude).
 //  - CompanionModTest: the real Companion Mod over FakeTrackedHeadset and the real VRBridge, with the
-//    Interactive Control stand-in of companion_mod_stubs.h. The test moves the controllers, drives
+//    Interactive Control stand-in of companion_mod_stubs.h. The test moves the Motion Controllers, drives
 //    frames, and asserts which pulses reached which hand.
 // The bridge call itself (VRBridge.pulseHaptic) is covered in test_vr_bridge.cpp.
 
@@ -228,12 +228,34 @@ TEST_F(CompanionModTest, EachClickPulsesThePointerHandAndHoldingTheTriggerOnABut
     EXPECT_EQ(PulsesTo(headset, 0), 0u);
 }
 
+TEST_F(CompanionModTest, HoldingTheTriggerOnAnAnalogClickPointPulsesOnTheClickOnlyNotEveryFrame) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('lever', -0.3, 1.5, 2.3, { analog = true })", "=addPoint"), 0);
+
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2);
+    ASSERT_EQ(headset.HapticPulses().size(), 1u) << "the landing";
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(6);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "6") << "the analog Click Point keeps acting while the trigger is held";
+    EXPECT_EQ(headset.HapticPulses().size(), 2u) << "but only the pull is a click to feel";
+
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(3);
+    EXPECT_EQ(headset.HapticPulses().size(), 3u) << "the second pull is the second click";
+}
+
 TEST_F(CompanionModTest, PulsesGoToTheLeftHandWhenItIsThePointerHandAndNeverToTheOtherOne) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     ASSERT_NO_FATAL_FAILURE(AddCenterAndThreeDegrees(L));
-    // The right controller is on and tracked but lies still, so it is not in use.
+    // The right Motion Controller is on and tracked but lies still, so it is not in use.
     headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
 
     PICK_UP_AND_AIM(kLeft, 0.3f, 0.0f, -0.3f);
@@ -282,7 +304,7 @@ TEST_F(CompanionModTest, NoPulsesWhileMotionControllersAreOff) {
 }
 
 TEST_F(CompanionModTest, PulsingIsHarmlessWithTheActionSetRefusedTheCallFailingOrNoPointerHand) {
-    // Action set refused: no controller is ever tracked, so there is no Pointer Hand and nothing to pulse.
+    // Action set refused: no Motion Controller is ever tracked, so there is no Pointer Hand and nothing to pulse.
     FakeTrackedHeadset headset(FakeTrackedHeadsetOptions{ .refuseActionSet = true });
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));

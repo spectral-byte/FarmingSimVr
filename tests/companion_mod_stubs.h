@@ -173,7 +173,8 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 //   Without a call there is no Interactive Control at all (g_modIsLoaded has no entry).
 // StubIC.addPoint(name, x, y, z, options) -> Click Point at a world position
 //   options: analog (bool), inRange (default true: IC activates it), screenX, screenY (where the stub's
-//   mouse test finds it; default 0.5, 0.5)
+//   mouse test finds it; default 0.5, 0.5), facesAway (bool: like a static outdoor Click Point facing away
+//   from the camera, IC tests it with no mouse position, so it is never clickable)
 // StubIC.equip(vehicle, state) / StubIC.stateSetting (1 toggle, 2 always on, 3 always off) /
 //   StubIC.stateWrites / StubIC.changeCamera(vehicle, cam)  the vehicle side, see below
 // StubIC.tick()  one frame of IC's own vehicle update: every Click Point updates (activation, the mouse
@@ -201,6 +202,7 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
         function Point:setClickable(clickable) self.clickable = clickable end
         function Point:isExecutable() return self.activated and self.clickable end
         local function hitTest(self, mx, my)
+            if mx == nil or my == nil then self:setClickable(false) return end
             local half = self.size * 0.5
             local over = math.abs(mx - self.screenPosX) < half and math.abs(my - self.screenPosY) < half
             if over then StubIC.blinks[self.name] = (StubIC.blinks[self.name] or 0) + 1 end
@@ -212,6 +214,7 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
             Point.updateClickable = hitTest
         end
         function Point:updateScreenPosition(mx, my)
+            if self.facesAway then mx, my = nil, nil end
             (self.updateClickable or self.updateClickableRenamed)(self, mx, my)
         end
         function Point:update(isIndoor, isOutdoor, hasInput)
@@ -265,7 +268,7 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
         local node = StubScene.newNode(name, 0, x, y, z)
         local point = setmetatable({
             name = name, node = node, activated = false, clickable = false, size = 0.04,
-            inRange = options.inRange ~= false,
+            inRange = options.inRange ~= false, facesAway = options.facesAway == true,
             screenPosX = options.screenX or 0.5, screenPosY = options.screenY or 0.5,
             interactiveController = controller,
         }, StubIC.Point)
