@@ -42,6 +42,18 @@ VRCompanion.controllerMap = {
     hudToggle = VRCompanion.DEFAULT_CONTROLLER_MAP.hudToggle,
 }
 
+-- The inputs each action can be put on. The trigger and the grip are not offered: pointing at and
+-- clicking a Click Point and the menu scroll/back use them. A thumbstick is only a Snap Turn.
+local ACTIONS = { "snapTurn", "recenter", "hudToggle" }
+local BUTTON_INPUTS = { "thumbClick", "buttonLower", "buttonUpper", "menu" }
+local ALLOWED_INPUTS = {
+    snapTurn = { "thumbX" },
+    recenter = BUTTON_INPUTS,
+    hudToggle = BUTTON_INPUTS,
+}
+local NO_INPUT = "none"
+local SETTING_KEY_PREFIX = "vrSettings.controllerMap."
+
 -- [hand] = { stick = -1 | 0 | 1, down = { [button] = bool } } for every tracked hand; nil for a
 -- hand that is not tracked.
 local edges = {}
@@ -111,12 +123,119 @@ function VRCompanion:processControllerButtons()
     end
 end
 
--- Map unload: forget what was held.
+-- Map unload (and Motion Controllers off): forget what was held.
 function VRCompanion:resetControllerButtons()
+    edges = {}
+end
+
+-- ---- Mapping, persistence, console command ------------------------------------------------------
+
+local function findCaseInsensitive(list, wanted)
+    local low = string.lower(tostring(wanted))
+    for _, entry in ipairs(list) do
+        if string.lower(entry) == low then return entry end
+    end
+    return nil
+end
+
+-- The canonical input name when `input` can drive `action`, NO_INPUT for "none", otherwise nil.
+local function validInput(action, input)
+    if input == nil then return nil end
+    if string.lower(tostring(input)) == NO_INPUT then return NO_INPUT end
+    return findCaseInsensitive(ALLOWED_INPUTS[action], input)
+end
+
+-- Puts `action` on `input` (an input name, "none" to remove it, or nil for the default). False when
+-- the action or input is not one the module knows.
+function VRCompanion:setControllerMapping(action, input, save)
+    action = findCaseInsensitive(ACTIONS, action)
+    if action == nil then return false end
+    if input == nil then
+        self.controllerMap[action] = self.DEFAULT_CONTROLLER_MAP[action]
+    else
+        local valid = validInput(action, input)
+        if valid == nil then return false end
+        self.controllerMap[action] = (valid ~= NO_INPUT) and valid or false
+    end
+    if save and type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
+    return true
+end
+
+function VRCompanion:resetControllerMappings(save)
+    for _, action in ipairs(ACTIONS) do
+        self.controllerMap[action] = self.DEFAULT_CONTROLLER_MAP[action]
+    end
+    if save and type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
+end
+
+function VRCompanion:getControllerMappingReport()
+    local parts = {}
+    for _, action in ipairs(ACTIONS) do
+        parts[#parts + 1] = string.format("%s=%s", action, self.controllerMap[action] or NO_INPUT)
+    end
+    return table.concat(parts, ", ")
+end
+
+-- Called from saveMotionControllerSettings with the open settings file and the engine's setters.
+function VRCompanion:saveControllerMapSettings(xmlFile, xml)
+    if type(xml.setString) ~= "function" then return end
+    for _, action in ipairs(ACTIONS) do
+        xml.setString(xmlFile, SETTING_KEY_PREFIX .. action, self.controllerMap[action] or NO_INPUT)
+    end
+end
+
+-- Called from loadMotionControllerSettings with the open settings file and the engine's getters. A
+-- key that is missing or holds something that is not an input for that action keeps the current value.
+function VRCompanion:loadControllerMapSettings(xmlFile, xml)
+    if type(xml.getString) ~= "function" then return end
+    for _, action in ipairs(ACTIONS) do
+        local valid = validInput(action, xml.getString(xmlFile, SETTING_KEY_PREFIX .. action))
+        if valid ~= nil then
+            self.controllerMap[action] = (valid ~= NO_INPUT) and valid or false
+        end
+    end
+end
+
+function VRCompanion:consoleCommandControllerMap(action, input)
+    local usage = "Usage: vrControllerMap [snapTurn|recenter|hudToggle] [<input>|none|default] | vrControllerMap reset. "
+        .. "Inputs: thumbClick, buttonLower, buttonUpper, menu (snapTurn: thumbX)"
+    if action == nil or action == "" or string.lower(tostring(action)) == "status" then
+        return "Controller mappings: " .. self:getControllerMappingReport() .. ". " .. usage
+    end
+    if string.lower(tostring(action)) == "reset" then
+        self:resetControllerMappings(true)
+        return "Controller mappings reset (Saved): " .. self:getControllerMappingReport()
+    end
+    if input == nil or input == "" then
+        return usage
+    end
+    local wanted = input
+    if string.lower(tostring(input)) == "default" then wanted = nil end
+    if not self:setControllerMapping(action, wanted, true) then
+        return usage
+    end
+    print(string.format("[FS25_VR] Controller mappings: %s", self:getControllerMappingReport()))
+    return "Controller mappings: " .. self:getControllerMappingReport() .. " (Saved)"
+end
+
+function VRCompanion:registerControllerMapConsoleCommands()
+    if addConsoleCommand == nil then return end
+    addConsoleCommand("vrControllerMap", "Show, change or remove the Motion Controller button mappings (saved): vrControllerMap [snapTurn|recenter|hudToggle] [<input>|none|default] | reset", "consoleCommandControllerMap", self)
+end
+
+function VRCompanion:unregisterControllerMapConsoleCommands()
+    if removeConsoleCommand ~= nil then
+        removeConsoleCommand("vrControllerMap")
+    end
     edges = {}
 end
 
 -- Export to ControllerMap subsystem table
 VRCompanion.ControllerMap.processControllerButtons = function(self, ...) return VRCompanion.processControllerButtons(VRCompanion, ...) end
+VRCompanion.ControllerMap.consoleCommandControllerMap = function(self, ...) return VRCompanion.consoleCommandControllerMap(VRCompanion, ...) end
 
 return VRCompanion.ControllerMap
