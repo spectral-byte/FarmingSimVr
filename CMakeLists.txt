@@ -105,6 +105,8 @@ set(CORE_SOURCES
     src/openxr/openxr_dispatch.h
     src/openxr/openxr_cursor_overlay.h
     src/openxr/openxr_cursor_overlay.cpp
+    src/openxr/openxr_input.h
+    src/openxr/openxr_input.cpp
     src/openxr/openxr_manager.cpp
     src/openxr/openxr_manager.h
     src/proxy/system_dxgi.h
@@ -188,12 +190,23 @@ add_executable(fs25_vr_tests
     tests/test_thread_trace.cpp
     tests/test_openxr_cursor_overlay.cpp
     tests/test_openxr_manager.cpp
+    tests/test_openxr_motion_controllers.cpp
     tests/test_mirror_window_controller.cpp
     tests/test_dxgi_proxy.cpp
     tests/test_detour.cpp
     tests/test_vr_bridge.cpp
     tests/test_luau_interceptor.cpp
     tests/test_companion_mod.cpp
+    tests/test_motion_controllers.cpp
+    tests/test_pointer_ray.cpp
+    tests/test_pointer_handover.cpp
+    tests/test_haptics.cpp
+    tests/test_interactive_control_auto_on.cpp
+    tests/test_menu_pointer_panel.cpp
+    tests/test_menu_pointer.cpp
+    tests/test_pointer_hand_switch.cpp
+    tests/test_motion_controller_button_mappings.cpp
+    tests/test_menu_scroll_back.cpp
     tests/test_virtual_ngx_handle.cpp
     tests/test_dlss_evaluation.cpp
     tests/test_ngx_interceptor.cpp

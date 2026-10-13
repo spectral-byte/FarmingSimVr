@@ -709,6 +709,7 @@ function VRCompanion:onRecenterAction()
         if bridge ~= nil and type(bridge.recenter) == "function" then
             bridge.recenter()
         end
+        if type(self.resetMotionControllerMovement) == "function" then self:resetMotionControllerMovement() end
         if self.isMenuVisible then
             print("[FS25_VR] Menu Quad layer realigned directly in front of head pose.")
         end

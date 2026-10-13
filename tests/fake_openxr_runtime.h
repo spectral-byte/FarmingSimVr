@@ -1,6 +1,7 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include "fake_openxr_controllers.h"
 #include "fake_openxr_events.h"
 #include "fake_openxr_tracking.h"
 #include <cstring>
@@ -13,6 +14,7 @@ namespace fs25vr {
 class FakeOpenXrRuntime : public IOpenXrDispatch {
 public:
     FakeOpenXrTracking tracking;
+    FakeOpenXrControllers controllers{tracking};   // Motion Controllers: poses, inputs, recorded haptics
     FakeOpenXrEventQueue events;
 
     XrResult EnumerateInstanceExtensionProperties(const char*, uint32_t capacity, uint32_t* count, XrExtensionProperties* properties) override {
@@ -73,16 +75,65 @@ public:
     }
     XrResult BeginSession(XrSession, const XrSessionBeginInfo*) override { return XR_SUCCESS; }
     XrResult EndSession(XrSession) override { return XR_SUCCESS; }
-    XrResult DestroySession(XrSession) override { return XR_SUCCESS; }
+    XrResult DestroySession(XrSession) override {
+        controllers.OnSessionDestroyed();
+        return XR_SUCCESS;
+    }
     XrResult CreateReferenceSpace(XrSession, const XrReferenceSpaceCreateInfo* createInfo, XrSpace* space) override {
         return tracking.CreateReferenceSpace(createInfo, space);
     }
     XrResult DestroySpace(XrSpace space) override {
-        tracking.DestroySpace(space);
+        if (!controllers.DestroyActionSpace(space)) {
+            tracking.DestroySpace(space);
+        }
         return XR_SUCCESS;
     }
-    XrResult LocateSpace(XrSpace, XrSpace baseSpace, XrTime, XrSpaceLocation* location) override {
+    XrResult LocateSpace(XrSpace space, XrSpace baseSpace, XrTime time, XrSpaceLocation* location) override {
+        if (controllers.OwnsSpace(space)) {
+            return controllers.LocateActionSpace(space, baseSpace, time, location);
+        }
         return tracking.LocateSpace(baseSpace, location);
+    }
+
+    // ---- Motion Controllers ----
+    XrResult StringToPath(XrInstance, const char* pathString, XrPath* path) override {
+        return controllers.StringToPath(pathString, path);
+    }
+    XrResult CreateActionSet(XrInstance, const XrActionSetCreateInfo* info, XrActionSet* actionSet) override {
+        return controllers.CreateActionSet(info, actionSet);
+    }
+    XrResult DestroyActionSet(XrActionSet actionSet) override { return controllers.DestroyActionSet(actionSet); }
+    XrResult CreateAction(XrActionSet actionSet, const XrActionCreateInfo* info, XrAction* action) override {
+        return controllers.CreateAction(actionSet, info, action);
+    }
+    XrResult DestroyAction(XrAction) override { return XR_SUCCESS; }
+    XrResult SuggestInteractionProfileBindings(XrInstance, const XrInteractionProfileSuggestedBinding* suggested) override {
+        return controllers.SuggestInteractionProfileBindings(suggested);
+    }
+    XrResult AttachSessionActionSets(XrSession, const XrSessionActionSetsAttachInfo* info) override {
+        return controllers.AttachSessionActionSets(info);
+    }
+    XrResult CreateActionSpace(XrSession, const XrActionSpaceCreateInfo* info, XrSpace* space) override {
+        return controllers.CreateActionSpace(info, space);
+    }
+    XrResult SyncActions(XrSession, const XrActionsSyncInfo* info) override { return controllers.SyncActions(info); }
+    XrResult GetActionStateBoolean(XrSession, const XrActionStateGetInfo* info, XrActionStateBoolean* state) override {
+        return controllers.GetActionStateBoolean(info, state);
+    }
+    XrResult GetActionStateFloat(XrSession, const XrActionStateGetInfo* info, XrActionStateFloat* state) override {
+        return controllers.GetActionStateFloat(info, state);
+    }
+    XrResult GetActionStateVector2f(XrSession, const XrActionStateGetInfo* info, XrActionStateVector2f* state) override {
+        return controllers.GetActionStateVector2f(info, state);
+    }
+    XrResult GetActionStatePose(XrSession, const XrActionStateGetInfo* info, XrActionStatePose* state) override {
+        return controllers.GetActionStatePose(info, state);
+    }
+    XrResult ApplyHapticFeedback(XrSession, const XrHapticActionInfo* info, const XrHapticBaseHeader* feedback) override {
+        return controllers.ApplyHapticFeedback(info, feedback);
+    }
+    XrResult StopHapticFeedback(XrSession, const XrHapticActionInfo* info) override {
+        return controllers.StopHapticFeedback(info);
     }
     XrResult LocateViews(XrSession, const XrViewLocateInfo*, XrViewState* viewState, uint32_t capacity, uint32_t* count, XrView* views) override {
         return tracking.LocateViews(viewState, capacity, count, views);
@@ -129,13 +180,21 @@ public:
     XrResult EndFrame(XrSession, const XrFrameEndInfo*) override { return XR_SUCCESS; }
 };
 
+// Options for FakeTrackedHeadset that must be in place before the session is created.
+struct FakeTrackedHeadsetOptions {
+    // The runtime refuses the Motion Controller action set (head tracking still works).
+    bool refuseActionSet = false;
+};
+
 // An OpenXrManager running against a FakeOpenXrRuntime with its session started and tracking
-// spaces created, ready for the test to place the head and set eye FOVs.
+// spaces created, ready for the test to place the head and the hands and to set eye FOVs.
+// Hand ids: 0 = left, 1 = right.
 struct FakeTrackedHeadset {
     std::shared_ptr<FakeOpenXrRuntime> runtime = std::make_shared<FakeOpenXrRuntime>();
     std::shared_ptr<OpenXrManager> manager;
 
-    FakeTrackedHeadset() {
+    explicit FakeTrackedHeadset(const FakeTrackedHeadsetOptions& options = FakeTrackedHeadsetOptions()) {
+        runtime->controllers.RefuseActionSet(options.refuseActionSet);
         manager = std::make_shared<OpenXrManager>(runtime);
         bool ok = manager->Initialize() && manager->CreateSession() && manager->CreateTrackingSpaces();
         manager->PollEvents();  // consume READY so the session is running
@@ -147,6 +206,27 @@ struct FakeTrackedHeadset {
 
     void SetHeadPose(const HeadPose& pose) { runtime->tracking.SetHeadPose(pose); }
     void SetEyeFov(uint32_t eyeIndex, const XrFovf& fov) { runtime->tracking.SetEyeFov(eyeIndex, fov); }
+
+    // Places a hand's aim pose in the runtime's tracking origin (before Recenter re-bases it) and
+    // switches the controller on or off. Only position and orientation of `pose` are used.
+    void SetHandPose(uint32_t hand, const HeadPose& pose, bool tracked = true) {
+        auto& sim = runtime->controllers.hands[hand & 1];
+        sim.pose = FakeOpenXrTracking::ToXrPose(pose);
+        sim.tracked = tracked;
+    }
+    void SetHandTracked(uint32_t hand, bool tracked) { runtime->controllers.hands[hand & 1].tracked = tracked; }
+    void SetHandInputs(uint32_t hand, const FakeOpenXrControllers::Inputs& inputs) {
+        runtime->controllers.hands[hand & 1].inputs = inputs;
+    }
+    const std::vector<FakeOpenXrControllers::HapticPulse>& HapticPulses() const { return runtime->controllers.hapticPulses; }
+
+    // One game frame boundary: ends the frame in flight and begins the next, which syncs the
+    // actions and locates the hands at that frame's predicted display time, as the Injector does
+    // right after Present.
+    void NextFrame() {
+        manager->EndFrame();
+        manager->BeginFrame();
+    }
 };
 
 } // namespace fs25vr

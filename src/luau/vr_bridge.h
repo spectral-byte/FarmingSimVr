@@ -38,6 +38,19 @@ public:
 
     HeadPose GetHeadPose();
     HeadPose GetHeadPoseForEye(uint32_t eyeIndex);
+    // One Motion Controller's state (0 = left, 1 = right); untracked defaults without a runtime,
+    // when the runtime refused the action set, or for any other hand id. Does not touch the render-pose records.
+    HandState GetHandState(uint32_t hand);
+    // A short vibration on one hand (0 = left, 1 = right): `durationMs` long at `strength` (0..1).
+    // False when nothing played: no runtime, the action set was refused, or an unknown hand.
+    bool PulseHaptic(uint32_t hand, float durationMs, float strength);
+    // Where one hand's ray lands on the visible menu / 2D Floating Window Mode panel, in normalized
+    // panel coordinates (PanelHit). A miss when no panel is showing, the hand is untracked or there is
+    // no runtime. The Injector owns the panel pose and size, so the geometry stays here (ADR-0006, ADR-0008).
+    PanelHit GetPanelHit(uint32_t hand);
+    // Draws the menu cursor at (u, v) while the Pointer Ray has control, or gives it back to the desk
+    // mouse (active = false). Cleared whenever a panel appears or goes away.
+    void SetMenuCursor(bool active, float u, float v);
     void Recenter();
     EyeProjection GetEyeProjection(uint32_t eyeIndex = 0);
 
@@ -104,8 +117,12 @@ public:
     static int Lua_IsStereoActive(lua_State* L);
     static int Lua_RequiresAfrFallback(lua_State* L);
     static int Lua_GetHeadPose(lua_State* L);
+    static int Lua_GetHandState(lua_State* L);
+    static int Lua_PulseHaptic(lua_State* L);
     static int Lua_Recenter(lua_State* L);
     static int Lua_AlignMenuQuad(lua_State* L);
+    static int Lua_GetPanelHit(lua_State* L);
+    static int Lua_SetMenuCursor(lua_State* L);
     static int Lua_GetEyeProjection(lua_State* L);
     static int Lua_SetMenuVisible(lua_State* L);
     static int Lua_GetIsMenuVisible(lua_State* L);
@@ -142,6 +159,8 @@ public:
     static void PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex = -1);
     // In-place variants: write the same fields into the existing table at tableIndex (no allocation).
     static void FillPoseTable(lua_State* L, int tableIndex, const HeadPose& pose, int eyeIndex = -1);
+    static void PushHandStateTable(lua_State* L, const HandState& hand);
+    static void FillHandStateTable(lua_State* L, int tableIndex, const HandState& hand);
     static void FillEyeProjectionTable(lua_State* L, int tableIndex, const EyeProjection& proj, uint32_t eyeIndex);
 
     struct LuaFunctionEntry {
@@ -159,6 +178,8 @@ public:
         {"isStereoActive", &Lua_IsStereoActive},
         {"getRequiresAfrFallback", &Lua_RequiresAfrFallback},
         {"getHeadPose", &Lua_GetHeadPose},
+        {"getHandState", &Lua_GetHandState},
+        {"pulseHaptic", &Lua_PulseHaptic},
         {"recenter", &Lua_Recenter},
         {"getEyeProjection", &Lua_GetEyeProjection},
         {"getFrameParity", &Lua_GetFrameParity},
@@ -168,6 +189,8 @@ public:
         {"setMenuVisible", &Lua_SetMenuVisible},
         {"getIsMenuVisible", &Lua_GetIsMenuVisible},
         {"alignMenuQuad", &Lua_AlignMenuQuad},
+        {"getPanelHit", &Lua_GetPanelHit},
+        {"setMenuCursor", &Lua_SetMenuCursor},
         {"set2DViewActive", &Lua_Set2DViewActive},
         {"getIs2DViewActive", &Lua_GetIs2DViewActive},
         {"getRenderingMode", &Lua_GetRenderingMode},

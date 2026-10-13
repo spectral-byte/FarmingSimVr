@@ -6,7 +6,7 @@ The Interactive Control mod (`FS25_interactiveControl`, by VertexDezign) makes s
 **The Companion Mod wraps Interactive Control's Click Point functions itself, and switches that wrap off when the mod is missing or has changed. It does not depend on a hook from Interactive Control's authors.**
 - The wrap is installed only when `FS25_interactiveControl` is loaded and its Click Point class has the functions the wrap expects. Otherwise the Companion Mod logs one warning and leaves Interactive Control, and the rest of the Motion Controller support, untouched.
 - While the Pointer Hand is in use, the wrap selects Click Points from the Pointer Ray instead of the mouse, and the Pointer Hand's trigger runs Interactive Control's own execute path. Interactive Control keeps its networking, analog controls and icons.
-- Using the Pointer Hand in a cab switches Interactive Control on for that vehicle, and putting it down restores the state it had. The Companion Mod writes that synced state only at those two moments.
+- Using the Pointer Hand in a cab switches Interactive Control on for that vehicle, and putting it down restores the state it had. The Companion Mod writes that synced state only at those two moments, plus one more write each time the vehicle's camera changes, because Interactive Control switches itself off then and the wrap switches it on again. Never per frame.
 - Interactive Control is an optional companion: without it, the Pointer Ray still works in menus.
 
 ## Status

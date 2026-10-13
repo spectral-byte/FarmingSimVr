@@ -453,6 +453,14 @@ bool MirrorWindowController::ConstrainVirtualClipRectToPhysical(HWND hWnd, const
 void MirrorWindowController::UpdateMenuCursorState(IDXGISwapChain* swapChain, OpenXrManager* openXrManager) {
     if (!openXrManager) return;
 
+    // The Pointer Ray has control: the cursor is drawn where the ray lands on the panel, whatever the
+    // desk mouse is doing or which window has focus.
+    const PointerCursorOverride& pointer = openXrManager->GetPointerCursorOverride();
+    if (pointer.active) {
+        openXrManager->SetMenuCursorState({ true, pointer.u, pointer.v, MenuCursorState::kDefaultCursorSize });
+        return;
+    }
+
     HWND hWnd = m_gameHwnd;
     if (!hWnd && swapChain) {
         DXGI_SWAP_CHAIN_DESC desc{};
