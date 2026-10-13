@@ -27,7 +27,7 @@ Two parts work together:
 - **2D view toggle** between full VR and a floating virtual screen.
 - **Snap turn** (30°, 45° or 90°) on foot and in vehicles.
 - **Desktop mirror window** that stays unscaled whatever the headset resolution.
-- **Virtual Hands**: a gloved hand drawn where each Motion Controller is held. The trigger curls the index finger and the grip the other three.
+- **Virtual Hands**: a gloved hand drawn where each Motion Controller is held. The trigger curls the index finger and the grip the other three. The Pointer Ray starts at the index fingertip and runs along the finger.
 
 ## Installation
 
@@ -87,7 +87,7 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrHudSafeArea <horizontal> <vertical>` | Keep other HUD elements (warnings, notifications, other mods) inside the lens |
 | `vrMotionControllers <on\|off>` | Use Motion Controllers (default `on`, saved). `off` makes the mod ignore Motion Controller input |
 | `vrMotionControllerStatus` | Report each Motion Controller's tracked and in-use state and the Pointer Hand |
-| `vrPointerDiagnostics` | Report why the Pointer Ray may not select Click Points (ray placement, who controls the pointer, Interactive Control support; also each hand's aim pose and grip pose and whether they are tracked, and each Virtual Hand's state) |
+| `vrPointerDiagnostics` | Report why the Pointer Ray may not select Click Points (ray placement, who controls the pointer, Interactive Control support; also each hand's aim pose and grip pose and whether they are tracked, how far each index finger points from the aim direction, and each Virtual Hand's state) |
 | `vrVirtualHandsDiagnostics` | Report whether the Virtual Hands (gloved hands drawn where the Motion Controllers are held) are available, and each hand's state with the reason when it is hidden |
 | `vrPointerCone <degrees>` | How wide a cone around the Pointer Ray selects the nearest Interactive Control Click Point (default `5`, saved) |
 
