@@ -63,6 +63,10 @@
 --     VRCompanion.pointerConeDegrees               saved by `vrPointerCone <degrees>` (default 5)
 --     VRCompanion:draw()                           the line and dot, drawn from the update's end points
 --
+--   Haptics (ticket #76; VRBridge.pulseHaptic(hand, durationMs, strength) -> boolean)
+--     VRCompanion:pulsePointerHand(durationMs, strength) -> boolean   Pointer Hand only; false when off
+--     VRCompanion:onClickPointEvent(kind, clickPoint)   "selected" (non-nil point) and "clicked" pulse
+--
 --   Time: every time in this module is VRCompanion:getCurrentTimeMs(), i.e. the global g_time in
 --   milliseconds (a wall clock only when g_time is nil). Tests drive it by assigning _G.g_time.
 --
@@ -508,6 +512,39 @@ end
 function VRCompanion:isPointerTriggerConsumed()
     local hand = state.pointerHand
     return hand ~= nil and state.triggerConsumed[hand] == true
+end
+
+-- ---- Haptic pulses on the Pointer Hand (ticket #76) -----------------------------------------------
+
+-- Pulse lengths (ms) and strengths (0..1): a light tick when the ray lands on a different Click Point,
+-- a firmer one for a click so the two can be told apart by feel.
+VRCompanion.HAPTIC_SELECT_MS = 25
+VRCompanion.HAPTIC_SELECT_STRENGTH = 0.25
+VRCompanion.HAPTIC_CLICK_MS = 45
+VRCompanion.HAPTIC_CLICK_STRENGTH = 0.6
+
+-- Vibrates the Pointer Hand (never the other hand). Nothing happens while Motion Controllers are off,
+-- without a Pointer Hand, or when the Injector has no haptics call or the runtime refuses it.
+function VRCompanion:pulsePointerHand(durationMs, strength)
+    local hand = state.pointerHand
+    if hand == nil or self.motionControllersEnabled == false then return false end
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge == nil or type(bridge.pulseHaptic) ~= "function" then return false end
+    local ok, played = pcall(bridge.pulseHaptic, hand, durationMs, strength)
+    return ok and played == true
+end
+
+-- Interactive Control's Click Point events (see VRCompanionInteractiveControl.lua): "selected" when the
+-- ray lands on a different Click Point (clickPoint is nil when it left every one: silent), "clicked"
+-- for each click that was executed.
+function VRCompanion:onClickPointEvent(kind, clickPoint)
+    if kind == "selected" then
+        if clickPoint ~= nil then
+            self:pulsePointerHand(self.HAPTIC_SELECT_MS, self.HAPTIC_SELECT_STRENGTH)
+        end
+    elseif kind == "clicked" then
+        self:pulsePointerHand(self.HAPTIC_CLICK_MS, self.HAPTIC_CLICK_STRENGTH)
+    end
 end
 
 -- A line from the hand with a dot where it lands, drawn with the engine's debug drawing from the end
