@@ -7,6 +7,8 @@
 
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
+#include <array>
+#include <cmath>
 #include <map>
 #include <regex>
 #include <sstream>
@@ -781,7 +783,7 @@ TEST_F(CompanionModTest, LettingGoRestoresTheModelsRelaxedPoseAndTheThumbNeverMo
         local hand = StubModel.hands().right
         for segment = 1, 3 do
             local x, y, z, w = getQuaternion(StubModel.joint(hand, 'index' .. segment))
-            assert(math.abs(x) > 0.1 and math.abs(y) + math.abs(z) > 0.01 and w < 0.999, "the rest pose of index" .. segment .. " is a bent, twisted one")
+            assert(math.abs(x) > 0.02 and math.abs(y) + math.abs(z) > 0.01 and w < 0.9999, "the rest pose of index" .. segment .. " is a bent, twisted one")
         end
         for _, finger in ipairs(FINGERS) do assertStill('right', finger, 'open hand') end
         _G.thumbRest = { getQuaternion(StubModel.joint(hand, 'thumb2')) }
@@ -943,6 +945,74 @@ std::map<std::string, std::string> TransformGroupParents(const std::string& xml)
     return parents;
 }
 
+// The world position of every bone of an .i3d's scene, composed the way the engine composes node transforms:
+// translation and rotation in degrees (Euler, R = Rz * Ry * Rx when zyx is true, the convention the GIANTS
+// exporter writes, else R = Ry * Rx * Rz) of each TransformGroup below its parent. The scene's first group (the
+// hand's root) is the identity. The skinned mesh's bind pose is this composed skeleton (the .shapes file holds
+// no bind matrices), so it is the skeleton the mesh was modelled around or the hand is distorted in the game.
+// extraXDegrees turns the named bones further about their own X axis (a finger curl). Besides each bone's position the
+// result holds the point 0.25 units along its -Z axis (the way the bones run) under "<bone>@end".
+std::map<std::string, std::array<double, 3>> ComposedBonePositions(const std::string& xml, bool zyx,
+                                                                   const std::map<std::string, double>& extraXDegrees = {}) {
+    using Mat = std::array<double, 9>;
+    const auto multiply = [](const Mat& a, const Mat& b) {
+        Mat r{};
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                for (int k = 0; k < 3; ++k) r[3 * i + j] += a[3 * i + k] * b[3 * k + j];
+        return r;
+    };
+    const auto rotation = [](char axis, double degrees) {
+        const double a = degrees * 3.14159265358979323846 / 180.0, c = std::cos(a), s = std::sin(a);
+        if (axis == 'x') return Mat{ 1, 0, 0, 0, c, -s, 0, s, c };
+        if (axis == 'y') return Mat{ c, 0, s, 0, 1, 0, -s, 0, c };
+        return Mat{ c, -s, 0, s, c, 0, 0, 0, 1 };
+    };
+    const auto numbers = [](const std::string& text) {
+        std::array<double, 3> v{};
+        std::istringstream in(text);
+        in >> v[0] >> v[1] >> v[2];
+        return v;
+    };
+    struct Frame { Mat rotation; std::array<double, 3> position; };
+    std::map<std::string, std::array<double, 3>> positions;
+    std::vector<Frame> open;
+    const std::regex tag(R"re(<TransformGroup\s+([^>]*?)(/?)>|</TransformGroup>)re");
+    const std::regex attribute(R"re((\w+)="([^"]*)")re");
+    for (auto it = std::sregex_iterator(xml.begin(), xml.end(), tag); it != std::sregex_iterator(); ++it) {
+        if (!(*it)[1].matched) {
+            if (!open.empty()) open.pop_back();
+            continue;
+        }
+        std::map<std::string, std::string> attributes;
+        const std::string attributeText = (*it)[1];
+        for (auto a = std::sregex_iterator(attributeText.begin(), attributeText.end(), attribute); a != std::sregex_iterator(); ++a)
+            attributes[(*a)[1]] = (*a)[2];
+        const auto t = numbers(attributes.count("translation") ? attributes["translation"] : "0 0 0");
+        const auto r = numbers(attributes.count("rotation") ? attributes["rotation"] : "0 0 0");
+        Mat local = zyx ? multiply(multiply(rotation('z', r[2]), rotation('y', r[1])), rotation('x', r[0]))
+                        : multiply(multiply(rotation('y', r[1]), rotation('x', r[0])), rotation('z', r[2]));
+        const auto extra = extraXDegrees.find(attributes["name"]);
+        if (extra != extraXDegrees.end()) local = multiply(local, rotation('x', extra->second));
+        Frame frame{ local, t };
+        if (!open.empty()) {
+            const Frame& parent = open.back();
+            for (int i = 0; i < 3; ++i)
+                frame.position[i] = parent.position[i] + parent.rotation[3 * i] * t[0] + parent.rotation[3 * i + 1] * t[1] + parent.rotation[3 * i + 2] * t[2];
+            frame.rotation = multiply(parent.rotation, local);
+        }
+        positions[attributes["name"]] = frame.position;
+        positions[attributes["name"] + "@end"] = { frame.position[0] - 0.25 * frame.rotation[2], frame.position[1] - 0.25 * frame.rotation[5],
+                                                   frame.position[2] - 0.25 * frame.rotation[8] };
+        if ((*it)[2].str() != "/") open.push_back(frame);
+    }
+    return positions;
+}
+
+double Distance(const std::array<double, 3>& a, const std::array<double, 3>& b) {
+    return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+}
+
 } // namespace
 
 TEST_F(CompanionModTest, TheJointTableNamesThreeCurlJointsBelowTheBaseBoneOfEveryFingerInTheShippedModel) {
@@ -980,6 +1050,103 @@ TEST_F(CompanionModTest, TheJointTableNamesThreeCurlJointsBelowTheBaseBoneOfEver
     }
     EXPECT_EQ(fingerNames, (std::vector<std::string>{ "index", "middle", "ring", "little" })) << "the thumb is never curled";
     EXPECT_EQ(EvalLua(L, "VRCompanion.VIRTUAL_HAND_FINGERS[1].input .. VRCompanion.VIRTUAL_HAND_FINGERS[2].input"), "triggergrip");
+}
+
+// The Gloved Hand's bones as the Blender armature has them at rest ("Gloved Hand LP.blend": each bone's head, in the
+// exporter's Y-up axes x, z, -y), in the mesh's own units. The model's bone transforms must compose to these.
+TEST_F(CompanionModTest, TheShippedModelsBoneTransformsComposeToTheSkeletonTheMeshWasModelledAround) {
+    const std::string model = ReadFile("mods/FS25_VRCompanion/models/VirtualHandLeft.i3d");
+    ASSERT_FALSE(model.empty());
+    const std::map<std::string, std::array<double, 3>> armature = {
+        { "Wrist", { 0.0630, 0.0551, 0.9691 } },        { "Hand", { 0.0630, 0.0551, 0.5246 } },
+        { "Thumb", { 0.0695, 0.0551, -0.1343 } },       { "Lower", { 0.5854, 0.0551, 0.0182 } },
+        { "Middle", { 0.7947, 0.0111, -0.1689 } },      { "Top", { 0.9515, -0.0800, -0.4387 } },
+        { "Index Finger", { 0.0695, 0.0551, -0.1343 } }, { "Lower.001", { 0.3777, 0.0551, -0.6210 } },
+        { "Middle.001", { 0.4523, 0.0218, -0.9363 } },  { "Top.001", { 0.5042, -0.0903, -1.2298 } },
+        { "Middle Finger", { 0.0695, 0.0551, -0.1343 } }, { "Lower.002", { 0.1051, 0.0551, -0.7313 } },
+        { "Middle.002", { 0.1343, 0.0317, -1.0804 } },  { "Top.002", { 0.1603, -0.0746, -1.3587 } },
+        { "Ring Finger", { 0.0695, 0.0551, -0.1343 } }, { "Lower.003", { -0.1674, 0.0551, -0.6794 } },
+        { "Middle.003", { -0.1902, 0.0418, -0.9521 } }, { "Top.003", { -0.2127, -0.0885, -1.2401 } },
+        { "Pinky", { 0.0695, 0.0551, -0.1343 } },       { "Lower.004", { -0.3816, 0.0551, -0.6307 } },
+        { "Middle.004", { -0.4387, 0.0330, -0.7780 } }, { "Top.004", { -0.5405, -0.0757, -0.9996 } },
+    };
+
+    for (const bool zyx : { true, false }) {
+        SCOPED_TRACE(zyx ? "Euler R = Rz * Ry * Rx (the exporter's convention)" : "Euler R = Ry * Rx * Rz");
+        const auto composed = ComposedBonePositions(model, zyx);
+        for (const auto& [name, want] : armature) {
+            ASSERT_TRUE(composed.count(name)) << name << " is a bone of the model";
+            // the other Euler order is only a few hundredths of a degree off for these small bends
+            EXPECT_LT(Distance(composed.at(name), want), zyx ? 0.005 : 0.02)
+                << name << " composes to (" << composed.at(name)[0] << ", " << composed.at(name)[1] << ", " << composed.at(name)[2]
+                << "), the armature has it at (" << want[0] << ", " << want[1] << ", " << want[2] << ")";
+        }
+    }
+}
+
+TEST_F(CompanionModTest, TheShippedModelsWristToFingertipChainIsAsLongAsTheMeshAndNoFingerSpirals) {
+    const std::string model = ReadFile("mods/FS25_VRCompanion/models/VirtualHandLeft.i3d");
+    ASSERT_FALSE(model.empty());
+    const auto bones = ComposedBonePositions(model, true);
+    // 2.25 and 2.33 units; times the 0.0875 m per unit the Companion Mod applies, 0.197 and 0.204 m. The first export
+    // of the model composed to 0.46 units (0.040 m): the engine's skeleton, a fifth of the mesh.
+    EXPECT_NEAR(Distance(bones.at("Wrist"), bones.at("Top.001")), 2.25, 0.05);
+    EXPECT_NEAR(Distance(bones.at("Wrist"), bones.at("Top.002")), 2.33, 0.05);
+    const std::vector<std::vector<std::string>> fingers = {
+        { "Index Finger", "Lower.001", "Middle.001", "Top.001" }, { "Middle Finger", "Lower.002", "Middle.002", "Top.002" },
+        { "Ring Finger", "Lower.003", "Middle.003", "Top.003" },  { "Pinky", "Lower.004", "Middle.004", "Top.004" },
+        { "Thumb", "Lower", "Middle", "Top" },
+    };
+    for (const auto& finger : fingers) {
+        double along = 0;
+        for (size_t joint = 1; joint < finger.size(); ++joint) along += Distance(bones.at(finger[joint - 1]), bones.at(finger[joint]));
+        // a finger runs about straight (the thumb curves most, to 0.82): its ends are nearly as far apart as the joints along it, unlike a heap of 90 degree turns (0.3 to 0.5)
+        EXPECT_GT(Distance(bones.at(finger.front()), bones.at(finger.back())), 0.8 * along) << finger.front() << " finger";
+        EXPECT_GT(along, 0.7) << finger.front() << " finger is a real finger length";
+    }
+}
+
+// The curl the mod applies (VRCompanion.FINGER_CURL_DIRECTION * FINGER_CURL_DEGREES about each joint's own X), played
+// on the shipped model's composed bones. The model's axes: fingers run along -Z, the palm faces -Y. The knuckle
+// line of the fingers is 0.17 units behind the palm plane (the palm surface is at y -0.115, the knuckles at 0.055).
+TEST_F(CompanionModTest, AFullCurlOfTheShippedModelFoldsEveryFingerTowardThePalmAndRestsItsTipOnIt) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    const std::string model = ReadFile("mods/FS25_VRCompanion/models/VirtualHandLeft.i3d");
+    ASSERT_FALSE(model.empty());
+    const double direction = std::stod(EvalLua(L, "VRCompanion.FINGER_CURL_DIRECTION"));
+    std::array<double, 3> degrees{};
+    for (int segment = 0; segment < 3; ++segment) degrees[segment] = std::stod(EvalLua(L, "VRCompanion.FINGER_CURL_DEGREES[" + std::to_string(segment + 1) + "]"));
+
+    const std::vector<std::vector<std::string>> fingers = {
+        { "Lower.001", "Middle.001", "Top.001" }, { "Lower.002", "Middle.002", "Top.002" },
+        { "Lower.003", "Middle.003", "Top.003" }, { "Lower.004", "Middle.004", "Top.004" },
+    };
+    const auto rest = ComposedBonePositions(model, true);
+    for (const auto& finger : fingers) {
+        SCOPED_TRACE(finger[0]);
+        std::map<std::string, double> half, full;
+        for (int segment = 0; segment < 3; ++segment) {
+            full[finger[segment]] = direction * degrees[segment];
+            half[finger[segment]] = 0.5 * direction * degrees[segment];
+        }
+        const auto curled = ComposedBonePositions(model, true, full);
+        const auto partly = ComposedBonePositions(model, true, half);
+        const double knuckleY = rest.at(finger[0])[1], knuckleZ = rest.at(finger[0])[2];
+        const auto inFront = [&](const std::map<std::string, std::array<double, 3>>& pose, const std::string& point) { return knuckleY - pose.at(point)[1]; };
+
+        // toward the palm: the middle and the top joint swing to the palm side (-Y) as the curl grows, the most at full
+        EXPECT_GT(inFront(partly, finger[1]), inFront(rest, finger[1]) + 0.05) << "the middle joint at half curl";
+        EXPECT_GT(inFront(curled, finger[1]), inFront(partly, finger[1])) << "the middle joint at full curl";
+        EXPECT_GT(inFront(curled, finger[2]), inFront(rest, finger[2]) + 0.1) << "the top joint";
+        // and back toward the wrist, not out past the fingertips
+        EXPECT_GT(curled.at(finger[2] + "@end")[2], knuckleZ + 0.2) << "the fingertip folds back over the palm";
+        // the tip rests on the palm: 0.05 to 0.45 units in front of the knuckle line (the palm plane is at 0.17), not
+        // through the back of the hand (an earlier 80, 100, 65 degrees ended the index tip 0.03 behind the line)
+        EXPECT_GT(inFront(curled, finger[2] + "@end"), 0.05) << "the tip does not go through the palm";
+        EXPECT_LT(inFront(curled, finger[2] + "@end"), 0.45) << "the tip does not stick out of the palm";
+    }
 }
 
 TEST_F(CompanionModTest, PullingTheTriggerAndSqueezingTheGripLeavesThePointerRayOriginAndTheClickAsTheyWere) {

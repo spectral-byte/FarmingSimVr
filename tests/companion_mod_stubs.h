@@ -201,8 +201,9 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 //                                         this model (as for the shipped one) is a NEGATIVE rotation about the joint's own
 //                                         X axis; errors when the joint turned about any other axis
 // Every joint of the stub model rests in a slightly bent pose that is NOT the identity rotation (each segment a
-// different X angle around the model's -90 degree bone-axis turn, plus a small Y and Z twist), so a curl that
-// ignored the model's rest pose would show.
+// different X angle, plus a small Y and Z twist), so a curl that ignored the model's rest pose would show. Like the
+// shipped model's, the stub's joint rotations are small bends relative to their parent: a bone's rotation is NOT a
+// 90 degree turn of the bone axis (the GIANTS exporter wrote those, and the bones composed to a heap).
 // Nodes are visible, unscaled and (for shapes) casting shadows by default, like freshly loaded ones.
 inline constexpr const char* kStubModelLoading = R"luau(
     StubModel = { fileExists = true, failLoad = false, missingJoints = {}, loads = {}, clones = {}, deleted = {} }
@@ -286,6 +287,9 @@ inline constexpr const char* kStubModelLoading = R"luau(
     }
     local STUB_MESH_BOUNDS = { min = { -0.6331, -0.2843, -1.6223 }, max = { 1.0737, 0.3675, 1.1760 } }  -- glove and arm stub
     local function sub3(a, b) return a[1] - b[1], a[2] - b[2], a[3] - b[3] end
+    -- the rest flexion about X of the three curl joints of a finger, relative to their parent, in radians (the shipped
+    -- index finger: -5.9, -14.8 and -21.2 degrees)
+    local STUB_REST_FLEX = { -0.10, -0.26, -0.37 }
 
     local function buildHand()
         local fileRoot = StubScene.newNode("virtualHandFile", 0)
@@ -304,12 +308,13 @@ inline constexpr const char* kStubModelLoading = R"luau(
             for index = 1, 3 do
                 local name = STUB_FINGERS[finger][index + 1]
                 if not StubModel.missingJoints[name] then
-                    -- the model's relaxed pose, like the shipped one's: the bone-axis turn of -90 degrees about X
-                    -- (every bone has it), flexed a little more at each segment (a NEGATIVE turn about X is toward
-                    -- the palm in this model), with a small twist. The first joint sits at the finger's knuckle.
+                    -- the model's relaxed pose, like the shipped one's: each joint flexed a little relative to its
+                    -- parent (a NEGATIVE turn about X is toward the palm in this model; the shipped file has -3 to
+                    -- -9, -15 to -21 and -14 to -21 degrees for the three segments), with a small twist. The
+                    -- bones run along their local -Z, as the shipped ones do. The first joint sits at the finger's knuckle.
                     local x, y, z = 0, 0, 0
                     if index == 1 then x, y, z = sub3(STUB_KNUCKLE[finger], STUB_FINGER_BASE) end
-                    parent = StubScene.newNode(name, parent, x, y, z, -1.5708 - 0.1 * index, 0.1, -0.05)
+                    parent = StubScene.newNode(name, parent, x, y, z, STUB_REST_FLEX[index], 0.1, -0.05)
                     local n = nodes[parent]
                     n.restQx, n.restQy, n.restQz, n.restQw = n.qx, n.qy, n.qz, n.qw
                 end
