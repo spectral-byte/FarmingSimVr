@@ -22,6 +22,7 @@ public:
     // Action names inside the action set (the fake runtime identifies actions by these).
     static constexpr const char* kActionSetName = "fs25vr_input";
     static constexpr const char* kAimPoseAction = "aim_pose";
+    static constexpr const char* kGripPoseAction = "grip_pose";
     static constexpr const char* kTriggerAction = "trigger";
     static constexpr const char* kGripAction = "grip";
     static constexpr const char* kThumbstickAction = "thumbstick";
@@ -66,6 +67,7 @@ private:
     XrActionSet m_actionSet = XR_NULL_HANDLE;
     std::array<XrPath, kHandCount> m_handPaths{};
     XrAction m_aimPoseAction = XR_NULL_HANDLE;
+    XrAction m_gripPoseAction = XR_NULL_HANDLE;   // stays null when the runtime refuses it: grip pose untracked
     XrAction m_triggerAction = XR_NULL_HANDLE;
     XrAction m_gripAction = XR_NULL_HANDLE;
     XrAction m_thumbstickAction = XR_NULL_HANDLE;
@@ -81,6 +83,7 @@ private:
 
     bool CreateAction(IOpenXrDispatch& dispatch, const char* name, const char* localizedName,
                       XrActionType type, XrAction* out);
+    void CreateGripPoseAction(IOpenXrDispatch& dispatch);
     bool SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance);
     void ResetHands();
     void FailCreate(IOpenXrDispatch& dispatch, const char* step, XrResult result);

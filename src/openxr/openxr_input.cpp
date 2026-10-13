@@ -54,10 +54,28 @@ bool OpenXrInput::CreateAction(IOpenXrDispatch& dispatch, const char* name, cons
     return true;
 }
 
+// The grip pose is optional: a runtime that refuses it leaves the aim pose and every other input
+// working, and the grip pose then reports untracked (the Virtual Hand has nothing to be drawn at).
+void OpenXrInput::CreateGripPoseAction(IOpenXrDispatch& dispatch) {
+    XrActionCreateInfo info{XR_TYPE_ACTION_CREATE_INFO};
+    info.actionType = XR_ACTION_TYPE_POSE_INPUT;
+    strncpy_s(info.actionName, kGripPoseAction, XR_MAX_ACTION_NAME_SIZE - 1);
+    strncpy_s(info.localizedActionName, "Grip pose", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
+    info.countSubactionPaths = kHandCount;
+    info.subactionPaths = m_handPaths.data();
+    const XrResult res = dispatch.CreateAction(m_actionSet, &info, &m_gripPoseAction);
+    if (XR_FAILED(res)) {
+        m_gripPoseAction = XR_NULL_HANDLE;
+        LogWarn("OpenXrInput: creating the grip pose action failed (result " + std::to_string(res) +
+                "). The grip pose reports untracked; the aim pose and the other inputs are unchanged.");
+    }
+}
+
 bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance) {
     const std::vector<Profile> profiles = {
         { "/interaction_profiles/oculus/touch_controller", {
             { m_aimPoseAction, "input/aim/pose", "input/aim/pose" },
+            { m_gripPoseAction, "input/grip/pose", "input/grip/pose" },
             { m_triggerAction, "input/trigger/value", "input/trigger/value" },
             { m_gripAction, "input/squeeze/value", "input/squeeze/value" },
             { m_thumbstickAction, "input/thumbstick", "input/thumbstick" },
@@ -68,6 +86,7 @@ bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance
             { m_hapticAction, "output/haptic", "output/haptic" } } },
         { "/interaction_profiles/valve/index_controller", {
             { m_aimPoseAction, "input/aim/pose", "input/aim/pose" },
+            { m_gripPoseAction, "input/grip/pose", "input/grip/pose" },
             { m_triggerAction, "input/trigger/value", "input/trigger/value" },
             { m_gripAction, "input/squeeze/value", "input/squeeze/value" },
             { m_thumbstickAction, "input/thumbstick", "input/thumbstick" },
@@ -77,6 +96,7 @@ bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance
             { m_hapticAction, "output/haptic", "output/haptic" } } },
         { "/interaction_profiles/htc/vive_controller", {
             { m_aimPoseAction, "input/aim/pose", "input/aim/pose" },
+            { m_gripPoseAction, "input/grip/pose", "input/grip/pose" },
             { m_triggerAction, "input/trigger/value", "input/trigger/value" },
             { m_gripAction, "input/squeeze/click", "input/squeeze/click" },
             { m_thumbstickAction, "input/trackpad", "input/trackpad" },
@@ -85,6 +105,7 @@ bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance
             { m_hapticAction, "output/haptic", "output/haptic" } } },
         { "/interaction_profiles/khr/simple_controller", {
             { m_aimPoseAction, "input/aim/pose", "input/aim/pose" },
+            { m_gripPoseAction, "input/grip/pose", "input/grip/pose" },
             { m_triggerAction, "input/select/click", "input/select/click" },
             { m_menuAction, "input/menu/click", "input/menu/click" },
             { m_hapticAction, "output/haptic", "output/haptic" } } },
@@ -97,6 +118,7 @@ bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance
         XrResult res = dispatch.StringToPath(instance, profile.path, &profilePath);
         std::vector<XrActionSuggestedBinding> suggested;
         for (const HandBinding& binding : profile.bindings) {
+            if (binding.action == XR_NULL_HANDLE) continue;  // an optional action the runtime refused
             const char* suffixes[kHandCount] = { binding.leftSuffix, binding.rightSuffix };
             for (uint32_t hand = 0; hand < kHandCount && XR_SUCCEEDED(res); ++hand) {
                 if (!suffixes[hand]) continue;
@@ -165,6 +187,7 @@ bool OpenXrInput::Create(IOpenXrDispatch& dispatch, XrInstance instance, XrSessi
         !CreateAction(dispatch, kHapticAction, "Haptic", XR_ACTION_TYPE_VIBRATION_OUTPUT, &m_hapticAction)) {
         return false;
     }
+    CreateGripPoseAction(dispatch);
 
     if (!SuggestBindings(dispatch, instance)) return false;
 
@@ -309,7 +332,7 @@ void OpenXrInput::Destroy(IOpenXrDispatch& dispatch) {
         dispatch.DestroyActionSet(m_actionSet);
         m_actionSet = XR_NULL_HANDLE;
     }
-    m_aimPoseAction = m_triggerAction = m_gripAction = m_thumbstickAction = XR_NULL_HANDLE;
+    m_aimPoseAction = m_gripPoseAction = m_triggerAction =m_gripAction = m_thumbstickAction = XR_NULL_HANDLE;
     m_thumbstickClickAction = m_buttonLowerAction = m_buttonUpperAction = m_menuAction = XR_NULL_HANDLE;
     m_hapticAction = XR_NULL_HANDLE;
     m_handPaths = {};

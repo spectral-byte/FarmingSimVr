@@ -61,6 +61,7 @@ TEST(OpenXrManagerTest, ActionSetHoldsRawPerHandInputsAndAHapticOutput) {
     const auto& controllers = headset.runtime->controllers;
 
     EXPECT_TRUE(HasAction(controllers, "aim_pose", XR_ACTION_TYPE_POSE_INPUT));
+    EXPECT_TRUE(HasAction(controllers, "grip_pose", XR_ACTION_TYPE_POSE_INPUT));
     EXPECT_TRUE(HasAction(controllers, "trigger", XR_ACTION_TYPE_FLOAT_INPUT));
     EXPECT_TRUE(HasAction(controllers, "grip", XR_ACTION_TYPE_FLOAT_INPUT));
     EXPECT_TRUE(HasAction(controllers, "thumbstick", XR_ACTION_TYPE_VECTOR2F_INPUT));
@@ -69,7 +70,7 @@ TEST(OpenXrManagerTest, ActionSetHoldsRawPerHandInputsAndAHapticOutput) {
     EXPECT_TRUE(HasAction(controllers, "button_upper", XR_ACTION_TYPE_BOOLEAN_INPUT));
     EXPECT_TRUE(HasAction(controllers, "menu", XR_ACTION_TYPE_BOOLEAN_INPUT));
     EXPECT_TRUE(HasAction(controllers, "haptic", XR_ACTION_TYPE_VIBRATION_OUTPUT));
-    EXPECT_EQ(controllers.actions.size(), 9u) << "only raw inputs and the haptic output belong in the set";
+    EXPECT_EQ(controllers.actions.size(), 10u) << "only raw inputs and the haptic output belong in the set";
 }
 
 TEST(OpenXrManagerTest, SuggestedBindingsCoverTouchIndexViveAndKhronosSimpleControllers) {
@@ -81,9 +82,11 @@ TEST(OpenXrManagerTest, SuggestedBindingsCoverTouchIndexViveAndKhronosSimpleCont
                                  "/interaction_profiles/htc/vive_controller",
                                  "/interaction_profiles/khr/simple_controller" }) {
         EXPECT_EQ(controllers.suggestedBindings.count(profile), 1u) << profile;
-        // Every profile aims with its hands and vibrates them.
+        // Every profile aims with its hands, shows them (grip pose) and vibrates them.
         EXPECT_EQ(controllers.BindingsFor(profile, "aim_pose"),
                   (std::vector<std::string>{ "/user/hand/left/input/aim/pose", "/user/hand/right/input/aim/pose" })) << profile;
+        EXPECT_EQ(controllers.BindingsFor(profile, "grip_pose"),
+                  (std::vector<std::string>{ "/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose" })) << profile;
         EXPECT_EQ(controllers.BindingsFor(profile, "haptic"),
                   (std::vector<std::string>{ "/user/hand/left/output/haptic", "/user/hand/right/output/haptic" })) << profile;
     }
