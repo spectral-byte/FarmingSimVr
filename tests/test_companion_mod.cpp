@@ -1,6 +1,7 @@
 #include "companion_mod_fixture.h"
 #include "ngx/ngx_interceptor.h"
 #include <algorithm>
+#include <filesystem>
 #include <map>
 #include <regex>
 #include <set>
@@ -78,6 +79,37 @@ TEST_F(CompanionModTest, PackagedModZipContainsModDescIconAndEveryModuleFile) {
         EXPECT_EQ(file.find('/', 4), std::string::npos) << file;
         EXPECT_EQ(file.substr(file.size() - 4), ".lua") << file;
     }
+}
+
+TEST_F(CompanionModTest, EveryScriptThatZipsTheModShipsTheVirtualHandModelItsShapesAndItsAttribution) {
+    // The Virtual Hand model is an asset, not a script: the zip must carry models/ or the Companion Mod
+    // starts without Virtual Hands in the player's game.
+    for (const char* scriptPath : { "scripts/deploy.ps1", "scripts/package_release.ps1" }) {
+        SCOPED_TRACE(scriptPath);
+        std::istringstream lines(ReadFile(scriptPath));
+        std::string line;
+        int zipLines = 0;
+        while (std::getline(lines, line)) {
+            if (line.find("tar.exe") == std::string::npos || line.find("modDesc.xml") == std::string::npos) continue;
+            ++zipLines;
+            EXPECT_NE(line.find("models/*"), std::string::npos) << line;
+        }
+        EXPECT_EQ(zipLines, 1) << "exactly one command zips the Companion Mod";
+    }
+#ifdef PROJECT_ROOT_DIR
+    const std::filesystem::path models = std::filesystem::path(PROJECT_ROOT_DIR) / "mods" / "FS25_VRCompanion" / "models";
+    for (const char* file : { "VirtualHandLeft.i3d", "VirtualHandLeft.i3d.shapes", "VirtualHand_ATTRIBUTION.txt" }) {
+        EXPECT_TRUE(std::filesystem::is_regular_file(models / file)) << file << " is part of the mod";
+    }
+#endif
+}
+
+TEST_F(CompanionModTest, TheVirtualHandModelRecordsItsSourceAuthorAndLicense) {
+    const std::string text = ReadFile("mods/FS25_VRCompanion/models/VirtualHand_ATTRIBUTION.txt");
+    ASSERT_FALSE(text.empty());
+    EXPECT_NE(text.find("https://poly.pizza/m/MTB4egc4Vh"), std::string::npos) << "source URL";
+    EXPECT_NE(text.find("J-Toastie"), std::string::npos) << "author";
+    EXPECT_NE(text.find("Creative Commons Attribution"), std::string::npos) << "license";
 }
 
 TEST_F(CompanionModTest, ReleaseBundleAndModZipShipTheGplLicense) {

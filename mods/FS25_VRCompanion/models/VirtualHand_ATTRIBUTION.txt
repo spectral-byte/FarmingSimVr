@@ -1,0 +1,30 @@
+Virtual Hand model: source, author and license
+==============================================
+
+Files: VirtualHandLeft.i3d, VirtualHandLeft.i3d.shapes
+
+Title:    Gloved Hand
+Author:   J-Toastie
+Source:   https://poly.pizza/m/MTB4egc4Vh
+License:  Creative Commons Attribution (CC BY). Poly Pizza lists the license
+          without a version number, so none is claimed here.
+
+Required attribution (keep this line wherever the model is redistributed):
+
+    "Gloved Hand" by J-Toastie (https://poly.pizza/m/MTB4egc4Vh),
+    licensed under Creative Commons Attribution (CC BY).
+
+Changes made for FS25 VR (CC BY asks for changes to be indicated):
+
+  * Exported to .i3d with the GIANTS Blender exporter. The model is a LEFT
+    hand. The Companion Mod draws the left Virtual Hand as it is and the
+    right Virtual Hand as its mirror image (see VRCompanionVirtualHands.lua).
+  * In VirtualHandLeft.i3d: the externalShapesFile now names the shapes file
+    that actually ships (VirtualHandLeft.i3d.shapes) and shadow casting of the
+    shape is switched off (castsShadows="false"). The mesh, the rig and the
+    materials are unchanged.
+  * The Companion Mod scales and turns the model onto the OpenXR grip pose
+    at run time; nothing about that is stored in the files.
+
+This license covers the model files in this folder only. The rest of FS25 VR
+is licensed under the GNU General Public License v3.0 (see LICENSE).

@@ -70,6 +70,15 @@ $noticeText = foreach ($notice in $notices) {
     Get-Content $path -Raw
     ""
 }
+# The Virtual Hand model is CC BY: its attribution also travels with the bundle, not only inside the mod zip.
+$modelAttribution = Join-Path $companionDir "models\VirtualHand_ATTRIBUTION.txt"
+if (-not (Test-Path $modelAttribution)) {
+    Write-Error "$modelAttribution not found."
+}
+$noticeText += "=" * 80
+$noticeText += "  Virtual Hand model (Gloved Hand)"
+$noticeText += "=" * 80
+$noticeText += Get-Content $modelAttribution -Raw
 Set-Content -Path "$bundleDir\THIRD_PARTY_NOTICES.txt" -Value $noticeText -Encoding utf8
 Write-Host "[Package] Wrote THIRD_PARTY_NOTICES.txt"
 
@@ -80,7 +89,7 @@ Write-Host "[Package] Staged LICENSE"
 # Package Companion Mod
 Push-Location $companionDir
 try {
-    tar.exe -a -cf "$bundleDir\mods\FS25_VRCompanion.zip" modDesc.xml icon_vr.png src/*.lua -C $repoRoot LICENSE
+    tar.exe -a -cf "$bundleDir\mods\FS25_VRCompanion.zip" modDesc.xml icon_vr.png src/*.lua models/* -C $repoRoot LICENSE
     Copy-Item "$bundleDir\mods\FS25_VRCompanion.zip" "$releaseDir\FS25_VRCompanion.zip" -Force
     Write-Host "[Package] Packaged FS25_VRCompanion.zip"
 } finally {

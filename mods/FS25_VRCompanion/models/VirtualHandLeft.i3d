@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+
+<i3D name="Gloved Hand LP" version="1.6" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://i3d.giants.ch/schema/i3d-1.6.xsd">
+  <Asset>
+    <Export program="i3dConverter" version="1.0"/>
+  </Asset>
+
+  <Files>
+  </Files>
+
+
+  <Materials>
+    <Material name="Arm" materialId="2" diffuseColor="0.8 0.462745 0.309804 1" specularColor="0.501961 1 0">
+    </Material>
+    <Material name="Glove" materialId="1" diffuseColor="0.8 0.8 0.8 1" specularColor="0.501961 1 0">
+    </Material>
+  </Materials>
+
+
+  <Shapes externalShapesFile="VirtualHandLeft.i3d.shapes">
+  </Shapes>
+
+  <Scene>
+    <TransformGroup name="Hand.002" nodeId="5">
+      <Shape name="HandModel.001" shapeId="1" nodeId="6" castsShadows="false" receiveShadows="true" skinBindNodeIds="7 8 25 26 27 28 9 10 11 12 13 14 15 16 21 22 23 24 17 18 19 20" materialIds="1,2"/>
+      <TransformGroup name="Wrist" translation="0.0629653 0.0550946 0.969075" rotation="-90 -1.25938e-12 1.36604e-05" nodeId="7">
+        <TransformGroup name="Hand" translation="-1.76557e-09 -1.76856e-10 -0.444487" rotation="-90 -0.564293 -3.60697e-06" nodeId="8">
+          <TransformGroup name="Index Finger" translation="2.28252e-09 -2.15196e-09 -0.65891" rotation="-90 -31.7832 6.58695e-06" nodeId="9">
+            <TransformGroup name="Lower.001" translation="2.80208e-08 -4.09032e-09 -0.576101" rotation="-95.8634 19.0318 0.0138157" nodeId="10">
+              <TransformGroup name="Middle.001" translation="2.65786e-08 -5.58794e-09 -0.325696" rotation="-104.767 3.10435 -0.305041" nodeId="11">
+                <TransformGroup name="Top.001" translation="-7.10133e-08 3.72529e-09 -0.318453" rotation="-111.224 -1.78701 0.303658" nodeId="12"/>
+              </TransformGroup>
+            </TransformGroup>
+          </TransformGroup>
+          <TransformGroup name="Middle Finger" translation="2.28252e-09 -2.15196e-09 -0.65891" rotation="-90 -2.85693 -4.6585e-06" nodeId="13">
+            <TransformGroup name="Lower.002" translation="-5.99853e-09 1.68852e-09 -0.598086" rotation="-93.825 -1.3596 0.00617514" nodeId="14">
+              <TransformGroup name="Middle.002" translation="-8.03902e-09 1.22236e-09 -0.351131" rotation="-106.995 -0.645616 -0.368002" nodeId="15">
+                <TransformGroup name="Top.002" translation="-1.22527e-08 1.67638e-08 -0.299041" rotation="-107.842 4.20034 1.99591" nodeId="16"/>
+              </TransformGroup>
+            </TransformGroup>
+          </TransformGroup>
+          <TransformGroup name="Pinky" translation="2.28252e-09 -2.15196e-09 -0.65891" rotation="-90 42.8193 5.34303e-06" nodeId="17">
+            <TransformGroup name="Lower.004" translation="-4.71391e-09 -1.25535e-10 -0.670714" rotation="-98.3113 -20.9025 0.969258" nodeId="18">
+              <TransformGroup name="Middle.004" translation="1.76951e-08 -2.04891e-08 -0.159482" rotation="-106.119 3.00526 -1.86187" nodeId="19">
+                <TransformGroup name="Top.004" translation="-7.45058e-09 -4.47035e-08 -0.267027" rotation="-111.242 0.337392 1.3942" nodeId="20"/>
+              </TransformGroup>
+            </TransformGroup>
+          </TransformGroup>
+          <TransformGroup name="Ring Finger" translation="2.28252e-09 -2.15196e-09 -0.65891" rotation="-90 24.0504 -2.37879e-06" nodeId="21">
+            <TransformGroup name="Lower.003" translation="-1.60396e-08 5.19671e-09 -0.594343" rotation="-92.7815 -18.7088 -0.0260852" nodeId="22">
+              <TransformGroup name="Middle.003" translation="-2.47383e-09 -4.19095e-09 -0.273965" rotation="-111.49 -0.147155 0.401653" nodeId="23">
+                <TransformGroup name="Top.003" translation="-5.12227e-09 5.4948e-08 -0.316888" rotation="-104.244 -0.918293 0.429044" nodeId="24"/>
+              </TransformGroup>
+            </TransformGroup>
+          </TransformGroup>
+          <TransformGroup name="Thumb" translation="2.28252e-09 -2.15196e-09 -0.65891" rotation="-90 -105.903 1.11453e-05" nodeId="25">
+            <TransformGroup name="Lower" translation="-1.95742e-08 2.30809e-09 -0.537971" rotation="-99.0971 58.2478 -0.232479" nodeId="26">
+              <TransformGroup name="Middle" translation="9.68976e-09 -6.51926e-09 -0.284216" rotation="-97.1809 17.7063 2.17288" nodeId="27">
+                <TransformGroup name="Top" translation="3.58559e-08 0 -0.325075" rotation="-100.97 3.33984 0.98493" nodeId="28"/>
+              </TransformGroup>
+            </TransformGroup>
+          </TransformGroup>
+        </TransformGroup>
+      </TransformGroup>
+    </TransformGroup>
+  </Scene>
+
+</i3D>
