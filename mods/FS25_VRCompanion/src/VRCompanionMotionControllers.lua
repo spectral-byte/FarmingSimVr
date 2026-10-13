@@ -35,8 +35,11 @@
 --     VRCompanion:getPointerHand() -> 0 | 1 | nil
 --     VRCompanion.pointerHand                    mirror of getPointerHand() (read-only for others)
 --       Pointer Hand rule of this module: exactly one hand in use -> that hand; none in use -> nil;
---       both in use -> the previous Pointer Hand if it is still in use, otherwise nil (choosing
---       between two hands in use is the Pointer Hand switching rule, which owns pointerHand then).
+--       both in use -> the previous Pointer Hand, until a trigger pull on the other hand moves it
+--       there (with no previous Pointer Hand, a pull on either hand picks that hand). That switching
+--       pull is consumed: getPointerTrigger() reports it as neither pressed nor held until the
+--       trigger is let go, and menus read isPointerTriggerConsumed() so it never clicks either.
+--     VRCompanion:isPointerTriggerConsumed() -> boolean   the Pointer Hand's trigger is held from its switching pull
 --
 --   VRCompanion.motionControllersEnabled  boolean, default true, saved (`vrMotionControllers on|off`).
 --     When false the mod ignores controller input: hands report untracked, none is in use, there is
@@ -132,6 +135,7 @@ local function newState()
         inUse = {},      -- [hand] = boolean
         triggerDown = {},     -- [hand] = trigger is pulled (with hysteresis)
         triggerPressed = {},  -- [hand] = it went down this update
+        triggerConsumed = {}, -- [hand] = a Pointer Hand switch took this pull: it counts for nothing until let go
         ray = { valid = false, ox = 0, oy = 0, oz = 0, dx = 0, dy = 0, dz = -1 },
         headScratch = nil,    -- table VRBridge.getHeadPose fills in place
         pointerHand = nil,
@@ -171,6 +175,7 @@ local function initHands()
         state.inUse[hand] = false
         state.triggerDown[hand] = false
         state.triggerPressed[hand] = false
+        state.triggerConsumed[hand] = false
     end
 end
 initHands()
@@ -208,16 +213,23 @@ local function movedFromReference(motion, hand)
     return moved
 end
 
--- The Pointer Hand: the one hand in use; with both in use the previous one while its hand is still in
--- use (choosing between two hands in use belongs to the Pointer Hand switching rule); otherwise none.
+-- The Pointer Hand: the one hand in use. With both in use it is the previous one, until the trigger is
+-- pulled on the other hand: that pull moves the Pointer Hand there and is consumed (it clicks nothing,
+-- see getPointerTrigger). With both in use and no previous Pointer Hand, a pull on either picks it.
 local function choosePointerHand()
     local left, right = state.inUse[0], state.inUse[1]
     if left and not right then return 0 end
     if right and not left then return 1 end
-    if left and right and state.pointerHand ~= nil and state.inUse[state.pointerHand] then
-        return state.pointerHand
+    if not (left and right) then return nil end
+    local previous = state.pointerHand
+    for _, hand in ipairs(HANDS) do
+        if hand ~= previous and state.triggerPressed[hand] then
+            state.triggerPressed[hand] = false
+            state.triggerConsumed[hand] = true  -- until the trigger is let go
+            return hand
+        end
     end
-    return nil
+    return previous
 end
 
 -- Puts every cached hand back to untracked and nobody in use; the tables stay the ones the bridge fills.
@@ -232,6 +244,7 @@ local function clearHands()
         state.inUse[hand] = false
         state.triggerDown[hand] = false
         state.triggerPressed[hand] = false
+        state.triggerConsumed[hand] = false
     end
     state.pointerHand = nil
     state.ray.valid = false
@@ -360,6 +373,7 @@ function VRCompanion:updateMotionControllers(dt)
         local isDown = value >= (wasDown and self.POINTER_TRIGGER_RELEASE or self.POINTER_TRIGGER_PRESS)
         if current.tracked ~= true then isDown = false end
         state.triggerDown[hand] = isDown
+        if not isDown then state.triggerConsumed[hand] = false end
         state.triggerPressed[hand] = isDown and not wasDown
     end
     state.pointerHand = choosePointerHand()
@@ -485,11 +499,19 @@ function VRCompanion:getPointerRay()
     return nil
 end
 
--- The Pointer Hand's trigger: pressed (it went down this update), held (it is down).
+-- The Pointer Hand's trigger: pressed (it went down this update), held (it is down). A pull that
+-- switched the Pointer Hand to this hand is neither, however long it is held on: it is let go first.
 function VRCompanion:getPointerTrigger()
     local hand = state.pointerHand
-    if hand == nil then return false, false end
+    if hand == nil or state.triggerConsumed[hand] then return false, false end
     return state.triggerPressed[hand] == true, state.triggerDown[hand] == true
+end
+
+-- Whether the Pointer Hand's trigger is held from the pull that made it the Pointer Hand (menus read
+-- the raw trigger and must not click on it).
+function VRCompanion:isPointerTriggerConsumed()
+    local hand = state.pointerHand
+    return hand ~= nil and state.triggerConsumed[hand] == true
 end
 
 -- ---- Haptic pulses on the Pointer Hand (ticket #76) -----------------------------------------------
@@ -711,6 +733,7 @@ VRCompanion.MotionControllers.resetMotionControllerMovement = function(self, ...
 VRCompanion.MotionControllers.consoleCommandSetPointerCone = function(self, ...) return VRCompanion.consoleCommandSetPointerCone(VRCompanion, ...) end
 VRCompanion.MotionControllers.getPointerRay = function(self, ...) return VRCompanion.getPointerRay(VRCompanion, ...) end
 VRCompanion.MotionControllers.getPointerTrigger = function(self, ...) return VRCompanion.getPointerTrigger(VRCompanion, ...) end
-VRCompanion.MotionControllers.draw = function(self, ...) return VRCompanion.draw(VRCompanion, ...) end
+VRCompanion.MotionControllers.isPointerTriggerConsumed = function(self, ...) return VRCompanion.isPointerTriggerConsumed(VRCompanion, ...) end
+VRCompanion.MotionControllers.draw =function(self, ...) return VRCompanion.draw(VRCompanion, ...) end
 
 return VRCompanion.MotionControllers
