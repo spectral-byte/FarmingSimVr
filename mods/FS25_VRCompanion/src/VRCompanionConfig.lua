@@ -242,6 +242,7 @@ function VRCompanion:saveConfiguration(xmlPath)
             end
             setXmlBoolFn(xmlFile, "vrSettings.hudGroups.controls.expanded", self.controlsExpanded ~= false)
         end
+        if type(self.saveMotionControllerSettings) == "function" then self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn }) end
         if type(setXmlStringFn) == "function" then
             -- Persist the mode last requested, not VRBridge's: while the compositor is active the bridge
             -- only queues a change until the next frame boundary, so it still reports the old mode here.
@@ -349,6 +350,8 @@ function VRCompanion:loadConfiguration(xmlPath)
                 local loadedControlsExpanded = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
                     "vrSettings.hudGroups.controls.expanded")
                 if loadedControlsExpanded ~= nil then controlsExpanded = loadedControlsExpanded end
+
+                if type(self.loadMotionControllerSettings) == "function" then self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn }) end
 
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.snapTurnAngle")

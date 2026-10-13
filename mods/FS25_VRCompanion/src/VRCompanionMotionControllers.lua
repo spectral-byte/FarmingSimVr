@@ -61,6 +61,11 @@ VRCompanion.MOTION_HAND_LEFT = 0
 VRCompanion.MOTION_HAND_RIGHT = 1
 VRCompanion.pointerHand = nil
 
+-- rMotionControllers on|off: saved, default on. Off makes the mod ignore controller input; it never
+-- touches the Injector's session or action set.
+VRCompanion.DEFAULT_MOTION_CONTROLLERS_ENABLED = true
+VRCompanion.motionControllersEnabled = VRCompanion.DEFAULT_MOTION_CONTROLLERS_ENABLED
+
 -- A hand is in use while it is tracked and has moved within this long (ms).
 VRCompanion.MOTION_CONTROLLER_IN_USE_MS = 3000
 -- "Moved" means the aim pose left the position (metres) or orientation (radians) it was last at by
@@ -78,6 +83,8 @@ local function newState()
         motion = {},     -- [hand] = { ref = {x,y,z,qx,qy,qz,qw} | nil, lastMovedMs = number | nil }
         inUse = {},      -- [hand] = boolean
         pointerHand = nil,
+        ignoredCleared = false,  -- controller input was ignored and the cached hands were already cleared
+        bridgeMissing = false,   -- the Injector offers no VRBridge.getHandState
     }
 end
 
@@ -156,8 +163,34 @@ local function choosePointerHand()
     return nil
 end
 
+-- Puts every cached hand back to untracked and nobody in use; the tables stay the ones the bridge fills.
+local function clearHands()
+    local untracked = untrackedHand()
+    for _, hand in ipairs(HANDS) do
+        local cached = state.hands[hand]
+        for key, value in pairs(untracked) do
+            cached[key] = value
+        end
+        state.motion[hand] = {}
+        state.inUse[hand] = false
+    end
+    state.pointerHand = nil
+    VRCompanion.pointerHand = nil
+end
+
 function VRCompanion:updateMotionControllers(dt)
+    if self.motionControllersEnabled == false then
+        -- Controller input is ignored: nothing is polled, and the hands read as untracked.
+        if not state.ignoredCleared then
+            clearHands()
+            state.ignoredCleared = true
+        end
+        return
+    end
+    state.ignoredCleared = false
+
     local getHandState = bridgeCall()
+    state.bridgeMissing = (getHandState == nil)
     if getHandState == nil then
         return
     end
@@ -201,10 +234,113 @@ function VRCompanion:resetMotionControllerMovement()
         state.motion[hand].ref = nil
     end
 end
+-- ---- Settings, persistence, console commands ------------------------------------------------
+
+local SETTING_KEY_ENABLED = "vrSettings.motionControllers"
+
+local function parseOnOff(arg)
+    local low = string.lower(tostring(arg))
+    if low == "on" or low == "true" or low == "1" then return true end
+    if low == "off" or low == "false" or low == "0" then return false end
+    return nil
+end
+
+function VRCompanion:setMotionControllersEnabled(enabled, save)
+    self.motionControllersEnabled = (enabled ~= false)
+    if self.motionControllersEnabled then
+        state.ignoredCleared = false
+    end
+    if save and type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
+end
+
+-- Called from saveConfiguration with the open settings file and the engine's setters (any may be nil).
+function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
+    if type(xml.setBool) == "function" then
+        xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.motionControllersEnabled ~= false)
+    end
+end
+
+-- Called from loadConfiguration with the open settings file and the engine's getters (any may be nil).
+-- A key that is missing keeps the current value.
+function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
+    local loaded = nil
+    if type(xml.getBool) == "function" then
+        loaded = xml.getBool(xmlFile, SETTING_KEY_ENABLED)
+    end
+    if loaded == nil and type(xml.getString) == "function" then
+        local str = xml.getString(xmlFile, SETTING_KEY_ENABLED)
+        if str ~= nil then loaded = parseOnOff(str) end
+    end
+    if loaded ~= nil then
+        self.motionControllersEnabled = loaded
+    end
+end
+
+function VRCompanion:consoleCommandSetMotionControllers(arg)
+    local enabled = parseOnOff(arg)
+    if arg == nil or arg == "" or string.lower(tostring(arg)) == "status" then
+        return string.format("Motion Controllers are %s. Usage: vrMotionControllers <on|off> (saved)",
+            self.motionControllersEnabled and "on" or "off")
+    end
+    if enabled == nil then
+        return "Usage: vrMotionControllers <on|off>"
+    end
+    self:setMotionControllersEnabled(enabled, true)
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR Motion Controllers: %s (Saved)", enabled and "on" or "off"), 2500)
+        end)
+    end
+    print(string.format("[FS25_VR] Motion Controllers set to: %s", enabled and "on" or "off"))
+    return string.format("Motion Controllers set to: %s (Saved)", enabled and "on" or "off")
+end
+
+function VRCompanion:getMotionControllerStatus()
+    if self.motionControllersEnabled == false then
+        return "Motion Controllers: off (controller input is ignored) | Left: ignored | Right: ignored | Pointer Hand: none"
+    end
+    if state.bridgeMissing then
+        return "Motion Controllers: on | VRBridge.getHandState is not available (no Injector, or an older one) | Pointer Hand: none"
+    end
+    local function describe(hand)
+        return string.format("%s, %s",
+            state.hands[hand].tracked == true and "tracked" or "not tracked",
+            state.inUse[hand] and "in use" or "not in use")
+    end
+    local pointer = state.pointerHand
+    return string.format("Motion Controllers: on | Left: %s | Right: %s | Pointer Hand: %s",
+        describe(0), describe(1), pointer == 0 and "left" or pointer == 1 and "right" or "none")
+end
+
+function VRCompanion:consoleCommandMotionControllerStatus()
+    return self:getMotionControllerStatus()
+end
+
+function VRCompanion:registerMotionControllerConsoleCommands()
+    if addConsoleCommand == nil then return end
+    addConsoleCommand("vrMotionControllers", "Turn Motion Controller input on or off (saved; the Injector's session is untouched): vrMotionControllers [on|off]", "consoleCommandSetMotionControllers", self)
+    addConsoleCommand("vrMotionControllerStatus", "Report each Motion Controller's tracked and in-use state and the Pointer Hand: vrMotionControllerStatus", "consoleCommandMotionControllerStatus", self)
+end
+
+-- Map unload: forget everything seen this session. The saved setting stays as it is.
+function VRCompanion:resetMotionControllers()
+    if removeConsoleCommand ~= nil then
+        removeConsoleCommand("vrMotionControllers")
+        removeConsoleCommand("vrMotionControllerStatus")
+    end
+    state = newState()
+    initHands()
+    self.pointerHand = nil
+end
 -- Export to MotionControllers subsystem table
 VRCompanion.MotionControllers.getHandState = function(self, ...) return VRCompanion.getHandState(VRCompanion, ...) end
 VRCompanion.MotionControllers.isHandInUse = function(self, ...) return VRCompanion.isHandInUse(VRCompanion, ...) end
 VRCompanion.MotionControllers.getPointerHand = function(self, ...) return VRCompanion.getPointerHand(VRCompanion, ...) end
+VRCompanion.MotionControllers.consoleCommandSetMotionControllers = function(self, ...) return VRCompanion.consoleCommandSetMotionControllers(VRCompanion, ...) end
+VRCompanion.MotionControllers.consoleCommandMotionControllerStatus = function(self, ...) return VRCompanion.consoleCommandMotionControllerStatus(VRCompanion, ...) end
 VRCompanion.MotionControllers.updateMotionControllers = function(self, ...) return VRCompanion.updateMotionControllers(VRCompanion, ...) end
 VRCompanion.MotionControllers.resetMotionControllerMovement = function(self, ...) return VRCompanion.resetMotionControllerMovement(VRCompanion, ...) end
 
