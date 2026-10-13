@@ -434,11 +434,12 @@ local function qrotate(qx, qy, qz, qw, x, y, z)
 end
 
 -- Whether the head is currently placed in the world by the mod's own camera chain; otherwise the
--- listener node says nothing about where the player's head is.
+-- listener node says nothing about where the player's head is. (The engine's own head-tracking setting,
+-- VRCompanion:isHeadTrackingActive, is not a gate: the mod places the head itself whatever it says, and in
+-- the game it reads off while the head is in fact placed.)
 local function headIsPlacedInTheWorld(self)
     if self.isMenuVisible or self.is2DViewActive or self.trackedCameraShown == false then return false end
     if type(self.isPassThroughMode) == "function" and self:isPassThroughMode() then return false end
-    if type(self.isHeadTrackingActive) == "function" and not self:isHeadTrackingActive() then return false end
     return true
 end
 
@@ -453,8 +454,9 @@ local function placePointerRay(self, hand)
     if pose.tracked ~= true then return false, "the Pointer Hand is not tracked" end
     if listener == nil or listener == 0 then return false, "the Cyclopean Audio Listener Node does not exist" end
     if not headIsPlacedInTheWorld(self) then
-        return false, string.format("the head is not placed in the world (menu=%s, 2D=%s, trackedCameraShown=%s)",
-            tostring(self.isMenuVisible), tostring(self.is2DViewActive), tostring(self.trackedCameraShown))
+        return false, string.format("the head is not placed in the world (menu=%s, 2D=%s, trackedCameraShown=%s, passThrough=%s)",
+            tostring(self.isMenuVisible), tostring(self.is2DViewActive), tostring(self.trackedCameraShown),
+            tostring(type(self.isPassThroughMode) == "function" and self:isPassThroughMode()))
     end
     if type(getWorldTranslationFn) ~= "function" or type(getWorldQuaternionFn) ~= "function" then
         return false, "getWorldTranslation / getWorldQuaternion are not available"

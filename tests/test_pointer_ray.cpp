@@ -163,6 +163,24 @@ TEST_F(CompanionModTest, VrPointerDiagnosticsSaysWhyPointingWorksOrNot) {
     EXPECT_NE(aimed.find("selected: yes"), std::string::npos) << aimed;
 }
 
+TEST_F(CompanionModTest, ThePointerRayIsPlacedWhileTheEnginesHeadTrackingReadsOff) {
+    // In the game isHeadTrackingActive() reads false (the engine's own setting) while the mod places the head
+    // itself, so it must not stop the ray (seen in the headset: "the head is not placed in the world").
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('lights', -0.3, 1.5, 2.3)", "=addPoint"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:setHeadTrackingEnabled(false)", "=headTrackingOff"), 0);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isHeadTrackingActive()"), "false");
+
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "lights");
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1");
+}
+
 TEST_F(CompanionModTest, TheClickPointNearestTheRaysCenterInsideTheConeWinsAndNothingOutsideIsSelected) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
