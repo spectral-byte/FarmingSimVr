@@ -59,9 +59,6 @@ public:
     // the runtime fails the call (a runtime that is not focused may; that is not an error here).
     bool PulseHaptic(IOpenXrDispatch& dispatch, XrSession session, uint32_t hand, int64_t durationNs, float amplitude);
 
-    XrAction GetHapticAction() const { return m_hapticAction; }
-    XrPath GetHandPath(uint32_t hand) const { return m_handPaths[hand < kHandCount ? hand : 0]; }
-
 private:
     bool m_attempted = false;
     bool m_ready = false;

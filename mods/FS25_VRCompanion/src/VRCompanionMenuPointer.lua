@@ -17,8 +17,9 @@
 --   * The drawn cursor (ADR-0009) is placed with VRBridge.setMenuCursor(true, u, v) while the ray has
 --     control, and handed back to the desk mouse with VRBridge.setMenuCursor(false).
 --   * The trigger is the left mouse button: down on the pull (only if the ray was on the panel), up on
---     the release, wherever the hand points then. Holding it while moving the hand drags. A pull
---     counts at 0.6 and the release at 0.3, so a wobbling trigger is one click.
+--     the release, wherever the hand points then. Holding it while moving the hand drags. The trigger is
+--     VRCompanion:getPointerTrigger (one set of thresholds with the Pointer Ray), so a wobbling trigger
+--     is one click, and the pull that switched the Pointer Hand is not a click.
 --
 -- Also in menus (not in 2D gameplay, where no GUI is open to receive them), on EITHER hand and only
 -- while a menu is showing and Motion Controllers are on:
@@ -31,12 +32,11 @@
 --     event, so the module sends g_gui:mouseEvent(x, y, true, false, wheel button) with that poll
 --     answering "pressed" for that one call (see sendWheel; the original is restored after).
 --   * Snap Turn is off in menus (VRCompanion:snapTurn refuses). A world action the player mapped onto
---     the lower face button (vrControllerMap) yields to back while a menu shows (ControllerMap).
+--     the lower face button (vrMotionControllerMap) yields to back while a menu shows (MotionControllerMap).
 --
--- Button mappings of the world actions are in VRCompanionControllerMap.lua (ticket #75).
+-- Button mappings of the world actions are in VRCompanionMotionControllerMap.lua.
 --
 -- PUBLIC SURFACE
---   VRCompanion.MENU_TRIGGER_PRESS / VRCompanion.MENU_TRIGGER_RELEASE   trigger thresholds (0..1)
 --   VRCompanion.MENU_BACK_PRESS / MENU_BACK_RELEASE                      grip thresholds (0..1)
 --   VRCompanion.MENU_SCROLL_ENGAGE / MENU_SCROLL_RELEASE / MENU_SCROLL_REPEAT_MS
 --   VRCompanion:updateMenuPointer(dt)   called by updateMotionControllers; idempotent per frame
@@ -45,9 +45,6 @@
 
 VRCompanion = VRCompanion or {}
 VRCompanion.MenuPointer = VRCompanion.MenuPointer or {}
-
-VRCompanion.MENU_TRIGGER_PRESS = 0.6
-VRCompanion.MENU_TRIGGER_RELEASE = 0.3
 
 -- The grip counts as pressed (back / close) at 0.6 and as let go below 0.3.
 VRCompanion.MENU_BACK_PRESS = 0.6
@@ -59,7 +56,6 @@ local DEFAULT_MOUSE_BUTTON_LEFT = 1
 local function newState()
     return {
         hit = nil,             -- table the bridge fills in place (adopted from its first reply)
-        triggerHeld = false,   -- the trigger is past the press threshold (with hysteresis)
         clickDown = false,     -- a left button press was delivered and not yet released
         lastX = nil,           -- last position delivered to the GUI (GUI coordinates)
         lastY = nil,
@@ -124,19 +120,6 @@ local function letGo()
             setMenuCursor(false)
         end
     end
-end
-
--- While the ray does not point, a trigger that is already held must not turn into a click the moment
--- the ray takes over: remember the trigger as held.
-local function followTriggerWhileIdle(self)
-    local held = false
-    for _, hand in ipairs({ self.MOTION_HAND_LEFT, self.MOTION_HAND_RIGHT }) do
-        local pad = self:getHandState(hand)
-        if pad ~= nil and (pad.trigger or 0) >= self.MENU_TRIGGER_RELEASE then
-            held = true
-        end
-    end
-    state.triggerHeld = held
 end
 
 -- ---- Back / close ---------------------------------------------------------------------------------
@@ -314,7 +297,6 @@ function VRCompanion:updateMenuPointer(dt)
     local hand = self:getPointerHand()
     if not (panelShowing and hand ~= nil and getPanelHit ~= nil and self:isPointerRayInControl()) then
         letGo()
-        followTriggerWhileIdle(self)
         return
     end
 
@@ -324,19 +306,10 @@ function VRCompanion:updateMenuPointer(dt)
     end
     local hit = state.hit or {}
 
-    -- A pull that switched the Pointer Hand to this hand is not a click, even held on.
-    local trigger = self:getHandState(hand).trigger or 0
-    if self:isPointerTriggerConsumed() then trigger = 0 end
-    local pulled, released = false, false
-    if state.triggerHeld then
-        if trigger < self.MENU_TRIGGER_RELEASE then
-            state.triggerHeld = false
-            released = true
-        end
-    elseif trigger >= self.MENU_TRIGGER_PRESS then
-        state.triggerHeld = true
-        pulled = true
-    end
+    -- The click follows the Pointer Hand's trigger. A pull that switched the Pointer Hand to this hand is
+    -- neither pressed nor held (see getPointerTrigger), and a trigger already held when the ray took over
+    -- was never pressed, so neither clicks.
+    local pulled, held = self:getPointerTrigger()
 
     local onPanel = hit.hit == true
     if onPanel then
@@ -352,7 +325,7 @@ function VRCompanion:updateMenuPointer(dt)
     if pulled and onPanel and not state.clickDown then
         state.clickDown = true
         sendMouse(state.lastX, state.lastY, true, false, mouseButton("MOUSE_BUTTON_LEFT", DEFAULT_MOUSE_BUTTON_LEFT))
-    elseif released and state.clickDown then
+    elseif not held and state.clickDown then
         state.clickDown = false
         sendMouse(state.lastX, state.lastY, false, true, mouseButton("MOUSE_BUTTON_LEFT", DEFAULT_MOUSE_BUTTON_LEFT))
     end

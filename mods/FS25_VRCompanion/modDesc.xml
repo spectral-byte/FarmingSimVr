@@ -23,7 +23,7 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         <sourceFile filename="src/VRCompanionInput.lua"/>
         <sourceFile filename="src/VRCompanionMotionControllers.lua"/>
         <sourceFile filename="src/VRCompanionMenuPointer.lua"/>
-        <sourceFile filename="src/VRCompanionControllerMap.lua"/>
+        <sourceFile filename="src/VRCompanionMotionControllerMap.lua"/>
         <sourceFile filename="src/VRCompanionInteractiveControl.lua"/>
         <sourceFile filename="src/VRCompanion.lua"/>
     </extraSourceFiles>

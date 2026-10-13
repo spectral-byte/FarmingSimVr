@@ -1,4 +1,4 @@
-// The desk mouse and the Pointer Ray hand over control (spec #71, ticket #79), seen from outside: the
+// The desk mouse and the Pointer Ray hand over control (spec #71), seen from outside: the
 // real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with a stand-in for the
 // Interactive Control mod (companion_mod_stubs.h) whose mouse position the test moves. The test asserts
 // which Click Point Interactive Control treats as clickable or executed, whether the ray is drawn, and
@@ -104,7 +104,7 @@ void AddAimedAtAndUnderMouse(lua_State* L) {
 #define FRAMES(count) \
     for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
 
-// The Pointer Hand: picks the controller up (it moves) and aims it along the given pose.
+// The Pointer Hand: picks the Motion Controller up (it moves) and aims it along the given pose.
 #define PICK_UP_AND_AIM(hand, x, y, z) \
     do { \
         SetGameTime(10000); \
@@ -240,7 +240,7 @@ TEST_F(CompanionModTest, WithNoMotionControllerInUseInteractiveControlSelectsByT
     ADD_AIMED_AT_AND_UNDER_MOUSE();
     ASSERT_EQ(RunLuauChunk(L, "_G.originalUpdateClickable = StubIC.Point.updateClickable", "=remember"), 0);
 
-    // Controllers not tracked at all.
+    // Motion Controllers not tracked at all.
     SetGameTime(10000);
     headset.SetHandTracked(kRight, false);
     headset.SetHandTracked(0, false);
@@ -251,13 +251,13 @@ TEST_F(CompanionModTest, WithNoMotionControllerInUseInteractiveControlSelectsByT
     EXPECT_EQ(EvalLua(L, "StubIC.Point.updateClickable == originalUpdateClickable"), "true") << "Interactive Control has not been touched";
     EXPECT_EQ(EvalLua(L, "rayDrawn()"), "0");
 
-    // A controller lying on the desk, aimed at a Click Point and never moved.
+    // A Motion Controller lying on the desk, aimed at a Click Point and never moved.
     headset.SetHandTracked(kRight, true);
     headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
     FRAMES(3);
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(3);
-    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "underMouse") << "a still controller does not select";
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "underMouse") << "a still Motion Controller does not select";
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0");
     EXPECT_EQ(EvalLua(L, "rayDrawn()"), "0");
     headset.SetHandInputs(kRight, Trigger(0.0f));
@@ -286,7 +286,7 @@ TEST_F(CompanionModTest, ClickPointsAndMenusFollowTheSameControlOwner) {
     // The mouse takes control: Interactive Control selects by it ...
     MOVE_MOUSE(0.4, 0.6);
     FRAMES(2);
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerController()"), "mouse");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "mouse");
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "underMouse");
     // ... and a menu opening now is left to the mouse too.
     ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=openMenu"), 0);
@@ -297,7 +297,7 @@ TEST_F(CompanionModTest, ClickPointsAndMenusFollowTheSameControlOwner) {
     // The Pointer Hand moves: the menu cursor follows the ray ...
     headset.SetHandPose(kRight, HandAt(0.35f, 0.0f, -0.3f));
     FRAMES(2);
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerController()"), "ray");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "ray");
     EXPECT_NE(EvalLua(L, "#guiEvents"), "0");
     EXPECT_TRUE(headset.manager->GetPointerCursorOverride().active);
     // ... and once the menu is closed Interactive Control selects by the ray again.

@@ -3,23 +3,23 @@
 --
 -- Makes the player's Motion Controllers visible to the rest of the mod: it polls each hand's state
 -- from the Injector once per update, decides which hands are in use, picks the Pointer Hand, and owns
--- the `vrMotionControllers` setting and the status console command. Controller input is optional;
--- everything here is inert when VRBridge.getHandState is missing or the runtime offers no controllers.
+-- the `vrMotionControllers` setting and the status console command. Motion Controller input is optional;
+-- everything here is inert when VRBridge.getHandState is missing or the runtime offers no Motion Controllers.
 --
--- PUBLIC SURFACE (frozen for the Motion Controller tickets that build on this module; see ADR-0025)
+-- PUBLIC SURFACE (other modules build on it; see ADR-0025)
 --
 --   Hand ids          VRCompanion.MOTION_HAND_LEFT = 0, VRCompanion.MOTION_HAND_RIGHT = 1.
---                     The same ids VRBridge.getHandState (and the later haptics call) use. Anywhere a
+--                     The same ids VRBridge.getHandState and VRBridge.pulseHaptic use. Anywhere a
 --                     hand is a parameter it is one of these two numbers.
 --
 --   VRBridge.getHandState(hand [, out]) -> table   (the bridge call, filled in place like getHeadPose)
---     tracked            boolean  aim pose valid and the controller active (false when the runtime
---                                 has no controllers, refused the action set, or the controller is off)
+--     tracked            boolean  aim pose valid and the Motion Controller active (false when the
+--                                 runtime has no Motion Controllers, refused the action set, or it is off)
 --     x, y, z            metres   aim pose position, tracking space, SAME convention, reference space
 --     pitch, yaw, roll   radians  and predicted display time as VRBridge.getHeadPose (follows the
 --     qx, qy, qz, qw              Recenter Action). Compose it into the world exactly like the head.
 --     isValid, isPositionTracked, isOrientationTracked   booleans, as in getHeadPose
---     trigger, grip      0..1     analog value (Khronos simple controller: select/click as trigger)
+--     trigger, grip      0..1     analog value (Khronos simple controller profile: select/click as trigger)
 --     thumbX, thumbY     -1..1    thumbstick (Vive: trackpad); +X right, +Y up
 --     thumbClick         boolean  thumbstick (Vive: trackpad) click
 --     buttonLower        boolean  lower face button: Touch X (left) / A (right), Index A
@@ -30,7 +30,7 @@
 --   Per-frame cached state (updated once per VRCompanion:update by updateMotionControllers(dt)):
 --     VRCompanion:getHandState(hand) -> table   the bridge fields above, the same table every frame
 --                                               (filled in place; read it, never keep or edit it).
---                                               Untracked defaults when motion controllers are off.
+--                                               Untracked defaults when Motion Controllers are off.
 --     VRCompanion:isHandInUse(hand) -> boolean  tracked and moved within MOTION_CONTROLLER_IN_USE_MS
 --     VRCompanion:getPointerHand() -> 0 | 1 | nil
 --     VRCompanion.pointerHand                    mirror of getPointerHand() (read-only for others)
@@ -38,32 +38,31 @@
 --       both in use -> the previous Pointer Hand, until a trigger pull on the other hand moves it
 --       there (with no previous Pointer Hand, a pull on either hand picks that hand). That switching
 --       pull is consumed: getPointerTrigger() reports it as neither pressed nor held until the
---       trigger is let go, and menus read isPointerTriggerConsumed() so it never clicks either.
---     VRCompanion:isPointerTriggerConsumed() -> boolean   the Pointer Hand's trigger is held from its switching pull
+--       trigger is let go, so it never clicks in a menu either.
 --
 --   VRCompanion.motionControllersEnabled  boolean, default true, saved (`vrMotionControllers on|off`).
---     When false the mod ignores controller input: hands report untracked, none is in use, there is
+--     When false the mod ignores Motion Controller input: hands report untracked, none is in use, there is
 --     no Pointer Hand. The Injector session and its action set are never touched by this setting.
 --
---   Who controls the pointer (ticket #74; read by menus, and by Interactive Control selection later)
+--   Who controls the pointer (read by menus and by Interactive Control selection)
 --     The pointer is the cursor / selection the player aims: either the desk mouse or the Pointer Ray.
 --     Whichever moved last controls it. Starts with the mouse; the ray takes control when the Pointer
 --     Hand moves (the same "moved" that puts a hand in use), the mouse takes it back when it moves.
---     VRCompanion:getPointerController() -> "mouse" | "ray"   (VRCompanion.POINTER_CONTROL_MOUSE / _RAY)
+--     VRCompanion:getPointerOwner() -> "mouse" | "ray"   (VRCompanion.POINTER_CONTROL_MOUSE / _RAY)
 --       "ray" only while the ray is the last mover AND a Pointer Hand is in use (so Motion Controllers
 --       off, an untracked hand and the 3 s idle timeout all read as "mouse").
---     VRCompanion:isPointerRayInControl() -> boolean   (getPointerController() == "ray")
+--     VRCompanion:isPointerRayInControl() -> boolean   (getPointerOwner() == "ray")
 --     VRCompanion:notePointerRayMoved() / VRCompanion:notePointerMouseMoved()   hand the control over;
 --       called by this module (hand moves; mouseEvent listener; sampling g_inputBinding:getMousePosition)
 --       and callable from tests or other modules that see either one move.
 --
---   The Pointer Ray (ticket #73; see "The Pointer Ray" below, and VRCompanionInteractiveControl.lua)
+--   The Pointer Ray (see "The Pointer Ray" below, and VRCompanionInteractiveControl.lua)
 --     VRCompanion:getPointerRay() -> table | nil   world origin / direction of the ray this update
 --     VRCompanion:getPointerTrigger() -> pressed, held   the Pointer Hand's trigger (hysteresis 0.6 / 0.4)
 --     VRCompanion.pointerConeDegrees               saved by `vrPointerCone <degrees>` (default 5)
 --     VRCompanion:draw()                           the line and dot, drawn from the update's end points
 --
---   Haptics (ticket #76; VRBridge.pulseHaptic(hand, durationMs, strength) -> boolean)
+--   Haptics (VRBridge.pulseHaptic(hand, durationMs, strength) -> boolean)
 --     VRCompanion:pulsePointerHand(durationMs, strength) -> boolean   Pointer Hand only; false when off
 --     VRCompanion:onClickPointEvent(kind, clickPoint)   "selected" (non-nil point) and "clicked" pulse
 --
@@ -79,10 +78,10 @@
 --     Locomotion  onRecenterAction -> resetMotionControllerMovement() (a recenter moves every pose)
 --     MenuPointer updateMotionControllers -> updateMenuPointer(dt) at the end of every update, and
 --                 resetMotionControllers -> resetMenuPointer() (VRCompanionMenuPointer.lua)
---     ControllerMap (VRCompanionControllerMap.lua) is driven from here: updateMotionControllers ->
---                 processControllerButtons(), and the save/load/register/reset functions below call its
---                 saveControllerMapSettings / loadControllerMapSettings / registerControllerMapConsoleCommands /
---                 unregisterControllerMapConsoleCommands
+--     ControllerMap (VRCompanionMotionControllerMap.lua) is driven from here: updateMotionControllers ->
+--                 processMotionControllerButtons(), and the save/load/register/reset functions below call its
+--                 saveMotionControllerMapSettings / loadMotionControllerMapSettings / registerMotionControllerMapConsoleCommands /
+--                 unregisterMotionControllerMapConsoleCommands
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -98,7 +97,7 @@ VRCompanion.POINTER_CONTROL_RAY = "ray"
 -- The desk mouse counts as moved when its normalized position changes by more than this (about a pixel).
 VRCompanion.POINTER_MOUSE_MOVE_EPSILON = 0.0005
 
--- rMotionControllers on|off: saved, default on. Off makes the mod ignore controller input; it never
+-- vrMotionControllers on|off: saved, default on. Off makes the mod ignore Motion Controller input; it never
 -- touches the Injector's session or action set.
 VRCompanion.DEFAULT_MOTION_CONTROLLERS_ENABLED = true
 VRCompanion.motionControllersEnabled = VRCompanion.DEFAULT_MOTION_CONTROLLERS_ENABLED
@@ -107,7 +106,7 @@ VRCompanion.motionControllersEnabled = VRCompanion.DEFAULT_MOTION_CONTROLLERS_EN
 VRCompanion.MOTION_CONTROLLER_IN_USE_MS = 3000
 -- "Moved" means the aim pose left the position (metres) or orientation (radians) it was last at by
 -- more than this. Measured from the last pose that counted, so a slow drift adds up to a move while
--- a controller lying on a desk (sensor noise well below a millimetre) never does.
+-- a Motion Controller lying on a desk (sensor noise well below a millimetre) never does.
 VRCompanion.MOTION_CONTROLLER_MOVE_DISTANCE = 0.01
 VRCompanion.MOTION_CONTROLLER_MOVE_ANGLE = 0.035
 
@@ -139,9 +138,9 @@ local function newState()
         ray = { valid = false, ox = 0, oy = 0, oz = 0, dx = 0, dy = 0, dz = -1 },
         headScratch = nil,    -- table VRBridge.getHeadPose fills in place
         pointerHand = nil,
-        ignoredCleared = false,  -- controller input was ignored and the cached hands were already cleared
+        ignoredCleared = false,  -- Motion Controller input was ignored and the cached hands were already cleared
         bridgeMissing = false,   -- the Injector offers no VRBridge.getHandState
-        pointerController = VRCompanion.POINTER_CONTROL_MOUSE,  -- see "Who controls the pointer"
+        pointerOwner = VRCompanion.POINTER_CONTROL_MOUSE,  -- see "Who controls the pointer"
         mousePosition = nil,     -- {x, y}: where the desk mouse was last seen
         movedThisUpdate = {},    -- [hand] = true when the hand's aim moved far enough to count this update
     }
@@ -255,15 +254,15 @@ end
 -- One place for "desk mouse or Pointer Ray: whichever moved last" (see the header for the API).
 
 function VRCompanion:notePointerRayMoved()
-    state.pointerController = self.POINTER_CONTROL_RAY
+    state.pointerOwner = self.POINTER_CONTROL_RAY
 end
 
 function VRCompanion:notePointerMouseMoved()
-    state.pointerController = self.POINTER_CONTROL_MOUSE
+    state.pointerOwner = self.POINTER_CONTROL_MOUSE
 end
 
-function VRCompanion:getPointerController()
-    if state.pointerController == self.POINTER_CONTROL_RAY and state.pointerHand ~= nil
+function VRCompanion:getPointerOwner()
+    if state.pointerOwner == self.POINTER_CONTROL_RAY and state.pointerHand ~= nil
         and self.motionControllersEnabled ~= false then
         return self.POINTER_CONTROL_RAY
     end
@@ -271,7 +270,7 @@ function VRCompanion:getPointerController()
 end
 
 function VRCompanion:isPointerRayInControl()
-    return self:getPointerController() == self.POINTER_CONTROL_RAY
+    return self:getPointerOwner() == self.POINTER_CONTROL_RAY
 end
 
 -- The desk mouse was seen at (x, y), either reported by the engine (isEvent: any event is the player
@@ -321,12 +320,12 @@ end
 function VRCompanion:updateMotionControllers(dt)
     sampleDeskMouse(self)
     if self.motionControllersEnabled == false then
-        -- Controller input is ignored: nothing is polled, and the hands read as untracked.
+        -- Motion Controller input is ignored: nothing is polled, and the hands read as untracked.
         if not state.ignoredCleared then
             clearHands()
             state.ignoredCleared = true
         end
-        if type(self.resetControllerButtons) == "function" then self:resetControllerButtons() end
+        if type(self.resetMotionControllerButtons) == "function" then self:resetMotionControllerButtons() end
         settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return
@@ -389,7 +388,7 @@ function VRCompanion:updateMotionControllers(dt)
     if state.pointerHand ~= nil and state.movedThisUpdate[state.pointerHand] then
         self:notePointerRayMoved()
     end
-    if type(self.processControllerButtons) == "function" then self:processControllerButtons() end
+    if type(self.processMotionControllerButtons) == "function" then self:processMotionControllerButtons() end
     self:updatePointerRay(dt)
     updatePointerUsers(self, dt)
 end
@@ -415,13 +414,6 @@ end
 --     Read it, never keep or edit it.
 --   VRCompanion:getPointerTrigger() -> pressed, held   the Pointer Hand's trigger this update
 --   VRCompanion:draw()                           the engine calls it per rendered frame (per eye under AFR)
-
-local function qmul(ax, ay, az, aw, bx, by, bz, bw)
-    return aw * bx + ax * bw + ay * bz - az * by,
-           aw * by - ax * bz + ay * bw + az * bx,
-           aw * bz + ax * by - ay * bx + az * bw,
-           aw * bw - ax * bx - ay * by - az * bz
-end
 
 -- Rotates (x, y, z) by the unit quaternion (qx, qy, qz, qw).
 local function qrotate(qx, qy, qz, qw, x, y, z)
@@ -514,14 +506,7 @@ function VRCompanion:getPointerTrigger()
     return state.triggerPressed[hand] == true, state.triggerDown[hand] == true
 end
 
--- Whether the Pointer Hand's trigger is held from the pull that made it the Pointer Hand (menus read
--- the raw trigger and must not click on it).
-function VRCompanion:isPointerTriggerConsumed()
-    local hand = state.pointerHand
-    return hand ~= nil and state.triggerConsumed[hand] == true
-end
-
--- ---- Haptic pulses on the Pointer Hand (ticket #76) -----------------------------------------------
+-- ---- Haptic pulses on the Pointer Hand -----------------------------------------------
 
 -- Pulse lengths (ms) and strengths (0..1): a light tick when the ray lands on a different Click Point,
 -- a firmer one for a click so the two can be told apart by feel.
@@ -598,7 +583,7 @@ function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.motionControllersEnabled ~= false)
     end
     self:savePointerConeSetting(xmlFile, xml)
-    if type(self.saveControllerMapSettings) == "function" then self:saveControllerMapSettings(xmlFile, xml) end
+    if type(self.saveMotionControllerMapSettings) == "function" then self:saveMotionControllerMapSettings(xmlFile, xml) end
 end
 
 -- Called from loadConfiguration with the open settings file and the engine's getters (any may be nil).
@@ -616,7 +601,7 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
         self.motionControllersEnabled = loaded
     end
     self:loadPointerConeSetting(xmlFile, xml)
-    if type(self.loadControllerMapSettings) == "function" then self:loadControllerMapSettings(xmlFile, xml) end
+    if type(self.loadMotionControllerMapSettings) == "function" then self:loadMotionControllerMapSettings(xmlFile, xml) end
 end
 
 -- vrPointerCone: the cone (degrees) inside which a Click Point is selected.
@@ -681,7 +666,7 @@ end
 
 function VRCompanion:getMotionControllerStatus()
     if self.motionControllersEnabled == false then
-        return "Motion Controllers: off (controller input is ignored) | Left: ignored | Right: ignored | Pointer Hand: none"
+        return "Motion Controllers: off (Motion Controller input is ignored) | Left: ignored | Right: ignored | Pointer Hand: none"
     end
     if state.bridgeMissing then
         return "Motion Controllers: on | VRBridge.getHandState is not available (no Injector, or an older one) | Pointer Hand: none"
@@ -705,7 +690,7 @@ function VRCompanion:registerMotionControllerConsoleCommands()
     addConsoleCommand("vrMotionControllers", "Turn Motion Controller input on or off (saved; the Injector's session is untouched): vrMotionControllers [on|off]", "consoleCommandSetMotionControllers", self)
     addConsoleCommand("vrMotionControllerStatus", "Report each Motion Controller's tracked and in-use state and the Pointer Hand: vrMotionControllerStatus", "consoleCommandMotionControllerStatus", self)
     addConsoleCommand("vrPointerCone", "How wide (degrees) the cone around the Pointer Ray is inside which the nearest Click Point is selected (saved): vrPointerCone [degrees]", "consoleCommandSetPointerCone", self)
-    if type(self.registerControllerMapConsoleCommands) == "function" then self:registerControllerMapConsoleCommands() end
+    if type(self.registerMotionControllerMapConsoleCommands) == "function" then self:registerMotionControllerMapConsoleCommands() end
 end
 
 -- Map unload: forget everything seen this session. The saved setting stays as it is.
@@ -722,7 +707,7 @@ function VRCompanion:resetMotionControllers()
     state = newState()
     initHands()
     self.pointerHand = nil
-    if type(self.unregisterControllerMapConsoleCommands) == "function" then self:unregisterControllerMapConsoleCommands() end
+    if type(self.unregisterMotionControllerMapConsoleCommands) == "function" then self:unregisterMotionControllerMapConsoleCommands() end
 end
 -- Export to MotionControllers subsystem table
 VRCompanion.MotionControllers.getHandState = function(self, ...) return VRCompanion.getHandState(VRCompanion, ...) end
@@ -730,7 +715,7 @@ VRCompanion.MotionControllers.isHandInUse = function(self, ...) return VRCompani
 VRCompanion.MotionControllers.getPointerHand = function(self, ...) return VRCompanion.getPointerHand(VRCompanion, ...) end
 VRCompanion.MotionControllers.consoleCommandSetMotionControllers = function(self, ...) return VRCompanion.consoleCommandSetMotionControllers(VRCompanion, ...) end
 VRCompanion.MotionControllers.consoleCommandMotionControllerStatus = function(self, ...) return VRCompanion.consoleCommandMotionControllerStatus(VRCompanion, ...) end
-VRCompanion.MotionControllers.getPointerController = function(self, ...) return VRCompanion.getPointerController(VRCompanion, ...) end
+VRCompanion.MotionControllers.getPointerOwner = function(self, ...) return VRCompanion.getPointerOwner(VRCompanion, ...) end
 VRCompanion.MotionControllers.isPointerRayInControl = function(self, ...) return VRCompanion.isPointerRayInControl(VRCompanion, ...) end
 VRCompanion.MotionControllers.notePointerRayMoved = function(self, ...) return VRCompanion.notePointerRayMoved(VRCompanion, ...) end
 VRCompanion.MotionControllers.notePointerMouseMoved = function(self, ...) return VRCompanion.notePointerMouseMoved(VRCompanion, ...) end
@@ -740,7 +725,6 @@ VRCompanion.MotionControllers.resetMotionControllerMovement = function(self, ...
 VRCompanion.MotionControllers.consoleCommandSetPointerCone = function(self, ...) return VRCompanion.consoleCommandSetPointerCone(VRCompanion, ...) end
 VRCompanion.MotionControllers.getPointerRay = function(self, ...) return VRCompanion.getPointerRay(VRCompanion, ...) end
 VRCompanion.MotionControllers.getPointerTrigger = function(self, ...) return VRCompanion.getPointerTrigger(VRCompanion, ...) end
-VRCompanion.MotionControllers.isPointerTriggerConsumed = function(self, ...) return VRCompanion.isPointerTriggerConsumed(VRCompanion, ...) end
 VRCompanion.MotionControllers.draw =function(self, ...) return VRCompanion.draw(VRCompanion, ...) end
 
 return VRCompanion.MotionControllers

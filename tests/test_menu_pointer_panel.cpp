@@ -1,4 +1,4 @@
-// Menu pointing in the Injector (spec #71, ticket #74): where a Motion Controller's ray lands on the
+// Menu pointing in the Injector (spec #71): where a Motion Controller's ray lands on the
 // floating menu / 2D Floating Window Mode panel, in normalized panel coordinates, and the drawn
 // cursor override the Pointer Ray uses. The panel geometry lives here (ADR-0006, ADR-0008); Lua only
 // consumes the hit.

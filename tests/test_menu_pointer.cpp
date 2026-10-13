@@ -1,4 +1,4 @@
-// Menu pointing in the Companion Mod (spec #71, ticket #74): the real Companion Mod over the real
+// Menu pointing in the Companion Mod (spec #71): the real Companion Mod over the real
 // VRBridge over FakeTrackedHeadset, with a stub GUI that records the cursor moves and clicks the
 // mod delivers through the game's own GUI mouse handling. The first block covers the two bridge
 // calls the mod relies on (panel hit, drawn cursor); the rest covers the mod's behaviour.
@@ -317,14 +317,14 @@ TEST_F(MenuPointerTest, MovingTheDeskMouseTakesControlAndMovingThePointerHandTak
     StartWithMenuOpen();
     ASSERT_FALSE(HasFatalFailure());
     AimRightHandAt(0.40f, 0.30f);
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerController()"), "ray");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "ray");
     ASSERT_TRUE(headset.manager->GetPointerCursorOverride().active);
     const int eventsWhileRayControlled = Count("#guiEvents");
 
     // The engine reports the desk mouse to the mod as mouse events.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:mouseEvent(0.20, 0.60, false, false, 0)", "=deskMouse"), 0);
     NextFrame(&headset);
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerController()"), "mouse");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "mouse");
     EXPECT_FALSE(headset.manager->GetPointerCursorOverride().active) << "the drawn cursor is the desk mouse's again";
     EXPECT_EQ(Count("#guiEvents"), eventsWhileRayControlled) << "the ray leaves the game's cursor alone";
     PullRightTrigger(1.0f);
@@ -332,7 +332,7 @@ TEST_F(MenuPointerTest, MovingTheDeskMouseTakesControlAndMovingThePointerHandTak
     PullRightTrigger(0.0f);
 
     AimRightHandAt(0.70f, 0.30f);  // the Pointer Hand moves
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerController()"), "ray");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "ray");
     EXPECT_TRUE(headset.manager->GetPointerCursorOverride().active);
     ExpectLastGuiEventAt(0.70, 0.70);
     PullRightTrigger(1.0f);
@@ -347,13 +347,13 @@ TEST_F(MenuPointerTest, TheDeskMouseIsAlsoNoticedBySamplingItsPositionWhenNoMous
     )luau", "=inputBinding"), 0);
     NextFrame(&headset);  // first sample: just remembers where the mouse is
     AimRightHandAt(0.40f, 0.30f);
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerController()"), "ray");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "ray");
 
     ASSERT_EQ(RunLuauChunk(L, "g_inputBinding.x = 0.52", "=mouseMoved"), 0);
     NextFrame(&headset);
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerController()"), "mouse");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "mouse");
     NextFrame(&headset);
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerController()"), "mouse") << "a mouse lying still stays in control";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "mouse") << "a mouse lying still stays in control";
 }
 
 TEST_F(MenuPointerTest, ThePointerRayStartsWithoutControlAndTheStillDeskMouseDoesNotTakeItBack) {
@@ -363,12 +363,12 @@ TEST_F(MenuPointerTest, ThePointerRayStartsWithoutControlAndTheStillDeskMouseDoe
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
     ASSERT_EQ(RunLuauChunk(L, kGuiStubs, "=guiStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerController()"), "mouse");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "mouse");
     EXPECT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "false");
 
     headset.SetHandPose(kRight, AimAt(0.5f, 0.5f));
     NextFrame(&headset);
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerController()"), "mouse") << "a controller that has not moved is not pointing";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "mouse") << "a Motion Controller that has not moved is not pointing";
     AimRightHandAt(0.6f, 0.5f);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "true");
 }
@@ -379,7 +379,7 @@ TEST_F(MenuPointerTest, TheRayLosesControlWhenThePointerHandIsPutDown) {
     AimRightHandAt(0.40f, 0.30f);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "true");
 
-    AdvanceGameTime(3500);  // the controller lies still for longer than the in-use window
+    AdvanceGameTime(3500);  // the Motion Controller lies still for longer than the in-use window
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "false");
     EXPECT_FALSE(headset.manager->GetPointerCursorOverride().active);

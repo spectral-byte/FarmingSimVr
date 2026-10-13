@@ -1,6 +1,6 @@
-// Motion Controller buttons trigger Snap Turn, Recenter and HUD toggle (spec #71, ticket #75), seen
+// Motion Controller buttons trigger Snap Turn, Recenter and HUD toggle (spec #71), seen
 // from outside: the real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, the
-// test pushes the fake controllers' thumbsticks and buttons, drives frames and the game clock, and
+// test pushes the fake Motion Controllers' thumbsticks and buttons, drives frames and the game clock, and
 // observes the camera's yaw, the Recenter calls reaching the bridge, and the HUD state.
 
 #include "companion_mod_fixture.h"
@@ -57,7 +57,7 @@ constexpr const char* kCabAndRecenterCounter = R"luau(
     end
 )luau";
 
-class ControllerButtonMappingTest : public CompanionModTest {
+class MotionControllerButtonMappingTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
@@ -80,8 +80,8 @@ protected:
     void RestartGameSession() {
         std::string seed;
         for (const char* key : { "snapTurn", "recenter", "hudToggle" }) {
-            const std::string value = EvalLua(L, std::string("savedXml['vrSettings.controllerMap.") + key + "']");
-            if (value != "nil") seed += std::string("savedXml['vrSettings.controllerMap.") + key + "'] = '" + value + "'\n";
+            const std::string value = EvalLua(L, std::string("savedXml['vrSettings.motionControllerMap.") + key + "']");
+            if (value != "nil") seed += std::string("savedXml['vrSettings.motionControllerMap.") + key + "'] = '" + value + "'\n";
         }
         lua_close(L);
         L = luaL_newstate();
@@ -116,14 +116,14 @@ FakeOpenXrControllers::Inputs Thumb(float x, float y = 0.0f) {
 
 } // namespace
 
-TEST_F(ControllerButtonMappingTest, PushingTheThumbstickRightSnapTurnsRight) {
+TEST_F(MotionControllerButtonMappingTest, PushingTheThumbstickRightSnapTurnsRight) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     Hold(kRight, Thumb(1.0f));
     // Snap Turn right steps the in-cab view yaw by -90 degrees (same as the key action).
     EXPECT_NEAR(CabYaw(), -3.14159265 / 2.0, 1e-4);
 }
 
-TEST_F(ControllerButtonMappingTest, PushingTheThumbstickLeftSnapTurnsLeftOnEitherHand) {
+TEST_F(MotionControllerButtonMappingTest, PushingTheThumbstickLeftSnapTurnsLeftOnEitherHand) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     Hold(kLeft, Thumb(-1.0f));
     EXPECT_NEAR(CabYaw(), 3.14159265 / 2.0, 1e-4) << "left hand, left push";
@@ -139,7 +139,7 @@ TEST_F(ControllerButtonMappingTest, PushingTheThumbstickLeftSnapTurnsLeftOnEithe
     EXPECT_NEAR(CabYaw(), 3.14159265 / 2.0, 1e-4) << "right hand, left push";
 }
 
-TEST_F(ControllerButtonMappingTest, ASnapTurnIsOnePerPushAndKeepsTheKeyActionDebounce) {
+TEST_F(MotionControllerButtonMappingTest, ASnapTurnIsOnePerPushAndKeepsTheKeyActionDebounce) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     Hold(kRight, Thumb(1.0f));
     const double afterFirst = CabYaw();
@@ -162,7 +162,7 @@ TEST_F(ControllerButtonMappingTest, ASnapTurnIsOnePerPushAndKeepsTheKeyActionDeb
     EXPECT_NEAR(CabYaw(), afterFirst - 3.14159265 / 2.0, 1e-4);
 }
 
-TEST_F(ControllerButtonMappingTest, AThumbstickPushedMostlyUpOrOnlySlightlySidewaysDoesNotSnapTurn) {
+TEST_F(MotionControllerButtonMappingTest, AThumbstickPushedMostlyUpOrOnlySlightlySidewaysDoesNotSnapTurn) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     Hold(kRight, Thumb(0.5f, 0.0f));
     EXPECT_NEAR(CabYaw(), 0.0, 1e-6) << "half way is inside the deadzone";
@@ -178,7 +178,7 @@ FakeOpenXrControllers::Inputs Pressed(bool FakeOpenXrControllers::Inputs::*butto
     return inputs;
 }
 
-TEST_F(ControllerButtonMappingTest, ClickingTheThumbstickTriggersTheRecenterActionOnEitherHand) {
+TEST_F(MotionControllerButtonMappingTest, ClickingTheThumbstickTriggersTheRecenterActionOnEitherHand) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     EXPECT_EQ(RecenterCalls(), 0);
 
@@ -200,7 +200,7 @@ TEST_F(ControllerButtonMappingTest, ClickingTheThumbstickTriggersTheRecenterActi
     EXPECT_EQ(RecenterCalls(), 3);
 }
 
-TEST_F(ControllerButtonMappingTest, PressingTheMenuButtonTriggersTheHudToggleActionOnEitherHandWithItsDebounce) {
+TEST_F(MotionControllerButtonMappingTest, PressingTheMenuButtonTriggersTheHudToggleActionOnEitherHandWithItsDebounce) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     auto hudState = [&]() { return std::stoi(EvalLua(L, "VRCompanion:getHudState()")); };
     const int start = hudState();
@@ -223,7 +223,7 @@ TEST_F(ControllerButtonMappingTest, PressingTheMenuButtonTriggersTheHudToggleAct
     EXPECT_EQ(hudState(), (start + 2) % 3) << "right hand, after the debounce";
 }
 
-TEST_F(ControllerButtonMappingTest, SnapTurnStaysOffWhileAMenuIsShowing) {
+TEST_F(MotionControllerButtonMappingTest, SnapTurnStaysOffWhileAMenuIsShowing) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_gui = { _visible = true, getIsGuiVisible = function(self) return self._visible end }
@@ -239,7 +239,7 @@ TEST_F(ControllerButtonMappingTest, SnapTurnStaysOffWhileAMenuIsShowing) {
     EXPECT_NEAR(CabYaw(), -3.14159265 / 2.0, 1e-4) << "Snap Turn is back once the menu is closed";
 }
 
-TEST_F(ControllerButtonMappingTest, NothingHappensWhileMotionControllersAreOff) {
+TEST_F(MotionControllerButtonMappingTest, NothingHappensWhileMotionControllersAreOff) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllers', 'off')").find("off"), std::string::npos);
     const int hudBefore = std::stoi(EvalLua(L, "VRCompanion:getHudState()"));
@@ -262,7 +262,7 @@ TEST_F(ControllerButtonMappingTest, NothingHappensWhileMotionControllersAreOff) 
     EXPECT_EQ(RecenterCalls(), 1);
 }
 
-TEST_F(ControllerButtonMappingTest, AControllerThatComesBackTrackedWithAnInputHeldDoesNotFireIt) {
+TEST_F(MotionControllerButtonMappingTest, AControllerThatComesBackTrackedWithAnInputHeldDoesNotFireIt) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     headset.SetHandInputs(kRight, Pressed(&FakeOpenXrControllers::Inputs::thumbClick));
     headset.SetHandTracked(kRight, false);
@@ -278,9 +278,9 @@ TEST_F(ControllerButtonMappingTest, AControllerThatComesBackTrackedWithAnInputHe
 
 // ---- Changing, removing and saving the mappings ----
 
-TEST_F(ControllerButtonMappingTest, AConsoleCommandChangesWhichInputTriggersAnAction) {
+TEST_F(MotionControllerButtonMappingTest, AConsoleCommandChangesWhichInputTriggersAnAction) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
-    EXPECT_NE(EvalLua(L, "runCommand('vrControllerMap', 'recenter', 'buttonUpper')").find("buttonUpper"), std::string::npos);
+    EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerMap', 'recenter', 'buttonUpper')").find("buttonUpper"), std::string::npos);
 
     Tap(kRight, Pressed(&FakeOpenXrControllers::Inputs::thumbClick));
     EXPECT_EQ(RecenterCalls(), 0) << "the thumbstick click no longer recenters";
@@ -291,18 +291,18 @@ TEST_F(ControllerButtonMappingTest, AConsoleCommandChangesWhichInputTriggersAnAc
 
     // The menu button can move to a face button too.
     const int hudBefore = std::stoi(EvalLua(L, "VRCompanion:getHudState()"));
-    EvalLua(L, "runCommand('vrControllerMap', 'hudToggle', 'buttonLower')");
+    EvalLua(L, "runCommand('vrMotionControllerMap', 'hudToggle', 'buttonLower')");
     Tap(kLeft, Pressed(&FakeOpenXrControllers::Inputs::menu));
     EXPECT_EQ(std::stoi(EvalLua(L, "VRCompanion:getHudState()")), hudBefore) << "the menu button no longer toggles the HUD";
     Tap(kLeft, Pressed(&FakeOpenXrControllers::Inputs::buttonLower));
     EXPECT_EQ(std::stoi(EvalLua(L, "VRCompanion:getHudState()")), (hudBefore + 1) % 3);
 }
 
-TEST_F(ControllerButtonMappingTest, AConsoleCommandRemovesAMappingAndDefaultBringsItBack) {
+TEST_F(MotionControllerButtonMappingTest, AConsoleCommandRemovesAMappingAndDefaultBringsItBack) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
-    EvalLua(L, "runCommand('vrControllerMap', 'snapTurn', 'none')");
-    EvalLua(L, "runCommand('vrControllerMap', 'recenter', 'none')");
-    EvalLua(L, "runCommand('vrControllerMap', 'hudToggle', 'none')");
+    EvalLua(L, "runCommand('vrMotionControllerMap', 'snapTurn', 'none')");
+    EvalLua(L, "runCommand('vrMotionControllerMap', 'recenter', 'none')");
+    EvalLua(L, "runCommand('vrMotionControllerMap', 'hudToggle', 'none')");
     const int hudBefore = std::stoi(EvalLua(L, "VRCompanion:getHudState()"));
 
     Tap(kRight, Thumb(1.0f));
@@ -312,35 +312,35 @@ TEST_F(ControllerButtonMappingTest, AConsoleCommandRemovesAMappingAndDefaultBrin
     EXPECT_EQ(RecenterCalls(), 0);
     EXPECT_EQ(std::stoi(EvalLua(L, "VRCompanion:getHudState()")), hudBefore);
 
-    EvalLua(L, "runCommand('vrControllerMap', 'recenter', 'default')");
+    EvalLua(L, "runCommand('vrMotionControllerMap', 'recenter', 'default')");
     Tap(kRight, Pressed(&FakeOpenXrControllers::Inputs::thumbClick));
     EXPECT_EQ(RecenterCalls(), 1);
 
-    EvalLua(L, "runCommand('vrControllerMap', 'reset')");
+    EvalLua(L, "runCommand('vrMotionControllerMap', 'reset')");
     AdvanceGameTime(300);
     Tap(kRight, Thumb(1.0f));
     EXPECT_NEAR(CabYaw(), -3.14159265 / 2.0, 1e-4) << "reset restores the Snap Turn too";
 }
 
-TEST_F(ControllerButtonMappingTest, TheCommandReportsTheMappingsAndRefusesInputsItDoesNotKnow) {
+TEST_F(MotionControllerButtonMappingTest, TheCommandReportsTheMappingsAndRefusesInputsItDoesNotKnow) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
-    const std::string report = EvalLua(L, "runCommand('vrControllerMap')");
+    const std::string report = EvalLua(L, "runCommand('vrMotionControllerMap')");
     EXPECT_NE(report.find("snapTurn=thumbX"), std::string::npos) << report;
     EXPECT_NE(report.find("recenter=thumbClick"), std::string::npos) << report;
     EXPECT_NE(report.find("hudToggle=menu"), std::string::npos) << report;
 
     // The trigger belongs to pointing and clicking, and an action name must be one of the three.
-    EXPECT_NE(EvalLua(L, "runCommand('vrControllerMap', 'recenter', 'trigger')").find("Usage"), std::string::npos);
-    EXPECT_NE(EvalLua(L, "runCommand('vrControllerMap', 'jump', 'menu')").find("Usage"), std::string::npos);
-    EXPECT_NE(EvalLua(L, "runCommand('vrControllerMap', 'snapTurn', 'menu')").find("Usage"), std::string::npos);
+    EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerMap', 'recenter', 'trigger')").find("Usage"), std::string::npos);
+    EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerMap', 'jump', 'menu')").find("Usage"), std::string::npos);
+    EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerMap', 'snapTurn', 'menu')").find("Usage"), std::string::npos);
     Tap(kRight, Pressed(&FakeOpenXrControllers::Inputs::thumbClick));
     EXPECT_EQ(RecenterCalls(), 1) << "a refused command changes nothing";
 }
 
-TEST_F(ControllerButtonMappingTest, TheMappingsAreSavedAndComeBackInTheNextGameSession) {
+TEST_F(MotionControllerButtonMappingTest, TheMappingsAreSavedAndComeBackInTheNextGameSession) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
-    EvalLua(L, "runCommand('vrControllerMap', 'recenter', 'buttonLower')");
-    EvalLua(L, "runCommand('vrControllerMap', 'hudToggle', 'none')");
+    EvalLua(L, "runCommand('vrMotionControllerMap', 'recenter', 'buttonLower')");
+    EvalLua(L, "runCommand('vrMotionControllerMap', 'hudToggle', 'none')");
     ASSERT_NO_FATAL_FAILURE(RestartGameSession());
 
     Tap(kRight, Pressed(&FakeOpenXrControllers::Inputs::thumbClick));
@@ -354,9 +354,9 @@ TEST_F(ControllerButtonMappingTest, TheMappingsAreSavedAndComeBackInTheNextGameS
     EXPECT_NEAR(CabYaw(), -3.14159265 / 2.0, 1e-4) << "the untouched mapping is still the default";
 }
 
-TEST_F(ControllerButtonMappingTest, ASavedMappingThatMakesNoSenseIsIgnored) {
-    ASSERT_NO_FATAL_FAILURE(StartMod("_G.savedXml = { ['vrSettings.controllerMap.recenter'] = 'trigger', "
-                                     "['vrSettings.controllerMap.hudToggle'] = 'nonsense' }"));
-    EXPECT_NE(EvalLua(L, "runCommand('vrControllerMap')").find("recenter=thumbClick"), std::string::npos);
-    EXPECT_NE(EvalLua(L, "runCommand('vrControllerMap')").find("hudToggle=menu"), std::string::npos);
+TEST_F(MotionControllerButtonMappingTest, ASavedMappingThatMakesNoSenseIsIgnored) {
+    ASSERT_NO_FATAL_FAILURE(StartMod("_G.savedXml = { ['vrSettings.motionControllerMap.recenter'] = 'trigger', "
+                                     "['vrSettings.motionControllerMap.hudToggle'] = 'nonsense' }"));
+    EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerMap')").find("recenter=thumbClick"), std::string::npos);
+    EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerMap')").find("hudToggle=menu"), std::string::npos);
 }

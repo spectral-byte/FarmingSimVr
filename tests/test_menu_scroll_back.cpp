@@ -1,6 +1,6 @@
-// Scrolling and going back in menus with Motion Controllers (spec #71, ticket #80), seen from
+// Scrolling and going back in menus with Motion Controllers (spec #71), seen from
 // outside: the real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, the test
-// pushes the fake controllers' thumbsticks, grips and buttons, drives frames and the game clock, and
+// pushes the fake Motion Controllers' thumbsticks, grips and buttons, drives frames and the game clock, and
 // observes what the stub GUI receives. The stub GUI scrolls its list the way the game's list and
 // slider elements do (they poll the mouse wheel state while handling a mouse event) and records the
 // back/close input it is given.
@@ -444,7 +444,7 @@ TEST_F(MenuScrollBackTest, AWorldActionOnTheLowerFaceButtonYieldsToBackWhileAMen
     StartWithMenuOpen();
     ASSERT_FALSE(HasFatalFailure());
     ASSERT_EQ(RunLuauChunk(L, kCabAndRecenterCounter, "=cab"), 0);
-    ASSERT_EQ(RunLuauChunk(L, "assert(VRCompanion:setControllerMapping('recenter', 'buttonLower'))", "=mapRecenter"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "assert(VRCompanion:setMotionControllerMapping('recenter', 'buttonLower'))", "=mapRecenter"), 0);
     NextFrame(&headset);
 
     Hold(kRight, LowerButton());

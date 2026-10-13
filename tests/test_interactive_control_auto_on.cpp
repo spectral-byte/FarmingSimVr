@@ -1,4 +1,4 @@
-// Interactive Control switches on when the Pointer Hand is picked up in a cab (spec #71, ticket #77,
+// Interactive Control switches on when the Pointer Hand is picked up in a cab (spec #71,
 // ADR-0026), seen from outside: the real Companion Mod runs against the real VRBridge over
 // FakeTrackedHeadset, with a stand-in for the Interactive Control mod whose vehicle records every write
 // of its synced state (companion_mod_stubs.h). The test moves the fake Motion Controllers and the game
@@ -55,7 +55,7 @@ void PreFrame(lua_State* L) {
 #define FRAMES(count) \
     for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
 
-// The Pointer Hand is in use once its controller has moved: a controller held at (x, y, z) that was
+// The Pointer Hand is in use once its Motion Controller has moved: a Motion Controller held at (x, y, z) that was
 // moved there just now.
 #define PICK_UP(hand) \
     do { \
@@ -65,7 +65,7 @@ void PreFrame(lua_State* L) {
         FRAMES(1); \
     } while (0)
 
-// The Pointer Hand stops being in use: the controller lies still for longer than the in-use time.
+// The Pointer Hand stops being in use: the Motion Controller lies still for longer than the in-use time.
 #define PUT_DOWN() \
     do { \
         AdvanceGameTime(3500); \

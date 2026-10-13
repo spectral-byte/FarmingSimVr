@@ -1,4 +1,4 @@
-// Pointer Hand switching (spec #71, ticket #78), seen from outside: the real Companion Mod runs against
+// Pointer Hand switching (spec #71), seen from outside: the real Companion Mod runs against
 // the real VRBridge over FakeTrackedHeadset, with the Interactive Control stand-in from
 // companion_mod_stubs.h (which Click Point executed) and a stub GUI (which clicks reached a menu).
 // With both Motion Controllers in use, a trigger pull on the hand that is not the Pointer Hand moves
@@ -239,7 +239,7 @@ TEST_F(PointerHandSwitchTest, WhenThePointerHandStopsBeingInUseTheOtherHandBecom
 TEST_F(PointerHandSwitchTest, WithBothHandsInUseAndNoPointerHandYetAPullPicksThatHandAndIsConsumed) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     SetGameTime(10000);
-    // Both controllers are picked up in the same frame: neither was the Pointer Hand first.
+    // Both Motion Controllers are picked up in the same frame: neither was the Pointer Hand first.
     headset.SetHandPose(kRight, HandAt(SideOf(kRight) - 0.1f, 0.0f, -0.3f));
     headset.SetHandPose(kLeft, HandAt(SideOf(kLeft) - 0.1f, 0.0f, -0.3f));
     Frames(1);
@@ -256,7 +256,7 @@ TEST_F(PointerHandSwitchTest, WithBothHandsInUseAndNoPointerHandYetAPullPicksTha
     EXPECT_EQ(Executed(), "") << "the picking pull is consumed too";
 
     Release(kRight);
-    // Aiming at the Click Point moves the hand, which gives the Pointer Ray control (ticket #79).
+    // Aiming at the Click Point moves the hand, which gives the Pointer Ray control.
     headset.SetHandPose(kRight, HandAt(SideOf(kRight) + 0.05f, 0.0f, -0.3f));
     Frames(1);
     Pull(kRight);

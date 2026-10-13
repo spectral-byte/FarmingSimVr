@@ -84,7 +84,7 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrHudGroup <map\|speedometer\|info\|controls> <horizontal> <vertical> [scale]` | Place and scale a HUD group |
 | `vrHudGroupShow <group> <streamlined\|full> <on\|off>` | Choose which groups show in each HUD state |
 | `vrHudSafeArea <horizontal> <vertical>` | Keep other HUD elements (warnings, notifications, other mods) inside the lens |
-| `vrMotionControllers <on\|off>` | Use Motion Controllers (default `on`, saved). `off` makes the mod ignore controller input |
+| `vrMotionControllers <on\|off>` | Use Motion Controllers (default `on`, saved). `off` makes the mod ignore Motion Controller input |
 | `vrMotionControllerStatus` | Report each Motion Controller's tracked and in-use state and the Pointer Hand |
 | `vrPointerCone <degrees>` | How wide a cone around the Pointer Ray selects the nearest Interactive Control Click Point (default `5`, saved) |
 
@@ -98,14 +98,14 @@ With Motion Controllers on, these inputs work on either hand (a push or press ac
 | Thumbstick click | Recenter |
 | Menu button | Toggle the HUD |
 
-The menu button is the left controller only on Touch and does not exist on Index, so the HUD toggle needs another input there. `vrControllerMap` changes or removes each mapping and saves it:
+The menu button is on the left Motion Controller only on Touch and does not exist on Index, so the HUD toggle needs another input there. `vrMotionControllerMap` changes or removes each mapping and saves it:
 
 | Command | Purpose |
 | :--- | :--- |
-| `vrControllerMap` | Show the current mappings |
-| `vrControllerMap <snapTurn\|recenter\|hudToggle> <input>` | Put an action on an input: `thumbClick`, `buttonLower`, `buttonUpper` or `menu` (`snapTurn` only takes `thumbX`) |
-| `vrControllerMap <action> none` | Remove the mapping |
-| `vrControllerMap <action> default` / `vrControllerMap reset` | Restore one / all defaults |
+| `vrMotionControllerMap` | Show the current mappings |
+| `vrMotionControllerMap <snapTurn\|recenter\|hudToggle> <input>` | Put an action on an input: `thumbClick`, `buttonLower`, `buttonUpper` or `menu` (`snapTurn` only takes `thumbX`) |
+| `vrMotionControllerMap <action> none` | Remove the mapping |
+| `vrMotionControllerMap <action> default` / `vrMotionControllerMap reset` | Restore one / all defaults |
 
 `hudConvergenceDepth` (default `1.8`) is set in `settings.xml` only.
 

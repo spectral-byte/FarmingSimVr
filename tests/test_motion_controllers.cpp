@@ -1,7 +1,7 @@
-// Motion Controller state in the Companion Mod (spec #71, ticket #72), seen from outside: the real
+// Motion Controller state in the Companion Mod (spec #71), seen from outside: the real
 // Companion Mod runs against the real VRBridge over FakeTrackedHeadset, the test moves the fake
-// controllers and drives frames and the game clock, and asserts what the mod reports and what the
-// Injector's OpenXR layer was asked to do. Later Motion Controller tickets add their own files next
+// Motion Controllers and drives frames and the game clock, and asserts what the mod reports and what the
+// Injector's OpenXR layer was asked to do. Other Motion Controller features have their own files next
 // to this one and reuse companion_mod_fixture.h.
 
 #include "companion_mod_fixture.h"
@@ -187,7 +187,7 @@ TEST_F(CompanionModTest, ASingleHandInUseIsThePointerHand) {
     headset.SetHandPose(kLeft, HandAt(-0.30f, 1.10f, -0.35f));
     headset.SetHandPose(kRight, HandAt(0.30f, 1.20f, -0.40f));
     NextFrame(&headset);
-    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "nil") << "nobody picked a controller up yet";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "nil") << "nobody picked a Motion Controller up yet";
 
     headset.SetHandPose(kLeft, HandAt(-0.20f, 1.10f, -0.35f));
     NextFrame(&headset);
@@ -260,7 +260,7 @@ TEST_F(CompanionModTest, ARecenterDoesNotMakeAControllerLyingStillLookMoved) {
     NextFrame(&headset);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "false");
 
-    // The Recenter Action moves the origin to the head: every pose, the desk controller's too, shifts.
+    // The Recenter Action moves the origin to the head: every pose, the desk Motion Controller's too, shifts.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenter"), 0);
     NextFrame(&headset);
 
@@ -322,7 +322,7 @@ TEST_F(CompanionModTest, VrMotionControllersOffIgnoresControllerInputWithoutTouc
     EXPECT_EQ(controllers.destroyActionSetCalls, 0u);
     EXPECT_TRUE(headset.manager->HasMotionControllerActions());
 
-    // Switching back on picks the controllers up again.
+    // Switching back on picks the Motion Controllers up again.
     EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllers', 'on')").find("on"), std::string::npos);
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getHandState(1).tracked"), "true");
@@ -420,7 +420,7 @@ TEST_F(CompanionModTest, TheStatusCommandReportsEachHandsTrackedAndInUseStateAnd
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrMotionControllers', 'off')", "=off"), 0);
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "runCommand('vrMotionControllerStatus')"),
-              "Motion Controllers: off (controller input is ignored) | Left: ignored | Right: ignored | Pointer Hand: none");
+              "Motion Controllers: off (Motion Controller input is ignored) | Left: ignored | Right: ignored | Pointer Hand: none");
 }
 
 // ---- Nothing to track ----

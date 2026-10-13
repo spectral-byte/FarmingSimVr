@@ -431,7 +431,7 @@ TEST(OpenXrManagerTest, PassThroughReportsBothHandsUntracked) {
     EXPECT_FALSE(manager.GetHandState(1).tracked);
 }
 
-// ---- Haptics: the dispatch and fake side is ready; the pulse call itself belongs to the haptics ticket ----
+// ---- Haptics through the dispatch (OpenXrManager::PulseHaptic is covered in test_haptics.cpp) ----
 
 TEST(OpenXrManagerTest, HapticFeedbackAppliedThroughTheDispatchReachesTheNamedHandOnly) {
     FakeTrackedHeadset headset;

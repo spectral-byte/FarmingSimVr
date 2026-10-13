@@ -243,7 +243,8 @@ public:
     }
 };
 
-class NativeOpenXrDispatch : public IOpenXrDispatch {public:
+class NativeOpenXrDispatch : public IOpenXrDispatch {
+public:
     XrResult EnumerateInstanceExtensionProperties(
         const char* layerName,
         uint32_t propertyCapacityInput,
