@@ -469,3 +469,115 @@ TEST_F(CompanionModTest, TheHandModelIsLoadedOncePerMapAndDeletedWhenTheMapUnloa
 }
 
 class VirtualHandsModelTest : public CompanionModTest {};
+
+// ---- A model that is missing or fails to load ----
+
+TEST_F(CompanionModTest, AMissingHandModelLogsOnceAndLeavesNoVirtualHandsWhilePointingStillWorks) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubModel.fileExists = false; StubIC.addPoint('lights', -0.3, 1.5, 2.3)", "=noModelFile"), 0);
+    SetGameTime(10000);
+    headset.SetHandPose(kRight, HandAt(0.2f, 0.0f, -0.3f));
+    FRAMES(1);
+    headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    FRAMES(30);
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=menu"), 0);
+    FRAMES(3);
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenu"), 0);
+    FRAMES(3);
+
+    EXPECT_EQ(EvalLua(L, "#StubModel.clones"), "0") << "no Virtual Hands";
+    EXPECT_EQ(EvalLua(L, "#StubModel.loads"), "0") << "the engine is not asked to load a file that is not there";
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands:"), 1) << "one line, however long the game runs";
+    EXPECT_EQ(CountLogLines("virtualHandRight.i3d"), 1) << "naming the file";
+    EXPECT_NE(EvalLua(L, "runCommand('vrVirtualHandsDiagnostics')").find("model not loaded"), std::string::npos);
+
+    // The Pointer Ray and Click Points are unaffected.
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "lights");
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "StubIC.executed[1]"), "lights");
+}
+
+TEST_F(CompanionModTest, AHandModelThatFailsToLoadLogsOnceAndLeavesNoVirtualHandsWhilePointingStillWorks) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubModel.failLoad = true; StubIC.addPoint('lights', -0.3, 1.5, 2.3)", "=failingModel"), 0);
+    SetGameTime(10000);
+    headset.SetHandPose(kRight, HandAt(0.2f, 0.0f, -0.3f));
+    FRAMES(1);
+    headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    FRAMES(30);
+
+    EXPECT_EQ(EvalLua(L, "#StubModel.clones"), "0");
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands:"), 1);
+    EXPECT_EQ(CountLogLines("failed to load"), 1);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "lights");
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "StubIC.executed[1]"), "lights");
+}
+
+// ---- Log line and diagnostics ----
+
+TEST_F(CompanionModTest, TheVirtualHandsLogLineChangesOnlyWhenTheReasonChanges) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    FRAMES(20);
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands:"), 1) << "one line while nothing changes";
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands: available"), 1);
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=menu"), 0);
+    FRAMES(10);
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands:"), 2);
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands: head not placed in the world"), 1);
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenu"), 0);
+    FRAMES(10);
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands: available"), 2) << "it says when they are back";
+
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrMotionControllers', 'off')", "=off"), 0);
+    FRAMES(10);
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands: Motion Controllers off"), 1);
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands:"), 4);
+}
+
+TEST_F(CompanionModTest, TheDiagnosticsCommandsReportEachVirtualHandAndWhyItIsHidden) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+
+    std::string report = EvalLua(L, "runCommand('vrVirtualHandsDiagnostics')");
+    EXPECT_NE(report.find("Virtual Hands: available"), std::string::npos) << report;
+    EXPECT_NE(report.find("Right Virtual Hand: shown"), std::string::npos) << report;
+    EXPECT_NE(report.find("Left Virtual Hand: hidden (Motion Controller not in use)"), std::string::npos) << report;
+    const std::string pointer = EvalLua(L, "runCommand('vrPointerDiagnostics')");
+    EXPECT_NE(pointer.find("Right Virtual Hand: shown"), std::string::npos) << "the Motion Controller diagnostics carry it too: " << pointer;
+    EXPECT_NE(pointer.find("Pointer Ray:"), std::string::npos) << "next to the existing report: " << pointer;
+
+    headset.SetHandGripPose(kRight, HandAt(0.25f, -0.10f, -0.20f), /*tracked=*/false);
+    FRAMES(1);
+    report = EvalLua(L, "runCommand('vrVirtualHandsDiagnostics')");
+    EXPECT_NE(report.find("Right Virtual Hand: hidden (grip pose not tracked)"), std::string::npos) << report;
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:set2DViewActive(true)", "=2d"), 0);
+    FRAMES(1);
+    report = EvalLua(L, "runCommand('vrVirtualHandsDiagnostics')");
+    EXPECT_NE(report.find("Virtual Hands: head not placed in the world"), std::string::npos) << report;
+    EXPECT_NE(report.find("Right Virtual Hand: hidden (head not placed in the world"), std::string::npos) << report;
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:set2DViewActive(false); runCommand('vrMotionControllers', 'off')", "=off"), 0);
+    FRAMES(1);
+    report = EvalLua(L, "runCommand('vrVirtualHandsDiagnostics')");
+    EXPECT_NE(report.find("Virtual Hands: Motion Controllers off"), std::string::npos) << report;
+
+    // The command goes with the map.
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=unloadMap"), 0);
+    EXPECT_EQ(EvalLua(L, "registeredCommands['vrVirtualHandsDiagnostics']"), "nil");
+}

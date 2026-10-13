@@ -82,6 +82,10 @@
 --     Locomotion  onRecenterAction -> resetMotionControllerMovement() (a recenter moves every pose)
 --     MenuPointer updateMotionControllers -> updateMenuPointer(dt) at the end of every update, and
 --                 resetMotionControllers -> resetMenuPointer() (VRCompanionMenuPointer.lua)
+--     VirtualHands updateMotionControllers -> updateVirtualHands(dt) at the end of every update (also when input is
+--                 ignored, so the hands hide), resetMotionControllers -> resetVirtualHands(), and the console
+--                 command registers next to the others (VRCompanionVirtualHands.lua). The Virtual Hands place the grip
+--                 pose through VRCompanion:headRelativePoseToWorld, the transform the Pointer Ray uses too.
 --     ControllerMap (VRCompanionMotionControllerMap.lua) is driven from here: updateMotionControllers ->
 --                 processMotionControllerButtons(), and the save/load/register/reset functions below call its
 --                 saveMotionControllerMapSettings / loadMotionControllerMapSettings / registerMotionControllerMapConsoleCommands /
