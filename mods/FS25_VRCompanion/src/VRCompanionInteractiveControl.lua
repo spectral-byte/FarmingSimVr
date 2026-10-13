@@ -186,13 +186,35 @@ local function tryInstall(self)
     end
     local manager = currentManager()
     if manager == nil then
-        return  -- Interactive Control has not created its manager yet
+        -- Interactive Control has not created its manager yet; say so once so a stuck wait shows in the log.
+        if not state.waitingLogged then
+            state.waitingLogged = true
+            print("[FS25_VR] Interactive Control support: waiting for g_currentMission.interactiveControl")
+        end
+        return
     end
     missing = missingFunctions(manager, MANAGER_FUNCTIONS)
     if missing ~= nil then
         return giveUp("the manager has no " .. missing)
     end
     installWrappers(self, class)
+    print("[FS25_VR] Interactive Control support: installed")
+end
+
+-- One line for vrPointerDiagnostics: whether the wrap is installed and what it currently sees.
+function VRCompanion:getInteractiveControlDiagnostics()
+    if state.gaveUp then return "Interactive Control support: gave up (see the warning in the log)" end
+    if not state.installed then
+        return "Interactive Control support: not installed yet (" .. (state.waitingLogged and "no manager"
+            or "waiting for a tracked Motion Controller") .. ")"
+    end
+    local live, tracked = 0, 0
+    for point in pairs(state.points) do
+        tracked = tracked + 1
+        if isPointActive(point) then live = live + 1 end
+    end
+    return string.format("Interactive Control support: installed | Click Points seen: %d (active %d) | selected: %s | updates: %d",
+        tracked, live, state.selected ~= nil and "yes" or "none", state.updates)
 end
 
 local function anyHandTracked(self)

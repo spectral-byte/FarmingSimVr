@@ -253,12 +253,24 @@ end
 -- ---- Who controls the pointer ---------------------------------------------------------------
 -- One place for "desk mouse or Pointer Ray: whichever moved last" (see the header for the API).
 
-function VRCompanion:notePointerRayMoved()
-    state.pointerOwner = self.POINTER_CONTROL_RAY
+-- Logs who took the pointer (the first few times only, so a mouse that never settles cannot flood the log).
+local POINTER_OWNER_LOG_LIMIT = 30
+local function setPointerOwner(self, owner, why)
+    if state.pointerOwner ~= owner then
+        state.ownerChanges = (state.ownerChanges or 0) + 1
+        if state.ownerChanges <= POINTER_OWNER_LOG_LIMIT then
+            print(string.format("[FS25_VR] Pointer control: %s (%s)", owner, why))
+        end
+    end
+    state.pointerOwner = owner
 end
 
-function VRCompanion:notePointerMouseMoved()
-    state.pointerOwner = self.POINTER_CONTROL_MOUSE
+function VRCompanion:notePointerRayMoved()
+    setPointerOwner(self, self.POINTER_CONTROL_RAY, "the Pointer Hand moved")
+end
+
+function VRCompanion:notePointerMouseMoved(why)
+    setPointerOwner(self, self.POINTER_CONTROL_MOUSE, why or "the desk mouse moved")
 end
 
 function VRCompanion:getPointerOwner()
@@ -285,7 +297,7 @@ local function noteDeskMouse(self, x, y, isEvent)
         moved = moved or math.abs(x - last.x) > epsilon or math.abs(y - last.y) > epsilon
     end
     if moved then
-        self:notePointerMouseMoved()
+        self:notePointerMouseMoved(isEvent and "mouse event" or "mouse position sampled")
     end
 end
 
@@ -438,16 +450,21 @@ local function placePointerRay(self, hand)
     local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
     local getWorldQuaternionFn = getWorldQuaternion or (_G and _G.getWorldQuaternion)
     local bridge = VRBridge or (_G and _G.VRBridge)
-    if pose.tracked ~= true or listener == nil or listener == 0 or not headIsPlacedInTheWorld(self)
-        or type(getWorldTranslationFn) ~= "function" or type(getWorldQuaternionFn) ~= "function"
-        or bridge == nil or type(bridge.getHeadPose) ~= "function" then
-        return false
+    if pose.tracked ~= true then return false, "the Pointer Hand is not tracked" end
+    if listener == nil or listener == 0 then return false, "the Cyclopean Audio Listener Node does not exist" end
+    if not headIsPlacedInTheWorld(self) then
+        return false, string.format("the head is not placed in the world (menu=%s, 2D=%s, trackedCameraShown=%s)",
+            tostring(self.isMenuVisible), tostring(self.is2DViewActive), tostring(self.trackedCameraShown))
     end
+    if type(getWorldTranslationFn) ~= "function" or type(getWorldQuaternionFn) ~= "function" then
+        return false, "getWorldTranslation / getWorldQuaternion are not available"
+    end
+    if bridge == nil or type(bridge.getHeadPose) ~= "function" then return false, "VRBridge.getHeadPose is not available" end
     state.headScratch = state.headScratch or {}
     local head = bridge.getHeadPose(state.headScratch)
-    if type(head) ~= "table" then return false end
+    if type(head) ~= "table" then return false, "VRBridge.getHeadPose returned no table" end
     state.headScratch = head
-    if head.isValid ~= true or head.qw == nil then return false end
+    if head.isValid ~= true or head.qw == nil then return false, "the head pose is not valid" end
 
     -- Hand offset and aim direction in the head's frame.
     local hx, hy, hz, hw = -head.qx, -head.qy, -head.qz, head.qw
@@ -458,12 +475,12 @@ local function placePointerRay(self, hand)
     -- ... and in the world, through the head's world placement.
     local lx, ly, lz = getWorldTranslationFn(listener)
     local lqx, lqy, lqz, lqw = getWorldQuaternionFn(listener)
-    if lx == nil or lqw == nil then return false end
+    if lx == nil or lqw == nil then return false, "the listener node has no world pose" end
     local wx, wy, wz = qrotate(lqx, lqy, lqz, lqw, offX, offY, offZ)
     ray.ox, ray.oy, ray.oz = lx + wx, ly + wy, lz + wz
     local dx, dy, dz = qrotate(lqx, lqy, lqz, lqw, fx, fy, fz)
     local length = math.sqrt(dx * dx + dy * dy + dz * dz)
-    if length < 0.5 then return false end
+    if length < 0.5 then return false, "the hand's aim direction is degenerate" end
     ray.dx, ray.dy, ray.dz = dx / length, dy / length, dz / length
     return true
 end
@@ -475,8 +492,15 @@ function VRCompanion:updatePointerRay(dt)
     ray.valid = false
     ray.visible = false
     local hand = state.pointerHand
+    local reason = "there is no Pointer Hand (no hand in use)"
     if hand ~= nil then
-        ray.valid = placePointerRay(self, hand)
+        ray.valid, reason = placePointerRay(self, hand)
+        if ray.valid then reason = "placed" end
+    end
+    -- Logged when it changes, so a session where pointing does not work says why in the game log.
+    if reason ~= state.rayReason then
+        state.rayReason = reason
+        print("[FS25_VR] Pointer Ray: " .. reason)
     end
     local hasTarget, hitX, hitY, hitZ = false, nil, nil, nil
     if type(self.updateInteractiveControl) == "function" then
@@ -685,8 +709,27 @@ function VRCompanion:consoleCommandMotionControllerStatus()
     return self:getMotionControllerStatus()
 end
 
+-- Why pointing may not work, in one line: the ray, who controls the pointer and Interactive Control support.
+function VRCompanion:getPointerDiagnostics()
+    local icText = "Interactive Control support: not available"
+    if type(self.getInteractiveControlDiagnostics) == "function" then
+        icText = self:getInteractiveControlDiagnostics()
+    end
+    local pointer = state.pointerHand
+    local trigger = pointer ~= nil and state.hands[pointer].trigger or 0
+    return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s",
+        tostring(state.rayReason or "not updated yet"),
+        pointer == 0 and "left" or pointer == 1 and "right" or "none", trigger,
+        self:getPointerOwner(), icText)
+end
+
+function VRCompanion:consoleCommandPointerDiagnostics()
+    return self:getPointerDiagnostics()
+end
+
 function VRCompanion:registerMotionControllerConsoleCommands()
     if addConsoleCommand == nil then return end
+    addConsoleCommand("vrPointerDiagnostics", "Report why the Pointer Ray may not select Click Points: vrPointerDiagnostics", "consoleCommandPointerDiagnostics", self)
     addConsoleCommand("vrMotionControllers", "Turn Motion Controller input on or off (saved; the Injector's session is untouched): vrMotionControllers [on|off]", "consoleCommandSetMotionControllers", self)
     addConsoleCommand("vrMotionControllerStatus", "Report each Motion Controller's tracked and in-use state and the Pointer Hand: vrMotionControllerStatus", "consoleCommandMotionControllerStatus", self)
     addConsoleCommand("vrPointerCone", "How wide (degrees) the cone around the Pointer Ray is inside which the nearest Click Point is selected (saved): vrPointerCone [degrees]", "consoleCommandSetPointerCone", self)
@@ -701,6 +744,7 @@ function VRCompanion:resetMotionControllers()
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrMotionControllers")
         removeConsoleCommand("vrMotionControllerStatus")
+        removeConsoleCommand("vrPointerDiagnostics")
         removeConsoleCommand("vrPointerCone")
     end
     if type(self.resetInteractiveControlSupport) == "function" then self:resetInteractiveControlSupport() end

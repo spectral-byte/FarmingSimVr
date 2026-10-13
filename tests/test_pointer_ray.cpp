@@ -143,6 +143,26 @@ TEST_F(CompanionModTest, PullingTheTriggerOnAClickPointInTheRayExecutesItOnce) {
     EXPECT_EQ(EvalLua(L, "StubIC.executed[1]"), "lights");
 }
 
+TEST_F(CompanionModTest, VrPointerDiagnosticsSaysWhyPointingWorksOrNot) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('lights', -0.3, 1.5, 2.3)", "=addPoint"), 0);
+
+    FRAMES(1);
+    const std::string idle = EvalLua(L, "runCommand('vrPointerDiagnostics')");
+    EXPECT_NE(idle.find("there is no Pointer Hand"), std::string::npos) << idle;
+
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2);
+    const std::string aimed = EvalLua(L, "runCommand('vrPointerDiagnostics')");
+    EXPECT_NE(aimed.find("Pointer Ray: placed"), std::string::npos) << aimed;
+    EXPECT_NE(aimed.find("Pointer Hand: right"), std::string::npos) << aimed;
+    EXPECT_NE(aimed.find("pointer controlled by: ray"), std::string::npos) << aimed;
+    EXPECT_NE(aimed.find("Interactive Control support: installed"), std::string::npos) << aimed;
+    EXPECT_NE(aimed.find("selected: yes"), std::string::npos) << aimed;
+}
+
 TEST_F(CompanionModTest, TheClickPointNearestTheRaysCenterInsideTheConeWinsAndNothingOutsideIsSelected) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
