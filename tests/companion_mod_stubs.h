@@ -174,6 +174,8 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 // StubIC.addPoint(name, x, y, z, options) -> Click Point at a world position
 //   options: analog (bool), inRange (default true: IC activates it), screenX, screenY (where the stub's
 //   mouse test finds it; default 0.5, 0.5)
+// StubIC.equip(vehicle, state) / StubIC.stateSetting (1 toggle, 2 always on, 3 always off) /
+//   StubIC.stateWrites / StubIC.changeCamera(vehicle, cam)  the vehicle side, see below
 // StubIC.tick()  one frame of IC's own vehicle update: every Click Point updates (activation, the mouse
 //   hit test through updateClickable, hover blink), as IC does each frame
 // StubIC.executed  names of the Click Points IC executed through its controller, in order
@@ -181,6 +183,7 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 // StubIC.selected()  name of the Click Point IC currently treats as the clickable one, or nil
 inline constexpr const char* kStubInteractiveControl = R"luau(
     StubIC = {}
+    StubIC.stateWrites = {}
     function StubIC.install(variant)
         variant = variant or "ok"
         local Point = {}
@@ -234,6 +237,17 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
             end
         end
 
+        -- IC's own settings: the state setting (toggle key, always on or always off).
+        Manager.SETTING_STATE_TOGGLE, Manager.SETTING_STATE_ALWAYS_ON, Manager.SETTING_STATE_OFF = 1, 2, 3
+        StubIC.stateSetting = Manager.SETTING_STATE_TOGGLE
+        StubIC.stateWrites = {}
+        Manager.settings = {
+            getSetting = function(_, name)
+                if name == "IC_STATE" then return StubIC.stateSetting end
+                return nil
+            end,
+        }
+
         _G.g_inputBinding = _G.g_inputBinding or {}
         _G.g_inputBinding.getMousePosition = function() return StubIC.mouseX, StubIC.mouseY end
         _G.g_modIsLoaded = _G.g_modIsLoaded or {}
@@ -258,6 +272,27 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
         controller.point = point
         table.insert(StubIC.points, point)
         return point
+    end
+
+    -- StubIC.equip(vehicle, state) gives a vehicle Interactive Control's per-vehicle state: the synced
+    -- on/off state (spec_interactiveControl.state), isInteractiveControlActivated and
+    -- activateInteractiveControl(state, noEventSend), which records every call in StubIC.stateWrites
+    -- as { state, noEventSend } and, like IC, changes the state only when it differs.
+    function StubIC.equip(vehicle, initialState)
+        vehicle.spec_interactiveControl = { state = initialState == true, interactiveControllers = { {} } }
+        function vehicle:isInteractiveControlActivated() return self.spec_interactiveControl.state end
+        function vehicle:activateInteractiveControl(newState, noEventSend)
+            table.insert(StubIC.stateWrites, { state = newState, noEventSend = noEventSend })
+            self.spec_interactiveControl.state = newState
+        end
+        return vehicle
+    end
+
+    -- StubIC.changeCamera(vehicle, cam): the vehicle's active camera becomes `cam`. Like IC (unless it
+    -- keeps itself alive) the vehicle switches itself off when the new camera is an inside camera.
+    function StubIC.changeCamera(vehicle, cam)
+        vehicle.getActiveCamera = function() return cam end
+        if cam.isInside and not StubIC.keepAlive then vehicle:activateInteractiveControl(false) end
     end
 
     function StubIC.tick()
