@@ -164,10 +164,86 @@ public:
         XrTime* /*time*/) {
         return XR_ERROR_FUNCTION_UNSUPPORTED;
     }
+
+    // ---- Input (ADR-0025): the Motion Controller action set. ------------------------------------
+    // Every call defaults to XR_ERROR_FUNCTION_UNSUPPORTED so a dispatch that offers no input
+    // behaves like a runtime that refuses the action set: the Injector then reports both hands
+    // untracked and carries on with head tracking only.
+    virtual XrResult StringToPath(
+        XrInstance /*instance*/, const char* /*pathString*/, XrPath* /*path*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult CreateActionSet(
+        XrInstance /*instance*/, const XrActionSetCreateInfo* /*createInfo*/, XrActionSet* /*actionSet*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult DestroyActionSet(XrActionSet /*actionSet*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult CreateAction(
+        XrActionSet /*actionSet*/, const XrActionCreateInfo* /*createInfo*/, XrAction* /*action*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult DestroyAction(XrAction /*action*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult SuggestInteractionProfileBindings(
+        XrInstance /*instance*/, const XrInteractionProfileSuggestedBinding* /*suggestedBindings*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult AttachSessionActionSets(
+        XrSession /*session*/, const XrSessionActionSetsAttachInfo* /*attachInfo*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult CreateActionSpace(
+        XrSession /*session*/, const XrActionSpaceCreateInfo* /*createInfo*/, XrSpace* /*space*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult SyncActions(
+        XrSession /*session*/, const XrActionsSyncInfo* /*syncInfo*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult GetActionStateBoolean(
+        XrSession /*session*/, const XrActionStateGetInfo* /*getInfo*/, XrActionStateBoolean* /*state*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult GetActionStateFloat(
+        XrSession /*session*/, const XrActionStateGetInfo* /*getInfo*/, XrActionStateFloat* /*state*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult GetActionStateVector2f(
+        XrSession /*session*/, const XrActionStateGetInfo* /*getInfo*/, XrActionStateVector2f* /*state*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult GetActionStatePose(
+        XrSession /*session*/, const XrActionStateGetInfo* /*getInfo*/, XrActionStatePose* /*state*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult ApplyHapticFeedback(
+        XrSession /*session*/, const XrHapticActionInfo* /*hapticActionInfo*/, const XrHapticBaseHeader* /*hapticFeedback*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
+
+    virtual XrResult StopHapticFeedback(
+        XrSession /*session*/, const XrHapticActionInfo* /*hapticActionInfo*/) {
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
 };
 
-class NativeOpenXrDispatch : public IOpenXrDispatch {
-public:
+class NativeOpenXrDispatch : public IOpenXrDispatch {public:
     XrResult EnumerateInstanceExtensionProperties(
         const char* layerName,
         uint32_t propertyCapacityInput,
@@ -390,6 +466,76 @@ public:
             return XR_FAILED(res) ? res : XR_ERROR_FUNCTION_UNSUPPORTED;
         }
         return pfnConvert(instance, performanceCounter, time);
+    }
+
+    XrResult StringToPath(XrInstance instance, const char* pathString, XrPath* path) override {
+        return xrStringToPath(instance, pathString, path);
+    }
+
+    XrResult CreateActionSet(
+        XrInstance instance, const XrActionSetCreateInfo* createInfo, XrActionSet* actionSet) override {
+        return xrCreateActionSet(instance, createInfo, actionSet);
+    }
+
+    XrResult DestroyActionSet(XrActionSet actionSet) override {
+        return xrDestroyActionSet(actionSet);
+    }
+
+    XrResult CreateAction(
+        XrActionSet actionSet, const XrActionCreateInfo* createInfo, XrAction* action) override {
+        return xrCreateAction(actionSet, createInfo, action);
+    }
+
+    XrResult DestroyAction(XrAction action) override {
+        return xrDestroyAction(action);
+    }
+
+    XrResult SuggestInteractionProfileBindings(
+        XrInstance instance, const XrInteractionProfileSuggestedBinding* suggestedBindings) override {
+        return xrSuggestInteractionProfileBindings(instance, suggestedBindings);
+    }
+
+    XrResult AttachSessionActionSets(
+        XrSession session, const XrSessionActionSetsAttachInfo* attachInfo) override {
+        return xrAttachSessionActionSets(session, attachInfo);
+    }
+
+    XrResult CreateActionSpace(
+        XrSession session, const XrActionSpaceCreateInfo* createInfo, XrSpace* space) override {
+        return xrCreateActionSpace(session, createInfo, space);
+    }
+
+    XrResult SyncActions(XrSession session, const XrActionsSyncInfo* syncInfo) override {
+        return xrSyncActions(session, syncInfo);
+    }
+
+    XrResult GetActionStateBoolean(
+        XrSession session, const XrActionStateGetInfo* getInfo, XrActionStateBoolean* state) override {
+        return xrGetActionStateBoolean(session, getInfo, state);
+    }
+
+    XrResult GetActionStateFloat(
+        XrSession session, const XrActionStateGetInfo* getInfo, XrActionStateFloat* state) override {
+        return xrGetActionStateFloat(session, getInfo, state);
+    }
+
+    XrResult GetActionStateVector2f(
+        XrSession session, const XrActionStateGetInfo* getInfo, XrActionStateVector2f* state) override {
+        return xrGetActionStateVector2f(session, getInfo, state);
+    }
+
+    XrResult GetActionStatePose(
+        XrSession session, const XrActionStateGetInfo* getInfo, XrActionStatePose* state) override {
+        return xrGetActionStatePose(session, getInfo, state);
+    }
+
+    XrResult ApplyHapticFeedback(
+        XrSession session, const XrHapticActionInfo* hapticActionInfo, const XrHapticBaseHeader* hapticFeedback) override {
+        return xrApplyHapticFeedback(session, hapticActionInfo, hapticFeedback);
+    }
+
+    XrResult StopHapticFeedback(XrSession session, const XrHapticActionInfo* hapticActionInfo) override {
+        return xrStopHapticFeedback(session, hapticActionInfo);
     }
 
 private:

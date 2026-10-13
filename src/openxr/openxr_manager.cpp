@@ -248,6 +248,7 @@ bool OpenXrManager::Initialize() {
 
 void OpenXrManager::Shutdown() {
     DestroyEyeSwapchains();
+    m_input.Destroy(*m_dispatch);
     if (m_viewSpace != XR_NULL_HANDLE) {
         m_dispatch->DestroySpace(m_viewSpace);
         m_viewSpace = XR_NULL_HANDLE;
@@ -319,6 +320,10 @@ bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queu
     }
     m_sessionState = XR_SESSION_STATE_IDLE;
     LogInfo("OpenXrManager: Session created successfully; waiting for the runtime to report READY.");
+
+    // Motion Controllers (ADR-0025): declared and attached once per session. A runtime that refuses
+    // any step leaves both hands untracked; it never fails the session.
+    m_input.Create(*m_dispatch, m_instance, m_session);
     return true;
 }
 
@@ -594,6 +599,10 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
 
     m_lastPolledTime = time;
     return m_lastPose;
+}
+
+HandState OpenXrManager::GetHandState(uint32_t hand) {
+    return m_input.Get(hand);
 }
 
 void OpenXrManager::Recenter() {

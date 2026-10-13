@@ -2,6 +2,8 @@
 
 #include "openxr_dispatch.h"
 #include "openxr_cursor_overlay.h"
+#include "openxr_input.h"
+#include "openxr_types.h"
 #include "core/math_utils.h"
 #include "core/raii_utils.h"
 #include <functional>
@@ -43,22 +45,6 @@ struct OpenXrRuntimeInfo {
     LUID adapterLuid{};
 };
 
-struct HeadPose {
-    Vector3 position{ 0.0f, 0.0f, 0.0f };
-    Quaternion orientation{ 0.0f, 0.0f, 0.0f, 1.0f };
-    EulerAngles rotation{ 0.0f, 0.0f, 0.0f };
-
-    bool isValid = false;
-    bool positionTracked = false;
-    bool orientationTracked = false;
-
-    constexpr HeadPose() = default;
-    constexpr HeadPose(const Vector3& pos, const Quaternion& ori, const EulerAngles& rot,
-                       bool valid = true, bool posTracked = true, bool oriTracked = true)
-        : position(pos), orientation(ori), rotation(rot),
-          isValid(valid), positionTracked(posTracked), orientationTracked(oriTracked) {}
-};
-
 struct EyeProjection {
     float fovY = 0.0f;
     float fovX = 0.0f;
@@ -92,6 +78,14 @@ public:
     void Recenter();
     const HeadPose& GetLastPose() const { return m_lastPose; }
     const HeadPose& GetRawPose() const { return m_rawPose; }
+
+    // ---- Motion Controllers (ADR-0025) ----
+    // True when the Motion Controller action set was declared and attached for this session. False
+    // when the runtime refused any step (the session and head tracking are unaffected).
+    bool HasMotionControllerActions() const { return m_input.IsReady(); }
+    // One hand's state (0 = left, 1 = right), located at the head pose's predicted display time in
+    // the same Recenter-aware reference space. Untracked defaults when the action set is unavailable.
+    HandState GetHandState(uint32_t hand);
 
     EyeProjection PollEyeProjection(uint32_t eyeIndex = 0, XrTime time = 0);
     bool LocateActiveViews(XrTime time = 0);
@@ -251,6 +245,7 @@ private:
     EyeSwapchain m_eyeSwapchains[2];
     bool m_hasEyeSwapchains = false;
     OpenXrCursorOverlay m_cursorOverlay;
+    OpenXrInput m_input;
     MenuCursorState m_menuCursorState;
     float m_ipd = 0.064f;
     uint64_t m_submittedFramePairCount = 0;

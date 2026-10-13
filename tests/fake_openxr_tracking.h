@@ -42,8 +42,19 @@ public:
     // Places the head. Orientation may be given as a quaternion or as Euler angles (when the
     // quaternion is identity); validity and tracking flags follow the pose.
     void SetHeadPose(const HeadPose& pose) {
-        head.pose.position = { pose.position.x, pose.position.y, pose.position.z };
+        head.pose = ToXrPose(pose);
 
+        head.locationFlags = 0;
+        if (pose.isValid) {
+            head.locationFlags |= XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+        }
+        if (pose.positionTracked) head.locationFlags |= XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+        if (pose.orientationTracked) head.locationFlags |= XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+    }
+
+    // The XrPose a HeadPose describes. Orientation may be given as a quaternion or as Euler angles
+    // (when the quaternion is identity).
+    static XrPosef ToXrPose(const HeadPose& pose) {
         Quaternion orientation = pose.orientation;
         bool hasRotation = pose.rotation.pitch != 0.0f || pose.rotation.yaw != 0.0f || pose.rotation.roll != 0.0f;
         bool hasOrientation = orientation.x != 0.0f || orientation.y != 0.0f ||
@@ -57,16 +68,11 @@ public:
             Quaternion qRoll(0.0f, 0.0f, std::sin(halfRoll), std::cos(halfRoll));
             orientation = qYaw * qPitch * qRoll;
         }
-        head.pose.orientation = { orientation.x, orientation.y, orientation.z, orientation.w };
-
-        head.locationFlags = 0;
-        if (pose.isValid) {
-            head.locationFlags |= XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
-        }
-        if (pose.positionTracked) head.locationFlags |= XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
-        if (pose.orientationTracked) head.locationFlags |= XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+        XrPosef out;
+        out.orientation = { orientation.x, orientation.y, orientation.z, orientation.w };
+        out.position = { pose.position.x, pose.position.y, pose.position.z };
+        return out;
     }
-
     // Sets one eye's field of view. A runtime always reports both eyes, so an eye that was never
     // set mirrors the first one set (left/right swapped and negated). Eyes sit at the head origin
     // so the manager keeps its configured IPD.
@@ -97,25 +103,33 @@ public:
         if (!location) return XR_SUCCESS;
 
         *location = head;
-
-        auto it = referenceSpaces.find(baseSpace);
-        if (it != referenceSpaces.end() && it->second.type == XR_REFERENCE_SPACE_TYPE_LOCAL) {
-            const XrPosef& refPose = it->second.poseInReferenceSpace;
-            float dx = head.pose.position.x - refPose.position.x;
-            float dy = head.pose.position.y - refPose.position.y;
-            float dz = head.pose.position.z - refPose.position.z;
-
-            Quaternion qRefInv(-refPose.orientation.x, -refPose.orientation.y, -refPose.orientation.z, refPose.orientation.w);
-            Vector3 relPos = RotateVectorByQuaternion(qRefInv, Vector3(dx, dy, dz));
-
-            Quaternion qHead(head.pose.orientation.x, head.pose.orientation.y,
-                             head.pose.orientation.z, head.pose.orientation.w);
-            Quaternion relOri = qRefInv * qHead;
-
-            location->pose.position = { relPos.x, relPos.y, relPos.z };
-            location->pose.orientation = { relOri.x, relOri.y, relOri.z, relOri.w };
-        }
+        location->pose = RebasePose(baseSpace, head.pose);
         return XR_SUCCESS;
+    }
+
+    // A pose given in the runtime's tracking origin, expressed in baseSpace. A LOCAL base is
+    // re-based by its pose (which is how Recenter() moves the origin); any other space leaves the
+    // pose in the tracking origin. Hands and the head share this so they always agree.
+    XrPosef RebasePose(XrSpace baseSpace, const XrPosef& pose) const {
+        auto it = referenceSpaces.find(baseSpace);
+        if (it == referenceSpaces.end() || it->second.type != XR_REFERENCE_SPACE_TYPE_LOCAL) {
+            return pose;
+        }
+        const XrPosef& refPose = it->second.poseInReferenceSpace;
+        float dx = pose.position.x - refPose.position.x;
+        float dy = pose.position.y - refPose.position.y;
+        float dz = pose.position.z - refPose.position.z;
+
+        Quaternion qRefInv(-refPose.orientation.x, -refPose.orientation.y, -refPose.orientation.z, refPose.orientation.w);
+        Vector3 relPos = RotateVectorByQuaternion(qRefInv, Vector3(dx, dy, dz));
+
+        Quaternion qPose(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w);
+        Quaternion relOri = qRefInv * qPose;
+
+        XrPosef out;
+        out.position = { relPos.x, relPos.y, relPos.z };
+        out.orientation = { relOri.x, relOri.y, relOri.z, relOri.w };
+        return out;
     }
 
     XrResult LocateViews(XrViewState* outViewState, uint32_t viewCapacityInput,
