@@ -87,6 +87,25 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrMotionControllers <on\|off>` | Use Motion Controllers (default `on`, saved). `off` makes the mod ignore controller input |
 | `vrMotionControllerStatus` | Report each Motion Controller's tracked and in-use state and the Pointer Hand |
 
+### Motion Controller buttons
+
+With Motion Controllers on, these inputs work on either hand (a push or press acts once, with the same debounce as the keys):
+
+| Input | Action |
+| :--- | :--- |
+| Thumbstick left / right | Snap turn left / right (off while a menu is showing) |
+| Thumbstick click | Recenter |
+| Menu button | Toggle the HUD |
+
+The menu button is the left controller only on Touch and does not exist on Index, so the HUD toggle needs another input there. `vrControllerMap` changes or removes each mapping and saves it:
+
+| Command | Purpose |
+| :--- | :--- |
+| `vrControllerMap` | Show the current mappings |
+| `vrControllerMap <snapTurn\|recenter\|hudToggle> <input>` | Put an action on an input: `thumbClick`, `buttonLower`, `buttonUpper` or `menu` (`snapTurn` only takes `thumbX`) |
+| `vrControllerMap <action> none` | Remove the mapping |
+| `vrControllerMap <action> default` / `vrControllerMap reset` | Restore one / all defaults |
+
 `hudConvergenceDepth` (default `1.8`) is set in `settings.xml` only.
 
 

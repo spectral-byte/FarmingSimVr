@@ -18,6 +18,7 @@ inline const std::vector<std::string>& CompanionModLoadOrder() {
         "src/VRCompanionInput.lua",
         "src/VRCompanionMotionControllers.lua",
         "src/VRCompanionMenuPointer.lua",
+        "src/VRCompanionControllerMap.lua",
         "src/VRCompanion.lua",
     };
     return order;

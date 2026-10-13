@@ -66,6 +66,10 @@
 --     Locomotion  onRecenterAction -> resetMotionControllerMovement() (a recenter moves every pose)
 --     MenuPointer updateMotionControllers -> updateMenuPointer(dt) at the end of every update, and
 --                 resetMotionControllers -> resetMenuPointer() (VRCompanionMenuPointer.lua)
+--     ControllerMap (VRCompanionControllerMap.lua) is driven from here: updateMotionControllers ->
+--                 processControllerButtons(), and the save/load/register/reset functions below call its
+--                 saveControllerMapSettings / loadControllerMapSettings / registerControllerMapConsoleCommands /
+--                 unregisterControllerMapConsoleCommands
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -271,6 +275,7 @@ function VRCompanion:updateMotionControllers(dt)
             clearHands()
             state.ignoredCleared = true
         end
+        if type(self.resetControllerButtons) == "function" then self:resetControllerButtons() end
         updatePointerUsers(self, dt)
         return
     end
@@ -321,6 +326,7 @@ function VRCompanion:updateMotionControllers(dt)
     if state.pointerHand ~= nil and state.movedThisUpdate[state.pointerHand] then
         self:notePointerRayMoved()
     end
+    if type(self.processControllerButtons) == "function" then self:processControllerButtons() end
     updatePointerUsers(self, dt)
 end
 
@@ -357,6 +363,7 @@ function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
     if type(xml.setBool) == "function" then
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.motionControllersEnabled ~= false)
     end
+    if type(self.saveControllerMapSettings) == "function" then self:saveControllerMapSettings(xmlFile, xml) end
 end
 
 -- Called from loadConfiguration with the open settings file and the engine's getters (any may be nil).
@@ -373,6 +380,7 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
     if loaded ~= nil then
         self.motionControllersEnabled = loaded
     end
+    if type(self.loadControllerMapSettings) == "function" then self:loadControllerMapSettings(xmlFile, xml) end
 end
 
 function VRCompanion:consoleCommandSetMotionControllers(arg)
@@ -420,6 +428,7 @@ function VRCompanion:registerMotionControllerConsoleCommands()
     if addConsoleCommand == nil then return end
     addConsoleCommand("vrMotionControllers", "Turn Motion Controller input on or off (saved; the Injector's session is untouched): vrMotionControllers [on|off]", "consoleCommandSetMotionControllers", self)
     addConsoleCommand("vrMotionControllerStatus", "Report each Motion Controller's tracked and in-use state and the Pointer Hand: vrMotionControllerStatus", "consoleCommandMotionControllerStatus", self)
+    if type(self.registerControllerMapConsoleCommands) == "function" then self:registerControllerMapConsoleCommands() end
 end
 
 -- Map unload: forget everything seen this session. The saved setting stays as it is.
@@ -434,6 +443,7 @@ function VRCompanion:resetMotionControllers()
     state = newState()
     initHands()
     self.pointerHand = nil
+    if type(self.unregisterControllerMapConsoleCommands) == "function" then self:unregisterControllerMapConsoleCommands() end
 end
 -- Export to MotionControllers subsystem table
 VRCompanion.MotionControllers.getHandState = function(self, ...) return VRCompanion.getHandState(VRCompanion, ...) end
