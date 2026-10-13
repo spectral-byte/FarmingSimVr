@@ -225,6 +225,7 @@ function VRCompanion:updateMotionControllers(dt)
     end
     state.pointerHand = choosePointerHand()
     self.pointerHand = state.pointerHand
+    if type(self.processControllerButtons) == "function" then self:processControllerButtons() end
 end
 
 -- A Recenter Action moves the origin every pose is measured from. Hands lying still must not look
