@@ -73,9 +73,14 @@ VRCompanion.modDirectory = VRCompanion.modDirectory or g_currentModDirectory or 
 -- The hand model (a LEFT hand), relative to the Companion Mod's folder.
 VRCompanion.VIRTUAL_HAND_MODEL = "models/VirtualHandLeft.i3d"
 
--- The curl of one finger joint at a full pull, base to tip, in degrees. The three together fold a finger
--- into a fist the way a real one does (knuckle about 80, middle joint about 100, tip about 65).
-VRCompanion.FINGER_CURL_DEGREES = { 80, 100, 65 }
+-- The curl of one finger joint at a full pull, base to tip, in degrees, ADDED to the glove's relaxed pose (which
+-- already flexes the joints by about 3 to 9, 15 to 21 and 14 to 21 degrees). A real fist flexes a finger about
+-- 80, 100 and 65 degrees from straight; on top of the relaxed pose that would drive the fingertips into the
+-- palm, so these are less. Checked offline on the composed bones of the corrected rig (models/VirtualHandLeft.i3d,
+-- scripts/check_virtual_hand_rig.ps1 -Curl): at 1 the bone through each fingertip ends 0.08 to 0.30 model units in
+-- front of the knuckle line, and the palm plane is 0.17 in front of it, so the fingertips come to rest on the palm.
+-- The earlier 80, 100, 65 put the index tip end 0.03 BEHIND the knuckle line, 0.2 inside the hand.
+VRCompanion.FINGER_CURL_DEGREES = { 60, 75, 40 }
 
 -- THE MODEL-TO-GRIP OFFSET: how the model as the file holds it is carried onto the OpenXR grip pose frame (origin
 -- at the centre of the tube the closed non-thumb fingers form, -Z along that tube from the little finger toward
@@ -116,11 +121,15 @@ VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP = {
 }
 
 -- Which way a curl turns a joint about its own X axis for THIS model: -1, a NEGATIVE rotation about local X is
--- toward the palm (+1 would be the opposite model). The Gloved Hand's bones run along their local -Z with a
--- bone-axis turn of about -90 degrees about X relative to their parent, and its relaxed rest pose already flexes
--- every finger joint further in the NEGATIVE direction (index Lower.001 -95.9, Middle.001 -104.8, Top.001
--- -111.2 degrees about X, against the -90 of the bone axis). The Blender file agrees: the same bends are toward
--- the side the palm faces (-Z in Blender). Flip this one number if a headset check shows fingers bending back.
+-- toward the palm (+1 would be the opposite model). The Gloved Hand's bones run along their local -Z, each bone's
+-- X axis is the side axis of its finger (perpendicular to the segment, in the plane of the palm), and its relaxed
+-- rest pose already flexes every finger joint a little in the NEGATIVE direction (index Lower.001 -5.9,
+-- Middle.001 -14.8, Top.001 -21.2 degrees about X relative to the parent). The Blender file agrees: the same bends
+-- are toward the side the palm faces (-Z in Blender, -Y in the file). Checked offline on the composed bone
+-- transforms of the file: turning a joint by a NEGATIVE angle about its local X moves the rest of the finger toward
+-- -Y, the palm side, for all four fingers (the local X axes lie within 25 degrees of the file's X axis, the most for
+-- the splayed little finger, and are exactly perpendicular to their segments). Flip this one number if a headset
+-- check shows fingers bending back.
 VRCompanion.FINGER_CURL_DIRECTION = -1
 
 local HANDS = { 0, 1 }
@@ -425,7 +434,7 @@ function describeEngineGeometry(entry)
         local sx, sy, sz = getScale(entry.model)
         scale = string.format("%.4f %.4f %.4f", sx, sy, sz)
     end
-    return string.format("holder %s, model %s (local scale %s), Wrist %s, Wrist to Top.001 %s m, Wrist to Top.002 %s m (expect about 0.19)",
+    return string.format("holder %s, model %s (local scale %s), Wrist %s, Wrist to Top.001 %s m, Wrist to Top.002 %s m (expect about 0.20: 0.197 and 0.204)",
         at(entry.holder), at(entry.model), scale, at(wrist), distance(wrist, indexTip), distance(wrist, middleTip))
 end
 
