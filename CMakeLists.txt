@@ -201,6 +201,7 @@ add_executable(fs25_vr_tests
     tests/test_menu_pointer_panel.cpp
     tests/test_menu_pointer.cpp
     tests/test_controller_button_mappings.cpp
+    tests/test_menu_scroll_back.cpp
     tests/test_virtual_ngx_handle.cpp
     tests/test_dlss_evaluation.cpp
     tests/test_ngx_interceptor.cpp
