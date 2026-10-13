@@ -550,6 +550,49 @@ TEST_F(VrBridgeTest, GetHandStateReadsLeaveTheLuaStackBalanced) {
     ASSERT_EQ(RunLuauString(L, "local t = VRBridge.getHandState(0, {}); VRBridge.getHandState(0, t); VRBridge.getHandState(1)"), 0);
     EXPECT_EQ(lua_gettop(L), before);
 }
+
+TEST_F(VrBridgeTest, PulseHapticSendsMillisecondsAndStrengthToTheNamedHandOnly) {
+    fs25vr::FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    const int before = lua_gettop(L);
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.pulseHaptic(1, 40, 0.5) == true)
+        assert(VRBridge.pulseHaptic("left", 20, 0.25) == true)
+        assert(VRBridge.pulseHaptic("R", 10, 1) == true)
+    )luau"), 0);
+    EXPECT_EQ(lua_gettop(L), before);
+
+    const auto& pulses = headset.HapticPulses();
+    ASSERT_EQ(pulses.size(), 3u);
+    EXPECT_EQ(pulses[0].hand, 1);
+    EXPECT_EQ(pulses[0].duration, 40000000) << "OpenXR wants nanoseconds";
+    EXPECT_FLOAT_EQ(pulses[0].amplitude, 0.5f);
+    EXPECT_EQ(pulses[1].hand, 0);
+    EXPECT_EQ(pulses[1].duration, 20000000);
+    EXPECT_FLOAT_EQ(pulses[1].amplitude, 0.25f);
+    EXPECT_EQ(pulses[2].hand, 1);
+}
+
+TEST_F(VrBridgeTest, PulseHapticIsHarmlessWithoutARuntimeOrWithTheActionSetRefused) {
+    fs25vr::FakeTrackedHeadset refused(fs25vr::FakeTrackedHeadsetOptions{ .refuseActionSet = true });
+    fs25vr::VRBridge noRuntime(nullptr, nullptr);
+    fs25vr::VRBridge refusedBridge(refused.manager, nullptr);
+
+    for (fs25vr::VRBridge* bridge : { &noRuntime, &refusedBridge }) {
+        lua_State* state = luaL_newstate();
+        luaL_openlibs(state);
+        ASSERT_TRUE(bridge->Inject(state));
+        EXPECT_EQ(RunLuauString(state, R"luau(
+            assert(VRBridge.pulseHaptic(1, 40, 0.5) == false)
+            assert(VRBridge.pulseHaptic(nil, nil, nil) == false, "missing arguments are not an error")
+            assert(VRBridge.pulseHaptic(5, 40, 0.5) == false, "an unknown hand")
+        )luau"), 0);
+        lua_close(state);
+    }
+    EXPECT_TRUE(refused.HapticPulses().empty());
+}
 TEST_F(VrBridgeTest, SuppliedTablePoseStillRecordedAsTheEyeRenderPose) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
@@ -1225,6 +1268,7 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "getRequiresAfrFallback",
         "getHeadPose",
         "getHandState",
+        "pulseHaptic",
         "recenter",
         "getEyeProjection",
         "getFrameParity",

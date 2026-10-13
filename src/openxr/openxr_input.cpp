@@ -282,6 +282,22 @@ void OpenXrInput::LocatePoses(IOpenXrDispatch& dispatch, XrSpace baseSpace, XrTi
         state.tracked = true;
     }
 }
+
+bool OpenXrInput::PulseHaptic(IOpenXrDispatch& dispatch, XrSession session, uint32_t hand, int64_t durationNs,
+                              float amplitude) {
+    if (!m_ready || hand >= kHandCount || session == XR_NULL_HANDLE || m_hapticAction == XR_NULL_HANDLE) {
+        return false;
+    }
+    XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
+    vibration.duration = durationNs;
+    vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+    vibration.amplitude = amplitude;
+    XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};
+    info.action = m_hapticAction;
+    info.subactionPath = m_handPaths[hand];
+    return XR_SUCCEEDED(dispatch.ApplyHapticFeedback(session, &info, reinterpret_cast<const XrHapticBaseHeader*>(&vibration)));
+}
+
 void OpenXrInput::Destroy(IOpenXrDispatch& dispatch) {
     for (auto& space : m_aimSpaces) {
         if (space != XR_NULL_HANDLE) {
