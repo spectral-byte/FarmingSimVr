@@ -1,7 +1,7 @@
 -- ====================================================================
 -- FS25 VR Companion Mod: Virtual Hands
 --
--- Draws a gloved hand in the 3D world where each Motion Controller is held (spec #82). The player alone
+-- Draws a gloved hand in the 3D world where each Motion Controller is held. The player alone
 -- sees them: nothing here is synchronised in multiplayer, and the hands have no collision, physics or
 -- shadow.
 --
@@ -19,7 +19,7 @@
 -- per update, so under Sequential Dual-Pass both eye passes see the same placement and under Alternate
 -- Frame Rendering each rendered frame places it again.
 --
--- THE MODEL (ticket #84): one right-hand work glove i3d at VRCompanion.modDirectory ..
+-- THE MODEL: one right-hand work glove i3d at VRCompanion.modDirectory ..
 -- VRCompanion.VIRTUAL_HAND_MODEL. The file's first child is the hand's root node, whose origin and axes are
 -- the OpenXR grip pose of a right hand, with joints thumb1..3, index1..3, middle1..3, ring1..3 and
 -- little1..3 below it. It is loaded once per map load (on the first update with Motion Controllers on),
@@ -36,7 +36,7 @@
 -- are never touched. A joint is found by name below the hand's clone; the rotation it has when found is
 -- the model's relaxed rest pose, and the curl is applied on top of it: the joint's rest rotation turned
 -- about the joint's own X axis by value * VRCompanion.FINGER_CURL_DEGREES[segment] (positive = toward the
--- palm, ticket #84). 0 is therefore exactly the rest pose. The left hand is the mirrored clone, so the same
+-- palm, so the model's joint X axes must be authored that way). 0 is therefore exactly the rest pose. The left hand is the mirrored clone, so the same
 -- local rotation curls its mirrored fingers the same way. A hand that is hidden is not updated: its fingers
 -- are set again the moment it is shown. A joint the model lacks keeps that finger segment still; the
 -- missing names are logged once per map, and the other fingers still curl.
@@ -253,9 +253,9 @@ local function curlFingers(entry, pose)
         local value = math.max(0, math.min(1, tonumber(pose[joint.input]) or 0))
         local half = math.rad(degrees[joint.segment]) * value * 0.5
         local bx, bw = math.sin(half), math.cos(half)  -- the turn about X, as a quaternion
-        local ax, ay, az, aw = joint.restX, joint.restY, joint.restZ, joint.restW
         -- rest * turn: the turn happens in the joint's own frame
-        setQuaternion(joint.node, aw * bx + ax * bw, ay * bw + az * bx, az * bw - ay * bx, aw * bw - ax * bx)
+        setQuaternion(joint.node, VRCompanion.multiplyQuaternions(joint.restX, joint.restY, joint.restZ, joint.restW,
+            bx, 0, 0, bw))
     end
 end
 

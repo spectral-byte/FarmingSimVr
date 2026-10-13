@@ -1,7 +1,7 @@
 # Motion Controller Input Reaches Lua as Raw Per-Hand State
 
 ## Context and Decision
-Motion Controllers drive the Pointer Ray, clicks on Click Points and menus, Snap Turn, the Recenter Action and the HUD Toggle Action. The game has no VR input of its own, so every Motion Controller input has to come from the Injector's OpenXR session. OpenXR lets an application declare either game-level actions (such as "click" or "snap turn left") or plain device inputs, and the runtime's binding screen remaps whatever is declared.
+Motion Controllers drive the Pointer Ray, the Virtual Hand, clicks on Click Points and menus, Snap Turn, the Recenter Action and the HUD Toggle Action. The game has no VR input of its own, so every Motion Controller input has to come from the Injector's OpenXR session. OpenXR lets an application declare either game-level actions (such as "click" or "snap turn left") or plain device inputs, and the runtime's binding screen remaps whatever is declared.
 
 **The Injector declares a fixed set of raw inputs per hand and passes their state to the Companion Mod through VRBridge. The Companion Mod decides what each one does.**
 - Per hand: the aim pose (where the Pointer Ray starts), the grip pose (where a Virtual Hand is drawn), trigger and grip values, the thumbstick axes and click, two face buttons and the menu button, plus whether the hand is tracked.

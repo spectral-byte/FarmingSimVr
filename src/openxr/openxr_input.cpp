@@ -332,6 +332,7 @@ void OpenXrInput::LocatePoses(IOpenXrDispatch& dispatch, XrSpace baseSpace, XrTi
                                             state.gripPose);
     }
 }
+
 bool OpenXrInput::PulseHaptic(IOpenXrDispatch& dispatch, XrSession session, uint32_t hand, int64_t durationNs,
                               float amplitude) {
     if (!m_ready || hand >= kHandCount || session == XR_NULL_HANDLE || m_hapticAction == XR_NULL_HANDLE) {
@@ -360,7 +361,7 @@ void OpenXrInput::Destroy(IOpenXrDispatch& dispatch) {
         dispatch.DestroyActionSet(m_actionSet);
         m_actionSet = XR_NULL_HANDLE;
     }
-    m_aimPoseAction = m_gripPoseAction = m_triggerAction =m_gripAction = m_thumbstickAction = XR_NULL_HANDLE;
+    m_aimPoseAction = m_gripPoseAction = m_triggerAction = m_gripAction = m_thumbstickAction = XR_NULL_HANDLE;
     m_thumbstickClickAction = m_buttonLowerAction = m_buttonUpperAction = m_menuAction = XR_NULL_HANDLE;
     m_hapticAction = XR_NULL_HANDLE;
     m_handPaths = {};

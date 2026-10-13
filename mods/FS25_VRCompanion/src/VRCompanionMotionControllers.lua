@@ -19,8 +19,9 @@
 --     pitch, yaw, roll   radians  and predicted display time as VRBridge.getHeadPose (follows the
 --     qx, qy, qz, qw              Recenter Action). Compose it into the world exactly like the head.
 --     isValid, isPositionTracked, isOrientationTracked   booleans, as in getHeadPose
---     gripPoseTracked    boolean  the grip pose (where a Virtual Hand is drawn) is located; its own flag, false
---                                 whenever the hand is untracked and also when the runtime refuses the grip pose
+--     gripPoseTracked    boolean  the grip pose (where a Virtual Hand is drawn) is located; its own flag, independent
+--                                 of the aim pose's: false when the hand is untracked, when the runtime refuses the grip pose
+--                                 or when it can not locate it
 --     gripPoseX/Y/Z, gripPosePitch/Yaw/Roll, gripPoseQx/Qy/Qz/Qw   the grip pose, same conventions, reference
 --                                 space and predicted display time as the aim pose above (identity when untracked)
 --     trigger, grip      0..1     analog value (Khronos simple controller profile: select/click as trigger)
@@ -468,6 +469,7 @@ end
 --   VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out) -> true | false, reason
 --     On true, out.x, out.y, out.z (world position) and out.qx, out.qy, out.qz, out.qw (unit world
 --     rotation) are filled in place. On false, out is untouched and reason says why in one line.
+--   VRCompanion.multiplyQuaternions(ax, ay, az, aw, bx, by, bz, bw) -> x, y, z, w   (a then b is applied as a * b)
 
 -- Multiplies two quaternions: a then b is applied as a * b.
 local function qmultiply(ax, ay, az, aw, bx, by, bz, bw)
@@ -476,6 +478,9 @@ local function qmultiply(ax, ay, az, aw, bx, by, bz, bw)
            aw * bz + ax * by - ay * bx + az * bw,
            aw * bw - ax * bx - ay * by - az * bz
 end
+
+-- Shared with the Virtual Hands, which compose a joint's rest rotation with a curl.
+VRCompanion.multiplyQuaternions = qmultiply
 
 function VRCompanion:isHeadPlacedInTheWorld()
     return headIsPlacedInTheWorld(self)
@@ -542,6 +547,7 @@ local function placePointerRay(self, hand)
     ray.dx, ray.dy, ray.dz = dx / length, dy / length, dz / length
     return true
 end
+
 -- Called at the end of every updateMotionControllers. Places the ray, lets Interactive Control select
 -- and click, and settles what is drawn.
 function VRCompanion:updatePointerRay(dt)
