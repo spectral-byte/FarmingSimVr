@@ -216,6 +216,10 @@ struct FakeTrackedHeadset {
         sim.gripPose = sim.pose;
         sim.tracked = tracked;
     }
+    // Moves only a hand's aim pose; its grip pose stays where it is.
+    void SetHandAimPose(uint32_t hand, const HeadPose& pose) {
+        runtime->controllers.hands[hand & 1].pose = FakeOpenXrTracking::ToXrPose(pose);
+    }
     // Places a hand's grip pose apart from its aim pose in the tracking origin. `tracked = false` makes
     // the grip pose alone untracked: the controller (and so the aim pose) stays on.
     void SetHandGripPose(uint32_t hand, const HeadPose& pose, bool tracked = true) {

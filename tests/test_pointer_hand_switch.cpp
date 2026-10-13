@@ -59,7 +59,7 @@ constexpr const char* kGuiStubs = R"luau(
     _G.guiDowns = function() local n = 0 for _, e in ipairs(_G.guiEvents) do if e.down then n = n + 1 end end return n end
 )luau";
 
-// Both hands are held 0.3 m ahead of the head and 0.3 m to either side, pointing straight ahead. In
+// Both hands are held with the index fingertip 0.3 m ahead of the head and 0.3 m to either side, pointing straight ahead. In
 // the cab (the player sits at (0, 1.5, 0) looking along world +Z, tracking X is world -X) the right
 // hand's ray starts at world (-0.3, 1.5, 0.3) and the left hand's at (0.3, 1.5, 0.3).
 class PointerHandSwitchTest : public CompanionModTest {
@@ -95,9 +95,9 @@ protected:
 
     // Lifts the hand off the desk and holds it still where it points: it is now in use.
     void PickUp(uint32_t hand) {
-        headset.SetHandPose(hand, HandAt(SideOf(hand) - 0.1f, 0.0f, -0.3f));
+        headset.SetHandPointing(hand, HandAt(SideOf(hand) - 0.1f, 0.0f, -0.3f));
         Frames(1);
-        headset.SetHandPose(hand, HandAt(SideOf(hand), 0.0f, -0.3f));
+        headset.SetHandPointing(hand, HandAt(SideOf(hand), 0.0f, -0.3f));
         Frames(1);
     }
 
@@ -189,7 +189,7 @@ TEST_F(PointerHandSwitchTest, OnlyThePointerHandCastsAPointerRay) {
     // Both hands point at their own Click Point, but only the right hand's ray exists.
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "rightPoint");
     EXPECT_EQ(EvalLua(L, "string.format('%.2f %.2f %.2f', VRCompanion:getPointerRay().ox, VRCompanion:getPointerRay().oy, VRCompanion:getPointerRay().oz)"),
-              "-0.30 1.50 0.30") << "the ray starts at the right hand";
+              "-0.30 1.50 0.30") << "the ray starts at the right fingertip";
 
     Pull(kLeft);
     Frames(2);
@@ -201,7 +201,7 @@ TEST_F(PointerHandSwitchTest, OnlyThePointerHandCastsAPointerRay) {
 TEST_F(PointerHandSwitchTest, ATriggerPullOnAHandThatIsNotInUseDoesNotSwitch) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     SetGameTime(1000);
-    headset.SetHandPose(kLeft, HandAt(SideOf(kLeft), 0.0f, -0.3f));  // lying on the desk: tracked, placed long ago
+    headset.SetHandPointing(kLeft, HandAt(SideOf(kLeft), 0.0f, -0.3f));  // lying on the desk: tracked, placed long ago
     Frames(2);
     SetGameTime(10000);
     PickUp(kRight);
@@ -222,7 +222,7 @@ TEST_F(PointerHandSwitchTest, WhenThePointerHandStopsBeingInUseTheOtherHandBecom
     // The right hand is put down; the left keeps moving for longer than a hand stays in use.
     for (int step = 0; step < 8; ++step) {
         AdvanceGameTime(500);
-        headset.SetHandPose(kLeft, HandAt(SideOf(kLeft) + (step % 2 == 0 ? 0.05f : 0.0f), 0.0f, -0.3f));
+        headset.SetHandPointing(kLeft, HandAt(SideOf(kLeft) + (step % 2 == 0 ? 0.05f : 0.0f), 0.0f, -0.3f));
         Frames(1);
     }
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "false");
@@ -230,7 +230,7 @@ TEST_F(PointerHandSwitchTest, WhenThePointerHandStopsBeingInUseTheOtherHandBecom
     EXPECT_EQ(PointerHand(), "0");
 
     // And it is picked up again: the left hand stays the Pointer Hand until a pull on the right switches.
-    headset.SetHandPose(kRight, HandAt(SideOf(kRight) + 0.1f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(SideOf(kRight) + 0.1f, 0.0f, -0.3f));
     Frames(1);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true");
     EXPECT_EQ(PointerHand(), "0");
@@ -240,11 +240,11 @@ TEST_F(PointerHandSwitchTest, WithBothHandsInUseAndNoPointerHandYetAPullPicksTha
     ASSERT_NO_FATAL_FAILURE(StartMod());
     SetGameTime(10000);
     // Both Motion Controllers are picked up in the same frame: neither was the Pointer Hand first.
-    headset.SetHandPose(kRight, HandAt(SideOf(kRight) - 0.1f, 0.0f, -0.3f));
-    headset.SetHandPose(kLeft, HandAt(SideOf(kLeft) - 0.1f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(SideOf(kRight) - 0.1f, 0.0f, -0.3f));
+    headset.SetHandPointing(kLeft, HandAt(SideOf(kLeft) - 0.1f, 0.0f, -0.3f));
     Frames(1);
-    headset.SetHandPose(kRight, HandAt(SideOf(kRight), 0.0f, -0.3f));
-    headset.SetHandPose(kLeft, HandAt(SideOf(kLeft), 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(SideOf(kRight), 0.0f, -0.3f));
+    headset.SetHandPointing(kLeft, HandAt(SideOf(kLeft), 0.0f, -0.3f));
     Frames(2);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isHandInUse(0) and VRCompanion:isHandInUse(1)"), "true");
     EXPECT_EQ(PointerHand(), "nil");
@@ -257,7 +257,7 @@ TEST_F(PointerHandSwitchTest, WithBothHandsInUseAndNoPointerHandYetAPullPicksTha
 
     Release(kRight);
     // Aiming at the Click Point moves the hand, which gives the Pointer Ray control.
-    headset.SetHandPose(kRight, HandAt(SideOf(kRight) + 0.05f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(SideOf(kRight) + 0.05f, 0.0f, -0.3f));
     Frames(1);
     Pull(kRight);
     Frames(1);
@@ -299,13 +299,13 @@ protected:
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
         ASSERT_EQ(RunLuauChunk(L, kGuiStubs, "=guiStubs"), 0);
         ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
-        headset.SetHandPose(kRight, AimAtPanel(0.5f, 0.5f));
+        headset.SetHandPointing(kRight, AimAtPanel(0.5f, 0.5f));
         NextFrame(&headset);
-        headset.SetHandPose(kRight, AimAtPanel(0.55f, 0.5f));
+        headset.SetHandPointing(kRight, AimAtPanel(0.55f, 0.5f));
         NextFrame(&headset);
-        headset.SetHandPose(kLeft, AimAtPanel(0.25f, 0.5f));
+        headset.SetHandPointing(kLeft, AimAtPanel(0.25f, 0.5f));
         NextFrame(&headset);
-        headset.SetHandPose(kLeft, AimAtPanel(0.3f, 0.5f));
+        headset.SetHandPointing(kLeft, AimAtPanel(0.3f, 0.5f));
         NextFrame(&headset);
         ASSERT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "1");
         ASSERT_EQ(EvalLua(L, "VRCompanion:isHandInUse(0)"), "true");

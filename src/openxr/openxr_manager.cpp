@@ -1459,8 +1459,18 @@ XrExtent2Df OpenXrManager::ComputeMenuQuadSize() const {
 
 PanelHit OpenXrManager::ComputeQuadRayHit(const XrPosef& quadPose, const XrExtent2Df& quadSize,
                                           const Vector3& rayOrigin, const Quaternion& rayOrientation) {
+    return ComputeQuadRayHitAlong(quadPose, quadSize, rayOrigin,
+                                  RotateVectorByQuaternion(rayOrientation, Vector3(0.0f, 0.0f, -1.0f)));
+}
+
+PanelHit OpenXrManager::ComputeQuadRayHitAlong(const XrPosef& quadPose, const XrExtent2Df& quadSize,
+                                               const Vector3& rayOrigin, const Vector3& rayDirection) {
     PanelHit miss;
     if (quadSize.width <= 0.0f || quadSize.height <= 0.0f) {
+        return miss;
+    }
+    const float length = std::sqrt(rayDirection.x * rayDirection.x + rayDirection.y * rayDirection.y + rayDirection.z * rayDirection.z);
+    if (!(length > 1e-6f)) {
         return miss;
     }
     // Into the quad's own frame, where the panel is the z = 0 plane facing +Z.
@@ -1468,7 +1478,7 @@ PanelHit OpenXrManager::ComputeQuadRayHit(const XrPosef& quadPose, const XrExten
     const Quaternion worldToQuad(-quadToWorld.x, -quadToWorld.y, -quadToWorld.z, quadToWorld.w);
     const Vector3 offset(rayOrigin.x - quadPose.position.x, rayOrigin.y - quadPose.position.y, rayOrigin.z - quadPose.position.z);
     const Vector3 origin = RotateVectorByQuaternion(worldToQuad, offset);
-    const Vector3 worldDir = RotateVectorByQuaternion(rayOrientation, Vector3(0.0f, 0.0f, -1.0f));
+    const Vector3 worldDir(rayDirection.x / length, rayDirection.y / length, rayDirection.z / length);
     const Vector3 dir = RotateVectorByQuaternion(worldToQuad, worldDir);
 
     // The panel is only visible from its front: the ray must start in front of it and head into it.
@@ -1500,6 +1510,14 @@ PanelHit OpenXrManager::GetPanelHit(uint32_t hand) {
     // The hand is located in the local space the quad layer is submitted in, so the pose and size
     // SubmitMenuQuad() uses are the ones to test against.
     return ComputeQuadRayHit(ComputeMenuQuadPose(), ComputeMenuQuadSize(), state.aim.position, state.aim.orientation);
+}
+
+PanelHit OpenXrManager::GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction) {
+    const HandState state = GetHandState(hand);
+    if (!state.tracked || !state.aim.isValid) {
+        return {};
+    }
+    return ComputeQuadRayHitAlong(ComputeMenuQuadPose(), ComputeMenuQuadSize(), origin, direction);
 }
 
 bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df* customSize) {

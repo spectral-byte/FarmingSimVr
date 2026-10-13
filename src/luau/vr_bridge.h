@@ -48,6 +48,9 @@ public:
     // panel coordinates (PanelHit). A miss when no panel is showing, the hand is untracked or there is
     // no runtime. The Injector owns the panel pose and size, so the geometry stays here (ADR-0006, ADR-0008).
     PanelHit GetPanelHit(uint32_t hand);
+    // The same for a ray the Companion Mod gives, in the space the hand poses are in: the Pointer Ray starts at the
+    // index fingertip and runs along the finger, not along the aim pose.
+    PanelHit GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction);
     // Draws the menu cursor at (u, v) while the Pointer Ray has control, or gives it back to the desk
     // mouse (active = false). Cleared whenever a panel appears or goes away.
     void SetMenuCursor(bool active, float u, float v);
@@ -122,6 +125,7 @@ public:
     static int Lua_Recenter(lua_State* L);
     static int Lua_AlignMenuQuad(lua_State* L);
     static int Lua_GetPanelHit(lua_State* L);
+    static int Lua_GetPanelHitAlongRay(lua_State* L);
     static int Lua_SetMenuCursor(lua_State* L);
     static int Lua_GetEyeProjection(lua_State* L);
     static int Lua_SetMenuVisible(lua_State* L);
@@ -190,6 +194,7 @@ public:
         {"getIsMenuVisible", &Lua_GetIsMenuVisible},
         {"alignMenuQuad", &Lua_AlignMenuQuad},
         {"getPanelHit", &Lua_GetPanelHit},
+        {"getPanelHitAlongRay", &Lua_GetPanelHitAlongRay},
         {"setMenuCursor", &Lua_SetMenuCursor},
         {"set2DViewActive", &Lua_Set2DViewActive},
         {"getIs2DViewActive", &Lua_GetIs2DViewActive},

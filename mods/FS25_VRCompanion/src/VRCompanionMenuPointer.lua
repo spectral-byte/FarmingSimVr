@@ -8,8 +8,11 @@
 --
 -- How it works, per update (called from updateMotionControllers, once the hands were polled):
 --   * The Injector owns the panel pose (ADR-0006, ADR-0008), so it reports where the Pointer Hand's
---     ray lands on the visible panel: VRBridge.getPanelHit(hand) -> {hit, u, v, distance}, with u
---     across from the left and v down from the top, both 0..1.
+--     ray lands on the visible panel: VRBridge.getPanelHitAlongRay(hand, ox, oy, oz, dx, dy, dz) ->
+--     {hit, u, v, distance}, with u across from the left and v down from the top, both 0..1. The ray is the
+--     Pointer Ray (it starts at the index fingertip and runs along the finger, VRCompanion:
+--     getPointerRayInTrackingSpace), the same as in the world. (VRBridge.getPanelHit(hand) tests the aim pose
+--     and is the fallback for an Injector without the other call.)
 --   * The game's cursor is moved and clicked through the game's own GUI mouse handling,
 --     g_gui:mouseEvent(posX, posY, isDown, isUp, button), exactly the call the engine makes for the
 --     desk mouse (the Injector never synthesizes OS input). The GUI measures y up from the BOTTOM, so
@@ -300,7 +303,20 @@ function VRCompanion:updateMenuPointer(dt)
         return
     end
 
-    local result = getPanelHit(hand, state.hit)
+    -- The ray is the one drawn in the world: it starts at the index fingertip and runs along the finger (or the aim
+    -- pose while the grip pose is not tracked), in the space the hand poses are in, which is the space the Injector's
+    -- panel is in. An Injector without getPanelHitAlongRay tests the aim pose.
+    local getPanelHitAlongRay = bridgeFunction("getPanelHitAlongRay")
+    local ox, oy, oz, dx, dy, dz = nil, nil, nil, nil, nil, nil
+    if getPanelHitAlongRay ~= nil then
+        ox, oy, oz, dx, dy, dz = self:getPointerRayInTrackingSpace(hand)
+    end
+    local result
+    if ox ~= nil then
+        result = getPanelHitAlongRay(hand, ox, oy, oz, dx, dy, dz, state.hit)
+    else
+        result = getPanelHit(hand, state.hit)
+    end
     if type(result) == "table" then
         state.hit = result
     end

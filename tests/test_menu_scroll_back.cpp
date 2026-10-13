@@ -104,9 +104,9 @@ protected:
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
         ASSERT_EQ(RunLuauChunk(L, kGuiStubs, "=guiStubs"), 0);
         ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
-        headset.SetHandPose(kRight, AimAt(0.5f, 0.5f));
+        headset.SetHandPointing(kRight, AimAt(0.5f, 0.5f));
         NextFrame(&headset);
-        headset.SetHandPose(kRight, AimAt(0.55f, 0.5f));  // a real move: the hand is in use and points
+        headset.SetHandPointing(kRight, AimAt(0.55f, 0.5f));  // a real move: the hand is in use and points
         NextFrame(&headset);
     }
 
@@ -303,7 +303,7 @@ TEST_F(MenuScrollBackTest, TheCursorDecidesWhatScrolls) {
     StartWithMenuOpen();
     ASSERT_FALSE(HasFatalFailure());
 
-    headset.SetHandPose(kRight, AimAt(0.95f, 0.5f));  // over the panel, beside the list
+    headset.SetHandPointing(kRight, AimAt(0.95f, 0.5f));  // over the panel, beside the list
     NextFrame(&headset);
     Hold(kRight, Stick(0.0f, 1.0f));
     EXPECT_EQ(Scrolls(), 0) << "the wheel turns where the cursor is, not over the list";

@@ -248,6 +248,13 @@ PanelHit VRBridge::GetPanelHit(uint32_t hand) {
     return {};
 }
 
+PanelHit VRBridge::GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction) {
+    if (m_openXrManager && (m_menuVisible || m_2dViewActive)) {
+        return m_openXrManager->GetPanelHitAlongRay(hand, origin, direction);
+    }
+    return {};
+}
+
 void VRBridge::SetMenuCursor(bool active, float u, float v) {
     if (m_openXrManager) {
         m_openXrManager->SetPointerCursorOverride(active, u, v);
@@ -737,6 +744,45 @@ int VRBridge::Lua_GetPanelHit(lua_State* L) {
     uint32_t hand = kInvalidHand;
     const int outIndex = ParseHandAndOutputArgs(L, hand);
     const PanelHit hit = self->GetPanelHit(hand);
+
+    if (outIndex != 0 && HasAllFields(L, outIndex, kPanelHitFields, kPanelHitFieldCount)) {
+        FillPanelHitTable(L, outIndex, hit);
+        lua_pushvalue(L, outIndex);
+    } else {
+        lua_createtable(L, 0, static_cast<int>(kPanelHitFieldCount));
+        FillPanelHitTable(L, -1, hit);
+    }
+    return 1;
+}
+
+// VRBridge.getPanelHitAlongRay(hand, ox, oy, oz, dx, dy, dz [, outTable]) -> { hit, u, v, distance }: the same for a ray
+// the caller gives, in the space the hand poses of getHandState are in. The Pointer Ray starts at the index
+// fingertip and runs along the finger, which only the Companion Mod knows. The direction need not be a unit vector.
+// A miss when an argument is missing, the direction has no length, or the hand is not tracked.
+int VRBridge::Lua_GetPanelHitAlongRay(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.getPanelHitAlongRay");
+    uint32_t hand = kInvalidHand;
+    const int outIndex = ParseHandAndOutputArgs(L, hand);
+    // The six numbers are the numeric arguments that follow the hand (a hand given by name is a string).
+    double ray[6] = {};
+    int found = 0;
+    bool handPassed = false;
+    const int argc = lua_gettop(L);
+    for (int i = 1; i <= argc && found < 6; ++i) {
+        const int type = lua_type(L, i);
+        if (type == LUA_TTABLE) continue;
+        if (!handPassed) { handPassed = true; continue; }
+        if (type != LUA_TNUMBER) break;
+        ray[found++] = lua_tonumber(L, i);
+    }
+    PanelHit hit;
+    if (found == 6) {
+        hit = self->GetPanelHitAlongRay(hand,
+            Vector3(static_cast<float>(ray[0]), static_cast<float>(ray[1]), static_cast<float>(ray[2])),
+            Vector3(static_cast<float>(ray[3]), static_cast<float>(ray[4]), static_cast<float>(ray[5])));
+    }
 
     if (outIndex != 0 && HasAllFields(L, outIndex, kPanelHitFields, kPanelHitFieldCount)) {
         FillPanelHitTable(L, outIndex, hit);

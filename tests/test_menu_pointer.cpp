@@ -109,6 +109,53 @@ TEST_F(CompanionModTest, BridgePanelHitIsAMissWithoutAVisiblePanelATrackedHandOr
     lua_close(L2);
 }
 
+// The Pointer Ray starts at the index fingertip and runs along the finger, not along the aim pose, and the panel is the
+// Injector's geometry: the Companion Mod hands it the ray (tracking space, the space the hand poses are in).
+TEST_F(CompanionModTest, BridgeReportsWhereAGivenRayHitsThePanelWhateverTheHandsAimPoseSays) {
+    FakeTrackedHeadset headset;
+    PlaceHead(headset);
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    bridge.SetMenuVisible(true);
+    // The aim pose of the right hand is somewhere that hits nothing (far to the side, pointing straight ahead).
+    headset.SetHandPose(kRight, PoseAt(5.0f, 1.6f, 0.0f));
+    headset.SetHandPose(kLeft, PoseAt(-5.0f, 1.6f, 0.0f));
+    headset.NextFrame();
+
+    // The panel is 1.6 m wide and 0.9 m high, 1.5 m ahead of the head at eye height (0, 1.6, 0).
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        -- straight ahead from 0.4 m right and 0.225 m up: 0.25 of the width right of centre, 0.25 of the height above it
+        local hit = VRBridge.getPanelHitAlongRay(1, 0.4, 1.6 + 0.225, 0.0, 0, 0, -1)
+        assert(hit.hit == true, "the ray hits")
+        assert(math.abs(hit.u - 0.75) < 1e-4 and math.abs(hit.v - 0.25) < 1e-4, string.format("u %.4f v %.4f", hit.u, hit.v))
+        assert(math.abs(hit.distance - 1.5) < 1e-4, "distance")
+        -- a slanted ray (not a unit vector): at 1.5 m it has moved 1.5 * 0.3 = 0.45 m right and 1.5 * -0.15 = 0.225 m down
+        local slanted = VRBridge.getPanelHitAlongRay("left", 0, 1.6, 0, 0.3, -0.15, -1)
+        assert(slanted.hit == true, "the slanted ray hits")
+        assert(math.abs(slanted.u - (0.5 + 0.45 / 1.6)) < 1e-4 and math.abs(slanted.v - (0.5 + 0.225 / 0.9)) < 1e-4, string.format("u %.4f v %.4f", slanted.u, slanted.v))
+        assert(math.abs(slanted.distance - 1.5 * math.sqrt(0.3 ^ 2 + 0.15 ^ 2 + 1)) < 1e-3, "distance along the unit direction")
+        -- the plain call still follows the aim pose
+        assert(VRBridge.getPanelHit(1).hit == false, "the aim pose of the right hand hits nothing")
+        -- a ray past the edge, pointing away, or with no direction is a miss
+        assert(VRBridge.getPanelHitAlongRay(1, 0.9, 1.6, 0, 0, 0, -1).hit == false, "right of the edge")
+        assert(VRBridge.getPanelHitAlongRay(1, 0, 1.6, 0, 0, 0, 1).hit == false, "pointing away")
+        assert(VRBridge.getPanelHitAlongRay(1, 0, 1.6, 0, 0, 0, 0).hit == false, "no direction")
+        assert(VRBridge.getPanelHitAlongRay(1, 0, 1.6, 0).hit == false, "arguments missing")
+        assert(VRBridge.getPanelHitAlongRay(5, 0, 1.6, 0, 0, 0, -1).hit == false, "bad hand")
+        -- like the other calls, a complete table is filled in place
+        local out = VRBridge.getPanelHitAlongRay(1, 0, 1.6, 0, 0, 0, -1)
+        assert(VRBridge.getPanelHitAlongRay(1, 0.4, 1.6 + 0.225, 0, 0, 0, -1, out) == out and math.abs(out.u - 0.75) < 1e-4, "filled in place")
+    )luau", "=panelHitAlongRay"), 0);
+
+    // No panel, or a hand that is not tracked, is a miss whatever the ray.
+    headset.SetHandTracked(kRight, false);
+    headset.NextFrame();
+    ASSERT_EQ(RunLuauChunk(L, "assert(VRBridge.getPanelHitAlongRay(1, 0, 1.6, 0, 0, 0, -1).hit == false, 'untracked hand')", "=untrackedAlongRay"), 0);
+    bridge.SetMenuVisible(false);
+    ASSERT_EQ(RunLuauChunk(L, "assert(VRBridge.getPanelHitAlongRay('left', 0, 1.6, 0, 0, 0, -1).hit == false, 'no panel')", "=noPanelAlongRay"), 0);
+    bridge.Set2DViewActive(true);
+    ASSERT_EQ(RunLuauChunk(L, "assert(VRBridge.getPanelHitAlongRay('left', 0, 1.6, 0, 0, 0, -1).hit == true, '2D panel')", "=panel2dAlongRay"), 0);
+}
 TEST_F(CompanionModTest, BridgeSetsTheDrawnCursorWhileThePointerRayHasControlAndClearsItOnTheMenuChanging) {
     FakeTrackedHeadset headset;
     PlaceHead(headset);
@@ -191,13 +238,13 @@ protected:
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
         ASSERT_EQ(RunLuauChunk(L, kGuiStubs, "=guiStubs"), 0);
         ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
-        headset.SetHandPose(kRight, AimAt(0.5f, 0.5f));
+        headset.SetHandPointing(kRight, AimAt(0.5f, 0.5f));
         NextFrame(&headset);
         AimRightHandAt(0.55f, 0.5f);  // a real move: the hand is in use and the ray takes control
     }
 
     void AimRightHandAt(float u, float v) {
-        headset.SetHandPose(kRight, AimAt(u, v));
+        headset.SetHandPointing(kRight, AimAt(u, v));
         NextFrame(&headset);
     }
     void PullRightTrigger(float value) {
@@ -214,6 +261,27 @@ protected:
 
 } // namespace
 
+TEST_F(MenuPointerTest, TheCursorFollowsTheFingerTheRayRunsAlongNotTheAimPose) {
+    StartWithMenuOpen();
+    ASSERT_FALSE(HasFatalFailure());
+
+    // The finger points at (0.75, 0.25) of the panel, while the runtime's aim pose points at nothing: 5 m to the right.
+    headset.SetHandPointing(kRight, AimAt(0.75f, 0.25f));
+    headset.SetHandAimPose(kRight, PoseAt(5.0f, 1.6f, 0.0f));
+    NextFrame(&headset);
+
+    ExpectLastGuiEventAt(0.75, 0.75);
+    const auto& drawn = headset.manager->GetPointerCursorOverride();
+    EXPECT_TRUE(drawn.active);
+    EXPECT_NEAR(drawn.u, 0.75f, 1e-3f);
+    EXPECT_NEAR(drawn.v, 0.25f, 1e-3f);
+
+    // The aim pose is the fallback while the grip pose is not tracked: the cursor goes where the aim pose points.
+    headset.SetHandPose(kRight, AimAt(0.25f, 0.5f));
+    headset.SetHandGripPose(kRight, PoseAt(0.0f, 0.0f, 0.0f), /*tracked=*/false);
+    NextFrame(&headset);
+    ExpectLastGuiEventAt(0.25, 0.5);
+}
 TEST_F(MenuPointerTest, AimingThePointerHandAtTheMenuMovesTheGamesCursorThereAndTheDrawnCursorFollows) {
     StartWithMenuOpen();
     ASSERT_FALSE(HasFatalFailure());
@@ -366,7 +434,7 @@ TEST_F(MenuPointerTest, ThePointerRayStartsWithoutControlAndTheStillDeskMouseDoe
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "mouse");
     EXPECT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "false");
 
-    headset.SetHandPose(kRight, AimAt(0.5f, 0.5f));
+    headset.SetHandPointing(kRight, AimAt(0.5f, 0.5f));
     NextFrame(&headset);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "mouse") << "a Motion Controller that has not moved is not pointing";
     AimRightHandAt(0.6f, 0.5f);
