@@ -123,7 +123,8 @@ int CountLogLines(const std::string& text) {
     for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
 
 // A Motion Controller picked up: it moves a little, then holds the aim pose given, with its grip pose
-// somewhere else (the grip pose is where the hand holds the controller, not where it points). The game clock\n// is set by the test once (the in-use timeout is measured on it).
+// somewhere else (the grip pose is where the hand holds the controller, not where it points). The game clock
+// is set by the test once (the in-use timeout is measured on it).
 #define PICK_UP(hand, aimX, aimY, aimZ, gripX, gripY, gripZ) \
     do { \
         headset.SetHandPose((hand), HandAt((aimX) - 0.1f, (aimY), (aimZ))); \
@@ -580,4 +581,63 @@ TEST_F(CompanionModTest, TheDiagnosticsCommandsReportEachVirtualHandAndWhyItIsHi
     // The command goes with the map.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=unloadMap"), 0);
     EXPECT_EQ(EvalLua(L, "registeredCommands['vrVirtualHandsDiagnostics']"), "nil");
+}
+
+// ---- Finger curl (ticket #86) ----
+
+namespace {
+
+// Reads how far each finger of a Virtual Hand is curled, from the joints' rotations away from the model's rest
+// pose (StubModel.curl: radians about the joint's own X axis, positive toward the palm).
+constexpr const char* kCurlReaders = R"luau(
+    _G.FINGERS = { "thumb", "index", "middle", "ring", "little" }
+    -- the curl of the three joints of one finger of "left" / "right", as { joint1, joint2, joint3 }
+    function _G.fingerCurl(which, finger)
+        local hand = StubModel.hands()[which]
+        assert(hand ~= nil, "there is a " .. which .. " Virtual Hand")
+        local curls = {}
+        for segment = 1, 3 do curls[segment] = StubModel.curl(hand, finger .. segment) end
+        return curls
+    end
+    -- every joint of a finger is curled by `expected(segment)` radians
+    function _G.assertFinger(which, finger, expected, message)
+        local curls = fingerCurl(which, finger)
+        for segment = 1, 3 do
+            local want = expected(segment)
+            assert(math.abs(curls[segment] - want) < 1e-3,
+                string.format("%s %s%d is curled %.4f rad, expected %.4f (%s)", which, finger, segment, curls[segment], want, message or ""))
+        end
+    end
+    function _G.assertStill(which, finger, message) assertFinger(which, finger, function() return 0 end, message) end
+    -- the curl of a finger's joints at full pull, learnt from the model by pulling all the way
+    function _G.fullCurl(which, finger) return fingerCurl(which, finger) end
+)luau";
+
+} // namespace
+
+TEST_F(CompanionModTest, TheIndexFingerCurlsInProportionToTheTriggerAndNoOtherFingerMoves) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kCurlReaders, "=curlReaders"), 0);
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.fullIndex = fingerCurl('right', 'index')
+        for segment = 1, 3 do
+            assert(fullIndex[segment] > math.rad(30) and fullIndex[segment] <= math.rad(110),
+                string.format("index%d at full trigger is curled %.1f degrees", segment, math.deg(fullIndex[segment])))
+        end
+        for _, finger in ipairs({ 'middle', 'ring', 'little', 'thumb' }) do assertStill('right', finger, 'trigger only') end
+    )luau", "=fullTrigger"), 0);
+
+    headset.SetHandInputs(kRight, Trigger(0.5f));
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assertFinger('right', 'index', function(segment) return fullIndex[segment] * 0.5 end, 'half trigger')
+        for _, finger in ipairs({ 'middle', 'ring', 'little', 'thumb' }) do assertStill('right', finger, 'half trigger') end
+    )luau", "=halfTrigger"), 0);
 }
