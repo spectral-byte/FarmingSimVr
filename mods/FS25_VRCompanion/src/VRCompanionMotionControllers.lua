@@ -422,6 +422,7 @@ function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
     if type(xml.setBool) == "function" then
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.motionControllersEnabled ~= false)
     end
+    self:savePointerConeSetting(xmlFile, xml)
 end
 
 -- Called from loadConfiguration with the open settings file and the engine's getters (any may be nil).
@@ -438,6 +439,47 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
     if loaded ~= nil then
         self.motionControllersEnabled = loaded
     end
+    self:loadPointerConeSetting(xmlFile, xml)
+end
+
+-- vrPointerCone: the cone (degrees) inside which a Click Point is selected.
+local SETTING_KEY_CONE = "vrSettings.pointerConeDegrees"
+
+local function validPointerCone(self, degrees)
+    return type(degrees) == "number" and degrees >= self.MIN_POINTER_CONE_DEGREES and degrees <= self.MAX_POINTER_CONE_DEGREES
+end
+
+function VRCompanion:savePointerConeSetting(xmlFile, xml)
+    if type(xml.setFloat) == "function" then
+        xml.setFloat(xmlFile, SETTING_KEY_CONE, self.pointerConeDegrees)
+    end
+end
+
+function VRCompanion:loadPointerConeSetting(xmlFile, xml)
+    if type(xml.getFloat) ~= "function" then return end
+    local degrees = xml.getFloat(xmlFile, SETTING_KEY_CONE)
+    if validPointerCone(self, degrees) then
+        self.pointerConeDegrees = degrees
+    end
+end
+
+function VRCompanion:consoleCommandSetPointerCone(arg)
+    local usage = string.format("Usage: vrPointerCone <degrees, %s to %s> (saved)",
+        tostring(self.MIN_POINTER_CONE_DEGREES), tostring(self.MAX_POINTER_CONE_DEGREES))
+    if arg == nil or arg == "" then
+        return string.format("Pointer Ray cone: %s degrees (default %s). %s",
+            tostring(self.pointerConeDegrees), tostring(self.DEFAULT_POINTER_CONE_DEGREES), usage)
+    end
+    local degrees = tonumber(arg)
+    if not validPointerCone(self, degrees) then
+        return usage
+    end
+    self.pointerConeDegrees = degrees
+    if type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
+    print(string.format("[FS25_VR] Pointer Ray cone set to: %s degrees", tostring(degrees)))
+    return string.format("Pointer Ray cone set to: %s degrees (Saved)", tostring(degrees))
 end
 
 function VRCompanion:consoleCommandSetMotionControllers(arg)
@@ -485,6 +527,7 @@ function VRCompanion:registerMotionControllerConsoleCommands()
     if addConsoleCommand == nil then return end
     addConsoleCommand("vrMotionControllers", "Turn Motion Controller input on or off (saved; the Injector's session is untouched): vrMotionControllers [on|off]", "consoleCommandSetMotionControllers", self)
     addConsoleCommand("vrMotionControllerStatus", "Report each Motion Controller's tracked and in-use state and the Pointer Hand: vrMotionControllerStatus", "consoleCommandMotionControllerStatus", self)
+    addConsoleCommand("vrPointerCone", "How wide (degrees) the cone around the Pointer Ray is inside which the nearest Click Point is selected (saved): vrPointerCone [degrees]", "consoleCommandSetPointerCone", self)
 end
 
 -- Map unload: forget everything seen this session. The saved setting stays as it is.
@@ -492,6 +535,7 @@ function VRCompanion:resetMotionControllers()
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrMotionControllers")
         removeConsoleCommand("vrMotionControllerStatus")
+        removeConsoleCommand("vrPointerCone")
     end
     if type(self.resetInteractiveControlSupport) == "function" then self:resetInteractiveControlSupport() end
     state = newState()
@@ -506,5 +550,9 @@ VRCompanion.MotionControllers.consoleCommandSetMotionControllers = function(self
 VRCompanion.MotionControllers.consoleCommandMotionControllerStatus = function(self, ...) return VRCompanion.consoleCommandMotionControllerStatus(VRCompanion, ...) end
 VRCompanion.MotionControllers.updateMotionControllers = function(self, ...) return VRCompanion.updateMotionControllers(VRCompanion, ...) end
 VRCompanion.MotionControllers.resetMotionControllerMovement = function(self, ...) return VRCompanion.resetMotionControllerMovement(VRCompanion, ...) end
+VRCompanion.MotionControllers.consoleCommandSetPointerCone = function(self, ...) return VRCompanion.consoleCommandSetPointerCone(VRCompanion, ...) end
+VRCompanion.MotionControllers.getPointerRay = function(self, ...) return VRCompanion.getPointerRay(VRCompanion, ...) end
+VRCompanion.MotionControllers.getPointerTrigger = function(self, ...) return VRCompanion.getPointerTrigger(VRCompanion, ...) end
+VRCompanion.MotionControllers.draw = function(self, ...) return VRCompanion.draw(VRCompanion, ...) end
 
 return VRCompanion.MotionControllers

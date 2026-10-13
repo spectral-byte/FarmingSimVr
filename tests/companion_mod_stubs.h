@@ -24,6 +24,8 @@
 //     A vehicle in the cab view: camParent -> cameraNode, headTrackingNode (1.5 m up, turned by pi like
 //     the game's cab cameras). g_currentMission.controlledVehicle is the vehicle and
 //     StubScene.updateCamera() runs VRCompanion:onVehicleCameraUpdate for it.
+//   StubScene.outside(options) -> { cam, cameraNode }   an Outside Camera of the controlled vehicle at the world
+//       pose x, y, z, yaw (the engine only reads it); StubScene.updateCamera() runs onVehicleCameraUpdate
 //   StubScene.onFoot(options) -> { parent, yawNode, firstPersonCamera }   (a player on foot)
 //       options: x, y, z, yaw. StubScene.updateCamera() then runs onPlayerCameraUpdate.
 inline constexpr const char* kStubSceneGraph = R"luau(
@@ -80,7 +82,8 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 
     _G.createTransformGroup = function(name) return StubScene.newNode(name, 0) end
     _G.createCamera = function(name) return StubScene.newNode(name, 0) end
-    _G.getRootNode = function() return 0 end
+    local rootNode = StubScene.newNode("root", 0)
+    _G.getRootNode = function() return rootNode end
     _G.getParent = function(node) return nodes[node] and nodes[node].parent or 0 end
     _G.link = function(parent, child) if nodes[child] then nodes[child].parent = parent end end
     _G.setTranslation = function(node, x, y, z) local n = nodes[node]; if n then n.x, n.y, n.z = x, y, z end end
@@ -130,6 +133,19 @@ inline constexpr const char* kStubSceneGraph = R"luau(
         StubScene.updateCamera = function() VRCompanion:onVehicleCameraUpdate(cam, 16.667) end
         VRCompanion:onEnterVehicle(vehicle, true, nil)
         return { vehicle = vehicle, cam = cam, cameraNode = cameraNode, headTrackingNode = headTrackingNode, parent = parent }
+    end
+
+    function StubScene.outside(options)
+        options = options or {}
+        local cameraNode = StubScene.newNode("outsideCamera", 0, options.x, options.y, options.z, 0, options.yaw or 0, 0)
+        local cam = { isInside = false, cameraNode = cameraNode }
+        local vehicle = { getActiveCamera = function() return cam end }
+        _G.g_currentMission = _G.g_currentMission or {}
+        _G.g_currentMission.controlledVehicle = vehicle
+        _G.activeCamera = cameraNode
+        StubScene.updateCamera = function() VRCompanion:onVehicleCameraUpdate(cam, 16.667) end
+        VRCompanion:onEnterVehicle(vehicle, true, nil)
+        return { cam = cam, cameraNode = cameraNode }
     end
 
     function StubScene.onFoot(options)

@@ -67,10 +67,26 @@ constexpr const char* kConsoleStubs = R"luau(
     end
 )luau";
 
+// Stubs of the engine's XML settings API that remember what was saved, so a later session can load it.
+constexpr const char* kXmlStubs = R"luau(
+    _G.savedXml = _G.savedXml or {}
+    _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+    _G.createFolder = function() return true end
+    _G.createXMLFile = function() return 1 end
+    _G.setXMLFloat = function(file, key, value) _G.savedXml[key] = value end
+    _G.setXMLBool = function(file, key, value) _G.savedXml[key] = value end
+    _G.setXMLString = function(file, key, value) _G.savedXml[key] = value end
+    _G.saveXMLFile = function() return true end
+    _G.delete = function() end
+    _G.loadXMLFile = function() return 2 end
+    _G.getXMLFloat = function(file, key) local v = _G.savedXml[key]; return type(v) == "number" and v or nil end
+    _G.getXMLBool = function(file, key) local v = _G.savedXml[key]; if type(v) == "boolean" then return v end return nil end
+    _G.getXMLString = function(file, key) local v = _G.savedXml[key]; return type(v) == "string" and v or nil end
+)luau";
 // A cab at the world origin, an Interactive Control release the Companion Mod supports, and the mod
 // started: the player sits at (0, 1.5, 0) looking along world +Z, so a hand held at (x, y, -z)
 // from the head points along +Z from world (-x, 1.5 + y, +z).
-void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const char* icVariant = "ok") {
+void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const char* icVariant = "ok", const char* scene = "StubScene.cab({})") {
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
     ASSERT_EQ(RunLuauChunk(L, kStubSceneGraph, "=sceneGraph"), 0);
@@ -80,7 +96,7 @@ void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const char* icVariant = "o
     if (icVariant != nullptr) {
         ASSERT_EQ(RunLuauChunk(L, std::string("StubIC.install('") + icVariant + "')", "=installIc"), 0);
     }
-    ASSERT_EQ(RunLuauChunk(L, "StubScene.cab()", "=cab"), 0);
+    ASSERT_EQ(RunLuauChunk(L, scene, "=scene"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
 }
 
@@ -125,4 +141,463 @@ TEST_F(CompanionModTest, PullingTheTriggerOnAClickPointInTheRayExecutesItOnce) {
     FRAMES(1);
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1");
     EXPECT_EQ(EvalLua(L, "StubIC.executed[1]"), "lights");
+}
+
+TEST_F(CompanionModTest, TheClickPointNearestTheRaysCenterInsideTheConeWinsAndNothingOutsideIsSelected) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    // The ray runs from world (-0.3, 1.5, 0.3) along +Z. Two metres ahead, a sideways offset of
+    // 2 * tan(angle) is that many degrees off its centre: 3 degrees, 1.5 degrees on the other side,
+    // and 8 degrees, which is outside the default 5 degree cone.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.addPoint('threeDegrees', -0.3 + 0.1048, 1.5, 2.3)
+        StubIC.addPoint('oneAndAHalfDegrees', -0.3 - 0.0524, 1.5, 2.3)
+        StubIC.addPoint('eightDegrees', -0.3 + 0.2811, 1.5, 2.3)
+    )luau", "=addPoints"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "oneAndAHalfDegrees") << "the nearest to the centre of the ray wins";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.points[2].inRange = false", "=hideNearest"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "threeDegrees");
+
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].inRange = false", "=hideSecond"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "nil") << "8 degrees is outside the cone";
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0") << "a pull with nothing selected clicks nothing";
+}
+
+TEST_F(CompanionModTest, VrPointerConeChangesTheConeAndIsSaved) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kXmlStubs, "=xmlStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('eightDegrees', -0.3 + 0.2811, 1.5, 2.3)", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "nil") << "outside the default cone";
+
+    EXPECT_NE(EvalLua(L, "runCommand('vrPointerCone', '10')").find("10"), std::string::npos);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "eightDegrees") << "inside a 10 degree cone";
+
+    EXPECT_EQ(EvalLua(L, "runCommand('vrPointerCone', '10') ~= nil and VRCompanion.pointerConeDegrees"), "10");
+    EXPECT_NE(EvalLua(L, "runCommand('vrPointerCone', 'wide')").find("Usage"), std::string::npos);
+    EXPECT_NE(EvalLua(L, "runCommand('vrPointerCone', '500')").find("Usage"), std::string::npos);
+    EXPECT_EQ(EvalLua(L, "VRCompanion.pointerConeDegrees"), "10") << "an invalid value changes nothing";
+    EXPECT_NE(EvalLua(L, "runCommand('vrPointerCone')").find("10"), std::string::npos) << "without a value it reports the current cone";
+
+    // A later session loads what was saved.
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:saveConfiguration()", "=save"), 0);
+    EXPECT_EQ(EvalLua(L, "savedXml['vrSettings.pointerConeDegrees']"), "10");
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.pointerConeDegrees = VRCompanion.DEFAULT_POINTER_CONE_DEGREES", "=forget"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadConfiguration('mockSettings.xml')", "=reload"), 0);
+    EXPECT_EQ(EvalLua(L, "VRCompanion.pointerConeDegrees"), "10");
+}
+
+TEST_F(CompanionModTest, OnePullClicksOnceHoldingKeepsOnlyAnAnalogClickPointActing) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.addPoint('switch', -0.3, 1.5, 2.3)
+        StubIC.addPoint('lever', -0.3, 1.5, 2.3, { analog = true, inRange = false })
+    )luau", "=addPoints"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2);
+
+    // A pull held for ten frames clicks the switch once, however long it is held.
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(10);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1");
+    // Letting go and pulling again is a second click.
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "2");
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+
+    // The analog Click Point keeps acting for as long as the trigger is held.
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].inRange = false; StubIC.points[2].inRange = true; StubIC.executed = {}", "=useLever"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "lever");
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(6);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "6") << "once per frame while held";
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "6") << "and not after the trigger is let go";
+}
+
+TEST_F(CompanionModTest, ATriggerThatRestsHalfWayNeitherClicksNorStopsAHoldFlickering) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('switch', -0.3, 1.5, 2.3)", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Trigger(0.5f));
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0") << "half-way is not a pull";
+    headset.SetHandInputs(kRight, Trigger(0.7f));
+    FRAMES(1);
+    headset.SetHandInputs(kRight, Trigger(0.5f));  // wobbling between 0.4 and 0.6 while held
+    FRAMES(1);
+    headset.SetHandInputs(kRight, Trigger(0.7f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1") << "one pull, however the trigger wobbles while held";
+}
+
+TEST_F(CompanionModTest, AClickDoesNotHappenWhenTheTriggerWasAlreadyDownBeforeTheHandWasAimed) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('switch', -0.3, 1.5, 2.3)", "=addPoint"), 0);
+    SetGameTime(10000);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    headset.SetHandPose(kRight, HandAt(0.2f, 0.0f, -0.3f));
+    FRAMES(2);  // trigger held, controller still: not in use, nothing to click with
+    headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "1");
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0") << "a trigger that never went down while aiming is not a pull";
+}
+
+TEST_F(CompanionModTest, ThePointerRayIsALineFromTheHandWithADotWhereItLands) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('switch', -0.3, 1.5, 2.3)", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2);
+
+    // On a Click Point the ray ends on it.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        drawPass()
+        assert(#debugLines == 1 and #debugPoints == 1, "one line and one dot")
+        local line, dot = debugLines[1], debugPoints[1]
+        assert(math.abs(line.x0 + 0.3) < 1e-4 and math.abs(line.y0 - 1.5) < 1e-4 and math.abs(line.z0 - 0.3) < 1e-4, "the line starts at the hand")
+        assert(math.abs(line.x1 + 0.3) < 1e-4 and math.abs(line.y1 - 1.5) < 1e-4 and math.abs(line.z1 - 2.3) < 1e-4, "and ends on the Click Point")
+        assert(math.abs(dot.x + 0.3) < 1e-4 and math.abs(dot.z - 2.3) < 1e-4, "the dot is at the end")
+    )luau", "=drawOnClickPoint"), 0);
+
+    // Aimed past it, the ray runs on a fixed length along the aim.
+    headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f, 0.0f, 0.5f));  // turned 0.5 rad
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        drawPass()
+        assert(#debugLines == 1 and #debugPoints == 1)
+        local line = debugLines[1]
+        local length = math.sqrt((line.x1 - line.x0)^2 + (line.y1 - line.y0)^2 + (line.z1 - line.z0)^2)
+        assert(math.abs(length - VRCompanion.POINTER_RAY_LENGTH) < 1e-3, "tracking-space turn of the hand turns the ray")
+        -- a hand yawed +0.5 rad in tracking space aims along (-sin 0.5, 0, -cos 0.5); the cab turns that by pi
+        local dx = (line.x1 - line.x0) / length
+        assert(math.abs(dx - math.sin(0.5)) < 1e-3, "direction x " .. dx)
+    )luau", "=drawPastTheClickPoint"), 0);
+}
+
+TEST_F(CompanionModTest, ThePointerRayIsHiddenWithoutActiveClickPointsWithoutAPointerHandAndWhenUntracked) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('switch', -0.3, 1.5, 2.3)", "=addPoint"), 0);
+    auto drawn = [&]() {
+        EXPECT_EQ(RunLuauChunk(L, "drawPass()", "=drawPass"), 0);
+        return EvalLua(L, "#debugLines + #debugPoints");
+    };
+
+    EXPECT_EQ(drawn(), "0") << "no Pointer Hand yet";
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2);
+    EXPECT_EQ(drawn(), "2") << "Pointer Hand in use and a Click Point to hit";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].inRange = false", "=outOfRange"), 0);
+    FRAMES(4);  // Interactive Control deactivates the Click Point; the ray has nothing to hit
+    EXPECT_EQ(drawn(), "0") << "no active Click Points";
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].inRange = true", "=inRange"), 0);
+    FRAMES(2);
+    EXPECT_EQ(drawn(), "2");
+
+    headset.SetHandTracked(kRight, false);
+    FRAMES(1);
+    EXPECT_EQ(drawn(), "0") << "an untracked Pointer Hand leaves no frozen ray";
+    headset.SetHandTracked(kRight, true);
+    FRAMES(1);
+    EXPECT_EQ(drawn(), "2") << "back when tracking returns while the hand is still in use";
+
+    AdvanceGameTime(3100);  // the controller lies still for more than 3 s
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "nil");
+    EXPECT_EQ(drawn(), "0") << "a controller left lying still has no ray";
+}
+
+// Where a hand held at (hx, hy, hz) from a head at the origin of the tracking space is in the world,
+// computed independently of the mod: the cab's head tracking node turns tracking space by the cab's
+// yaw plus the cab model's half turn (and by a Snap Turn), and sits 1.5 m above the cab.
+constexpr const char* kExpectedWorldMath = R"luau(
+    function _G.turnedY(angle, x, y, z)
+        return x * math.cos(angle) + z * math.sin(angle), y, -x * math.sin(angle) + z * math.cos(angle)
+    end
+    function _G.expectedOrigin(cab, turn, hx, hy, hz)
+        local ox, oy, oz = turnedY(turn, hx, hy, hz)
+        local bx, by, bz = turnedY(cab.yaw, 0, 1.5, 0)
+        return cab.x + bx + ox, cab.y + by + oy, cab.z + bz + oz
+    end
+    function _G.near(a, b) return math.abs(a - b) < 1e-3 end
+)luau";
+
+TEST_F(CompanionModTest, ThePointerRayStartsAtTheRealHandWhereverTheCabStandsAndTurns) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "ok", "StubScene.cab({ x = 100, y = 2, z = 50, yaw = 0.7 })"));
+    ASSERT_EQ(RunLuauChunk(L, kExpectedWorldMath, "=expectedMath"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('switch', 0, 0, 0)", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, -0.2f, -0.4f);
+    FRAMES(2);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        drawPass()
+        local line = debugLines[1]
+        assert(line ~= nil, "a ray is drawn")
+        local cab = { x = 100, y = 2, z = 50, yaw = 0.7 }
+        local ex, ey, ez = expectedOrigin(cab, 0.7 + math.pi, 0.3, -0.2, -0.4)
+        assert(near(line.x0, ex) and near(line.y0, ey) and near(line.z0, ez),
+            string.format("origin %.3f %.3f %.3f expected %.3f %.3f %.3f", line.x0, line.y0, line.z0, ex, ey, ez))
+        -- Aimed straight ahead in tracking space: along the cab's forward direction, half-turned.
+        local fx, fy, fz = turnedY(0.7 + math.pi, 0, 0, -1)
+        local length = math.sqrt((line.x1 - line.x0)^2 + (line.y1 - line.y0)^2 + (line.z1 - line.z0)^2)
+        assert(near((line.x1 - line.x0) / length, fx) and near((line.z1 - line.z0) / length, fz), "direction")
+    )luau", "=originAndDirection"), 0);
+}
+
+TEST_F(CompanionModTest, ThePointerRayStaysOnTheHandAfterASnapTurnAndTheRecenterAction) {
+    FakeTrackedHeadset headset;
+    HeadPose head;
+    head.position = Vector3(0.2f, 0.05f, -0.1f);
+    head.rotation = fs25vr::EulerAngles(0.0f, 0.4f, 0.0f);
+    head.isValid = true;
+    headset.SetHeadPose(head);
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kExpectedWorldMath, "=expectedMath"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('switch', 0, 0, 0)", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.5f, 0.1f, -0.3f);
+    FRAMES(2);
+
+    // What must not change while the hand and head are held still is the ray's origin and direction in
+    // the head's own frame (the Cyclopean Audio Listener Node is the head in the world).
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local function inverseRotate(qx, qy, qz, qw, x, y, z)
+            qx, qy, qz = -qx, -qy, -qz
+            local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
+            return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
+        end
+        _G.handInHeadFrame = function()
+            drawPass()
+            local line = debugLines[1]
+            assert(line ~= nil, "a ray is drawn")
+            local lx, ly, lz = getWorldTranslation(VRCompanion.cyclopeanAudioListenerNode)
+            local qx, qy, qz, qw = getWorldQuaternion(VRCompanion.cyclopeanAudioListenerNode)
+            local ox, oy, oz = inverseRotate(qx, qy, qz, qw, line.x0 - lx, line.y0 - ly, line.z0 - lz)
+            local dx, dy, dz = inverseRotate(qx, qy, qz, qw, line.x1 - line.x0, line.y1 - line.y0, line.z1 - line.z0)
+            local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+            return { ox, oy, oz, dx / length, dy / length, dz / length }
+        end
+        _G.sameAs = function(a, b)
+            for i = 1, 6 do assert(near(a[i], b[i]), "component " .. i .. ": " .. a[i] .. " vs " .. b[i]) end
+        end
+        _G.before = handInHeadFrame()
+        local hx, hy, hz = turnedY(-0.4, 0.3, 0.05, -0.2)  -- hand minus head, turned back by the head's yaw
+        assert(near(before[1], hx) and near(before[2], hy) and near(before[3], hz),
+            string.format("hand offset in the head frame %.3f %.3f %.3f", before[1], before[2], before[3]))
+    )luau", "=baseline"), 0);
+
+    // Snap Turn: the cab view turns, the ray turns with the hand.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.worldBefore = { debugLines[1].x0, debugLines[1].z0 }
+        assert(VRCompanion:snapTurnRight(nil, 20000) == true, "snap turn happened")
+    )luau", "=snapTurn"), 0);
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        sameAs(handInHeadFrame(), before)
+        assert(not (near(debugLines[1].x0, worldBefore[1]) and near(debugLines[1].z0, worldBefore[2])),
+            "the hand moved in the world with the turn")
+    )luau", "=afterSnapTurn"), 0);
+
+    // The Recenter Action moves the head and the hand in tracking space together; the ray follows.
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onRecenterAction()", "=recenter"), 0);
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "sameAs(handInHeadFrame(), before)", "=afterRecenter"), 0);
+}
+
+TEST_F(CompanionModTest, ThePointerRayLooksTheSameInBothEyesUnderAlternateFrameRendering) {
+    FakeTrackedHeadset headset;
+    headset.manager->SetIpd(0.064f);
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "ok", "StubScene.cab({ x = 10, z = 20, yaw = 0.3 })"));
+    RegisterTestSetFrameParity(bridge);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.addPoint('switch', 0, 0, 0)
+        VRCompanion:setRenderingMode('AFR')
+        VRBridge.latchPendingRenderingMode()
+
+    )luau", "=afr"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, -0.1f, -0.4f);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRBridge.setFrameParity(0)", "=leftEye"), 0);
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "drawPass(); _G.leftEyeLine = debugLines[1]; _G.leftEyeCameraX, _G.leftEyeCameraY, _G.leftEyeCameraZ = StubScene.worldPosition(getCamera())", "=drawLeft"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRBridge.setFrameParity(1)", "=rightEye"), 0);
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        drawPass()
+        local left, right = leftEyeLine, debugLines[1]
+        assert(left ~= nil and right ~= nil, "drawn in both eyes")
+        local rx, ry, rz = StubScene.worldPosition(getCamera())
+        assert(math.abs(rx - leftEyeCameraX) + math.abs(rz - leftEyeCameraZ) > 0.03, "the camera is at the other eye")
+        for _, key in ipairs({ "x0", "y0", "z0", "x1", "y1", "z1" }) do
+            assert(math.abs(left[key] - right[key]) < 1e-6, key .. " differs between the eyes: " .. left[key] .. " vs " .. right[key])
+        end
+    )luau", "=sameInBothEyes"), 0);
+}
+
+TEST_F(CompanionModTest, ThePointerRayLooksTheSameInBothPassesUnderSequentialDualPass) {
+    FakeTrackedHeadset headset;
+    headset.manager->SetIpd(0.064f);
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "ok", "StubScene.cab({ x = 10, z = 20, yaw = 0.3 })"));
+    RegisterTestSetFrameParity(bridge);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.addPoint('switch', 0, 0, 0)
+        VRCompanion:setRenderingMode('DualPass')
+        VRBridge.latchPendingRenderingMode()
+        VRBridge.setSubPassIndex(0)
+    )luau", "=sdp"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, -0.1f, -0.4f);
+    FRAMES(2);
+
+    // One update per logical frame; the camera is placed and the ray drawn in each of the two passes.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local lines = {}
+        for pass = 0, 1 do
+            VRBridge.setSubPassIndex(pass)
+            StubScene.updateCamera()
+            drawPass()
+            lines[pass] = debugLines[1]
+            assert(#debugPoints == 1)
+        end
+        assert(lines[0] ~= nil and lines[1] ~= nil, "drawn in both passes")
+        for _, key in ipairs({ "x0", "y0", "z0", "x1", "y1", "z1" }) do
+            assert(math.abs(lines[0][key] - lines[1][key]) < 1e-6, key .. " differs between the passes")
+        end
+    )luau", "=sameInBothPasses"), 0);
+}
+
+TEST_F(CompanionModTest, ThePointerRayStartsAtTheRealHandInAnOutsideCamera) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "ok", "StubScene.outside({ x = 10, y = 2, z = 30, yaw = -1.2 })"));
+    ASSERT_EQ(RunLuauChunk(L, kExpectedWorldMath, "=expectedMath"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('hitch', 0, 0, 0)", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, -0.2f, -0.4f);
+    FRAMES(2);
+    // The head is carried on a level base at the engine camera, turned by its heading, so the hand is
+    // that far from the camera, turned the same way.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        drawPass()
+        local line = debugLines[1]
+        assert(line ~= nil, "a ray is drawn")
+        local ex, ey, ez = turnedY(-1.2, 0.3, -0.2, -0.4)
+        assert(near(line.x0, 10 + ex) and near(line.y0, 2 + ey) and near(line.z0, 30 + ez),
+            string.format("origin %.3f %.3f %.3f", line.x0, line.y0, line.z0))
+    )luau", "=outsideOrigin"), 0);
+}
+
+TEST_F(CompanionModTest, ThePointerRayStartsAtTheRealHandOnFootAndAfterASnapTurn) {
+    FakeTrackedHeadset headset;
+    headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "ok", "StubScene.onFoot({ x = 50, z = -20, yaw = 1.0 })"));
+    ASSERT_EQ(RunLuauChunk(L, kExpectedWorldMath, "=expectedMath"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('door', 0, 0, 0)", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, -0.2f, -0.4f);
+    FRAMES(2);
+
+    // With the head at the origin of tracking space, the hand is where it is in tracking space as the head sees it:
+    // 0.3 right, 0.2 down and 0.4 ahead, whichever way the player's body faces.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local function headFrame()
+            drawPass()
+            local line = debugLines[1]
+            assert(line ~= nil, "a ray is drawn")
+            local node = VRCompanion.cyclopeanAudioListenerNode
+            local lx, ly, lz = getWorldTranslation(node)
+            local qx, qy, qz, qw = getWorldQuaternion(node)
+            local function inverseRotate(x, y, z)
+                local ix, iy, iz = -qx, -qy, -qz
+                local cx, cy, cz = iy * z - iz * y + qw * x, iz * x - ix * z + qw * y, ix * y - iy * x + qw * z
+                return x + 2 * (iy * cz - iz * cy), y + 2 * (iz * cx - ix * cz), z + 2 * (ix * cy - iy * cx)
+            end
+            return line, lx, ly, lz, inverseRotate(line.x0 - lx, line.y0 - ly, line.z0 - lz)
+        end
+        local line, lx, ly, lz, hx, hy, hz = headFrame()
+        assert(math.abs(lx - 50) < 1 and math.abs(lz + 20) < 1, "the head is by the player")
+        assert(near(hx, 0.3) and near(hy, -0.2) and near(hz, -0.4), string.format("hand in head frame %.3f %.3f %.3f", hx, hy, hz))
+        _G.before = { line.x0, line.z0 }
+        assert(VRCompanion:snapTurnLeft(nil, 20000) == true, "snap turn")
+        _G.headFrame = headFrame
+    )luau", "=onFoot"), 0);
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local line, lx, ly, lz, hx, hy, hz = headFrame()
+        assert(near(hx, 0.3) and near(hy, -0.2) and near(hz, -0.4), string.format("after the turn %.3f %.3f %.3f", hx, hy, hz))
+        assert(not (near(line.x0, before[1]) and near(line.z0, before[2])), "the ray moved with the turn")
+    )luau", "=onFootAfterTurn"), 0);
+}
+
+TEST_F(CompanionModTest, ClickPointsOnAVehicleExteriorAndOnAPlacedObjectCanBeClickedOnFoot) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "ok", "StubScene.onFoot({ x = 50, z = -20, yaw = 1.0 })"));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('probe', 0, 0, 0)", "=probe"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, -0.2f, -0.4f);
+    FRAMES(2);
+    // Where the ray runs now, whichever way the player's body faces: a vehicle's door handle (an
+    // outdoor Click Point) two metres along it, and a gate control (a placed object) five metres.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        drawPass()
+        local line = debugLines[1]
+        local length = math.sqrt((line.x1 - line.x0)^2 + (line.y1 - line.y0)^2 + (line.z1 - line.z0)^2)
+        local dx, dy, dz = (line.x1 - line.x0) / length, (line.y1 - line.y0) / length, (line.z1 - line.z0) / length
+        StubIC.points[1].inRange = false
+        local door = StubIC.addPoint('doorHandle', line.x0 + dx * 2, line.y0 + dy * 2, line.z0 + dz * 2)
+        door.outdoor = true
+    )luau", "=addExterior"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "doorHandle");
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.executed[1]"), "doorHandle");
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        drawPass()
+        local line = debugLines[1]
+        local length = math.sqrt((line.x1 - line.x0)^2 + (line.y1 - line.y0)^2 + (line.z1 - line.z0)^2)
+        local dx, dy, dz = (line.x1 - line.x0) / length, (line.y1 - line.y0) / length, (line.z1 - line.z0) / length
+        StubIC.points[2].inRange = false
+        StubIC.addPoint('gateControl', line.x0 + dx * 5, line.y0 + dy * 5, line.z0 + dz * 5)
+    )luau", "=addPlaced"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "gateControl");
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "StubIC.executed[2]"), "gateControl");
 }
