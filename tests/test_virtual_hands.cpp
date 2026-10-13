@@ -39,6 +39,13 @@ FakeOpenXrControllers::Inputs Trigger(float value) {
     return inputs;
 }
 
+FakeOpenXrControllers::Inputs Squeeze(float trigger, float grip) {
+    FakeOpenXrControllers::Inputs inputs;
+    inputs.trigger = trigger;
+    inputs.grip = grip;
+    return inputs;
+}
+
 // The engine's console and settings globals the Companion Mod registers into.
 constexpr const char* kConsoleStubs = R"luau(
     _G.registeredCommands = {}
@@ -609,8 +616,6 @@ constexpr const char* kCurlReaders = R"luau(
         end
     end
     function _G.assertStill(which, finger, message) assertFinger(which, finger, function() return 0 end, message) end
-    -- the curl of a finger's joints at full pull, learnt from the model by pulling all the way
-    function _G.fullCurl(which, finger) return fingerCurl(which, finger) end
 )luau";
 
 } // namespace
@@ -640,4 +645,218 @@ TEST_F(CompanionModTest, TheIndexFingerCurlsInProportionToTheTriggerAndNoOtherFi
         assertFinger('right', 'index', function(segment) return fullIndex[segment] * 0.5 end, 'half trigger')
         for _, finger in ipairs({ 'middle', 'ring', 'little', 'thumb' }) do assertStill('right', finger, 'half trigger') end
     )luau", "=halfTrigger"), 0);
+}
+
+TEST_F(CompanionModTest, TheMiddleRingAndLittleFingersCurlInProportionToTheGripIndependentlyOfTheTrigger) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kCurlReaders, "=curlReaders"), 0);
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+
+    // A full squeeze with the trigger left alone.
+    headset.SetHandInputs(kRight, Squeeze(0.0f, 1.0f));
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.fullGrip = fingerCurl('right', 'middle')
+        for segment = 1, 3 do
+            assert(fullGrip[segment] > math.rad(30) and fullGrip[segment] <= math.rad(110),
+                string.format("middle%d at full grip is curled %.1f degrees", segment, math.deg(fullGrip[segment])))
+        end
+        for _, finger in ipairs({ 'middle', 'ring', 'little' }) do
+            assertFinger('right', finger, function(segment) return fullGrip[segment] end, 'full grip')
+        end
+        assertStill('right', 'index', 'grip only')
+        assertStill('right', 'thumb', 'grip only')
+    )luau", "=fullGrip"), 0);
+
+    // Both at once, each at its own amount: the trigger and the grip do not influence each other.
+    headset.SetHandInputs(kRight, Squeeze(0.25f, 0.75f));
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        for _, finger in ipairs({ 'middle', 'ring', 'little' }) do
+            assertFinger('right', finger, function(segment) return fullGrip[segment] * 0.75 end, 'three quarters grip')
+        end
+        local quarter = fingerCurl('right', 'index')
+        assert(quarter[1] > 0 and quarter[1] < fullGrip[1], "the index finger is part way down with a quarter trigger")
+        _G.quarterIndex = quarter
+    )luau", "=bothInputs"), 0);
+    headset.SetHandInputs(kRight, Squeeze(1.0f, 0.0f));
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assertFinger('right', 'index', function(segment) return quarterIndex[segment] * 4 end, 'a quarter trigger is a quarter of a full one')
+        for _, finger in ipairs({ 'middle', 'ring', 'little' }) do assertStill('right', finger, 'trigger only') end
+    )luau", "=triggerOnly"), 0);
+}
+
+TEST_F(CompanionModTest, LettingGoRestoresTheModelsRelaxedPoseAndTheThumbNeverMoves) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kCurlReaders, "=curlReaders"), 0);
+    SetGameTime(10000);
+
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        -- an open hand: every joint is exactly where the model put it, not turned to some zero rotation
+        local hand = StubModel.hands().right
+        for segment = 1, 3 do
+            local x, y, z, w = getQuaternion(StubModel.joint(hand, 'index' .. segment))
+            assert(math.abs(y) > 0.01 and math.abs(z) > 0.01 and w < 0.999, "the rest pose of index" .. segment .. " is a bent, twisted one")
+        end
+        for _, finger in ipairs(FINGERS) do assertStill('right', finger, 'open hand') end
+        _G.thumbRest = { getQuaternion(StubModel.joint(hand, 'thumb2')) }
+    )luau", "=openHand"), 0);
+
+    headset.SetHandInputs(kRight, Squeeze(1.0f, 1.0f));
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(fingerCurl('right', 'index')[1] > 0.5 and fingerCurl('right', 'little')[1] > 0.5, "a fist")
+        assertStill('right', 'thumb', 'the thumb stays relaxed in a fist')
+        local now = { getQuaternion(StubModel.joint(StubModel.hands().right, 'thumb2')) }
+        for i = 1, 4 do assert(now[i] == thumbRest[i], "the thumb's rotation is untouched") end
+    )luau", "=fist"), 0);
+
+    headset.SetHandInputs(kRight, Squeeze(0.0f, 0.0f));
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        for _, finger in ipairs(FINGERS) do assertStill('right', finger, 'open again') end
+    )luau", "=openAgain"), 0);
+}
+
+TEST_F(CompanionModTest, TheMirroredLeftHandCurlsOnItsOwnInputsAndTheRightHandIsNotAffected) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kCurlReaders, "=curlReaders"), 0);
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    PICK_UP(kLeft, -0.30f, -0.20f, -0.40f, -0.25f, -0.10f, -0.20f);
+
+    headset.SetHandInputs(kLeft, Squeeze(1.0f, 1.0f));
+    headset.SetHandInputs(kRight, Squeeze(0.0f, 0.0f));
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local lx = StubModel.scale(StubModel.hands().left)
+        assert(lx == -1, "this is the mirrored hand")
+        _G.leftFull = fingerCurl('left', 'index')
+        for segment = 1, 3 do assert(leftFull[segment] > math.rad(30), "the left index finger curls toward the palm (positive)") end
+        for _, finger in ipairs({ 'middle', 'ring', 'little' }) do
+            assertFinger('left', finger, function(segment) return leftFull[segment] end, 'left grip, same amount as the trigger')
+        end
+        assertStill('left', 'thumb', 'left thumb')
+        for _, finger in ipairs(FINGERS) do assertStill('right', finger, 'the right hand did not follow the left') end
+    )luau", "=leftOnly"), 0);
+
+    headset.SetHandInputs(kLeft, Squeeze(0.5f, 0.0f));
+    headset.SetHandInputs(kRight, Squeeze(0.0f, 1.0f));
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assertFinger('left', 'index', function(segment) return leftFull[segment] * 0.5 end, 'left half trigger')
+        for _, finger in ipairs({ 'middle', 'ring', 'little' }) do assertStill('left', finger, 'left grip released') end
+        assertStill('right', 'index', 'right trigger released')
+        local rightGrip = fingerCurl('right', 'middle')
+        for segment = 1, 3 do assert(math.abs(rightGrip[segment] - leftFull[segment]) < 1e-3, "both hands curl the same way for the same input") end
+    )luau", "=bothHands"), 0);
+}
+
+TEST_F(CompanionModTest, AHiddenVirtualHandIsCurledCorrectlyAsSoonAsItReappears) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kCurlReaders, "=curlReaders"), 0);
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    headset.SetHandInputs(kRight, Squeeze(1.0f, 1.0f));
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, "_G.fist = fingerCurl('right', 'index')", "=fist"), 0);
+
+    // In a menu the hand is hidden and the player lets go: when the menu closes the hand is open.
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=menu"), 0);
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Squeeze(0.0f, 0.0f));
+    FRAMES(5);
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenu"), 0);
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(handIsShown('right'), "back again")
+        for _, finger in ipairs(FINGERS) do assertStill('right', finger, 'let go while hidden') end
+    )luau", "=openOnReturn"), 0);
+
+    // And the other way round: pulled while hidden, curled the moment it is back.
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=menu"), 0);
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Squeeze(0.5f, 1.0f));
+    FRAMES(5);
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenu"), 0);
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assertFinger('right', 'index', function(segment) return fist[segment] * 0.5 end, 'half trigger on return')
+        assertFinger('right', 'little', function(segment) return fist[segment] end, 'full grip on return')
+    )luau", "=curledOnReturn"), 0);
+}
+
+TEST_F(CompanionModTest, AModelMissingSomeJointsLogsOnceAndCurlsTheJointsItHas) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kCurlReaders, "=curlReaders"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubModel.missingJoints = { index2 = true, ring1 = true, ring2 = true, ring3 = true }", "=lackingJoints"), 0);
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    PICK_UP(kLeft, -0.30f, -0.20f, -0.40f, -0.25f, -0.10f, -0.20f);
+    headset.SetHandInputs(kRight, Squeeze(1.0f, 1.0f));
+    FRAMES(30);
+
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands: the model lacks joints"), 1) << "once, not per hand and not per frame";
+    EXPECT_EQ(CountLogLines("index2, ring1, ring2, ring3"), 1) << "naming the joints";
+    EXPECT_EQ(EvalLua(L, "handIsShown('right') and handIsShown('left')"), "true") << "the hands still show";
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local hand = StubModel.hands().right
+        assert(StubModel.joint(hand, 'index2') == nil and StubModel.joint(hand, 'ring2') == nil, "the stub really lacks them")
+        assert(StubModel.curl(hand, 'index1') > math.rad(30) and StubModel.curl(hand, 'index3') > math.rad(30), "the index joints it has curl")
+        for _, name in ipairs({ 'middle1', 'middle2', 'middle3', 'little1', 'little2', 'little3' }) do
+            assert(StubModel.curl(hand, name) > math.rad(30), name .. " curls")
+        end
+        for segment = 1, 3 do assert(StubModel.curl(hand, 'thumb' .. segment) == 0, "the thumb is still") end
+    )luau", "=curlsWhatItHas"), 0);
+}
+
+TEST_F(CompanionModTest, PullingTheTriggerAndSqueezingTheGripLeavesThePointerRayOriginAndTheClickAsTheyWere) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kCurlReaders, "=curlReaders"), 0);
+    // The hand is held 0.3 m right of and 0.3 m ahead of the head, pointing straight ahead: in the world the
+    // ray starts at (-0.3, 1.5, 0.3) and runs along +Z (the grip pose is somewhere else on the hand).
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('lights', -0.3, 1.5, 2.3)", "=clickPoint"), 0);
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, 0.0f, -0.30f, 0.25f, -0.10f, -0.20f);
+    FRAMES(3);
+
+    // The ray starts at the aim pose, however the fingers are curled.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local ray = VRCompanion:getPointerRay()
+        assert(ray ~= nil, "a Pointer Ray")
+        local ex, ey, ez = expectedOrigin({ x = 0, y = 0, z = 0, yaw = 0 }, math.pi, 0.30, 0.0, -0.30)
+        assert(near(ray.ox, ex) and near(ray.oy, ey) and near(ray.oz, ez), string.format("the ray starts at the aim pose before the pull: %.3f %.3f %.3f vs %.3f %.3f %.3f", ray.ox, ray.oy, ray.oz, ex, ey, ez))
+        _G.originBefore = { ray.ox, ray.oy, ray.oz }
+    )luau", "=rayBefore"), 0);
+
+    headset.SetHandInputs(kRight, Squeeze(0.45f, 1.0f));  // a trigger part way down: curled, but not a click
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local ray = VRCompanion:getPointerRay()
+        for i, v in ipairs({ ray.ox, ray.oy, ray.oz }) do assert(near(v, originBefore[i]), "the ray origin did not move with the fingers") end
+        assert(fingerCurl('right', 'index')[1] > 0, "the index finger is curling")
+    )luau", "=rayDuring"), 0);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "lights") << "the Click Point is aimed at";
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0") << "a part-way trigger clicks nothing";
+
+    headset.SetHandInputs(kRight, Squeeze(1.0f, 1.0f));
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "StubIC.executed[1]"), "lights") << "the full pull clicks the Click Point as it always did";
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1");
 }
