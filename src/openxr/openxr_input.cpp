@@ -195,10 +195,93 @@ bool OpenXrInput::Create(IOpenXrDispatch& dispatch, XrInstance instance, XrSessi
     return true;
 }
 
-void OpenXrInput::Sync(IOpenXrDispatch&, XrSession) {}
+void OpenXrInput::Sync(IOpenXrDispatch& dispatch, XrSession session) {
+    if (!m_ready) return;
 
-void OpenXrInput::LocatePoses(IOpenXrDispatch&, XrSpace, XrTime) {}
+    XrActiveActionSet active{};
+    active.actionSet = m_actionSet;
+    active.subactionPath = XR_NULL_PATH;  // both hands
+    XrActionsSyncInfo syncInfo{XR_TYPE_ACTIONS_SYNC_INFO};
+    syncInfo.countActiveActionSets = 1;
+    syncInfo.activeActionSets = &active;
+    const XrResult res = dispatch.SyncActions(session, &syncInfo);
+    if (res == XR_SESSION_NOT_FOCUSED) {
+        // Another application has the input focus: no input is delivered, which is not an error.
+        ResetHands();
+        return;
+    }
+    if (XR_FAILED(res)) {
+        static uint32_t s_syncFailures = 0;
+        if (++s_syncFailures % 300 == 1) {
+            LogWarn("OpenXrInput: xrSyncActions failed (result " + std::to_string(res) + "); hands report untracked.");
+        }
+        ResetHands();
+        return;
+    }
 
+    for (uint32_t hand = 0; hand < kHandCount; ++hand) {
+        auto getInfo = [&](XrAction action) {
+            XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
+            info.action = action;
+            info.subactionPath = m_handPaths[hand];
+            return info;
+        };
+        HandState& state = m_hands[hand];
+
+        XrActionStatePose pose{XR_TYPE_ACTION_STATE_POSE};
+        XrActionStateGetInfo info = getInfo(m_aimPoseAction);
+        m_poseActive[hand] = XR_SUCCEEDED(dispatch.GetActionStatePose(session, &info, &pose)) && pose.isActive;
+
+        auto readFloat = [&](XrAction action) {
+            XrActionStateFloat value{XR_TYPE_ACTION_STATE_FLOAT};
+            XrActionStateGetInfo i = getInfo(action);
+            return (XR_SUCCEEDED(dispatch.GetActionStateFloat(session, &i, &value)) && value.isActive) ? value.currentState : 0.0f;
+        };
+        auto readBool = [&](XrAction action) {
+            XrActionStateBoolean value{XR_TYPE_ACTION_STATE_BOOLEAN};
+            XrActionStateGetInfo i = getInfo(action);
+            return XR_SUCCEEDED(dispatch.GetActionStateBoolean(session, &i, &value)) && value.isActive && value.currentState;
+        };
+        state.trigger = readFloat(m_triggerAction);
+        state.grip = readFloat(m_gripAction);
+        XrActionStateVector2f stick{XR_TYPE_ACTION_STATE_VECTOR2F};
+        XrActionStateGetInfo stickInfo = getInfo(m_thumbstickAction);
+        const bool stickActive = XR_SUCCEEDED(dispatch.GetActionStateVector2f(session, &stickInfo, &stick)) && stick.isActive;
+        state.thumbX = stickActive ? stick.currentState.x : 0.0f;
+        state.thumbY = stickActive ? stick.currentState.y : 0.0f;
+        state.thumbClick = readBool(m_thumbstickClickAction);
+        state.buttonLower = readBool(m_buttonLowerAction);
+        state.buttonUpper = readBool(m_buttonUpperAction);
+        state.menu = readBool(m_menuAction);
+    }
+}
+
+void OpenXrInput::LocatePoses(IOpenXrDispatch& dispatch, XrSpace baseSpace, XrTime time) {
+    if (!m_ready) return;
+    for (uint32_t hand = 0; hand < kHandCount; ++hand) {
+        HandState& state = m_hands[hand];
+        state.tracked = false;
+        state.aim = HeadPose{};
+        if (!m_poseActive[hand] || baseSpace == XR_NULL_HANDLE) continue;
+
+        XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+        if (XR_FAILED(dispatch.LocateSpace(m_aimSpaces[hand], baseSpace, time, &location))) continue;
+
+        const bool positionValid = (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+        const bool orientationValid = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
+        if (!positionValid || !orientationValid) continue;
+
+        HeadPose& aim = state.aim;
+        aim.position = Vector3(location.pose.position.x, location.pose.position.y, location.pose.position.z);
+        aim.orientation = Quaternion(location.pose.orientation.x, location.pose.orientation.y,
+                                     location.pose.orientation.z, location.pose.orientation.w);
+        aim.rotation = QuaternionToEuler(aim.orientation);
+        aim.isValid = true;
+        aim.positionTracked = (location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
+        aim.orientationTracked = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
+        state.tracked = true;
+    }
+}
 void OpenXrInput::Destroy(IOpenXrDispatch& dispatch) {
     for (auto& space : m_aimSpaces) {
         if (space != XR_NULL_HANDLE) {

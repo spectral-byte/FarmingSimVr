@@ -285,6 +285,18 @@ public:
         return (path >= 1 && path <= m_pathStrings.size()) ? m_pathStrings[path - 1] : std::string();
     }
 
+    // The handle of a declared action (XR_NULL_HANDLE when none has that name) and a hand's path.
+    XrAction ActionByName(const std::string& name) const {
+        for (const auto& [handle, record] : m_actionRecords) {
+            if (record.name == name) return handle;
+        }
+        return XR_NULL_HANDLE;
+    }
+    XrPath HandPath(int hand) const {
+        const auto it = m_pathIds.find(hand == 0 ? "/user/hand/left" : "/user/hand/right");
+        return it == m_pathIds.end() ? XR_NULL_PATH : it->second;
+    }
+
     // The binding paths a profile suggested for an action name (empty when none).
     std::vector<std::string> BindingsFor(const std::string& profile, const std::string& actionName) const {
         std::vector<std::string> out;

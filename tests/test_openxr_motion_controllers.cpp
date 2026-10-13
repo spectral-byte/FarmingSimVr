@@ -231,4 +231,232 @@ TEST(OpenXrManagerTest, ANewSessionAfterShutdownDeclaresAndAttachesTheActionSetA
     EXPECT_EQ(runtime->controllers.attachCalls, 2u) << "once per session, and this is a second session";
 }
 
+// ---- Reading a hand ----
+
+TEST(OpenXrManagerTest, HandStateReportsTheRawInputsSyncedAtFrameBegin) {
+    FakeTrackedHeadset headset;
+    Controllers::Inputs right;
+    right.trigger = 0.75f;
+    right.grip = 0.25f;
+    right.thumbX = -0.5f;
+    right.thumbY = 0.9f;
+    right.thumbClick = true;
+    right.buttonLower = true;
+    right.buttonUpper = false;
+    right.menu = true;
+    headset.SetHandPose(1, PoseAt(0.3f, 1.2f, -0.4f));
+    headset.SetHandInputs(1, right);
+
+    headset.NextFrame();
+
+    const HandState hand = headset.manager->GetHandState(1);
+    EXPECT_TRUE(hand.tracked);
+    EXPECT_FLOAT_EQ(hand.trigger, 0.75f);
+    EXPECT_FLOAT_EQ(hand.grip, 0.25f);
+    EXPECT_FLOAT_EQ(hand.thumbX, -0.5f);
+    EXPECT_FLOAT_EQ(hand.thumbY, 0.9f);
+    EXPECT_TRUE(hand.thumbClick);
+    EXPECT_TRUE(hand.buttonLower);
+    EXPECT_FALSE(hand.buttonUpper);
+    EXPECT_TRUE(hand.menu);
+
+    // The other hand has its own inputs.
+    const HandState left = headset.manager->GetHandState(0);
+    EXPECT_FLOAT_EQ(left.trigger, 0.0f);
+    EXPECT_FALSE(left.menu);
+}
+
+TEST(OpenXrManagerTest, HandsAreSyncedOncePerFrameNotOncePerRead) {
+    FakeTrackedHeadset headset;
+    auto& controllers = headset.runtime->controllers;
+
+    headset.NextFrame();
+    const uint32_t afterFirstFrame = controllers.syncCalls;
+    EXPECT_EQ(afterFirstFrame, 1u);
+
+    for (int i = 0; i < 10; ++i) {
+        headset.manager->GetHandState(0);
+        headset.manager->GetHandState(1);
+    }
+    EXPECT_EQ(controllers.syncCalls, afterFirstFrame) << "reads inside a frame use that frame's sync";
+
+    headset.NextFrame();
+    EXPECT_EQ(controllers.syncCalls, afterFirstFrame + 1);
+}
+
+TEST(OpenXrManagerTest, InputsChangedInsideAFrameShowAtTheNextFrame) {
+    FakeTrackedHeadset headset;
+    headset.NextFrame();
+    EXPECT_FLOAT_EQ(headset.manager->GetHandState(0).trigger, 0.0f);
+
+    Controllers::Inputs pulled;
+    pulled.trigger = 1.0f;
+    headset.SetHandInputs(0, pulled);
+    EXPECT_FLOAT_EQ(headset.manager->GetHandState(0).trigger, 0.0f) << "a frame sees one consistent snapshot";
+
+    headset.NextFrame();
+    EXPECT_FLOAT_EQ(headset.manager->GetHandState(0).trigger, 1.0f);
+}
+
+TEST(OpenXrManagerTest, HandStateIsFreshEvenWhenNoFrameHasBegun) {
+    // Before the first frame (or between frames) there is no frame snapshot: a read syncs itself,
+    // the way PollHeadPose falls back to "now".
+    FakeTrackedHeadset headset;
+    ASSERT_FALSE(headset.manager->IsFrameBegun());
+    Controllers::Inputs pulled;
+    pulled.trigger = 0.5f;
+    headset.SetHandInputs(1, pulled);
+    headset.SetHandPose(1, PoseAt(0.0f, 1.0f, -0.5f));
+
+    const HandState hand = headset.manager->GetHandState(1);
+
+    EXPECT_TRUE(hand.tracked);
+    EXPECT_FLOAT_EQ(hand.trigger, 0.5f);
+    EXPECT_FLOAT_EQ(hand.aim.position.y, 1.0f);
+}
+
+TEST(OpenXrManagerTest, HandAimPoseUsesTheHeadPoseReferenceSpaceAndPredictedDisplayTime) {
+    FakeTrackedHeadset headset;
+    headset.SetHandPose(0, PoseAt(-0.3f, 1.1f, -0.2f));
+    headset.NextFrame();
+    ASSERT_TRUE(headset.manager->IsFrameBegun());
+
+    const auto& locates = headset.runtime->controllers.locates;
+    ASSERT_FALSE(locates.empty());
+    for (const auto& located : locates) {
+        EXPECT_EQ(located.baseSpace, headset.manager->GetLocalSpace()) << "same reference space as the head pose";
+        EXPECT_EQ(located.time, 1000000) << "FakeOpenXrRuntime::WaitFrame's predicted display time, as the head pose uses";
+    }
+    const HandState hand = headset.manager->GetHandState(0);
+    EXPECT_FLOAT_EQ(hand.aim.position.x, -0.3f);
+    EXPECT_FLOAT_EQ(hand.aim.position.y, 1.1f);
+    EXPECT_FLOAT_EQ(hand.aim.position.z, -0.2f);
+    EXPECT_TRUE(hand.aim.isValid);
+    EXPECT_TRUE(hand.aim.positionTracked);
+    EXPECT_TRUE(hand.aim.orientationTracked);
+}
+
+TEST(OpenXrManagerTest, HandAimPoseUsesTheSameOrientationConventionAsTheHeadPose) {
+    FakeTrackedHeadset headset;
+    HeadPose aimed = PoseAt(0.0f, 1.0f, 0.0f);
+    aimed.rotation = EulerAngles(0.0f, 0.5f, 0.0f);  // pitch, yaw, roll as for SetHeadPose
+    headset.SetHeadPose(aimed);
+    headset.SetHandPose(1, aimed);
+    headset.NextFrame();
+
+    const HeadPose head = headset.manager->PollHeadPose();
+    const HandState hand = headset.manager->GetHandState(1);
+
+    EXPECT_NEAR(hand.aim.orientation.x, head.orientation.x, 1e-6f);
+    EXPECT_NEAR(hand.aim.orientation.y, head.orientation.y, 1e-6f);
+    EXPECT_NEAR(hand.aim.orientation.z, head.orientation.z, 1e-6f);
+    EXPECT_NEAR(hand.aim.orientation.w, head.orientation.w, 1e-6f);
+    EXPECT_NEAR(hand.aim.rotation.yaw, head.rotation.yaw, 1e-6f);
+    EXPECT_NEAR(hand.aim.rotation.yaw, 0.5f, 1e-4f);
+}
+
+TEST(OpenXrManagerTest, HandAimPoseFollowsTheRecenterActionAtOnce) {
+    FakeTrackedHeadset headset;
+    // The head stands at (1, 1.6, 0.5) looking 90 degrees to the left; the hand is one metre
+    // straight ahead of it: (0, 0, -1) in head space.
+    HeadPose head = PoseAt(1.0f, 1.6f, 0.5f);
+    head.rotation = EulerAngles(0.0f, 1.5707964f, 0.0f);
+    headset.SetHeadPose(head);
+    headset.SetHandPose(1, PoseAt(0.0f, 1.6f, 0.5f));  // ahead of that head: head + (-1, 0, 0)
+    headset.NextFrame();
+    EXPECT_NEAR(headset.manager->GetHandState(1).aim.position.x, 0.0f, 1e-4f) << "before Recenter: in the original origin";
+    EXPECT_NEAR(headset.manager->GetHandState(1).aim.position.z, 0.5f, 1e-4f);
+
+    headset.manager->Recenter();
+
+    // Recenter makes the head the origin facing -Z, so the hand is now straight ahead of it.
+    const HandState hand = headset.manager->GetHandState(1);
+    EXPECT_NEAR(hand.aim.position.x, 0.0f, 1e-4f);
+    EXPECT_NEAR(hand.aim.position.y, 0.0f, 1e-4f);
+    EXPECT_NEAR(hand.aim.position.z, -1.0f, 1e-4f);
+}
+
+TEST(OpenXrManagerTest, AnUntrackedControllerReportsUntrackedWithZeroedInputs) {
+    FakeTrackedHeadset headset;
+    Controllers::Inputs held;
+    held.trigger = 1.0f;
+    held.menu = true;
+    headset.SetHandInputs(0, held);
+    headset.SetHandPose(0, PoseAt(0.0f, 1.0f, 0.0f), /*tracked=*/false);
+
+    headset.NextFrame();
+
+    const HandState hand = headset.manager->GetHandState(0);
+    EXPECT_FALSE(hand.tracked);
+    EXPECT_FALSE(hand.aim.isValid);
+    EXPECT_FLOAT_EQ(hand.trigger, 0.0f);
+    EXPECT_FALSE(hand.menu);
+}
+
+TEST(OpenXrManagerTest, ASessionThatIsNotFocusedReportsNoInputWithoutAnError) {
+    FakeTrackedHeadset headset;
+    headset.SetHandPose(1, PoseAt(0.0f, 1.0f, -0.3f));
+    headset.NextFrame();
+    ASSERT_TRUE(headset.manager->GetHandState(1).tracked);
+
+    headset.runtime->controllers.syncActionsResult = XR_SESSION_NOT_FOCUSED;
+    headset.NextFrame();
+
+    EXPECT_FALSE(headset.manager->GetHandState(1).tracked);
+    EXPECT_TRUE(headset.manager->HasMotionControllerActions()) << "not being focused is not a refusal";
+    EXPECT_TRUE(headset.manager->IsSessionRunning());
+
+    headset.runtime->controllers.syncActionsResult = XR_SUCCESS;
+    headset.NextFrame();
+    EXPECT_TRUE(headset.manager->GetHandState(1).tracked);
+}
+
+TEST(OpenXrManagerTest, AnOutOfRangeHandReportsUntracked) {
+    FakeTrackedHeadset headset;
+    headset.NextFrame();
+    EXPECT_FALSE(headset.manager->GetHandState(2).tracked);
+    EXPECT_FALSE(headset.manager->GetHandState(1000).tracked);
+}
+
+TEST(OpenXrManagerTest, PassThroughReportsBothHandsUntracked) {
+    auto runtime = std::make_shared<FakeOpenXrRuntime>();
+    OpenXrManager manager(runtime);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    runtime->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    manager.PollEvents();
+    ASSERT_TRUE(manager.IsPassThrough());
+
+    EXPECT_FALSE(manager.GetHandState(0).tracked);
+    EXPECT_FALSE(manager.GetHandState(1).tracked);
+}
+
+// ---- Haptics: the dispatch and fake side is ready; the pulse call itself belongs to the haptics ticket ----
+
+TEST(OpenXrManagerTest, HapticFeedbackAppliedThroughTheDispatchReachesTheNamedHandOnly) {
+    FakeTrackedHeadset headset;
+    auto& controllers = headset.runtime->controllers;
+    const XrAction haptic = controllers.ActionByName("haptic");
+    ASSERT_NE(haptic, XR_NULL_HANDLE);
+
+    XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
+    vibration.duration = 20000000;  // 20 ms in nanoseconds
+    vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+    vibration.amplitude = 0.5f;
+    XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};
+    info.action = haptic;
+    info.subactionPath = controllers.HandPath(1);
+
+    EXPECT_EQ(headset.runtime->ApplyHapticFeedback(headset.manager->GetSession(), &info,
+                                                   reinterpret_cast<const XrHapticBaseHeader*>(&vibration)),
+              XR_SUCCESS);
+    EXPECT_EQ(headset.runtime->StopHapticFeedback(headset.manager->GetSession(), &info), XR_SUCCESS);
+
+    ASSERT_EQ(headset.HapticPulses().size(), 1u);
+    EXPECT_EQ(headset.HapticPulses()[0].hand, 1);
+    EXPECT_EQ(headset.HapticPulses()[0].duration, 20000000);
+    EXPECT_FLOAT_EQ(headset.HapticPulses()[0].amplitude, 0.5f);
+    EXPECT_EQ(controllers.stopHapticCalls, 1u);
+}
+
 } // namespace fs25vr

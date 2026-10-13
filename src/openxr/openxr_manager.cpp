@@ -601,10 +601,34 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
     return m_lastPose;
 }
 
-HandState OpenXrManager::GetHandState(uint32_t hand) {
-    return m_input.Get(hand);
+void OpenXrManager::RefreshHandState(XrTime time, bool resync) {
+    if (resync) {
+        m_input.Sync(*m_dispatch, m_session);
+    }
+    m_input.LocatePoses(*m_dispatch, m_localSpace, time);
+    m_handPosesStale = false;
+    m_handsFrameSerial = m_frameSerial;
 }
 
+HandState OpenXrManager::GetHandState(uint32_t hand) {
+    if (hand >= OpenXrInput::kHandCount || m_state != OpenXrState::Active || m_session == XR_NULL_HANDLE ||
+        m_localSpace == XR_NULL_HANDLE || !m_input.IsReady()) {
+        return HandState{};
+    }
+
+    if (m_frameBegun && m_handsFrameSerial == m_frameSerial) {
+        // Inside a frame every read sees the snapshot taken at frame begin; only a Recenter moves
+        // the reference space under it.
+        if (m_handPosesStale) {
+            RefreshHandState(m_frameState.predictedDisplayTime, /*resync=*/false);
+        }
+    } else {
+        // No frame snapshot (before the first frame, or between frames): sync now and locate at the
+        // same time PollHeadPose uses.
+        RefreshHandState(GetCurrentXrTime(), /*resync=*/true);
+    }
+    return m_input.Get(hand);
+}
 void OpenXrManager::Recenter() {
     ClearRenderPoses();
     Vector3 recenterPos = m_rawPose.position;
@@ -650,6 +674,7 @@ void OpenXrManager::Recenter() {
     }
 
     m_lastPolledTime = 0;
+    m_handPosesStale = true;  // the hands are located against the local space that was just re-created
     AlignMenuQuadToHeadPose();
     LogInfo("OpenXrManager: Head pose recentered.");
 }
@@ -1026,6 +1051,11 @@ bool OpenXrManager::BeginFrame() {
     }
 
     m_frameBegun = true;
+    ++m_frameSerial;
+    // Motion Controllers: one sync per frame, located at the predicted display time like the head.
+    if (m_input.IsReady()) {
+        RefreshHandState(m_frameState.predictedDisplayTime != 0 ? m_frameState.predictedDisplayTime : GetCurrentXrTime(), /*resync=*/true);
+    }
 
     // OpenXR specification: actively locate views and update projections and head pose
     // for predictedDisplayTime within the active frame lifecycle boundary.

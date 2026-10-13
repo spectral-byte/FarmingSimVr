@@ -246,6 +246,11 @@ private:
     bool m_hasEyeSwapchains = false;
     OpenXrCursorOverlay m_cursorOverlay;
     OpenXrInput m_input;
+    // The frame whose hand snapshot (sync + poses) is held; valid only while that frame is begun.
+    uint64_t m_frameSerial = 0;
+    uint64_t m_handsFrameSerial = 0;
+    bool m_handPosesStale = false;
+    void RefreshHandState(XrTime time, bool resync);
     MenuCursorState m_menuCursorState;
     float m_ipd = 0.064f;
     uint64_t m_submittedFramePairCount = 0;
