@@ -68,6 +68,20 @@ inline int RunLuauChunk(lua_State* L, const std::string& code, const char* chunk
     return status;
 }
 
+// Evaluates a Lua expression and returns tostring() of its value, e.g. EvalLua(L, "VRCompanion:getPointerHand()")
+// is "1" or "nil". Lets tests read mod state through its public surface without writing a chunk per check.
+inline std::string EvalLua(lua_State* L, const std::string& expression) {
+    const std::string chunk = "_G.__evalResult = tostring(" + expression + ")";
+    if (RunLuauChunk(L, chunk, "=eval") != 0) {
+        return "<error>";
+    }
+    lua_getglobal(L, "__evalResult");
+    const char* value = lua_tostring(L, -1);
+    std::string result = value ? value : "<none>";
+    lua_pop(L, 1);
+    return result;
+}
+
 inline void SetupCameraMockGlobals(lua_State* L) {
     RunLuauChunk(L, R"luau(
         _G.cameraFovY = {}
@@ -184,6 +198,7 @@ inline void SetupCameraMockGlobals(lua_State* L) {
 class CompanionModTest : public ::testing::Test {
 protected:
     lua_State* L = nullptr;
+    double gameTimeMs_ = 0.0;
 
     void SetUp() override {
         s_capturedLogs.clear();
@@ -202,6 +217,37 @@ protected:
         }
     }
 
+    // ---- Driving time and frames --------------------------------------------------------------
+    // The mod reads the game clock through VRCompanion:getCurrentTimeMs(), which is the global
+    // g_time (milliseconds) and falls back to the real clock when g_time is nil. g_time is not
+    // defined until a test calls SetGameTime/AdvanceGameTime, so tests that never touch it behave
+    // exactly as before. Tests that depend on time (the 3 s in-use window, debounces) set it and
+    // advance it by hand, so they never depend on wall-clock time.
+    void SetGameTime(double ms) {
+        gameTimeMs_ = ms;
+        lua_pushnumber(L, ms);
+        lua_setglobal(L, "g_time");
+    }
+    void AdvanceGameTime(double ms) { SetGameTime(gameTimeMs_ + ms); }
+    double GameTime() const { return gameTimeMs_; }
+
+    // One game frame: the game clock advances by dtMs, the headset (when given) crosses a frame
+    // boundary so the Injector syncs the Motion Controller actions and locates the hands, and then the
+    // Companion Mod's VRCompanion:update(dt) runs. Fails the test if the update raises an error.
+    void NextFrame(fs25vr::FakeTrackedHeadset* headset = nullptr, double dtMs = 16.667) {
+        AdvanceGameTime(dtMs);
+        if (headset) headset->NextFrame();
+        lua_getglobal(L, "VRCompanion");
+        lua_getfield(L, -1, "update");
+        lua_pushvalue(L, -2);
+        lua_pushnumber(L, dtMs);
+        if (lua_pcall(L, 2, 0, 0) != 0) {
+            const char* err = lua_tostring(L, -1);
+            ADD_FAILURE() << "VRCompanion:update raised: " << (err ? err : "unknown error");
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);  // VRCompanion
+    }
     void RegisterTestSetFrameParity(fs25vr::VRBridge& bridge) {
         lua_getglobal(L, "VRBridge");
         lua_pushlightuserdata(L, &bridge);
