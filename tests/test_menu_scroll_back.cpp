@@ -362,3 +362,100 @@ TEST_F(MenuScrollBackTest, AStickAlreadyPushedWhenTheMenuOpensDoesNotScrollUntil
     Hold(kRight, Stick(0.0f, 1.0f));
     EXPECT_EQ(Scrolls(), 1);
 }
+
+TEST_F(MenuScrollBackTest, WhenTheDeskMouseHasControlTheScrollLandsWhereTheMouseIs) {
+    StartWithMenuOpen();
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.g_inputBinding = { x = 0.5, y = 0.5, getMousePosition = function(self) return self.x, self.y end }
+    )luau", "=inputBinding"), 0);
+    NextFrame(&headset);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "true");
+    ASSERT_EQ(RunLuauChunk(L, "g_inputBinding.x = 0.9; VRCompanion:mouseEvent(0.9, 0.5, false, false, 0)", "=deskMouse"), 0);  // beside the list
+    NextFrame(&headset);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isPointerRayInControl()"), "false");
+
+    Hold(kRight, Stick(0.0f, 1.0f));
+    EXPECT_EQ(Scrolls(), 0) << "the mouse is beside the list; the ray's last position is over it";
+    Release(kRight);
+    ASSERT_EQ(RunLuauChunk(L, "g_inputBinding.x = 0.4", "=mouseOverList"), 0);
+    Hold(kRight, Stick(0.0f, 1.0f));
+    EXPECT_EQ(Scrolls(), 1);
+}
+
+TEST_F(MenuScrollBackTest, AGameThatDoesNotLetTheWheelStateBeSetNeverBreaksTheUpdateAndIsReportedOnce) {
+    StartWithMenuOpen();
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local locked = setmetatable({}, { __index = Input, __newindex = function() error("Input is read-only") end })
+        _G.Input = locked
+    )luau", "=lockedInput"), 0);
+    Hold(kRight, Stick(0.0f, 1.0f));  // NextFrame fails the test if the update raises
+    Release(kRight);
+    Hold(kRight, Stick(0.0f, 1.0f));
+    int reports = 0;
+    for (const auto& line : s_capturedLogs) {
+        if (line.find("menu pointer") != std::string::npos) ++reports;
+    }
+    EXPECT_EQ(reports, 1);
+    EXPECT_EQ(Scrolls(), 0) << "without the wheel state the game's list cannot know";
+    EXPECT_GE(std::stoi(EvalLua(L, "#guiEvents")), 2) << "the wheel events were still delivered";
+}
+
+// ---- Snap Turn and the lower face button stay out of the way in menus ----
+
+namespace {
+
+// The player sits in a vehicle cab: Snap Turn steps cam.rotY. recenterCalls counts the Recenter
+// Actions that reach the Injector bridge.
+constexpr const char* kCabAndRecenterCounter = R"luau(
+    _G.cam = { isInside = true, cameraNode = 101, origRotY = 0.0, rotY = 0.0 }
+    _G.g_currentMission = { controlledVehicle = { getActiveCamera = function() return _G.cam end } }
+    _G.recenterCalls = 0
+    local realRecenter = VRBridge.recenter
+    VRBridge.recenter = function(...)
+        _G.recenterCalls = _G.recenterCalls + 1
+        return realRecenter(...)
+    end
+)luau";
+
+} // namespace
+
+TEST_F(MenuScrollBackTest, SnapTurnStaysOffWhileAMenuIsShowingEvenAsTheStickScrolls) {
+    StartWithMenuOpen();
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_EQ(RunLuauChunk(L, kCabAndRecenterCounter, "=cab"), 0);
+
+    Hold(kRight, Stick(1.0f, 0.0f));
+    Release(kRight);
+    AdvanceGameTime(300);
+    Hold(kRight, Stick(0.0f, 1.0f));
+    Release(kRight);
+    EXPECT_NEAR(std::stod(EvalLua(L, "_G.cam.rotY")), 0.0, 1e-6) << "no Snap Turn with a menu showing";
+    EXPECT_EQ(Scrolls(), 1) << "the vertical push scrolled";
+
+    CloseMenu();
+    AdvanceGameTime(300);
+    Hold(kRight, Stick(1.0f, 0.0f));
+    EXPECT_NEAR(std::stod(EvalLua(L, "_G.cam.rotY")), -3.14159265 / 2.0, 1e-4) << "Snap Turn is back with the menu closed";
+}
+
+TEST_F(MenuScrollBackTest, AWorldActionOnTheLowerFaceButtonYieldsToBackWhileAMenuIsShowing) {
+    StartWithMenuOpen();
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_EQ(RunLuauChunk(L, kCabAndRecenterCounter, "=cab"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "assert(VRCompanion:setControllerMapping('recenter', 'buttonLower'))", "=mapRecenter"), 0);
+    NextFrame(&headset);
+
+    Hold(kRight, LowerButton());
+    Release(kRight);
+    EXPECT_EQ(Backs(), 1) << "in a menu the button goes back";
+    EXPECT_EQ(EvalLua(L, "_G.recenterCalls"), "0") << "and does not also recenter";
+
+    CloseMenu();
+    NextFrame(&headset);
+    Hold(kRight, LowerButton());
+    Release(kRight);
+    EXPECT_EQ(Backs(), 1) << "outside menus it does not go back";
+    EXPECT_EQ(EvalLua(L, "_G.recenterCalls"), "1") << "it does what the player mapped it to";
+}

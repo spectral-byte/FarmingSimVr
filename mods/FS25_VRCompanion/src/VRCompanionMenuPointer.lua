@@ -20,10 +20,25 @@
 --     the release, wherever the hand points then. Holding it while moving the hand drags. A pull
 --     counts at 0.6 and the release at 0.3, so a wobbling trigger is one click.
 --
--- Not here: scrolling and back/close (ticket #80), button mappings (ticket #75).
+-- Also in menus (not in 2D gameplay, where no GUI is open to receive them), on EITHER hand and only
+-- while a menu is showing and Motion Controllers are on:
+--   * Back / close: the grip (counts at 0.6, lets go below 0.3) or the lower face button, once per
+--     press, delivered as the game's own MENU_BACK menu input (g_gui:onMenuInput). A button already
+--     held when the menu opens, or a hand appears, is not a press.
+--   * Scroll: thumbstick up/down (engages at 0.7, more up/down than sideways) is the mouse wheel at
+--     the cursor: one notch on the push, then one per MENU_SCROLL_REPEAT_MS while held. The game's list
+--     and slider elements read the wheel by polling Input.isMouseButtonPressed while handling a mouse
+--     event, so the module sends g_gui:mouseEvent(x, y, true, false, wheel button) with that poll
+--     answering "pressed" for that one call (see sendWheel; the original is restored after).
+--   * Snap Turn is off in menus (VRCompanion:snapTurn refuses). A world action the player mapped onto
+--     the lower face button (vrControllerMap) yields to back while a menu shows (ControllerMap).
+--
+-- Button mappings of the world actions are in VRCompanionControllerMap.lua (ticket #75).
 --
 -- PUBLIC SURFACE
 --   VRCompanion.MENU_TRIGGER_PRESS / VRCompanion.MENU_TRIGGER_RELEASE   trigger thresholds (0..1)
+--   VRCompanion.MENU_BACK_PRESS / MENU_BACK_RELEASE                      grip thresholds (0..1)
+--   VRCompanion.MENU_SCROLL_ENGAGE / MENU_SCROLL_RELEASE / MENU_SCROLL_REPEAT_MS
 --   VRCompanion:updateMenuPointer(dt)   called by updateMotionControllers; idempotent per frame
 --   VRCompanion:resetMenuPointer()      map unload: lets go of the button and the drawn cursor
 -- ====================================================================
