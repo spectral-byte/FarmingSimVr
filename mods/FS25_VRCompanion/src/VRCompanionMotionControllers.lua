@@ -450,15 +450,33 @@ local function headIsPlacedInTheWorld(self)
     return true
 end
 
--- Fills state.ray.o* / d* for the Pointer Hand; false when it cannot be placed.
-local function placePointerRay(self, hand)
-    local ray = state.ray
-    local pose = state.hands[hand]
+-- ---- Head-relative poses in the world (shared by the Pointer Ray and the Virtual Hands) --------------
+-- A hand pose from VRBridge is in the head pose's tracking space. Carrying it into the world is one
+-- transform, whatever the pose is for: take the pose relative to the head, then apply the Cyclopean
+-- Audio Listener Node's world pose (the head's centre with the head's full world rotation).
+--
+--   VRCompanion:isHeadPlacedInTheWorld() -> boolean
+--   VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out) -> true | false, reason
+--     On true, out.x, out.y, out.z (world position) and out.qx, out.qy, out.qz, out.qw (unit world
+--     rotation) are filled in place. On false, out is untouched and reason says why in one line.
+
+-- Multiplies two quaternions: a then b is applied as a * b.
+local function qmultiply(ax, ay, az, aw, bx, by, bz, bw)
+    return aw * bx + ax * bw + ay * bz - az * by,
+           aw * by - ax * bz + ay * bw + az * bx,
+           aw * bz + ax * by - ay * bx + az * bw,
+           aw * bw - ax * bx - ay * by - az * bz
+end
+
+function VRCompanion:isHeadPlacedInTheWorld()
+    return headIsPlacedInTheWorld(self)
+end
+
+function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out)
     local listener = self.cyclopeanAudioListenerNode
     local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
     local getWorldQuaternionFn = getWorldQuaternion or (_G and _G.getWorldQuaternion)
     local bridge = VRBridge or (_G and _G.VRBridge)
-    if pose.tracked ~= true then return false, "the Pointer Hand is not tracked" end
     if listener == nil or listener == 0 then return false, "the Cyclopean Audio Listener Node does not exist" end
     if not headIsPlacedInTheWorld(self) then
         return false, string.format("the head is not placed in the world (menu=%s, 2D=%s, trackedCameraShown=%s, passThrough=%s)",
@@ -475,25 +493,41 @@ local function placePointerRay(self, hand)
     state.headScratch = head
     if head.isValid ~= true or head.qw == nil then return false, "the head pose is not valid" end
 
-    -- Hand offset and aim direction in the head's frame.
+    -- The pose relative to the head, in the head's frame ...
     local hx, hy, hz, hw = -head.qx, -head.qy, -head.qz, head.qw
-    local offX, offY, offZ = qrotate(hx, hy, hz, hw, pose.x - head.x, pose.y - head.y, pose.z - head.z)
-    local fx, fy, fz = qrotate(pose.qx, pose.qy, pose.qz, pose.qw, 0, 0, -1)
-    fx, fy, fz = qrotate(hx, hy, hz, hw, fx, fy, fz)
+    local offX, offY, offZ = qrotate(hx, hy, hz, hw, x - head.x, y - head.y, z - head.z)
+    local rx, ry, rz, rw = qmultiply(hx, hy, hz, hw, qx, qy, qz, qw)
 
     -- ... and in the world, through the head's world placement.
     local lx, ly, lz = getWorldTranslationFn(listener)
     local lqx, lqy, lqz, lqw = getWorldQuaternionFn(listener)
     if lx == nil or lqw == nil then return false, "the listener node has no world pose" end
     local wx, wy, wz = qrotate(lqx, lqy, lqz, lqw, offX, offY, offZ)
-    ray.ox, ray.oy, ray.oz = lx + wx, ly + wy, lz + wz
-    local dx, dy, dz = qrotate(lqx, lqy, lqz, lqw, fx, fy, fz)
+    local wqx, wqy, wqz, wqw = qmultiply(lqx, lqy, lqz, lqw, rx, ry, rz, rw)
+    local length = math.sqrt(wqx * wqx + wqy * wqy + wqz * wqz + wqw * wqw)
+    if length < 1e-6 then return false, "the pose has no rotation" end
+    out.x, out.y, out.z = lx + wx, ly + wy, lz + wz
+    out.qx, out.qy, out.qz, out.qw = wqx / length, wqy / length, wqz / length, wqw / length
+    return true
+end
+
+-- Fills state.ray.o* / d* for the Pointer Hand; false when it cannot be placed.
+local function placePointerRay(self, hand)
+    local ray = state.ray
+    local pose = state.hands[hand]
+    if pose.tracked ~= true then return false, "the Pointer Hand is not tracked" end
+    state.rayPose = state.rayPose or {}
+    local world = state.rayPose
+    local ok, reason = self:headRelativePoseToWorld(pose.x, pose.y, pose.z, pose.qx, pose.qy, pose.qz, pose.qw, world)
+    if not ok then return false, reason end
+    ray.ox, ray.oy, ray.oz = world.x, world.y, world.z
+    -- The ray runs along the aim pose's -Z axis.
+    local dx, dy, dz = qrotate(world.qx, world.qy, world.qz, world.qw, 0, 0, -1)
     local length = math.sqrt(dx * dx + dy * dy + dz * dz)
     if length < 0.5 then return false, "the hand's aim direction is degenerate" end
     ray.dx, ray.dy, ray.dz = dx / length, dy / length, dz / length
     return true
 end
-
 -- Called at the end of every updateMotionControllers. Places the ray, lets Interactive Control select
 -- and click, and settles what is drawn.
 function VRCompanion:updatePointerRay(dt)
