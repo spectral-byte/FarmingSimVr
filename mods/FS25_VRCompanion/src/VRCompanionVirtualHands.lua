@@ -347,6 +347,8 @@ local function curlFingers(entry, pose)
     end
 end
 
+local describeEngineGeometry  -- defined below with the diagnostics
+
 -- Places one hand at its grip pose, or hides it; returns the hand's status for the diagnostics.
 local function updateHand(self, hand, unavailable)
     local entry = state.hands[hand]
@@ -369,6 +371,10 @@ local function updateHand(self, hand, unavailable)
                 engine("setWorldQuaternion")(entry.holder, world.qx, world.qy, world.qz, world.qw)
                 curlFingers(entry, pose)
                 status = "shown"
+                if not entry.geometryLogged then
+                    entry.geometryLogged = true
+                    print(string.format("[FS25_VR] Virtual Hand geometry (%s): %s", HAND_NAMES[hand], describeEngineGeometry(entry)))
+                end
             else
                 status = "hidden (" .. why .. ")"
             end
@@ -395,6 +401,34 @@ function VRCompanion:updateVirtualHands(dt)
     end
 end
 
+-- What the engine itself reports about one hand's nodes (world positions and scale), for a headset check that finds
+-- the hand the wrong size or in the wrong place. Needs the engine's node query functions; says so when it has none.
+function describeEngineGeometry(entry)
+    local getWorldTranslation, getScale = engine("getWorldTranslation"), engine("getScale")
+    if type(getWorldTranslation) ~= "function" or entry == nil or entry.model == nil then
+        return "no engine geometry"
+    end
+    local function at(node)
+        if node == nil then return "missing" end
+        local x, y, z = getWorldTranslation(node)
+        return string.format("(%.3f, %.3f, %.3f)", x, y, z)
+    end
+    local function distance(a, b)
+        if a == nil or b == nil then return "?" end
+        local ax, ay, az = getWorldTranslation(a)
+        local bx, by, bz = getWorldTranslation(b)
+        return string.format("%.3f", math.sqrt((ax - bx) ^ 2 + (ay - by) ^ 2 + (az - bz) ^ 2))
+    end
+    local wrist, indexTip, middleTip = findNode(entry.model, "Wrist"), findNode(entry.model, "Top.001"), findNode(entry.model, "Top.002")
+    local scale = "?"
+    if type(getScale) == "function" then
+        local sx, sy, sz = getScale(entry.model)
+        scale = string.format("%.4f %.4f %.4f", sx, sy, sz)
+    end
+    return string.format("holder %s, model %s (local scale %s), Wrist %s, Wrist to Top.001 %s m, Wrist to Top.002 %s m (expect about 0.19)",
+        at(entry.holder), at(entry.model), scale, at(wrist), distance(wrist, indexTip), distance(wrist, middleTip))
+end
+
 -- One line: why Virtual Hands are unavailable (or that they are available) and each hand's state.
 function VRCompanion:getVirtualHandsDiagnostics()
     local function describe(hand)
@@ -405,6 +439,12 @@ function VRCompanion:getVirtualHandsDiagnostics()
         tostring(state.reason or "not updated yet"), describe(0), describe(1))
 end
 
+-- The engine's own numbers for both hands, one line each.
+function VRCompanion:consoleCommandVirtualHandsGeometry()
+    return string.format("Left Virtual Hand: %s | Right Virtual Hand: %s",
+        describeEngineGeometry(state.hands[0]), describeEngineGeometry(state.hands[1]))
+end
+
 function VRCompanion:consoleCommandVirtualHandsDiagnostics()
     return self:getVirtualHandsDiagnostics()
 end
@@ -412,12 +452,14 @@ end
 function VRCompanion:registerVirtualHandsConsoleCommands()
     if addConsoleCommand == nil then return end
     addConsoleCommand("vrVirtualHandsDiagnostics", "Report why the Virtual Hands are shown or hidden: vrVirtualHandsDiagnostics", "consoleCommandVirtualHandsDiagnostics", self)
+    addConsoleCommand("vrVirtualHandsGeometry", "Report where the engine puts the Virtual Hands and how big they are: vrVirtualHandsGeometry", "consoleCommandVirtualHandsGeometry", self)
 end
 
 -- Map unload: the hands and the model go, and the next map loads the model again.
 function VRCompanion:resetVirtualHands()
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrVirtualHandsDiagnostics")
+        removeConsoleCommand("vrVirtualHandsGeometry")
     end
     discardScene()
     state = newState()
