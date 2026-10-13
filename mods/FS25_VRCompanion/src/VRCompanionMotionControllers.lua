@@ -330,9 +330,14 @@ local function settleInteractiveControl(self, dt)
 end
 
 -- What reads the pointer after the hands were polled (menus); a single guarded call.
+-- The Virtual Hands read the settled hands too (VRCompanionVirtualHands.lua), so they follow every exit
+-- of the update, including the ones where Motion Controller input is ignored.
 local function updatePointerUsers(self, dt)
     if type(self.updateMenuPointer) == "function" then
         self:updateMenuPointer(dt)
+    end
+    if type(self.updateVirtualHands) == "function" then
+        self:updateVirtualHands(dt)
     end
 end
 
@@ -472,6 +477,13 @@ function VRCompanion:isHeadPlacedInTheWorld()
     return headIsPlacedInTheWorld(self)
 end
 
+-- The state behind isHeadPlacedInTheWorld, for log lines and diagnostics.
+function VRCompanion:describeHeadPlacement()
+    return string.format("menu=%s, 2D=%s, trackedCameraShown=%s, passThrough=%s",
+        tostring(self.isMenuVisible), tostring(self.is2DViewActive), tostring(self.trackedCameraShown),
+        tostring(type(self.isPassThroughMode) == "function" and self:isPassThroughMode()))
+end
+
 function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out)
     local listener = self.cyclopeanAudioListenerNode
     local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
@@ -479,9 +491,7 @@ function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out)
     local bridge = VRBridge or (_G and _G.VRBridge)
     if listener == nil or listener == 0 then return false, "the Cyclopean Audio Listener Node does not exist" end
     if not headIsPlacedInTheWorld(self) then
-        return false, string.format("the head is not placed in the world (menu=%s, 2D=%s, trackedCameraShown=%s, passThrough=%s)",
-            tostring(self.isMenuVisible), tostring(self.is2DViewActive), tostring(self.trackedCameraShown),
-            tostring(type(self.isPassThroughMode) == "function" and self:isPassThroughMode()))
+        return false, "the head is not placed in the world (" .. self:describeHeadPlacement() .. ")"
     end
     if type(getWorldTranslationFn) ~= "function" or type(getWorldQuaternionFn) ~= "function" then
         return false, "getWorldTranslation / getWorldQuaternion are not available"
@@ -774,12 +784,16 @@ function VRCompanion:getPointerDiagnostics()
     if type(self.getInteractiveControlDiagnostics) == "function" then
         icText = self:getInteractiveControlDiagnostics()
     end
+    local virtualHandsText = ""
+    if type(self.getVirtualHandsDiagnostics) == "function" then
+        virtualHandsText = " | " .. self:getVirtualHandsDiagnostics()
+    end
     local pointer = state.pointerHand
     local trigger = pointer ~= nil and state.hands[pointer].trigger or 0
-    return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s | Left hand: %s | Right hand: %s",
+    return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s | Left hand: %s | Right hand: %s%s",
         tostring(state.rayReason or "not updated yet"),
         pointer == 0 and "left" or pointer == 1 and "right" or "none", trigger,
-        self:getPointerOwner(), icText, describeHandPoses(0), describeHandPoses(1))
+        self:getPointerOwner(), icText, describeHandPoses(0), describeHandPoses(1), virtualHandsText)
 end
 
 function VRCompanion:consoleCommandPointerDiagnostics()
@@ -792,6 +806,7 @@ function VRCompanion:registerMotionControllerConsoleCommands()
     addConsoleCommand("vrMotionControllers", "Turn Motion Controller input on or off (saved; the Injector's session is untouched): vrMotionControllers [on|off]", "consoleCommandSetMotionControllers", self)
     addConsoleCommand("vrMotionControllerStatus", "Report each Motion Controller's tracked and in-use state and the Pointer Hand: vrMotionControllerStatus", "consoleCommandMotionControllerStatus", self)
     addConsoleCommand("vrPointerCone", "How wide (degrees) the cone around the Pointer Ray is inside which the nearest Click Point is selected (saved): vrPointerCone [degrees]", "consoleCommandSetPointerCone", self)
+    if type(self.registerVirtualHandsConsoleCommands) == "function" then self:registerVirtualHandsConsoleCommands() end
     if type(self.registerMotionControllerMapConsoleCommands) == "function" then self:registerMotionControllerMapConsoleCommands() end
 end
 
@@ -799,6 +814,9 @@ end
 function VRCompanion:resetMotionControllers()
     if type(self.resetMenuPointer) == "function" then
         self:resetMenuPointer()
+    end
+    if type(self.resetVirtualHands) == "function" then
+        self:resetVirtualHands()
     end
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrMotionControllers")
