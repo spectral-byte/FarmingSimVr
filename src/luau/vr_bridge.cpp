@@ -226,6 +226,19 @@ HandState VRBridge::GetHandState(uint32_t hand) {
     return {};
 }
 
+PanelHit VRBridge::GetPanelHit(uint32_t hand) {
+    if (m_openXrManager && (m_menuVisible || m_2dViewActive)) {
+        return m_openXrManager->GetPanelHit(hand);
+    }
+    return {};
+}
+
+void VRBridge::SetMenuCursor(bool active, float u, float v) {
+    if (m_openXrManager) {
+        m_openXrManager->SetPointerCursorOverride(active, u, v);
+    }
+}
+
 void VRBridge::Recenter() {
     if (m_openXrManager) {
         m_openXrManager->Recenter();
@@ -621,6 +634,7 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
 void VRBridge::SetMenuVisible(bool visible) {
     if (m_menuVisible != visible) {
         m_menuVisible = visible;
+        SetMenuCursor(false, 0.0f, 0.0f);  // a ray cursor from the previous panel must not linger
         SetFrameParity(0);
         ResetSubPass();
         SignalDiscontinuity();
@@ -649,6 +663,53 @@ int VRBridge::Lua_AlignMenuQuad(lua_State* L) {
     return 0;
 }
 
+static const char* const kPanelHitFields[] = { "hit", "u", "v", "distance" };
+static constexpr size_t kPanelHitFieldCount = 4;
+
+static void FillPanelHitTable(lua_State* L, int tableIndex, const PanelHit& hit) {
+    tableIndex = lua_absindex(L, tableIndex);
+    lua_pushvalue(L, tableIndex);
+    lua_pushboolean(L, hit.hit ? 1 : 0); lua_setfield(L, -2, "hit");
+    lua_pushnumber(L, hit.u); lua_setfield(L, -2, "u");
+    lua_pushnumber(L, hit.v); lua_setfield(L, -2, "v");
+    lua_pushnumber(L, hit.distance); lua_setfield(L, -2, "distance");
+    lua_pop(L, 1);
+}
+
+// VRBridge.getPanelHit(hand [, outTable]) -> { hit, u, v, distance }. u runs left to right and v top
+// to bottom, both 0..1 (the drawn cursor's convention). Like getHandState, a caller-supplied table is
+// filled in place only when it already holds every field.
+int VRBridge::Lua_GetPanelHit(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.getPanelHit");
+    uint32_t hand = kInvalidHand;
+    const int outIndex = ParseHandAndOutputArgs(L, hand);
+    const PanelHit hit = self->GetPanelHit(hand);
+
+    if (outIndex != 0 && HasAllFields(L, outIndex, kPanelHitFields, kPanelHitFieldCount)) {
+        FillPanelHitTable(L, outIndex, hit);
+        lua_pushvalue(L, outIndex);
+    } else {
+        lua_createtable(L, 0, static_cast<int>(kPanelHitFieldCount));
+        FillPanelHitTable(L, -1, hit);
+    }
+    return 1;
+}
+
+// VRBridge.setMenuCursor(active [, u, v]): the Pointer Ray draws the menu cursor at (u, v) in
+// getPanelHit coordinates; active = false hands the cursor back to the desk mouse.
+int VRBridge::Lua_SetMenuCursor(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setMenuCursor");
+    const bool active = lua_gettop(L) >= 1 && lua_toboolean(L, 1) != 0;
+    const float u = lua_isnumber(L, 2) ? static_cast<float>(lua_tonumber(L, 2)) : 0.0f;
+    const float v = lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : 0.0f;
+    self->SetMenuCursor(active, u, v);
+    return 0;
+}
+
 int VRBridge::Lua_SetMenuVisible(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
@@ -671,6 +732,7 @@ int VRBridge::Lua_GetIsMenuVisible(lua_State* L) {
 void VRBridge::Set2DViewActive(bool active) {
     if (m_2dViewActive != active) {
         m_2dViewActive = active;
+        SetMenuCursor(false, 0.0f, 0.0f);
         SetFrameParity(0);
         ResetSubPass();
         SignalDiscontinuity();

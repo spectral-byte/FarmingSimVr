@@ -1447,6 +1447,51 @@ XrExtent2Df OpenXrManager::ComputeMenuQuadSize() const {
     return XrExtent2Df{ height * aspect, height };
 }
 
+PanelHit OpenXrManager::ComputeQuadRayHit(const XrPosef& quadPose, const XrExtent2Df& quadSize,
+                                          const Vector3& rayOrigin, const Quaternion& rayOrientation) {
+    PanelHit miss;
+    if (quadSize.width <= 0.0f || quadSize.height <= 0.0f) {
+        return miss;
+    }
+    // Into the quad's own frame, where the panel is the z = 0 plane facing +Z.
+    const Quaternion quadToWorld(quadPose.orientation.x, quadPose.orientation.y, quadPose.orientation.z, quadPose.orientation.w);
+    const Quaternion worldToQuad(-quadToWorld.x, -quadToWorld.y, -quadToWorld.z, quadToWorld.w);
+    const Vector3 offset(rayOrigin.x - quadPose.position.x, rayOrigin.y - quadPose.position.y, rayOrigin.z - quadPose.position.z);
+    const Vector3 origin = RotateVectorByQuaternion(worldToQuad, offset);
+    const Vector3 worldDir = RotateVectorByQuaternion(rayOrientation, Vector3(0.0f, 0.0f, -1.0f));
+    const Vector3 dir = RotateVectorByQuaternion(worldToQuad, worldDir);
+
+    // The panel is only visible from its front: the ray must start in front of it and head into it.
+    constexpr float kMinApproach = 1e-6f;
+    if (dir.z > -kMinApproach || origin.z <= 0.0f) {
+        return miss;
+    }
+    const float t = -origin.z / dir.z;
+    const float x = origin.x + dir.x * t;
+    const float y = origin.y + dir.y * t;
+    const float u = x / quadSize.width + 0.5f;
+    const float v = 0.5f - y / quadSize.height;
+    if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) {
+        return miss;
+    }
+    PanelHit hit;
+    hit.hit = true;
+    hit.u = u;
+    hit.v = v;
+    hit.distance = t;
+    return hit;
+}
+
+PanelHit OpenXrManager::GetPanelHit(uint32_t hand) {
+    const HandState state = GetHandState(hand);
+    if (!state.tracked || !state.aim.isValid) {
+        return {};
+    }
+    // The hand is located in the local space the quad layer is submitted in, so the pose and size
+    // SubmitMenuQuad() uses are the ones to test against.
+    return ComputeQuadRayHit(ComputeMenuQuadPose(), ComputeMenuQuadSize(), state.aim.position, state.aim.orientation);
+}
+
 bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df* customSize) {
     if (!m_hasEyeSwapchains || m_session == XR_NULL_HANDLE) {
         return false;
