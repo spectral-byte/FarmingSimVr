@@ -219,6 +219,13 @@ HeadPose VRBridge::GetHeadPoseForEye(uint32_t eyeIndex) {
     return {};
 }
 
+HandState VRBridge::GetHandState(uint32_t hand) {
+    if (m_openXrManager) {
+        return m_openXrManager->GetHandState(hand);
+    }
+    return {};
+}
+
 void VRBridge::Recenter() {
     if (m_openXrManager) {
         m_openXrManager->Recenter();
@@ -281,6 +288,45 @@ static const char* const kEyeProjectionFields[] = {
 };
 static constexpr size_t kEyeProjectionFieldCount = 15;
 
+// The fields of a hand state table, in documentation order: the aim pose carries the head pose's 13
+// fields (same names, units and convention as getHeadPose), then the raw inputs.
+static const char* const kHandStateFields[] = {
+    "tracked",
+    "x", "y", "z", "pitch", "yaw", "roll", "qx", "qy", "qz", "qw",
+    "isValid", "isPositionTracked", "isOrientationTracked",
+    "trigger", "grip", "thumbX", "thumbY", "thumbClick", "buttonLower", "buttonUpper", "menu"
+};
+static constexpr size_t kHandStateFieldCount = 22;
+
+static constexpr uint32_t kInvalidHand = 0xFFFFFFFFu;
+
+// Scans the call arguments for a hand selector (0/1 or "left"/"right", also "l"/"r") and an optional
+// caller-supplied output table, in either order. An unrecognised or missing selector yields
+// kInvalidHand, which reports an untracked hand. Returns the stack index of the output table or 0.
+static int ParseHandAndOutputArgs(lua_State* L, uint32_t& hand) {
+    int outIndex = 0;
+    bool handSeen = false;
+    hand = kInvalidHand;
+    const int argc = lua_gettop(L);
+    for (int i = 1; i <= argc; ++i) {
+        if (lua_type(L, i) == LUA_TTABLE) {
+            if (outIndex == 0) outIndex = i;
+        } else if (!handSeen) {
+            if (lua_type(L, i) == LUA_TNUMBER) {
+                const double value = lua_tonumber(L, i);
+                hand = (value == 0.0) ? 0u : (value == 1.0) ? 1u : kInvalidHand;
+                handSeen = true;
+            } else if (lua_type(L, i) == LUA_TSTRING) {
+                const char* s = lua_tostring(L, i);
+                if (s && (_stricmp(s, "left") == 0 || _stricmp(s, "l") == 0)) hand = 0;
+                else if (s && (_stricmp(s, "right") == 0 || _stricmp(s, "r") == 0)) hand = 1;
+                handSeen = true;
+            }
+        }
+    }
+    return outIndex;
+}
+
 void VRBridge::PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex) {
     lua_createtable(L, 0, eyeIndex >= 0 ? 14 : 13);
     FillPoseTable(L, -1, pose, eyeIndex);
@@ -322,6 +368,47 @@ int VRBridge::Lua_GetHeadPose(lua_State* L) {
         lua_pushvalue(L, outIndex);
     } else {
         PushPoseTable(L, pose);
+    }
+    return 1;
+}
+
+void VRBridge::PushHandStateTable(lua_State* L, const HandState& hand) {
+    lua_createtable(L, 0, static_cast<int>(kHandStateFieldCount));
+    FillHandStateTable(L, -1, hand);
+}
+
+void VRBridge::FillHandStateTable(lua_State* L, int tableIndex, const HandState& hand) {
+    tableIndex = lua_absindex(L, tableIndex);
+    FillPoseTable(L, tableIndex, hand.aim);
+    lua_pushvalue(L, tableIndex);
+
+    lua_pushboolean(L, hand.tracked ? 1 : 0); lua_setfield(L, -2, "tracked");
+    lua_pushnumber(L, hand.trigger); lua_setfield(L, -2, "trigger");
+    lua_pushnumber(L, hand.grip); lua_setfield(L, -2, "grip");
+    lua_pushnumber(L, hand.thumbX); lua_setfield(L, -2, "thumbX");
+    lua_pushnumber(L, hand.thumbY); lua_setfield(L, -2, "thumbY");
+    lua_pushboolean(L, hand.thumbClick ? 1 : 0); lua_setfield(L, -2, "thumbClick");
+    lua_pushboolean(L, hand.buttonLower ? 1 : 0); lua_setfield(L, -2, "buttonLower");
+    lua_pushboolean(L, hand.buttonUpper ? 1 : 0); lua_setfield(L, -2, "buttonUpper");
+    lua_pushboolean(L, hand.menu ? 1 : 0); lua_setfield(L, -2, "menu");
+    lua_pop(L, 1);
+}
+
+// VRBridge.getHandState(hand [, outTable]) -> table. Like getHeadPose it fills a caller-supplied
+// table in place when that table already holds every field, so nothing is allocated per frame.
+int VRBridge::Lua_GetHandState(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.getHandState");
+    uint32_t hand = kInvalidHand;
+    const int outIndex = ParseHandAndOutputArgs(L, hand);
+    const HandState state = self->GetHandState(hand);
+
+    if (outIndex != 0 && HasAllFields(L, outIndex, kHandStateFields, kHandStateFieldCount)) {
+        FillHandStateTable(L, outIndex, state);
+        lua_pushvalue(L, outIndex);
+    } else {
+        PushHandStateTable(L, state);
     }
     return 1;
 }

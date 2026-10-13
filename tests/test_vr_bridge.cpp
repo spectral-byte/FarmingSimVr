@@ -448,6 +448,108 @@ TEST_F(VrBridgeTest, FillsCallerSuppliedTablesInPlaceForPoseAndProjection) {
     )luau"), 0);
 }
 
+TEST_F(VrBridgeTest, GetHandStateReportsAimPoseAndRawInputsPerHandIntoACallerSuppliedTable) {
+    fs25vr::FakeTrackedHeadset headset;
+    auto oxr = headset.manager;
+    fs25vr::HeadPose aim;
+    aim.position = fs25vr::Vector3(0.30f, 1.20f, -0.40f);
+    aim.rotation = fs25vr::EulerAngles(0.10f, -0.20f, 0.0f);
+    aim.isValid = true;
+    aim.positionTracked = true;
+    aim.orientationTracked = true;
+    headset.SetHandPose(1, aim);
+    fs25vr::FakeOpenXrControllers::Inputs right;
+    right.trigger = 0.75f;
+    right.grip = 0.25f;
+    right.thumbX = -0.5f;
+    right.thumbY = 0.9f;
+    right.thumbClick = true;
+    right.buttonLower = true;
+    right.menu = true;
+    headset.SetHandInputs(1, right);
+    headset.NextFrame();
+
+    fs25vr::VRBridge bridge(oxr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        local right = VRBridge.getHandState(1)
+        assert(right.tracked == true)
+        assert(math.abs(right.x - 0.30) < 1e-6 and math.abs(right.y - 1.20) < 1e-6 and math.abs(right.z + 0.40) < 1e-6)
+        assert(math.abs(right.pitch - 0.10) < 1e-4 and math.abs(right.yaw + 0.20) < 1e-4)
+        assert(right.isValid == true and right.isPositionTracked == true and right.isOrientationTracked == true)
+        assert(math.abs(right.trigger - 0.75) < 1e-6 and math.abs(right.grip - 0.25) < 1e-6)
+        assert(math.abs(right.thumbX + 0.5) < 1e-6 and math.abs(right.thumbY - 0.9) < 1e-6)
+        assert(right.thumbClick == true and right.buttonLower == true and right.buttonUpper == false and right.menu == true)
+
+        -- Either hand selector style reaches the same hand; the left hand is separate.
+        assert(VRBridge.getHandState("right").trigger == right.trigger)
+        assert(VRBridge.getHandState("R").trigger == right.trigger)
+        local left = VRBridge.getHandState(0)
+        assert(left.trigger == 0 and left.menu == false and VRBridge.getHandState("left").trigger == 0)
+        assert(VRBridge.getHandState("Left").trigger == 0 and VRBridge.getHandState("l").trigger == 0)
+
+        -- A caller-supplied table is filled in place (no allocation per frame) once it is complete.
+        local incomplete = {}
+        local out = VRBridge.getHandState(1, incomplete)
+        assert(out ~= incomplete and next(incomplete) == nil, "an incomplete table must be left untouched")
+        assert(VRBridge.getHandState(1, out) == out, "a complete table is filled in place")
+        assert(VRBridge.getHandState(out, "right") == out, "the table may precede the hand")
+        local n = 0
+        for k in pairs(out) do n = n + 1 end
+        assert(n == 22, "hand state has 22 fields, got " .. n)
+
+        -- Refilling overwrites: the same table now holds the left hand.
+        assert(VRBridge.getHandState(0, out) == out)
+        assert(out.trigger == 0 and out.x == 0 and out.tracked == true)
+    )luau"), 0);
+}
+
+TEST_F(VrBridgeTest, GetHandStateReportsAnUntrackedZeroedHandWhenThereIsNothingToTrack) {
+    fs25vr::FakeTrackedHeadset refused(fs25vr::FakeTrackedHeadsetOptions{ /*refuseActionSet=*/true });
+    fs25vr::FakeTrackedHeadset headset;
+    headset.SetHandPose(0, fs25vr::HeadPose(), /*tracked=*/false);
+    headset.NextFrame();
+
+    fs25vr::VRBridge noRuntime(nullptr, nullptr);
+    fs25vr::VRBridge refusedBridge(refused.manager, nullptr);
+    fs25vr::VRBridge offBridge(headset.manager, nullptr);
+    const std::string check = R"luau(
+        for _, hand in ipairs({ 0, 1, "left", "right", 7, "nonsense" }) do
+            local state = VRBridge.getHandState(hand)
+            assert(state.tracked == false, "untracked: " .. tostring(hand))
+            assert(state.isValid == false and state.trigger == 0 and state.grip == 0, "zeroed: " .. tostring(hand))
+            assert(state.thumbX == 0 and state.thumbY == 0 and state.x == 0 and state.qw == 1, "zeroed: " .. tostring(hand))
+            assert(state.thumbClick == false and state.buttonLower == false and state.buttonUpper == false and state.menu == false)
+        end
+        assert(VRBridge.getHandState() ~= nil, "a call without a hand still returns a table")
+    )luau";
+
+    for (fs25vr::VRBridge* bridge : { &noRuntime, &refusedBridge }) {
+        lua_State* state = luaL_newstate();
+        luaL_openlibs(state);
+        ASSERT_TRUE(bridge->Inject(state));
+        EXPECT_EQ(RunLuauString(state, check), 0);
+        lua_close(state);
+    }
+    // A controller that is switched off reports untracked too (hand 0), while hand 1 is fine.
+    ASSERT_TRUE(offBridge.Inject(L));
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getHandState(0).tracked == false)
+        assert(VRBridge.getHandState(1).tracked == true)
+        assert(VRBridge.getHandState(2).tracked == false, "out of range")
+    )luau"), 0);
+}
+
+TEST_F(VrBridgeTest, GetHandStateReadsLeaveTheLuaStackBalanced) {
+    fs25vr::FakeTrackedHeadset headset;
+    headset.NextFrame();
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    const int before = lua_gettop(L);
+    ASSERT_EQ(RunLuauString(L, "local t = VRBridge.getHandState(0, {}); VRBridge.getHandState(0, t); VRBridge.getHandState(1)"), 0);
+    EXPECT_EQ(lua_gettop(L), before);
+}
 TEST_F(VrBridgeTest, SuppliedTablePoseStillRecordedAsTheEyeRenderPose) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
@@ -1111,7 +1213,7 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
 
-    // VRBridge should expose exactly kExposedFieldCount fields (1 version string + 32 functions)
+    // VRBridge should expose exactly kExposedFieldCount fields (1 version string + one entry per function; see kFunctionTable)
     const char* expectedKeys[] = {
         "version",
         "isReady",
@@ -1122,6 +1224,7 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "isStereoActive",
         "getRequiresAfrFallback",
         "getHeadPose",
+        "getHandState",
         "recenter",
         "getEyeProjection",
         "getFrameParity",

@@ -38,6 +38,9 @@ public:
 
     HeadPose GetHeadPose();
     HeadPose GetHeadPoseForEye(uint32_t eyeIndex);
+    // One Motion Controller's state (0 = left, 1 = right); untracked defaults without a runtime,
+    // when the runtime refused the action set, or for any other hand id. Does not touch the render-pose records.
+    HandState GetHandState(uint32_t hand);
     void Recenter();
     EyeProjection GetEyeProjection(uint32_t eyeIndex = 0);
 
@@ -104,6 +107,7 @@ public:
     static int Lua_IsStereoActive(lua_State* L);
     static int Lua_RequiresAfrFallback(lua_State* L);
     static int Lua_GetHeadPose(lua_State* L);
+    static int Lua_GetHandState(lua_State* L);
     static int Lua_Recenter(lua_State* L);
     static int Lua_AlignMenuQuad(lua_State* L);
     static int Lua_GetEyeProjection(lua_State* L);
@@ -142,6 +146,8 @@ public:
     static void PushPoseTable(lua_State* L, const HeadPose& pose, int eyeIndex = -1);
     // In-place variants: write the same fields into the existing table at tableIndex (no allocation).
     static void FillPoseTable(lua_State* L, int tableIndex, const HeadPose& pose, int eyeIndex = -1);
+    static void PushHandStateTable(lua_State* L, const HandState& hand);
+    static void FillHandStateTable(lua_State* L, int tableIndex, const HandState& hand);
     static void FillEyeProjectionTable(lua_State* L, int tableIndex, const EyeProjection& proj, uint32_t eyeIndex);
 
     struct LuaFunctionEntry {
@@ -159,6 +165,7 @@ public:
         {"isStereoActive", &Lua_IsStereoActive},
         {"getRequiresAfrFallback", &Lua_RequiresAfrFallback},
         {"getHeadPose", &Lua_GetHeadPose},
+        {"getHandState", &Lua_GetHandState},
         {"recenter", &Lua_Recenter},
         {"getEyeProjection", &Lua_GetEyeProjection},
         {"getFrameParity", &Lua_GetFrameParity},
