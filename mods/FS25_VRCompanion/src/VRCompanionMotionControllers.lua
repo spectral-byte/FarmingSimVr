@@ -60,6 +60,10 @@
 --     VRCompanion.pointerConeDegrees               saved by `vrPointerCone <degrees>` (default 5)
 --     VRCompanion:draw()                           the line and dot, drawn from the update's end points
 --
+--   Haptics (ticket #76; VRBridge.pulseHaptic(hand, durationMs, strength) -> boolean)
+--     VRCompanion:pulsePointerHand(durationMs, strength) -> boolean   Pointer Hand only; false when off
+--     VRCompanion:onClickPointEvent(kind, clickPoint)   "selected" (non-nil point) and "clicked" pulse
+--
 --   Time: every time in this module is VRCompanion:getCurrentTimeMs(), i.e. the global g_time in
 --   milliseconds (a wall clock only when g_time is nil). Tests drive it by assigning _G.g_time.
 --
