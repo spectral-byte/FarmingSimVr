@@ -54,6 +54,12 @@
 --       called by this module (hand moves; mouseEvent listener; sampling g_inputBinding:getMousePosition)
 --       and callable from tests or other modules that see either one move.
 --
+--   The Pointer Ray (ticket #73; see "The Pointer Ray" below, and VRCompanionInteractiveControl.lua)
+--     VRCompanion:getPointerRay() -> table | nil   world origin / direction of the ray this update
+--     VRCompanion:getPointerTrigger() -> pressed, held   the Pointer Hand's trigger (hysteresis 0.6 / 0.4)
+--     VRCompanion.pointerConeDegrees               saved by `vrPointerCone <degrees>` (default 5)
+--     VRCompanion:draw()                           the line and dot, drawn from the update's end points
+--
 --   Time: every time in this module is VRCompanion:getCurrentTimeMs(), i.e. the global g_time in
 --   milliseconds (a wall clock only when g_time is nil). Tests drive it by assigning _G.g_time.
 --
