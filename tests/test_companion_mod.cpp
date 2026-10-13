@@ -98,7 +98,7 @@ TEST_F(CompanionModTest, EveryScriptThatZipsTheModShipsTheVirtualHandModelItsSha
     }
 #ifdef PROJECT_ROOT_DIR
     const std::filesystem::path models = std::filesystem::path(PROJECT_ROOT_DIR) / "mods" / "FS25_VRCompanion" / "models";
-    for (const char* file : { "VirtualHandLeft.i3d", "VirtualHandLeft.i3d.shapes", "VirtualHand_ATTRIBUTION.txt" }) {
+    for (const char* file : { "VirtualHandLeft.i3d", "VirtualHandLeft.i3d.shapes", "VirtualHandRight.i3d", "VirtualHandRight.i3d.shapes", "VirtualHand_ATTRIBUTION.txt" }) {
         EXPECT_TRUE(std::filesystem::is_regular_file(models / file)) << file << " is part of the mod";
     }
 #endif
@@ -110,6 +110,10 @@ TEST_F(CompanionModTest, TheVirtualHandModelRecordsItsSourceAuthorAndLicense) {
     EXPECT_NE(text.find("https://poly.pizza/m/MTB4egc4Vh"), std::string::npos) << "source URL";
     EXPECT_NE(text.find("J-Toastie"), std::string::npos) << "author";
     EXPECT_NE(text.find("Creative Commons Attribution"), std::string::npos) << "license";
+    EXPECT_NE(text.find("VirtualHandLeft.i3d"), std::string::npos) << "names the left hand file";
+    EXPECT_NE(text.find("VirtualHandRight.i3d"), std::string::npos) << "names the right hand file, a mirrored derivative";
+    EXPECT_NE(text.find("mirror"), std::string::npos) << "says the right hand is a mirrored derivative";
+    EXPECT_NE(text.find("metres"), std::string::npos) << "says the model was scaled to metres";
 }
 
 TEST_F(CompanionModTest, ReleaseBundleAndModZipShipTheGplLicense) {
