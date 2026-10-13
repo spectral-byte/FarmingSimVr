@@ -56,6 +56,13 @@ bool VRBridge::Inject(lua_State* L) {
 
     int origTop = lua_gettop(L);
 
+    // Inject runs inside a hook on the game's own call into this state, at a point the game does not expect the
+    // collector to run. A collection step started from our pushes below has crashed in the allocator
+    // (freeblock, from luaC_step) on several launches. Hold the collector off for the injection and let it run
+    // again afterwards, from the game's own allocations; leave it stopped if the game had stopped it.
+    const bool collectorWasRunning = lua_gc(L, LUA_GCISRUNNING, 0) != 0;
+    if (collectorWasRunning) lua_gc(L, LUA_GCSTOP, 0);
+
     // Create table for VRBridge pre-allocated for all exposed fields (version + every table entry)
     // to prevent dynamic table resizing/rehashing during startup
     lua_createtable(L, 0, kExposedFieldCount);
@@ -82,6 +89,7 @@ bool VRBridge::Inject(lua_State* L) {
 
     // Strictly restore stack state to guarantee zero stack leakage
     lua_settop(L, origTop);
+    if (collectorWasRunning) lua_gc(L, LUA_GCRESTART, 0);
 
     LogInfo("VRBridge: Successfully injected global VRBridge table into Luau environment.");
     return true;

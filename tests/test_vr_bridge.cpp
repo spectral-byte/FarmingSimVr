@@ -70,6 +70,25 @@ TEST_F(VrBridgeTest, InjectsGlobalTableWithoutStackCorruption) {
     EXPECT_EQ(lua_gettop(L), initialTop);
 }
 
+TEST_F(VrBridgeTest, InjectingLeavesARunningCollectorRunning) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_NE(lua_gc(L, LUA_GCISRUNNING, 0), 0);
+
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_NE(lua_gc(L, LUA_GCISRUNNING, 0), 0) << "the game's collector runs again after the injection";
+}
+
+TEST_F(VrBridgeTest, InjectingLeavesAStoppedCollectorStopped) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    lua_gc(L, LUA_GCSTOP, 0);
+    ASSERT_EQ(lua_gc(L, LUA_GCISRUNNING, 0), 0);
+
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_EQ(lua_gc(L, LUA_GCISRUNNING, 0), 0) << "a collector the game had stopped is not started by the injection";
+}
+
 TEST_F(VrBridgeTest, ExposesVersionAndIsReadyAndHandshakeToLuauScript) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
