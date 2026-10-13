@@ -58,6 +58,7 @@ local function newState()
         points = setmetatable({}, { __mode = "k" }),  -- [clickPoint] = update count when last seen active
         updates = 0,
         selected = nil,
+        autoOn = nil,         -- see "Interactive Control switches on while the Pointer Hand is in use"
         pullArmed = false,    -- the trigger went down while the ray had control and is still down
     }
 end
@@ -239,6 +240,97 @@ local function clickSelected(self)
     end
 end
 
+-- ---- Interactive Control switches on while the Pointer Hand is in use in a cab ---------------------
+-- Picking up the Pointer Hand in a vehicle switches Interactive Control on for that vehicle, so the
+-- player need not press its toggle key first; putting the Pointer Hand down, or leaving the vehicle,
+-- puts that vehicle's state back as it was. Interactive Control's synced state is written ONLY at those
+-- transitions (and once more when the vehicle's camera changes, because Interactive Control switches
+-- itself off then), never per frame, so multiplayer sees no extra traffic. When Interactive Control's
+-- own setting says always on or always off, that setting wins and nothing is written.
+--
+-- Also relied on (release 1.2.0.1): g_currentMission.interactiveControl.settings:getSetting("IC_STATE")
+-- with FS25_interactiveControl.InteractiveControlManager.SETTING_STATE_TOGGLE; on the vehicle
+-- spec_interactiveControl (state, interactiveControllers) and activateInteractiveControl(state,
+-- noEventSend). When they are not there the Pointer Hand simply does not switch Interactive Control.
+
+-- Whether Interactive Control is in its toggle mode, the only mode in which its state is ours to write.
+local function stateSettingIsToggle()
+    local manager = currentManager()
+    local settings = manager ~= nil and manager.settings or nil
+    local env = _G and _G[MOD_NAME]
+    local managerClass = type(env) == "table" and env.InteractiveControlManager or nil
+    if type(settings) ~= "table" or type(settings.getSetting) ~= "function"
+        or type(managerClass) ~= "table" or managerClass.SETTING_STATE_TOGGLE == nil then
+        return false
+    end
+    local ok, value = pcall(settings.getSetting, settings, "IC_STATE")
+    return ok and value == managerClass.SETTING_STATE_TOGGLE
+end
+
+-- The vehicle's synced Interactive Control state, or nil when it has none to write.
+local function vehicleState(vehicle)
+    local spec = vehicle ~= nil and vehicle.spec_interactiveControl or nil
+    if type(spec) ~= "table" or type(vehicle.activateInteractiveControl) ~= "function" then return nil end
+    if type(spec.interactiveControllers) == "table" and #spec.interactiveControllers == 0 then return nil end
+    return spec.state == true
+end
+
+local function activeCameraOf(vehicle)
+    if type(vehicle.getActiveCamera) == "function" then
+        local ok, cam = pcall(vehicle.getActiveCamera, vehicle)
+        if ok then return cam end
+    end
+    return nil
+end
+
+-- state.autoOn = nil | { vehicle, previous, wrote, camera }: the vehicle Interactive Control was
+-- switched on for while the Pointer Hand is in use.
+local function writeState(vehicle, value)
+    pcall(vehicle.activateInteractiveControl, vehicle, value)
+end
+
+local function endAutoOn(autoOn)
+    state.autoOn = nil
+    if autoOn.wrote and vehicleState(autoOn.vehicle) ~= autoOn.previous and stateSettingIsToggle() then
+        writeState(autoOn.vehicle, autoOn.previous)
+    end
+end
+
+local function updateAutoOn(self)
+    local autoOn = state.autoOn
+    local vehicle = nil
+    if self:getPointerHand() ~= nil and self.motionControllersEnabled ~= false then
+        vehicle = self:getControlledVehicle()
+    end
+    if autoOn ~= nil and autoOn.vehicle ~= vehicle then
+        endAutoOn(autoOn)
+        autoOn = nil
+    end
+    if vehicle == nil then return end
+
+    if autoOn == nil then
+        local previous = vehicleState(vehicle)
+        if previous == nil then return end
+        autoOn = { vehicle = vehicle, previous = previous, wrote = false, camera = activeCameraOf(vehicle) }
+        state.autoOn = autoOn
+        if not previous and stateSettingIsToggle() then
+            autoOn.wrote = true
+            writeState(vehicle, true)
+        end
+        return
+    end
+
+    -- Interactive Control switched itself off when the camera changed: switch it on again, once.
+    local camera = activeCameraOf(vehicle)
+    if camera ~= autoOn.camera then
+        autoOn.camera = camera
+        if vehicleState(vehicle) == false and stateSettingIsToggle() then
+            autoOn.wrote = true
+            writeState(vehicle, true)
+        end
+    end
+end
+
 -- Called by the Pointer Ray code once per Companion Mod update, after the ray is placed. Returns
 -- whether there are active Click Points (something the ray could hit) and, when one is selected, its
 -- world position (where the ray ends).
@@ -251,6 +343,7 @@ function VRCompanion:updateInteractiveControl(dt)
         if not state.installed then return false end
     end
     state.updates = state.updates + 1
+    updateAutoOn(self)
 
     local ray = nil
     if rayControlsSelection(self) then

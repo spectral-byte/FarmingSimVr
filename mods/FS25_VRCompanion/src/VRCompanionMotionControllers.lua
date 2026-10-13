@@ -306,6 +306,11 @@ local function sampleDeskMouse(self)
     end
 end
 
+-- Interactive Control still has to see a Pointer Hand go away (its state is put back); a single guarded call.
+local function settleInteractiveControl(self, dt)
+    if type(self.updateInteractiveControl) == "function" then self:updateInteractiveControl(dt) end
+end
+
 -- What reads the pointer after the hands were polled (menus); a single guarded call.
 local function updatePointerUsers(self, dt)
     if type(self.updateMenuPointer) == "function" then
@@ -322,6 +327,7 @@ function VRCompanion:updateMotionControllers(dt)
             state.ignoredCleared = true
         end
         if type(self.resetControllerButtons) == "function" then self:resetControllerButtons() end
+        settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return
     end
@@ -331,6 +337,7 @@ function VRCompanion:updateMotionControllers(dt)
     state.bridgeMissing = (getHandState == nil)
     if getHandState == nil then
         state.ray.valid = false
+        settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return
     end
