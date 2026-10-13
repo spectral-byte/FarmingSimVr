@@ -27,6 +27,7 @@ Two parts work together:
 - **2D view toggle** between full VR and a floating virtual screen.
 - **Snap turn** (30°, 45° or 90°) on foot and in vehicles.
 - **Desktop mirror window** that stays unscaled whatever the headset resolution.
+- **Virtual Hands**: a gloved hand drawn where each Motion Controller is held. The trigger curls the index finger and the grip the other three.
 
 ## Installation
 
@@ -115,4 +116,5 @@ The menu button is on the left Motion Controller only on Touch and does not exis
 ## License
 
 Copyright (C) 2026 spectral-byte. Licensed under the [GNU General Public License v3.0](LICENSE). Built with Khronos OpenXR, Luau, MinHook and GoogleTest; release bundles include `THIRD_PARTY_NOTICES.txt`.
+The Virtual Hand glove model is "Gloved Hand" by J-Toastie ([source](https://poly.pizza/m/MTB4egc4Vh)), licensed under Creative Commons Attribution (CC BY); see `mods/FS25_VRCompanion/models/VirtualHand_ATTRIBUTION.txt`.
 Farming Simulator 25 is a trademark of GIANTS Software GmbH.
