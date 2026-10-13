@@ -256,6 +256,8 @@ TEST_F(PointerHandSwitchTest, WithBothHandsInUseAndNoPointerHandYetAPullPicksTha
     EXPECT_EQ(Executed(), "") << "the picking pull is consumed too";
 
     Release(kRight);
+    // Aiming at the Click Point moves the hand, which gives the Pointer Ray control (ticket #79).
+    headset.SetHandPose(kRight, HandAt(SideOf(kRight) + 0.05f, 0.0f, -0.3f));
     Frames(1);
     Pull(kRight);
     Frames(1);
