@@ -7,6 +7,11 @@
 
 #include "companion_mod_fixture.h"
 #include "companion_mod_stubs.h"
+#include <map>
+#include <regex>
+#include <sstream>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -456,8 +461,8 @@ TEST_F(CompanionModTest, TheHandModelIsLoadedOncePerMapAndDeletedWhenTheMapUnloa
     FRAMES(3);
     EXPECT_EQ(EvalLua(L, "#StubModel.loads"), "1") << "loaded once, however often the hands hide and show";
     EXPECT_EQ(EvalLua(L, "#StubModel.clones"), "2");
-    EXPECT_EQ(EvalLua(L, "StubModel.loads[1].filename:find('virtualHandRight.i3d', 1, true) ~= nil"), "true")
-        << "the right-hand model of the Companion Mod: " << EvalLua(L, "StubModel.loads[1].filename");
+    EXPECT_EQ(EvalLua(L, "StubModel.loads[1].filename:find('models/VirtualHandLeft.i3d', 1, true) ~= nil"), "true")
+        << "the hand model of the Companion Mod: " << EvalLua(L, "StubModel.loads[1].filename");
     EXPECT_EQ(EvalLua(L, "StubModel.loads[1].addPhysics"), "false") << "no physics";
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -498,7 +503,7 @@ TEST_F(CompanionModTest, AMissingHandModelLogsOnceAndLeavesNoVirtualHandsWhilePo
     EXPECT_EQ(EvalLua(L, "#StubModel.clones"), "0") << "no Virtual Hands";
     EXPECT_EQ(EvalLua(L, "#StubModel.loads"), "0") << "the engine is not asked to load a file that is not there";
     EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands:"), 1) << "one line, however long the game runs";
-    EXPECT_EQ(CountLogLines("virtualHandRight.i3d"), 1) << "naming the file";
+    EXPECT_EQ(CountLogLines("VirtualHandLeft.i3d"), 1) << "naming the file";
     EXPECT_NE(EvalLua(L, "runCommand('vrVirtualHandsDiagnostics')").find("model not loaded"), std::string::npos);
 
     // The Pointer Ray and Click Points are unaffected.
@@ -803,7 +808,8 @@ TEST_F(CompanionModTest, AModelMissingSomeJointsLogsOnceAndCurlsTheJointsItHas) 
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     ASSERT_EQ(RunLuauChunk(L, kCurlReaders, "=curlReaders"), 0);
-    ASSERT_EQ(RunLuauChunk(L, "StubModel.missingJoints = { index2 = true, ring1 = true, ring2 = true, ring3 = true }", "=lackingJoints"), 0);
+    // the model's index finger lacks its middle joint and its ring finger all three (the names are the file's own)
+    ASSERT_EQ(RunLuauChunk(L, "StubModel.missingJoints = { ['Middle.001'] = true, ['Lower.003'] = true, ['Middle.003'] = true, ['Top.003'] = true }", "=lackingJoints"), 0);
     SetGameTime(10000);
     PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
     PICK_UP(kLeft, -0.30f, -0.20f, -0.40f, -0.25f, -0.10f, -0.20f);
@@ -811,7 +817,7 @@ TEST_F(CompanionModTest, AModelMissingSomeJointsLogsOnceAndCurlsTheJointsItHas) 
     FRAMES(30);
 
     EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands: the model lacks joints"), 1) << "once, not per hand and not per frame";
-    EXPECT_EQ(CountLogLines("index2, ring1, ring2, ring3"), 1) << "naming the joints";
+    EXPECT_EQ(CountLogLines("Middle.001, Lower.003, Middle.003, Top.003"), 1) << "naming the joints as the model does";
     EXPECT_EQ(EvalLua(L, "handIsShown('right') and handIsShown('left')"), "true") << "the hands still show";
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local hand = StubModel.hands().right
@@ -822,6 +828,87 @@ TEST_F(CompanionModTest, AModelMissingSomeJointsLogsOnceAndCurlsTheJointsItHas) 
         end
         for segment = 1, 3 do assert(StubModel.curl(hand, 'thumb' .. segment) == 0, "the thumb is still") end
     )luau", "=curlsWhatItHas"), 0);
+}
+
+TEST_F(CompanionModTest, AFingerWhoseBaseBoneIsMissingStaysStillWhileTheOtherFingersCurl) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kCurlReaders, "=curlReaders"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubModel.missingJoints = { ['Ring Finger'] = true }", "=noRingBone"), 0);
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    headset.SetHandInputs(kRight, Squeeze(1.0f, 1.0f));
+    FRAMES(5);
+
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands: the model lacks joints"), 1);
+    EXPECT_EQ(CountLogLines("Ring Finger, Lower.003, Middle.003, Top.003"), 1) << "the finger is named by its base bone and its joints";
+    EXPECT_EQ(EvalLua(L, "handIsShown('right')"), "true");
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local hand = StubModel.hands().right
+        assert(StubModel.joint(hand, 'ring1') == nil, "the mod has no way to reach the ring joints")
+        for _, name in ipairs({ 'Lower.003', 'Middle.003', 'Top.003' }) do
+            assert(StubModel.curlOfNamed(hand, name) == 0, name .. " stays at rest: a finger with no base bone is not curled")
+        end
+        assert(fingerCurl('right', 'middle')[1] > math.rad(30) and fingerCurl('right', 'little')[1] > math.rad(30), "the other fingers curl")
+    )luau", "=otherFingersCurl"), 0);
+}
+
+namespace {
+
+// node name -> name of its parent TransformGroup ("" at the top) in an .i3d file's scene
+std::map<std::string, std::string> TransformGroupParents(const std::string& xml) {
+    std::map<std::string, std::string> parents;
+    std::vector<std::string> open;
+    const std::regex tag(R"re(<TransformGroup\s+name="([^"]*)"[^>]*?(/?)>|</TransformGroup>)re");
+    for (auto it = std::sregex_iterator(xml.begin(), xml.end(), tag); it != std::sregex_iterator(); ++it) {
+        if ((*it)[1].matched) {
+            parents[(*it)[1]] = open.empty() ? "" : open.back();
+            if ((*it)[2].str() != "/") open.push_back((*it)[1]);
+        } else if (!open.empty()) {
+            open.pop_back();
+        }
+    }
+    return parents;
+}
+
+} // namespace
+
+TEST_F(CompanionModTest, TheJointTableNamesThreeCurlJointsBelowTheBaseBoneOfEveryFingerInTheShippedModel) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    const std::string model = ReadFile("mods/FS25_VRCompanion/models/VirtualHandLeft.i3d");
+    ASSERT_FALSE(model.empty());
+    const auto parents = TransformGroupParents(model);
+
+    // one line per finger: name|base bone|joint 1|joint 2|joint 3
+    const std::string table = EvalLua(L, R"luau((function()
+        local lines = {}
+        for _, finger in ipairs(VRCompanion.VIRTUAL_HAND_FINGERS) do
+            table.insert(lines, finger.name .. "|" .. finger.base .. "|" .. table.concat(finger.joints, "|"))
+        end
+        return table.concat(lines, "\n")
+    end)())luau");
+    std::istringstream lines(table);
+    std::string line;
+    std::vector<std::string> fingerNames;
+    while (std::getline(lines, line)) {
+        std::vector<std::string> names;
+        std::istringstream parts(line);
+        for (std::string part; std::getline(parts, part, '|');) names.push_back(part);
+        ASSERT_EQ(names.size(), 5u) << line;
+        fingerNames.push_back(names[0]);
+        SCOPED_TRACE(line);
+        ASSERT_TRUE(parents.count(names[1])) << names[1] << " is a bone of the model";
+        EXPECT_EQ(parents.at(names[1]), "Hand") << "a finger's base bone hangs off the Hand bone";
+        for (size_t joint = 2; joint < 5; ++joint) {
+            ASSERT_TRUE(parents.count(names[joint])) << names[joint] << " is a bone of the model";
+            EXPECT_EQ(parents.at(names[joint]), names[joint - 1]) << names[joint] << " follows " << names[joint - 1];
+        }
+    }
+    EXPECT_EQ(fingerNames, (std::vector<std::string>{ "index", "middle", "ring", "little" })) << "the thumb is never curled";
+    EXPECT_EQ(EvalLua(L, "VRCompanion.VIRTUAL_HAND_FINGERS[1].input .. VRCompanion.VIRTUAL_HAND_FINGERS[2].input"), "triggergrip");
 }
 
 TEST_F(CompanionModTest, PullingTheTriggerAndSqueezingTheGripLeavesThePointerRayOriginAndTheClickAsTheyWere) {

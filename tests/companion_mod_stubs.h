@@ -185,8 +185,10 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 //   StubModel.isShown(node)               the node and every ancestor are visible (and it exists)
 //   StubModel.scale(node) -> x, y, z      StubModel.castsShadow(node) -> true when any shape below casts one
 //   StubModel.isLinkedToScene(node)       the node's ancestors lead up to the scene root
-//   StubModel.missingJoints               set of joint names (e.g. { index2 = true }) the next loaded model lacks
-//   StubModel.joint(hand, name) -> node   the finger joint below a hand node, or nil ("thumb1".."little3")
+//   StubModel.missingJoints               set of node names of the model's file (e.g. { ["Middle.001"] = true }) the
+//                                         next loaded model lacks
+//   StubModel.joint(hand, name) -> node   the finger joint below a hand node, or nil ("thumb1".."little3": finger
+//                                         and curl segment, looked up in that finger's own subtree)
 //   StubModel.curl(hand, name) -> radians how far the joint is rotated from its rest pose about its own X axis
 //                                         (positive = toward the palm); errors when the joint turned about any other axis
 // Every joint of the stub model rests in a slightly bent pose that is NOT the identity rotation (each segment a
@@ -247,19 +249,33 @@ inline constexpr const char* kStubModelLoading = R"luau(
         n.qx, n.qy, n.qz, n.qw = qmul(-px, -py, -pz, pw, qx, qy, qz, qw)
     end
 
+    -- The joint names of the shipped model (VirtualHandLeft.i3d), written out here on purpose: the stub stands for
+    -- the file, the mod must find these by its own table. Per finger: the base bone, then the three curl joints.
+    -- The thumb's joints are called Lower, Middle and Top, like the fingers' without the .00N suffix.
+    local STUB_FINGERS = {
+        index  = { "Index Finger", "Lower.001", "Middle.001", "Top.001" },
+        middle = { "Middle Finger", "Lower.002", "Middle.002", "Top.002" },
+        ring   = { "Ring Finger", "Lower.003", "Middle.003", "Top.003" },
+        little = { "Pinky", "Lower.004", "Middle.004", "Top.004" },
+        thumb  = { "Thumb", "Lower", "Middle", "Top" },
+    }
+    -- the order the file lists the fingers below the Hand bone
+    local STUB_FINGER_ORDER = { "index", "middle", "little", "ring", "thumb" }
+
     local function buildHand()
         local fileRoot = StubScene.newNode("virtualHandFile", 0)
-        local hand = StubScene.newNode("virtualHandRight", fileRoot)
-        local mesh = StubScene.newNode("glove", hand)
+        local root = StubScene.newNode("Hand.002", fileRoot)  -- the file's first child, the hand's root node
+        local mesh = StubScene.newNode("HandModel.001", root)
         nodes[mesh].isShape = true
         nodes[mesh].castShadow = true
-        for _, finger in ipairs({ "thumb", "index", "middle", "ring", "little" }) do
-            local parent = hand
-            for segment = 1, 3 do
-                local name = finger .. segment
+        local wrist = StubScene.newNode("Wrist", root)
+        local palm = StubScene.newNode("Hand", wrist)
+        for _, finger in ipairs(STUB_FINGER_ORDER) do
+            local parent = palm
+            for index, name in ipairs(STUB_FINGERS[finger]) do
                 if not StubModel.missingJoints[name] then
                     -- the model's relaxed pose: bent a little more at each segment, with a small twist
-                    parent = StubScene.newNode(name, parent, 0, 0, 0, 0.15 * segment, 0.1, -0.05)
+                    parent = StubScene.newNode(name, parent, 0, 0, 0, 0.15 * index, 0.1, -0.05)
                     local n = nodes[parent]
                     n.restQx, n.restQy, n.restQz, n.restQw = n.qx, n.qy, n.qz, n.qw
                 end
@@ -299,18 +315,37 @@ inline constexpr const char* kStubModelLoading = R"luau(
 
     _G.getQuaternion = function(id) local n = nodes[id]; return n.qx, n.qy, n.qz, n.qw end
 
-    function StubModel.joint(id, name)
+    local function findByName(id, name)
         if nodes[id] == nil then return nil end
         for _, childId in ipairs(childrenOf(id)) do
             if nodes[childId].name == name then return childId end
-            local found = StubModel.joint(childId, name)
+            local found = findByName(childId, name)
             if found ~= nil then return found end
         end
         return nil
     end
+    -- "index2" -> the middle curl joint of the index finger of the hand node, looked up inside that finger's own
+    -- subtree (the thumb's joints have names of their own too); nil when the model lacks it
+    function StubModel.joint(id, joint)
+        local finger, segment = joint:match("^(%a+)(%d)$")
+        local names = STUB_FINGERS[finger]
+        assert(names ~= nil, joint .. " is not a finger joint of the stub model")
+        local base = findByName(id, names[1])
+        if base == nil then return nil end
+        return findByName(base, names[tonumber(segment) + 1])
+    end
     function StubModel.curl(hand, name)
         local id = StubModel.joint(hand, name)
         assert(id ~= nil, name .. " is not in the model")
+        return StubModel.curlOfNode(id, name)
+    end
+    -- the same for a node found by its own name in the file, wherever it hangs (for a finger the mod cannot reach)
+    function StubModel.curlOfNamed(hand, nodeName)
+        local id = findByName(hand, nodeName)
+        assert(id ~= nil, nodeName .. " is not in the model")
+        return StubModel.curlOfNode(id, nodeName)
+    end
+    function StubModel.curlOfNode(id, name)
         local n = nodes[id]
         -- rotation from the rest pose to now, in the joint's own frame: conj(rest) * current
         local x, y, z, w = qmul(-n.restQx, -n.restQy, -n.restQz, n.restQw, n.qx, n.qy, n.qz, n.qw)

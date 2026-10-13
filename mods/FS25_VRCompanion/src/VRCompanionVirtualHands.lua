@@ -61,7 +61,7 @@ VRCompanion.VirtualHands = VRCompanion.VirtualHands or {}
 -- The mod's own folder, known only while the engine loads the mod's scripts.
 VRCompanion.modDirectory = VRCompanion.modDirectory or g_currentModDirectory or ""
 -- The right-hand model, relative to the Companion Mod's folder.
-VRCompanion.VIRTUAL_HAND_MODEL = "models/virtualHandRight.i3d"
+VRCompanion.VIRTUAL_HAND_MODEL = "models/VirtualHandLeft.i3d"
 
 -- The curl of one finger joint at a full pull, base to tip, in degrees. The three together fold a finger
 -- into a fist the way a real one does (knuckle about 80, middle joint about 100, tip about 65).
@@ -69,14 +69,19 @@ VRCompanion.FINGER_CURL_DEGREES = { 80, 100, 65 }
 
 local HANDS = { 0, 1 }
 local HAND_NAMES = { [0] = "left", [1] = "right" }
--- The fingers that curl and the analog input of the Motion Controller that drives each. The thumb is left out
--- on purpose: it stays as the model rests.
-local FINGERS = {
-    { name = "index", input = "trigger" },
-    { name = "middle", input = "grip" },
-    { name = "ring", input = "grip" },
-    { name = "little", input = "grip" },
+
+-- THE JOINT TABLE: the fingers that curl, the analog input of the Motion Controller that drives each, and the
+-- model's own names for the bones. `base` is the finger's base bone and `joints` are its three curl joints, base
+-- to tip (segment 1, 2 and 3). The thumb is left out on purpose: it stays as the model rests. The thumb's own
+-- bones are called Lower, Middle and Top, so a joint is only ever looked for below its finger's base bone, never
+-- by its name across the whole hand. A test checks this table against models/VirtualHandLeft.i3d.
+VRCompanion.VIRTUAL_HAND_FINGERS = {
+    { name = "index",  input = "trigger", base = "Index Finger",  joints = { "Lower.001", "Middle.001", "Top.001" } },
+    { name = "middle", input = "grip",    base = "Middle Finger", joints = { "Lower.002", "Middle.002", "Top.002" } },
+    { name = "ring",   input = "grip",    base = "Ring Finger",   joints = { "Lower.003", "Middle.003", "Top.003" } },
+    { name = "little", input = "grip",    base = "Pinky",         joints = { "Lower.004", "Middle.004", "Top.004" } },
 }
+local FINGERS = VRCompanion.VIRTUAL_HAND_FINGERS
 
 local function newState()
     return {
@@ -143,18 +148,20 @@ local function findNode(node, name)
     return nil
 end
 
--- Finds the finger joints below one hand clone and remembers each one's rest rotation. Returns the names of
--- the joints the model does not have.
+-- Finds the finger joints below one hand clone and remembers each one's rest rotation. Each finger's base bone
+-- is found first and its joints below it; a finger whose base bone is missing has no joints at all. Returns the
+-- model's names of what it does not have, as a set.
 local function findJoints(entry)
     local getQuaternion = engine("getQuaternion")
     entry.joints = {}
     local missing = {}
     for _, finger in ipairs(FINGERS) do
-        for segment = 1, 3 do
-            local name = finger.name .. segment
-            local node = findNode(entry.model, name)
+        local base = findNode(entry.model, finger.base)
+        if base == nil then missing[finger.base] = true end
+        for segment, name in ipairs(finger.joints) do
+            local node = base ~= nil and findNode(base, name) or nil
             if node == nil then
-                table.insert(missing, name)
+                missing[name] = true
             else
                 local qx, qy, qz, qw = getQuaternion(node)
                 table.insert(entry.joints, {
@@ -203,14 +210,15 @@ local function buildHands(self)
         end
         disableShadowCasting(model)
         engine("setVisibility")(holder, false)
-        for _, name in ipairs(findJoints(entry)) do missing[name] = true end
+        for name in pairs(findJoints(entry)) do missing[name] = true end
     end
     if next(missing) ~= nil and not state.missingJointsLogged then
         state.missingJointsLogged = true
-        local names = {}
+        local names = {}  -- in table order: each finger's base bone, then its joints
         for _, finger in ipairs(FINGERS) do
-            for segment = 1, 3 do
-                if missing[finger.name .. segment] then table.insert(names, finger.name .. segment) end
+            if missing[finger.base] then table.insert(names, finger.base) end
+            for _, name in ipairs(finger.joints) do
+                if missing[name] then table.insert(names, name) end
             end
         end
         print("[FS25_VR] Virtual Hands: the model lacks joints, those fingers stay still: " .. table.concat(names, ", "))
