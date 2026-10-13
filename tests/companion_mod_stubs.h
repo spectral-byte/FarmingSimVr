@@ -172,12 +172,19 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 
 // ---- Model loading ---------------------------------------------------------------------------------------
 // Run after kStubSceneGraph. The engine functions the Virtual Hands call to bring in their model, with a
-// stand-in for the shipped Gloved Hand (VirtualHandLeft.i3d): a file root whose first child is the hand's root
-// node, with the Wrist > Hand > finger bone chains below it, one shape with the real mesh's bounds, and the real
-// bone names and (roughly) positions in the file's own units.
+// stand-ins for the shipped Gloved Hand files (VirtualHandLeft.i3d, VirtualHandRight.i3d): each a file root whose
+// first child is the hand's root node, with the Wrist > Hand > finger bone chains below it, one shape with the real
+// mesh's bounds, and the real bone names and (roughly) positions in the files' own units: METRES, like the shipped
+// files, which carry their real-world size and their handedness themselves. The right file is the left one mirrored
+// across the model's X = 0 plane (positions with x negated, the Euler Y and Z angles of every bone negated), with the
+// same node names. The stub is served by the file name asked for: a name containing "VirtualHandRight" is the right
+// hand's.
 //
-//   StubModel.fileExists (default true)   what fileExists() answers for the model file
-//   StubModel.failLoad (default false)    loadI3DFile answers 0 (and a failure reason) although the file exists
+//   StubModel.fileExists (default true)   what fileExists() answers for the model files
+//   StubModel.missingFiles                set of file names (e.g. { ["VirtualHandRight.i3d"] = true }) fileExists() says
+//                                         are not there, whatever fileExists is
+//   StubModel.failLoad (default false)    loadI3DFile answers 0 (and a failure reason) although the files exist
+//   StubModel.failFiles                   set of file names loadI3DFile fails for
 //   StubModel.loads                       { { filename, root } } per loadI3DFile call that reached the "engine"
 //   StubModel.clones                      node ids of every clone() of a node (the hands), in order
 //   StubModel.deleted                     node id -> true for every deleted node
@@ -185,8 +192,9 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 //                         virtualHand_right by the mod): each holder is placed at its grip pose, so its local space is the
 //                         grip pose frame and everything of the hand hangs below it; a missing one is nil
 //   StubModel.model(hand) -> node         the cloned model below a hand's holder
-//   StubModel.isMirrored(node)            the node is a mirror image of the model as loaded (its scale and its ancestors'
-//                                         scales multiply to a negative number)
+//   StubModel.scaledNodes(node) -> list   the names of the nodes among the node's ancestors and descendants whose scale
+//                                         is not exactly 1 (none may be: the engine ignores the scale above a skinned mesh)
+//   StubModel.setScaleCalls               how many times anything called setScale
 //   StubModel.pointInAncestor(node, ancestor, x, y, z) -> x, y, z   a point of a node's local space in an ancestor's
 //   StubModel.jointInGripFrame(hand, "index1") -> x, y, z   where a joint is, in the grip pose frame of the hand
 //   StubModel.meshBoundsInGripFrame(hand) -> minX, minY, minZ, maxX, maxY, maxZ   the box around the glove mesh there
@@ -206,7 +214,9 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 // 90 degree turn of the bone axis (the GIANTS exporter wrote those, and the bones composed to a heap).
 // Nodes are visible, unscaled and (for shapes) casting shadows by default, like freshly loaded ones.
 inline constexpr const char* kStubModelLoading = R"luau(
-    StubModel = { fileExists = true, failLoad = false, missingJoints = {}, loads = {}, clones = {}, deleted = {} }
+    StubModel = { fileExists = true, failLoad = false, missingFiles = {}, failFiles = {}, setScaleCalls = 0,
+                  missingJoints = {}, loads = {}, clones = {}, deleted = {} }
+    local function baseName(filename) return (tostring(filename):gsub("^.*[/\\]", "")) end
     local nodes = StubScene.nodes
     local function qmul(ax, ay, az, aw, bx, by, bz, bw)
         return aw * bx + ax * bw + ay * bz - az * by,
@@ -228,7 +238,7 @@ inline constexpr const char* kStubModelLoading = R"luau(
     end
 
     _G.ClassIds = { SHAPE = 1 }
-    _G.fileExists = function(filename) return StubModel.fileExists end
+    _G.fileExists = function(filename) return StubModel.fileExists and not StubModel.missingFiles[baseName(filename)] end
     _G.entityExists = function(id) return nodes[id] ~= nil end
     _G.getHasClassId = function(id, classId) return nodes[id] ~= nil and classId == 1 and nodes[id].isShape == true end
     _G.getNumOfChildren = function(id) return #childrenOf(id) end
@@ -243,7 +253,10 @@ inline constexpr const char* kStubModelLoading = R"luau(
     _G.unlink = function(id) if nodes[id] then nodes[id].parent = 0 end end
     _G.setVisibility = function(id, visible) if nodes[id] then nodes[id].visible = visible end end
     _G.getVisibility = function(id) return nodes[id] ~= nil and nodes[id].visible ~= false end
-    _G.setScale = function(id, x, y, z) if nodes[id] then nodes[id].sx, nodes[id].sy, nodes[id].sz = x, y, z end end
+    _G.setScale = function(id, x, y, z)
+        StubModel.setScaleCalls = StubModel.setScaleCalls + 1
+        if nodes[id] then nodes[id].sx, nodes[id].sy, nodes[id].sz = x, y, z end
+    end
     _G.getScale = function(id) local n = nodes[id]; return n.sx or 1, n.sy or 1, n.sz or 1 end
     _G.setShapeCastShadowmap = function(id, cast) if nodes[id] then nodes[id].castShadow = cast end end
     _G.setWorldTranslation = function(id, x, y, z)
@@ -273,10 +286,12 @@ inline constexpr const char* kStubModelLoading = R"luau(
     -- the order the file lists the fingers below the Hand bone
     local STUB_FINGER_ORDER = { "index", "middle", "little", "ring", "thumb" }
 
-    -- The shipped model's geometry, in the file's own units (about 2.1 units from the wrist to the middle
-    -- fingertip, a real hand being about 0.19 m) and in the file's own axes: fingers along -Z, the palm facing -Y
-    -- (the back of the hand +Y), the thumb on the +X side (it is a LEFT hand). The numbers are the model's bone
-    -- positions and mesh bounds as the Blender file gives them, in the exporter's Y-up axes.
+    -- The shipped LEFT model's geometry, in the glove's original units (about 2.1 units from the wrist to the middle
+    -- fingertip) and in the file's own axes: fingers along -Z, the palm facing -Y (the back of the hand +Y), the
+    -- thumb on the +X side. The numbers are the model's bone positions and mesh bounds as the Blender file gives
+    -- them, in the exporter's Y-up axes. The shipped files are these times 0.0875 m per unit (a real hand is about
+    -- 0.19 m long), so buildHand scales them; the right hand is mirrored across X = 0.
+    local STUB_METRES_PER_UNIT = 0.0875
     local STUB_WRIST = { 0.0630, 0.0551, 0.9691 }                  -- the Wrist bone
     local STUB_PALM = { 0.0630, 0.0551, 0.5246 }                   -- the Hand bone, the wrist crease of the glove
     local STUB_FINGER_BASE = { 0.0695, 0.0551, -0.1343 }           -- where all five base bones start
@@ -286,19 +301,24 @@ inline constexpr const char* kStubModelLoading = R"luau(
         thumb = { 0.5854, 0.0551, 0.0182 },
     }
     local STUB_MESH_BOUNDS = { min = { -0.6331, -0.2843, -1.6223 }, max = { 1.0737, 0.3675, 1.1760 } }  -- glove and arm stub
-    local function sub3(a, b) return a[1] - b[1], a[2] - b[2], a[3] - b[3] end
     -- the rest flexion about X of the three curl joints of a finger, relative to their parent, in radians (the shipped
     -- index finger: -5.9, -14.8 and -21.2 degrees)
     local STUB_REST_FLEX = { -0.10, -0.26, -0.37 }
 
-    local function buildHand()
+    -- the left file (mirror = 1) or the right one (mirror = -1: x negated, the Euler Y and Z angles negated), in metres
+    local function buildHand(mirror)
+        local k = STUB_METRES_PER_UNIT
+        local function at(x, y, z) return mirror * x * k, y * k, z * k end
+        local function sub3(a, b) return mirror * (a[1] - b[1]) * k, (a[2] - b[2]) * k, (a[3] - b[3]) * k end
         local fileRoot = StubScene.newNode("virtualHandFile", 0)
         local root = StubScene.newNode("Hand.002", fileRoot)  -- the file's first child, the hand's root node
         local mesh = StubScene.newNode("HandModel.001", root)
         nodes[mesh].isShape = true
         nodes[mesh].castShadow = true
-        nodes[mesh].bounds = STUB_MESH_BOUNDS
-        local wrist = StubScene.newNode("Wrist", root, STUB_WRIST[1], STUB_WRIST[2], STUB_WRIST[3])
+        local lo, hi = STUB_MESH_BOUNDS.min, STUB_MESH_BOUNDS.max
+        local x0, x1 = mirror * lo[1] * k, mirror * hi[1] * k
+        nodes[mesh].bounds = { min = { math.min(x0, x1), lo[2] * k, lo[3] * k }, max = { math.max(x0, x1), hi[2] * k, hi[3] * k } }
+        local wrist = StubScene.newNode("Wrist", root, at(STUB_WRIST[1], STUB_WRIST[2], STUB_WRIST[3]))
         local palm = StubScene.newNode("Hand", wrist, sub3(STUB_PALM, STUB_WRIST))
         for _, finger in ipairs(STUB_FINGER_ORDER) do
             local parent = palm  -- a base bone the model lacks leaves its joints hanging off the palm
@@ -314,7 +334,7 @@ inline constexpr const char* kStubModelLoading = R"luau(
                     -- bones run along their local -Z, as the shipped ones do. The first joint sits at the finger's knuckle.
                     local x, y, z = 0, 0, 0
                     if index == 1 then x, y, z = sub3(STUB_KNUCKLE[finger], STUB_FINGER_BASE) end
-                    parent = StubScene.newNode(name, parent, x, y, z, STUB_REST_FLEX[index], 0.1, -0.05)
+                    parent = StubScene.newNode(name, parent, x, y, z, STUB_REST_FLEX[index], 0.1 * mirror, -0.05 * mirror)
                     local n = nodes[parent]
                     n.restQx, n.restQy, n.restQz, n.restQw = n.qx, n.qy, n.qz, n.qw
                 end
@@ -323,8 +343,8 @@ inline constexpr const char* kStubModelLoading = R"luau(
         return fileRoot
     end
     _G.loadI3DFile = function(filename, addPhysics, callOnCreate)
-        if not StubModel.fileExists or StubModel.failLoad then return 0, 1 end
-        local root = buildHand()
+        if not StubModel.fileExists or StubModel.failLoad or StubModel.failFiles[baseName(filename)] then return 0, 1 end
+        local root = buildHand(tostring(filename):find("VirtualHandRight", 1, true) and -1 or 1)
         table.insert(StubModel.loads, { filename = filename, root = root, addPhysics = addPhysics, callOnCreate = callOnCreate })
         return root, 0
     end
@@ -444,16 +464,21 @@ inline constexpr const char* kStubModelLoading = R"luau(
         end
         return nil
     end
-    -- true when the node is a mirror image of its model as loaded: the scales of the node and its ancestors
-    -- multiply to a negative number
-    function StubModel.isMirrored(id)
-        local sign = 1
-        while nodes[id] ~= nil and id ~= 0 do
-            local sx, sy, sz = getScale(id)
-            if sx * sy * sz < 0 then sign = -sign end
-            id = nodes[id].parent
+    -- the names of the nodes among a node's ancestors, itself and descendants with a scale other than exactly 1
+    function StubModel.scaledNodes(id)
+        local names = {}
+        local function check(node)
+            local sx, sy, sz = getScale(node)
+            if sx ~= 1 or sy ~= 1 or sz ~= 1 then table.insert(names, nodes[node].name) end
         end
-        return sign < 0
+        local function down(node)
+            check(node)
+            for _, childId in ipairs(childrenOf(node)) do down(childId) end
+        end
+        local up = nodes[id] and nodes[id].parent
+        while up ~= nil and up ~= 0 and nodes[up] ~= nil do check(up); up = nodes[up].parent end
+        down(id)
+        return names
     end
     -- a point given in the local space of a node, in the local space of one of its ancestors (scale, then
     -- rotation, then translation, node by node)

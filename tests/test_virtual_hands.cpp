@@ -429,10 +429,13 @@ TEST_F(CompanionModTest, VirtualHandsAreOnePlacementForBothPassesUnderSequential
     )luau", "=sameInBothPasses"), 0);
 }
 
-// The shipped model is a LEFT hand, so the left Virtual Hand is the model as it is and the right one its mirror
-// image. The mirror is across the grip pose frame's X plane (both hands' grip frames have the same axes), which
-// turns a left hand into a right hand and leaves the finger and thumb directions of the frame alone.
-TEST_F(CompanionModTest, TheRightVirtualHandIsTheLeftHandModelMirroredAcrossTheGripFrameAndNeitherCastsShadows) {
+// The engine ignores a scale (a size or a mirror) on a node above a skinned mesh, so the hands are real-world size
+// and handed in the FILES: the left Virtual Hand is the left file, the right one the right file (the left model
+// mirrored across the model's X plane). The result in the grip pose frame is still the mirror image across the grip
+// frame's X plane (both hands' grip frames have the same axes), which turns a left hand into a right hand and leaves
+// the finger and thumb directions of the frame alone. Nothing at or above a model is scaled, and nothing is mirrored by
+// a negative scale.
+TEST_F(CompanionModTest, TheRightVirtualHandIsTheLeftHandMirroredAcrossTheGripFrameWithNoScaleAnywhereAndNeitherCastsShadows) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
@@ -445,8 +448,11 @@ TEST_F(CompanionModTest, TheRightVirtualHandIsTheLeftHandModelMirroredAcrossTheG
         assert(hands.left ~= nil and hands.right ~= nil, "a hand for each Motion Controller")
         assert(#StubModel.clones == 2, "two clones in all")
         local left, right = StubModel.model(hands.left), StubModel.model(hands.right)
-        assert(not StubModel.isMirrored(left), "the left hand is the model as it is")
-        assert(StubModel.isMirrored(right), "the right hand is the model mirrored")
+        for _, node in ipairs({ hands.left, hands.right, left, right }) do
+            local scaled = StubModel.scaledNodes(node)
+            assert(#scaled == 0, "a node at, above or below the model is scaled: " .. table.concat(scaled, ", "))
+        end
+        assert(StubModel.setScaleCalls == 0, "the mod never calls setScale")
         assert(not StubModel.castsShadow(hands.left) and not StubModel.castsShadow(hands.right), "neither hand casts shadows")
         assert(StubModel.isLinkedToScene(hands.left) and StubModel.isLinkedToScene(hands.right), "both are in the scene")
 
@@ -458,6 +464,28 @@ TEST_F(CompanionModTest, TheRightVirtualHandIsTheLeftHandModelMirroredAcrossTheG
             assert(near(rx, -lx) and near(ry, ly) and near(rz, lz),
                 string.format("%s: left at %.3f %.3f %.3f, right at %.3f %.3f %.3f", joint, lx, ly, lz, rx, ry, rz))
         end
+        -- The right hand's model-to-grip offset is the left one's mirrored across the grip frame's X plane, S R S with
+        -- S = diag(-1, 1, 1), worked out here from the matrices and not from the mod's own formula.
+        local function matrix(q)
+            local x, y, z, w = q.x, q.y, q.z, q.w
+            return { { 1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w) },
+                     { 2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w) },
+                     { 2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y) } }
+        end
+        local offsets = VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP
+        local rl, rr = matrix(offsets.left.rotation), matrix(offsets.right.rotation)
+        local s = { -1, 1, 1 }
+        for i = 1, 3 do
+            for j = 1, 3 do
+                assert(near(rr[i][j], s[i] * s[j] * rl[i][j]), string.format("right rotation [%d][%d] is %.3f, the mirrored left one is %.3f", i, j, rr[i][j], s[i] * s[j] * rl[i][j]))
+            end
+        end
+        local det = rr[1][1] * (rr[2][2] * rr[3][3] - rr[2][3] * rr[3][2]) - rr[1][2] * (rr[2][1] * rr[3][3] - rr[2][3] * rr[3][1]) + rr[1][3] * (rr[2][1] * rr[3][2] - rr[2][2] * rr[3][1])
+        assert(near(det, 1), "the right offset rotation is a proper rotation, determinant " .. det)
+        local lo_, ro_ = offsets.left.gripOrigin, offsets.right.gripOrigin
+        assert(near(ro_.x, -lo_.x) and near(ro_.y, lo_.y) and near(ro_.z, lo_.z), "the right grip origin is the left one with x negated")
+        assert(offsets.scale == nil, "the offset carries no scale: the models are in metres")
+
         local lo = { StubModel.meshBoundsInGripFrame(hands.left) }
         local ro = { StubModel.meshBoundsInGripFrame(hands.right) }
         assert(near(ro[1], -lo[4]) and near(ro[4], -lo[1]) and near(ro[2], lo[2]) and near(ro[5], lo[5]) and near(ro[3], lo[3]) and near(ro[6], lo[6]),
@@ -522,7 +550,7 @@ TEST_F(CompanionModTest, BothVirtualHandsSitInTheGripPoseFrameAtRealHandSize) {
     )luau", "=gripFrame"), 0);
 }
 
-TEST_F(CompanionModTest, TheHandModelIsLoadedOncePerMapAndDeletedWhenTheMapUnloads) {
+TEST_F(CompanionModTest, EachHandModelFileIsLoadedOncePerMapAndDeletedWhenTheMapUnloads) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
@@ -533,29 +561,29 @@ TEST_F(CompanionModTest, TheHandModelIsLoadedOncePerMapAndDeletedWhenTheMapUnloa
     FRAMES(3);
     ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenu"), 0);
     FRAMES(3);
-    EXPECT_EQ(EvalLua(L, "#StubModel.loads"), "1") << "loaded once, however often the hands hide and show";
+    EXPECT_EQ(EvalLua(L, "#StubModel.loads"), "2") << "each of the two files loaded once, however often the hands hide and show";
     EXPECT_EQ(EvalLua(L, "#StubModel.clones"), "2");
     EXPECT_EQ(EvalLua(L, "StubModel.loads[1].filename:find('models/VirtualHandLeft.i3d', 1, true) ~= nil"), "true")
-        << "the hand model of the Companion Mod: " << EvalLua(L, "StubModel.loads[1].filename");
-    EXPECT_EQ(EvalLua(L, "StubModel.loads[1].addPhysics"), "false") << "no physics";
+        << "the left hand model of the Companion Mod: " << EvalLua(L, "StubModel.loads[1].filename");
+    EXPECT_EQ(EvalLua(L, "StubModel.loads[2].filename:find('models/VirtualHandRight.i3d', 1, true) ~= nil"), "true")
+        << "the right hand model of the Companion Mod: " << EvalLua(L, "StubModel.loads[2].filename");
+    EXPECT_EQ(EvalLua(L, "tostring(StubModel.loads[1].addPhysics) .. tostring(StubModel.loads[2].addPhysics)"), "falsefalse") << "no physics";
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        _G.nodesBefore = { StubModel.hands().left, StubModel.hands().right, StubModel.loads[1].root }
+        _G.nodesBefore = { StubModel.hands().left, StubModel.hands().right, StubModel.loads[1].root, StubModel.loads[2].root }
         VRCompanion:deleteMap()
     )luau", "=unloadMap"), 0);
-    EXPECT_EQ(EvalLua(L, "StubModel.deleted[nodesBefore[1]] and StubModel.deleted[nodesBefore[2]] and StubModel.deleted[nodesBefore[3]]"), "true")
-        << "the clones and the loaded model are gone";
+    EXPECT_EQ(EvalLua(L, "StubModel.deleted[nodesBefore[1]] and StubModel.deleted[nodesBefore[2]] and StubModel.deleted[nodesBefore[3]] and StubModel.deleted[nodesBefore[4]]"), "true")
+        << "the clones and both loaded models are gone";
     EXPECT_EQ(EvalLua(L, "next(StubModel.hands()) == nil"), "true");
 
     // The next map loads it again.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('y')", "=loadAnotherMap"), 0);
     SetGameTime(20000);
     PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
-    EXPECT_EQ(EvalLua(L, "#StubModel.loads"), "2");
+    EXPECT_EQ(EvalLua(L, "#StubModel.loads"), "4");
     EXPECT_EQ(EvalLua(L, "handIsShown('right')"), "true");
 }
-
-class VirtualHandsModelTest : public CompanionModTest {};
 
 // ---- A model that is missing or fails to load ----
 
@@ -577,7 +605,8 @@ TEST_F(CompanionModTest, AMissingHandModelLogsOnceAndLeavesNoVirtualHandsWhilePo
     EXPECT_EQ(EvalLua(L, "#StubModel.clones"), "0") << "no Virtual Hands";
     EXPECT_EQ(EvalLua(L, "#StubModel.loads"), "0") << "the engine is not asked to load a file that is not there";
     EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands:"), 1) << "one line, however long the game runs";
-    EXPECT_EQ(CountLogLines("VirtualHandLeft.i3d"), 1) << "naming the file";
+    EXPECT_EQ(CountLogLines("VirtualHandLeft.i3d"), 1) << "naming the first file that is missing";
+    EXPECT_EQ(CountLogLines("VirtualHandRight.i3d"), 0) << "one line for the two files";
     EXPECT_NE(EvalLua(L, "runCommand('vrVirtualHandsDiagnostics')").find("model not loaded"), std::string::npos);
 
     // The Pointer Ray and Click Points are unaffected.
@@ -585,6 +614,38 @@ TEST_F(CompanionModTest, AMissingHandModelLogsOnceAndLeavesNoVirtualHandsWhilePo
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(1);
     EXPECT_EQ(EvalLua(L, "StubIC.executed[1]"), "lights");
+}
+
+TEST_F(CompanionModTest, OnlyTheRightHandModelMissingLogsOnceNamingItAndLeavesNoVirtualHandsAtAll) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubModel.missingFiles = { ['VirtualHandRight.i3d'] = true }", "=noRightModelFile"), 0);
+    SetGameTime(10000);
+    PICK_UP(kLeft, -0.30f, -0.20f, -0.40f, -0.25f, -0.10f, -0.20f);
+    FRAMES(30);
+
+    EXPECT_EQ(EvalLua(L, "#StubModel.clones"), "0") << "no Virtual Hands";
+    EXPECT_EQ(EvalLua(L, "#StubModel.loads"), "0") << "neither file is loaded when one is missing";
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands:"), 1);
+    EXPECT_EQ(CountLogLines("VirtualHandRight.i3d"), 1) << "naming the missing file";
+}
+
+TEST_F(CompanionModTest, OnlyTheRightHandModelFailingToLoadLogsOnceDropsTheLoadedLeftModelAndLeavesNoVirtualHands) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubModel.failFiles = { ['VirtualHandRight.i3d'] = true }", "=failingRightModel"), 0);
+    SetGameTime(10000);
+    PICK_UP(kLeft, -0.30f, -0.20f, -0.40f, -0.25f, -0.10f, -0.20f);
+    FRAMES(30);
+
+    EXPECT_EQ(EvalLua(L, "#StubModel.clones"), "1") << "the left clone was made before the right file failed";
+    EXPECT_EQ(EvalLua(L, "next(StubModel.hands()) == nil"), "true") << "and was deleted again";
+    EXPECT_EQ(EvalLua(L, "StubModel.deleted[StubModel.loads[1].root]"), "true") << "the left file is dropped too";
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands:"), 1);
+    EXPECT_EQ(CountLogLines("VirtualHandRight.i3d"), 1) << "naming the file that failed";
+    EXPECT_EQ(CountLogLines("failed to load"), 1);
 }
 
 TEST_F(CompanionModTest, AHandModelThatFailsToLoadLogsOnceAndLeavesNoVirtualHandsWhilePointingStillWorks) {
@@ -805,7 +866,7 @@ TEST_F(CompanionModTest, LettingGoRestoresTheModelsRelaxedPoseAndTheThumbNeverMo
     )luau", "=openAgain"), 0);
 }
 
-TEST_F(CompanionModTest, TheMirroredRightHandCurlsOnItsOwnInputsAndTheLeftHandIsNotAffected) {
+TEST_F(CompanionModTest, TheRightHandOfTheMirroredFileCurlsOnItsOwnInputsLikeTheLeftHandAndTheLeftHandIsNotAffected) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
@@ -818,7 +879,7 @@ TEST_F(CompanionModTest, TheMirroredRightHandCurlsOnItsOwnInputsAndTheLeftHandIs
     headset.SetHandInputs(kRight, Squeeze(0.0f, 0.0f));
     FRAMES(1);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(StubModel.isMirrored(StubModel.model(StubModel.hands().right)), "the right hand is the mirrored one")
+        assert(#StubModel.scaledNodes(StubModel.model(StubModel.hands().right)) == 0, "the right hand is mirrored in its file, not by a scale")
         _G.leftFull = fingerCurl('left', 'index')
         for segment = 1, 3 do assert(leftFull[segment] > math.rad(30), "the left index finger curls toward the palm") end
         for _, finger in ipairs({ 'middle', 'ring', 'little' }) do
@@ -951,9 +1012,11 @@ std::map<std::string, std::string> TransformGroupParents(const std::string& xml)
 // hand's root) is the identity. The skinned mesh's bind pose is this composed skeleton (the .shapes file holds
 // no bind matrices), so it is the skeleton the mesh was modelled around or the hand is distorted in the game.
 // extraXDegrees turns the named bones further about their own X axis (a finger curl). Besides each bone's position the
-// result holds the point 0.25 units along its -Z axis (the way the bones run) under "<bone>@end".
+// result holds the point endLength along its -Z axis (the way the bones run) under "<bone>@end". The models are in
+// metres, so positions and lengths are metres.
 std::map<std::string, std::array<double, 3>> ComposedBonePositions(const std::string& xml, bool zyx,
-                                                                   const std::map<std::string, double>& extraXDegrees = {}) {
+                                                                   const std::map<std::string, double>& extraXDegrees = {},
+                                                                   double endLength = 0.25 * 0.0875) {
     using Mat = std::array<double, 9>;
     const auto multiply = [](const Mat& a, const Mat& b) {
         Mat r{};
@@ -1002,8 +1065,8 @@ std::map<std::string, std::array<double, 3>> ComposedBonePositions(const std::st
             frame.rotation = multiply(parent.rotation, local);
         }
         positions[attributes["name"]] = frame.position;
-        positions[attributes["name"] + "@end"] = { frame.position[0] - 0.25 * frame.rotation[2], frame.position[1] - 0.25 * frame.rotation[5],
-                                                   frame.position[2] - 0.25 * frame.rotation[8] };
+        positions[attributes["name"] + "@end"] = { frame.position[0] - endLength * frame.rotation[2], frame.position[1] - endLength * frame.rotation[5],
+                                                   frame.position[2] - endLength * frame.rotation[8] };
         if ((*it)[2].str() != "/") open.push_back(frame);
     }
     return positions;
@@ -1013,13 +1076,25 @@ double Distance(const std::array<double, 3>& a, const std::array<double, 3>& b) 
     return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
 }
 
+// The shipped models are the Gloved Hand in metres: its original units times this (VRCompanion's scale is gone, the
+// files carry the size). The right file is the left one mirrored across X = 0.
+constexpr double kMetresPerUnit = 0.0875;
+
+std::string ShippedModel(bool right) {
+    return ReadFile(right ? "mods/FS25_VRCompanion/models/VirtualHandRight.i3d" : "mods/FS25_VRCompanion/models/VirtualHandLeft.i3d");
+}
+
+const char* HandLabel(bool right) { return right ? "right model file" : "left model file"; }
+
 } // namespace
 
-TEST_F(CompanionModTest, TheJointTableNamesThreeCurlJointsBelowTheBaseBoneOfEveryFingerInTheShippedModel) {
+TEST_F(CompanionModTest, TheJointTableNamesThreeCurlJointsBelowTheBaseBoneOfEveryFingerInBothShippedModels) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
-    const std::string model = ReadFile("mods/FS25_VRCompanion/models/VirtualHandLeft.i3d");
+    for (const bool right : { false, true }) {
+    SCOPED_TRACE(HandLabel(right));
+    const std::string model = ShippedModel(right);
     ASSERT_FALSE(model.empty());
     const auto parents = TransformGroupParents(model);
 
@@ -1050,13 +1125,13 @@ TEST_F(CompanionModTest, TheJointTableNamesThreeCurlJointsBelowTheBaseBoneOfEver
     }
     EXPECT_EQ(fingerNames, (std::vector<std::string>{ "index", "middle", "ring", "little" })) << "the thumb is never curled";
     EXPECT_EQ(EvalLua(L, "VRCompanion.VIRTUAL_HAND_FINGERS[1].input .. VRCompanion.VIRTUAL_HAND_FINGERS[2].input"), "triggergrip");
+    }
 }
 
 // The Gloved Hand's bones as the Blender armature has them at rest ("Gloved Hand LP.blend": each bone's head, in the
-// exporter's Y-up axes x, z, -y), in the mesh's own units. The model's bone transforms must compose to these.
-TEST_F(CompanionModTest, TheShippedModelsBoneTransformsComposeToTheSkeletonTheMeshWasModelledAround) {
-    const std::string model = ReadFile("mods/FS25_VRCompanion/models/VirtualHandLeft.i3d");
-    ASSERT_FALSE(model.empty());
+// exporter's Y-up axes x, z, -y), in the mesh's original units. The models' bone transforms must compose to these
+// times 0.0875 m per unit, mirrored across X = 0 for the right hand.
+TEST_F(CompanionModTest, TheShippedModelsBoneTransformsComposeToTheSkeletonTheMeshWasModelledAroundInMetres) {
     const std::map<std::string, std::array<double, 3>> armature = {
         { "Wrist", { 0.0630, 0.0551, 0.9691 } },        { "Hand", { 0.0630, 0.0551, 0.5246 } },
         { "Thumb", { 0.0695, 0.0551, -0.1343 } },       { "Lower", { 0.5854, 0.0551, 0.0182 } },
@@ -1071,50 +1146,115 @@ TEST_F(CompanionModTest, TheShippedModelsBoneTransformsComposeToTheSkeletonTheMe
         { "Middle.004", { -0.4387, 0.0330, -0.7780 } }, { "Top.004", { -0.5405, -0.0757, -0.9996 } },
     };
 
-    for (const bool zyx : { true, false }) {
-        SCOPED_TRACE(zyx ? "Euler R = Rz * Ry * Rx (the exporter's convention)" : "Euler R = Ry * Rx * Rz");
-        const auto composed = ComposedBonePositions(model, zyx);
-        for (const auto& [name, want] : armature) {
-            ASSERT_TRUE(composed.count(name)) << name << " is a bone of the model";
-            // the other Euler order is only a few hundredths of a degree off for these small bends
-            EXPECT_LT(Distance(composed.at(name), want), zyx ? 0.005 : 0.02)
-                << name << " composes to (" << composed.at(name)[0] << ", " << composed.at(name)[1] << ", " << composed.at(name)[2]
-                << "), the armature has it at (" << want[0] << ", " << want[1] << ", " << want[2] << ")";
+    for (const bool right : { false, true }) {
+        const std::string model = ShippedModel(right);
+        ASSERT_FALSE(model.empty());
+        for (const bool zyx : { true, false }) {
+            SCOPED_TRACE(std::string(HandLabel(right)) + (zyx ? ", Euler R = Rz * Ry * Rx (the exporter's convention)" : ", Euler R = Ry * Rx * Rz"));
+            const auto composed = ComposedBonePositions(model, zyx);
+            for (const auto& [name, units] : armature) {
+                ASSERT_TRUE(composed.count(name)) << name << " is a bone of the model";
+                const std::array<double, 3> want = { (right ? -1.0 : 1.0) * units[0] * kMetresPerUnit, units[1] * kMetresPerUnit, units[2] * kMetresPerUnit };
+                // the other Euler order is only a few hundredths of a degree off for these small bends
+                EXPECT_LT(Distance(composed.at(name), want), zyx ? 0.0005 : 0.002)
+                    << name << " composes to (" << composed.at(name)[0] << ", " << composed.at(name)[1] << ", " << composed.at(name)[2]
+                    << ") m, the armature has it at (" << want[0] << ", " << want[1] << ", " << want[2] << ") m";
+            }
         }
     }
 }
 
-TEST_F(CompanionModTest, TheShippedModelsWristToFingertipChainIsAsLongAsTheMeshAndNoFingerSpirals) {
-    const std::string model = ReadFile("mods/FS25_VRCompanion/models/VirtualHandLeft.i3d");
-    ASSERT_FALSE(model.empty());
-    const auto bones = ComposedBonePositions(model, true);
-    // 2.25 and 2.33 units; times the 0.0875 m per unit the Companion Mod applies, 0.197 and 0.204 m. The first export
-    // of the model composed to 0.46 units (0.040 m): the engine's skeleton, a fifth of the mesh.
-    EXPECT_NEAR(Distance(bones.at("Wrist"), bones.at("Top.001")), 2.25, 0.05);
-    EXPECT_NEAR(Distance(bones.at("Wrist"), bones.at("Top.002")), 2.33, 0.05);
-    const std::vector<std::vector<std::string>> fingers = {
-        { "Index Finger", "Lower.001", "Middle.001", "Top.001" }, { "Middle Finger", "Lower.002", "Middle.002", "Top.002" },
-        { "Ring Finger", "Lower.003", "Middle.003", "Top.003" },  { "Pinky", "Lower.004", "Middle.004", "Top.004" },
-        { "Thumb", "Lower", "Middle", "Top" },
+TEST_F(CompanionModTest, TheShippedModelsAreRealHandSizeWristToFingertipChainAsLongAsTheMeshAndNoFingerSpirals) {
+    for (const bool right : { false, true }) {
+        SCOPED_TRACE(HandLabel(right));
+        const std::string model = ShippedModel(right);
+        ASSERT_FALSE(model.empty());
+        const auto bones = ComposedBonePositions(model, true);
+        // 2.25 and 2.33 units times 0.0875 m per unit: 0.197 and 0.204 m, the length of a real hand from the wrist to the
+        // middle fingertip joint. The first export of the model composed to 0.46 units (0.040 m): a fifth of the mesh.
+        EXPECT_NEAR(Distance(bones.at("Wrist"), bones.at("Top.001")), 0.197, 0.005);
+        EXPECT_NEAR(Distance(bones.at("Wrist"), bones.at("Top.002")), 0.204, 0.005);
+        // across the knuckles (the metacarpals are 0.99 units apart, 0.086 m; the first finger joints are closer)
+        EXPECT_NEAR(Distance(bones.at("Lower.001"), bones.at("Lower.004")), 0.0664, 0.004);
+        const std::vector<std::vector<std::string>> fingers = {
+            { "Index Finger", "Lower.001", "Middle.001", "Top.001" }, { "Middle Finger", "Lower.002", "Middle.002", "Top.002" },
+            { "Ring Finger", "Lower.003", "Middle.003", "Top.003" },  { "Pinky", "Lower.004", "Middle.004", "Top.004" },
+            { "Thumb", "Lower", "Middle", "Top" },
+        };
+        for (const auto& finger : fingers) {
+            double along = 0;
+            for (size_t joint = 1; joint < finger.size(); ++joint) along += Distance(bones.at(finger[joint - 1]), bones.at(finger[joint]));
+            // a finger runs about straight (the thumb curves most, to 0.82): its ends are nearly as far apart as the joints along it, unlike a heap of 90 degree turns (0.3 to 0.5)
+            EXPECT_GT(Distance(bones.at(finger.front()), bones.at(finger.back())), 0.8 * along) << finger.front() << " finger";
+            EXPECT_GT(along, 0.06) << finger.front() << " finger is a real finger length (metres)";
+        }
+    }
+}
+
+// The size and the handedness are in the files: no node of either model carries a scale (the engine ignores one above
+// a skinned mesh), and the right model is the left one mirrored across X = 0 with the same bone names and the same
+// parents, each bone's rotation D R D (Euler X as it was, Euler Y and Z negated: a proper rotation, a small bend
+// like the left one's, never a 90 degree pile-up) and each position with its x negated.
+TEST_F(CompanionModTest, TheRightModelFileIsTheLeftOneMirroredWithTheSameBonesAndNoNodeOfEitherCarriesAScale) {
+    const std::string left = ShippedModel(false), right = ShippedModel(true);
+    ASSERT_FALSE(left.empty());
+    ASSERT_FALSE(right.empty());
+    for (const std::string* model : { &left, &right }) {
+        EXPECT_EQ(model->find("scale=\""), std::string::npos) << "a node of the model carries a scale";
+    }
+    EXPECT_NE(left.find("externalShapesFile=\"VirtualHandLeft.i3d.shapes\""), std::string::npos);
+    EXPECT_NE(right.find("externalShapesFile=\"VirtualHandRight.i3d.shapes\""), std::string::npos) << "the right model names its own shapes file";
+    EXPECT_EQ(left.find("castsShadows=\"true\""), std::string::npos);
+    EXPECT_EQ(right.find("castsShadows=\"true\""), std::string::npos);
+    EXPECT_NE(right.find("castsShadows=\"false\""), std::string::npos);
+
+    EXPECT_EQ(TransformGroupParents(right), TransformGroupParents(left)) << "the same bone names and hierarchy";
+    const auto leftBones = ComposedBonePositions(left, true), rightBones = ComposedBonePositions(right, true);
+    for (const auto& [name, position] : leftBones) {
+        ASSERT_TRUE(rightBones.count(name)) << name;
+        const std::array<double, 3> mirrored = { -position[0], position[1], position[2] };
+        EXPECT_LT(Distance(rightBones.at(name), mirrored), 0.0005) << name << " of the right model is the left one's with x negated";
+    }
+
+    // every local rotation: read straight from the attributes
+    const auto rotations = [](const std::string& xml) {
+        std::map<std::string, std::array<double, 3>> found;
+        const std::regex tag(R"re(<TransformGroup\s+([^>]*?)/?>)re");
+        const std::regex attribute(R"re((\w+)="([^"]*)")re");
+        for (auto it = std::sregex_iterator(xml.begin(), xml.end(), tag); it != std::sregex_iterator(); ++it) {
+            std::map<std::string, std::string> attributes;
+            const std::string text = (*it)[1];
+            for (auto a = std::sregex_iterator(text.begin(), text.end(), attribute); a != std::sregex_iterator(); ++a) attributes[(*a)[1]] = (*a)[2];
+            std::array<double, 3> degrees{};
+            std::istringstream in(attributes.count("rotation") ? attributes["rotation"] : "0 0 0");
+            in >> degrees[0] >> degrees[1] >> degrees[2];
+            found[attributes["name"]] = degrees;
+        }
+        return found;
     };
-    for (const auto& finger : fingers) {
-        double along = 0;
-        for (size_t joint = 1; joint < finger.size(); ++joint) along += Distance(bones.at(finger[joint - 1]), bones.at(finger[joint]));
-        // a finger runs about straight (the thumb curves most, to 0.82): its ends are nearly as far apart as the joints along it, unlike a heap of 90 degree turns (0.3 to 0.5)
-        EXPECT_GT(Distance(bones.at(finger.front()), bones.at(finger.back())), 0.8 * along) << finger.front() << " finger";
-        EXPECT_GT(along, 0.7) << finger.front() << " finger is a real finger length";
+    const auto leftRotations = rotations(left), rightRotations = rotations(right);
+    ASSERT_EQ(leftRotations.size(), rightRotations.size());
+    for (const auto& [name, degrees] : leftRotations) {
+        SCOPED_TRACE(name);
+        ASSERT_TRUE(rightRotations.count(name));
+        const auto& mirrored = rightRotations.at(name);
+        EXPECT_NEAR(mirrored[0], degrees[0], 0.01) << "Euler X is unchanged by the mirror";
+        EXPECT_NEAR(mirrored[1], -degrees[1], 0.01) << "Euler Y changes sign";
+        EXPECT_NEAR(mirrored[2], -degrees[2], 0.01) << "Euler Z changes sign";
+        // small bends: the exporter's 90 degree pile-ups are gone (only the thumb's base is turned past 60 degrees)
+        for (const double angle : mirrored) EXPECT_LT(std::abs(angle), name == "Thumb" ? 120.0 : 60.0) << "a rotation of " << angle << " degrees";
     }
 }
 
 // The curl the mod applies (VRCompanion.FINGER_CURL_DIRECTION * FINGER_CURL_DEGREES about each joint's own X), played
-// on the shipped model's composed bones. The model's axes: fingers run along -Z, the palm faces -Y. The knuckle
-// line of the fingers is 0.17 units behind the palm plane (the palm surface is at y -0.115, the knuckles at 0.055).
-TEST_F(CompanionModTest, AFullCurlOfTheShippedModelFoldsEveryFingerTowardThePalmAndRestsItsTipOnIt) {
+// on the shipped models' composed bones, for both hands. The models' axes: fingers run along -Z, the palm faces -Y in
+// BOTH files (the right file is mirrored across X, which leaves Y and Z alone). The knuckle line of the fingers is
+// 0.17 units (0.015 m) behind the palm plane (the palm surface is at y -0.115, the knuckles at 0.055). One direction
+// number serves both hands because the right file's bone frames are proper-rotation mirrors of the left's.
+TEST_F(CompanionModTest, AFullCurlOfEachShippedModelFoldsEveryFingerTowardThePalmAndRestsItsTipOnIt) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
-    const std::string model = ReadFile("mods/FS25_VRCompanion/models/VirtualHandLeft.i3d");
-    ASSERT_FALSE(model.empty());
     const double direction = std::stod(EvalLua(L, "VRCompanion.FINGER_CURL_DIRECTION"));
     std::array<double, 3> degrees{};
     for (int segment = 0; segment < 3; ++segment) degrees[segment] = std::stod(EvalLua(L, "VRCompanion.FINGER_CURL_DEGREES[" + std::to_string(segment + 1) + "]"));
@@ -1123,32 +1263,41 @@ TEST_F(CompanionModTest, AFullCurlOfTheShippedModelFoldsEveryFingerTowardThePalm
         { "Lower.001", "Middle.001", "Top.001" }, { "Lower.002", "Middle.002", "Top.002" },
         { "Lower.003", "Middle.003", "Top.003" }, { "Lower.004", "Middle.004", "Top.004" },
     };
-    const auto rest = ComposedBonePositions(model, true);
-    for (const auto& finger : fingers) {
-        SCOPED_TRACE(finger[0]);
-        std::map<std::string, double> half, full;
-        for (int segment = 0; segment < 3; ++segment) {
-            full[finger[segment]] = direction * degrees[segment];
-            half[finger[segment]] = 0.5 * direction * degrees[segment];
-        }
-        const auto curled = ComposedBonePositions(model, true, full);
-        const auto partly = ComposedBonePositions(model, true, half);
-        const double knuckleY = rest.at(finger[0])[1], knuckleZ = rest.at(finger[0])[2];
-        const auto inFront = [&](const std::map<std::string, std::array<double, 3>>& pose, const std::string& point) { return knuckleY - pose.at(point)[1]; };
+    std::map<std::string, double> leftTipFront;
+    for (const bool right : { false, true }) {
+        SCOPED_TRACE(HandLabel(right));
+        const std::string model = ShippedModel(right);
+        ASSERT_FALSE(model.empty());
+        const auto rest = ComposedBonePositions(model, true);
+        for (const auto& finger : fingers) {
+            SCOPED_TRACE(finger[0]);
+            std::map<std::string, double> half, full;
+            for (int segment = 0; segment < 3; ++segment) {
+                full[finger[segment]] = direction * degrees[segment];
+                half[finger[segment]] = 0.5 * direction * degrees[segment];
+            }
+            const auto curled = ComposedBonePositions(model, true, full);
+            const auto partly = ComposedBonePositions(model, true, half);
+            const double knuckleY = rest.at(finger[0])[1], knuckleZ = rest.at(finger[0])[2];
+            const auto inFront = [&](const std::map<std::string, std::array<double, 3>>& pose, const std::string& point) { return knuckleY - pose.at(point)[1]; };
 
-        // toward the palm: the middle and the top joint swing to the palm side (-Y) as the curl grows, the most at full
-        EXPECT_GT(inFront(partly, finger[1]), inFront(rest, finger[1]) + 0.05) << "the middle joint at half curl";
-        EXPECT_GT(inFront(curled, finger[1]), inFront(partly, finger[1])) << "the middle joint at full curl";
-        EXPECT_GT(inFront(curled, finger[2]), inFront(rest, finger[2]) + 0.1) << "the top joint";
-        // and back toward the wrist, not out past the fingertips
-        EXPECT_GT(curled.at(finger[2] + "@end")[2], knuckleZ + 0.2) << "the fingertip folds back over the palm";
-        // the tip rests on the palm: 0.05 to 0.45 units in front of the knuckle line (the palm plane is at 0.17), not
-        // through the back of the hand (an earlier 80, 100, 65 degrees ended the index tip 0.03 behind the line)
-        EXPECT_GT(inFront(curled, finger[2] + "@end"), 0.05) << "the tip does not go through the palm";
-        EXPECT_LT(inFront(curled, finger[2] + "@end"), 0.45) << "the tip does not stick out of the palm";
+            // toward the palm: the middle and the top joint swing to the palm side (-Y) as the curl grows, the most at full
+            EXPECT_GT(inFront(partly, finger[1]), inFront(rest, finger[1]) + 0.05 * kMetresPerUnit) << "the middle joint at half curl";
+            EXPECT_GT(inFront(curled, finger[1]), inFront(partly, finger[1])) << "the middle joint at full curl";
+            EXPECT_GT(inFront(curled, finger[2]), inFront(rest, finger[2]) + 0.1 * kMetresPerUnit) << "the top joint";
+            // and back toward the wrist, not out past the fingertips
+            EXPECT_GT(curled.at(finger[2] + "@end")[2], knuckleZ + 0.2 * kMetresPerUnit) << "the fingertip folds back over the palm";
+            // the tip rests on the palm: 0.05 to 0.45 units (0.004 to 0.039 m) in front of the knuckle line (the palm plane
+            // is at 0.17 units), not through the back of the hand (an earlier 80, 100, 65 degrees ended the index tip behind the line)
+            const double tipFront = inFront(curled, finger[2] + "@end");
+            EXPECT_GT(tipFront, 0.05 * kMetresPerUnit) << "the tip does not go through the palm";
+            EXPECT_LT(tipFront, 0.45 * kMetresPerUnit) << "the tip does not stick out of the palm";
+            // and the right hand folds exactly as the left one does
+            if (!right) leftTipFront[finger[0]] = tipFront;
+            else EXPECT_NEAR(tipFront, leftTipFront[finger[0]], 0.0005) << "the right hand curls like the left one";
+        }
     }
 }
-
 TEST_F(CompanionModTest, PullingTheTriggerAndSqueezingTheGripLeavesThePointerRayOriginAndTheClickAsTheyWere) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);

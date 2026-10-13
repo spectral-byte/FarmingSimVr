@@ -19,22 +19,23 @@
 -- per update, so under Sequential Dual-Pass both eye passes see the same placement and under Alternate
 -- Frame Rendering each rendered frame places it again.
 --
--- THE MODEL: the Gloved Hand work glove (CC BY, see models/VirtualHand_ATTRIBUTION.txt), an i3d at
--- VRCompanion.modDirectory .. VRCompanion.VIRTUAL_HAND_MODEL. It is a LEFT hand, rigged: Wrist > Hand > one base
--- bone per finger (VRCompanion.VIRTUAL_HAND_FINGERS), each with three curl joints below it. The file's first
--- child is the hand's root node. It is loaded once per map load (on the first update with Motion Controllers
--- on) and cloned per hand. Each hand is a chain  holder -> mirror group -> offset node -> model clone  with the
--- holder linked to the scene root:
+-- THE MODELS: the Gloved Hand work glove (CC BY, see models/VirtualHand_ATTRIBUTION.txt), two i3d files at
+-- VRCompanion.modDirectory .. VRCompanion.VIRTUAL_HAND_MODEL_LEFT / VIRTUAL_HAND_MODEL_RIGHT: the glove as a left
+-- hand and the same glove mirrored as a right hand (scripts/export_virtual_hand.py makes both). Both are rigged
+-- the same way: Wrist > Hand > one base bone per finger (VRCompanion.VIRTUAL_HAND_FINGERS), each with three curl
+-- joints below it, the same bone names in both. The file's first child is the hand's root node. Each file is
+-- loaded once per map load (on the first update with Motion Controllers on) and cloned for its hand. Each hand is
+-- a chain  holder -> offset node -> model clone  with the holder linked to the scene root:
 --   * the holder carries the placement (the grip pose) and the visibility;
---   * the mirror group is unscaled for the left hand (the model as it is) and scaled -1 along X for the right
---     hand. It sits ABOVE the offset node, so it mirrors across the grip frame's X plane, which turns a left
---     hand into a right hand with the same grip frame axes (mirroring the model on its own axes would flip
---     thumb and little finger instead);
---   * the offset node carries the model onto the grip pose frame: VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP (scale
---     to real hand size, rotation, origin), derived and documented there.
+--   * the offset node carries the model onto the grip pose frame: VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP (a
+--     rotation and a translation, derived and documented there, one for each hand).
+-- NO NODE ABOVE OR ON THE MODEL CARRIES A SCALE. The engine skins a mesh by its bones' positions but ignores a
+-- scale (or a negative scale, a mirror) on an ancestor of the skinned mesh: it drew the glove at its raw size,
+-- about 2.5 m, while the bones were scaled. So the real-world size (the models are in metres) and the handedness
+-- (a mirrored second file) are in the files, and this module never calls setScale.
 -- Shadow casting is off on every shape of the clones. Everything is deleted again when the map unloads.
--- A missing or failing model logs one `[FS25_VR] Virtual Hands: ...` line and leaves Virtual Hands off; the
--- Pointer Ray, Click Points and menus do not depend on it.
+-- A missing or failing model file logs one `[FS25_VR] Virtual Hands: ...` line (naming the first file that
+-- failed) and leaves Virtual Hands off; the Pointer Ray, Click Points and menus do not depend on it.
 --
 -- FINGER CURL: each time a hand is shown, its index finger joints are rotated in proportion to the trigger and
 -- its middle, ring and little finger joints in proportion to the grip, both 0..1 as VRBridge.getHandState
@@ -43,8 +44,10 @@
 -- curl is applied on top of it: the joint's rest rotation turned about the joint's own X axis by
 -- FINGER_CURL_DIRECTION * value * VRCompanion.FINGER_CURL_DEGREES[segment]. FINGER_CURL_DIRECTION is -1 for this
 -- model: toward the palm is a NEGATIVE rotation about local X. 0 is therefore exactly the rest pose. The right
--- hand is the mirrored clone, so the same local rotation curls its mirrored fingers the same way. A hand that is
--- hidden is not updated: its fingers are set again the moment it is shown. A bone the model lacks keeps its
+-- file's bones are the left file's mirrored with their local frames kept proper rotations (the local X axis is
+-- negated by the mirror, so a joint's X rotation is unchanged and its Y and Z rotations change sign), so the same
+-- local rotation about X curls the right hand's fingers toward its palm the same way (checked offline on both
+-- files by scripts/check_virtual_hand_rig.ps1 -Curl). A hand that is hidden is not updated: its fingers are set again the moment it is shown. A bone the model lacks keeps its
 -- finger segment still (a finger without its base bone stays still altogether); the missing names are logged
 -- once per map, and the other fingers still curl.
 --
@@ -53,10 +56,11 @@
 -- available. Whether one hand is shown or why not is in the diagnostics only.
 --
 -- PUBLIC SURFACE
---   VRCompanion.VIRTUAL_HAND_MODEL           model path inside the Companion Mod
+--   VRCompanion.VIRTUAL_HAND_MODEL_LEFT      left hand model path inside the Companion Mod
+--   VRCompanion.VIRTUAL_HAND_MODEL_RIGHT     right hand model path inside the Companion Mod
 --   VRCompanion.modDirectory                 the Companion Mod's folder (set when the mod is loaded)
 --   VRCompanion.VIRTUAL_HAND_FINGERS         the joint table: per curling finger its input, base bone and three joints
---   VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP   scale, rotation and origin that carry the model onto the grip frame
+--   VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP   { left = , right = } rotation and grip origin (metres) that carry each model onto the grip frame
 --   VRCompanion.FINGER_CURL_DEGREES          full curl (value 1) of segment 1, 2 and 3 of a finger, in degrees
 --   VRCompanion.FINGER_CURL_DIRECTION        -1: toward the palm is a negative rotation about a joint's local X
 --   VRCompanion:updateVirtualHands(dt)       once per update, called by updateMotionControllers
@@ -70,33 +74,50 @@ VRCompanion.VirtualHands = VRCompanion.VirtualHands or {}
 
 -- The mod's own folder, known only while the engine loads the mod's scripts.
 VRCompanion.modDirectory = VRCompanion.modDirectory or g_currentModDirectory or ""
--- The hand model (a LEFT hand), relative to the Companion Mod's folder.
-VRCompanion.VIRTUAL_HAND_MODEL = "models/VirtualHandLeft.i3d"
+-- The hand models, relative to the Companion Mod's folder: the glove as a left hand and the same glove mirrored as a
+-- right hand, both in metres.
+VRCompanion.VIRTUAL_HAND_MODEL_LEFT = "models/VirtualHandLeft.i3d"
+VRCompanion.VIRTUAL_HAND_MODEL_RIGHT = "models/VirtualHandRight.i3d"
 
 -- The curl of one finger joint at a full pull, base to tip, in degrees, ADDED to the glove's relaxed pose (which
 -- already flexes the joints by about 3 to 9, 15 to 21 and 14 to 21 degrees). A real fist flexes a finger about
 -- 80, 100 and 65 degrees from straight; on top of the relaxed pose that would drive the fingertips into the
--- palm, so these are less. Checked offline on the composed bones of the corrected rig (models/VirtualHandLeft.i3d,
--- scripts/check_virtual_hand_rig.ps1 -Curl): at 1 the bone through each fingertip ends 0.08 to 0.30 model units in
--- front of the knuckle line, and the palm plane is 0.17 in front of it, so the fingertips come to rest on the palm.
+-- palm, so these are less. Checked offline on the composed bones of the corrected rig (models/VirtualHandLeft.i3d
+-- and VirtualHandRight.i3d, scripts/check_virtual_hand_rig.ps1 -Curl, identical for both): at 1 the bone through
+-- each fingertip ends 0.007 to 0.026 m (0.08 to 0.30 of the glove's original units) in front of the knuckle line,
+-- and the palm plane is 0.015 m (0.17 units) in front of it, so the fingertips come to rest on the palm.
 -- The earlier 80, 100, 65 put the index tip end 0.03 BEHIND the knuckle line, 0.2 inside the hand.
 VRCompanion.FINGER_CURL_DEGREES = { 60, 75, 40 }
 
 -- THE MODEL-TO-GRIP OFFSET: how the model as the file holds it is carried onto the OpenXR grip pose frame (origin
 -- at the centre of the tube the closed non-thumb fingers form, -Z along that tube from the little finger toward
 -- the thumb, +X the palm normal: into the palm for a right hand, out of the palm for a left hand, so -Y runs
--- toward the fingertips). One uniform scale, one rotation and one model-space point that must land on the grip
--- origin. A node between the mirror and the model carries it (see buildHands), so the right hand can be a
--- mirror across the GRIP frame's X plane.
+-- toward the fingertips). One rotation and one model-space point (in metres) that must land on the grip origin,
+-- for each hand. No scale: the models are already real-world size (see THE MODELS above). A node between the
+-- holder and the model carries it (see buildHands).
 --
 -- Derived from the Blender source (Gloved Hand LP.blend, inspected headless with Blender 5.2), in the
--- file's own units and axes (the exporter's Y-up axes: x right, y up, z = -Blender y):
+-- file's own axes (the exporter's Y-up axes: x right, y up, z = -Blender y). The numbers below are in the
+-- glove's ORIGINAL units, the arbitrary units it was modelled in; the exported files are those units times
+-- 0.0875 m per unit (scripts/export_virtual_hand.py, METRES_PER_UNIT), which is why the table at the end holds the
+-- origin as 0.0875 times the units written here:
 --   * AXES. The model is a LEFT hand. Its fingers run along -Z, the palm faces -Y (the back of the hand is +Y) and
 --     the thumb is on the +X side, so little finger -> thumb is +X. With the grip frame of a LEFT hand (+X out of
 --     the palm, -Z little finger -> thumb, so Y = Z x X points toward the wrist): grip X = model -Y, grip Y =
 --     model +Z, grip Z = model -X. That rotation is the quaternion below (qx, qy, qz, qw = -0.5, 0.5, 0.5, 0.5);
---     its determinant is +1. The right hand is the mirror image across the grip X plane (x -> -x), which is
---     exactly what swaps a left grip frame for a right one with the same axes.
+--     its determinant is +1.
+--   * THE RIGHT HAND. Both hands' grip frames have the same axes; the right hand is the mirror image of the left
+--     across the grip frame's X plane (grip x -> -x). The right MODEL file is the left model mirrored across the
+--     model's own X = 0 plane (S = diag(-1, 1, 1), thumb on -X, palm still toward -Y, fingers still along -Z). So a
+--     point p of the right model is the point S p of the left model, which is at  r = R (S p - o)  in the left grip
+--     frame (R the rotation above, o the left grip origin), and at  S r  in the right grip frame (the grip mirror
+--     is the same S). The right hand therefore carries  p -> S R S (p - S o): the rotation  R' = S R S  and the
+--     grip origin  o' = S o  (x negated). S R S is a proper rotation (determinant (-1)(+1)(-1) = +1), and for a
+--     quaternion (x, y, z, w) it is (x, -y, -z, w): here (-0.5, -0.5, -0.5, 0.5), the cyclic permutation
+--     model (x, y, z) -> grip (y, z, x): grip X = model +Y (into the palm, the palm faces -Y), grip Y = model +Z
+--     (toward the wrist), grip Z = model +X (the thumb is on -X, so -Z runs little finger -> thumb). The node
+--     translation is -R' o' = S (-R o): the left node's translation with x negated, "the left offset mirrored
+--     across the grip X plane".
 --   * SCALE. The file is in arbitrary units: from the Hand bone (the wrist crease, z 0.525) to the tip of the middle
 --     finger (mesh, z -1.622) it is 2.147 units; the knuckle row of the four fingers is about 0.99 units across
 --     (x -0.458 .. 0.527 at the metacarpals). A real hand is about 0.19 m long and 0.085 m across, which gives
@@ -112,12 +133,27 @@ VRCompanion.FINGER_CURL_DEGREES = { 60, 75, 40 }
 --     The grip origin is then 0.081 m from the wrist crease and 0.02 to 0.03 m behind the knuckle row.
 -- UNCERTAINTY: the scale is good to about 5 percent (hands differ). The origin is an estimate of where the tube is
 -- for a Touch, Index or Vive controller: expect +-0.02 m along the hand (z) and +-0.01 m out of the palm (y); the
--- headset check tunes it. The values are model units (multiply by the scale for metres), so they can be nudged
--- without redoing the arithmetic.
-VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP = {
-    scale = 0.0875,                                      -- metres per model unit
+-- headset check tunes it. Written below as original units times the 0.0875 m per unit the files were scaled by,
+-- so it can be nudged in the glove's units without redoing the arithmetic.
+local METRES_PER_MODEL_UNIT = 0.0875
+
+local function mirroredAcrossX(left)
+    -- S R S and S o for S = diag(-1, 1, 1), see THE RIGHT HAND above
+    return {
+        rotation = { x = left.rotation.x, y = -left.rotation.y, z = -left.rotation.z, w = left.rotation.w },
+        gripOrigin = { x = -left.gripOrigin.x, y = left.gripOrigin.y, z = left.gripOrigin.z },
+    }
+end
+
+local LEFT_MODEL_TO_GRIP = {
     rotation = { x = -0.5, y = 0.5, z = 0.5, w = 0.5 },  -- model axes -> grip axes (see AXES above)
-    gripOrigin = { x = 0.04, y = -0.30, z = -0.40 },     -- the model-space point that becomes the grip origin
+    gripOrigin = {                                       -- the model point that becomes the grip origin, in metres
+        x = 0.04 * METRES_PER_MODEL_UNIT, y = -0.30 * METRES_PER_MODEL_UNIT, z = -0.40 * METRES_PER_MODEL_UNIT,
+    },
+}
+VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP = {
+    left = LEFT_MODEL_TO_GRIP,
+    right = mirroredAcrossX(LEFT_MODEL_TO_GRIP),
 }
 
 -- Which way a curl turns a joint about its own X axis for THIS model: -1, a NEGATIVE rotation about local X is
@@ -129,7 +165,8 @@ VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP = {
 -- transforms of the file: turning a joint by a NEGATIVE angle about its local X moves the rest of the finger toward
 -- -Y, the palm side, for all four fingers (the local X axes lie within 25 degrees of the file's X axis, the most for
 -- the splayed little finger, and are exactly perpendicular to their segments). Flip this one number if a headset
--- check shows fingers bending back.
+-- check shows fingers bending back. The right file's bones are the left's mirrored with proper-rotation frames, so
+-- the sign is the same for both hands: the offline check folds the fingers of both files and both go toward the palm.
 VRCompanion.FINGER_CURL_DIRECTION = -1
 
 local HANDS = { 0, 1 }
@@ -152,7 +189,7 @@ local function newState()
     return {
         modelTried = false,      -- the model was loaded (or failed to) this map
         modelFailure = nil,      -- why the model is not available, when it is not
-        fileRoot = nil,          -- the loaded file's root node (never linked into the scene)
+        fileRoots = {},          -- [hand] = the root node of the model file loaded for that hand (never linked into the scene)
         hands = {},              -- [hand] = { holder, model, shown, status, world = {} }
         reason = nil,            -- the last reason logged
         missingJointsLogged = false,  -- the line about joints the model lacks was logged this map
@@ -180,8 +217,8 @@ local function discardScene()
         if entry ~= nil then deleteNode(entry.holder) end
     end
     state.hands = {}
-    deleteNode(state.fileRoot)
-    state.fileRoot = nil
+    for _, hand in ipairs(HANDS) do deleteNode(state.fileRoots[hand]) end
+    state.fileRoots = {}
 end
 
 -- Casting shadows is off for every shape below the node.
@@ -239,45 +276,55 @@ local function findJoints(entry)
     return missing
 end
 
--- Sets a node to carry the model onto the grip pose frame (VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP): the model point
--- gripOrigin ends at the node's origin, the model's axes are turned onto the grip axes, and a model unit is `scale` m.
-local function applyModelToGrip(node)
-    local offset = VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP
-    local q, o, s = offset.rotation, offset.gripOrigin, offset.scale
-    -- a point of the model is carried to  s * rotation * (point - gripOrigin)  in the grip frame, so the node's
-    -- own translation is  -s * rotation * gripOrigin
+-- Sets a node to carry a hand's model onto the grip pose frame (VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP): the model
+-- point gripOrigin ends at the node's origin and the model's axes are turned onto the grip axes. The node carries
+-- only a rotation and a translation, never a scale: the models are in metres.
+local function applyModelToGrip(node, offset)
+    local q, o = offset.rotation, offset.gripOrigin
+    -- a point of the model is carried to  rotation * (point - gripOrigin)  in the grip frame, so the node's own
+    -- translation is  -rotation * gripOrigin
     local cx, cy, cz = q.y * o.z - q.z * o.y + q.w * o.x, q.z * o.x - q.x * o.z + q.w * o.y, q.x * o.y - q.y * o.x + q.w * o.z
     local tx = o.x + 2 * (q.y * cz - q.z * cy)  -- the quaternion rotation of gripOrigin
     local ty = o.y + 2 * (q.z * cx - q.x * cz)
     local tz = o.z + 2 * (q.x * cy - q.y * cx)
-    engine("setScale")(node, s, s, s)
     engine("setQuaternion")(node, q.x, q.y, q.z, q.w)
-    engine("setTranslation")(node, -s * tx, -s * ty, -s * tz)
+    engine("setTranslation")(node, -tx, -ty, -tz)
 end
 
--- Loads the model and makes both hands, hidden. Returns nil on success, otherwise why not.
+-- The model file of a hand: the left hand's from the left file, the right hand's from the right one.
+local function modelPath(self, hand)
+    local file = hand == self.MOTION_HAND_RIGHT and self.VIRTUAL_HAND_MODEL_RIGHT or self.VIRTUAL_HAND_MODEL_LEFT
+    return (self.modDirectory or "") .. file
+end
+
+-- Loads both model files (each once) and makes both hands, hidden. Returns nil on success, otherwise why not (the
+-- first file that failed).
 local function buildHands(self)
     for _, name in ipairs({ "loadI3DFile", "clone", "link", "createTransformGroup", "getRootNode", "getChildAt",
-                            "setVisibility", "setScale", "setWorldTranslation", "setWorldQuaternion", "getName",
+                            "setVisibility", "setWorldTranslation", "setWorldQuaternion", "getName",
                             "getNumOfChildren", "getQuaternion", "setQuaternion", "setTranslation" }) do
         if type(engine(name)) ~= "function" then return name .. " is not available" end
     end
-    local path = (self.modDirectory or "") .. self.VIRTUAL_HAND_MODEL
     local fileExists = engine("fileExists")
-    if type(fileExists) == "function" and not fileExists(path) then
-        return "the model file is missing: " .. path
+    if type(fileExists) == "function" then
+        for _, hand in ipairs(HANDS) do
+            local path = modelPath(self, hand)
+            if not fileExists(path) then return "the model file is missing: " .. path end
+        end
     end
-    local ok, root, failedReason = pcall(engine("loadI3DFile"), path, false, false)
-    if not ok then return "loading " .. path .. " raised: " .. tostring(root) end
-    if root == nil or root == 0 then
-        return string.format("%s failed to load (reason %s)", path, tostring(failedReason))
-    end
-    state.fileRoot = root
-    local template = engine("getChildAt")(root, 0)
-    if template == nil or template == 0 then return path .. " holds no hand node" end
 
     local missing = {}
     for _, hand in ipairs(HANDS) do
+        local path = modelPath(self, hand)
+        local ok, root, failedReason = pcall(engine("loadI3DFile"), path, false, false)
+        if not ok then return "loading " .. path .. " raised: " .. tostring(root) end
+        if root == nil or root == 0 then
+            return string.format("%s failed to load (reason %s)", path, tostring(failedReason))
+        end
+        state.fileRoots[hand] = root
+        local template = engine("getChildAt")(root, 0)
+        if template == nil or template == 0 then return path .. " holds no hand node" end
+
         local holder = engine("createTransformGroup")("virtualHand_" .. HAND_NAMES[hand])
         local entry = { holder = holder, shown = false, status = "hidden", world = {} }
         state.hands[hand] = entry
@@ -285,23 +332,17 @@ local function buildHands(self)
         local model = engine("clone")(template, false, false)
         if model == nil or model == 0 then return "cloning the hand node of " .. path .. " failed" end
         entry.model = model
-        -- holder (the grip pose) -> mirror group -> offset node -> model clone. The model is a left hand: the right
-        -- hand's mirror group flips X of the grip frame, and the offset node below it carries the model onto that
-        -- frame, so the flip is a true mirror across the grip frame and not across the model's own axes.
-        local mirror = engine("createTransformGroup")("virtualHandMirror_" .. HAND_NAMES[hand])
-        engine("link")(holder, mirror)
-        if hand == self.MOTION_HAND_RIGHT then
-            engine("setScale")(mirror, -1, 1, 1)
-        end
+        -- holder (the grip pose) -> offset node -> model clone. No node carries a scale (see THE MODELS): the
+        -- offset node only turns and moves the model onto the grip frame, with the offset of this hand.
         local offset = engine("createTransformGroup")("virtualHandModelToGrip_" .. HAND_NAMES[hand])
-        engine("link")(mirror, offset)
-        applyModelToGrip(offset)
+        engine("link")(holder, offset)
+        applyModelToGrip(offset, hand == self.MOTION_HAND_RIGHT and self.VIRTUAL_HAND_MODEL_TO_GRIP.right
+            or self.VIRTUAL_HAND_MODEL_TO_GRIP.left)
         engine("link")(offset, model)
         disableShadowCasting(model)
         engine("setVisibility")(holder, false)
         for name in pairs(findJoints(entry)) do missing[name] = true end
-    end
-    if next(missing) ~= nil and not state.missingJointsLogged then
+    end    if next(missing) ~= nil and not state.missingJointsLogged then
         state.missingJointsLogged = true
         local names = {}  -- in table order: each finger's base bone, then its joints
         for _, finger in ipairs(FINGERS) do
@@ -434,7 +475,7 @@ function describeEngineGeometry(entry)
         local sx, sy, sz = getScale(entry.model)
         scale = string.format("%.4f %.4f %.4f", sx, sy, sz)
     end
-    return string.format("holder %s, model %s (local scale %s), Wrist %s, Wrist to Top.001 %s m, Wrist to Top.002 %s m (expect about 0.20: 0.197 and 0.204)",
+    return string.format("holder %s, model %s (local scale %s, expect 1.0000: the file is already in metres), Wrist %s, Wrist to Top.001 %s m, Wrist to Top.002 %s m (expect about 0.20: 0.197 and 0.204)",
         at(entry.holder), at(entry.model), scale, at(wrist), distance(wrist, indexTip), distance(wrist, middleTip))
 end
 
