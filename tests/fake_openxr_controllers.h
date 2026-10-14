@@ -32,6 +32,8 @@ public:
 
     struct Hand {
         XrPosef pose{ {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f} };  // in the tracking origin
+        XrPosef gripPose{ {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f} };  // in the tracking origin
+        bool gripTracked = true; // the grip pose alone is valid (a controller that is off has neither pose)
         bool tracked = true;     // the controller is on and its pose is valid
         Inputs inputs;           // the live values; xrSyncActions latches them
     };
@@ -45,6 +47,8 @@ public:
     std::set<std::string> unsupportedProfiles;       // these profiles fail with XR_ERROR_PATH_UNSUPPORTED
     XrResult attachResult = XR_SUCCESS;
     XrResult createActionSpaceResult = XR_SUCCESS;
+    XrResult createGripActionResult = XR_SUCCESS;       // only the grip pose action
+    XrResult createGripActionSpaceResult = XR_SUCCESS;  // only the grip pose action's spaces
     XrResult syncActionsResult = XR_SUCCESS;         // e.g. XR_SESSION_NOT_FOCUSED
     XrResult applyHapticResult = XR_SUCCESS;
 
@@ -73,10 +77,11 @@ public:
 
     struct LocateRecord {
         int hand = -1;
+        std::string action;     // the pose action whose space was located (aim_pose / grip_pose)
         XrSpace baseSpace = XR_NULL_HANDLE;
         XrTime time = 0;
     };
-    std::vector<LocateRecord> locates;      // every aim space located
+    std::vector<LocateRecord> locates;      // every pose space located
 
     struct HapticPulse {
         int hand = -1;
@@ -120,6 +125,9 @@ public:
     XrResult CreateAction(XrActionSet actionSet, const XrActionCreateInfo* createInfo, XrAction* action) {
         if (createActionResult != XR_SUCCESS) return createActionResult;
         if (!createInfo || !action || m_liveActionSets.count(actionSet) == 0) return XR_ERROR_HANDLE_INVALID;
+        if (createGripActionResult != XR_SUCCESS && std::string(createInfo->actionName) == OpenXrInput::kGripPoseAction) {
+            return createGripActionResult;
+        }
         ActionRecord record;
         record.name = createInfo->actionName;
         record.type = createInfo->actionType;
@@ -172,9 +180,12 @@ public:
         }
         const int hand = HandOf(createInfo->subactionPath);
         if (hand < 0) return XR_ERROR_PATH_UNSUPPORTED;
+        if (createGripActionSpaceResult != XR_SUCCESS && it->second.name == OpenXrInput::kGripPoseAction) {
+            return createGripActionSpaceResult;
+        }
         static uintptr_t s_spaceHandle = 0xAC7A0001;
         XrSpace handle = reinterpret_cast<XrSpace>(s_spaceHandle++);
-        m_actionSpaces[handle] = hand;
+        m_actionSpaces[handle] = { hand, it->second.name };
         ++actionSpacesCreated;
         *space = handle;
         return XR_SUCCESS;
@@ -239,23 +250,25 @@ public:
     }
 
     XrResult GetActionStatePose(const XrActionStateGetInfo* info, XrActionStatePose* state) {
-        return ReadState(info, XR_ACTION_TYPE_POSE_INPUT, [&](const std::string&, const Hand& h) {
-            state->isActive = h.tracked ? XR_TRUE : XR_FALSE;
+        return ReadState(info, XR_ACTION_TYPE_POSE_INPUT, [&](const std::string& name, const Hand& h) {
+            const bool grip = name == OpenXrInput::kGripPoseAction;
+            state->isActive = (h.tracked && (!grip || h.gripTracked)) ? XR_TRUE : XR_FALSE;
         }, [&] { state->isActive = XR_FALSE; });
     }
 
-    // Locates an aim space. Valid only while the latched pose action is active (a controller that
-    // is off or a session that is not focused has no pose).
+    // Locates an aim or grip space. Valid only while the latched pose action is active (a controller that
+    // is off, a grip pose that alone is untracked or a session that is not focused has no pose).
     XrResult LocateActionSpace(XrSpace space, XrSpace baseSpace, XrTime time, XrSpaceLocation* location) {
         const auto it = m_actionSpaces.find(space);
         if (it == m_actionSpaces.end()) return XR_ERROR_HANDLE_INVALID;
-        const int hand = it->second;
-        locates.push_back({ hand, baseSpace, time });
+        const int hand = it->second.hand;
+        const bool grip = it->second.action == OpenXrInput::kGripPoseAction;
+        locates.push_back({ hand, it->second.action, baseSpace, time });
         if (!location) return XR_SUCCESS;
         location->locationFlags = 0;
         location->pose = { {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f} };
-        if (m_latchedValid && m_latched[hand].tracked) {
-            location->pose = m_tracking.RebasePose(baseSpace, hands[hand].pose);
+        if (m_latchedValid && m_latched[hand].tracked && (!grip || m_latched[hand].gripTracked)) {
+            location->pose = m_tracking.RebasePose(baseSpace, grip ? hands[hand].gripPose : hands[hand].pose);
             location->locationFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                                       XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
         }
@@ -314,7 +327,11 @@ private:
     std::vector<std::string> m_pathStrings;
     std::set<XrActionSet> m_liveActionSets;
     std::unordered_map<XrAction, ActionRecord> m_actionRecords;
-    std::unordered_map<XrSpace, int> m_actionSpaces;
+    struct SpaceInfo {
+        int hand = -1;
+        std::string action;
+    };
+    std::unordered_map<XrSpace, SpaceInfo> m_actionSpaces;
     uint32_t m_attachedSessions = 0;
     Hand m_latched[2];
     bool m_latchedValid = false;

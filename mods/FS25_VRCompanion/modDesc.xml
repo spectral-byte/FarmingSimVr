@@ -9,7 +9,10 @@
     <description>
 <en><![CDATA[In-engine Luau Companion Mod for Farming Simulator 25 Virtual Reality.
 Interfaces directly with the native Injector via the in-process VRBridge table,
-coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
+coordinating head tracking, camera orientation, and stereoscopic rendering.
+
+Virtual Hand model: "Gloved Hand" by J-Toastie (https://poly.pizza/m/MTB4egc4Vh),
+CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigged and mirrored.]]>
 </en>
     </description>
     <multiplayer supported="true"/>
@@ -23,6 +26,7 @@ coordinating head tracking, camera orientation, and stereoscopic rendering.]]>
         <sourceFile filename="src/VRCompanionInput.lua"/>
         <sourceFile filename="src/VRCompanionMotionControllers.lua"/>
         <sourceFile filename="src/VRCompanionMenuPointer.lua"/>
+        <sourceFile filename="src/VRCompanionVirtualHands.lua"/>
         <sourceFile filename="src/VRCompanionMotionControllerMap.lua"/>
         <sourceFile filename="src/VRCompanionInteractiveControl.lua"/>
         <sourceFile filename="src/VRCompanion.lua"/>

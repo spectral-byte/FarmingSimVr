@@ -27,6 +27,7 @@ struct Profile {
 void OpenXrInput::ResetHands() {
     for (auto& hand : m_hands) hand = HandState{};
     m_poseActive = {};
+    m_gripPoseActive = {};
 }
 
 void OpenXrInput::FailCreate(IOpenXrDispatch& dispatch, const char* step, XrResult result) {
@@ -54,10 +55,28 @@ bool OpenXrInput::CreateAction(IOpenXrDispatch& dispatch, const char* name, cons
     return true;
 }
 
+// The grip pose is optional: a runtime that refuses it leaves the aim pose and every other input
+// working, and the grip pose then reports untracked (the Virtual Hand has nothing to be drawn at).
+void OpenXrInput::CreateGripPoseAction(IOpenXrDispatch& dispatch) {
+    XrActionCreateInfo info{XR_TYPE_ACTION_CREATE_INFO};
+    info.actionType = XR_ACTION_TYPE_POSE_INPUT;
+    strncpy_s(info.actionName, kGripPoseAction, XR_MAX_ACTION_NAME_SIZE - 1);
+    strncpy_s(info.localizedActionName, "Grip pose", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
+    info.countSubactionPaths = kHandCount;
+    info.subactionPaths = m_handPaths.data();
+    const XrResult res = dispatch.CreateAction(m_actionSet, &info, &m_gripPoseAction);
+    if (XR_FAILED(res)) {
+        m_gripPoseAction = XR_NULL_HANDLE;
+        LogWarn("OpenXrInput: creating the grip pose action failed (result " + std::to_string(res) +
+                "). The grip pose reports untracked; the aim pose and the other inputs are unchanged.");
+    }
+}
+
 bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance) {
     const std::vector<Profile> profiles = {
         { "/interaction_profiles/oculus/touch_controller", {
             { m_aimPoseAction, "input/aim/pose", "input/aim/pose" },
+            { m_gripPoseAction, "input/grip/pose", "input/grip/pose" },
             { m_triggerAction, "input/trigger/value", "input/trigger/value" },
             { m_gripAction, "input/squeeze/value", "input/squeeze/value" },
             { m_thumbstickAction, "input/thumbstick", "input/thumbstick" },
@@ -68,6 +87,7 @@ bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance
             { m_hapticAction, "output/haptic", "output/haptic" } } },
         { "/interaction_profiles/valve/index_controller", {
             { m_aimPoseAction, "input/aim/pose", "input/aim/pose" },
+            { m_gripPoseAction, "input/grip/pose", "input/grip/pose" },
             { m_triggerAction, "input/trigger/value", "input/trigger/value" },
             { m_gripAction, "input/squeeze/value", "input/squeeze/value" },
             { m_thumbstickAction, "input/thumbstick", "input/thumbstick" },
@@ -77,6 +97,7 @@ bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance
             { m_hapticAction, "output/haptic", "output/haptic" } } },
         { "/interaction_profiles/htc/vive_controller", {
             { m_aimPoseAction, "input/aim/pose", "input/aim/pose" },
+            { m_gripPoseAction, "input/grip/pose", "input/grip/pose" },
             { m_triggerAction, "input/trigger/value", "input/trigger/value" },
             { m_gripAction, "input/squeeze/click", "input/squeeze/click" },
             { m_thumbstickAction, "input/trackpad", "input/trackpad" },
@@ -85,6 +106,7 @@ bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance
             { m_hapticAction, "output/haptic", "output/haptic" } } },
         { "/interaction_profiles/khr/simple_controller", {
             { m_aimPoseAction, "input/aim/pose", "input/aim/pose" },
+            { m_gripPoseAction, "input/grip/pose", "input/grip/pose" },
             { m_triggerAction, "input/select/click", "input/select/click" },
             { m_menuAction, "input/menu/click", "input/menu/click" },
             { m_hapticAction, "output/haptic", "output/haptic" } } },
@@ -97,6 +119,7 @@ bool OpenXrInput::SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance
         XrResult res = dispatch.StringToPath(instance, profile.path, &profilePath);
         std::vector<XrActionSuggestedBinding> suggested;
         for (const HandBinding& binding : profile.bindings) {
+            if (binding.action == XR_NULL_HANDLE) continue;  // an optional action the runtime refused
             const char* suffixes[kHandCount] = { binding.leftSuffix, binding.rightSuffix };
             for (uint32_t hand = 0; hand < kHandCount && XR_SUCCEEDED(res); ++hand) {
                 if (!suffixes[hand]) continue;
@@ -165,6 +188,7 @@ bool OpenXrInput::Create(IOpenXrDispatch& dispatch, XrInstance instance, XrSessi
         !CreateAction(dispatch, kHapticAction, "Haptic", XR_ACTION_TYPE_VIBRATION_OUTPUT, &m_hapticAction)) {
         return false;
     }
+    CreateGripPoseAction(dispatch);
 
     if (!SuggestBindings(dispatch, instance)) return false;
 
@@ -188,6 +212,16 @@ bool OpenXrInput::Create(IOpenXrDispatch& dispatch, XrInstance instance, XrSessi
             FailCreate(dispatch, "creating the aim action space", res);
             return false;
         }
+        if (m_gripPoseAction == XR_NULL_HANDLE) continue;
+        spaceInfo.action = m_gripPoseAction;
+        res = dispatch.CreateActionSpace(session, &spaceInfo, &m_gripSpaces[hand]);
+        if (XR_FAILED(res)) {
+            // Optional like the action itself: this hand's grip pose reports untracked.
+            m_gripSpaces[hand] = XR_NULL_HANDLE;
+            LogWarn("OpenXrInput: creating the grip action space failed (result " + std::to_string(res) +
+                    "). The grip pose reports untracked; the aim pose is unchanged.");
+        }
+        spaceInfo.action = m_aimPoseAction;
     }
 
     m_ready = true;
@@ -231,6 +265,12 @@ void OpenXrInput::Sync(IOpenXrDispatch& dispatch, XrSession session) {
         XrActionStatePose pose{XR_TYPE_ACTION_STATE_POSE};
         XrActionStateGetInfo info = getInfo(m_aimPoseAction);
         m_poseActive[hand] = XR_SUCCEEDED(dispatch.GetActionStatePose(session, &info, &pose)) && pose.isActive;
+        m_gripPoseActive[hand] = false;
+        if (m_gripPoseAction != XR_NULL_HANDLE) {
+            XrActionStatePose gripState{XR_TYPE_ACTION_STATE_POSE};
+            XrActionStateGetInfo gripInfo = getInfo(m_gripPoseAction);
+            m_gripPoseActive[hand] = XR_SUCCEEDED(dispatch.GetActionStatePose(session, &gripInfo, &gripState)) && gripState.isActive;
+        }
 
         auto readFloat = [&](XrAction action) {
             XrActionStateFloat value{XR_TYPE_ACTION_STATE_FLOAT};
@@ -256,30 +296,40 @@ void OpenXrInput::Sync(IOpenXrDispatch& dispatch, XrSession session) {
     }
 }
 
+// Locates one pose space in `baseSpace` at `time` into `out` (the head pose's convention). False, and
+// `out` left untouched, when the pose is inactive or the runtime can not give a valid position and
+// orientation for it.
+static bool LocatePoseSpace(IOpenXrDispatch& dispatch, XrSpace space, bool active, XrSpace baseSpace, XrTime time,
+                            HeadPose& out) {
+    if (!active || space == XR_NULL_HANDLE || baseSpace == XR_NULL_HANDLE) return false;
+
+    XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+    if (XR_FAILED(dispatch.LocateSpace(space, baseSpace, time, &location))) return false;
+
+    const bool positionValid = (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+    const bool orientationValid = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
+    if (!positionValid || !orientationValid) return false;
+
+    out.position = Vector3(location.pose.position.x, location.pose.position.y, location.pose.position.z);
+    out.orientation = Quaternion(location.pose.orientation.x, location.pose.orientation.y,
+                                 location.pose.orientation.z, location.pose.orientation.w);
+    out.rotation = QuaternionToEuler(out.orientation);
+    out.isValid = true;
+    out.positionTracked = (location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
+    out.orientationTracked = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
+    return true;
+}
+
 void OpenXrInput::LocatePoses(IOpenXrDispatch& dispatch, XrSpace baseSpace, XrTime time) {
     if (!m_ready) return;
     for (uint32_t hand = 0; hand < kHandCount; ++hand) {
         HandState& state = m_hands[hand];
-        state.tracked = false;
         state.aim = HeadPose{};
-        if (!m_poseActive[hand] || baseSpace == XR_NULL_HANDLE) continue;
-
-        XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
-        if (XR_FAILED(dispatch.LocateSpace(m_aimSpaces[hand], baseSpace, time, &location))) continue;
-
-        const bool positionValid = (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
-        const bool orientationValid = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
-        if (!positionValid || !orientationValid) continue;
-
-        HeadPose& aim = state.aim;
-        aim.position = Vector3(location.pose.position.x, location.pose.position.y, location.pose.position.z);
-        aim.orientation = Quaternion(location.pose.orientation.x, location.pose.orientation.y,
-                                     location.pose.orientation.z, location.pose.orientation.w);
-        aim.rotation = QuaternionToEuler(aim.orientation);
-        aim.isValid = true;
-        aim.positionTracked = (location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
-        aim.orientationTracked = (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0;
-        state.tracked = true;
+        state.gripPose = HeadPose{};
+        state.tracked = LocatePoseSpace(dispatch, m_aimSpaces[hand], m_poseActive[hand], baseSpace, time, state.aim);
+        // The grip pose is located whether or not the aim pose is: each reports its own tracked flag.
+        state.gripTracked = LocatePoseSpace(dispatch, m_gripSpaces[hand], m_gripPoseActive[hand], baseSpace, time,
+                                            state.gripPose);
     }
 }
 
@@ -299,17 +349,19 @@ bool OpenXrInput::PulseHaptic(IOpenXrDispatch& dispatch, XrSession session, uint
 }
 
 void OpenXrInput::Destroy(IOpenXrDispatch& dispatch) {
-    for (auto& space : m_aimSpaces) {
-        if (space != XR_NULL_HANDLE) {
-            dispatch.DestroySpace(space);
-            space = XR_NULL_HANDLE;
+    for (auto* spaces : { &m_aimSpaces, &m_gripSpaces }) {
+        for (auto& space : *spaces) {
+            if (space != XR_NULL_HANDLE) {
+                dispatch.DestroySpace(space);
+                space = XR_NULL_HANDLE;
+            }
         }
     }
     if (m_actionSet != XR_NULL_HANDLE) {
         dispatch.DestroyActionSet(m_actionSet);
         m_actionSet = XR_NULL_HANDLE;
     }
-    m_aimPoseAction = m_triggerAction = m_gripAction = m_thumbstickAction = XR_NULL_HANDLE;
+    m_aimPoseAction = m_gripPoseAction = m_triggerAction = m_gripAction = m_thumbstickAction = XR_NULL_HANDLE;
     m_thumbstickClickAction = m_buttonLowerAction = m_buttonUpperAction = m_menuAction = XR_NULL_HANDLE;
     m_hapticAction = XR_NULL_HANDLE;
     m_handPaths = {};

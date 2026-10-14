@@ -56,6 +56,13 @@ bool VRBridge::Inject(lua_State* L) {
 
     int origTop = lua_gettop(L);
 
+    // Inject runs inside a hook on the game's own call into this state, at a point the game does not expect the
+    // collector to run. A collection step started from our pushes below has crashed in the allocator
+    // (freeblock, from luaC_step) on several launches. Hold the collector off for the injection and let it run
+    // again afterwards, from the game's own allocations; leave it stopped if the game had stopped it.
+    const bool collectorWasRunning = lua_gc(L, LUA_GCISRUNNING, 0) != 0;
+    if (collectorWasRunning) lua_gc(L, LUA_GCSTOP, 0);
+
     // Create table for VRBridge pre-allocated for all exposed fields (version + every table entry)
     // to prevent dynamic table resizing/rehashing during startup
     lua_createtable(L, 0, kExposedFieldCount);
@@ -82,6 +89,7 @@ bool VRBridge::Inject(lua_State* L) {
 
     // Strictly restore stack state to guarantee zero stack leakage
     lua_settop(L, origTop);
+    if (collectorWasRunning) lua_gc(L, LUA_GCRESTART, 0);
 
     LogInfo("VRBridge: Successfully injected global VRBridge table into Luau environment.");
     return true;
@@ -240,6 +248,13 @@ PanelHit VRBridge::GetPanelHit(uint32_t hand) {
     return {};
 }
 
+PanelHit VRBridge::GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction) {
+    if (m_openXrManager && (m_menuVisible || m_2dViewActive)) {
+        return m_openXrManager->GetPanelHitAlongRay(hand, origin, direction);
+    }
+    return {};
+}
+
 void VRBridge::SetMenuCursor(bool active, float u, float v) {
     if (m_openXrManager) {
         m_openXrManager->SetPointerCursorOverride(active, u, v);
@@ -309,14 +324,18 @@ static const char* const kEyeProjectionFields[] = {
 static constexpr size_t kEyeProjectionFieldCount = 15;
 
 // The fields of a hand state table, in documentation order: the aim pose carries the head pose's 13
-// fields (same names, units and convention as getHeadPose), then the raw inputs.
+// fields (same names, units and convention as getHeadPose), then the raw inputs, then the grip pose
+// (gripPoseTracked and the pose's position, Euler angles and quaternion, in the same convention).
 static const char* const kHandStateFields[] = {
     "tracked",
     "x", "y", "z", "pitch", "yaw", "roll", "qx", "qy", "qz", "qw",
     "isValid", "isPositionTracked", "isOrientationTracked",
-    "trigger", "grip", "thumbX", "thumbY", "thumbClick", "buttonLower", "buttonUpper", "menu"
+    "trigger", "grip", "thumbX", "thumbY", "thumbClick", "buttonLower", "buttonUpper", "menu",
+    "gripPoseTracked",
+    "gripPoseX", "gripPoseY", "gripPoseZ", "gripPosePitch", "gripPoseYaw", "gripPoseRoll",
+    "gripPoseQx", "gripPoseQy", "gripPoseQz", "gripPoseQw"
 };
-static constexpr size_t kHandStateFieldCount = 22;
+static constexpr size_t kHandStateFieldCount = 33;
 
 static constexpr uint32_t kInvalidHand = 0xFFFFFFFFu;
 
@@ -411,6 +430,19 @@ void VRBridge::FillHandStateTable(lua_State* L, int tableIndex, const HandState&
     lua_pushboolean(L, hand.buttonLower ? 1 : 0); lua_setfield(L, -2, "buttonLower");
     lua_pushboolean(L, hand.buttonUpper ? 1 : 0); lua_setfield(L, -2, "buttonUpper");
     lua_pushboolean(L, hand.menu ? 1 : 0); lua_setfield(L, -2, "menu");
+
+    const HeadPose& grip = hand.gripPose;
+    lua_pushboolean(L, hand.gripTracked ? 1 : 0); lua_setfield(L, -2, "gripPoseTracked");
+    lua_pushnumber(L, grip.position.x); lua_setfield(L, -2, "gripPoseX");
+    lua_pushnumber(L, grip.position.y); lua_setfield(L, -2, "gripPoseY");
+    lua_pushnumber(L, grip.position.z); lua_setfield(L, -2, "gripPoseZ");
+    lua_pushnumber(L, grip.rotation.pitch); lua_setfield(L, -2, "gripPosePitch");
+    lua_pushnumber(L, grip.rotation.yaw); lua_setfield(L, -2, "gripPoseYaw");
+    lua_pushnumber(L, grip.rotation.roll); lua_setfield(L, -2, "gripPoseRoll");
+    lua_pushnumber(L, grip.orientation.x); lua_setfield(L, -2, "gripPoseQx");
+    lua_pushnumber(L, grip.orientation.y); lua_setfield(L, -2, "gripPoseQy");
+    lua_pushnumber(L, grip.orientation.z); lua_setfield(L, -2, "gripPoseQz");
+    lua_pushnumber(L, grip.orientation.w); lua_setfield(L, -2, "gripPoseQw");
     lua_pop(L, 1);
 }
 
@@ -712,6 +744,45 @@ int VRBridge::Lua_GetPanelHit(lua_State* L) {
     uint32_t hand = kInvalidHand;
     const int outIndex = ParseHandAndOutputArgs(L, hand);
     const PanelHit hit = self->GetPanelHit(hand);
+
+    if (outIndex != 0 && HasAllFields(L, outIndex, kPanelHitFields, kPanelHitFieldCount)) {
+        FillPanelHitTable(L, outIndex, hit);
+        lua_pushvalue(L, outIndex);
+    } else {
+        lua_createtable(L, 0, static_cast<int>(kPanelHitFieldCount));
+        FillPanelHitTable(L, -1, hit);
+    }
+    return 1;
+}
+
+// VRBridge.getPanelHitAlongRay(hand, ox, oy, oz, dx, dy, dz [, outTable]) -> { hit, u, v, distance }: the same for a ray
+// the caller gives, in the space the hand poses of getHandState are in. The Pointer Ray starts at the index
+// fingertip and runs along the finger, which only the Companion Mod knows. The direction need not be a unit vector.
+// A miss when an argument is missing, the direction has no length, or the hand is not tracked.
+int VRBridge::Lua_GetPanelHitAlongRay(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.getPanelHitAlongRay");
+    uint32_t hand = kInvalidHand;
+    const int outIndex = ParseHandAndOutputArgs(L, hand);
+    // The six numbers are the numeric arguments that follow the hand (a hand given by name is a string).
+    double ray[6] = {};
+    int found = 0;
+    bool handPassed = false;
+    const int argc = lua_gettop(L);
+    for (int i = 1; i <= argc && found < 6; ++i) {
+        const int type = lua_type(L, i);
+        if (type == LUA_TTABLE) continue;
+        if (!handPassed) { handPassed = true; continue; }
+        if (type != LUA_TNUMBER) break;
+        ray[found++] = lua_tonumber(L, i);
+    }
+    PanelHit hit;
+    if (found == 6) {
+        hit = self->GetPanelHitAlongRay(hand,
+            Vector3(static_cast<float>(ray[0]), static_cast<float>(ray[1]), static_cast<float>(ray[2])),
+            Vector3(static_cast<float>(ray[3]), static_cast<float>(ray[4]), static_cast<float>(ray[5])));
+    }
 
     if (outIndex != 0 && HasAllFields(L, outIndex, kPanelHitFields, kPanelHitFieldCount)) {
         FillPanelHitTable(L, outIndex, hit);

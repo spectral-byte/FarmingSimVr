@@ -70,6 +70,25 @@ TEST_F(VrBridgeTest, InjectsGlobalTableWithoutStackCorruption) {
     EXPECT_EQ(lua_gettop(L), initialTop);
 }
 
+TEST_F(VrBridgeTest, InjectingLeavesARunningCollectorRunning) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_NE(lua_gc(L, LUA_GCISRUNNING, 0), 0);
+
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_NE(lua_gc(L, LUA_GCISRUNNING, 0), 0) << "the game's collector runs again after the injection";
+}
+
+TEST_F(VrBridgeTest, InjectingLeavesAStoppedCollectorStopped) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    lua_gc(L, LUA_GCSTOP, 0);
+    ASSERT_EQ(lua_gc(L, LUA_GCISRUNNING, 0), 0);
+
+    ASSERT_TRUE(bridge.Inject(L));
+
+    EXPECT_EQ(lua_gc(L, LUA_GCISRUNNING, 0), 0) << "a collector the game had stopped is not started by the injection";
+}
+
 TEST_F(VrBridgeTest, ExposesVersionAndIsReadyAndHandshakeToLuauScript) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -497,11 +516,49 @@ TEST_F(VrBridgeTest, GetHandStateReportsAimPoseAndRawInputsPerHandIntoACallerSup
         assert(VRBridge.getHandState(out, "right") == out, "the table may precede the hand")
         local n = 0
         for k in pairs(out) do n = n + 1 end
-        assert(n == 22, "hand state has 22 fields, got " .. n)
+        assert(n == 33, "hand state has 33 fields, got " .. n)
 
         -- Refilling overwrites: the same table now holds the left hand.
         assert(VRBridge.getHandState(0, out) == out)
         assert(out.trigger == 0 and out.x == 0 and out.tracked == true)
+    )luau"), 0);
+}
+
+TEST_F(VrBridgeTest, GetHandStateReportsTheGripPoseNextToTheAimPoseWithItsOwnTrackedFlag) {
+    fs25vr::FakeTrackedHeadset headset;
+    fs25vr::HeadPose aim;
+    aim.position = fs25vr::Vector3(0.30f, 1.20f, -0.40f);
+    fs25vr::HeadPose grip;
+    grip.position = fs25vr::Vector3(0.25f, 1.10f, -0.30f);
+    grip.rotation = fs25vr::EulerAngles(0.10f, -0.20f, 0.05f);
+    headset.SetHandPose(1, aim);
+    headset.SetHandGripPose(1, grip);
+    headset.SetHandPose(0, aim);
+    headset.SetHandGripPose(0, grip, /*tracked=*/false);
+    headset.NextFrame();
+
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        local right = VRBridge.getHandState(1)
+        assert(right.tracked == true and right.gripPoseTracked == true)
+        assert(math.abs(right.gripPoseX - 0.25) < 1e-6 and math.abs(right.gripPoseY - 1.10) < 1e-6 and math.abs(right.gripPoseZ + 0.30) < 1e-6)
+        assert(math.abs(right.gripPosePitch - 0.10) < 1e-4 and math.abs(right.gripPoseYaw + 0.20) < 1e-4 and math.abs(right.gripPoseRoll - 0.05) < 1e-4)
+        local len = math.sqrt(right.gripPoseQx^2 + right.gripPoseQy^2 + right.gripPoseQz^2 + right.gripPoseQw^2)
+        assert(math.abs(len - 1) < 1e-5, "the grip orientation is a unit quaternion")
+        -- The aim pose keeps its own fields and values.
+        assert(math.abs(right.x - 0.30) < 1e-6 and math.abs(right.y - 1.20) < 1e-6 and right.isValid == true)
+
+        -- The grip pose has its own tracked flag: this hand's controller is on, its grip pose is not.
+        local left = VRBridge.getHandState(0)
+        assert(left.tracked == true and left.gripPoseTracked == false)
+        assert(left.gripPoseX == 0 and left.gripPoseY == 0 and left.gripPoseZ == 0 and left.gripPoseQw == 1)
+
+        -- It fills the same caller-supplied table in place.
+        local out = VRBridge.getHandState(1, {})
+        assert(VRBridge.getHandState(1, out) == out and out.gripPoseTracked == true)
+        assert(VRBridge.getHandState(0, out) == out and out.gripPoseTracked == false and out.gripPoseX == 0)
     )luau"), 0);
 }
 
@@ -521,6 +578,8 @@ TEST_F(VrBridgeTest, GetHandStateReportsAnUntrackedZeroedHandWhenThereIsNothingT
             assert(state.isValid == false and state.trigger == 0 and state.grip == 0, "zeroed: " .. tostring(hand))
             assert(state.thumbX == 0 and state.thumbY == 0 and state.x == 0 and state.qw == 1, "zeroed: " .. tostring(hand))
             assert(state.thumbClick == false and state.buttonLower == false and state.buttonUpper == false and state.menu == false)
+            assert(state.gripPoseTracked == false and state.gripPoseX == 0 and state.gripPoseY == 0 and state.gripPoseZ == 0, "grip untracked: " .. tostring(hand))
+            assert(state.gripPosePitch == 0 and state.gripPoseYaw == 0 and state.gripPoseRoll == 0 and state.gripPoseQw == 1, "grip identity: " .. tostring(hand))
         end
         assert(VRBridge.getHandState() ~= nil, "a call without a hand still returns a table")
     )luau";
@@ -535,8 +594,8 @@ TEST_F(VrBridgeTest, GetHandStateReportsAnUntrackedZeroedHandWhenThereIsNothingT
     // A controller that is switched off reports untracked too (hand 0), while hand 1 is fine.
     ASSERT_TRUE(offBridge.Inject(L));
     ASSERT_EQ(RunLuauString(L, R"luau(
-        assert(VRBridge.getHandState(0).tracked == false)
-        assert(VRBridge.getHandState(1).tracked == true)
+        assert(VRBridge.getHandState(0).tracked == false and VRBridge.getHandState(0).gripPoseTracked == false)
+        assert(VRBridge.getHandState(1).tracked == true and VRBridge.getHandState(1).gripPoseTracked == true)
         assert(VRBridge.getHandState(2).tracked == false, "out of range")
     )luau"), 0);
 }
@@ -1279,6 +1338,7 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "getIsMenuVisible",
         "alignMenuQuad",
         "getPanelHit",
+        "getPanelHitAlongRay",
         "setMenuCursor",
         "set2DViewActive",
         "getIs2DViewActive",

@@ -61,6 +61,7 @@ TEST(OpenXrManagerTest, ActionSetHoldsRawPerHandInputsAndAHapticOutput) {
     const auto& controllers = headset.runtime->controllers;
 
     EXPECT_TRUE(HasAction(controllers, "aim_pose", XR_ACTION_TYPE_POSE_INPUT));
+    EXPECT_TRUE(HasAction(controllers, "grip_pose", XR_ACTION_TYPE_POSE_INPUT));
     EXPECT_TRUE(HasAction(controllers, "trigger", XR_ACTION_TYPE_FLOAT_INPUT));
     EXPECT_TRUE(HasAction(controllers, "grip", XR_ACTION_TYPE_FLOAT_INPUT));
     EXPECT_TRUE(HasAction(controllers, "thumbstick", XR_ACTION_TYPE_VECTOR2F_INPUT));
@@ -69,7 +70,7 @@ TEST(OpenXrManagerTest, ActionSetHoldsRawPerHandInputsAndAHapticOutput) {
     EXPECT_TRUE(HasAction(controllers, "button_upper", XR_ACTION_TYPE_BOOLEAN_INPUT));
     EXPECT_TRUE(HasAction(controllers, "menu", XR_ACTION_TYPE_BOOLEAN_INPUT));
     EXPECT_TRUE(HasAction(controllers, "haptic", XR_ACTION_TYPE_VIBRATION_OUTPUT));
-    EXPECT_EQ(controllers.actions.size(), 9u) << "only raw inputs and the haptic output belong in the set";
+    EXPECT_EQ(controllers.actions.size(), 10u) << "only raw inputs and the haptic output belong in the set";
 }
 
 TEST(OpenXrManagerTest, SuggestedBindingsCoverTouchIndexViveAndKhronosSimpleControllers) {
@@ -81,9 +82,11 @@ TEST(OpenXrManagerTest, SuggestedBindingsCoverTouchIndexViveAndKhronosSimpleCont
                                  "/interaction_profiles/htc/vive_controller",
                                  "/interaction_profiles/khr/simple_controller" }) {
         EXPECT_EQ(controllers.suggestedBindings.count(profile), 1u) << profile;
-        // Every profile aims with its hands and vibrates them.
+        // Every profile aims with its hands, shows them (grip pose) and vibrates them.
         EXPECT_EQ(controllers.BindingsFor(profile, "aim_pose"),
                   (std::vector<std::string>{ "/user/hand/left/input/aim/pose", "/user/hand/right/input/aim/pose" })) << profile;
+        EXPECT_EQ(controllers.BindingsFor(profile, "grip_pose"),
+                  (std::vector<std::string>{ "/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose" })) << profile;
         EXPECT_EQ(controllers.BindingsFor(profile, "haptic"),
                   (std::vector<std::string>{ "/user/hand/left/output/haptic", "/user/hand/right/output/haptic" })) << profile;
     }
@@ -156,6 +159,8 @@ void ExpectRefusalLeavesHeadTrackingAlone(const std::function<void(Controllers&)
         const HandState state = manager->GetHandState(hand);
         EXPECT_FALSE(state.tracked);
         EXPECT_FALSE(state.aim.isValid);
+        EXPECT_FALSE(state.gripTracked);
+        EXPECT_FALSE(state.gripPose.isValid);
         EXPECT_FLOAT_EQ(state.trigger, 0.0f);
     }
     EXPECT_TRUE(manager->EndFrame());
@@ -172,6 +177,40 @@ TEST(OpenXrManagerTest, RefusedActionSetStepLeavesSessionAndHeadTrackingUnchange
     ExpectRefusalLeavesHeadTrackingAlone([](Controllers& c) { c.suggestBindingsResult = XR_ERROR_RUNTIME_FAILURE; }, "xrSuggestInteractionProfileBindings");
     ExpectRefusalLeavesHeadTrackingAlone([](Controllers& c) { c.attachResult = XR_ERROR_RUNTIME_FAILURE; }, "xrAttachSessionActionSets");
     ExpectRefusalLeavesHeadTrackingAlone([](Controllers& c) { c.createActionSpaceResult = XR_ERROR_RUNTIME_FAILURE; }, "xrCreateActionSpace");
+}
+
+// A runtime that refuses only the grip pose must leave the aim pose, the inputs, head tracking and
+// presentation alone: the grip pose just reports untracked.
+void ExpectGripRefusalLeavesTheRestAlone(const std::function<void(Controllers&)>& refuse, const char* what) {
+    SCOPED_TRACE(what);
+    auto runtime = std::make_shared<FakeOpenXrRuntime>();
+    refuse(runtime->controllers);
+    auto manager = std::make_shared<OpenXrManager>(runtime);
+    ASSERT_TRUE(manager->Initialize());
+    ASSERT_TRUE(manager->CreateSession());
+    ASSERT_TRUE(manager->CreateTrackingSpaces());
+    manager->PollEvents();
+    EXPECT_TRUE(manager->IsSessionRunning());
+    EXPECT_TRUE(manager->HasMotionControllerActions()) << "the rest of the action set is still usable";
+
+    runtime->tracking.SetHeadPose(PoseAt(0.1f, 1.6f, -0.2f));
+    runtime->controllers.hands[1].pose = FakeOpenXrTracking::ToXrPose(PoseAt(0.3f, 1.2f, -0.4f));
+    runtime->controllers.hands[1].inputs.trigger = 0.5f;
+    ASSERT_TRUE(manager->BeginFrame());
+    EXPECT_TRUE(manager->PollHeadPose().isValid);
+    const HandState hand = manager->GetHandState(1);
+    EXPECT_TRUE(hand.tracked);
+    EXPECT_FLOAT_EQ(hand.aim.position.x, 0.3f);
+    EXPECT_FLOAT_EQ(hand.trigger, 0.5f);
+    EXPECT_FALSE(hand.gripTracked);
+    EXPECT_FALSE(hand.gripPose.isValid);
+    EXPECT_TRUE(manager->EndFrame());
+    manager->Shutdown();
+}
+
+TEST(OpenXrManagerTest, ARuntimeThatRefusesTheGripPoseStillTracksTheAimPoseAndTheInputs) {
+    ExpectGripRefusalLeavesTheRestAlone([](Controllers& c) { c.createGripActionResult = XR_ERROR_RUNTIME_FAILURE; }, "grip pose action");
+    ExpectGripRefusalLeavesTheRestAlone([](Controllers& c) { c.createGripActionSpaceResult = XR_ERROR_RUNTIME_FAILURE; }, "grip pose action space");
 }
 
 TEST(OpenXrManagerTest, PartiallyDeclaredActionSetIsReleasedWhenALaterStepIsRefused) {
@@ -207,11 +246,11 @@ TEST(OpenXrManagerTest, ShutdownReleasesTheActionSpacesAndTheActionSet) {
     ASSERT_TRUE(manager.Initialize());
     ASSERT_TRUE(manager.CreateSession());
     ASSERT_TRUE(manager.HasMotionControllerActions());
-    ASSERT_EQ(runtime->controllers.actionSpacesCreated, 2u);
+    ASSERT_EQ(runtime->controllers.actionSpacesCreated, 4u) << "an aim and a grip space per hand";
 
     manager.Shutdown();
 
-    EXPECT_EQ(runtime->controllers.destroyedActionSpaces, 2u);
+    EXPECT_EQ(runtime->controllers.destroyedActionSpaces, 4u);
     EXPECT_EQ(runtime->controllers.destroyActionSetCalls, 1u);
     EXPECT_FALSE(manager.HasMotionControllerActions());
     EXPECT_FALSE(manager.GetHandState(0).tracked);
@@ -376,6 +415,78 @@ TEST(OpenXrManagerTest, HandAimPoseFollowsTheRecenterActionAtOnce) {
     EXPECT_NEAR(hand.aim.position.z, -1.0f, 1e-4f);
 }
 
+// ---- The grip pose: located exactly like the aim pose, but its own pose with its own tracked flag ----
+
+TEST(OpenXrManagerTest, HandGripPoseUsesTheHeadPoseReferenceSpaceAndPredictedDisplayTime) {
+    FakeTrackedHeadset headset;
+    headset.SetHandPose(0, PoseAt(-0.3f, 1.1f, -0.2f));
+    headset.SetHandGripPose(0, PoseAt(-0.35f, 1.05f, -0.1f));
+    headset.NextFrame();
+    ASSERT_TRUE(headset.manager->IsFrameBegun());
+
+    const auto& locates = headset.runtime->controllers.locates;
+    const auto gripLocates = std::count_if(locates.begin(), locates.end(), [](const Controllers::LocateRecord& l) {
+        return l.action == "grip_pose";
+    });
+    EXPECT_EQ(gripLocates, 2) << "one grip location per hand per frame";
+    for (const auto& located : locates) {
+        EXPECT_EQ(located.baseSpace, headset.manager->GetLocalSpace()) << "same reference space as the head pose";
+        EXPECT_EQ(located.time, 1000000) << "FakeOpenXrRuntime::WaitFrame's predicted display time, as the head pose uses";
+    }
+
+    const HandState hand = headset.manager->GetHandState(0);
+    EXPECT_TRUE(hand.gripTracked);
+    EXPECT_FLOAT_EQ(hand.gripPose.position.x, -0.35f);
+    EXPECT_FLOAT_EQ(hand.gripPose.position.y, 1.05f);
+    EXPECT_FLOAT_EQ(hand.gripPose.position.z, -0.1f);
+    EXPECT_TRUE(hand.gripPose.isValid);
+    EXPECT_TRUE(hand.gripPose.positionTracked);
+    EXPECT_TRUE(hand.gripPose.orientationTracked);
+    // The aim pose is its own pose.
+    EXPECT_FLOAT_EQ(hand.aim.position.x, -0.3f);
+    EXPECT_FLOAT_EQ(hand.aim.position.y, 1.1f);
+}
+
+TEST(OpenXrManagerTest, HandGripPoseUsesTheSameOrientationConventionAsTheHeadPose) {
+    FakeTrackedHeadset headset;
+    HeadPose gripped = PoseAt(0.0f, 1.0f, 0.0f);
+    gripped.rotation = EulerAngles(0.0f, 0.5f, 0.0f);  // pitch, yaw, roll as for SetHeadPose
+    headset.SetHeadPose(gripped);
+    headset.SetHandGripPose(1, gripped);
+    headset.NextFrame();
+
+    const HeadPose head = headset.manager->PollHeadPose();
+    const HandState hand = headset.manager->GetHandState(1);
+
+    EXPECT_NEAR(hand.gripPose.orientation.x, head.orientation.x, 1e-6f);
+    EXPECT_NEAR(hand.gripPose.orientation.y, head.orientation.y, 1e-6f);
+    EXPECT_NEAR(hand.gripPose.orientation.z, head.orientation.z, 1e-6f);
+    EXPECT_NEAR(hand.gripPose.orientation.w, head.orientation.w, 1e-6f);
+    EXPECT_NEAR(hand.gripPose.rotation.yaw, head.rotation.yaw, 1e-6f);
+    EXPECT_NEAR(hand.gripPose.rotation.yaw, 0.5f, 1e-4f);
+}
+
+TEST(OpenXrManagerTest, HandGripPoseFollowsTheRecenterActionAtOnce) {
+    FakeTrackedHeadset headset;
+    // Same set-up as the aim pose: the head looks 90 degrees to the left and the grip is one metre
+    // straight ahead of it, while the aim pose sits elsewhere.
+    HeadPose head = PoseAt(1.0f, 1.6f, 0.5f);
+    head.rotation = EulerAngles(0.0f, 1.5707964f, 0.0f);
+    headset.SetHeadPose(head);
+    headset.SetHandPose(1, PoseAt(5.0f, 5.0f, 5.0f));
+    headset.SetHandGripPose(1, PoseAt(0.0f, 1.6f, 0.5f));
+    headset.NextFrame();
+    EXPECT_NEAR(headset.manager->GetHandState(1).gripPose.position.x, 0.0f, 1e-4f) << "before Recenter: in the original origin";
+    EXPECT_NEAR(headset.manager->GetHandState(1).gripPose.position.z, 0.5f, 1e-4f);
+
+    headset.manager->Recenter();
+
+    const HandState hand = headset.manager->GetHandState(1);
+    EXPECT_NEAR(hand.gripPose.position.x, 0.0f, 1e-4f);
+    EXPECT_NEAR(hand.gripPose.position.y, 0.0f, 1e-4f);
+    EXPECT_NEAR(hand.gripPose.position.z, -1.0f, 1e-4f);
+}
+
 TEST(OpenXrManagerTest, AnUntrackedControllerReportsUntrackedWithZeroedInputs) {
     FakeTrackedHeadset headset;
     Controllers::Inputs held;
@@ -389,8 +500,59 @@ TEST(OpenXrManagerTest, AnUntrackedControllerReportsUntrackedWithZeroedInputs) {
     const HandState hand = headset.manager->GetHandState(0);
     EXPECT_FALSE(hand.tracked);
     EXPECT_FALSE(hand.aim.isValid);
+    EXPECT_FALSE(hand.gripTracked) << "a controller that is off has no grip pose either";
     EXPECT_FLOAT_EQ(hand.trigger, 0.0f);
     EXPECT_FALSE(hand.menu);
+}
+
+TEST(OpenXrManagerTest, AGripPoseThatIsAloneUntrackedLeavesTheControllerTracked) {
+    FakeTrackedHeadset headset;
+    headset.SetHandPose(1, PoseAt(0.3f, 1.2f, -0.4f));
+    headset.SetHandGripPose(1, PoseAt(0.3f, 1.1f, -0.3f), /*tracked=*/false);
+    Controllers::Inputs held;
+    held.trigger = 0.5f;
+    headset.SetHandInputs(1, held);
+
+    headset.NextFrame();
+
+    const HandState hand = headset.manager->GetHandState(1);
+    EXPECT_TRUE(hand.tracked);
+    EXPECT_TRUE(hand.aim.isValid);
+    EXPECT_FLOAT_EQ(hand.trigger, 0.5f);
+    EXPECT_FALSE(hand.gripTracked);
+    EXPECT_FALSE(hand.gripPose.isValid);
+    EXPECT_FLOAT_EQ(hand.gripPose.position.y, 0.0f) << "an untracked grip pose is the default pose";
+    // The other hand keeps its own grip pose.
+    EXPECT_TRUE(headset.manager->GetHandState(0).gripTracked);
+
+    headset.SetHandGripPose(1, PoseAt(0.3f, 1.1f, -0.3f), /*tracked=*/true);
+    headset.NextFrame();
+    EXPECT_TRUE(headset.manager->GetHandState(1).gripTracked);
+}
+
+TEST(OpenXrManagerTest, AnUnfocusedSessionAnOutOfRangeHandAndPassThroughReportTheGripPoseUntracked) {
+    FakeTrackedHeadset headset;
+    headset.SetHandPose(1, PoseAt(0.0f, 1.0f, -0.3f));
+    headset.NextFrame();
+    ASSERT_TRUE(headset.manager->GetHandState(1).gripTracked);
+
+    EXPECT_FALSE(headset.manager->GetHandState(2).gripTracked);
+    EXPECT_FALSE(headset.manager->GetHandState(1000).gripTracked);
+
+    headset.runtime->controllers.syncActionsResult = XR_SESSION_NOT_FOCUSED;
+    headset.NextFrame();
+    EXPECT_FALSE(headset.manager->GetHandState(1).gripTracked);
+    EXPECT_FALSE(headset.manager->GetHandState(1).gripPose.isValid);
+
+    auto runtime = std::make_shared<FakeOpenXrRuntime>();
+    OpenXrManager manager(runtime);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    runtime->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    manager.PollEvents();
+    ASSERT_TRUE(manager.IsPassThrough());
+    EXPECT_FALSE(manager.GetHandState(0).gripTracked);
+    EXPECT_FALSE(manager.GetHandState(1).gripTracked);
 }
 
 TEST(OpenXrManagerTest, ASessionThatIsNotFocusedReportsNoInputWithoutAnError) {

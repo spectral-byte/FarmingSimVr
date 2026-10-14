@@ -27,7 +27,7 @@ $destZip = Join-Path $modsDir "FS25_VRCompanion.zip"
 
 Push-Location $companionDir
 try {
-    tar.exe -a -cf $destZip modDesc.xml icon_vr.png src/*.lua
+    tar.exe -a -cf $destZip modDesc.xml icon_vr.png src/*.lua models/*
     Write-Host "[Deploy] Packaged and deployed FS25_VRCompanion.zip to $modsDir"
 } finally {
     Pop-Location

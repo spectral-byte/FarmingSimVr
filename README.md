@@ -27,6 +27,7 @@ Two parts work together:
 - **2D view toggle** between full VR and a floating virtual screen.
 - **Snap turn** (30°, 45° or 90°) on foot and in vehicles.
 - **Desktop mirror window** that stays unscaled whatever the headset resolution.
+- **Virtual Hands**: a gloved hand drawn where each Motion Controller is held. The trigger curls the index finger and the grip the other three. The Pointer Ray starts at the index fingertip and runs along the finger.
 
 ## Installation
 
@@ -86,7 +87,8 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrHudSafeArea <horizontal> <vertical>` | Keep other HUD elements (warnings, notifications, other mods) inside the lens |
 | `vrMotionControllers <on\|off>` | Use Motion Controllers (default `on`, saved). `off` makes the mod ignore Motion Controller input |
 | `vrMotionControllerStatus` | Report each Motion Controller's tracked and in-use state and the Pointer Hand |
-| `vrPointerDiagnostics` | Report why the Pointer Ray may not select Click Points (ray placement, who controls the pointer, Interactive Control support) |
+| `vrPointerDiagnostics` | Report why the Pointer Ray may not select Click Points (ray placement, who controls the pointer, Interactive Control support; also each hand's aim pose and grip pose and whether they are tracked, how far each index finger points from the aim direction, and each Virtual Hand's state) |
+| `vrVirtualHandsDiagnostics` | Report whether the Virtual Hands (gloved hands drawn where the Motion Controllers are held) are available, and each hand's state with the reason when it is hidden |
 | `vrPointerCone <degrees>` | How wide a cone around the Pointer Ray selects the nearest Interactive Control Click Point (default `5`, saved) |
 
 ### Motion Controller buttons
@@ -114,4 +116,5 @@ The menu button is on the left Motion Controller only on Touch and does not exis
 ## License
 
 Copyright (C) 2026 spectral-byte. Licensed under the [GNU General Public License v3.0](LICENSE). Built with Khronos OpenXR, Luau, MinHook and GoogleTest; release bundles include `THIRD_PARTY_NOTICES.txt`.
+The Virtual Hand glove model is "Gloved Hand" by J-Toastie ([source](https://poly.pizza/m/MTB4egc4Vh)), licensed under [Creative Commons Attribution 3.0](https://creativecommons.org/licenses/by/3.0/) (CC BY 3.0) and modified here (scaled, rigged for the game engine, mirrored for the right hand); see `mods/FS25_VRCompanion/models/VirtualHand_ATTRIBUTION.txt`.
 Farming Simulator 25 is a trademark of GIANTS Software GmbH.

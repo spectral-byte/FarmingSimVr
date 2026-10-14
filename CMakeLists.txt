@@ -199,6 +199,7 @@ add_executable(fs25_vr_tests
     tests/test_companion_mod.cpp
     tests/test_motion_controllers.cpp
     tests/test_pointer_ray.cpp
+    tests/test_virtual_hands.cpp
     tests/test_pointer_handover.cpp
     tests/test_haptics.cpp
     tests/test_interactive_control_auto_on.cpp

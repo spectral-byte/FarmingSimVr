@@ -65,8 +65,8 @@ constexpr const char* kGuiStubs = R"luau(
 )luau";
 
 // A cab at the world origin and an Interactive Control release the Companion Mod supports. The player
-// sits at (0, 1.5, 0) looking along world +Z, so a hand held at (x, y, -z) from the head points along
-// +Z from world (-x, 1.5 + y, +z).
+// sits at (0, 1.5, 0) looking along world +Z, so a hand whose index fingertip is held at (x, y, -z) from the
+// head and points straight ahead (SetHandPointing) has its ray start at world (-x, 1.5 + y, +z) and run along +Z.
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge, bool withInteractiveControl = true) {
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
@@ -89,7 +89,7 @@ void PreFrame(lua_State* L) {
     )luau", "=preFrame"), 0);
 }
 
-// A hand held 0.3 m right of and 0.3 m ahead of the head, pointing straight ahead, makes a ray from
+// A fingertip held 0.3 m right of and 0.3 m ahead of the head, pointing straight ahead, makes a ray from
 // world (-0.3, 1.5, 0.3) along +Z, and 'aimedAt' sits on it. 'underMouse' is far from the ray, at
 // screen (0.4, 0.6) where the desk mouse can point at it.
 void AddAimedAtAndUnderMouse(lua_State* L) {
@@ -108,9 +108,9 @@ void AddAimedAtAndUnderMouse(lua_State* L) {
 #define PICK_UP_AND_AIM(hand, x, y, z) \
     do { \
         SetGameTime(10000); \
-        headset.SetHandPose((hand), HandAt((x) - 0.1f, (y), (z))); \
+        headset.SetHandPointing((hand), HandAt((x) - 0.1f, (y), (z))); \
         FRAMES(1); \
-        headset.SetHandPose((hand), HandAt((x), (y), (z))); \
+        headset.SetHandPointing((hand), HandAt((x), (y), (z))); \
         FRAMES(1); \
     } while (0)
 
@@ -155,7 +155,7 @@ TEST_F(CompanionModTest, MovingThePointerHandAfterwardsHandsSelectionBackToTheRa
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "underMouse") << "a still hand does not take control";
 
     // The Pointer Hand moves (a little: it still points at the same Click Point).
-    headset.SetHandPose(kRight, HandAt(0.35f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.35f, 0.0f, -0.3f));
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "aimedAt") << "the Pointer Ray selects again, with no command";
 }
@@ -178,7 +178,7 @@ TEST_F(CompanionModTest, WhileTheMouseHasControlThePointerRayIsHiddenAndTheTrigg
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0") << "the Pointer Hand's trigger clicks nothing, neither the aimed Click Point nor the one under the mouse";
 
-    headset.SetHandPose(kRight, HandAt(0.35f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.35f, 0.0f, -0.3f));
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "rayDrawn()"), "2") << "the ray is back when the hand moves";
     headset.SetHandInputs(kRight, Trigger(1.0f));
@@ -201,7 +201,7 @@ TEST_F(CompanionModTest, ATriggerPulledWhileTheMouseHasControlDoesNotClickWhenTh
     // Pulled while the mouse has control, still held when the hand moves: not a click.
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
-    headset.SetHandPose(kRight, HandAt(0.35f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.35f, 0.0f, -0.3f));
     FRAMES(4);
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "switch") << "the ray has control and the switch under it is selected";
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0") << "a pull that began under the mouse never clicks retroactively";
@@ -222,7 +222,7 @@ TEST_F(CompanionModTest, ATriggerPulledWhileTheMouseHasControlDoesNotClickWhenTh
     FRAMES(2);
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
-    headset.SetHandPose(kRight, HandAt(0.30f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.30f, 0.0f, -0.3f));
     FRAMES(5);
     ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "lever");
     EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0") << "holding the trigger on an analog Click Point acts only after a pull made with the ray in control";
@@ -253,7 +253,7 @@ TEST_F(CompanionModTest, WithNoMotionControllerInUseInteractiveControlSelectsByT
 
     // A Motion Controller lying on the desk, aimed at a Click Point and never moved.
     headset.SetHandTracked(kRight, true);
-    headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.3f, 0.0f, -0.3f));
     FRAMES(3);
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(3);
@@ -264,7 +264,7 @@ TEST_F(CompanionModTest, WithNoMotionControllerInUseInteractiveControlSelectsByT
 
     // Motion Controllers off: the hand moves, the mouse still selects.
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:setMotionControllersEnabled(false)", "=off"), 0);
-    headset.SetHandPose(kRight, HandAt(0.4f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.4f, 0.0f, -0.3f));
     FRAMES(3);
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "underMouse");
     EXPECT_EQ(EvalLua(L, "rayDrawn()"), "0");
@@ -295,7 +295,7 @@ TEST_F(CompanionModTest, ClickPointsAndMenusFollowTheSameControlOwner) {
     EXPECT_FALSE(headset.manager->GetPointerCursorOverride().active);
 
     // The Pointer Hand moves: the menu cursor follows the ray ...
-    headset.SetHandPose(kRight, HandAt(0.35f, 0.0f, -0.3f));
+    headset.SetHandPointing(kRight, HandAt(0.35f, 0.0f, -0.3f));
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerOwner()"), "ray");
     EXPECT_NE(EvalLua(L, "#guiEvents"), "0");

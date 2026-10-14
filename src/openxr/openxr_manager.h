@@ -157,10 +157,17 @@ public:
     // both in the Recenter-aware local space, so the test holds across a Recenter. No hit for an
     // untracked hand. Whether a panel is visible is the caller's (VRBridge's) knowledge.
     PanelHit GetPanelHit(uint32_t hand);
+    // The same for a ray the caller gives, in the space the hand poses are in (the Pointer Ray starts at the
+    // index fingertip and runs along the finger, which only the Companion Mod knows). `direction` need not be
+    // a unit vector. No hit for an untracked `hand`, or a direction without a length.
+    PanelHit GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction);
     // Pure ray (origin, -Z of rayOrientation) against a quad of `quadSize` at `quadPose`; the quad
     // is hit from its front side only, like it is seen.
     static PanelHit ComputeQuadRayHit(const XrPosef& quadPose, const XrExtent2Df& quadSize,
                                       const Vector3& rayOrigin, const Quaternion& rayOrientation);
+    // The same for a ray with a direction vector (any length above zero; `distance` is along the unit direction).
+    static PanelHit ComputeQuadRayHitAlong(const XrPosef& quadPose, const XrExtent2Df& quadSize,
+                                           const Vector3& rayOrigin, const Vector3& rayDirection);
 
     // While active the drawn cursor sits at (u, v) in PanelHit coordinates (clamped onto the panel)
     // and MirrorWindowController ignores the Win32 cursor: the Pointer Ray has control of the cursor.

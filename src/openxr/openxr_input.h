@@ -22,6 +22,7 @@ public:
     // Action names inside the action set (the fake runtime identifies actions by these).
     static constexpr const char* kActionSetName = "fs25vr_input";
     static constexpr const char* kAimPoseAction = "aim_pose";
+    static constexpr const char* kGripPoseAction = "grip_pose";
     static constexpr const char* kTriggerAction = "trigger";
     static constexpr const char* kGripAction = "grip";
     static constexpr const char* kThumbstickAction = "thumbstick";
@@ -44,7 +45,7 @@ public:
     // (hands untracked); that is not an error.
     void Sync(IOpenXrDispatch& dispatch, XrSession session);
 
-    // Locates each hand's aim space against `baseSpace` at `time`. Run after Sync().
+    // Locates each hand's aim and grip spaces against `baseSpace` at `time`. Run after Sync().
     void LocatePoses(IOpenXrDispatch& dispatch, XrSpace baseSpace, XrTime time);
 
     const HandState& Get(uint32_t hand) const {
@@ -66,6 +67,7 @@ private:
     XrActionSet m_actionSet = XR_NULL_HANDLE;
     std::array<XrPath, kHandCount> m_handPaths{};
     XrAction m_aimPoseAction = XR_NULL_HANDLE;
+    XrAction m_gripPoseAction = XR_NULL_HANDLE;   // stays null when the runtime refuses it: grip pose untracked
     XrAction m_triggerAction = XR_NULL_HANDLE;
     XrAction m_gripAction = XR_NULL_HANDLE;
     XrAction m_thumbstickAction = XR_NULL_HANDLE;
@@ -75,12 +77,15 @@ private:
     XrAction m_menuAction = XR_NULL_HANDLE;
     XrAction m_hapticAction = XR_NULL_HANDLE;
     std::array<XrSpace, kHandCount> m_aimSpaces{};
+    std::array<XrSpace, kHandCount> m_gripSpaces{};
     std::array<HandState, kHandCount> m_hands{};
     // Whether the pose action was active at the last sync (a controller that is off is inactive).
     std::array<bool, kHandCount> m_poseActive{};
+    std::array<bool, kHandCount> m_gripPoseActive{};
 
     bool CreateAction(IOpenXrDispatch& dispatch, const char* name, const char* localizedName,
                       XrActionType type, XrAction* out);
+    void CreateGripPoseAction(IOpenXrDispatch& dispatch);
     bool SuggestBindings(IOpenXrDispatch& dispatch, XrInstance instance);
     void ResetHands();
     void FailCreate(IOpenXrDispatch& dispatch, const char* step, XrResult result);

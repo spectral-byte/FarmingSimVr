@@ -77,6 +77,26 @@ TEST(OpenXrManagerTest, PanelTurnedToFaceThePlayerIsHitThroughItsOwnOrientation)
     EXPECT_NEAR(hit.distance, 1.5f, 1e-4f);
 }
 
+TEST(OpenXrManagerTest, ARayGivenByItsDirectionHitsWhereItLandsWhateverTheLengthOfTheDirection) {
+    const XrPosef quad = QuadAt(0, 0, -1.5f);
+    // From the origin along (0.3, -0.15, -1): at 1.5 m it has moved 0.45 m right and 0.225 m down.
+    for (const float scale : { 1.0f, 0.2f, 7.5f }) {
+        const PanelHit hit = OpenXrManager::ComputeQuadRayHitAlong(quad, kSize, Vector3(0, 0, 0), Vector3(0.3f * scale, -0.15f * scale, -1.0f * scale));
+        EXPECT_TRUE(hit.hit) << scale;
+        EXPECT_NEAR(hit.u, 0.5f + 0.45f / 1.6f, 1e-4f) << scale;
+        EXPECT_NEAR(hit.v, 0.5f + 0.225f / 0.9f, 1e-4f) << scale;
+        EXPECT_NEAR(hit.distance, 1.5f * std::sqrt(0.3f * 0.3f + 0.15f * 0.15f + 1.0f), 1e-3f) << "along the unit direction, " << scale;
+    }
+    EXPECT_FALSE(OpenXrManager::ComputeQuadRayHitAlong(quad, kSize, Vector3(0, 0, 0), Vector3(0, 0, 0)).hit) << "no direction";
+    EXPECT_FALSE(OpenXrManager::ComputeQuadRayHitAlong(quad, kSize, Vector3(0, 0, 0), Vector3(0, 0, 1)).hit) << "pointing away";
+    // It is the same ray as a hand turned the same way: the orientation form is this one with -Z rotated.
+    const PanelHit byOrientation = OpenXrManager::ComputeQuadRayHit(QuadAt(-1.5f, 0, 0, kPi * 0.5f), kSize, Vector3(0, 0, 0), Yaw(kPi * 0.5f));
+    const PanelHit byDirection = OpenXrManager::ComputeQuadRayHitAlong(QuadAt(-1.5f, 0, 0, kPi * 0.5f), kSize, Vector3(0, 0, 0), Vector3(-1, 0, 0));
+    EXPECT_TRUE(byDirection.hit);
+    EXPECT_NEAR(byDirection.u, byOrientation.u, 1e-5f);
+    EXPECT_NEAR(byDirection.v, byOrientation.v, 1e-5f);
+}
+
 // ---- A hand's ray against the panel that is submitted ----
 
 namespace {
@@ -127,6 +147,31 @@ TEST(OpenXrManagerTest, AnUntrackedHandOrAnUnknownHandHasNoPanelHit) {
     EXPECT_FALSE(headset.manager->GetPanelHit(1).hit) << "untracked";
     EXPECT_FALSE(headset.manager->GetPanelHit(0).hit) << "never placed, so untracked";
     EXPECT_FALSE(headset.manager->GetPanelHit(7).hit) << "no such hand";
+}
+
+TEST(OpenXrManagerTest, AGivenRayHitsThePanelOnlyForATrackedHandAndFollowsTheLocalSpaceAfterARecenter) {
+    FakeTrackedHeadset headset;
+    PlaceHeadAndAlignPanel(headset);
+    headset.SetHandPose(1, HandPoseAt(5.0f, 0.0f, 0.0f));  // the aim pose points at nothing
+    headset.SetHandTracked(0, false);
+    headset.NextFrame();
+
+    const PanelHit hit = headset.manager->GetPanelHitAlongRay(1, Vector3(0.4f, 1.6f + 0.225f, 0.0f), Vector3(0, 0, -1));
+    EXPECT_TRUE(hit.hit);
+    EXPECT_NEAR(hit.u, 0.75f, 1e-4f);
+    EXPECT_NEAR(hit.v, 0.25f, 1e-4f);
+    EXPECT_FALSE(headset.manager->GetPanelHit(1).hit) << "the aim pose does not point at the panel";
+    EXPECT_FALSE(headset.manager->GetPanelHitAlongRay(0, Vector3(0, 1.6f, 0), Vector3(0, 0, -1)).hit) << "untracked hand";
+    EXPECT_FALSE(headset.manager->GetPanelHitAlongRay(7, Vector3(0, 1.6f, 0), Vector3(0, 0, -1)).hit) << "no such hand";
+
+    // After a recentre the given ray is in the re-based local space the panel is submitted in, as the hand poses are.
+    headset.manager->Recenter();
+    headset.NextFrame();
+    const XrPosef quad = headset.manager->ComputeMenuQuadPose();
+    const PanelHit recentred = headset.manager->GetPanelHitAlongRay(1, Vector3(quad.position.x, quad.position.y, 0.0f), Vector3(0, 0, -1));
+    EXPECT_TRUE(recentred.hit);
+    EXPECT_NEAR(recentred.u, 0.5f, 1e-4f);
+    EXPECT_NEAR(recentred.v, 0.5f, 1e-4f);
 }
 
 TEST(OpenXrManagerTest, PanelHitFollowsTheLocalSpaceThePanelIsSubmittedIn) {

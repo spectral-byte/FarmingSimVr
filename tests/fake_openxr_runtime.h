@@ -209,10 +209,54 @@ struct FakeTrackedHeadset {
 
     // Places a hand's aim pose in the runtime's tracking origin (before Recenter re-bases it) and
     // switches the controller on or off. Only position and orientation of `pose` are used.
+    // The grip pose follows the aim pose until SetHandGripPose gives it a pose of its own.
     void SetHandPose(uint32_t hand, const HeadPose& pose, bool tracked = true) {
         auto& sim = runtime->controllers.hands[hand & 1];
         sim.pose = FakeOpenXrTracking::ToXrPose(pose);
+        sim.gripPose = sim.pose;
         sim.tracked = tracked;
+    }
+    // Moves only a hand's aim pose; its grip pose stays where it is.
+    void SetHandAimPose(uint32_t hand, const HeadPose& pose) {
+        runtime->controllers.hands[hand & 1].pose = FakeOpenXrTracking::ToXrPose(pose);
+    }
+    // Places a hand's grip pose apart from its aim pose in the tracking origin. `tracked = false` makes
+    // the grip pose alone untracked: the controller (and so the aim pose) stays on.
+    void SetHandGripPose(uint32_t hand, const HeadPose& pose, bool tracked = true) {
+        auto& sim = runtime->controllers.hands[hand & 1];
+        sim.gripPose = FakeOpenXrTracking::ToXrPose(pose);
+        sim.gripTracked = tracked;
+    }
+    // A hand held so that its index fingertip is at the position of `aim` and its finger runs along `aim`'s -Z axis:
+    // the aim pose is `aim` and the grip pose is the one that puts the relaxed glove finger there (the Pointer Ray
+    // starts at the fingertip and runs along the finger, so for a test that says "the hand points here" this is
+    // the hand that does). The fingertip and the finger direction are the grip-frame numbers of the Gloved Hand,
+    // metres, left hand (the right hand is the left with X negated), written out here independently of the mod:
+    // scripts/derive_virtual_hand_pointer.py prints them.
+    void SetHandPointing(uint32_t hand, const HeadPose& aim, bool tracked = true) {
+        const float mirror = (hand & 1) ? -1.0f : 1.0f;
+        const Vector3 tip(-0.0052f * mirror, -0.0905f, -0.0441f);
+        const Vector3 finger(0.3349f * mirror, -0.9232f, -0.1885f);
+        // The shortest turn that takes the finger direction onto -Z, then the aim orientation after it.
+        const Vector3 forward(0.0f, 0.0f, -1.0f);
+        const float dot = finger.x * forward.x + finger.y * forward.y + finger.z * forward.z;
+        Quaternion fingerToForward(finger.y * forward.z - finger.z * forward.y, finger.z * forward.x - finger.x * forward.z,
+                                   finger.x * forward.y - finger.y * forward.x, 1.0f + dot);
+        const float length = std::sqrt(fingerToForward.x * fingerToForward.x + fingerToForward.y * fingerToForward.y +
+                                       fingerToForward.z * fingerToForward.z + fingerToForward.w * fingerToForward.w);
+        fingerToForward = Quaternion(fingerToForward.x / length, fingerToForward.y / length, fingerToForward.z / length, fingerToForward.w / length);
+        const XrPosef aimPose = FakeOpenXrTracking::ToXrPose(aim);
+        const Quaternion aimOrientation(aimPose.orientation.x, aimPose.orientation.y, aimPose.orientation.z, aimPose.orientation.w);
+        const Quaternion gripOrientation = aimOrientation * fingerToForward;
+        const Vector3 tipOffset = RotateVectorByQuaternion(gripOrientation, tip);
+        HeadPose grip;
+        grip.orientation = gripOrientation;
+        grip.position = Vector3(aim.position.x - tipOffset.x, aim.position.y - tipOffset.y, aim.position.z - tipOffset.z);
+        grip.isValid = true;
+        grip.positionTracked = true;
+        grip.orientationTracked = true;
+        SetHandPose(hand, aim, tracked);
+        SetHandGripPose(hand, grip);
     }
     void SetHandTracked(uint32_t hand, bool tracked) { runtime->controllers.hands[hand & 1].tracked = tracked; }
     void SetHandInputs(uint32_t hand, const FakeOpenXrControllers::Inputs& inputs) {

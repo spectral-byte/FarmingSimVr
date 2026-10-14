@@ -1,0 +1,47 @@
+Virtual Hand model: source, author and license
+==============================================
+
+Files: VirtualHandLeft.i3d, VirtualHandLeft.i3d.shapes, VirtualHandRight.i3d, VirtualHandRight.i3d.shapes
+
+Title:    Gloved Hand
+Author:   J-Toastie
+Source:   https://poly.pizza/m/MTB4egc4Vh
+License:  Creative Commons Attribution 3.0 (CC BY 3.0),
+          https://creativecommons.org/licenses/by/3.0/
+          (the license link on the model's Poly Pizza page, checked 2026-10-13).
+
+Required attribution (keep this line wherever the model is redistributed):
+
+    "Gloved Hand" by J-Toastie (https://poly.pizza/m/MTB4egc4Vh),
+    licensed under Creative Commons Attribution 3.0 (CC BY 3.0,
+    https://creativecommons.org/licenses/by/3.0/).
+    Modified: scaled, rigged for the game engine and mirrored for a right hand.
+
+Changes made for FS25 VR (CC BY asks for changes to be indicated):
+
+  * Exported to .i3d with the GIANTS Blender exporter. The model is a LEFT
+    hand; VirtualHandLeft.i3d is that hand.
+  * Scaled to metres: the glove's mesh and skeleton are multiplied by 0.0875 m
+    per original model unit (a hand about 0.19 m long), and the files carry
+    this size themselves (no node scale). The shapes in the .shapes files
+    are in metres too.
+  * VirtualHandRight.i3d (and its .shapes file) is a derivative work: the
+    left hand model mirrored across its X = 0 plane (mesh and skeleton, same
+    bone names, polygon windings reversed so the faces stay outward), so
+    that the Companion Mod can draw a right Virtual Hand.
+  * In both .i3d files: the externalShapesFile now names the shapes file that
+    actually ships (VirtualHandLeft.i3d.shapes, VirtualHandRight.i3d.shapes)
+    and shadow casting of the shape is switched off (castsShadows="false").
+    The bone names and hierarchy and the materials are unchanged.
+  * The rig was corrected. The GIANTS Blender exporter writes every bone's
+    rotation 90 degrees short about X, which piles up down each finger: the
+    first export composed to a skeleton about a fifth the size of the mesh.
+    The bone rotations in both .i3d files are now the armature's own
+    parent-relative rotations, so the bones compose to the rest pose of the
+    armature in "Gloved Hand LP.blend" (scripts/export_virtual_hand.py re-exports
+    it; scripts/check_virtual_hand_rig.ps1 checks it).
+  * The Companion Mod turns and moves each model onto the OpenXR grip pose at
+    run time; nothing about that is stored in the files.
+
+This license covers the model files in this folder only. The rest of FS25 VR
+is licensed under the GNU General Public License v3.0 (see LICENSE).
