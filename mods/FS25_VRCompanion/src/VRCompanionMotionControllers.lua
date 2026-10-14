@@ -91,6 +91,10 @@
 --                 ignored, so the hands hide), resetMotionControllers -> resetVirtualHands(), and the console
 --                 command registers next to the others (VRCompanionVirtualHands.lua). The Virtual Hands place the grip
 --                 pose through VRCompanion:headRelativePoseToWorld, the transform the Pointer Ray uses too.
+--     WheelGrab   updateMotionControllers -> updateWheelGrab(dt) after the hands are polled and before the Pointer Hand is chosen
+--                 (also when input is ignored, so a held Steering Wheel is let go), the saved setting rides on
+--                 save/loadMotionControllerSettings (saveWheelGrabSetting / loadWheelGrabSetting), the console commands register
+--                 next to the others and resetMotionControllers -> resetWheelGrab() (VRCompanionWheelGrab.lua)
 --     ControllerMap (VRCompanionMotionControllerMap.lua) is driven from here: updateMotionControllers ->
 --                 processMotionControllerButtons(), and the save/load/register/reset functions below call its
 --                 saveMotionControllerMapSettings / loadMotionControllerMapSettings / registerMotionControllerMapConsoleCommands /
@@ -360,6 +364,7 @@ function VRCompanion:updateMotionControllers(dt)
             state.ignoredCleared = true
         end
         if type(self.resetMotionControllerButtons) == "function" then self:resetMotionControllerButtons() end
+        if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end  -- lets go of the Steering Wheel
         settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return
@@ -416,6 +421,8 @@ function VRCompanion:updateMotionControllers(dt)
         if not isDown then state.triggerConsumed[hand] = false end
         state.triggerPressed[hand] = isDown and not wasDown
     end
+    -- Wheel Grab decides which hands hold the Steering Wheel from the hands just polled (VRCompanionWheelGrab.lua).
+    if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end
     state.pointerHand = choosePointerHand()
     self.pointerHand = state.pointerHand
     -- The Pointer Hand moving is the ray moving: it takes the pointer from the desk mouse.
@@ -786,6 +793,7 @@ function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.motionControllersEnabled ~= false)
     end
     self:savePointerConeSetting(xmlFile, xml)
+    if type(self.saveWheelGrabSetting) == "function" then self:saveWheelGrabSetting(xmlFile, xml) end
     if type(self.saveMotionControllerMapSettings) == "function" then self:saveMotionControllerMapSettings(xmlFile, xml) end
 end
 
@@ -804,6 +812,7 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
         self.motionControllersEnabled = loaded
     end
     self:loadPointerConeSetting(xmlFile, xml)
+    if type(self.loadWheelGrabSetting) == "function" then self:loadWheelGrabSetting(xmlFile, xml) end
     if type(self.loadMotionControllerMapSettings) == "function" then self:loadMotionControllerMapSettings(xmlFile, xml) end
 end
 
@@ -917,6 +926,9 @@ function VRCompanion:getPointerDiagnostics()
     if type(self.getVirtualHandsDiagnostics) == "function" then
         virtualHandsText = " | " .. self:getVirtualHandsDiagnostics()
     end
+    if type(self.getWheelGrabDiagnostics) == "function" then
+        virtualHandsText = virtualHandsText .. " | " .. self:getWheelGrabDiagnostics()
+    end
     local pointer = state.pointerHand
     local trigger = pointer ~= nil and state.hands[pointer].trigger or 0
     return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s | Left hand: %s | Right hand: %s%s",
@@ -936,6 +948,7 @@ function VRCompanion:registerMotionControllerConsoleCommands()
     addConsoleCommand("vrMotionControllerStatus", "Report each Motion Controller's tracked and in-use state and the Pointer Hand: vrMotionControllerStatus", "consoleCommandMotionControllerStatus", self)
     addConsoleCommand("vrPointerCone", "How wide (degrees) the cone around the Pointer Ray is inside which the nearest Click Point is selected (saved): vrPointerCone [degrees]", "consoleCommandSetPointerCone", self)
     if type(self.registerVirtualHandsConsoleCommands) == "function" then self:registerVirtualHandsConsoleCommands() end
+    if type(self.registerWheelGrabConsoleCommands) == "function" then self:registerWheelGrabConsoleCommands() end
     if type(self.registerMotionControllerMapConsoleCommands) == "function" then self:registerMotionControllerMapConsoleCommands() end
 end
 
@@ -946,6 +959,9 @@ function VRCompanion:resetMotionControllers()
     end
     if type(self.resetVirtualHands) == "function" then
         self:resetVirtualHands()
+    end
+    if type(self.resetWheelGrab) == "function" then
+        self:resetWheelGrab()
     end
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrMotionControllers")

@@ -90,6 +90,8 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrPointerDiagnostics` | Report why the Pointer Ray may not select Click Points (ray placement, who controls the pointer, Interactive Control support; also each hand's aim pose and grip pose and whether they are tracked, how far each index finger points from the aim direction, and each Virtual Hand's state) |
 | `vrVirtualHandsDiagnostics` | Report whether the Virtual Hands (gloved hands drawn where the Motion Controllers are held) are available, and each hand's state with the reason when it is hidden |
 | `vrPointerCone <degrees>` | How wide a cone around the Pointer Ray selects the nearest Interactive Control Click Point (default `5`, saved) |
+| `vrWheelGrab <on\|off>` | Wheel Grab: steer by squeezing the grip with a hand at the Steering Wheel's rim and turning it, in the in-cab camera (default `on`, saved). `off` switches only Wheel Grab off, e.g. to rest your hands near the wheel while driving with a Wheel Peripheral |
+| `vrWheelGrabDiagnostics` | Report whether the vehicle has a Steering Wheel, each hand's distance to the rim ring, who is holding, the steering value sent and whether the wheel is at full lock (also in the game log) |
 
 ### Motion Controller buttons
 
