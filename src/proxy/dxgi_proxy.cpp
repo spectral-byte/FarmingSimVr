@@ -29,6 +29,18 @@ FARPROC SystemExport(const char* name) {
     return passthrough.GetExport(name);
 }
 
+// The proxy whose VR initialization is running on this thread. The OpenXR runtime is loaded into the
+// game process and its dxgi.dll import binds to this proxy, so a runtime that creates a DXGI factory
+// during setup (VDXR's xrGetSystem does) calls back into EnsureVrInitialized on the same thread.
+thread_local const DxgiProxy* t_initializingProxy = nullptr;
+
+struct VrInitScope {
+    explicit VrInitScope(const DxgiProxy* proxy) { t_initializingProxy = proxy; }
+    ~VrInitScope() { t_initializingProxy = nullptr; }
+    VrInitScope(const VrInitScope&) = delete;
+    VrInitScope& operator=(const VrInitScope&) = delete;
+};
+
 } // anonymous namespace
 
 
@@ -64,14 +76,20 @@ void DxgiProxy::EnsureVrInitialized() {
     // Installed on every factory call (idempotent and locked), not only the first, so a concurrent
     // caller blocks until the LoadLibrary hooks exist instead of loading nvngx unhooked.
     if (m_ngxInterceptor) m_ngxInterceptor->InstallModuleLoadHooks();
+    // A runtime calling back in from inside our own initialization would wait on call_once forever;
+    // it gets its factory from the system dxgi.dll with the OpenXR state as initialization left it.
+    if (t_initializingProxy == this) return;
     // call_once, not a flag: a concurrent caller waits until initialization finishes, because it
     // decides from the OpenXR state whether to hook the factory it is about to return.
     std::call_once(m_vrInitOnce, [this] {
+        VrInitScope scope(this);
         if (m_ngxInterceptor) m_ngxInterceptor->CheckAndAttachLoadedModule();
         if (!m_openXrManager) {
             LogWarn("DxgiProxy: No OpenXR manager supplied; forwarding all calls silently.");
         } else {
             LogInfo("Intercepted DXGI startup sequence. Initializing OpenXR subsystem...");
+            // Info lines are buffered; flush so a runtime that hangs below still leaves a log.
+            Logger::Instance().Flush();
             m_openXrManager->Initialize();
             if (m_openXrManager->IsPassThrough()) {
                 LogInfo("Injector operating in Pass-Through Mode (forwarding all calls silently).");
