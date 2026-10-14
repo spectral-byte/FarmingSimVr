@@ -11,7 +11,7 @@ Motion Controllers drive the Pointer Ray, the Virtual Hand, clicks on Click Poin
 - Which Motion Controller is the Pointer Hand, what the trigger does in the world or in a menu, the button mappings and their saved settings all live in the Companion Mod, like the rest of the VR behaviour.
 
 ## Status
-Proposed.
+Proposed. Partly replaced by ADR-0028: buttons, triggers and sticks also reach the game as a Virtual Gamepad, bound in the game's Controls screen.
 
 ## Considered Options
 - **Raw per-hand inputs, with their meaning set in the Companion Mod** (selected: the meaning of a button depends on game state only the Companion Mod sees, such as whether a menu is open, which hand is the Pointer Hand and whether a Click Point is selected. A new mapping is a Lua change, with no new Injector build).

@@ -144,6 +144,10 @@ _Avoid_: Mono upscaler fallback, 2D bypass, menu pass-through
 A tracked handheld VR input device, one per hand. The player may set it down at any time and keep driving with a Wheel Peripheral, gamepad, or keyboard.
 _Avoid_: VR controller, wand, hand controller, controller (in the Interactive Control mod a "controller" is a switch or lever)
 
+**Virtual Gamepad**:
+The Xbox-style gamepad the game sees in place of the Motion Controllers' triggers, grips, thumbsticks and buttons, so that every one of them is bound in the game's own Controls screen like any gamepad. Each physical control on each hand is its own gamepad input; a binding stays with the physical hand, never with the Pointer Hand. Hand poses never go through it. While the mod itself is using an input (a menu is showing, the Pointer Ray is on a Click Point, a Virtual Hand is holding the Steering Wheel), that input reads as released on it, except that an input already held when that use begins keeps its binding until it is let go.
+_Avoid_: Emulated controller, fake pad, XInput pad, virtual controller
+
 **Wheel Peripheral**:
 A physical steering wheel connected to the PC as a game input device.
 _Avoid_: Wheel, racing wheel, steering wheel (that is the Steering Wheel in the cab)
