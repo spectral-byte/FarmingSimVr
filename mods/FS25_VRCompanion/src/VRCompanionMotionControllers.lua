@@ -94,7 +94,9 @@
 --     WheelGrab   updateMotionControllers -> updateWheelGrab(dt) after the hands are polled and before the Pointer Hand is chosen
 --                 (also when input is ignored, so a held Steering Wheel is let go), the saved setting rides on
 --                 save/loadMotionControllerSettings (saveWheelGrabSetting / loadWheelGrabSetting), the console commands register
---                 next to the others and resetMotionControllers -> resetWheelGrab() (VRCompanionWheelGrab.lua)
+--                 next to the others and resetMotionControllers -> resetWheelGrab() (VRCompanionWheelGrab.lua). A hand
+--                 holding the Steering Wheel (isHandHoldingSteeringWheel) stays in use but is never a Pointer Hand
+--                 candidate, so it casts no Pointer Ray; Interactive Control's auto-on keeps its state while it holds.
 --     ControllerMap (VRCompanionMotionControllerMap.lua) is driven from here: updateMotionControllers ->
 --                 processMotionControllerButtons(), and the save/load/register/reset functions below call its
 --                 saveMotionControllerMapSettings / loadMotionControllerMapSettings / registerMotionControllerMapConsoleCommands /
@@ -236,8 +238,15 @@ end
 -- The Pointer Hand: the one hand in use. With both in use it is the previous one, until the trigger is
 -- pulled on the other hand: that pull moves the Pointer Hand there and is consumed (it clicks nothing,
 -- see getPointerTrigger). With both in use and no previous Pointer Hand, a pull on either picks it.
-local function choosePointerHand()
-    local left, right = state.inUse[0], state.inUse[1]
+-- A hand holding the Steering Wheel is in use but never a candidate (Wheel Grab, see VRCompanionWheelGrab.lua): the
+-- Pointer Hand that starts holding falls to the other hand in use, or to nobody, and can point again once it lets go.
+local function isHoldingSteeringWheel(self, hand)
+    return type(self.isHandHoldingSteeringWheel) == "function" and self:isHandHoldingSteeringWheel(hand) == true
+end
+
+local function choosePointerHand(self)
+    local left = state.inUse[0] and not isHoldingSteeringWheel(self, 0)
+    local right = state.inUse[1] and not isHoldingSteeringWheel(self, 1)
     if left and not right then return 0 end
     if right and not left then return 1 end
     if not (left and right) then return nil end
@@ -423,7 +432,14 @@ function VRCompanion:updateMotionControllers(dt)
     end
     -- Wheel Grab decides which hands hold the Steering Wheel from the hands just polled (VRCompanionWheelGrab.lua).
     if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end
-    state.pointerHand = choosePointerHand()
+    -- A hand holding the Steering Wheel stays in use (it keeps its Virtual Hand), however still it is held.
+    for _, hand in ipairs(HANDS) do
+        if isHoldingSteeringWheel(self, hand) then
+            state.inUse[hand] = true
+            if now ~= nil then state.motion[hand].lastMovedMs = now end
+        end
+    end
+    state.pointerHand = choosePointerHand(self)
     self.pointerHand = state.pointerHand
     -- The Pointer Hand moving is the ray moving: it takes the pointer from the desk mouse.
     if state.pointerHand ~= nil and state.movedThisUpdate[state.pointerHand] then
