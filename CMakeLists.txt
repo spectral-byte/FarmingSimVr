@@ -205,6 +205,7 @@ add_executable(fs25_vr_tests
     tests/test_pointer_handover.cpp
     tests/test_haptics.cpp
     tests/test_virtual_gamepad.cpp
+    tests/test_virtual_gamepad_rumble.cpp
     tests/test_xinput_hooks.cpp
     tests/test_interactive_control_auto_on.cpp
     tests/test_menu_pointer_panel.cpp

@@ -33,6 +33,23 @@ void OpenXrManager::SetPerformanceCounterSource(PerformanceCounterSource source)
     m_counterSource = std::move(source);
 }
 
+double OpenXrManager::GetMonotonicSeconds() const {
+    const PerformanceCounterSample now = ReadPerformanceCounter();
+    return now.frequency > 0 ? static_cast<double>(now.counter) / static_cast<double>(now.frequency) : 0.0;
+}
+
+void OpenXrManager::SetFrameBeginObserver(const void* owner, FrameBeginObserver observer) {
+    ClearFrameBeginObserver(owner);
+    m_frameBeginObservers.emplace_back(owner, std::move(observer));
+}
+
+void OpenXrManager::ClearFrameBeginObserver(const void* owner) {
+    m_frameBeginObservers.erase(
+        std::remove_if(m_frameBeginObservers.begin(), m_frameBeginObservers.end(),
+                       [owner](const auto& entry) { return entry.first == owner; }),
+        m_frameBeginObservers.end());
+}
+
 OpenXrManager::PerformanceCounterSample OpenXrManager::ReadPerformanceCounter() const {
     if (m_counterSource) return m_counterSource();
     LARGE_INTEGER qpc;
@@ -1074,6 +1091,9 @@ bool OpenXrManager::BeginFrame() {
         PollHeadPose(m_frameState.predictedDisplayTime);
     }
 
+    // Copy first: an observer may add or clear observers.
+    const auto observers = m_frameBeginObservers;
+    for (const auto& entry : observers) entry.second();
     return true;
 }
 

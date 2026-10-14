@@ -129,3 +129,35 @@ TEST_F(XInputHooksTest, AStandalonePadWithoutARuntimeNeverHooksTheLibrary) {
     bridge->GetVirtualGamepad().Configure(true, true);
     EXPECT_FALSE(bridge->GetVirtualGamepad().AreHooksInstalled());
 }
+
+TEST_F(XInputHooksTest, VibrationForThePadPlaysOnTheHandsAndVibrationForEverySlotElseStaysWithTheRealDevices) {
+    const RealSlots real = RealSlots::Read();
+    const int free = real.HighestFree();
+    if (free < 0) GTEST_SKIP() << "all four XInput slots hold real pads on this machine";
+
+    InjectorRuntime::Dependencies deps;
+    deps.vrBridge = bridge;
+    InjectorRuntime runtime(std::move(deps));
+    bridge->GetVirtualGamepad().Configure(true, true);
+    ASSERT_TRUE(bridge->GetVirtualGamepad().AreHooksInstalled());
+
+    // Through the normal import, as the game calls it: other slots answer as the real library does and move no hand.
+    XINPUT_VIBRATION rumble{ 65535, 65535 };
+    for (DWORD slot = 0; slot < 4; ++slot) {
+        if (static_cast<int>(slot) == free) continue;
+        EXPECT_EQ(XInputSetState(slot, &rumble), real.vibration[slot]) << "slot " << slot;
+    }
+    headset.NextFrame();
+    headset.NextFrame();
+    EXPECT_TRUE(headset.HapticPulses().empty()) << "not the pad's slot: nothing for the Motion Controllers";
+
+    // The pad's own slot reaches the hands: the left motor the left hand, the right motor the right.
+    XINPUT_VIBRATION leftOnly{ 65535, 0 };
+    ASSERT_EQ(XInputSetState(static_cast<DWORD>(free), &leftOnly), static_cast<DWORD>(ERROR_SUCCESS));
+    headset.NextFrame();
+    ASSERT_FALSE(headset.HapticPulses().empty());
+    for (const auto& pulse : headset.HapticPulses()) EXPECT_EQ(pulse.hand, 0);
+
+    bridge->GetVirtualGamepad().Configure(false, true);
+    EXPECT_EQ(RealSlots::Read().vibration, real.vibration);
+}

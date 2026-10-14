@@ -236,7 +236,10 @@ HandState VRBridge::GetHandState(uint32_t hand) {
 
 bool VRBridge::PulseHaptic(uint32_t hand, float durationMs, float strength) {
     if (m_openXrManager) {
-        return m_openXrManager->PulseHaptic(hand, durationMs / 1000.0, strength);
+        const bool played = m_openXrManager->PulseHaptic(hand, durationMs / 1000.0, strength);
+        // The Companion Mod's own pulses win over the game's rumble on that hand while they play.
+        if (played) m_virtualGamepad.NoteCompanionPulse(hand, durationMs / 1000.0);
+        return played;
     }
     return false;
 }

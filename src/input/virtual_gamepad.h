@@ -49,6 +49,10 @@ public:
     DWORD GetCapabilities(DWORD userIndex, DWORD flags, XINPUT_CAPABILITIES* capabilities);
     DWORD SetState(DWORD userIndex, XINPUT_VIBRATION* vibration);
 
+    // The Companion Mod played a pulse of its own on `hand` (a Click Point tick, a Wheel Grab pulse) lasting
+    // `durationSeconds`: the game's rumble stays off that hand while it plays, then resumes.
+    void NoteCompanionPulse(uint32_t hand, double durationSeconds);
+
     // Detours are installed only while a live InjectorRuntime owns the pad, so the hooks can always find the pad
     // that holds their originals.
     void SetOwnedByRuntime(bool owned);
@@ -72,7 +76,14 @@ private:
     static constexpr float kGripPress = 0.6f;
     static constexpr float kGripRelease = 0.4f;
 
+    // The game's rumble plays on the Motion Controllers as short pulses, renewed on every OpenXR frame while a
+    // motor runs (a pulse that is not renewed dies out by itself), at a fixed fraction of a gamepad's strength.
+    static constexpr float kRumbleScale = 0.5f;
+    static constexpr double kRumblePulseSeconds = 0.05;
+
     static VirtualGamepad* ForHook(FunctionDetour VirtualGamepad::*detour);
+
+    void PlayRumble();
 
     // The three below run with m_mutex held.
     Status EvaluateLocked();
@@ -95,6 +106,8 @@ private:
     XINPUT_GAMEPAD m_lastGamepad{};
     DWORD m_packetNumber = 0;
     std::array<bool, 2> m_gripDown{};
+    std::array<WORD, 2> m_motorSpeed{};            // per hand: the left motor plays on the left hand, the right on the right
+    std::array<double, 2> m_companionPulseUntil{}; // per hand: monotonic seconds
 
     RealPadProbe m_realPadProbe;
     FunctionDetour m_detourGetState;
