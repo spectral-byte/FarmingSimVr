@@ -381,9 +381,16 @@ function VRCompanion:updateMotionControllers(dt)
     state.ignoredCleared = false
 
     local getHandState = bridgeCall()
+    local bridgeWasMissing = state.bridgeMissing
     state.bridgeMissing = (getHandState == nil)
     if getHandState == nil then
         state.ray.valid = false
+        if not bridgeWasMissing then
+            -- The cached hands are stale from here on: read as untracked, so that a hand holding the Steering Wheel is no
+            -- longer located and Wheel Grab lets go (and stops dropping the other devices' steering).
+            clearHands()
+        end
+        if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end
         settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return

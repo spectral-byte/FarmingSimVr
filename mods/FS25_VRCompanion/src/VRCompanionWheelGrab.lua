@@ -129,6 +129,11 @@ VRCompanion.WHEEL_GRAB_GRAB_PULSE_STRENGTH = 0.4
 VRCompanion.WHEEL_GRAB_FULL_LOCK_PULSE_MS = 70
 VRCompanion.WHEEL_GRAB_FULL_LOCK_PULSE_STRENGTH = 0.8
 
+-- Wheel Grab's own setSteeringInput call raising on this many updates in a row makes it give up for the map, with one
+-- warning, exactly as for a missing or reshaped function. Three: a one-off failure is retried the next update, while a
+-- call that is broken fails on every one.
+VRCompanion.WHEEL_GRAB_STEERING_FAILURES_BEFORE_GIVING_UP = 3
+
 local HANDS = { 0, 1 }
 local HAND_NAMES = { [0] = "left", [1] = "right" }
 
@@ -146,7 +151,7 @@ local function newState()
         scratch = nil,       -- reused table for a hand's grip pose in the world
         sent = nil,          -- the steering value sent in the last update that sent one, nil while nothing is held
         atFullLock = false,  -- the target is at a steering stop
-        sendFailureLogged = false,
+        sendFailures = 0,    -- updates in a row on which Wheel Grab's own setSteeringInput call raised
     }
 end
 
@@ -261,14 +266,30 @@ local function wrapInstance(vehicle)
     vehicle[STEERING_FUNCTION] = wrapper
 end
 
--- Lifts both wraps (map unload). The class function is only put back when it is still the wrapper.
-local function unwrapAll()
+-- Lifts both wraps. The class function is only put back when it is still the wrapper.
+local function liftWraps()
     unwrapInstance()
     local class = wrap.class
     if class ~= nil and class[STEERING_FUNCTION] == wrap.classWrapper then
         class[STEERING_FUNCTION] = wrap.classOriginal
     end
-    wrap.class, wrap.classOriginal, wrap.classWrapper, wrap.problem = nil, nil, nil, nil
+    wrap.class, wrap.classOriginal, wrap.classWrapper = nil, nil, nil
+end
+
+-- Lifts both wraps and forgets that Wheel Grab gave up (map unload).
+local function unwrapAll()
+    liftWraps()
+    wrap.problem = nil
+end
+
+-- Wheel Grab cannot rely on the vehicle's steering function: it logs ONE warning, never steers again this map (it is
+-- unavailable, see steeringInputProblem), and lifts its wraps at once, so that the steering of every other device is
+-- exactly the game's.
+local function giveUp(problem)
+    wrap.problem = problem
+    liftWraps()
+    print("[FS25_VR] [Warning] Wheel Grab disabled: " .. problem .. ". Steering from the keyboard, a gamepad or a "
+        .. "Wheel Peripheral is unchanged.")
 end
 
 -- Why Wheel Grab cannot rely on the vehicle's steering function, or nil. The first time it cannot, one warning is logged
@@ -288,11 +309,7 @@ local function steeringInputProblem(vehicle)
         local instanceProblem = shapeProblem(vehicle[STEERING_FUNCTION])
         if instanceProblem ~= nil then problem = "the vehicle's " .. STEERING_FUNCTION .. ": " .. instanceProblem end
     end
-    if problem ~= nil then
-        wrap.problem = problem
-        print("[FS25_VR] [Warning] Wheel Grab disabled: " .. problem .. ". Steering from the keyboard, a gamepad or a "
-            .. "Wheel Peripheral is unchanged.")
-    end
+    if problem ~= nil then giveUp(problem) end
     return problem
 end
 
@@ -536,15 +553,24 @@ end
 
 -- Wheel Grab's own call: the only place that steers the vehicle (ADR-0027). isWheelGrabSendingSteering() is true while it
 -- runs, which is how a wrap of setSteeringInput tells this call from every other device's.
+--
+-- The call is made inside pcall, and a game that raises from it (a function that is not what the shape check could tell, or
+-- one that cannot be inspected at all: the engine's Lua may offer neither debug.info nor debug.getinfo) is given up on
+-- like a missing one (giveUp) once the call has raised on WHEEL_GRAB_STEERING_FAILURES_BEFORE_GIVING_UP updates in a row.
+-- One raise on its own, or two, does not switch Wheel Grab off for the map: a call can fail for a moment (a vehicle being
+-- torn down) and the next update sends the value again. Returns whether Wheel Grab gave up.
 local function sendSteering(vehicle, value)
     state.sending = true
     local ok, failure = pcall(vehicle.setSteeringInput, vehicle, value, true, engine("InputDevice").CATEGORY.WHEEL)
     state.sending = false
-    if not ok and not state.sendFailureLogged then
-        state.sendFailureLogged = true
-        print("[FS25_VR] [Warning] Wheel Grab: setSteeringInput raised: " .. tostring(failure))
+    if ok then
+        state.sendFailures = 0
+        return false
     end
-    return ok
+    state.sendFailures = state.sendFailures + 1
+    if state.sendFailures < VRCompanion.WHEEL_GRAB_STEERING_FAILURES_BEFORE_GIVING_UP then return false end
+    giveUp("setSteeringInput raised: " .. tostring(failure))
+    return true
 end
 
 function VRCompanion:updateWheelGrab(dt)
@@ -556,15 +582,17 @@ function VRCompanion:updateWheelGrab(dt)
         for _, hand in ipairs(HANDS) do releaseHand(hand) end
     end
     if not anyHolding() then
-        state.vehicle, state.sent, state.atFullLock = nil, nil, false
+        state.vehicle, state.sent, state.atFullLock, state.sendFailures = nil, nil, false, 0
     end
     if wheel == nil then
         unwrapInstance()
         return
     end
 
-    -- Every holding hand's turn since the last update is counted; a hand that grabs now counts as holding with no turn.
-    local wasAtFullLock = state.atFullLock
+    -- The target moves by the average turn, since the last update, of the hands that held then and still hold. A hand that
+    -- grabs now has not turned anything yet and is not counted (so it cannot halve the other hand's turn); a hand that
+    -- lets go now is not counted either, and its last turn is ignored with it.
+    local low, high = angleLimits(vehicle, wheel, direction)
     local sum, count = 0, 0
     for _, hand in ipairs(HANDS) do
         local entry = state.hands[hand]
@@ -587,27 +615,32 @@ function VRCompanion:updateWheelGrab(dt)
             local angle, radial, axial = measureHand(self, hand, wheel)
             if angle ~= nil and ringDistance(self, radial, axial) == 0 then
                 if not anyHolding() then
-                    -- The first hand to take hold: the target starts from where the wheel actually is.
+                    -- The first hand to take hold: the target starts from where the wheel actually is. A wheel already
+                    -- at a stop is "at full lock" from the start, so the stop is felt only after the target has left it
+                    -- and come back (the grab's own pulse is all this hand feels at the stop).
                     state.target = actualAngle(vehicle, wheel, direction)
+                    state.atFullLock = state.target <= low or state.target >= high
                     state.vehicle = vehicle
                 end
                 entry.holding = true
                 entry.angle = angle
                 pinHand(hand, wheel)
                 pulseHand(self, hand, self.WHEEL_GRAB_GRAB_PULSE_MS, self.WHEEL_GRAB_GRAB_PULSE_STRENGTH)
-                count = count + 1
             end
         end
     end
-    if count == 0 then
-        state.vehicle, state.sent, state.atFullLock = nil, nil, false
+    if not anyHolding() then
+        state.vehicle, state.sent, state.atFullLock, state.sendFailures = nil, nil, false, 0
         unwrapInstance()
         return
     end
     wrapInstance(vehicle)  -- the other devices' calls are dropped from here on
 
-    local low, high = angleLimits(vehicle, wheel, direction)
-    state.target = math.max(low, math.min(high, state.target + sum / count))
+    local wasAtFullLock = state.atFullLock
+    if count > 0 then
+        state.target = state.target + sum / count
+    end
+    state.target = math.max(low, math.min(high, state.target))
     state.atFullLock = state.target <= low or state.target >= high
     if state.atFullLock and not wasAtFullLock then
         -- The target reached a stop: every holding hand feels it, once, until the target has left the stop again.
@@ -619,7 +652,11 @@ function VRCompanion:updateWheelGrab(dt)
     end
     local value = steeringValue(vehicle, wheel, direction, state.target)
     state.sent = value
-    if value ~= nil then sendSteering(vehicle, value) end
+    if value ~= nil and sendSteering(vehicle, value) then
+        -- Wheel Grab gave up on the steering function: every hold ends, as if the grips were let go.
+        for _, hand in ipairs(HANDS) do releaseHand(hand) end
+        state.vehicle, state.sent, state.atFullLock = nil, nil, false
+    end
 end
 
 function VRCompanion:isHandHoldingSteeringWheel(hand)

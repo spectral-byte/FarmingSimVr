@@ -698,8 +698,11 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
 //   and then stores the input like the game (the analog flag and category only change on a non-zero input).
 //   variant: nil ("ok"), "missing" (a game update renamed it: the class has setSteeringAxis, same arguments, and no
 //   setSteeringInput) or "reshaped" (setSteeringInput(vehicle, { value, isAnalog, category }) takes one table).
+//   or "raises" (the "ok" function, but a call in the Wheel Peripheral's category -- the one Wheel Grab makes -- raises
+//   an error and records nothing; the other categories work). StubSteer.failNextWheelCalls(n) makes only the next n
+//   such calls raise, in any variant.
 //   Run it BEFORE loading the Companion Mod to have Drivable there at file load, like the game; StubSteer.original is
-//   the unwrapped function of the "ok" variant.
+//   the unwrapped function of the "ok" and "raises" variants.
 // StubSteer.keyboard / gamepad / wheelPeripheral (vehicle, value)  another device steering: the call it makes (by the
 //   variant's entry point); StubSteer.send(vehicle, value, isAnalog, category) is the general form.
 // StubSteer.equip(vehicle, options) -> vehicle   makes a StubScene.cab vehicle steerable. Like the game it COPIES
@@ -751,7 +754,12 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
         StubSteer.original = nil
         equipped = {}
         _G.Drivable = {}
+        StubSteer.wheelCallFailures = StubSteer.variant == "raises" and math.huge or 0
         local function steer(self, inputValue, isAnalog, deviceCategory)
+            if deviceCategory == InputDevice.CATEGORY.WHEEL and StubSteer.wheelCallFailures > 0 then
+                StubSteer.wheelCallFailures = StubSteer.wheelCallFailures - 1
+                error("setSteeringInput: the Wheel Peripheral branch is broken")  -- before the call is recorded
+            end
             table.insert(StubSteer.calls, { value = inputValue, analog = isAnalog, category = deviceCategory })
             local last = self.spec_drivable.lastInputValues
             last.axisSteer = inputValue
@@ -769,6 +777,8 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
             StubSteer.original = steer
         end
     end
+
+    function StubSteer.failNextWheelCalls(count) StubSteer.wheelCallFailures = count end
 
     -- Another device steering: the call the keyboard, a gamepad or a Wheel Peripheral makes, through whatever the
     -- installed game variant calls its steering function.

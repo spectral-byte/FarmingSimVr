@@ -190,6 +190,50 @@ TEST_F(CompanionModTest, ARegrabbingHandWhileTheOtherHoldsPicksUpFromTheWheelWit
     EXPECT_NEAR(WheelAngle(L), 0.9, 0.02) << "turning on from the new grip adds the turn to the wheel's own angle";
 }
 
+TEST_F(CompanionModTest, AHandTakingHoldWhileTheOtherTurnsLeavesTheOthersTurnWhole) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+
+    GRAB(kRight, RimAt(L, 0.0));
+    BRING_HAND(kLeft, RimAt(L, kPi));  // on the rim, the grip not squeezed yet
+    FRAMES(2);
+    ASSERT_NEAR(LastValue(L), 0.0, 0.002) << "the right hand holds the wheel still";
+
+    // In one frame the right hand turns by 0.2 and the left hand takes hold: the new hand has not turned the wheel yet,
+    // so the turn that frame is the right hand's, whole and not averaged with the left hand's nothing.
+    headset.SetHandPose(kRight, HandAtWorld(RimAt(L, 0.2)));
+    headset.SetHandInputs(kLeft, Grip(1.0f));
+    FRAMES(1);
+    ASSERT_TRUE(Held(L));
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(0)"), "true") << "the left hand took hold";
+    EXPECT_NEAR(LastValue(L), ValueFor540(0.2), 0.0005) << "the wheel was asked for the whole of the right hand's turn";
+
+    // From then on the two hands average as usual.
+    TURN_HANDS_TO(0.4, kPi + 0.2);
+    EXPECT_NEAR(LastValue(L), ValueFor540(0.2 + 0.2), 0.0005) << "both hands turned 0.2 more";
+}
+
+TEST_F(CompanionModTest, AHandLettingGoWhileTheOtherTurnsLeavesTheOthersTurnWholeAndIgnoresItsOwn) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+
+    GRAB(kRight, RimAt(L, 0.0));
+    GRAB(kLeft, RimAt(L, kPi));
+    FRAMES(2);
+    ASSERT_NEAR(LastValue(L), 0.0, 0.002);
+
+    // In one frame the left hand lets go and swings round a long way while the right hand turns by 0.2.
+    headset.SetHandInputs(kLeft, Grip(0.0f));
+    headset.SetHandPose(kLeft, HandAtWorld(RimAt(L, kPi + 1.5)));
+    headset.SetHandPose(kRight, HandAtWorld(RimAt(L, 0.2)));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(0)"), "false") << "the left hand let go";
+    EXPECT_NEAR(LastValue(L), ValueFor540(0.2), 0.0005) << "the wheel went by the right hand's turn alone";
+}
 TEST_F(CompanionModTest, AHandRegrabbingAfterLettingGoPicksUpFromTheWheelsCurrentAngleNotWhereTheLastGrabWasHeading) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);

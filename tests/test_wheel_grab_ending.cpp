@@ -73,6 +73,8 @@ std::vector<Situation> Situations() {
     add("the player gets out", "g_currentMission.controlledVehicle = nil", "g_currentMission.controlledVehicle = cab.vehicle");
     add("Wheel Grab is switched off", "runCommand('vrWheelGrab', 'off')", "runCommand('vrWheelGrab', 'on')");
     add("Motion Controllers are switched off", "runCommand('vrMotionControllers', 'off')", "runCommand('vrMotionControllers', 'on')");
+    add("the Injector stops offering hand states", "_G.savedGetHandState = VRBridge.getHandState; VRBridge.getHandState = nil",
+        "VRBridge.getHandState = _G.savedGetHandState");
     all.push_back({ "the holding hand loses tracking",
         [](lua_State*, FakeTrackedHeadset& headset) { headset.SetHandTracked(kRight, false); },
         [](lua_State*, FakeTrackedHeadset& headset) { headset.SetHandTracked(kRight, true); }, false });
@@ -160,6 +162,27 @@ TEST_F(CompanionModTest, AGripStillSqueezedWhenTheSituationIsOverDoesNotGrabAgai
         FRAMES(5);
         EXPECT_GT(Calls(L), callsAfterwards) << situation.name << ": and steering did not begin again";
     }
+}
+
+TEST_F(CompanionModTest, WhenTheInjectorStopsOfferingHandStatesOtherDevicesSteerAgainAtOnce) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+
+    GRAB(kRight, RimPoint(L, kRimRadius, 0.0));
+    TURN_HAND_TO(kRight, 0.3);
+    ASSERT_TRUE(Holds(L, kRight));
+    const int callsWhileHeld = Calls(L);
+    ASSERT_EQ(RunLuauChunk(L, "StubSteer.keyboard(cab.vehicle, 0.77)", "=keyboardWhileHeld"), 0);
+    ASSERT_EQ(Calls(L), callsWhileHeld) << "the keyboard is dropped while the Steering Wheel is held";
+
+    ASSERT_EQ(RunLuauChunk(L, "VRBridge.getHandState = nil", "=noHandStates"), 0);
+    FRAMES(2);
+    EXPECT_FALSE(Holds(L, kRight)) << "the hold ended: the hands cannot be located";
+    const int callsBefore = Calls(L);
+    ASSERT_EQ(RunLuauChunk(L, "StubSteer.keyboard(cab.vehicle, 0.77)", "=keyboardAfterwards"), 0);
+    EXPECT_EQ(Calls(L), callsBefore + 1) << "the keyboard reaches the vehicle again";
 }
 
 TEST_F(CompanionModTest, LosingTrackingOnOneOfTwoHoldingHandsLetsGoOfOnlyThatHand) {

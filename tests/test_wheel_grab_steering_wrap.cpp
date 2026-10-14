@@ -269,6 +269,56 @@ TEST_F(CompanionModTest, WithSetSteeringInputReshapedWheelGrabIsUnavailableWarns
     WHEEL_GRAB_GIVES_UP_WHEN_STEERING_INPUT_IS("reshaped");
 }
 
+// A game whose steering function does not work the way Wheel Grab calls it: the call raises. Whether the engine can tell
+// the function's shape or not, Wheel Grab then gives up exactly as for a missing function, once the call has failed on
+// three updates in a row (WHEEL_GRAB_STEERING_FAILURES_BEFORE_GIVING_UP).
+TEST_F(CompanionModTest, WhenWheelGrabsOwnSteeringCallKeepsRaisingWheelGrabGivesUpWithOneWarningAndOtherDevicesStillSteer) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "raises"));
+    SetGameTime(10000);
+
+    TRY_TO_STEER(kRight);
+
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isWheelGrabAvailable()"), "false") << "Wheel Grab is unavailable";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "false") << "and the Steering Wheel is not held";
+    EXPECT_EQ(CountLogLines("[Warning] Wheel Grab disabled"), 1) << "one warning says so";
+    EXPECT_EQ(CountLogLines("[Warning] Wheel Grab disabled: setSteeringInput raised"), 1) << "and says what went wrong";
+    TRY_TO_STEER(kRight);
+    EXPECT_EQ(CountLogLines("[Warning] Wheel Grab"), 1) << "and it is not repeated";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubSteer.keyboard(cab.vehicle, 0.77); StubSteer.gamepad(cab.vehicle, 0.66)", "=otherDevices"), 0);
+    EXPECT_EQ(CallsWithValue(L, kKeyboardValue), 1) << "the keyboard still steers";
+    EXPECT_EQ(CallsWithValue(L, kGamepadValue), 1) << "and the gamepad";
+    EXPECT_EQ(EvalLua(L, "Drivable.setSteeringInput == StubSteer.original"), "true") << "the wrap is lifted off the class";
+    EXPECT_NE(EvalLua(L, "VRCompanion:getWheelGrabDiagnostics()").find("steering input wrap: gave up"), std::string::npos)
+        << EvalLua(L, "VRCompanion:getWheelGrabDiagnostics()");
+}
+
+TEST_F(CompanionModTest, ASteeringCallThatRaisesNowAndThenDoesNotSwitchWheelGrabOff) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+    HOLD_THE_WHEEL();
+
+    ASSERT_EQ(RunLuauChunk(L, "StubSteer.failNextWheelCalls(2)", "=failTwice"), 0);
+    FRAMES(5);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "true") << "two failures in a row did not end the hold";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isWheelGrabAvailable()"), "true");
+    EXPECT_EQ(CountLogLines("Wheel Grab disabled"), 0) << "and gave nothing up";
+    ClearCalls(L);
+    FRAMES(3);
+    EXPECT_EQ(CallsThatReachedTheVehicle(L), 3) << "Wheel Grab's own call reached the vehicle every frame again";
+
+    // A failure on two updates, a success, then two more: never three in a row.
+    for (int round = 0; round < 3; ++round) {
+        ASSERT_EQ(RunLuauChunk(L, "StubSteer.failNextWheelCalls(2)", "=failTwiceMore"), 0);
+        FRAMES(3);
+    }
+    EXPECT_EQ(CountLogLines("Wheel Grab disabled"), 0) << "failures that never come three updates in a row gave nothing up";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "true");
+}
 TEST_F(CompanionModTest, VrWheelGrabDiagnosticsReportsThatTheWrapIsInstalled) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);

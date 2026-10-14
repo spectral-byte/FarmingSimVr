@@ -358,6 +358,36 @@ TEST_F(CompanionModTest, ASecondHandTakingHoldAtTheStopFeelsOnlyItsOwnGrab) {
     EXPECT_EQ(PulsesTo(headset, 0), 1u) << "the left hand felt its grab and nothing more: the wheel was at the stop already";
     EXPECT_EQ(PulsesTo(headset, 1), 2u) << "and the right hand felt nothing new";
 }
+
+TEST_F(CompanionModTest, AFirstHandTakingHoldAtTheStopFeelsOnlyItsGrabAndTheStopOnlyAfterLeavingItAndReturning) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    // Another device is holding the Steering Wheel at full lock (a gamepad pushed all the way: its steering reaches the
+    // game every frame) when the first hand takes hold.
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, SteerableCabOf120("rotatedTime = 1")));
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local tick = StubSteer.tick
+        StubSteer.tick = function(dt)
+            StubSteer.gamepad(cab.vehicle, -1)
+            tick(dt)
+        end
+    )luau", "=gamepadAtFullLock"), 0);
+    SetGameTime(10000);
+    FRAMES(3);
+    ASSERT_NEAR(WheelAngle(L), kFullLock, 1e-6) << "the Steering Wheel is at the stop";
+    GRAB(kRight, RimPoint(L, kRimRadius, 0.5));
+    FRAMES(5);
+    EXPECT_EQ(PulsesTo(headset, 1), 1u) << "the hand felt its grab and not the stop it was already at";
+
+    // Turning back leaves the stop; reaching it again is the stop.
+    TURN_HAND_FROM_TO(kRight, 0.5, 0.1, 0.1);
+    FRAMES(10);
+    EXPECT_EQ(PulsesTo(headset, 1), 1u) << "leaving the stop is silent";
+    TURN_HAND_FROM_TO(kRight, 0.1, 0.9, 0.1);
+    FRAMES(10);
+    EXPECT_EQ(PulsesTo(headset, 1), 2u) << "and reaching it again is felt once";
+}
+
 // ---- Diagnostics ---------------------------------------------------------------------------------------------
 
 TEST_F(CompanionModTest, TheDiagnosticsReportHowFarTheRealHandIsFromItsPinnedPoint) {
