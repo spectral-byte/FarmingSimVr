@@ -366,6 +366,10 @@ local function updatePointerUsers(self, dt)
     if type(self.updateVirtualHands) == "function" then
         self:updateVirtualHands(dt)
     end
+    -- Last: which Motion Controller inputs the uses above (and Interactive Control's click) took off the Virtual Gamepad.
+    if type(self.updateVirtualGamepadUse) == "function" then
+        self:updateVirtualGamepadUse(dt)
+    end
 end
 
 function VRCompanion:updateMotionControllers(dt)

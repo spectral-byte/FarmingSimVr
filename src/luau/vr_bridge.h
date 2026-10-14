@@ -129,6 +129,7 @@ public:
     static int Lua_PulseHaptic(lua_State* L);
     static int Lua_SetVirtualGamepad(lua_State* L);
     static int Lua_GetVirtualGamepad(lua_State* L);
+    static int Lua_SetVirtualGamepadUse(lua_State* L);
     static int Lua_Recenter(lua_State* L);
     static int Lua_AlignMenuQuad(lua_State* L);
     static int Lua_GetPanelHit(lua_State* L);
@@ -193,6 +194,7 @@ public:
         {"pulseHaptic", &Lua_PulseHaptic},
         {"setVirtualGamepad", &Lua_SetVirtualGamepad},
         {"getVirtualGamepad", &Lua_GetVirtualGamepad},
+        {"setVirtualGamepadUse", &Lua_SetVirtualGamepadUse},
         {"recenter", &Lua_Recenter},
         {"getEyeProjection", &Lua_GetEyeProjection},
         {"getFrameParity", &Lua_GetFrameParity},

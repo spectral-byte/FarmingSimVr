@@ -62,6 +62,12 @@ void VirtualGamepad::Configure(bool enabled, bool live) {
     if (!enabled) UninstallHooksLocked();
 }
 
+void VirtualGamepad::SetInputsInUse(uint32_t hand, uint32_t inputs) {
+    if (hand >= m_inUse.size()) return;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_inUse[hand] = inputs;
+}
+
 void VirtualGamepad::SetOwnedByRuntime(bool owned) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_owned = owned;
@@ -145,7 +151,7 @@ XINPUT_GAMEPAD VirtualGamepad::BuildGamepadLocked() {
     }
     // Each physical control on each hand is its own pad input (ADR-0028). Back and the D-pad are not fed here.
     for (uint32_t hand = OpenXrInput::kLeft; hand <= OpenXrInput::kRight; ++hand) {
-        const HandState state = m_openXrManager->GetHandState(hand);
+        HandState state = m_openXrManager->GetHandState(hand);
         if (!state.tracked) {
             m_gripDown[hand] = false;
             continue;
@@ -153,10 +159,19 @@ XINPUT_GAMEPAD VirtualGamepad::BuildGamepadLocked() {
         const bool left = (hand == OpenXrInput::kLeft);
         m_gripDown[hand] = state.grip >= (m_gripDown[hand] ? kGripRelease : kGripPress);
 
+        // An input the Companion Mod is using reads as released (the grip above keeps tracking its hysteresis).
+        const uint32_t used = m_inUse[hand];
+        if (used & kInputTrigger) state.trigger = 0.0f;
+        if (used & kInputStick) state.thumbX = state.thumbY = 0.0f;
+        if (used & kInputStickClick) state.thumbClick = false;
+        if (used & kInputLowerButton) state.buttonLower = false;
+        if (used & kInputUpperButton) state.buttonUpper = false;
+        if (used & kInputMenuButton) state.menu = false;
+
         (left ? pad.bLeftTrigger : pad.bRightTrigger) = ToTrigger(state.trigger);
         (left ? pad.sThumbLX : pad.sThumbRX) = ToAxis(state.thumbX);
         (left ? pad.sThumbLY : pad.sThumbRY) = ToAxis(state.thumbY);
-        if (m_gripDown[hand]) pad.wButtons |= left ? XINPUT_GAMEPAD_LEFT_SHOULDER : XINPUT_GAMEPAD_RIGHT_SHOULDER;
+        if (m_gripDown[hand] && !(used & kInputGrip)) pad.wButtons |= left ? XINPUT_GAMEPAD_LEFT_SHOULDER : XINPUT_GAMEPAD_RIGHT_SHOULDER;
         if (state.thumbClick) pad.wButtons |= left ? XINPUT_GAMEPAD_LEFT_THUMB : XINPUT_GAMEPAD_RIGHT_THUMB;
         // The letters on Touch controllers: X / Y on the left hand, A / B on the right.
         if (state.buttonLower) pad.wButtons |= left ? XINPUT_GAMEPAD_X : XINPUT_GAMEPAD_A;

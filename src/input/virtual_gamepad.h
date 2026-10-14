@@ -34,6 +34,19 @@ public:
     // (vrMotionControllers); while it is off the pad stays present but reads neutral.
     void Configure(bool enabled, bool live);
 
+    // The Companion Mod's own uses of the Motion Controllers (a menu, a Click Point click, the Steering Wheel): while it
+    // uses an input, that input reads as released or centred on the pad, so a use never also fires a binding. One bit set
+    // per input of the hand (0 = left, 1 = right), sent by the Companion Mod each update; the Companion Mod applies the
+    // held-input rule before it asks, so an input already held for a binding is simply not in the set.
+    static constexpr uint32_t kInputTrigger = 1u << 0;
+    static constexpr uint32_t kInputGrip = 1u << 1;
+    static constexpr uint32_t kInputStick = 1u << 2;        // both axes
+    static constexpr uint32_t kInputStickClick = 1u << 3;
+    static constexpr uint32_t kInputLowerButton = 1u << 4;  // A (right) / X (left)
+    static constexpr uint32_t kInputUpperButton = 1u << 5;  // B (right) / Y (left)
+    static constexpr uint32_t kInputMenuButton = 1u << 6;   // Start (left hand only)
+    void SetInputsInUse(uint32_t hand, uint32_t inputs);
+
     struct Status {
         bool present = false;
         int slot = -1;                      // 0..3 while present
@@ -95,6 +108,7 @@ private:
     XINPUT_GAMEPAD m_lastGamepad{};
     DWORD m_packetNumber = 0;
     std::array<bool, 2> m_gripDown{};
+    std::array<uint32_t, 2> m_inUse{};
 
     RealPadProbe m_realPadProbe;
     FunctionDetour m_detourGetState;

@@ -515,6 +515,20 @@ int VRBridge::Lua_GetVirtualGamepad(lua_State* L) {
     return 3;
 }
 
+// VRBridge.setVirtualGamepadUse(leftInputs, rightInputs): which inputs of each hand the Companion Mod is using itself
+// right now (bit set: 1 trigger, 2 grip, 4 thumbstick, 8 thumbstick click, 16 lower face button, 32 upper face button,
+// 64 menu button). Those inputs read as released or centred on the Virtual Gamepad. Sent each update; a missing mask is 0.
+int VRBridge::Lua_SetVirtualGamepadUse(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setVirtualGamepadUse");
+    for (uint32_t hand = 0; hand < 2; ++hand) {
+        const double mask = lua_isnumber(L, static_cast<int>(hand) + 1) ? lua_tonumber(L, static_cast<int>(hand) + 1) : 0.0;
+        self->m_virtualGamepad.SetInputsInUse(hand, static_cast<uint32_t>(mask > 0.0 ? mask : 0.0));
+    }
+    return 0;
+}
+
 int VRBridge::Lua_Recenter(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 

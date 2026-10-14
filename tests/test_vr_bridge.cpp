@@ -1330,6 +1330,7 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "pulseHaptic",
         "setVirtualGamepad",
         "getVirtualGamepad",
+        "setVirtualGamepadUse",
         "recenter",
         "getEyeProjection",
         "getFrameParity",
