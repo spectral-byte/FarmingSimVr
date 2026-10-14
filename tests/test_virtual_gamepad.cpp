@@ -56,6 +56,7 @@ protected:
     // savedXml first: what an earlier game session left in the settings file.
     void StartMod(const std::string& settingsFile = "") {
         ASSERT_TRUE(Bridge().Inject(L));
+        Pad().SetClockForTesting([this] { return GameTime(); });  // a click let go times its RS press by the game clock
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
         ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
         ASSERT_EQ(RunLuauChunk(L, kXmlStubs, "=xmlStubs"), 0);
@@ -166,15 +167,14 @@ TEST_F(VirtualGamepadTest, EachControlOnEachHandIsItsOwnPadInput) {
     right.grip = 1.0f;
     right.thumbX = -1.0f;
     right.thumbY = 0.25f;
-    right.thumbClick = true;
     right.buttonLower = true;
     right.menu = true;
     headset.SetHandInputs(kRight, right);
     NextFrame(&headset);
 
     state = Read();
-    EXPECT_EQ(state.Gamepad.wButtons, XINPUT_GAMEPAD_RIGHT_SHOULDER | XINPUT_GAMEPAD_RIGHT_THUMB | XINPUT_GAMEPAD_A)
-        << "right grip, stick click and lower face button; the right menu button feeds nothing";
+    EXPECT_EQ(state.Gamepad.wButtons, XINPUT_GAMEPAD_RIGHT_SHOULDER | XINPUT_GAMEPAD_A)
+        << "right grip and lower face button; the right menu button feeds nothing (the right stick click is the D-pad chord)";
     EXPECT_EQ(state.Gamepad.sThumbRX, -32767);
     EXPECT_EQ(state.Gamepad.sThumbRY, 8192);
     EXPECT_EQ(state.Gamepad.sThumbLX, 0);
@@ -186,7 +186,7 @@ TEST_F(VirtualGamepadTest, EachControlOnEachHandIsItsOwnPadInput) {
     EXPECT_EQ(Read().Gamepad.wButtons, XINPUT_GAMEPAD_B) << "right upper face button";
 }
 
-TEST_F(VirtualGamepadTest, BackAndTheDPadAreNeverFed) {
+TEST_F(VirtualGamepadTest, BackIsNeverFedAndTheDPadOnlyByTheRightStickChord) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     TurnOn();
 
@@ -200,6 +200,7 @@ TEST_F(VirtualGamepadTest, BackAndTheDPadAreNeverFed) {
     everything.buttonUpper = true;
     everything.menu = true;
     headset.SetHandInputs(kLeft, everything);
+    everything.thumbClick = false;  // the right stick click is the D-pad chord: its own tests below
     headset.SetHandInputs(kRight, everything);
     NextFrame(&headset);
 
@@ -207,8 +208,151 @@ TEST_F(VirtualGamepadTest, BackAndTheDPadAreNeverFed) {
     EXPECT_EQ(fed & (XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN |
                      XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_DPAD_RIGHT), 0);
     EXPECT_EQ(fed, XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER | XINPUT_GAMEPAD_LEFT_THUMB |
-                       XINPUT_GAMEPAD_RIGHT_THUMB | XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_X |
+                       XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_X |
                        XINPUT_GAMEPAD_Y | XINPUT_GAMEPAD_START);
+}
+
+// ---- The right-stick D-pad chord (ticket #102) --------------------------------------------------------
+
+namespace {
+constexpr WORD kDPad = XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_DPAD_RIGHT;
+
+FakeOpenXrControllers::Inputs Stick(float x, float y, bool click) {
+    FakeOpenXrControllers::Inputs inputs;
+    inputs.thumbX = x;
+    inputs.thumbY = y;
+    inputs.thumbClick = click;
+    return inputs;
+}
+}  // namespace
+
+TEST_F(VirtualGamepadTest, WithTheRightStickClickHeldPushingTheStickIsTheDPadInThatDirectionAndTheStickReadsCentred) {
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+    TurnOn();
+
+    struct Case { float x, y; WORD dpad; const char* name; };
+    const Case cases[] = {
+        { 0.0f, 1.0f, XINPUT_GAMEPAD_DPAD_UP, "up" },
+        { 0.0f, -1.0f, XINPUT_GAMEPAD_DPAD_DOWN, "down" },
+        { -1.0f, 0.0f, XINPUT_GAMEPAD_DPAD_LEFT, "left" },
+        { 1.0f, 0.0f, XINPUT_GAMEPAD_DPAD_RIGHT, "right" },
+        { 0.9f, 0.5f, XINPUT_GAMEPAD_DPAD_RIGHT, "right when the push leans up but x dominates" },
+        { 0.5f, -0.9f, XINPUT_GAMEPAD_DPAD_DOWN, "down when the push leans right but y dominates" },
+    };
+    for (const Case& c : cases) {
+        Hold(kRight, Stick(0.0f, 0.0f, true));
+        Hold(kRight, Stick(c.x, c.y, true));
+        const XINPUT_GAMEPAD pad = Read().Gamepad;
+        EXPECT_EQ(pad.wButtons & kDPad, c.dpad) << c.name;
+        EXPECT_EQ(pad.sThumbRX, 0) << c.name << ": the right stick reads centred";
+        EXPECT_EQ(pad.sThumbRY, 0) << c.name << ": the right stick reads centred";
+        Hold(kRight, {});
+    }
+}
+
+TEST_F(VirtualGamepadTest, AGripAndTheRightStickClickPushGiveTheBumperTogetherWithTheDPad) {
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+    TurnOn();
+
+    FakeOpenXrControllers::Inputs left;
+    left.grip = 1.0f;
+    headset.SetHandInputs(kLeft, left);
+    Hold(kRight, Stick(0.0f, 0.0f, true));
+    Hold(kRight, Stick(0.0f, 1.0f, true));
+    EXPECT_EQ(Read().Gamepad.wButtons, XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_DPAD_UP) << "LB + D-pad up";
+
+    headset.SetHandInputs(kLeft, {});
+    FakeOpenXrControllers::Inputs right = Stick(-1.0f, 0.0f, true);
+    right.grip = 1.0f;
+    Hold(kRight, right);
+    EXPECT_EQ(Read().Gamepad.wButtons, XINPUT_GAMEPAD_RIGHT_SHOULDER | XINPUT_GAMEPAD_DPAD_LEFT) << "RB + D-pad left";
+}
+
+TEST_F(VirtualGamepadTest, AWobbleBetweenTheEngageAndReleaseThresholdsNeitherDropsNorFlipsTheDirection) {
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+    TurnOn();
+
+    const auto dpad = [&](float x, float y) {
+        Hold(kRight, Stick(x, y, true));
+        return static_cast<WORD>(Read().Gamepad.wButtons & kDPad);
+    };
+    Hold(kRight, Stick(0.0f, 0.0f, true));
+    EXPECT_EQ(dpad(0.65f, 0.0f), 0) << "short of the engage threshold is no push";
+    EXPECT_EQ(dpad(0.8f, 0.0f), XINPUT_GAMEPAD_DPAD_RIGHT);
+    EXPECT_EQ(dpad(0.5f, 0.0f), XINPUT_GAMEPAD_DPAD_RIGHT) << "between the thresholds: held";
+    EXPECT_EQ(dpad(0.5f, 0.6f), XINPUT_GAMEPAD_DPAD_RIGHT) << "a wobble toward up that does not engage up does not flip it";
+    EXPECT_EQ(dpad(0.45f, -0.6f), XINPUT_GAMEPAD_DPAD_RIGHT);
+    EXPECT_EQ(dpad(0.3f, 0.0f), 0) << "below the release threshold: let go";
+    EXPECT_EQ(dpad(0.5f, 0.0f), 0) << "and back between the thresholds is still not a push";
+    EXPECT_EQ(dpad(-0.8f, 0.0f), XINPUT_GAMEPAD_DPAD_LEFT);
+    EXPECT_EQ(dpad(0.1f, 0.8f), XINPUT_GAMEPAD_DPAD_UP) << "a hard push the other way engages that direction at once";
+}
+
+TEST_F(VirtualGamepadTest, AClickLetGoWithoutAPushIsRSPressedOnceOnReleaseForAShortTime) {
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+    TurnOn();
+
+    Hold(kRight, Stick(0.0f, 0.0f, true));
+    EXPECT_EQ(Read().Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB, 0) << "RS is held back while the click is down";
+    NextFrame(&headset);
+    EXPECT_EQ(Read().Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB, 0);
+
+    Hold(kRight, {});
+    EXPECT_EQ(Read().Gamepad.wButtons, XINPUT_GAMEPAD_RIGHT_THUMB) << "RS arrives on release";
+    NextFrame(&headset);
+    EXPECT_EQ(Read().Gamepad.wButtons, XINPUT_GAMEPAD_RIGHT_THUMB) << "and stays long enough to be seen";
+
+    AdvanceGameTime(300);
+    NextFrame(&headset);
+    EXPECT_EQ(Read().Gamepad.wButtons, 0) << "then it is gone: one press, not a held button";
+    NextFrame(&headset);
+    EXPECT_EQ(Read().Gamepad.wButtons, 0);
+}
+
+TEST_F(VirtualGamepadTest, AClickThatPushedNeverReportsRSNeitherWhileHeldNorOnRelease) {
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+    TurnOn();
+
+    Hold(kRight, Stick(0.0f, 0.0f, true));
+    Hold(kRight, Stick(1.0f, 0.0f, true));
+    EXPECT_EQ(Read().Gamepad.wButtons, XINPUT_GAMEPAD_DPAD_RIGHT);
+
+    Hold(kRight, Stick(0.0f, 0.0f, true));
+    EXPECT_EQ(Read().Gamepad.wButtons, 0) << "stick back to centre with the click still down: nothing";
+
+    Hold(kRight, {});
+    EXPECT_EQ(Read().Gamepad.wButtons, 0) << "released after a push: no RS";
+    NextFrame(&headset);
+    EXPECT_EQ(Read().Gamepad.wButtons, 0);
+
+    // The next click is its own click (the game polls the pad every frame, so it sees the click go down).
+    Hold(kRight, Stick(0.0f, 0.0f, true));
+    Read();
+    Hold(kRight, {});
+    EXPECT_EQ(Read().Gamepad.wButtons, XINPUT_GAMEPAD_RIGHT_THUMB) << "a fresh click without a push is RS again";
+}
+
+TEST_F(VirtualGamepadTest, TheLeftStickAndItsClickAreUnaffectedByTheChord) {
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+    TurnOn();
+
+    Hold(kLeft, Stick(1.0f, 0.0f, true));
+    XINPUT_GAMEPAD pad = Read().Gamepad;
+    EXPECT_EQ(pad.wButtons, XINPUT_GAMEPAD_LEFT_THUMB) << "LS is pressed at once and no D-pad";
+    EXPECT_EQ(pad.sThumbLX, 32767) << "the left stick stays analog under its click";
+
+    // A left click and push does not mix with the right hand's click.
+    Hold(kRight, Stick(0.0f, 0.0f, true));
+    Hold(kRight, Stick(0.0f, 1.0f, true));
+    pad = Read().Gamepad;
+    EXPECT_EQ(pad.wButtons, XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_DPAD_UP);
+    EXPECT_EQ(pad.sThumbLX, 32767);
+
+    // Without the right click, the right stick is analog as before.
+    Hold(kRight, Stick(0.0f, 1.0f, false));
+    pad = Read().Gamepad;
+    EXPECT_EQ(pad.wButtons & kDPad, 0);
+    EXPECT_EQ(pad.sThumbRY, 32767);
 }
 
 TEST_F(VirtualGamepadTest, AGripIsPressedAboveSixtyPercentAndReleasedBelowFortyWithNoFlickerBetween) {
