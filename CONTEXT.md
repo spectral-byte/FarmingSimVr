@@ -141,11 +141,23 @@ The operational state where dual upscaler multiplexing is suspended during monos
 _Avoid_: Mono upscaler fallback, 2D bypass, menu pass-through
 
 **Motion Controller**:
-A tracked handheld VR input device, one per hand. The player may set it down at any time and keep driving with a wheel, gamepad, or keyboard.
+A tracked handheld VR input device, one per hand. The player may set it down at any time and keep driving with a Wheel Peripheral, gamepad, or keyboard.
 _Avoid_: VR controller, wand, hand controller, controller (in the Interactive Control mod a "controller" is a switch or lever)
 
+**Wheel Peripheral**:
+A physical steering wheel connected to the PC as a game input device.
+_Avoid_: Wheel, racing wheel, steering wheel (that is the Steering Wheel in the cab)
+
+**Steering Wheel**:
+The modelled wheel in a vehicle's cab that turns as the vehicle steers. Not every vehicle has one.
+_Avoid_: Wheel, cab wheel, steering (alone)
+
+**Wheel Grab**:
+Holding the Steering Wheel with a Motion Controller to steer the vehicle being driven, from its in-cab camera, by squeezing the grip with the Virtual Hand at the rim, with one hand or both. The Steering Wheel turns exactly as far as the hands do, so full lock may take turning hand over hand; while it is held, the hand's steering wins over every other steering input, and letting go hands steering back to the game, which centres the wheel as it does for any other input. It can be switched off on its own.
+_Avoid_: Grab steering, hand steering, VR steering, wheel grip
+
 **Pointer Hand**:
-The Motion Controller currently pointing. It moves on its own to whichever Motion Controller the player is using, so neither hand is fixed as the pointer. Only the Pointer Hand casts a Pointer Ray.
+The Motion Controller currently pointing. It moves on its own to whichever Motion Controller the player is using, so neither hand is fixed as the pointer. Only the Pointer Hand casts a Pointer Ray. A hand holding the Steering Wheel is never the Pointer Hand.
 _Avoid_: Dominant hand, main hand, laser hand
 
 **Pointer Ray**:
@@ -153,7 +165,7 @@ The ray from the Pointer Hand that selects what the player is aiming at: a Click
 _Avoid_: Laser, beam, raycast, gaze pointer
 
 **Virtual Hand**:
-A gloved hand drawn in the 3D world where a Motion Controller is held, its fingers curling with the trigger and grip, one per Motion Controller, shown while that Motion Controller is in use and Motion Controllers are switched on. Like the Pointer Ray, it appears on foot, in the cab and in an Outside Camera, never in a menu or 2D Floating Window Mode. Only the player holding the Motion Controllers sees their Virtual Hands; other players in multiplayer do not. The Pointer Ray of the Pointer Hand starts at the index fingertip of its Virtual Hand.
+A gloved hand drawn in the 3D world where a Motion Controller is held (or, while it holds the Steering Wheel, on the rim where it grabbed, turning with the wheel), its fingers curling with the trigger and grip, one per Motion Controller, shown while that Motion Controller is in use and Motion Controllers are switched on. Like the Pointer Ray, it appears on foot, in the cab and in an Outside Camera, never in a menu or 2D Floating Window Mode. Only the player holding the Motion Controllers sees their Virtual Hands; other players in multiplayer do not. The Pointer Ray of the Pointer Hand starts at the index fingertip of its Virtual Hand.
 _Avoid_: Hand model, controller model, avatar hand
 
 **Click Point**:
