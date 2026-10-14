@@ -35,7 +35,7 @@
 --
 -- AVAILABILITY (findSteeringWheel): the mod is on (`vrWheelGrab`, Motion Controllers on), the player is driving the
 -- controlled vehicle from its in-cab camera (not a passenger camera, not an Outside Camera), and the vehicle has a
--- Steering Wheel and a setSteeringInput. When it stops being available every hold ends as if the grip were let go.
+-- Steering Wheel and a setSteeringInput, and no hired helper is driving it (as for keyboard steering). When it stops being available every hold ends as if the grip were let go.
 --
 -- THE GRAB: the grip counts as squeezed at VRCompanion.WHEEL_GRAB_GRIP_PRESS and as let go below
 -- VRCompanion.WHEEL_GRAB_GRIP_RELEASE (hysteresis, like the menu back button). A grab starts on the update the grip is
@@ -204,7 +204,12 @@ local function findSteeringWheel(self)
     if askVehicle(vehicle, "getIsEntered") == false then
         return vehicle, nil, nil, "the vehicle is not entered"
     end
-    -- A hired helper driving the vehicle must also make Wheel Grab unavailable (not done yet): its check goes here.
+    -- A hired helper driving the vehicle makes Wheel Grab unavailable, just as it does the keyboard's steering (the game
+    -- registers no steer action while getIsAIActive() is true). Nothing here ever touches the helper: squeezing the grip
+    -- at the rim neither stops the job nor takes the wheel from it, and a hold in progress simply ends (updateWheelGrab).
+    if askVehicle(vehicle, "getIsAIActive") == true then
+        return vehicle, nil, nil, "a hired helper is driving"
+    end
     if askVehicle(vehicle, "getIsPlayerVehicleControlAllowed") == false then
         return vehicle, nil, nil, "steering the vehicle is not allowed right now"
     end
