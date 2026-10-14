@@ -77,7 +77,7 @@ inline constexpr const char* kConsoleStubs = R"luau(
 
 // Wheel Grab lets go of a hand that is further than WHEEL_GRAB_PULL_AWAY_DISTANCE from the point its Virtual Hand is
 // pinned to. Most of these tests turn the hand faster and further than an arm could while the Steering Wheel follows
-// (the stops, hand over hand), which the pull-away rule would take for a hand pulled off the wheel, so they set the
+// (the stops, hand over hand), which the pull-away rule would take for a hand pulled off the Steering Wheel, so they set the
 // distance so large it never happens. The pull-away rule itself is tested in test_wheel_grab_pinned_hand.cpp, which
 // leaves the distance alone.
 inline constexpr const char* kNoPullAway = "VRCompanion.WHEEL_GRAB_PULL_AWAY_DISTANCE = 1000";

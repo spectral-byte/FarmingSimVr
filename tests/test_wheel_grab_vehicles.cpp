@@ -63,7 +63,7 @@ TEST_F(CompanionModTest, OnAnUnturnedSeatTurningTheSteeringWheelOneWayPointsTheW
     EXPECT_LT(Number(L, "StubSteer.calls[#StubSteer.calls].value"), 0.0) << "by a steering value of this sign";
 }
 
-TEST_F(CompanionModTest, OnATurnedSeatTheSteeringWheelISeeFollowsMyHandAndTheWheelsOnTheGroundSteerTheWayThatWheelWould) {
+TEST_F(CompanionModTest, OnATurnedSeatTheSteeringWheelISeeFollowsMyHandAndTheWheelsOnTheGroundSteerTheWayThatSteeringWheelWould) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, SteerableCab("turnedSeat = true")));
@@ -73,11 +73,11 @@ TEST_F(CompanionModTest, OnATurnedSeatTheSteeringWheelISeeFollowsMyHandAndTheWhe
 
     EXPECT_NEAR(WheelAngle(L), 0.6, 0.02) << "the Steering Wheel turned as far as the hand did, the same way";
     // Driving backwards the wheels on the ground steer the other way for the same turn of the Steering Wheel: this is
-    // what "steers the way that wheel would" is, and it is the game's doing (it reverses the steering direction).
+    // what "steers the way that Steering Wheel would" is, and it is the game's doing (it reverses the steering direction).
     EXPECT_NEAR(RoadWheelAngle(L), -0.6 / kFullLockAngle, 0.002)
         << "the wheels on the ground steered by the same fraction of full lock, the other way from an unturned seat";
     // The game reverses the way it turns the Steering Wheel and the vehicle's steering direction alike, so the value
-    // that turns the wheel a given way is the same on every seat. Reversing it again would fight the game: the wheel
+    // that turns the Steering Wheel a given way is the same on every seat. Reversing it again would fight the game: the Steering Wheel
     // would turn away from the hand.
     EXPECT_LT(Number(L, "StubSteer.calls[#StubSteer.calls].value"), 0.0) << "the steering value has the sign an unturned seat's has";
 
@@ -90,7 +90,7 @@ TEST_F(CompanionModTest, OnATurnedSeatTheSteeringWheelISeeFollowsMyHandAndTheWhe
 TEST_F(CompanionModTest, OnATurnedSeatTheFullTurnOfTheSteeringWheelIsFullLock) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
-    // A tracked tractor's wheel: 120 degrees from straight ahead to full lock.
+    // A tracked tractor's Steering Wheel: 120 degrees from straight ahead to full lock.
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, SteerableCab("turnedSeat = true, rotationDeg = 120")));
     SetGameTime(10000);
     const double fullLock = 120.0 * 3.14159265358979 / 180.0;
@@ -105,13 +105,13 @@ TEST_F(CompanionModTest, OnATurnedSeatTheFullTurnOfTheSteeringWheelIsFullLock) {
     EXPECT_NEAR(RoadWheelAngle(L), -1.0, 0.002) << "with the wheels on the ground at full lock";
 }
 
-TEST_F(CompanionModTest, OnATurnedSeatWithASteeringWheelOfItsOwnTheHandTurnsThatWheel) {
+TEST_F(CompanionModTest, OnATurnedSeatWithASteeringWheelOfItsOwnTheHandTurnsThatSteeringWheel) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, SteerableCab("turnedSeat = true, turnedSeatWheel = true")));
     SetGameTime(10000);
 
-    TURN_CLOCKWISE_BY_SIX_TENTHS(kRight);  // the rim points are those of the wheel the game turns now
+    TURN_CLOCKWISE_BY_SIX_TENTHS(kRight);  // the rim points are those of the Steering Wheel the game turns now
 
     EXPECT_NEAR(WheelAngle(L), 0.6, 0.02) << "the turned seat's own Steering Wheel followed the hand";
     EXPECT_NEAR(RoadWheelAngle(L), -0.6 / kFullLockAngle, 0.002) << "and steered the vehicle";

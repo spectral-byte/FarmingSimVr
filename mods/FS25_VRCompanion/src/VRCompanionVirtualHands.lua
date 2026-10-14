@@ -242,9 +242,7 @@ end
 
 local state = newState()
 
-local function engine(name)
-    return _G and _G[name]
-end
+local engine = VRCompanion.getEngineGlobal  -- VRCompanionCore.lua, loaded before this file
 
 local function deleteNode(node)
     local deleteFn = engine("delete")

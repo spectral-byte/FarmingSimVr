@@ -2,7 +2,7 @@
 // Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with a cab vehicle that steers the way the
 // game's does (companion_mod_stubs.h, StubSteer) and a stub menu state (g_gui). Each situation that ends a grab is
 // brought about mid-grab, and the test asserts only what the player sees and what the game was told: whether the
-// Steering Wheel is still held, the steering calls that reached the vehicle, how the wheel turned, and that a grip
+// Steering Wheel is still held, the steering calls that reached the vehicle, how the Steering Wheel turned, and that a grip
 // still squeezed when the situation is over does not take hold again until it is let go and squeezed afresh.
 // The cab and the geometry are those of test_wheel_grab.cpp (see the top of that file).
 
@@ -83,7 +83,7 @@ std::vector<Situation> Situations() {
 
 } // namespace
 
-TEST_F(CompanionModTest, EverySituationThatEndsAGrabLetsGoOfTheWheelAtOnceAndTheGameCentresIt) {
+TEST_F(CompanionModTest, EverySituationThatEndsAGrabLetsGoOfTheSteeringWheelAtOnceAndTheGameCentresIt) {
     for (const Situation& situation : Situations()) {
         s_capturedLogs.clear();
         lua_close(L);  // each situation gets a fresh session
@@ -101,13 +101,13 @@ TEST_F(CompanionModTest, EverySituationThatEndsAGrabLetsGoOfTheWheelAtOnceAndThe
             TURN_HAND_TO(kRight, 0.2 * step);
         }
         FRAMES(30);
-        ASSERT_TRUE(Holds(L, kRight)) << situation.name << ": the wheel was held to begin with";
+        ASSERT_TRUE(Holds(L, kRight)) << situation.name << ": the Steering Wheel was held to begin with";
         ASSERT_NEAR(WheelAngle(L), 0.6, 0.02) << situation.name << ": and it was steered";
 
         const int callsBefore = Calls(L);
         situation.begin(L, headset);
         FRAMES(1);
-        EXPECT_FALSE(Holds(L, kRight)) << situation.name << ": the hand still held the wheel";
+        EXPECT_FALSE(Holds(L, kRight)) << situation.name << ": the hand still held the Steering Wheel";
         EXPECT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "false") << situation.name;
         EXPECT_EQ(Calls(L), callsBefore) << situation.name << ": steering was sent on the next frame";
 
@@ -115,7 +115,7 @@ TEST_F(CompanionModTest, EverySituationThatEndsAGrabLetsGoOfTheWheelAtOnceAndThe
         headset.SetHandPose(kRight, HandAtWorld(RimPoint(L, kRimRadius, 1.2)), situation.handStaysTracked);
         FRAMES(60);
         EXPECT_EQ(Calls(L), callsBefore) << situation.name << ": steering went on";
-        EXPECT_NEAR(WheelAngle(L), 0.0, 0.01) << situation.name << ": the game's own steering back did not centre the wheel";
+        EXPECT_NEAR(WheelAngle(L), 0.0, 0.01) << situation.name << ": the game's own steering back did not centre the Steering Wheel";
     }
 }
 
@@ -135,7 +135,7 @@ TEST_F(CompanionModTest, AGripStillSqueezedWhenTheSituationIsOverDoesNotGrabAgai
         GRAB(kRight, RimPoint(L, kRimRadius, 0.0));
         TURN_HAND_TO(kRight, 0.3);
         FRAMES(10);
-        ASSERT_TRUE(Holds(L, kRight)) << situation.name << ": the wheel was held to begin with";
+        ASSERT_TRUE(Holds(L, kRight)) << situation.name << ": the Steering Wheel was held to begin with";
         situation.begin(L, headset);
         FRAMES(3);
         situation.end(L, headset);
@@ -147,12 +147,12 @@ TEST_F(CompanionModTest, AGripStillSqueezedWhenTheSituationIsOverDoesNotGrabAgai
         }
         FRAMES(10);
         const int callsAfterwards = Calls(L);
-        EXPECT_FALSE(Holds(L, kRight)) << situation.name << ": the wheel was taken hold of again by a grip squeezed all along";
+        EXPECT_FALSE(Holds(L, kRight)) << situation.name << ": the Steering Wheel was taken hold of again by a grip squeezed all along";
         TURN_HAND_TO(kRight, 1.2);
         FRAMES(10);
         EXPECT_EQ(Calls(L), callsAfterwards) << situation.name << ": steering began again with no new squeeze";
 
-        // Let go, squeeze afresh at the rim: the wheel can be held again.
+        // Let go, squeeze afresh at the rim: the Steering Wheel can be held again.
         headset.SetHandInputs(kRight, Grip(0.0f));
         FRAMES(3);
         headset.SetHandInputs(kRight, Grip(1.0f));
@@ -202,12 +202,12 @@ TEST_F(CompanionModTest, LosingTrackingOnOneOfTwoHoldingHandsLetsGoOfOnlyThatHan
     EXPECT_TRUE(Holds(L, kRight)) << "the other hand still holds";
     EXPECT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "true");
 
-    // The wheel follows the remaining hand alone, by the whole of its turn.
+    // The Steering Wheel follows the remaining hand alone, by the whole of its turn.
     for (int step = 1; step <= 3; ++step) {
         TURN_HAND_TO(kRight, 0.1 * step);
     }
     FRAMES(30);
-    EXPECT_NEAR(WheelAngle(L), 0.3, 0.02) << "the hand still holding steered the wheel on its own";
+    EXPECT_NEAR(WheelAngle(L), 0.3, 0.02) << "the hand still holding steered the Steering Wheel on its own";
 
     // The hand comes back with its grip squeezed all along: it does not take hold again.
     headset.SetHandTracked(kLeft, true);

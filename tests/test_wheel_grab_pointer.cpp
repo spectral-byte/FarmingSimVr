@@ -107,9 +107,9 @@ TEST_F(CompanionModTest, AHoldingHandNeverBecomesThePointerHandHoweverItMovesAnd
     }
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingSteeringWheel(1)"), "true") << "still holding";
 
-    AdvanceGameTime(5000);  // the hand rests on the wheel for longer than a Motion Controller stays in use when it lies still
+    AdvanceGameTime(5000);  // the hand rests on the Steering Wheel for longer than a Motion Controller stays in use when it lies still
     FRAMES(3);
-    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true") << "a hand holding the wheel is still in use";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true") << "a hand holding the Steering Wheel is still in use";
     EXPECT_EQ(PointerHand(L), "nil");
 }
 
@@ -127,7 +127,7 @@ TEST_F(CompanionModTest, AfterReleaseTheHandPointsAgainAsUsual) {
     headset.SetHandInputs(kRight, Grip(0.0f));
     FRAMES(1);
     EXPECT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "false") << "the grip was let go";
-    EXPECT_EQ(PointerHand(L), "1") << "the hand that held the wheel is the Pointer Hand again";
+    EXPECT_EQ(PointerHand(L), "1") << "the hand that held the Steering Wheel is the Pointer Hand again";
     EXPECT_NE(PointerRay(L), "nil") << "and casts its Pointer Ray again";
 }
 

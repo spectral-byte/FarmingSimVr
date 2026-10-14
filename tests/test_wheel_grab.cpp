@@ -91,7 +91,7 @@ TEST_F(CompanionModTest, SqueezingTheGripOutsideTheRimRingDoesNothingToSteering)
 
     struct Spot { double radius, lift; const char* where; };
     for (const Spot& spot : { Spot{ 0.40, 0.0, "beyond the rim" }, Spot{ 0.04, 0.0, "on the hub" },
-                              Spot{ 0.18, 0.15, "well in front of the wheel's plane" } }) {
+                              Spot{ 0.18, 0.15, "well in front of the Steering Wheel's plane" } }) {
         GRAB(kRight, RimPoint(L, spot.radius, 0.5, spot.lift));
         for (int step = 1; step <= 4; ++step) {
             headset.SetHandPose(kRight, HandAtWorld(RimPoint(L, spot.radius, 0.5 + 0.2 * step, spot.lift)));
@@ -100,33 +100,33 @@ TEST_F(CompanionModTest, SqueezingTheGripOutsideTheRimRingDoesNothingToSteering)
         headset.SetHandInputs(kRight, Grip(0.0f));
         FRAMES(2);
         EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), "0") << "a grip squeezed " << spot.where << " steered";
-        EXPECT_NEAR(WheelAngle(L), 0.0, 1e-6) << "a grip squeezed " << spot.where << " turned the wheel";
+        EXPECT_NEAR(WheelAngle(L), 0.0, 1e-6) << "a grip squeezed " << spot.where << " turned the Steering Wheel";
     }
 }
 
 TEST_F(CompanionModTest, TurningStartsFromTheSteeringWheelsActualAngleSoGrabbingNeverJumpsIt) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
-    // Steered 0.5 of the way to full lock: 1.5 turns of the wheel's 540 degrees at full lock, past the half
-    // turn at which a node's Euler angles wrap. A slow steering duration keeps the game from centring the wheel
+    // Steered 0.5 of the way to full lock: 1.5 turns of the Steering Wheel's 540 degrees at full lock, past the half
+    // turn at which a node's Euler angles wrap. A slow steering duration keeps the game from centring the Steering Wheel
     // while the hand is brought up, and from catching up with it quickly afterwards.
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, SteerableCab("rotatedTime = 0.5, steeringDuration = 100")));
     SetGameTime(10000);
     const double start = 0.5 * 3.0 * 3.14159265358979;
 
-    GRAB(kRight, RimPoint(L, kRimRadius, 1.0));  // the hand takes hold of the rim wherever it is, not where the wheel's angle is
+    GRAB(kRight, RimPoint(L, kRimRadius, 1.0));  // the hand takes hold of the rim wherever it is, not where the Steering Wheel's angle is
     FRAMES(20);
-    EXPECT_NEAR(WheelAngle(L), start, 0.02) << "the wheel stayed where it was when the hand took hold";
+    EXPECT_NEAR(WheelAngle(L), start, 0.02) << "the Steering Wheel stayed where it was when the hand took hold";
 
     TURN_HAND_TO(kRight, 1.0 + 0.3);
     FRAMES(150);
-    EXPECT_NEAR(WheelAngle(L), start + 0.3, 0.02) << "turning the hand turned the wheel on from its own angle";
+    EXPECT_NEAR(WheelAngle(L), start + 0.3, 0.02) << "turning the hand turned the Steering Wheel on from its own angle";
 }
 
 TEST_F(CompanionModTest, TheSteeringWheelStopsDeadAtFullLockAndTurnsBackAtOnce) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
-    // A tracked tractor's wheel turns 120 degrees at full lock.
+    // A tracked tractor's Steering Wheel turns 120 degrees at full lock.
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, SteerableCab("rotationDeg = 120")));
     SetGameTime(10000);
     const double fullLock = 120.0 * 3.14159265358979 / 180.0;
@@ -136,26 +136,26 @@ TEST_F(CompanionModTest, TheSteeringWheelStopsDeadAtFullLockAndTurnsBackAtOnce) 
         TURN_HAND_TO(kRight, 0.2 * step);  // the hand carries on to 3 radians, a good way past full lock
     }
     FRAMES(30);
-    EXPECT_NEAR(WheelAngle(L), fullLock, 0.01) << "the wheel stopped at full lock";
+    EXPECT_NEAR(WheelAngle(L), fullLock, 0.01) << "the Steering Wheel stopped at full lock";
     EXPECT_NEAR(Number(L, "StubSteer.calls[#StubSteer.calls].value"), -1.0, 1e-6)
         << "at full lock the vehicle was told to steer all the way";
 
-    // Back from the stop by 0.3 radian of hand turn: the wheel follows at once, no slack to wind back first.
+    // Back from the stop by 0.3 radian of hand turn: the Steering Wheel follows at once, no slack to wind back first.
     for (int step = 1; step <= 3; ++step) {
         TURN_HAND_TO(kRight, 3.0 - 0.1 * step);
     }
     FRAMES(30);
-    EXPECT_NEAR(WheelAngle(L), fullLock - 0.3, 0.02) << "turning back from the stop moved the wheel straight away";
+    EXPECT_NEAR(WheelAngle(L), fullLock - 0.3, 0.02) << "turning back from the stop moved the Steering Wheel straight away";
 
     for (int step = 1; step <= 40; ++step) {
         TURN_HAND_TO(kRight, 2.7 - 0.2 * step);  // all the way round the other way, to -5.3 radians
     }
     FRAMES(30);
-    EXPECT_NEAR(WheelAngle(L), -fullLock, 0.01) << "and the wheel stops at full lock the other way too";
+    EXPECT_NEAR(WheelAngle(L), -fullLock, 0.01) << "and the Steering Wheel stops at full lock the other way too";
     EXPECT_NEAR(Number(L, "StubSteer.calls[#StubSteer.calls].value"), 1.0, 1e-6);
 }
 
-TEST_F(CompanionModTest, LettingGoOfTheGripStopsSteeringAndTheGameCentresTheWheel) {
+TEST_F(CompanionModTest, LettingGoOfTheGripStopsSteeringAndTheGameCentresTheSteeringWheel) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
@@ -174,7 +174,7 @@ TEST_F(CompanionModTest, LettingGoOfTheGripStopsSteeringAndTheGameCentresTheWhee
     TURN_HAND_TO(kRight, 2.0);  // the hand carries on turning, no longer holding
     FRAMES(60);
     EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), callsAtRelease) << "nothing was sent after the grip was let go";
-    EXPECT_NEAR(WheelAngle(L), 0.0, 0.01) << "the game's own steering back centred the wheel";
+    EXPECT_NEAR(WheelAngle(L), 0.0, 0.01) << "the game's own steering back centred the Steering Wheel";
 }
 
 TEST_F(CompanionModTest, TheGripGrabsAtTheMenuBackThresholdAndKeepsHoldingUntilItIsAlmostOpen) {
@@ -188,7 +188,7 @@ TEST_F(CompanionModTest, TheGripGrabsAtTheMenuBackThresholdAndKeepsHoldingUntilI
     FRAMES(2);
     TURN_HAND_TO(kRight, 0.4);
     FRAMES(10);
-    EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), "0") << "a grip at 0.5 did not take the wheel";
+    EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), "0") << "a grip at 0.5 did not take the Steering Wheel";
 
     TURN_HAND_TO(kRight, 0.0);
     headset.SetHandInputs(kRight, Grip(0.7f));
@@ -197,14 +197,14 @@ TEST_F(CompanionModTest, TheGripGrabsAtTheMenuBackThresholdAndKeepsHoldingUntilI
     FRAMES(2);
     TURN_HAND_TO(kRight, 0.4);
     FRAMES(30);
-    EXPECT_NEAR(WheelAngle(L), 0.4, 0.02) << "a grip eased to 0.4 still held the wheel";
+    EXPECT_NEAR(WheelAngle(L), 0.4, 0.02) << "a grip eased to 0.4 still held the Steering Wheel";
 
     headset.SetHandInputs(kRight, Grip(0.2f));
     FRAMES(1);
     const std::string callsAtRelease = EvalLua(L, "#StubSteer.calls");
     TURN_HAND_TO(kRight, 1.0);
     FRAMES(5);
-    EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), callsAtRelease) << "below 0.3 the wheel was let go";
+    EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), callsAtRelease) << "below 0.3 the Steering Wheel was let go";
 }
 
 TEST_F(CompanionModTest, AGripAlreadySqueezedWhenTheHandReachesTheRingDoesNotGrab) {
@@ -213,7 +213,7 @@ TEST_F(CompanionModTest, AGripAlreadySqueezedWhenTheHandReachesTheRingDoesNotGra
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     SetGameTime(10000);
 
-    BRING_HAND(kRight, RimPoint(L, 0.5, 0.0));  // a fist away from the wheel
+    BRING_HAND(kRight, RimPoint(L, 0.5, 0.0));  // a fist away from the Steering Wheel
     headset.SetHandInputs(kRight, Grip(1.0f));
     FRAMES(2);
     for (int step = 1; step <= 5; ++step) {
@@ -222,7 +222,7 @@ TEST_F(CompanionModTest, AGripAlreadySqueezedWhenTheHandReachesTheRingDoesNotGra
     }
     TURN_HAND_TO(kRight, 0.5);
     FRAMES(10);
-    EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), "0") << "a fist swept through the ring did not take the wheel";
+    EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), "0") << "a fist swept through the ring did not take the Steering Wheel";
 }
 
 // ---- Where Wheel Grab is available ----
@@ -255,7 +255,7 @@ TEST_F(CompanionModTest, ThereIsNoWheelGrabInAnOutsideCameraOrFromAPassengerSeat
 
     ASSERT_EQ(RunLuauChunk(L, "StubSteer.changeCamera(cab.vehicle, cab.cam)", "=cabCamera"), 0);
     TRY_TO_STEER(kRight);
-    EXPECT_GT(Number(L, "#StubSteer.calls"), 0.0) << "back in the cab camera the wheel can be held again";
+    EXPECT_GT(Number(L, "#StubSteer.calls"), 0.0) << "back in the cab camera the Steering Wheel can be held again";
 }
 
 TEST_F(CompanionModTest, ThereIsNoWheelGrabOnFoot) {
@@ -318,7 +318,7 @@ TEST_F(CompanionModTest, ThereIsNoWheelGrabWithMotionControllersOff) {
     EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), "0");
 }
 
-TEST_F(CompanionModTest, SwitchingWheelGrabOrMotionControllersOffLetsGoOfTheWheelAndItIsNotHeldAgainBySwitchingOnAgain) {
+TEST_F(CompanionModTest, SwitchingWheelGrabOrMotionControllersOffLetsGoOfTheSteeringWheelAndItIsNotHeldAgainBySwitchingOnAgain) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
@@ -339,7 +339,7 @@ TEST_F(CompanionModTest, SwitchingWheelGrabOrMotionControllersOffLetsGoOfTheWhee
         FRAMES(3);
         TURN_HAND_TO(kRight, 1.0);  // the grip is still squeezed: that is not a new grab
         FRAMES(5);
-        EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), callsWhenOff) << setting << " on took hold of the wheel again";
+        EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), callsWhenOff) << setting << " on took hold of the Steering Wheel again";
         headset.SetHandInputs(kRight, Grip(0.0f));
         FRAMES(30);
     }
@@ -378,7 +378,7 @@ TEST_F(CompanionModTest, VrWheelGrabIsSavedAcrossSessions) {
 
 // ---- Diagnostics ----
 
-TEST_F(CompanionModTest, VrWheelGrabDiagnosticsLogsTheWheelEachHandsDistanceToTheRingTheGrabAndTheSteeringSent) {
+TEST_F(CompanionModTest, VrWheelGrabDiagnosticsLogsTheSteeringWheelEachHandsDistanceToTheRingTheGrabAndTheSteeringSent) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, SteerableCab("rotationDeg = 120")));

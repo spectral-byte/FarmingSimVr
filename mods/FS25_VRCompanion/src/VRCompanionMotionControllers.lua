@@ -72,6 +72,7 @@
 --     VRCompanion:draw()                           the line and dot, drawn from the update's end points
 --
 --   Haptics (VRBridge.pulseHaptic(hand, durationMs, strength) -> boolean)
+--     VRCompanion:pulseHand(hand, durationMs, strength) -> boolean   one hand; false when off or the runtime refuses
 --     VRCompanion:pulsePointerHand(durationMs, strength) -> boolean   Pointer Hand only; false when off
 --     VRCompanion:onClickPointEvent(kind, clickPoint)   "selected" (non-nil point) and "clicked" pulse
 --
@@ -92,7 +93,7 @@
 --                 command registers next to the others (VRCompanionVirtualHands.lua). The Virtual Hands place the grip
 --                 pose through VRCompanion:headRelativePoseToWorld, the transform the Pointer Ray uses too.
 --     WheelGrab   updateMotionControllers -> updateWheelGrab(dt) after the hands are polled and before the Pointer Hand is chosen
---                 (also when input is ignored, so a held Steering Wheel is let go), the saved setting rides on
+--                 (also when input is ignored, or the Injector offers no hand states, so a held Steering Wheel is let go), the saved setting rides on
 --                 save/loadMotionControllerSettings (saveWheelGrabSetting / loadWheelGrabSetting), the console commands register
 --                 next to the others and resetMotionControllers -> resetWheelGrab() (VRCompanionWheelGrab.lua). A hand
 --                 holding the Steering Wheel (isHandHoldingSteeringWheel) stays in use but is never a Pointer Hand
@@ -748,15 +749,19 @@ VRCompanion.HAPTIC_SELECT_STRENGTH = 0.25
 VRCompanion.HAPTIC_CLICK_MS = 45
 VRCompanion.HAPTIC_CLICK_STRENGTH = 0.6
 
--- Vibrates the Pointer Hand (never the other hand). Nothing happens while Motion Controllers are off,
--- without a Pointer Hand, or when the Injector has no haptics call or the runtime refuses it.
-function VRCompanion:pulsePointerHand(durationMs, strength)
-    local hand = state.pointerHand
+-- Vibrates one hand (never the other). Nothing happens, and false is returned, while Motion Controllers are
+-- off, without a hand, or when the Injector has no haptics call or the runtime refuses it.
+function VRCompanion:pulseHand(hand, durationMs, strength)
     if hand == nil or self.motionControllersEnabled == false then return false end
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge == nil or type(bridge.pulseHaptic) ~= "function" then return false end
     local ok, played = pcall(bridge.pulseHaptic, hand, durationMs, strength)
     return ok and played == true
+end
+
+-- Vibrates the Pointer Hand (never the other hand); false without a Pointer Hand (see pulseHand).
+function VRCompanion:pulsePointerHand(durationMs, strength)
+    return self:pulseHand(state.pointerHand, durationMs, strength)
 end
 
 -- Interactive Control's Click Point events (see VRCompanionInteractiveControl.lua): "selected" when the
@@ -793,7 +798,9 @@ end
 
 local SETTING_KEY_ENABLED = "vrSettings.motionControllers"
 
-local function parseOnOff(arg)
+-- The on/off a console argument or a saved string says (on/true/1, off/false/0), or nil when it says neither. Shared
+-- with Wheel Grab's `vrWheelGrab` command and setting.
+function VRCompanion.parseOnOffArgument(arg)
     local low = string.lower(tostring(arg))
     if low == "on" or low == "true" or low == "1" then return true end
     if low == "off" or low == "false" or low == "0" then return false end
@@ -829,7 +836,7 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
     end
     if loaded == nil and type(xml.getString) == "function" then
         local str = xml.getString(xmlFile, SETTING_KEY_ENABLED)
-        if str ~= nil then loaded = parseOnOff(str) end
+        if str ~= nil then loaded = VRCompanion.parseOnOffArgument(str) end
     end
     if loaded ~= nil then
         self.motionControllersEnabled = loaded
@@ -880,7 +887,7 @@ function VRCompanion:consoleCommandSetPointerCone(arg)
 end
 
 function VRCompanion:consoleCommandSetMotionControllers(arg)
-    local enabled = parseOnOff(arg)
+    local enabled = VRCompanion.parseOnOffArgument(arg)
     if arg == nil or arg == "" or string.lower(tostring(arg)) == "status" then
         return string.format("Motion Controllers are %s. Usage: vrMotionControllers <on|off> (saved)",
             self.motionControllersEnabled and "on" or "off")

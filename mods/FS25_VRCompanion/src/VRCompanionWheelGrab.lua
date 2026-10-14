@@ -8,23 +8,24 @@
 -- every frame while the Steering Wheel is held, vehicle:setSteeringInput(value, true, InputDevice.CATEGORY.WHEEL)
 -- is called, and nothing else is touched (the vehicle's own steering value is never written, so the game keeps
 -- its steering rate limit, its end stops and its multiplayer sync). When nothing is held nothing is sent, and the
--- game's own steering back centres the wheel.
+-- game's own steering back centres the Steering Wheel.
 --
--- TERMS (CONTEXT.md): the Steering Wheel is the modelled wheel in the cab, a Wheel Peripheral is a physical
--- wheel on the PC. A hand "holds" the Steering Wheel from the grab until the grip is let go.
+-- TERMS (CONTEXT.md): the Steering Wheel is the one modelled in the cab, a Wheel Peripheral is a game input device
+-- connected to the PC. A hand "holds" the Steering Wheel from the grab until the grip is let go.
 --
 -- THE STEERING WHEEL: the node the game turns, found the way the game finds it (steeringWheelOf): the turned seat's
--- or the crab steering mode's own wheel when the vehicle has one, otherwise the drivable's. The game sets that node's
+-- or the crab steering mode's own Steering Wheel when the vehicle has one, otherwise the drivable's. The game sets that node's
 -- rotation to (0, angle, 0) every frame, so it turns about its LOCAL Y axis, whatever tilts it is in the node above.
 -- The angle is rotatedTime * (the in-cab rotation) * (the node direction: -1 on a turned seat), the same product the
 -- game uses, so the ACTUAL angle is read from those fields and never from the node's Euler angles (which wrap at
--- half a turn while a vanilla wheel turns up to one and a half turns each way). The node is used for geometry only.
+-- half a turn while a vanilla Steering Wheel turns up to one and a half turns each way). The node is used for geometry only.
 --
--- TURNING: a hand's angle about the axis is measured in the plane of the wheel, in the frame of the node ABOVE the
--- wheel node (which does not turn with it), from the hand's grip position. Each frame the target angle moves by the
--- AVERAGE of the angle changes of the hands that hold, starting from the wheel's actual angle at the first grab, and
+-- TURNING: a hand's angle about the axis is measured in the plane of the Steering Wheel, in the frame of the node ABOVE
+-- the Steering Wheel node (which does not turn with it), from the hand's grip position. Each frame the target angle moves by the
+-- AVERAGE of the angle changes of the hands that held on the update before and still hold (a hand that grabs or lets go on an
+-- update is not counted on it, so it neither halves nor adds to the others' turn), starting from the Steering Wheel's actual angle at the first grab, and
 -- is clamped to full lock each way (the angles at the vehicle's minimum and maximum rotated time) with no slack kept
--- past the stop: turning back moves the wheel at once. The steering value sent is the inverse of what the game does
+-- past the stop: turning back moves the Steering Wheel at once. The steering value sent is the inverse of what the game does
 -- with a value (Wheels.lua updateVehiclePhysics), so the node comes to rest at the target:
 --   rotatedTime = angle / (inCabRotation * direction)
 --   value = -rotatedTime / (maxRotTime * steeringDirection)  for rotatedTime >= 0
@@ -33,15 +34,15 @@
 -- The game steers toward the value at a capped rate, so the node lags a fast hand; it is the node's actual rotation the
 -- hand has to follow, never the target.
 --
--- THE PINNED HAND: at the grab the hand's grip pose (position and orientation) is stored in the LOCAL frame of the wheel
+-- THE PINNED HAND: at the grab the hand's grip pose (position and orientation) is stored in the LOCAL frame of the Steering Wheel
 -- node. While the hand holds, getWheelGrabHandPose(hand) carries it back to the world through the node's ACTUAL rotation
--- (not the target), so the Virtual Hand turns with the wheel exactly as the game turns it, the steering rate lag shows as
--- the hand staying on the wheel, and no angle is kept or wrapped. VRCompanionVirtualHands.lua draws the hand there. A hand
+-- (not the target), so the Virtual Hand turns with the Steering Wheel exactly as the game turns it, the steering rate lag shows as
+-- the hand staying on the Steering Wheel, and no angle is kept or wrapped. VRCompanionVirtualHands.lua draws the hand there. A hand
 -- whose real grip position is more than WHEEL_GRAB_PULL_AWAY_DISTANCE from its pinned point lets go.
 --
 -- HAPTICS: one short pulse in a hand when it grabs, one firmer pulse in every holding hand when the target reaches full
--- lock (again only after the target has left the stop; a hand that grabs while another holds at the stop feels only its own
--- grab), none on release.
+-- lock (again only after the target has left the stop; a hand that grabs while another holds at the stop, or a first hand that
+-- grabs with the Steering Wheel already at the stop, feels only its own grab), none on release.
 --
 -- AVAILABILITY (findSteeringWheel): the mod is on (`vrWheelGrab`, Motion Controllers on), no menu is open and 2D
 -- Floating Window Mode is off, the player is driving the controlled vehicle from its in-cab camera (not a passenger
@@ -56,20 +57,21 @@
 -- VRCompanion.WHEEL_GRAB_GRIP_RELEASE (hysteresis, like the menu back button). A grab starts on the update the grip is
 -- SQUEEZED (an edge: a grip already squeezed when the hand reaches the ring or when Wheel Grab becomes available does
 -- not grab) by a hand that is in use, with its grip position inside the ring: between WHEEL_GRAB_RING_INNER and
--- WHEEL_GRAB_RING_OUTER from the wheel's axis and within WHEEL_GRAB_RING_HALF_THICKNESS of its plane. The ring is the
--- same on every vehicle: it is not measured from the wheel's mesh.
+-- WHEEL_GRAB_RING_OUTER from the Steering Wheel's axis and within WHEEL_GRAB_RING_HALF_THICKNESS of its plane. The ring is the
+-- same on every vehicle: it is not measured from the Steering Wheel's mesh.
 --
 -- THE HANDS WIN: while the Steering Wheel is held, every other call of vehicle:setSteeringInput is dropped (the keyboard,
 -- a gamepad, a Wheel Peripheral, the game's phone tilt steering); only Wheel Grab's own call passes. The function is wrapped
 -- on the Drivable class and on the controlled vehicle's own copy (the engine copies it onto each vehicle), see the section
 -- "The hands win over other steering" below. If the function is missing or has another shape, Wheel Grab is unavailable, one
--- warning is logged and the steering of other devices is untouched. vrWheelGrabDiagnostics reports the wrap.
+-- warning is logged and the steering of other devices is untouched; Wheel Grab does the same when its own call raises on
+-- WHEEL_GRAB_STEERING_FAILURES_BEFORE_GIVING_UP updates in a row. vrWheelGrabDiagnostics reports the wrap.
 --
 -- PUBLIC SURFACE
 --   VRCompanion.wheelGrabEnabled           boolean, default true, saved (`vrWheelGrab on|off`)
 --   VRCompanion.WHEEL_GRAB_GRIP_PRESS / _RELEASE            grip value that grabs / lets go (0..1)
---   VRCompanion.WHEEL_GRAB_RING_INNER / _OUTER              the ring's radii from the wheel's axis (m)
---   VRCompanion.WHEEL_GRAB_RING_HALF_THICKNESS              how far from the wheel's plane the ring reaches (m)
+--   VRCompanion.WHEEL_GRAB_RING_INNER / _OUTER              the ring's radii from the Steering Wheel's axis (m)
+--   VRCompanion.WHEEL_GRAB_RING_HALF_THICKNESS              how far from the Steering Wheel's plane the ring reaches (m)
 --   VRCompanion:updateWheelGrab(dt)         once per update, called by updateMotionControllers after the hands are polled
 --   VRCompanion:isHandHoldingSteeringWheel(hand) -> boolean   the hand holds the Steering Wheel (as of the last update)
 --   VRCompanion:isSteeringWheelHeld() -> boolean              some hand does
@@ -107,9 +109,9 @@ VRCompanion.WHEEL_GRAB_GRIP_PRESS = 0.6
 VRCompanion.WHEEL_GRAB_GRIP_RELEASE = 0.3
 
 -- THE RIM RING, in metres, the same for every vehicle: the grip position of a squeezing hand must be this far from the
--- Steering Wheel's axis (measured in its plane) and this close to its plane. Vanilla wheels are about 0.2 to 0.25 m
+-- Steering Wheel's axis (measured in its plane) and this close to its plane. Vanilla Steering Wheels are about 0.2 to 0.25 m
 -- across the rim from the centre, and in VR a hand is not precise, so the ring is generous: 10 to 25 cm, which leaves out
--- a hand resting on the hub and one resting on the dashboard behind a small wheel. A few cm either side of the plane
+-- a hand resting on the hub and one resting on the dashboard behind a small Steering Wheel. A few cm either side of the plane
 -- covers a hand holding the rim from the front or from behind. Tune in the headset with `vrWheelGrabDiagnostics`.
 VRCompanion.WHEEL_GRAB_RING_INNER = 0.10
 VRCompanion.WHEEL_GRAB_RING_OUTER = 0.25
@@ -157,9 +159,7 @@ end
 
 local state = newState()
 
-local function engine(name)
-    return _G and _G[name]
-end
+local engine = VRCompanion.getEngineGlobal  -- VRCompanionCore.lua, loaded before this file
 
 local function isNode(node)
     return node ~= nil and node ~= 0
@@ -193,7 +193,7 @@ local wrap = {
 }
 
 -- Whether the vehicle's Steering Wheel is held, which is when the wraps drop calls. The wrap passes everything when
--- Wheel Grab or Motion Controllers are switched off, even before the next update lets go of the wheel.
+-- Wheel Grab or Motion Controllers are switched off, even before the next update lets go of the Steering Wheel.
 local function isHeldIn(vehicle)
     return vehicle ~= nil and state.vehicle == vehicle and (state.hands[0].holding or state.hands[1].holding)
         and not state.sending and VRCompanion.wheelGrabEnabled ~= false and VRCompanion.motionControllersEnabled ~= false
@@ -318,7 +318,7 @@ wrapClass()  -- Drivable is there as the files load: the types the game builds a
 -- ---- The Steering Wheel of a vehicle --------------------------------------------------------------------------------
 
 -- The table the game would turn right now: { node, indoorRotation, ... } and the direction it turns the node in, or nil.
--- A turned seat and a crab steering mode may bring their own wheel (ReverseDriving / CrabSteering updateSteeringWheel).
+-- A turned seat and a crab steering mode may bring their own Steering Wheel (ReverseDriving / CrabSteering updateSteeringWheel).
 local function steeringWheelOf(vehicle)
     local direction = 1
     local wheel = vehicle.spec_drivable and vehicle.spec_drivable.steeringWheel or nil
@@ -379,7 +379,7 @@ local function askVehicle(vehicle, method)
     return nil
 end
 
--- The vehicle the player is driving, its Steering Wheel and the direction of the wheel node, or nil and why not. A vehicle
+-- The vehicle the player is driving, its Steering Wheel and the direction of the Steering Wheel node, or nil and why not. A vehicle
 -- is returned whenever the player is driving one, whatever is wrong with it.
 local function findSteeringWheel(self)
     if self.wheelGrabEnabled == false then return nil, nil, nil, "Wheel Grab is off" end
@@ -408,7 +408,7 @@ local function findSteeringWheel(self)
     end
     -- A hired helper driving the vehicle makes Wheel Grab unavailable, just as it does the keyboard's steering (the game
     -- registers no steer action while getIsAIActive() is true). Nothing here ever touches the helper: squeezing the grip
-    -- at the rim neither stops the job nor takes the wheel from it, and a hold in progress simply ends (updateWheelGrab).
+    -- at the rim neither stops the job nor takes the Steering Wheel from it, and a hold in progress simply ends (updateWheelGrab).
     if askVehicle(vehicle, "getIsAIActive") == true then
         return vehicle, nil, nil, "a hired helper is driving"
     end
@@ -442,9 +442,9 @@ local function updateGrips(self)
     end
 end
 
--- Where the hand's grip position is relative to the wheel: the angle about its axis (radians, in the plane of the wheel,
+-- Where the hand's grip position is relative to the Steering Wheel: the angle about its axis (radians, in the plane of it,
 -- turning the same way as the node's rotation about its local Y), the distance from the axis and the signed distance from
--- the plane. All measured in the frame of the node above the wheel node, which does not turn with the wheel. Returns nil
+-- the plane. All measured in the frame of the node above the Steering Wheel node, which does not turn with it. Returns nil
 -- and why when the hand is not located (an untracked grip pose, or no head placed in the world: a menu, 2D Floating
 -- Window Mode, another camera, Pass-Through Mode).
 local function measureHand(self, hand, wheel)
@@ -464,7 +464,7 @@ local function measureHand(self, hand, wheel)
     return math.atan2(-dz, dx), math.sqrt(dx * dx + dz * dz), dy
 end
 
--- How far a hand at this distance from the wheel's axis and from its plane is from the rim ring (0 inside it).
+-- How far a hand at this distance from the Steering Wheel's axis and from its plane is from the rim ring (0 inside it).
 local function ringDistance(self, radial, axial)
     local along = math.max(self.WHEEL_GRAB_RING_INNER - radial, radial - self.WHEEL_GRAB_RING_OUTER, 0)
     local across = math.max(math.abs(axial) - self.WHEEL_GRAB_RING_HALF_THICKNESS, 0)
@@ -483,7 +483,7 @@ local function releaseHand(hand)
     entry.pin = nil
 end
 
--- Stores the hand's grip pose, which measureHand has just left in state.scratch (world), in the local frame of the wheel
+-- Stores the hand's grip pose, which measureHand has just left in state.scratch (world), in the local frame of the Steering Wheel
 -- node: the point the Virtual Hand is pinned to. Without the engine's node functions the hand is not pinned and is drawn
 -- at its grip pose as usual.
 local function pinHand(hand, wheel)
@@ -503,7 +503,7 @@ local function pinHand(hand, wheel)
     entry.pin = { node = wheel.node, x = lx, y = ly, z = lz, qx = qx, qy = qy, qz = qz, qw = qw }
 end
 
--- Where a pin is in the world right now, carried through the wheel node's actual rotation: x, y, z, qx, qy, qz, qw, or
+-- Where a pin is in the world right now, carried through the Steering Wheel node's actual rotation: x, y, z, qx, qy, qz, qw, or
 -- nil when the engine cannot say.
 local function pinInTheWorld(pin)
     local localToWorld, getWorldQuaternion = engine("localToWorld"), engine("getWorldQuaternion")
@@ -526,15 +526,6 @@ local function distanceToPin(hand)
     local world = state.scratch
     local dx, dy, dz = world.x - x, world.y - y, world.z - z
     return math.sqrt(dx * dx + dy * dy + dz * dz)
-end
-
--- Vibrates one hand (never the other). Nothing happens while Motion Controllers are off, or when the Injector has no
--- haptics call or the runtime refuses it.
-local function pulseHand(self, hand, durationMs, strength)
-    if self.motionControllersEnabled == false then return end
-    local bridge = VRBridge or engine("VRBridge")
-    if bridge == nil or type(bridge.pulseHaptic) ~= "function" then return end
-    pcall(bridge.pulseHaptic, hand, durationMs, strength)
 end
 
 local function anyHolding()
@@ -604,7 +595,7 @@ function VRCompanion:updateWheelGrab(dt)
             else
                 local away = distanceToPin(hand)
                 if away ~= nil and away > self.WHEEL_GRAB_PULL_AWAY_DISTANCE then
-                    releaseHand(hand)  -- pulled away from the wheel with the grip still squeezed: as if let go
+                    releaseHand(hand)  -- pulled away from the Steering Wheel with the grip still squeezed: as if let go
                 else
                     sum = sum + wrapAngle(angle - entry.angle)
                     count = count + 1
@@ -615,7 +606,7 @@ function VRCompanion:updateWheelGrab(dt)
             local angle, radial, axial = measureHand(self, hand, wheel)
             if angle ~= nil and ringDistance(self, radial, axial) == 0 then
                 if not anyHolding() then
-                    -- The first hand to take hold: the target starts from where the wheel actually is. A wheel already
+                    -- The first hand to take hold: the target starts from where the Steering Wheel actually is. A Steering Wheel already
                     -- at a stop is "at full lock" from the start, so the stop is felt only after the target has left it
                     -- and come back (the grab's own pulse is all this hand feels at the stop).
                     state.target = actualAngle(vehicle, wheel, direction)
@@ -625,7 +616,7 @@ function VRCompanion:updateWheelGrab(dt)
                 entry.holding = true
                 entry.angle = angle
                 pinHand(hand, wheel)
-                pulseHand(self, hand, self.WHEEL_GRAB_GRAB_PULSE_MS, self.WHEEL_GRAB_GRAB_PULSE_STRENGTH)
+                self:pulseHand(hand, self.WHEEL_GRAB_GRAB_PULSE_MS, self.WHEEL_GRAB_GRAB_PULSE_STRENGTH)
             end
         end
     end
@@ -646,7 +637,7 @@ function VRCompanion:updateWheelGrab(dt)
         -- The target reached a stop: every holding hand feels it, once, until the target has left the stop again.
         for _, hand in ipairs(HANDS) do
             if state.hands[hand].holding then
-                pulseHand(self, hand, self.WHEEL_GRAB_FULL_LOCK_PULSE_MS, self.WHEEL_GRAB_FULL_LOCK_PULSE_STRENGTH)
+                self:pulseHand(hand, self.WHEEL_GRAB_FULL_LOCK_PULSE_MS, self.WHEEL_GRAB_FULL_LOCK_PULSE_STRENGTH)
             end
         end
     end
@@ -688,13 +679,6 @@ end
 
 local SETTING_KEY_ENABLED = "vrSettings.wheelGrab"
 
-local function parseOnOff(arg)
-    local low = string.lower(tostring(arg))
-    if low == "on" or low == "true" or low == "1" then return true end
-    if low == "off" or low == "false" or low == "0" then return false end
-    return nil
-end
-
 function VRCompanion:setWheelGrabEnabled(enabled, save)
     self.wheelGrabEnabled = (enabled ~= false)
     if save and type(self.saveConfiguration) == "function" then
@@ -718,7 +702,7 @@ function VRCompanion:loadWheelGrabSetting(xmlFile, xml)
     end
     if loaded == nil and type(xml.getString) == "function" then
         local str = xml.getString(xmlFile, SETTING_KEY_ENABLED)
-        if str ~= nil then loaded = parseOnOff(str) end
+        if str ~= nil then loaded = VRCompanion.parseOnOffArgument(str) end
     end
     if loaded ~= nil then
         self.wheelGrabEnabled = loaded
@@ -726,7 +710,7 @@ function VRCompanion:loadWheelGrabSetting(xmlFile, xml)
 end
 
 function VRCompanion:consoleCommandSetWheelGrab(arg)
-    local enabled = parseOnOff(arg)
+    local enabled = VRCompanion.parseOnOffArgument(arg)
     if arg == nil or arg == "" or string.lower(tostring(arg)) == "status" then
         return string.format("Wheel Grab is %s. Usage: vrWheelGrab <on|off> (saved)", self.wheelGrabEnabled ~= false and "on" or "off")
     end
@@ -771,7 +755,7 @@ local function describeHand(self, hand, wheel)
 end
 
 -- The state of Wheel Grab as a list of fields: whether it is on and available, whether the vehicle has a Steering Wheel,
--- each hand's distance to the rim ring and whether it holds, the steering value sent and whether the wheel is at full lock.
+-- each hand's distance to the rim ring and whether it holds, the steering value sent and whether the Steering Wheel is at full lock.
 local function diagnosticFields(self)
     local vehicle = self:getControlledVehicle()
     local wheel, direction = nil, nil

@@ -27,6 +27,13 @@ VRCompanion.vehicleSpeedHooked = (VRCompanion.vehicleSpeedHooked ~= nil) and VRC
 VRCompanion.stereoToggled = (VRCompanion.stereoToggled ~= nil) and VRCompanion.stereoToggled or false
 VRCompanion.inMissionUpdate = (VRCompanion.inMissionUpdate ~= nil) and VRCompanion.inMissionUpdate or false
 
+-- An engine global by name, or nil when the game does not have it: the engine's functions and tables are read through
+-- this, so that one that is missing is a nil to test for and not an error. Virtual Hands and Wheel Grab alias it as
+-- their local `engine`; this file loads before both.
+function VRCompanion.getEngineGlobal(name)
+    return _G and _G[name]
+end
+
 function VRCompanion:loadMap(name)
     print(string.format("[FS25_VR] Initializing Companion Mod on map '%s'...", tostring(name)))
 
