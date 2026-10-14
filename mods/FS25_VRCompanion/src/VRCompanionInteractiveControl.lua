@@ -335,7 +335,10 @@ end
 local function updateAutoOn(self)
     local autoOn = state.autoOn
     local vehicle = nil
-    if self:getPointerHand() ~= nil and self.motionControllersEnabled ~= false then
+    -- A hand holding the Steering Wheel is not the Pointer Hand, but grabbing it does not touch Interactive Control's
+    -- state either: what was switched on stays on while a hand holds (Wheel Grab never starts it).
+    local holding = autoOn ~= nil and type(self.isSteeringWheelHeld) == "function" and self:isSteeringWheelHeld()
+    if (self:getPointerHand() ~= nil or holding) and self.motionControllersEnabled ~= false then
         vehicle = self:getControlledVehicle()
     end
     if autoOn ~= nil and autoOn.vehicle ~= vehicle then
