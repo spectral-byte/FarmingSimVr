@@ -33,9 +33,14 @@
 -- The game steers toward the value at a capped rate, so the node lags a fast hand; it is the node's actual rotation the
 -- hand has to follow, never the target.
 --
--- AVAILABILITY (findSteeringWheel): the mod is on (`vrWheelGrab`, Motion Controllers on), the player is driving the
--- controlled vehicle from its in-cab camera (not a passenger camera, not an Outside Camera), and the vehicle has a
--- Steering Wheel and a setSteeringInput, and no hired helper is driving it (as for keyboard steering). When it stops being available every hold ends as if the grip were let go.
+-- AVAILABILITY (findSteeringWheel): the mod is on (`vrWheelGrab`, Motion Controllers on), no menu is open and 2D
+-- Floating Window Mode is off, the player is driving the controlled vehicle from its in-cab camera (not a passenger
+-- camera, not an Outside Camera), and the vehicle has a Steering Wheel and a setSteeringInput, and no hired helper is
+-- driving it (as for keyboard steering). When it stops being
+-- available, or the controlled vehicle changes, every hold ends as if the grip were let go (nothing is sent from the
+-- next update on); so does a hand's hold when that hand can no longer be located (it lost tracking). A grip still
+-- squeezed when the situation returns is not a press: it has to be let go and squeezed afresh (updateGrips), and a hand
+-- that is tracked again with its grip squeezed has not squeezed afresh either.
 --
 -- THE GRAB: the grip counts as squeezed at VRCompanion.WHEEL_GRAB_GRIP_PRESS and as let go below
 -- VRCompanion.WHEEL_GRAB_GRIP_RELEASE (hysteresis, like the menu back button). A grab starts on the update the grip is
@@ -93,8 +98,8 @@ local HAND_NAMES = { [0] = "left", [1] = "right" }
 local function newState()
     return {
         hands = {
-            [0] = { gripDown = false, pressed = false, holding = false, angle = 0 },
-            [1] = { gripDown = false, pressed = false, holding = false, angle = 0 },
+            [0] = { gripDown = false, pressed = false, holding = false, angle = 0, tracked = false },
+            [1] = { gripDown = false, pressed = false, holding = false, angle = 0, tracked = false },
         },
         vehicle = nil,       -- the vehicle the Steering Wheel is held in
         target = 0,          -- the target angle of the Steering Wheel (radians, unwrapped) while held
@@ -187,6 +192,9 @@ end
 local function findSteeringWheel(self)
     if self.wheelGrabEnabled == false then return nil, nil, nil, "Wheel Grab is off" end
     if self.motionControllersEnabled == false then return nil, nil, nil, "Motion Controllers are off" end
+    -- A menu or 2D Floating Window Mode takes the player out of the cab: the hands cannot be located in it either.
+    if self.isMenuVisible == true then return nil, nil, nil, "a menu is open" end
+    if self.is2DViewActive == true then return nil, nil, nil, "2D Floating Window Mode is on" end
     local vehicle = self:getControlledVehicle()
     if vehicle == nil then return nil, nil, nil, "not driving a vehicle" end
     local camera = self:getVehicleActiveCamera(vehicle)
@@ -232,8 +240,11 @@ local function updateGrips(self)
             local threshold = entry.gripDown and self.WHEEL_GRAB_GRIP_RELEASE or self.WHEEL_GRAB_GRIP_PRESS
             squeezed = (pose.grip or 0) >= threshold
         end
-        entry.pressed = squeezed and not entry.gripDown
+        -- A grip already squeezed when the hand is tracked again (it lost tracking while holding) is not a press: the
+        -- grip has to be let go and squeezed afresh.
+        entry.pressed = squeezed and not entry.gripDown and entry.tracked
         entry.gripDown = squeezed
+        entry.tracked = pose.tracked == true
     end
 end
 
