@@ -44,8 +44,14 @@
 -- WHEEL_GRAB_RING_OUTER from the wheel's axis and within WHEEL_GRAB_RING_HALF_THICKNESS of its plane. The ring is the
 -- same on every vehicle: it is not measured from the wheel's mesh.
 --
+-- THE HANDS WIN: while the Steering Wheel is held, every other call of vehicle:setSteeringInput is dropped (the keyboard,
+-- a gamepad, a Wheel Peripheral, the game's phone tilt steering); only Wheel Grab's own call passes. The function is wrapped
+-- on the Drivable class and on the controlled vehicle's own copy (the engine copies it onto each vehicle), see the section
+-- "The hands win over other steering" below. If the function is missing or has another shape, Wheel Grab is unavailable, one
+-- warning is logged and the steering of other devices is untouched. vrWheelGrabDiagnostics reports the wrap.
+--
 -- PUBLIC SURFACE
---   VRCompanion.wheelGrabEnabled            boolean, default true, saved (`vrWheelGrab on|off`)
+--   VRCompanion.wheelGrabEnabled           boolean, default true, saved (`vrWheelGrab on|off`)
 --   VRCompanion.WHEEL_GRAB_GRIP_PRESS / _RELEASE            grip value that grabs / lets go (0..1)
 --   VRCompanion.WHEEL_GRAB_RING_INNER / _OUTER              the ring's radii from the wheel's axis (m)
 --   VRCompanion.WHEEL_GRAB_RING_HALF_THICKNESS              how far from the wheel's plane the ring reaches (m)
@@ -117,6 +123,144 @@ end
 local function isNode(node)
     return node ~= nil and node ~= 0
 end
+
+-- ---- The hands win over other steering (ADR-0027) --------------------------------------------------------------------
+--
+-- Every steering device calls vehicle:setSteeringInput(value, isAnalog, deviceCategory): the keyboard, a gamepad, a Wheel
+-- Peripheral and the game's own phone tilt steering and steering slider. While the Steering Wheel is held, Wheel Grab drops
+-- every one of those calls; its own call (made with `state.sending` set) is the only one that passes. The game gives each
+-- vehicle its OWN COPY of the function when it builds the vehicle types (Vehicle:load -> copyTypeFunctionsInto, after the
+-- mod's files are loaded), and the steering input calls the copy, so there are two wraps:
+--   * the class (Drivable.setSteeringInput), wrapped as the files load (or as soon as Drivable is there), so that
+--     every vehicle type the game builds afterwards copies the wrapper;
+--   * the controlled vehicle's own copy, wrapped for as long as the Steering Wheel is held in it, for a vehicle whose
+--     copy was taken from the function before the class was wrapped.
+-- Both pass every call through unchanged whenever nothing is held. Like Interactive Control's wraps, a restore only puts
+-- back a function when it is still the wrapper put there: a wrap another mod added later is never undone.
+-- When the function is missing or not shaped as the wrap expects, Wheel Grab gives up with ONE warning: it is unavailable
+-- and the steering of every other device is left untouched.
+
+local STEERING_FUNCTION = "setSteeringInput"
+local STEERING_PARAMETERS = 4  -- (vehicle, inputValue, isAnalog, deviceCategory)
+
+local wrap = {
+    class = nil,         -- the Drivable table the class wrap was put on
+    classOriginal = nil, -- what Drivable.setSteeringInput was before
+    classWrapper = nil,  -- what the wrap put there
+    instance = nil,      -- { vehicle, original, hadOwn, wrapper } of the controlled vehicle's own copy while it is wrapped
+    problem = nil,       -- why Wheel Grab gave up, once it did (the warning is logged then and never again)
+}
+
+-- Whether the vehicle's Steering Wheel is held, which is when the wraps drop calls. The wrap passes everything when
+-- Wheel Grab or Motion Controllers are switched off, even before the next update lets go of the wheel.
+local function isHeldIn(vehicle)
+    return vehicle ~= nil and state.vehicle == vehicle and (state.hands[0].holding or state.hands[1].holding)
+        and not state.sending and VRCompanion.wheelGrabEnabled ~= false and VRCompanion.motionControllersEnabled ~= false
+end
+
+local function makeWrapper(original)
+    return function(vehicle, inputValue, isAnalog, deviceCategory, ...)
+        if isHeldIn(vehicle) then return end
+        return original(vehicle, inputValue, isAnalog, deviceCategory, ...)
+    end
+end
+
+-- How many parameters a Lua function declares, or nil when it takes any number or the runtime cannot tell.
+local function parameterCount(fn)
+    local library = _G and _G.debug
+    if type(library) ~= "table" then return nil end
+    if type(library.info) == "function" then
+        local ok, count, isVararg = pcall(library.info, fn, "a")
+        if ok and type(count) == "number" then return (not isVararg) and count or nil end
+    end
+    if type(library.getinfo) == "function" then
+        local ok, info = pcall(library.getinfo, fn, "u")
+        if ok and type(info) == "table" and type(info.nparams) == "number" then
+            return (not info.isvararg) and info.nparams or nil
+        end
+    end
+    return nil
+end
+
+-- Why a steering function is not what the wrap expects, or nil when it is.
+local function shapeProblem(fn)
+    if fn == nil then return "it is missing" end
+    if type(fn) ~= "function" then return "it is not a function" end
+    local count = parameterCount(fn)
+    if count ~= nil and count < STEERING_PARAMETERS then
+        return string.format("it takes %d parameters, not (vehicle, value, isAnalog, deviceCategory)", count)
+    end
+    return nil
+end
+
+-- Wraps the Drivable class function once per class table. A class whose function is not as expected is left alone
+-- (steeringInputProblem reports it when a vehicle needs it).
+local function wrapClass()
+    local class = engine("Drivable")
+    if type(class) ~= "table" or class == wrap.class then return end
+    local original = class[STEERING_FUNCTION]
+    if shapeProblem(original) ~= nil then return end
+    wrap.class, wrap.classOriginal, wrap.classWrapper = class, original, makeWrapper(original)
+    class[STEERING_FUNCTION] = wrap.classWrapper
+end
+
+-- Gives the vehicle its own copy back, unless something else has replaced the wrapper since.
+local function unwrapInstance()
+    local current = wrap.instance
+    wrap.instance = nil
+    if current ~= nil and rawget(current.vehicle, STEERING_FUNCTION) == current.wrapper then
+        current.vehicle[STEERING_FUNCTION] = current.hadOwn and current.original or nil
+    end
+end
+
+-- Wraps the controlled vehicle's own copy of the function (replacing a wrap of an earlier vehicle).
+local function wrapInstance(vehicle)
+    local current = wrap.instance
+    if current ~= nil and current.vehicle == vehicle and rawget(vehicle, STEERING_FUNCTION) == current.wrapper then return end
+    if current ~= nil then unwrapInstance() end
+    local original = vehicle[STEERING_FUNCTION]
+    if type(original) ~= "function" or original == wrap.classWrapper then return end  -- the class wrap reaches it
+    local wrapper = makeWrapper(original)
+    wrap.instance = { vehicle = vehicle, original = original, hadOwn = rawget(vehicle, STEERING_FUNCTION) ~= nil, wrapper = wrapper }
+    vehicle[STEERING_FUNCTION] = wrapper
+end
+
+-- Lifts both wraps (map unload). The class function is only put back when it is still the wrapper.
+local function unwrapAll()
+    unwrapInstance()
+    local class = wrap.class
+    if class ~= nil and class[STEERING_FUNCTION] == wrap.classWrapper then
+        class[STEERING_FUNCTION] = wrap.classOriginal
+    end
+    wrap.class, wrap.classOriginal, wrap.classWrapper, wrap.problem = nil, nil, nil, nil
+end
+
+-- Why Wheel Grab cannot rely on the vehicle's steering function, or nil. The first time it cannot, one warning is logged
+-- and Wheel Grab stays unavailable for the rest of the map.
+local function steeringInputProblem(vehicle)
+    if wrap.problem ~= nil then return wrap.problem end
+    wrapClass()
+    local class = engine("Drivable")
+    local problem = nil
+    if type(class) ~= "table" then
+        problem = "Drivable is missing"
+    else
+        local classProblem = shapeProblem(wrap.classOriginal or class[STEERING_FUNCTION])
+        if classProblem ~= nil then problem = "Drivable." .. STEERING_FUNCTION .. ": " .. classProblem end
+    end
+    if problem == nil then
+        local instanceProblem = shapeProblem(vehicle[STEERING_FUNCTION])
+        if instanceProblem ~= nil then problem = "the vehicle's " .. STEERING_FUNCTION .. ": " .. instanceProblem end
+    end
+    if problem ~= nil then
+        wrap.problem = problem
+        print("[FS25_VR] [Warning] Wheel Grab disabled: " .. problem .. ". Steering from the keyboard, a gamepad or a "
+            .. "Wheel Peripheral is unchanged.")
+    end
+    return problem
+end
+
+wrapClass()  -- Drivable is there as the files load: the types the game builds afterwards copy the wrapper
 
 -- ---- The Steering Wheel of a vehicle --------------------------------------------------------------------------------
 
@@ -195,10 +339,12 @@ local function findSteeringWheel(self)
     end
     local wheel, direction = steeringWheelOf(vehicle)
     if wheel == nil then return vehicle, nil, nil, "the vehicle has no Steering Wheel" end
-    if type(vehicle.setSteeringInput) ~= "function" or engine("InputDevice") == nil
-        or engine("InputDevice").CATEGORY == nil or engine("InputDevice").CATEGORY.WHEEL == nil then
+    if engine("InputDevice") == nil or engine("InputDevice").CATEGORY == nil or engine("InputDevice").CATEGORY.WHEEL == nil then
         return vehicle, nil, nil, "the vehicle takes no steering input"
     end
+    -- The steering function must be there and shaped as the wrap expects (gives up with one warning when it is not).
+    local problem = steeringInputProblem(vehicle)
+    if problem ~= nil then return vehicle, nil, nil, "steering input is not supported (" .. problem .. ")" end
     -- Wheel Grab is available exactly where the keyboard could steer the vehicle: it is entered, nothing blocks the
     -- player's control and it is powered (a vehicle with its motor off does not follow any steering input).
     if askVehicle(vehicle, "getIsEntered") == false then
@@ -309,7 +455,10 @@ function VRCompanion:updateWheelGrab(dt)
     if not anyHolding() then
         state.vehicle, state.sent, state.atFullLock = nil, nil, false
     end
-    if wheel == nil then return end
+    if wheel == nil then
+        unwrapInstance()
+        return
+    end
 
     -- Every holding hand's turn since the last update is counted; a hand that grabs now counts as holding with no turn.
     local sum, count = 0, 0
@@ -341,8 +490,10 @@ function VRCompanion:updateWheelGrab(dt)
     end
     if count == 0 then
         state.vehicle, state.sent, state.atFullLock = nil, nil, false
+        unwrapInstance()
         return
     end
+    wrapInstance(vehicle)  -- the other devices' calls are dropped from here on
 
     local low, high = angleLimits(vehicle, wheel, direction)
     state.target = math.max(low, math.min(high, state.target + sum / count))
@@ -463,6 +614,13 @@ local function diagnosticFields(self)
     end
     local sentText = "steering sent: none (nothing held)"
     if state.sent ~= nil then sentText = string.format("steering sent: %.2f (analog, Wheel Peripheral)", state.sent) end
+    -- Whether the wrap that drops other devices' steering while the Steering Wheel is held is in place.
+    local wrapText = "steering input wrap: not installed"
+    if wrap.problem ~= nil then
+        wrapText = "steering input wrap: gave up (" .. wrap.problem .. ")"
+    elseif wrap.classWrapper ~= nil then
+        wrapText = "steering input wrap: installed" .. (wrap.instance ~= nil and " (on the vehicle too)" or "")
+    end
     return {
         string.format("Wheel Grab: %s", self.wheelGrabEnabled ~= false and "on" or "off"),
         reason == nil and "available: yes" or ("available: no (" .. reason .. ")"),
@@ -471,6 +629,7 @@ local function diagnosticFields(self)
         describeHand(self, 1, wheel),
         sentText,
         string.format("at full lock: %s", state.atFullLock and "yes" or "no"),
+        wrapText,
     }
 end
 
@@ -488,6 +647,7 @@ function VRCompanion:consoleCommandWheelGrabDiagnostics()
 end
 
 function VRCompanion:registerWheelGrabConsoleCommands()
+    wrapClass()  -- map load: the class again (resetWheelGrab lifted the wrap with the last map)
     if addConsoleCommand == nil then return end
     addConsoleCommand("vrWheelGrab", "Turn Wheel Grab, steering by holding the Steering Wheel with a Motion Controller, on or off (saved): vrWheelGrab [on|off]", "consoleCommandSetWheelGrab", self)
     addConsoleCommand("vrWheelGrabDiagnostics", "Report the Steering Wheel, each hand's distance to the rim ring, the grab and the steering sent: vrWheelGrabDiagnostics", "consoleCommandWheelGrabDiagnostics", self)
@@ -499,6 +659,7 @@ function VRCompanion:resetWheelGrab()
         removeConsoleCommand("vrWheelGrab")
         removeConsoleCommand("vrWheelGrabDiagnostics")
     end
+    unwrapAll()
     state = newState()
 end
 

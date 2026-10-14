@@ -693,9 +693,15 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
 // Wheels.lua updateVehiclePhysics), so a test sees what the player would: the calls that reached the vehicle and how
 // the Steering Wheel turned.
 //
-// StubSteer.install()  defines the globals the game defines: InputDevice.CATEGORY and the Drivable class whose
+// StubSteer.install(variant)  defines the globals the game defines: InputDevice.CATEGORY and the Drivable class whose
 //   setSteeringInput records every call that reaches a vehicle in StubSteer.calls as { value, analog, category }
 //   and then stores the input like the game (the analog flag and category only change on a non-zero input).
+//   variant: nil ("ok"), "missing" (a game update renamed it: the class has setSteeringAxis, same arguments, and no
+//   setSteeringInput) or "reshaped" (setSteeringInput(vehicle, { value, isAnalog, category }) takes one table).
+//   Run it BEFORE loading the Companion Mod to have Drivable there at file load, like the game; StubSteer.original is
+//   the unwrapped function of the "ok" variant.
+// StubSteer.keyboard / gamepad / wheelPeripheral (vehicle, value)  another device steering: the call it makes (by the
+//   variant's entry point); StubSteer.send(vehicle, value, isAnalog, category) is the general form.
 // StubSteer.equip(vehicle, options) -> vehicle   makes a StubScene.cab vehicle steerable. Like the game it COPIES
 //   Drivable.setSteeringInput onto the vehicle instance, so wrapping only the class afterwards would not reach it.
 //   options:
@@ -711,6 +717,8 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
 //     noWheel           true: the vehicle has no Steering Wheel node
 //     powered           false: the motor is off, the vehicle does not steer
 //     controlAllowed    false: getIsPlayerVehicleControlAllowed says no (an attached tool blocks the steering)
+//     copyOfOriginal    true: the vehicle's copy of setSteeringInput is the unwrapped StubSteer.original, as if it was
+//                       copied before the Companion Mod wrapped the class
 // StubSteer.tick(dtMs)  one frame of the game's vehicle update for every equipped vehicle: the steering input of the
 //   last frame moves the steering value toward it (analog input at 2.5 steering durations per full range, keyboard
 //   input at 1), the input is cleared (so it must be sent again every frame), the wheels' rotated time follows, and the
@@ -728,12 +736,14 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
     StubSteer.calls = {}
     local equipped = {}
 
-    function StubSteer.install()
+    function StubSteer.install(variant)
         _G.InputDevice = { CATEGORY = { UNKNOWN = 0, KEYBOARD_MOUSE = 1, GAMEPAD = 2, WHEEL = 3 } }
         StubSteer.calls = {}
+        StubSteer.variant = variant or "ok"
+        StubSteer.original = nil
         equipped = {}
         _G.Drivable = {}
-        function Drivable.setSteeringInput(self, inputValue, isAnalog, deviceCategory)
+        local function steer(self, inputValue, isAnalog, deviceCategory)
             table.insert(StubSteer.calls, { value = inputValue, analog = isAnalog, category = deviceCategory })
             local last = self.spec_drivable.lastInputValues
             last.axisSteer = inputValue
@@ -742,7 +752,30 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
                 last.axisSteerDeviceCategory = deviceCategory
             end
         end
+        if StubSteer.variant == "missing" then
+            Drivable.setSteeringAxis = steer
+        elseif StubSteer.variant == "reshaped" then
+            function Drivable.setSteeringInput(self, input) steer(self, input.value, input.isAnalog, input.category) end
+        else
+            Drivable.setSteeringInput = steer
+            StubSteer.original = steer
+        end
     end
+
+    -- Another device steering: the call the keyboard, a gamepad or a Wheel Peripheral makes, through whatever the
+    -- installed game variant calls its steering function.
+    function StubSteer.send(vehicle, value, isAnalog, category)
+        if StubSteer.variant == "missing" then
+            vehicle:setSteeringAxis(value, isAnalog, category)
+        elseif StubSteer.variant == "reshaped" then
+            vehicle:setSteeringInput({ value = value, isAnalog = isAnalog, category = category })
+        else
+            vehicle:setSteeringInput(value, isAnalog, category)
+        end
+    end
+    function StubSteer.keyboard(vehicle, value) StubSteer.send(vehicle, value, false, InputDevice.CATEGORY.KEYBOARD_MOUSE) end
+    function StubSteer.gamepad(vehicle, value) StubSteer.send(vehicle, value, true, InputDevice.CATEGORY.GAMEPAD) end
+    function StubSteer.wheelPeripheral(vehicle, value) StubSteer.send(vehicle, value, true, InputDevice.CATEGORY.WHEEL) end
 
     function StubSteer.equip(vehicle, options)
         options = options or {}
@@ -769,6 +802,10 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
         end
         vehicle.spec_drivable = spec
         vehicle.setSteeringInput = Drivable.setSteeringInput  -- Vehicle:load copies the class functions onto the instance
+        vehicle.setSteeringAxis = Drivable.setSteeringAxis    -- (the "missing" variant renames it)
+        if options.copyOfOriginal then
+            vehicle.setSteeringInput = StubSteer.original      -- a copy taken before anything wrapped the class
+        end
         function vehicle:getSteeringDirection() return 1 end
         function vehicle:getIsEntered() return true end
         function vehicle:getIsPowered() return self.stubPowered end
