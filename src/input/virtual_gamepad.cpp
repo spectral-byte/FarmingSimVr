@@ -7,6 +7,7 @@
 #include "openxr/openxr_manager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -29,14 +30,20 @@ SHORT ToAxis(float value) {
     return static_cast<SHORT>(std::lround(std::clamp(value, -1.0f, 1.0f) * 32767.0f));
 }
 
+bool Engaged(float axis, float other, float engage) {
+    return std::fabs(axis) >= engage && std::fabs(axis) > std::fabs(other);
+}
+
 } // namespace
 
 VirtualGamepad::VirtualGamepad(std::shared_ptr<OpenXrManager> openXrManager)
     : m_openXrManager(std::move(openXrManager)) {
+    if (m_openXrManager) m_openXrManager->SetFrameBeginObserver(this, [this] { PlayRumble(); });
 }
 
 VirtualGamepad::~VirtualGamepad() {
     if (IsProcessTerminating()) return;
+    if (m_openXrManager) m_openXrManager->ClearFrameBeginObserver(this);
     std::lock_guard<std::mutex> lock(m_mutex);
     UninstallHooksLocked();
 }
@@ -76,6 +83,16 @@ void VirtualGamepad::SetOwnedByRuntime(bool owned) {
     } else if (!owned) {
         UninstallHooksLocked();
     }
+}
+
+void VirtualGamepad::SetClockForTesting(ClockMs clock) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_clock = std::move(clock);
+}
+
+double VirtualGamepad::NowMs() const {
+    if (m_clock) return m_clock();
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 void VirtualGamepad::SetRealPadProbeForTesting(RealPadProbe probe) {
@@ -128,6 +145,9 @@ VirtualGamepad::Status VirtualGamepad::EvaluateLocked() {
         LogInfo(std::string("VirtualGamepad: removed from XInput slot ") + std::to_string(m_slot) + " (" + reason + ")");
         m_slot = kNoSlot;
         m_gripDown.fill(false);
+        m_motorSpeed.fill(0);
+
+        ResetRightStickChordLocked();
     }
 
     m_reason = (m_slot != kNoSlot) ? kReasonPresent : reason;
@@ -147,13 +167,15 @@ XINPUT_GAMEPAD VirtualGamepad::BuildGamepadLocked() {
     XINPUT_GAMEPAD pad{};
     if (!m_live) {
         m_gripDown.fill(false);
+        ResetRightStickChordLocked();
         return pad;
     }
-    // Each physical control on each hand is its own pad input (ADR-0028). Back and the D-pad are not fed here.
+    // Each physical control on each hand is its own pad input (ADR-0028). Back is never fed; the D-pad comes only from the right stick chord below.
     for (uint32_t hand = OpenXrInput::kLeft; hand <= OpenXrInput::kRight; ++hand) {
         HandState state = m_openXrManager->GetHandState(hand);
         if (!state.tracked) {
             m_gripDown[hand] = false;
+            if (hand == OpenXrInput::kRight) ResetRightStickChordLocked();
             continue;
         }
         const bool left = (hand == OpenXrInput::kLeft);
@@ -177,8 +199,62 @@ XINPUT_GAMEPAD VirtualGamepad::BuildGamepadLocked() {
         if (state.buttonLower) pad.wButtons |= left ? XINPUT_GAMEPAD_X : XINPUT_GAMEPAD_A;
         if (state.buttonUpper) pad.wButtons |= left ? XINPUT_GAMEPAD_Y : XINPUT_GAMEPAD_B;
         if (left && state.menu) pad.wButtons |= XINPUT_GAMEPAD_START;
+        if (!left) ApplyRightStickChordLocked(state, pad);
     }
     return pad;
+}
+
+void VirtualGamepad::ResetRightStickChordLocked() {
+    m_rightClickDown = false;
+    m_rightPush = Push::None;
+    m_rightClickPushed = false;
+    m_rsPulseUntilMs = 0.0;
+}
+
+// With the right stick click held, the stick is the D-pad (the direction of the dominant axis, engaged at
+// kStickEngage and held down to kStickRelease so a wobble between them neither drops nor flips it) and reads
+// centred; RS is never reported while the click is down (ADR-0028).
+void VirtualGamepad::ApplyRightStickChordLocked(const HandState& right, XINPUT_GAMEPAD& pad) {
+    const bool clickDown = right.thumbClick;
+    if (!clickDown) {
+        // A click let go without a push is an RS press, sent now for a short fixed time.
+        if (m_rightClickDown && !m_rightClickPushed) m_rsPulseUntilMs = NowMs() + kRsReleasePulseMs;
+        m_rightClickDown = false;
+        m_rightPush = Push::None;
+        m_rightClickPushed = false;
+        if (NowMs() < m_rsPulseUntilMs) pad.wButtons |= XINPUT_GAMEPAD_RIGHT_THUMB;
+        return;
+    }
+    if (!m_rightClickDown) {
+        m_rightClickPushed = false;
+        m_rsPulseUntilMs = 0.0;
+    }
+    m_rightClickDown = true;
+
+    const float x = right.thumbX;
+    const float y = right.thumbY;
+    if (Engaged(x, y, kStickEngage)) {
+        m_rightPush = x > 0.0f ? Push::Right : Push::Left;
+    } else if (Engaged(y, x, kStickEngage)) {
+        m_rightPush = y > 0.0f ? Push::Up : Push::Down;
+    } else if (m_rightPush != Push::None) {
+        const bool horizontal = (m_rightPush == Push::Left || m_rightPush == Push::Right);
+        const float along = horizontal ? x : y;
+        const bool positive = (m_rightPush == Push::Right || m_rightPush == Push::Up);
+        if (std::fabs(along) < kStickRelease || (along > 0.0f) != positive) m_rightPush = Push::None;
+    }
+
+    switch (m_rightPush) {
+        case Push::Up: pad.wButtons |= XINPUT_GAMEPAD_DPAD_UP; break;
+        case Push::Down: pad.wButtons |= XINPUT_GAMEPAD_DPAD_DOWN; break;
+        case Push::Left: pad.wButtons |= XINPUT_GAMEPAD_DPAD_LEFT; break;
+        case Push::Right: pad.wButtons |= XINPUT_GAMEPAD_DPAD_RIGHT; break;
+        case Push::None: break;
+    }
+    if (m_rightPush != Push::None) m_rightClickPushed = true;
+    pad.sThumbRX = 0;
+    pad.sThumbRY = 0;
+    pad.wButtons &= static_cast<WORD>(~XINPUT_GAMEPAD_RIGHT_THUMB);
 }
 
 DWORD VirtualGamepad::GetState(DWORD userIndex, XINPUT_STATE* state) {
@@ -228,10 +304,32 @@ DWORD VirtualGamepad::GetCapabilities(DWORD userIndex, DWORD flags, XINPUT_CAPAB
 DWORD VirtualGamepad::SetState(DWORD userIndex, XINPUT_VIBRATION* vibration) {
     using SetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_VIBRATION*);
     std::unique_lock<std::mutex> lock(m_mutex);
-    if (IsPadSlotLocked(userIndex)) return ERROR_SUCCESS;  // rumble comes with its own ticket
+    if (IsPadSlotLocked(userIndex)) {
+        // Played from the next OpenXR frame on (PlayRumble); the left motor is the left hand's.
+        m_motorSpeed[OpenXrInput::kLeft] = vibration ? vibration->wLeftMotorSpeed : 0;
+        m_motorSpeed[OpenXrInput::kRight] = vibration ? vibration->wRightMotorSpeed : 0;
+        return ERROR_SUCCESS;
+    }
     const auto real = reinterpret_cast<SetStateFn>(m_detourSetState.GetOriginal());
     lock.unlock();
     return real ? real(userIndex, vibration) : ERROR_DEVICE_NOT_CONNECTED;
+}
+
+void VirtualGamepad::NoteCompanionPulse(uint32_t hand, double durationMs) {
+    if (hand >= m_companionPulseUntilMs.size()) return;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_companionPulseUntilMs[hand] = NowMs() + durationMs;
+}
+
+void VirtualGamepad::PlayRumble() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!EvaluateLocked().present || !m_live) return;
+    const double now = NowMs();
+    for (uint32_t hand = OpenXrInput::kLeft; hand <= OpenXrInput::kRight; ++hand) {
+        if (m_motorSpeed[hand] == 0 || now < m_companionPulseUntilMs[hand]) continue;
+        const float strength = kRumbleScale * static_cast<float>(m_motorSpeed[hand]) / 65535.0f;
+        m_openXrManager->PulseHaptic(hand, kRumblePulseMs / 1000.0, strength);
+    }
 }
 
 void VirtualGamepad::InstallHooksLocked() {
