@@ -1,0 +1,263 @@
+#include "input/virtual_gamepad.h"
+
+#include "core/dll_lifecycle.h"
+#include "core/injector_runtime.h"
+#include "core/logger.h"
+#include "luau/vr_bridge.h"
+#include "openxr/openxr_manager.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <string>
+
+namespace fs25vr {
+
+namespace {
+
+constexpr const char* kReasonOff = "off";
+constexpr const char* kReasonNoSession = "no OpenXR session";
+constexpr const char* kReasonNoActions = "the OpenXR runtime refused the Motion Controller action set";
+constexpr const char* kReasonSlotsFull = "all four XInput slots hold real pads";
+constexpr const char* kReasonPresent = "present";
+
+BYTE ToTrigger(float value) {
+    return static_cast<BYTE>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
+}
+
+SHORT ToAxis(float value) {
+    return static_cast<SHORT>(std::lround(std::clamp(value, -1.0f, 1.0f) * 32767.0f));
+}
+
+} // namespace
+
+VirtualGamepad::VirtualGamepad(std::shared_ptr<OpenXrManager> openXrManager)
+    : m_openXrManager(std::move(openXrManager)) {
+}
+
+VirtualGamepad::~VirtualGamepad() {
+    if (IsProcessTerminating()) return;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    UninstallHooksLocked();
+}
+
+VirtualGamepad* VirtualGamepad::ForHook(FunctionDetour VirtualGamepad::*detour) {
+    InjectorRuntime* runtime = InjectorRuntime::ForHook([detour](InjectorRuntime& r) {
+        return (r.GetVrBridge().GetVirtualGamepad().*detour).IsInstalled();
+    });
+    return runtime ? &runtime->GetVrBridge().GetVirtualGamepad() : nullptr;
+}
+
+void VirtualGamepad::Configure(bool enabled, bool live) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_live = live;
+    if (enabled == m_enabled) return;
+    m_enabled = enabled;
+    if (enabled) {
+        InstallHooksLocked();
+    } else {
+        m_loggedSlotsFull = false;
+    }
+    EvaluateLocked();
+    if (!enabled) UninstallHooksLocked();
+}
+
+void VirtualGamepad::SetOwnedByRuntime(bool owned) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_owned = owned;
+    if (owned && m_enabled) {
+        InstallHooksLocked();
+    } else if (!owned) {
+        UninstallHooksLocked();
+    }
+}
+
+void VirtualGamepad::SetRealPadProbeForTesting(RealPadProbe probe) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_realPadProbe = std::move(probe);
+}
+
+VirtualGamepad::Status VirtualGamepad::GetStatus() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return EvaluateLocked();
+}
+
+bool VirtualGamepad::RealPadPresentLocked(DWORD slot) {
+    if (m_realPadProbe) return m_realPadProbe(slot);
+    using GetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
+    const auto real = reinterpret_cast<GetStateFn>(m_detourGetState.GetOriginal());
+    if (!real) return false;
+    XINPUT_STATE ignored{};
+    return real(slot, &ignored) == ERROR_SUCCESS;
+}
+
+VirtualGamepad::Status VirtualGamepad::EvaluateLocked() {
+    const char* reason = kReasonPresent;
+    if (!m_enabled) {
+        reason = kReasonOff;
+    } else if (!m_openXrManager || !m_openXrManager->IsActive() || !m_openXrManager->HasSession()) {
+        reason = kReasonNoSession;
+    } else if (!m_openXrManager->HasMotionControllerActions()) {
+        reason = kReasonNoActions;
+    }
+
+    if (reason == kReasonPresent && m_slot == kNoSlot) {
+        // The pad appears: the highest slot no real pad occupies, so a real Xbox pad keeps the first one.
+        for (int slot = kSlotCount - 1; slot >= 0; --slot) {
+            if (!RealPadPresentLocked(static_cast<DWORD>(slot))) {
+                m_slot = slot;
+                m_loggedSlotsFull = false;
+                LogInfo("VirtualGamepad: appeared in XInput slot " + std::to_string(slot));
+                break;
+            }
+        }
+        if (m_slot == kNoSlot) {
+            reason = kReasonSlotsFull;
+            if (!m_loggedSlotsFull) {
+                m_loggedSlotsFull = true;
+                LogWarn("VirtualGamepad: not created, all four XInput slots hold real pads.");
+            }
+        }
+    } else if (reason != kReasonPresent && m_slot != kNoSlot) {
+        LogInfo(std::string("VirtualGamepad: removed from XInput slot ") + std::to_string(m_slot) + " (" + reason + ")");
+        m_slot = kNoSlot;
+        m_gripDown.fill(false);
+    }
+
+    m_reason = (m_slot != kNoSlot) ? kReasonPresent : reason;
+    Status status;
+    status.present = (m_slot != kNoSlot);
+    status.slot = m_slot;
+    status.reason = m_reason;
+    return status;
+}
+
+bool VirtualGamepad::IsPadSlotLocked(DWORD userIndex) {
+    const Status status = EvaluateLocked();
+    return status.present && static_cast<DWORD>(status.slot) == userIndex;
+}
+
+XINPUT_GAMEPAD VirtualGamepad::BuildGamepadLocked() {
+    XINPUT_GAMEPAD pad{};
+    if (!m_live) {
+        m_gripDown.fill(false);
+        return pad;
+    }
+    // Each physical control on each hand is its own pad input (ADR-0028). Back and the D-pad are not fed here.
+    for (uint32_t hand = OpenXrInput::kLeft; hand <= OpenXrInput::kRight; ++hand) {
+        const HandState state = m_openXrManager->GetHandState(hand);
+        if (!state.tracked) {
+            m_gripDown[hand] = false;
+            continue;
+        }
+        const bool left = (hand == OpenXrInput::kLeft);
+        m_gripDown[hand] = state.grip >= (m_gripDown[hand] ? kGripRelease : kGripPress);
+
+        (left ? pad.bLeftTrigger : pad.bRightTrigger) = ToTrigger(state.trigger);
+        (left ? pad.sThumbLX : pad.sThumbRX) = ToAxis(state.thumbX);
+        (left ? pad.sThumbLY : pad.sThumbRY) = ToAxis(state.thumbY);
+        if (m_gripDown[hand]) pad.wButtons |= left ? XINPUT_GAMEPAD_LEFT_SHOULDER : XINPUT_GAMEPAD_RIGHT_SHOULDER;
+        if (state.thumbClick) pad.wButtons |= left ? XINPUT_GAMEPAD_LEFT_THUMB : XINPUT_GAMEPAD_RIGHT_THUMB;
+        // The letters on Touch controllers: X / Y on the left hand, A / B on the right.
+        if (state.buttonLower) pad.wButtons |= left ? XINPUT_GAMEPAD_X : XINPUT_GAMEPAD_A;
+        if (state.buttonUpper) pad.wButtons |= left ? XINPUT_GAMEPAD_Y : XINPUT_GAMEPAD_B;
+        if (left && state.menu) pad.wButtons |= XINPUT_GAMEPAD_START;
+    }
+    return pad;
+}
+
+DWORD VirtualGamepad::GetState(DWORD userIndex, XINPUT_STATE* state) {
+    using GetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    if (IsPadSlotLocked(userIndex)) {
+        if (!state) return ERROR_BAD_ARGUMENTS;
+        const XINPUT_GAMEPAD pad = BuildGamepadLocked();
+        if (std::memcmp(&pad, &m_lastGamepad, sizeof(pad)) != 0) {
+            m_lastGamepad = pad;
+            ++m_packetNumber;
+        }
+        state->dwPacketNumber = m_packetNumber;
+        state->Gamepad = pad;
+        return ERROR_SUCCESS;
+    }
+    const auto real = reinterpret_cast<GetStateFn>(m_detourGetState.GetOriginal());
+    lock.unlock();
+    return real ? real(userIndex, state) : ERROR_DEVICE_NOT_CONNECTED;
+}
+
+DWORD VirtualGamepad::GetCapabilities(DWORD userIndex, DWORD flags, XINPUT_CAPABILITIES* capabilities) {
+    using GetCapabilitiesFn = DWORD(WINAPI*)(DWORD, DWORD, XINPUT_CAPABILITIES*);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    if (IsPadSlotLocked(userIndex)) {
+        if (!capabilities) return ERROR_BAD_ARGUMENTS;
+        std::memset(capabilities, 0, sizeof(*capabilities));
+        capabilities->Type = XINPUT_DEVTYPE_GAMEPAD;
+        capabilities->SubType = XINPUT_DEVSUBTYPE_GAMEPAD;
+        // What a wired Xbox pad reports: every button but the guide button, full-range triggers and sticks.
+        capabilities->Gamepad.wButtons = 0xF3FF;
+        capabilities->Gamepad.bLeftTrigger = 255;
+        capabilities->Gamepad.bRightTrigger = 255;
+        capabilities->Gamepad.sThumbLX = -64;
+        capabilities->Gamepad.sThumbLY = -64;
+        capabilities->Gamepad.sThumbRX = -64;
+        capabilities->Gamepad.sThumbRY = -64;
+        capabilities->Vibration.wLeftMotorSpeed = 255;
+        capabilities->Vibration.wRightMotorSpeed = 255;
+        return ERROR_SUCCESS;
+    }
+    const auto real = reinterpret_cast<GetCapabilitiesFn>(m_detourGetCapabilities.GetOriginal());
+    lock.unlock();
+    return real ? real(userIndex, flags, capabilities) : ERROR_DEVICE_NOT_CONNECTED;
+}
+
+DWORD VirtualGamepad::SetState(DWORD userIndex, XINPUT_VIBRATION* vibration) {
+    using SetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_VIBRATION*);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    if (IsPadSlotLocked(userIndex)) return ERROR_SUCCESS;  // rumble comes with its own ticket
+    const auto real = reinterpret_cast<SetStateFn>(m_detourSetState.GetOriginal());
+    lock.unlock();
+    return real ? real(userIndex, vibration) : ERROR_DEVICE_NOT_CONNECTED;
+}
+
+void VirtualGamepad::InstallHooksLocked() {
+    if (!m_owned || m_detourGetState.IsInstalled()) return;
+    HMODULE xinput = LoadLibraryW(L"xinput1_4.dll");
+    if (!xinput) {
+        LogWarn("VirtualGamepad: xinput1_4.dll is not available; the Virtual Gamepad cannot answer the game.");
+        return;
+    }
+    const auto install = [xinput](FunctionDetour& detour, const char* name, void* intercept) {
+        void* target = reinterpret_cast<void*>(GetProcAddress(xinput, name));
+        if (!target || !detour.Install(target, intercept)) {
+            LogWarn(std::string("VirtualGamepad: could not hook ") + name);
+        }
+    };
+    install(m_detourGetCapabilities, "XInputGetCapabilities", reinterpret_cast<void*>(&VirtualGamepad::Intercept_XInputGetCapabilities));
+    install(m_detourSetState, "XInputSetState", reinterpret_cast<void*>(&VirtualGamepad::Intercept_XInputSetState));
+    // The state hook goes last: it is the one the other calls and the slot probe wait for.
+    install(m_detourGetState, "XInputGetState", reinterpret_cast<void*>(&VirtualGamepad::Intercept_XInputGetState));
+}
+
+void VirtualGamepad::UninstallHooksLocked() {
+    m_detourGetState.Uninstall();
+    m_detourGetCapabilities.Uninstall();
+    m_detourSetState.Uninstall();
+}
+
+DWORD WINAPI VirtualGamepad::Intercept_XInputGetState(DWORD userIndex, XINPUT_STATE* state) {
+    VirtualGamepad* pad = ForHook(&VirtualGamepad::m_detourGetState);
+    return pad ? pad->GetState(userIndex, state) : ERROR_DEVICE_NOT_CONNECTED;
+}
+
+DWORD WINAPI VirtualGamepad::Intercept_XInputGetCapabilities(DWORD userIndex, DWORD flags, XINPUT_CAPABILITIES* capabilities) {
+    VirtualGamepad* pad = ForHook(&VirtualGamepad::m_detourGetCapabilities);
+    return pad ? pad->GetCapabilities(userIndex, flags, capabilities) : ERROR_DEVICE_NOT_CONNECTED;
+}
+
+DWORD WINAPI VirtualGamepad::Intercept_XInputSetState(DWORD userIndex, XINPUT_VIBRATION* vibration) {
+    VirtualGamepad* pad = ForHook(&VirtualGamepad::m_detourSetState);
+    return pad ? pad->SetState(userIndex, vibration) : ERROR_DEVICE_NOT_CONNECTED;
+}
+
+} // namespace fs25vr
+

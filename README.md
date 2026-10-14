@@ -86,7 +86,8 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrHudGroupShow <group> <streamlined\|full> <on\|off>` | Choose which groups show in each HUD state |
 | `vrHudSafeArea <horizontal> <vertical>` | Keep other HUD elements (warnings, notifications, other mods) inside the lens |
 | `vrMotionControllers <on\|off>` | Use Motion Controllers (default `on`, saved). `off` makes the mod ignore Motion Controller input |
-| `vrMotionControllerStatus` | Report each Motion Controller's tracked and in-use state and the Pointer Hand |
+| `vrMotionControllerStatus` | Report each Motion Controller's tracked and in-use state, the Pointer Hand and whether the Virtual Gamepad is present (and in which XInput slot) |
+| `vrVirtualGamepad <on\|off>` | The Motion Controllers' triggers, grips, thumbsticks and buttons as an Xbox pad in the game, bound in the game's Controls screen (default `off` for now, saved). Appears in the highest XInput slot no real pad occupies, can be turned on and off without a restart, and reads neutral while `vrMotionControllers` is `off` |
 | `vrPointerDiagnostics` | Report why the Pointer Ray may not select Click Points (ray placement, who controls the pointer, Interactive Control support; also each hand's aim pose and grip pose and whether they are tracked, how far each index finger points from the aim direction, and each Virtual Hand's state) |
 | `vrVirtualHandsDiagnostics` | Report whether the Virtual Hands (gloved hands drawn where the Motion Controllers are held) are available, and each hand's state with the reason when it is hidden |
 | `vrPointerCone <degrees>` | How wide a cone around the Pointer Ray selects the nearest Interactive Control Click Point (default `5`, saved) |

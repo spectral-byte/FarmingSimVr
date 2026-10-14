@@ -101,6 +101,7 @@ InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
     m_proxy->SetOwnedByRuntime(true);
     m_deps.windowController->SetOwnedByRuntime(true);
     m_deps.luauInterceptor->SetOwnedByRuntime(true);
+    m_deps.vrBridge->GetVirtualGamepad().SetOwnedByRuntime(true);
 
     m_deps.ngxInterceptor->SetVRBridge(m_deps.vrBridge.get());
     m_deps.ngxInterceptor->SetOpenXrManager(m_deps.openXrManager.get());
@@ -120,6 +121,7 @@ InjectorRuntime::~InjectorRuntime() {
     m_proxy->SetOwnedByRuntime(false);
     m_deps.windowController->SetOwnedByRuntime(false);
     m_deps.luauInterceptor->SetOwnedByRuntime(false);
+    m_deps.vrBridge->GetVirtualGamepad().SetOwnedByRuntime(false);
     m_proxy->DetachAll();
     m_deps.luauInterceptor->Detach();
 

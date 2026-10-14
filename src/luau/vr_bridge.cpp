@@ -484,6 +484,37 @@ int VRBridge::Lua_PulseHaptic(lua_State* L) {
     return 1;
 }
 
+// VRBridge.setVirtualGamepad(enabled, live): the Companion Mod's settings for the Virtual Gamepad. `enabled` is
+// the saved vrVirtualGamepad setting (the pad is wanted at all); `live` says Motion Controller input is on
+// (vrMotionControllers), without which the pad stays present but reads neutral. A missing `live` is true.
+int VRBridge::Lua_SetVirtualGamepad(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setVirtualGamepad");
+    const bool enabled = lua_toboolean(L, 1) != 0;
+    const bool live = lua_isnoneornil(L, 2) || lua_toboolean(L, 2) != 0;
+    self->m_virtualGamepad.Configure(enabled, live);
+    return 0;
+}
+
+// VRBridge.getVirtualGamepad() -> present, slot, reason: whether the game sees the Virtual Gamepad, its XInput
+// slot (0..3, nil while absent) and, while absent, why not ("off", "no OpenXR session", ...). Returns plain
+// values so a per-frame caller allocates nothing.
+int VRBridge::Lua_GetVirtualGamepad(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.getVirtualGamepad");
+    const VirtualGamepad::Status status = self->m_virtualGamepad.GetStatus();
+    lua_pushboolean(L, status.present ? 1 : 0);
+    if (status.present) {
+        lua_pushinteger(L, status.slot);
+    } else {
+        lua_pushnil(L);
+    }
+    lua_pushstring(L, status.reason);
+    return 3;
+}
+
 int VRBridge::Lua_Recenter(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
