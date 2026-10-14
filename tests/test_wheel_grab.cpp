@@ -91,7 +91,7 @@ TEST_F(CompanionModTest, SqueezingTheGripOutsideTheRimRingDoesNothingToSteering)
 
     struct Spot { double radius, lift; const char* where; };
     for (const Spot& spot : { Spot{ 0.40, 0.0, "beyond the rim" }, Spot{ 0.04, 0.0, "on the hub" },
-                              Spot{ 0.18, 0.15, "well in front of the Steering Wheel's plane" } }) {
+                              Spot{ 0.18, 0.25, "well in front of the Steering Wheel's plane" } }) {
         GRAB(kRight, RimPoint(L, spot.radius, 0.5, spot.lift));
         for (int step = 1; step <= 4; ++step) {
             headset.SetHandPose(kRight, HandAtWorld(RimPoint(L, spot.radius, 0.5 + 0.2 * step, spot.lift)));
@@ -101,6 +101,21 @@ TEST_F(CompanionModTest, SqueezingTheGripOutsideTheRimRingDoesNothingToSteering)
         FRAMES(2);
         EXPECT_EQ(EvalLua(L, "#StubSteer.calls"), "0") << "a grip squeezed " << spot.where << " steered";
         EXPECT_NEAR(WheelAngle(L), 0.0, 1e-6) << "a grip squeezed " << spot.where << " turned the Steering Wheel";
+    }
+}
+
+TEST_F(CompanionModTest, AHandGrippingTheRimTenCentimetresFromTheNodesPlaneStillTakesTheSteeringWheel) {
+    // In the headset the node's plane was 8 to 11 cm from where the rim visibly is, so a hand on the rim measured that far.
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+
+    for (double lift : { 0.11, -0.11 }) {
+        GRAB(kRight, RimPoint(L, 0.18, 0.5, lift));
+        EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:isHandHoldingSteeringWheel(1))"), "true") << "a grip " << lift << " m from the plane";
+        headset.SetHandInputs(kRight, Grip(0.0f));
+        FRAMES(2);
     }
 }
 

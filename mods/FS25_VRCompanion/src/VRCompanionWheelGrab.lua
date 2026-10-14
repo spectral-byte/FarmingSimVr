@@ -111,11 +111,13 @@ VRCompanion.WHEEL_GRAB_GRIP_RELEASE = 0.3
 -- THE RIM RING, in metres, the same for every vehicle: the grip position of a squeezing hand must be this far from the
 -- Steering Wheel's axis (measured in its plane) and this close to its plane. Vanilla Steering Wheels are about 0.2 to 0.25 m
 -- across the rim from the centre, and in VR a hand is not precise, so the ring is generous: 10 to 25 cm, which leaves out
--- a hand resting on the hub and one resting on the dashboard behind a small Steering Wheel. A few cm either side of the plane
--- covers a hand holding the rim from the front or from behind. Tune in the headset with `vrWheelGrabDiagnostics`.
+-- a hand resting on the hub and one resting on the dashboard behind a small Steering Wheel. The plane is the node's origin
+-- plane, which is not where the rim visibly is: in the first headset test, hands gripping the rim were consistently 8 to
+-- 11 cm from it (always on the same side), so the ring reaches 15 cm either side. Tune in the headset with
+-- `vrWheelGrabDiagnostics` and the log line written for every squeeze.
 VRCompanion.WHEEL_GRAB_RING_INNER = 0.10
 VRCompanion.WHEEL_GRAB_RING_OUTER = 0.25
-VRCompanion.WHEEL_GRAB_RING_HALF_THICKNESS = 0.05
+VRCompanion.WHEEL_GRAB_RING_HALF_THICKNESS = 0.15
 
 -- PULL-AWAY: a holding hand's real grip position this far (m) from the point its Virtual Hand is pinned to ends the
 -- grab, as if the grip were let go: the player cannot steer from somewhere they obviously could not reach. The pinned hand
