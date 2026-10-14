@@ -33,11 +33,6 @@ void OpenXrManager::SetPerformanceCounterSource(PerformanceCounterSource source)
     m_counterSource = std::move(source);
 }
 
-double OpenXrManager::GetMonotonicSeconds() const {
-    const PerformanceCounterSample now = ReadPerformanceCounter();
-    return now.frequency > 0 ? static_cast<double>(now.counter) / static_cast<double>(now.frequency) : 0.0;
-}
-
 void OpenXrManager::SetFrameBeginObserver(const void* owner, FrameBeginObserver observer) {
     ClearFrameBeginObserver(owner);
     m_frameBeginObservers.emplace_back(owner, std::move(observer));

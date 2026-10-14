@@ -238,7 +238,7 @@ bool VRBridge::PulseHaptic(uint32_t hand, float durationMs, float strength) {
     if (m_openXrManager) {
         const bool played = m_openXrManager->PulseHaptic(hand, durationMs / 1000.0, strength);
         // The Companion Mod's own pulses win over the game's rumble on that hand while they play.
-        if (played) m_virtualGamepad.NoteCompanionPulse(hand, durationMs / 1000.0);
+        if (played) m_virtualGamepad.NoteCompanionPulse(hand, durationMs);
         return played;
     }
     return false;

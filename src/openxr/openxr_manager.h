@@ -110,8 +110,6 @@ public:
     void SetPerformanceCounterSource(PerformanceCounterSource source);
     // counter / frequency in nanoseconds without overflowing for any int64 counter.
     static int64_t PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency);
-    // A monotonic clock in seconds, read from the same performance counter source.
-    double GetMonotonicSeconds() const;
 
     // `observer` runs at the end of every BeginFrame that began a frame, after the hand state is synced. One
     // observer per `owner` (the Virtual Gamepad plays its rumble from here); clearing is by the same owner.

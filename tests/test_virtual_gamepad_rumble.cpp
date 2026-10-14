@@ -54,10 +54,8 @@ protected:
 
     void SetUp() override {
         CompanionModTest::SetUp();
-        // The Injector reads time from the performance counter; the game clock drives it here (a 10 MHz counter).
-        headset.manager->SetPerformanceCounterSource([this] {
-            return fs25vr::OpenXrManager::PerformanceCounterSample{ static_cast<int64_t>(gameTimeMs_ * 10000.0), 10000000 };
-        });
+        // The pad times the game's rumble against the Companion Mod's pulses by the game clock.
+        bridge.GetVirtualGamepad().SetClockForTesting([this] { return GameTime(); });
         ASSERT_TRUE(bridge.Inject(L));
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
         ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);

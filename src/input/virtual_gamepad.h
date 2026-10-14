@@ -11,6 +11,7 @@
 namespace fs25vr {
 
 class OpenXrManager;
+struct HandState;
 
 // The Virtual Gamepad (ADR-0028): the Motion Controllers' triggers, grips, thumbsticks and buttons presented to
 // the game as an Xbox pad it reads through XInput. The Injector answers the game's XInputGetState,
@@ -50,8 +51,8 @@ public:
     DWORD SetState(DWORD userIndex, XINPUT_VIBRATION* vibration);
 
     // The Companion Mod played a pulse of its own on `hand` (a Click Point tick, a Wheel Grab pulse) lasting
-    // `durationSeconds`: the game's rumble stays off that hand while it plays, then resumes.
-    void NoteCompanionPulse(uint32_t hand, double durationSeconds);
+    // `durationMs`: the game's rumble stays off that hand while it plays, then resumes.
+    void NoteCompanionPulse(uint32_t hand, double durationMs);
 
     // Detours are installed only while a live InjectorRuntime owns the pad, so the hooks can always find the pad
     // that holds their originals.
@@ -62,6 +63,12 @@ public:
     // XInputGetState (and is "no" for every slot while the hooks are not installed).
     using RealPadProbe = std::function<bool(DWORD slot)>;
     void SetRealPadProbeForTesting(RealPadProbe probe);
+
+    // Tests only: the clock (milliseconds) that times the RS press sent when a click is let go, which is
+    // otherwise the real steady clock; tests drive it with the game clock. It also times the game's rumble against the
+    // Companion Mod's own pulses.
+    using ClockMs = std::function<double()>;
+    void SetClockForTesting(ClockMs clock);
 
     // Detour entry points, acting for the pad of the live runtime that installed them.
     static DWORD WINAPI Intercept_XInputGetState(DWORD userIndex, XINPUT_STATE* state);
@@ -79,7 +86,18 @@ private:
     // The game's rumble plays on the Motion Controllers as short pulses, renewed on every OpenXR frame while a
     // motor runs (a pulse that is not renewed dies out by itself), at a fixed fraction of a gamepad's strength.
     static constexpr float kRumbleScale = 0.5f;
-    static constexpr double kRumblePulseSeconds = 0.05;
+    static constexpr double kRumblePulseMs = 50.0;
+
+    // The right-stick D-pad chord (ADR-0028): with the right stick click held, a push of that stick is the D-pad
+    // and the stick reads centred. The thresholds are the ones the Snap Turn push used (the Companion Mod's
+    // VRCompanion.MOTION_CONTROLLER_STICK_ENGAGE / _RELEASE, 0.7 / 0.4).
+    static constexpr float kStickEngage = 0.7f;
+    static constexpr float kStickRelease = 0.4f;
+
+    // A click let go without a push is reported as RS pressed for this long, so the game sees a press.
+    static constexpr double kRsReleasePulseMs = 100.0;
+
+    enum class Push { None, Up, Down, Left, Right };
 
     static VirtualGamepad* ForHook(FunctionDetour VirtualGamepad::*detour);
 
@@ -90,6 +108,8 @@ private:
     bool IsPadSlotLocked(DWORD userIndex);
     bool RealPadPresentLocked(DWORD slot);
     XINPUT_GAMEPAD BuildGamepadLocked();
+    void ApplyRightStickChordLocked(const HandState& right, XINPUT_GAMEPAD& pad);
+    void ResetRightStickChordLocked();
 
     void InstallHooksLocked();
     void UninstallHooksLocked();
@@ -107,8 +127,15 @@ private:
     DWORD m_packetNumber = 0;
     std::array<bool, 2> m_gripDown{};
     std::array<WORD, 2> m_motorSpeed{};            // per hand: the left motor plays on the left hand, the right on the right
-    std::array<double, 2> m_companionPulseUntil{}; // per hand: monotonic seconds
+    std::array<double, 2> m_companionPulseUntilMs{}; // per hand, on the pad's clock
 
+    bool m_rightClickDown = false;  // the right stick click was down at the last look
+    Push m_rightPush = Push::None;  // the D-pad direction the chord reports now
+    bool m_rightClickPushed = false;  // this click has pushed: it will never report RS
+    double m_rsPulseUntilMs = 0.0;  // RS is reported pressed until this time (a click let go without a push)
+    ClockMs m_clock;
+
+    double NowMs() const;
     RealPadProbe m_realPadProbe;
     FunctionDetour m_detourGetState;
     FunctionDetour m_detourGetCapabilities;
