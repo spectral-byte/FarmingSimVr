@@ -22,6 +22,9 @@
 --                                      (`vrVirtualGamepad on|off`).
 --   VRCompanion:getVirtualGamepadStatus() -> string  one phrase for the status command
 --
+--   VRCompanion.virtualGamepadDefaultsWritten  boolean, default false, saved: the VR-comfort default bindings have been
+--                                      written to the Virtual Gamepad, once and for good (see THE ONE-TIME DEFAULT REWRITE).
+--
 -- THE MOD'S OWN USES (ticket #101, ADR-0028): while the Companion Mod is using a Motion Controller input itself, that input
 -- reads as released on the pad, so a VR use never also fires a game binding. A use asks for an input every update it wants
 -- it, and the answer is whether it may have it:
@@ -34,6 +37,30 @@
 -- THE HELD-INPUT RULE: an input already held (as the pad reads it) when a use begins keeps its binding until it is let go,
 -- and the use does not act on it meanwhile. The same holds the other way round: an input a use took stays off the pad
 -- until it is let go, even if the use ends first (a grip that closed a menu does not fire its binding as the menu goes).
+--
+-- THE ONE-TIME DEFAULT REWRITE (ticket #104, ADR-0028): the game's default gamepad bindings apply to every pad and cannot target
+-- one device, so the first time the Virtual Gamepad is among the game's input devices this module edits that one device's
+-- bindings, as the Controls screen would, and saves them (the calls are the ones spike #99 proved in the game:
+-- g_inputBinding:getActionByName, action.bindings, Binding.new + addBinding, taking a binding out of action.bindings, and
+-- saveToXMLFile). The layout (button numbers are the game's own for an Xbox pad: 5 / 6 LB / RB, 10 Start, 11 / 12 the
+-- left / right stick click, AXIS_3 the right stick X):
+--   - Snap Turn left / right on the right stick's left / right half (AXIS_3- / AXIS_3+), off LB / RB
+--   - the game's smooth look left / right (AXIS_LOOK_LEFTRIGHT_PLAYER and _VEHICLE) off the right stick X
+--   - the Recenter Action on RS (BUTTON_12), off LS (the Companion Mod's own GAMEPAD_DEFAULT)
+--   - the VR View Toggle Action on left stick click + Start, off Back (which the pad never sends)
+-- A new binding takes the `index` slot the binding it replaces had, otherwise the lowest one the device has free on that
+-- action (addBinding refuses an occupied slot). Only bindings of the Virtual Gamepad's device are looked at; a real pad's are
+-- never touched. The device is "<slot>_XINPUT_GAMEPAD" with the slot VRBridge reports. It counts as among the game's input
+-- devices once the game has bindings for it on the Companion Mod's own actions (the game applies GAMEPAD_DEFAULT to every
+-- pad it lists); until then the module looks again about once a second and says only that it is waiting.
+-- THE SAVED FLAG is one global flag (the spec's single saved flag), not one per device. The pad takes its slot once, when it
+-- appears, and a real pad plugged in later takes a lower one, so the device is normally the same session after session. If
+-- the slot ever does change, the new device keeps the game's defaults: that is the lesser harm next to rewriting a player's
+-- bindings a second time. Once set (after the bindings were saved) the rewrite never runs again, so what the player changes
+-- in the Controls screen sticks.
+-- THE FALLBACK: the binding API missing (g_inputBinding, Binding.new, getActionByName, addBinding or saveToXMLFile) or raising
+-- is one warning in the game log for the session, no flag, and the bindings put back as they were. The pad then keeps the
+-- game's defaults plus the Companion Mod's GAMEPAD_DEFAULT bindings, and the player rebinds in the Controls screen.
 --
 --   Hooks into the rest of the mod (each a single guarded call):
 --     MotionControllers.lua  updateMotionControllers -> updateVirtualGamepad(dt) first of all, saveMotionControllerSettings
@@ -49,7 +76,12 @@ VRCompanion.VirtualGamepad = VRCompanion.VirtualGamepad or {}
 VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_ENABLED = false
 VRCompanion.virtualGamepadEnabled = VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_ENABLED
 
+-- Set once the VR-comfort default bindings have been written to the Virtual Gamepad and saved. Saved: never rewrites again.
+VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_DEFAULTS_WRITTEN = false
+VRCompanion.virtualGamepadDefaultsWritten = VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_DEFAULTS_WRITTEN
+
 local SETTING_KEY_ENABLED = "vrSettings.virtualGamepad"
+local SETTING_KEY_DEFAULTS_WRITTEN = "vrSettings.virtualGamepadDefaultsWritten"
 
 -- The inputs of a hand a use can take, with the bit the Injector knows each by (VirtualGamepad::kInput*).
 local INPUTS = { "trigger", "grip", "stick", "stickClick", "lower", "upper", "menu" }
@@ -131,6 +163,8 @@ function VRCompanion:updateVirtualGamepad(dt)
         end
         state.seenKey = key
     end
+
+    self:updateVirtualGamepadDefaults(dt, present, slot)
 end
 
 -- ---- The Companion Mod's own uses --------------------------------------------------------------------
@@ -233,6 +267,208 @@ function VRCompanion:updateVirtualGamepadUse(dt)
     end
 end
 
+-- ---- The one-time default rewrite ---------------------------------------------------------------------
+
+-- The VR actions: the game applies GAMEPAD_DEFAULT to every pad it lists, so a binding of one of these on the Virtual
+-- Gamepad's device is how the Companion Mod knows the game lists the device.
+local VR_ACTIONS = { "VR_SNAP_TURN_LEFT", "VR_SNAP_TURN_RIGHT", "VR_RECENTER_VIEW", "VR_TOGGLE_VIEW", "VR_HUD_TOGGLE" }
+
+-- What the rewrite takes off the Virtual Gamepad's device (action, the binding's input string), and what it puts on.
+local TAKEN = {
+    { action = "AXIS_LOOK_LEFTRIGHT_PLAYER", input = "AXIS_3-" },
+    { action = "AXIS_LOOK_LEFTRIGHT_PLAYER", input = "AXIS_3+" },
+    { action = "AXIS_LOOK_LEFTRIGHT_VEHICLE", input = "AXIS_3-" },
+    { action = "AXIS_LOOK_LEFTRIGHT_VEHICLE", input = "AXIS_3+" },
+    { action = "VR_SNAP_TURN_LEFT", input = "BUTTON_5" },
+    { action = "VR_SNAP_TURN_RIGHT", input = "BUTTON_6" },
+    { action = "VR_RECENTER_VIEW", input = "BUTTON_11" },
+    { action = "VR_TOGGLE_VIEW", input = "BUTTON_9" },
+}
+local GIVEN = {
+    { action = "VR_SNAP_TURN_LEFT", inputs = { "AXIS_3-" } },
+    { action = "VR_SNAP_TURN_RIGHT", inputs = { "AXIS_3+" } },
+    { action = "VR_RECENTER_VIEW", inputs = { "BUTTON_12" } },
+    { action = "VR_TOGGLE_VIEW", inputs = { "BUTTON_11", "BUTTON_10" } },
+}
+
+local RECHECK_MS = 1000
+
+-- Why the rewrite will not be tried again this game session (the one warning has been logged), or nil.
+local rewriteProblem = nil
+
+local function inputBindingApi()
+    local inputBinding = g_inputBinding or (_G and _G.g_inputBinding)
+    local bindingClass = Binding or (_G and _G.Binding)
+    if inputBinding == nil then return nil, "g_inputBinding is missing" end
+    if bindingClass == nil or type(bindingClass.new) ~= "function" then return nil, "Binding.new is missing" end
+    for _, method in ipairs({ "getActionByName", "addBinding", "saveToXMLFile" }) do
+        if type(inputBinding[method]) ~= "function" then return nil, "g_inputBinding:" .. method .. " is missing" end
+    end
+    return inputBinding, bindingClass
+end
+
+-- Looks at the game's bindings for what the rewrite would change on `deviceId`: nil and a word when the game does not list
+-- the device yet, otherwise the plan: for each action, the bindings of the device to take out and the ones to put in.
+local function planRewrite(inputBinding, deviceId)
+    local byName, plan, listed = {}, {}, false
+    local function entry(name)
+        local step = byName[name]
+        if step ~= nil then return step end
+        local action = inputBinding:getActionByName(name)
+        if action == nil or type(action.bindings) ~= "table" then return nil end
+        step = { name = name, action = action, take = {}, give = {} }
+        byName[name] = step
+        plan[#plan + 1] = step
+        return step
+    end
+
+    for _, name in ipairs(VR_ACTIONS) do
+        local step = entry(name)
+        if step == nil then return nil, "the game does not know the action " .. name end
+        for _, binding in ipairs(step.action.bindings) do
+            if binding.deviceId == deviceId then listed = true end
+        end
+    end
+    if not listed then return nil, "no bindings of its yet" end
+
+    for _, taken in ipairs(TAKEN) do
+        local step = entry(taken.action)
+        if step == nil then return nil, "the game does not know the action " .. taken.action end
+        for _, binding in ipairs(step.action.bindings) do
+            if binding.deviceId == deviceId and binding.inputString == taken.input then
+                step.take[#step.take + 1] = binding
+            end
+        end
+    end
+
+    for _, given in ipairs(GIVEN) do
+        local step = byName[given.action]
+        local inputString = table.concat(given.inputs, " ")
+        local present, used, firstFree = false, {}, 1
+        local replaced = {}
+        for _, binding in ipairs(step.action.bindings) do
+            if binding.deviceId == deviceId then
+                local leaving = false
+                for _, taken in ipairs(step.take) do
+                    if taken == binding then leaving = true end
+                end
+                if leaving then
+                    replaced[#replaced + 1] = binding.index
+                else
+                    used[binding.index] = true
+                    if binding.inputString == inputString then present = true end
+                end
+            end
+        end
+        if not present then
+            -- The slot of the binding it replaces if there is one, otherwise the lowest the device has free on the action.
+            local index = replaced[1]
+            if index == nil or used[index] then
+                index = 1
+                while used[index] do index = index + 1 end
+            end
+            step.give[#step.give + 1] = { inputs = given.inputs, index = index }
+        end
+    end
+    return plan
+end
+
+local function removeFrom(list, item)
+    for i = #list, 1, -1 do
+        if list[i] == item then table.remove(list, i) end
+    end
+end
+
+-- Makes the plan's changes and saves. Raises on any failure, which the caller answers by putting the bindings back.
+local function applyRewrite(inputBinding, bindingClass, deviceId, plan)
+    local changes = 0
+    for _, step in ipairs(plan) do
+        for _, binding in ipairs(step.take) do
+            removeFrom(step.action.bindings, binding)
+            changes = changes + 1
+        end
+        for _, give in ipairs(step.give) do
+            local binding = bindingClass.new(deviceId, give.inputs)
+            binding.axisComponent = "+"
+            binding.neutralInput = 0
+            binding.index = give.index
+            binding:makeId()
+            if inputBinding:addBinding(step.action, binding) ~= true then
+                error("addBinding refused " .. table.concat(give.inputs, " ") .. " for " .. step.name)
+            end
+            changes = changes + 1
+        end
+    end
+    inputBinding:saveToXMLFile()
+    return changes
+end
+
+local function snapshotPlan(plan)
+    local copies = {}
+    for i, step in ipairs(plan) do
+        copies[i] = {}
+        for j, binding in ipairs(step.action.bindings) do copies[i][j] = binding end
+    end
+    return copies
+end
+
+local function restorePlan(plan, copies)
+    for i, step in ipairs(plan) do
+        local bindings = step.action.bindings
+        for j = #bindings, 1, -1 do bindings[j] = nil end
+        for j, binding in ipairs(copies[i]) do bindings[j] = binding end
+    end
+end
+
+local function giveUpOnRewrite(reason)
+    rewriteProblem = reason
+    print("[FS25_VR] [Warning] Virtual Gamepad default bindings not written: " .. reason .. ". The Virtual Gamepad keeps the "
+        .. "game's default bindings plus the Companion Mod's gamepad defaults; rebind Snap Turn in the Controls screen.")
+end
+
+-- Once the Virtual Gamepad is present: writes the VR-comfort default bindings to its device, once for good.
+function VRCompanion:updateVirtualGamepadDefaults(dt, present, slot)
+    if self.virtualGamepadDefaultsWritten == true or rewriteProblem ~= nil then return end
+    if not present or type(slot) ~= "number" then return end
+    state.defaultsWait = (state.defaultsWait or 0) - (dt or 0)
+    if state.defaultsWait > 0 then return end
+    state.defaultsWait = RECHECK_MS
+
+    local inputBinding, bindingClass = inputBindingApi()
+    if inputBinding == nil then
+        giveUpOnRewrite("the game's binding API is not there (" .. tostring(bindingClass) .. ")")
+        return
+    end
+
+    local deviceId = string.format("%d_XINPUT_GAMEPAD", slot)
+    local ok, plan, why = pcall(planRewrite, inputBinding, deviceId)
+    if not ok then
+        giveUpOnRewrite("looking at the game's bindings raised: " .. tostring(plan))
+        return
+    end
+    if plan == nil then
+        if state.waitingFor ~= deviceId then
+            state.waitingFor = deviceId
+            print("[FS25_VR] Virtual Gamepad default bindings: waiting for the game to list " .. deviceId .. " (" .. tostring(why) .. ")")
+        end
+        return
+    end
+
+    local copies = snapshotPlan(plan)
+    local applied, changes = pcall(applyRewrite, inputBinding, bindingClass, deviceId, plan)
+    if not applied then
+        restorePlan(plan, copies)
+        giveUpOnRewrite("the game's binding API raised: " .. tostring(changes))
+        return
+    end
+
+    self.virtualGamepadDefaultsWritten = true
+    print(string.format("[FS25_VR] Virtual Gamepad default bindings written to %s (%d changes) and saved", deviceId, changes))
+    if type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
+end
+
 function VRCompanion:getVirtualGamepadStatus()
     local b = bridge()
     if b == nil or type(b.getVirtualGamepad) ~= "function" then
@@ -242,6 +478,13 @@ function VRCompanion:getVirtualGamepadStatus()
     local text = describe(present, slot, reason)
     if present then
         text = text .. "; the Companion Mod is using: " .. describeUse()
+        if self.virtualGamepadDefaultsWritten == true then
+            text = text .. "; default bindings written"
+        elseif rewriteProblem ~= nil then
+            text = text .. "; default bindings not written (" .. rewriteProblem .. ")"
+        else
+            text = text .. "; default bindings not written yet"
+        end
     end
     return text
 end
@@ -249,6 +492,7 @@ end
 function VRCompanion:saveVirtualGamepadSetting(xmlFile, xml)
     if type(xml.setBool) == "function" then
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.virtualGamepadEnabled == true)
+        xml.setBool(xmlFile, SETTING_KEY_DEFAULTS_WRITTEN, self.virtualGamepadDefaultsWritten == true)
     end
 end
 
@@ -263,6 +507,12 @@ function VRCompanion:loadVirtualGamepadSetting(xmlFile, xml)
     end
     if loaded ~= nil then
         self.virtualGamepadEnabled = loaded
+    end
+    if type(xml.getBool) == "function" then
+        local written = xml.getBool(xmlFile, SETTING_KEY_DEFAULTS_WRITTEN)
+        if written ~= nil then
+            self.virtualGamepadDefaultsWritten = written
+        end
     end
 end
 

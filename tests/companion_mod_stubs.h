@@ -11,7 +11,7 @@
 //                            transforms, joint rotations, shadow flags, and a model that is missing, failing or lacking joints
 //   kStubInteractiveControl  a stand-in for the Interactive Control mod's Click Point class and manager
 //                            (StubIC), with a mismatched variant
-//   kStubSteeringVehicle     a cab vehicle with a Steering Wheel and the game's analog steering (StubSteer): the
+//   kStubInputBinding        a stand-in for g_inputBinding and Binding (StubInput), shaped after the finding of spike #99: the\r\n//                            actions and their bindings per device, addBinding, saveToXMLFile, with variants that lack the API or raise\r\n//   kStubSteeringVehicle     a cab vehicle with a Steering Wheel and the game's analog steering (StubSteer): the
 //                            Drivable.setSteeringInput that records every call, a Steering Wheel node and the
 //                            per-frame tick that moves the steering toward the input and turns the node (ADR-0027)
 //
@@ -906,4 +906,217 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
     function StubSteer.tick(dt)
         for _, vehicle in ipairs(equipped) do StubSteer.step(vehicle, dt) end
     end
+)luau";
+
+// ---- The game's input binding -------------------------------------------------------------------------
+// A stand-in for g_inputBinding and Binding, shaped after the finding of spike #99 (spec #98): the game's InputBinding Lua is
+// stripped in the readable source, so this models only what the spike saw it do.
+//   - g_inputBinding:getActionByName(name) -> action | nil. action.bindings is an array of Binding objects (deviceId,
+//     inputString, axisComponent, neutralInput, index, id), those of devices that are not plugged in included. The methods
+//     are on the metatable, so pairs(g_inputBinding) does not list them.
+//   - Binding.new(deviceId, { inputs }) with the fields set by hand and b:makeId(); g_inputBinding:addBinding(action, b)
+//     is true when added, false (after the game's "occupied slot" log line) when the device already has a binding of that
+//     action at b.index.
+//   - g_inputBinding:deleteBinding(...) says true and removes nothing. Taking a binding out of action.bindings does remove it.
+//   - g_inputBinding:saveToXMLFile() takes no path; StubInput.saves counts the calls and StubInput.saved is the listing at the
+//     last one.
+//
+//   StubInput.install(options)
+//     options.devices  the pads the game has applied GAMEPAD_DEFAULT to, as device ids (default 0_ and 3_XINPUT_GAMEPAD); a
+//                      pad that is not plugged in counts. Each gets, at index slot + 1 as in the saved file, the Companion Mod's
+//                      GAMEPAD_DEFAULT bindings (VR_RECENTER_VIEW BUTTON_11, VR_HUD_TOGGLE BUTTON_10, VR_SNAP_TURN_LEFT BUTTON_5,
+//                      VR_SNAP_TURN_RIGHT BUTTON_6, VR_TOGGLE_VIEW BUTTON_9) and the game's own (smooth look on the right
+//                      stick X on foot and in vehicles, JUMP and look up / down), next to the keyboard's.
+//     options.variant  "ok" (default); "missing": no g_inputBinding; "reshaped": no addBinding; "raises": addBinding raises
+//                      on its second call, after the Companion Mod has taken bindings out; "saveRaises": saveToXMLFile raises
+//     options.omit     a list of "ACTION@device" default bindings left out
+//     options.extra    a list of { action, device, input, index } bindings added to the defaults
+//     options.state    a string from StubInput.serialize(): the bindings of an earlier game session, in place of the defaults
+//   StubInput.addDevice(deviceId)      the game lists one more pad and applies GAMEPAD_DEFAULT to it
+//   StubInput.list(action, deviceId) -> string   the device's bindings of the action as "input/axisComponent@index", sorted,
+//                      separated by ' ; ' ("" when there are none)
+//   StubInput.dump(deviceId) -> string   all of the device's bindings as "ACTION: list" lines (every device when nil)
+//   StubInput.change(action, deviceId, from, to)   the player changes a binding in the Controls screen: its input becomes `to`
+//   StubInput.serialize() -> string    every binding, for a later game session
+//   StubInput.saves, StubInput.saved   see above
+inline constexpr const char* kStubInputBinding = R"luau(
+    StubInput = {}
+    local actions = {}
+    local actionOrder = {}
+    local variant = "ok"
+    local addCalls = 0
+
+    local Binding = {}
+    Binding.__index = Binding
+    function Binding.new(deviceId, inputs)
+        local b = setmetatable({}, Binding)
+        b.deviceId = deviceId
+        b.inputString = table.concat(inputs, " ")
+        b.axisComponent = "+"
+        b.neutralInput = 0
+        b.index = 1
+        return b
+    end
+    function Binding:makeId()
+        self.id = table.concat({ self.deviceId, self.inputString, self.axisComponent, tostring(self.neutralInput), tostring(self.index) }, "|")
+    end
+
+    local function actionNamed(name)
+        local action = actions[name]
+        if action == nil then
+            action = { name = name, bindings = {} }
+            actions[name] = action
+            table.insert(actionOrder, name)
+        end
+        return action
+    end
+
+    local function put(name, deviceId, input, axisComponent, index)
+        local b = Binding.new(deviceId, { input })
+        b.axisComponent = axisComponent or "+"
+        b.index = index
+        b:makeId()
+        table.insert(actionNamed(name).bindings, b)
+    end
+
+    local function split(text, separator)
+        local parts = {}
+        for part in string.gmatch(text, "[^" .. separator .. "]+") do table.insert(parts, part) end
+        return parts
+    end
+
+    local methods = {}
+    methods.__index = methods
+    function methods:getActionByName(name) return actions[name] end
+    local function addBindingImpl(self, action, b)
+        addCalls = addCalls + 1
+        if variant == "raises" and addCalls >= 2 then error("InputBinding:addBinding: attempt to index nil") end
+        for _, existing in ipairs(action.bindings) do
+            if existing.deviceId == b.deviceId and existing.index == b.index then
+                print("Warning: InputBinding:addBinding: occupied slot " .. tostring(b.index) .. " of " .. action.name)
+                return false
+            end
+        end
+        table.insert(action.bindings, b)
+        return true
+    end
+    methods.addBinding = addBindingImpl
+    function methods:deleteBinding(...) return true end
+    function methods:saveToXMLFile()
+        if variant == "saveRaises" then error("InputBinding:saveToXMLFile: attempt to call a nil value") end
+        StubInput.saves = StubInput.saves + 1
+        StubInput.saved = StubInput.dump(nil)
+        return true
+    end
+
+    local function slotIndex(deviceId) return (tonumber(string.match(deviceId, "^(%d+)_")) or 0) + 1 end
+
+    local function omitted(options, name, deviceId)
+        for _, key in ipairs(options.omit or {}) do
+            if key == name .. "@" .. deviceId then return true end
+        end
+        return false
+    end
+
+    local pendingOptions = {}
+    function StubInput.addDevice(deviceId)
+        local index = slotIndex(deviceId)
+        local function pad(name, input, axisComponent)
+            if not omitted(pendingOptions, name, deviceId) then put(name, deviceId, input, axisComponent, index) end
+        end
+        pad("JUMP", "BUTTON_2")
+        pad("VR_RECENTER_VIEW", "BUTTON_11")
+        pad("VR_HUD_TOGGLE", "BUTTON_10")
+        pad("VR_SNAP_TURN_LEFT", "BUTTON_5")
+        pad("VR_SNAP_TURN_RIGHT", "BUTTON_6")
+        pad("VR_TOGGLE_VIEW", "BUTTON_9")
+        pad("AXIS_LOOK_LEFTRIGHT_PLAYER", "AXIS_3+", "+")
+        pad("AXIS_LOOK_LEFTRIGHT_PLAYER", "AXIS_3-", "-")
+        pad("AXIS_LOOK_LEFTRIGHT_VEHICLE", "AXIS_3+", "+")
+        pad("AXIS_LOOK_LEFTRIGHT_VEHICLE", "AXIS_3-", "-")
+        pad("AXIS_LOOK_UPDOWN_PLAYER", "AXIS_4+", "+")
+        pad("AXIS_LOOK_UPDOWN_PLAYER", "AXIS_4-", "-")
+    end
+
+    function StubInput.install(options)
+        options = options or {}
+        pendingOptions = options
+        variant = options.variant or "ok"
+        actions, actionOrder, addCalls = {}, {}, 0
+        StubInput.saves, StubInput.saved = 0, nil
+        _G.g_inputBinding = nil
+        if variant == "missing" then return end
+
+        _G.Binding = Binding
+        local inputBinding = setmetatable({}, methods)
+        methods.addBinding = (variant ~= "reshaped") and addBindingImpl or nil
+        _G.g_inputBinding = inputBinding
+
+        if options.state ~= nil then
+            for _, line in ipairs(split(options.state, "\n")) do
+                local f = split(line, "|")
+                put(f[1], f[2], f[3], f[4], tonumber(f[5]))
+            end
+        else
+            for _, name in ipairs({ "VR_RECENTER_VIEW", "VR_HUD_TOGGLE", "VR_SNAP_TURN_LEFT", "VR_SNAP_TURN_RIGHT", "VR_TOGGLE_VIEW" }) do
+                put(name, "KB_MOUSE_DEFAULT", "KEY_numPad5", "+", 1)
+            end
+            for _, deviceId in ipairs(options.devices or { "0_XINPUT_GAMEPAD", "3_XINPUT_GAMEPAD" }) do
+                StubInput.addDevice(deviceId)
+            end
+            for _, extra in ipairs(options.extra or {}) do
+                put(extra.action, extra.device, extra.input, extra.axisComponent, extra.index)
+            end
+        end
+    end
+
+    local function describe(b) return b.inputString .. "/" .. b.axisComponent .. "@" .. tostring(b.index) end
+
+    function StubInput.list(name, deviceId)
+        local action = actions[name]
+        local parts = {}
+        for _, b in ipairs(action and action.bindings or {}) do
+            if b.deviceId == deviceId then table.insert(parts, describe(b)) end
+        end
+        table.sort(parts)
+        return table.concat(parts, " ; ")
+    end
+
+    function StubInput.dump(deviceId)
+        local lines = {}
+        for _, name in ipairs(actionOrder) do
+            local devices = {}
+            for _, b in ipairs(actions[name].bindings) do
+                if deviceId == nil or b.deviceId == deviceId then devices[b.deviceId] = true end
+            end
+            local ids = {}
+            for id in pairs(devices) do table.insert(ids, id) end
+            table.sort(ids)
+            for _, id in ipairs(ids) do table.insert(lines, name .. " " .. id .. ": " .. StubInput.list(name, id)) end
+        end
+        return table.concat(lines, "\n")
+    end
+
+    function StubInput.change(name, deviceId, from, to)
+        for _, b in ipairs(actions[name].bindings) do
+            if b.deviceId == deviceId and b.inputString == from then
+                b.inputString = to
+                b:makeId()
+                return
+            end
+        end
+        error("no such binding: " .. name .. " " .. deviceId .. " " .. from)
+    end
+
+    function StubInput.serialize()
+        local lines = {}
+        for _, name in ipairs(actionOrder) do
+            for _, b in ipairs(actions[name].bindings) do
+                table.insert(lines, table.concat({ name, b.deviceId, b.inputString, b.axisComponent, tostring(b.index) }, "|"))
+            end
+        end
+        return table.concat(lines, "\n")
+    end
+
+    StubInput.saves, StubInput.saved = 0, nil
 )luau";
