@@ -110,6 +110,9 @@ TEST_F(CompanionModTest, TheVirtualHandModelRecordsItsSourceAuthorAndLicense) {
     EXPECT_NE(text.find("https://poly.pizza/m/MTB4egc4Vh"), std::string::npos) << "source URL";
     EXPECT_NE(text.find("J-Toastie"), std::string::npos) << "author";
     EXPECT_NE(text.find("Creative Commons Attribution"), std::string::npos) << "license";
+    EXPECT_NE(text.find("https://creativecommons.org/licenses/by/3.0/"), std::string::npos) << "link to the license text, which CC BY asks for";
+    const std::string modDesc = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
+    EXPECT_NE(modDesc.find("J-Toastie"), std::string::npos) << "the credit is visible in the game's mod description";
     EXPECT_NE(text.find("VirtualHandLeft.i3d"), std::string::npos) << "names the left hand file";
     EXPECT_NE(text.find("VirtualHandRight.i3d"), std::string::npos) << "names the right hand file, a mirrored derivative";
     EXPECT_NE(text.find("mirror"), std::string::npos) << "says the right hand is a mirrored derivative";

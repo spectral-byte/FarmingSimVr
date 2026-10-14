@@ -6,13 +6,16 @@ Files: VirtualHandLeft.i3d, VirtualHandLeft.i3d.shapes, VirtualHandRight.i3d, Vi
 Title:    Gloved Hand
 Author:   J-Toastie
 Source:   https://poly.pizza/m/MTB4egc4Vh
-License:  Creative Commons Attribution (CC BY). Poly Pizza lists the license
-          without a version number, so none is claimed here.
+License:  Creative Commons Attribution 3.0 (CC BY 3.0),
+          https://creativecommons.org/licenses/by/3.0/
+          (the license link on the model's Poly Pizza page, checked 2026-10-13).
 
 Required attribution (keep this line wherever the model is redistributed):
 
     "Gloved Hand" by J-Toastie (https://poly.pizza/m/MTB4egc4Vh),
-    licensed under Creative Commons Attribution (CC BY).
+    licensed under Creative Commons Attribution 3.0 (CC BY 3.0,
+    https://creativecommons.org/licenses/by/3.0/).
+    Modified: scaled, rigged for the game engine and mirrored for a right hand.
 
 Changes made for FS25 VR (CC BY asks for changes to be indicated):
 

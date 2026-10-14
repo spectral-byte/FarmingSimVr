@@ -116,5 +116,5 @@ The menu button is on the left Motion Controller only on Touch and does not exis
 ## License
 
 Copyright (C) 2026 spectral-byte. Licensed under the [GNU General Public License v3.0](LICENSE). Built with Khronos OpenXR, Luau, MinHook and GoogleTest; release bundles include `THIRD_PARTY_NOTICES.txt`.
-The Virtual Hand glove model is "Gloved Hand" by J-Toastie ([source](https://poly.pizza/m/MTB4egc4Vh)), licensed under Creative Commons Attribution (CC BY); see `mods/FS25_VRCompanion/models/VirtualHand_ATTRIBUTION.txt`.
+The Virtual Hand glove model is "Gloved Hand" by J-Toastie ([source](https://poly.pizza/m/MTB4egc4Vh)), licensed under [Creative Commons Attribution 3.0](https://creativecommons.org/licenses/by/3.0/) (CC BY 3.0) and modified here (scaled, rigged for the game engine, mirrored for the right hand); see `mods/FS25_VRCompanion/models/VirtualHand_ATTRIBUTION.txt`.
 Farming Simulator 25 is a trademark of GIANTS Software GmbH.
