@@ -72,6 +72,7 @@
 --     VRCompanion:draw()                           the line and dot, drawn from the update's end points
 --
 --   Haptics (VRBridge.pulseHaptic(hand, durationMs, strength) -> boolean)
+--     VRCompanion:pulseHand(hand, durationMs, strength) -> boolean   one hand; false when off or the runtime refuses
 --     VRCompanion:pulsePointerHand(durationMs, strength) -> boolean   Pointer Hand only; false when off
 --     VRCompanion:onClickPointEvent(kind, clickPoint)   "selected" (non-nil point) and "clicked" pulse
 --
@@ -91,6 +92,12 @@
 --                 ignored, so the hands hide), resetMotionControllers -> resetVirtualHands(), and the console
 --                 command registers next to the others (VRCompanionVirtualHands.lua). The Virtual Hands place the grip
 --                 pose through VRCompanion:headRelativePoseToWorld, the transform the Pointer Ray uses too.
+--     WheelGrab   updateMotionControllers -> updateWheelGrab(dt) after the hands are polled and before the Pointer Hand is chosen
+--                 (also when input is ignored, or the Injector offers no hand states, so a held Steering Wheel is let go), the saved setting rides on
+--                 save/loadMotionControllerSettings (saveWheelGrabSetting / loadWheelGrabSetting), the console commands register
+--                 next to the others and resetMotionControllers -> resetWheelGrab() (VRCompanionWheelGrab.lua). A hand
+--                 holding the Steering Wheel (isHandHoldingSteeringWheel) stays in use but is never a Pointer Hand
+--                 candidate, so it casts no Pointer Ray; Interactive Control's auto-on keeps its state while it holds.
 --     ControllerMap (VRCompanionMotionControllerMap.lua) is driven from here: updateMotionControllers ->
 --                 processMotionControllerButtons(), and the save/load/register/reset functions below call its
 --                 saveMotionControllerMapSettings / loadMotionControllerMapSettings / registerMotionControllerMapConsoleCommands /
@@ -232,8 +239,15 @@ end
 -- The Pointer Hand: the one hand in use. With both in use it is the previous one, until the trigger is
 -- pulled on the other hand: that pull moves the Pointer Hand there and is consumed (it clicks nothing,
 -- see getPointerTrigger). With both in use and no previous Pointer Hand, a pull on either picks it.
-local function choosePointerHand()
-    local left, right = state.inUse[0], state.inUse[1]
+-- A hand holding the Steering Wheel is in use but never a candidate (Wheel Grab, see VRCompanionWheelGrab.lua): the
+-- Pointer Hand that starts holding falls to the other hand in use, or to nobody, and can point again once it lets go.
+local function isHoldingSteeringWheel(self, hand)
+    return type(self.isHandHoldingSteeringWheel) == "function" and self:isHandHoldingSteeringWheel(hand) == true
+end
+
+local function choosePointerHand(self)
+    local left = state.inUse[0] and not isHoldingSteeringWheel(self, 0)
+    local right = state.inUse[1] and not isHoldingSteeringWheel(self, 1)
     if left and not right then return 0 end
     if right and not left then return 1 end
     if not (left and right) then return nil end
@@ -360,6 +374,7 @@ function VRCompanion:updateMotionControllers(dt)
             state.ignoredCleared = true
         end
         if type(self.resetMotionControllerButtons) == "function" then self:resetMotionControllerButtons() end
+        if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end  -- lets go of the Steering Wheel
         settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return
@@ -367,9 +382,16 @@ function VRCompanion:updateMotionControllers(dt)
     state.ignoredCleared = false
 
     local getHandState = bridgeCall()
+    local bridgeWasMissing = state.bridgeMissing
     state.bridgeMissing = (getHandState == nil)
     if getHandState == nil then
         state.ray.valid = false
+        if not bridgeWasMissing then
+            -- The cached hands are stale from here on: read as untracked, so that a hand holding the Steering Wheel is no
+            -- longer located and Wheel Grab lets go (and stops dropping the other devices' steering).
+            clearHands()
+        end
+        if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end
         settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return
@@ -416,7 +438,16 @@ function VRCompanion:updateMotionControllers(dt)
         if not isDown then state.triggerConsumed[hand] = false end
         state.triggerPressed[hand] = isDown and not wasDown
     end
-    state.pointerHand = choosePointerHand()
+    -- Wheel Grab decides which hands hold the Steering Wheel from the hands just polled (VRCompanionWheelGrab.lua).
+    if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end
+    -- A hand holding the Steering Wheel stays in use (it keeps its Virtual Hand), however still it is held.
+    for _, hand in ipairs(HANDS) do
+        if isHoldingSteeringWheel(self, hand) then
+            state.inUse[hand] = true
+            if now ~= nil then state.motion[hand].lastMovedMs = now end
+        end
+    end
+    state.pointerHand = choosePointerHand(self)
     self.pointerHand = state.pointerHand
     -- The Pointer Hand moving is the ray moving: it takes the pointer from the desk mouse.
     if state.pointerHand ~= nil and state.movedThisUpdate[state.pointerHand] then
@@ -718,15 +749,19 @@ VRCompanion.HAPTIC_SELECT_STRENGTH = 0.25
 VRCompanion.HAPTIC_CLICK_MS = 45
 VRCompanion.HAPTIC_CLICK_STRENGTH = 0.6
 
--- Vibrates the Pointer Hand (never the other hand). Nothing happens while Motion Controllers are off,
--- without a Pointer Hand, or when the Injector has no haptics call or the runtime refuses it.
-function VRCompanion:pulsePointerHand(durationMs, strength)
-    local hand = state.pointerHand
+-- Vibrates one hand (never the other). Nothing happens, and false is returned, while Motion Controllers are
+-- off, without a hand, or when the Injector has no haptics call or the runtime refuses it.
+function VRCompanion:pulseHand(hand, durationMs, strength)
     if hand == nil or self.motionControllersEnabled == false then return false end
     local bridge = VRBridge or (_G and _G.VRBridge)
     if bridge == nil or type(bridge.pulseHaptic) ~= "function" then return false end
     local ok, played = pcall(bridge.pulseHaptic, hand, durationMs, strength)
     return ok and played == true
+end
+
+-- Vibrates the Pointer Hand (never the other hand); false without a Pointer Hand (see pulseHand).
+function VRCompanion:pulsePointerHand(durationMs, strength)
+    return self:pulseHand(state.pointerHand, durationMs, strength)
 end
 
 -- Interactive Control's Click Point events (see VRCompanionInteractiveControl.lua): "selected" when the
@@ -763,7 +798,9 @@ end
 
 local SETTING_KEY_ENABLED = "vrSettings.motionControllers"
 
-local function parseOnOff(arg)
+-- The on/off a console argument or a saved string says (on/true/1, off/false/0), or nil when it says neither. Shared
+-- with Wheel Grab's `vrWheelGrab` command and setting.
+function VRCompanion.parseOnOffArgument(arg)
     local low = string.lower(tostring(arg))
     if low == "on" or low == "true" or low == "1" then return true end
     if low == "off" or low == "false" or low == "0" then return false end
@@ -786,6 +823,7 @@ function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.motionControllersEnabled ~= false)
     end
     self:savePointerConeSetting(xmlFile, xml)
+    if type(self.saveWheelGrabSetting) == "function" then self:saveWheelGrabSetting(xmlFile, xml) end
     if type(self.saveMotionControllerMapSettings) == "function" then self:saveMotionControllerMapSettings(xmlFile, xml) end
 end
 
@@ -798,12 +836,13 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
     end
     if loaded == nil and type(xml.getString) == "function" then
         local str = xml.getString(xmlFile, SETTING_KEY_ENABLED)
-        if str ~= nil then loaded = parseOnOff(str) end
+        if str ~= nil then loaded = VRCompanion.parseOnOffArgument(str) end
     end
     if loaded ~= nil then
         self.motionControllersEnabled = loaded
     end
     self:loadPointerConeSetting(xmlFile, xml)
+    if type(self.loadWheelGrabSetting) == "function" then self:loadWheelGrabSetting(xmlFile, xml) end
     if type(self.loadMotionControllerMapSettings) == "function" then self:loadMotionControllerMapSettings(xmlFile, xml) end
 end
 
@@ -848,7 +887,7 @@ function VRCompanion:consoleCommandSetPointerCone(arg)
 end
 
 function VRCompanion:consoleCommandSetMotionControllers(arg)
-    local enabled = parseOnOff(arg)
+    local enabled = VRCompanion.parseOnOffArgument(arg)
     if arg == nil or arg == "" or string.lower(tostring(arg)) == "status" then
         return string.format("Motion Controllers are %s. Usage: vrMotionControllers <on|off> (saved)",
             self.motionControllersEnabled and "on" or "off")
@@ -917,6 +956,9 @@ function VRCompanion:getPointerDiagnostics()
     if type(self.getVirtualHandsDiagnostics) == "function" then
         virtualHandsText = " | " .. self:getVirtualHandsDiagnostics()
     end
+    if type(self.getWheelGrabDiagnostics) == "function" then
+        virtualHandsText = virtualHandsText .. " | " .. self:getWheelGrabDiagnostics()
+    end
     local pointer = state.pointerHand
     local trigger = pointer ~= nil and state.hands[pointer].trigger or 0
     return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s | Left hand: %s | Right hand: %s%s",
@@ -936,6 +978,7 @@ function VRCompanion:registerMotionControllerConsoleCommands()
     addConsoleCommand("vrMotionControllerStatus", "Report each Motion Controller's tracked and in-use state and the Pointer Hand: vrMotionControllerStatus", "consoleCommandMotionControllerStatus", self)
     addConsoleCommand("vrPointerCone", "How wide (degrees) the cone around the Pointer Ray is inside which the nearest Click Point is selected (saved): vrPointerCone [degrees]", "consoleCommandSetPointerCone", self)
     if type(self.registerVirtualHandsConsoleCommands) == "function" then self:registerVirtualHandsConsoleCommands() end
+    if type(self.registerWheelGrabConsoleCommands) == "function" then self:registerWheelGrabConsoleCommands() end
     if type(self.registerMotionControllerMapConsoleCommands) == "function" then self:registerMotionControllerMapConsoleCommands() end
 end
 
@@ -946,6 +989,9 @@ function VRCompanion:resetMotionControllers()
     end
     if type(self.resetVirtualHands) == "function" then
         self:resetVirtualHands()
+    end
+    if type(self.resetWheelGrab) == "function" then
+        self:resetWheelGrab()
     end
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrMotionControllers")

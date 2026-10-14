@@ -19,6 +19,9 @@
 -- world by VRCompanion:headRelativePoseToWorld, the same transform the Pointer Ray uses. It is placed once
 -- per update, so under Sequential Dual-Pass both eye passes see the same placement and under Alternate
 -- Frame Rendering each rendered frame places it again.
+-- A hand that holds the Steering Wheel (Wheel Grab, VRCompanion:getWheelGrabHandPose) is not placed at its grip pose but
+-- pinned to the rim point where it grabbed, turning with the wheel node's actual rotation; it stays shown however long it
+-- is held still (the Motion Controller module keeps a holding hand in use), and its fingers still curl with the real grip.
 --
 -- THE MODELS: the Gloved Hand work glove (CC BY, see models/VirtualHand_ATTRIBUTION.txt), two i3d files at
 -- VRCompanion.modDirectory .. VRCompanion.VIRTUAL_HAND_MODEL_LEFT / VIRTUAL_HAND_MODEL_RIGHT: the glove as a left
@@ -239,9 +242,7 @@ end
 
 local state = newState()
 
-local function engine(name)
-    return _G and _G[name]
-end
+local engine = VRCompanion.getEngineGlobal  -- VRCompanionCore.lua, loaded before this file
 
 local function deleteNode(node)
     local deleteFn = engine("delete")
@@ -458,6 +459,13 @@ local function updateHand(self, hand, unavailable)
             local ok, why = self:headRelativePoseToWorld(pose.gripPoseX, pose.gripPoseY, pose.gripPoseZ,
                 pose.gripPoseQx, pose.gripPoseQy, pose.gripPoseQz, pose.gripPoseQw, world)
             if ok then
+                -- A hand holding the Steering Wheel is drawn pinned to the rim where it grabbed (Wheel Grab).
+                if type(self.getWheelGrabHandPose) == "function" then
+                    local x, y, z, qx, qy, qz, qw = self:getWheelGrabHandPose(hand)
+                    if x ~= nil then
+                        world.x, world.y, world.z, world.qx, world.qy, world.qz, world.qw = x, y, z, qx, qy, qz, qw
+                    end
+                end
                 engine("setWorldTranslation")(entry.holder, world.x, world.y, world.z)
                 engine("setWorldQuaternion")(entry.holder, world.qx, world.qy, world.qz, world.qw)
                 curlFingers(entry, pose)
