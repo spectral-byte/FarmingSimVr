@@ -542,6 +542,30 @@ local function reportAvailability(reason)
     state.reason = reason
 end
 
+-- Logs every grip squeeze while Wheel Grab is available, with where the hand was and why it did or did not take hold, so a
+-- squeeze that does nothing in the headset can be read from the game log (one line per squeeze, never per frame).
+-- measureHand's results are `angle`, `radial` and `axial`, or nil and why in `radial` when the hand is not located.
+local function reportSqueeze(self, hand, inUse, angle, radial, axial)
+    local outcome
+    if not inUse then
+        outcome = "not taken: the hand has not moved in the last few seconds, so it is not in use"
+    elseif angle == nil then
+        outcome = "not taken: the hand is not located (" .. tostring(radial) .. ")"
+    else
+        local distance = ringDistance(self, radial, axial)
+        if distance == 0 then
+            outcome = "taken"
+        else
+            outcome = string.format("not taken: %.2f m from the ring", distance)
+        end
+    end
+    local where = ""
+    if angle ~= nil then
+        where = string.format(" (%.2f m from the axis, %.2f m from the plane)", radial, axial)
+    end
+    print(string.format("[FS25_VR] Wheel Grab: %s grip squeezed, Steering Wheel %s%s", HAND_NAMES[hand], outcome, where))
+end
+
 -- Wheel Grab's own call: the only place that steers the vehicle (ADR-0027). isWheelGrabSendingSteering() is true while it
 -- runs, which is how a wrap of setSteeringInput tells this call from every other device's.
 --
@@ -602,9 +626,11 @@ function VRCompanion:updateWheelGrab(dt)
                     entry.angle = angle
                 end
             end
-        elseif entry.pressed and self:isHandInUse(hand) then
+        elseif entry.pressed then
+            local inUse = self:isHandInUse(hand)
             local angle, radial, axial = measureHand(self, hand, wheel)
-            if angle ~= nil and ringDistance(self, radial, axial) == 0 then
+            reportSqueeze(self, hand, inUse, angle, radial, axial)
+            if inUse and angle ~= nil and ringDistance(self, radial, axial) == 0 then
                 if not anyHolding() then
                     -- The first hand to take hold: the target starts from where the Steering Wheel actually is. A Steering Wheel already
                     -- at a stop is "at full lock" from the start, so the stop is felt only after the target has left it

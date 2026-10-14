@@ -104,6 +104,24 @@ TEST_F(CompanionModTest, SqueezingTheGripOutsideTheRimRingDoesNothingToSteering)
     }
 }
 
+TEST_F(CompanionModTest, EveryGripSqueezeIsLoggedWithWhereTheHandWasAndWhetherItTookTheSteeringWheel) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+
+    GRAB(kRight, RimPoint(L, 0.40, 0.5));  // beyond the rim
+    headset.SetHandInputs(kRight, Grip(0.0f));
+    FRAMES(2);
+    EXPECT_EQ(CountLogLines("Wheel Grab: right grip squeezed, Steering Wheel not taken: "), 1) << "the miss is logged once";
+    EXPECT_EQ(CountLogLines("m from the axis"), 1) << "with how far from the axis and the plane the hand was";
+
+    GRAB(kRight, RimPoint(L, 0.18, 0.5));  // on the rim
+    EXPECT_EQ(CountLogLines("Wheel Grab: right grip squeezed, Steering Wheel taken"), 1) << "the grab is logged once";
+    FRAMES(10);
+    EXPECT_EQ(CountLogLines("grip squeezed"), 2) << "holding on adds no more lines";
+}
+
 TEST_F(CompanionModTest, TurningStartsFromTheSteeringWheelsActualAngleSoGrabbingNeverJumpsIt) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
