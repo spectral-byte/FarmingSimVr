@@ -121,9 +121,10 @@ VRCompanion.WHEEL_GRAB_RING_HALF_THICKNESS = 0.15
 
 -- PULL-AWAY: a holding hand's real grip position this far (m) from the point its Virtual Hand is pinned to ends the
 -- grab, as if the grip were let go: the player cannot steer from somewhere they obviously could not reach. The pinned hand
--- lags the real one by a few cm while the game's steering catches up with a quick turn; 20 cm is well past that, yet short
--- of walking away from the cab. Tune in the headset: `vrWheelGrabDiagnostics` reports each hand's distance to its pin.
-VRCompanion.WHEEL_GRAB_PULL_AWAY_DISTANCE = 0.20
+-- lags the real one while the game's steering catches up with a quick turn; 20 cm let go too easily in the first headset
+-- test, so it is 30 cm, which is still short of walking away from the cab. Tune in the headset: `vrWheelGrabDiagnostics`
+-- reports each hand's distance to its pin.
+VRCompanion.WHEEL_GRAB_PULL_AWAY_DISTANCE = 0.30
 
 -- HAPTICS (milliseconds, strength 0..1): a short pulse in the hand that grabs, a firmer, longer one in every holding
 -- hand when the target reaches full lock. Nothing on release and no continuous rumble. For scale, the Pointer Hand's

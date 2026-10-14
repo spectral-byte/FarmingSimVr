@@ -152,7 +152,7 @@ TEST_F(CompanionModTest, PullingTheRealHandAwayFromThePinnedPointEndsTheGrabWith
     ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
     SetGameTime(10000);
     const double pullAway = Number(L, "VRCompanion.WHEEL_GRAB_PULL_AWAY_DISTANCE");
-    EXPECT_NEAR(pullAway, 0.20, 0.05) << "about 20 cm";
+    EXPECT_NEAR(pullAway, 0.30, 0.05) << "about 30 cm";
 
     GRAB(kRight, RimPoint(L, kRimRadius, 0.5));
     const Point pinned = RimPoint(L, kRimRadius, 0.5);
