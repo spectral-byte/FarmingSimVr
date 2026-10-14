@@ -208,6 +208,7 @@ add_executable(fs25_vr_tests
     tests/test_pointer_hand_switch.cpp
     tests/test_motion_controller_button_mappings.cpp
     tests/test_menu_scroll_back.cpp
+    tests/test_wheel_grab_steering_wrap.cpp
     tests/test_wheel_grab.cpp
     tests/test_wheel_grab_vehicles.cpp
     tests/test_wheel_grab_pointer.cpp

@@ -6,6 +6,7 @@ Wheel Grab lets the player hold the Steering Wheel with a Motion Controller and 
 **The Companion Mod steers by calling `setSteeringInput` each frame as an analog Wheel Peripheral (`InputDevice.CATEGORY.WHEEL`), and wraps `Drivable.setSteeringInput` to drop calls from every other device while the Steering Wheel is held.**
 - The value sent is the Steering Wheel angle the hands ask for, divided by the vehicle's full-lock Steering Wheel angle, in the direction the game turns that Steering Wheel. A turned seat reverses both that direction and the vehicle's steering direction, so the two cancel: the same Steering Wheel angle gives the same value on a turned seat, and the wheels on the ground steer the other way, as they should when driving backwards.
 - When the grab ends, the Companion Mod stops calling it and lifts the wrap, so the game's own steering back takes over, as for any other input.
+- The wrap covers the `Drivable` class function and the controlled vehicle's own copy of it, because the engine copies `setSteeringInput` onto each vehicle when it builds the vehicle types; Wheel Grab's own call is told apart from the other devices' by a flag set while it makes the call, since the game's own tilt steering also calls it as a Wheel Peripheral.
 - The wrap passes every call through unchanged when no Steering Wheel is held, when Wheel Grab is off, or when the Companion Mod cannot find the function it expects. Then it logs one warning and leaves Wheel Grab unavailable, never breaking steering.
 
 ## Status
