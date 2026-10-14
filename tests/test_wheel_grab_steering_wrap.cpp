@@ -10,69 +10,17 @@
 //
 // The cab geometry is the one of test_wheel_grab.cpp: a hand "at the rim" is 0.18 m from the Steering Wheel's axis.
 
-#include "companion_mod_fixture.h"
-#include "companion_mod_stubs.h"
+#include "wheel_grab_test_support.h"
 #include <string>
 
 namespace {
 
-using fs25vr::FakeOpenXrControllers;
-using fs25vr::FakeTrackedHeadset;
-using fs25vr::HeadPose;
-using fs25vr::Vector3;
-
-constexpr uint32_t kRight = 1;
-
-constexpr double kRimRadius = 0.18;  // m from the Steering Wheel's axis: inside the ring, on the rim
+using namespace wheel_grab_test;
 
 // Values no Wheel Grab call ever has, so the calls of other devices can be told apart in the record.
 constexpr const char* kKeyboardValue = "0.77";
 constexpr const char* kGamepadValue = "0.66";
 constexpr const char* kPhoneTiltValue = "0.55";
-
-struct Point {
-    double x, y, z;
-};
-
-HeadPose HandAt(float x, float y, float z) {
-    HeadPose pose;
-    pose.position = Vector3(x, y, z);
-    pose.isValid = true;
-    pose.positionTracked = true;
-    pose.orientationTracked = true;
-    return pose;
-}
-
-// A hand at a world position of the cab at the origin (the head is at world (0, 1.5, 0) facing +Z).
-HeadPose HandAtWorld(const Point& p) {
-    return HandAt(static_cast<float>(-p.x), static_cast<float>(p.y - 1.5), static_cast<float>(-p.z));
-}
-
-FakeOpenXrControllers::Inputs Grip(float value) {
-    FakeOpenXrControllers::Inputs inputs;
-    inputs.grip = value;
-    return inputs;
-}
-
-// The engine's console globals the Companion Mod registers into.
-constexpr const char* kConsoleStubs = R"luau(
-    _G.registeredCommands = {}
-    _G.addConsoleCommand = function(name, desc, method, target)
-        _G.registeredCommands[name] = { desc = desc, method = method, target = target }
-    end
-    _G.removeConsoleCommand = function(name) _G.registeredCommands[name] = nil end
-    _G.runCommand = function(name, ...)
-        local command = _G.registeredCommands[name]
-        assert(command ~= nil, name .. " is not registered")
-        return command.target[command.method](command.target, ...)
-    end
-    _G.Input = { MOUSE_BUTTON_NONE = 0, MOUSE_BUTTON_LEFT = 1 }
-    _G.g_gui = {
-        visible = false,
-        getIsGuiVisible = function(self) return self.visible end,
-        mouseEvent = function() end,
-    }
-)luau";
 
 // The game before the Companion Mod loads, as it is in the game: the Drivable class is there when the mod's files load.
 // `variant` is a StubSteer.install variant ("ok", "missing", "reshaped"); `equipOptions` are more StubSteer.equip
@@ -90,25 +38,6 @@ void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& variant
         "_G.cab = cab\n";
     ASSERT_EQ(RunLuauChunk(L, scene.c_str(), "=scene"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
-}
-
-// What the game does each frame before the Companion Mod's update.
-void PreFrame(lua_State* L) {
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        if StubScene.updateCamera then StubScene.updateCamera() end
-        StubSteer.tick(16.667)
-    )luau", "=preFrame"), 0);
-}
-
-double Number(lua_State* L, const std::string& expression) {
-    return std::stod(EvalLua(L, expression));
-}
-
-// The world position of the point on the Steering Wheel `radius` from its axis when the wheel is turned to `angle`.
-Point RimPoint(lua_State* L, double radius, double angle) {
-    const std::string args = "(cab.vehicle, " + std::to_string(radius) + ", " + std::to_string(angle) + ")";
-    return { Number(L, "select(1, StubSteer.rimPoint" + args + ")"), Number(L, "select(2, StubSteer.rimPoint" + args + ")"),
-             Number(L, "select(3, StubSteer.rimPoint" + args + ")") };
 }
 
 // How many steering calls with this value reached the vehicle (so far, or since the record was last cleared).
@@ -133,51 +62,7 @@ void OtherDevicesSteer(lua_State* L) {
                                "StubSteer.wheelPeripheral(cab.vehicle, " + kPhoneTiltValue + ")\n").c_str(), "=otherDevices"), 0);
 }
 
-int CountLogLines(const std::string& text) {
-    int count = 0;
-    for (const auto& line : s_capturedLogs) {
-        if (line.find(text) != std::string::npos) ++count;
-    }
-    return count;
-}
-
 } // namespace
-
-#define FRAMES(count) \
-    for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
-
-// A Motion Controller put into use at a spot, then moved to `rim` (a hand counts as in use once it has moved).
-#define BRING_HAND(hand, rim) \
-    do { \
-        headset.SetHandPose((hand), HandAtWorld(Point{ 0.6, 1.0, 0.2 })); \
-        FRAMES(1); \
-        headset.SetHandPose((hand), HandAtWorld(rim)); \
-        FRAMES(1); \
-    } while (0)
-
-// The hand brought to the rim and the grip squeezed there.
-#define GRAB(hand, rim) \
-    do { \
-        BRING_HAND((hand), (rim)); \
-        headset.SetHandInputs((hand), Grip(1.0f)); \
-        FRAMES(1); \
-    } while (0)
-
-// The hand turned about the wheel's axis to where the rim point of a wheel turned to `angle` is.
-#define TURN_HAND_TO(hand, angle) \
-    do { \
-        headset.SetHandPose((hand), HandAtWorld(RimPoint(L, kRimRadius, (angle)))); \
-        FRAMES(1); \
-    } while (0)
-
-// The Steering Wheel held and turned a little, so Wheel Grab is steering.
-#define HOLD_THE_WHEEL() \
-    do { \
-        GRAB(kRight, RimPoint(L, kRimRadius, 0.0)); \
-        TURN_HAND_TO(kRight, 0.2); \
-        TURN_HAND_TO(kRight, 0.4); \
-        ASSERT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "true") << "the Steering Wheel is held"; \
-    } while (0)
 
 // The Steering Wheel held and turned a little, so Wheel Grab is steering.
 #define HOLD_THE_WHEEL() \
@@ -195,18 +80,6 @@ int CountLogLines(const std::string& text) {
         ASSERT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "false") << "the Steering Wheel is let go of"; \
     } while (0)
 
-// The hand brought to the rim, the grip squeezed and the hand turned a little, then the grip let go again: what a
-// player does to steer, whatever comes of it.
-#define TRY_TO_STEER() \
-    do { \
-        GRAB(kRight, RimPoint(L, kRimRadius, 0.0)); \
-        for (int step_ = 1; step_ <= 4; ++step_) { \
-            TURN_HAND_TO(kRight, 0.2 * step_); \
-        } \
-        FRAMES(5); \
-        headset.SetHandInputs(kRight, Grip(0.0f)); \
-        FRAMES(2); \
-    } while (0)
 
 // The whole story of the acceptance criteria for a vehicle set up with `equipOptions`: other devices steer before the
 // grab, are dropped while the Steering Wheel is held (Wheel Grab's own call reaches the vehicle all the same) and steer
@@ -372,13 +245,13 @@ TEST_F(CompanionModTest, UnloadingTheMapTakesTheWrapOffTheClassAndTheVehicle) {
         ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, (variant))); \
         SetGameTime(10000); \
         \
-        TRY_TO_STEER(); \
+        TRY_TO_STEER(kRight); \
         \
         EXPECT_EQ(EvalLua(L, "VRCompanion:isWheelGrabAvailable()"), "false") << "Wheel Grab is unavailable"; \
         EXPECT_EQ(EvalLua(L, "VRCompanion:isSteeringWheelHeld()"), "false") << "and the Steering Wheel could not be taken hold of"; \
         EXPECT_EQ(CallsThatReachedTheVehicle(L), 0) << "Wheel Grab sent the vehicle no steering"; \
         EXPECT_EQ(CountLogLines("[Warning] Wheel Grab"), 1) << "one warning says why"; \
-        TRY_TO_STEER(); \
+        TRY_TO_STEER(kRight); \
         EXPECT_EQ(CountLogLines("[Warning] Wheel Grab"), 1) << "and it is not repeated"; \
         \
         ASSERT_EQ(RunLuauChunk(L, "StubSteer.keyboard(cab.vehicle, 0.77); StubSteer.gamepad(cab.vehicle, 0.66)", "=otherDevices"), 0); \

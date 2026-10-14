@@ -12,68 +12,19 @@
 // full-lock rotation (120 degrees, a tracked tractor's) keeps full lock within a hand's reach and makes the game's
 // steering rate lag easy to see: the wheel moves 0.087 rad per frame at most.
 
-#include "companion_mod_fixture.h"
-#include "companion_mod_stubs.h"
+#include "wheel_grab_test_support.h"
 #include <algorithm>
 #include <cmath>
 #include <string>
 
 namespace {
 
-using fs25vr::FakeOpenXrControllers;
-using fs25vr::FakeTrackedHeadset;
-using fs25vr::HeadPose;
-using fs25vr::Vector3;
+using namespace wheel_grab_test;
 
-constexpr uint32_t kLeft = 0;
-constexpr uint32_t kRight = 1;
-
-constexpr double kRimRadius = 0.18;  // m from the Steering Wheel's axis: inside the ring, on the rim
 constexpr double kFullLock = 2.0943951;  // rad: 120 degrees, the in-cab rotation of the cab below
 
-struct Point {
-    double x, y, z;
-};
-
-HeadPose HandAt(float x, float y, float z) {
-    HeadPose pose;
-    pose.position = Vector3(x, y, z);
-    pose.isValid = true;
-    pose.positionTracked = true;
-    pose.orientationTracked = true;
-    return pose;
-}
-
-// A hand at a world position of the cab at the origin (see the top of the file).
-HeadPose HandAtWorld(const Point& p) {
-    return HandAt(static_cast<float>(-p.x), static_cast<float>(p.y - 1.5), static_cast<float>(-p.z));
-}
-
-FakeOpenXrControllers::Inputs Grip(float value) {
-    FakeOpenXrControllers::Inputs inputs;
-    inputs.grip = value;
-    return inputs;
-}
-
-// The engine's console globals the Companion Mod registers into, and the menu.
-constexpr const char* kConsoleStubs = R"luau(
-    _G.registeredCommands = {}
-    _G.addConsoleCommand = function(name, desc, method, target)
-        _G.registeredCommands[name] = { desc = desc, method = method, target = target }
-    end
-    _G.removeConsoleCommand = function(name) _G.registeredCommands[name] = nil end
-    _G.runCommand = function(name, ...)
-        local command = _G.registeredCommands[name]
-        assert(command ~= nil, name .. " is not registered")
-        return command.target[command.method](command.target, ...)
-    end
-    _G.Input = { MOUSE_BUTTON_NONE = 0, MOUSE_BUTTON_LEFT = 1 }
-    _G.g_gui = {
-        visible = false,
-        getIsGuiVisible = function(self) return self.visible end,
-        mouseEvent = function() end,
-    }
-    -- Where a Virtual Hand ("left" or "right") is drawn in the world, nil when there is none.
+// Where a Virtual Hand ("left" or "right") is drawn in the world, nil when there is none.
+constexpr const char* kVirtualHandStubs = R"luau(
     function _G.handPosition(which)
         local node = StubModel.hands()[which]
         if node == nil then return nil end
@@ -86,45 +37,17 @@ constexpr const char* kConsoleStubs = R"luau(
 )luau";
 
 // A cab with a steerable vehicle that turns 120 degrees at full lock; `options` are more StubSteer.equip options.
-std::string SteerableCab(const std::string& options = "") {
-    return "StubSteer.install()\n"
-           "local cab = StubScene.cab({})\n"
-           "StubSteer.equip(cab.vehicle, { parent = cab.parent, rotationDeg = 120, " + options + " })\n"
-           "_G.cab = cab\n";
+std::string SteerableCabOf120(const std::string& options = "") {
+    return SteerableCab("rotationDeg = 120, " + options);
 }
 
-void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& scene = SteerableCab()) {
-    ASSERT_TRUE(bridge.Inject(L));
-    ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubSceneGraph, "=sceneGraph"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubModelLoading, "=modelLoading"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubSteeringVehicle, "=steeringVehicle"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
-    ASSERT_EQ(RunLuauChunk(L, scene.c_str(), "=scene"), 0);
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
+// This file tests the pull-away rule too, so the pull-away distance is left alone.
+void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& scene = SteerableCabOf120()) {
+    StartOptions options;
+    options.modelLoading = true;
+    options.extraStubs = kVirtualHandStubs;
+    ASSERT_NO_FATAL_FAILURE(StartWheelGrabMod(L, bridge, scene, options));
 }
-
-// What the game does each frame before the Companion Mod's update: the camera update that places the head in
-// the world, and the vehicle's own update that acts on the steering input of the frame before.
-void PreFrame(lua_State* L) {
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        if StubScene.updateCamera then StubScene.updateCamera() end
-        StubSteer.tick(16.667)
-    )luau", "=preFrame"), 0);
-}
-
-double Number(lua_State* L, const std::string& expression) {
-    return std::stod(EvalLua(L, expression));
-}
-
-// The world position of the point on the Steering Wheel `radius` from its axis when the wheel's base is at `angle`.
-Point RimPoint(lua_State* L, double radius, double angle) {
-    const std::string args = "(cab.vehicle, " + std::to_string(radius) + ", " + std::to_string(angle) + ")";
-    return { Number(L, "select(1, StubSteer.rimPoint" + args + ")"), Number(L, "select(2, StubSteer.rimPoint" + args + ")"),
-             Number(L, "select(3, StubSteer.rimPoint" + args + ")") };
-}
-
-double WheelAngle(lua_State* L) { return Number(L, "StubSteer.wheelAngle(cab.vehicle)"); }
 
 // Where the Virtual Hand node of a hand is drawn.
 Point HandDrawnAt(lua_State* L, const char* which) {
@@ -137,14 +60,6 @@ double Distance(const Point& a, const Point& b) {
     return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z));
 }
 
-int CountLogLines(const std::string& text) {
-    int count = 0;
-    for (const auto& line : s_capturedLogs) {
-        if (line.find(text) != std::string::npos) ++count;
-    }
-    return count;
-}
-
 size_t PulsesTo(const FakeTrackedHeadset& headset, int hand) {
     size_t count = 0;
     for (const auto& pulse : headset.HapticPulses()) {
@@ -155,32 +70,6 @@ size_t PulsesTo(const FakeTrackedHeadset& headset, int hand) {
 
 } // namespace
 
-#define FRAMES(count) \
-    for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
-
-// A Motion Controller put into use at a spot, then moved to `rim` (a hand counts as in use once it has moved).
-#define BRING_HAND(hand, rim) \
-    do { \
-        headset.SetHandPose((hand), HandAtWorld(Point{ 0.6, 1.0, 0.2 })); \
-        FRAMES(1); \
-        headset.SetHandPose((hand), HandAtWorld(rim)); \
-        FRAMES(1); \
-    } while (0)
-
-// The hand brought to `rim` and the grip squeezed there.
-#define GRAB(hand, rim) \
-    do { \
-        BRING_HAND((hand), (rim)); \
-        headset.SetHandInputs((hand), Grip(1.0f)); \
-        FRAMES(1); \
-    } while (0)
-
-// The hand moved to the rim point at base angle `angle`, then a frame later.
-#define MOVE_HAND_TO(hand, angle) \
-    do { \
-        headset.SetHandPose((hand), HandAtWorld(RimPoint(L, kRimRadius, (angle)))); \
-        FRAMES(1); \
-    } while (0)
 
 TEST_F(CompanionModTest, AHoldingVirtualHandStaysOnTheRimWhereItGrabbedAndFollowsTheWheelNotTheHand) {
     FakeTrackedHeadset headset;
@@ -194,7 +83,7 @@ TEST_F(CompanionModTest, AHoldingVirtualHandStaysOnTheRimWhereItGrabbedAndFollow
         << "the Virtual Hand is on the rim where it grabbed";
 
     // A sudden yank of the hand runs ahead of the Steering Wheel, which the game turns at a capped rate.
-    MOVE_HAND_TO(kRight, grabAngle + 0.8);
+    TURN_HAND_TO(kRight, grabAngle + 0.8);
     const double lagging = WheelAngle(L);
     ASSERT_LT(lagging, 0.4) << "the wheel has not caught up with the yank yet";
     EXPECT_LT(Distance(HandDrawnAt(L, "right"), RimPoint(L, kRimRadius, grabAngle + lagging)), 1e-3)
@@ -215,7 +104,7 @@ TEST_F(CompanionModTest, AHoldingVirtualHandStaysOnTheRimWhereItGrabbedAndFollow
         const double sign_ = ((to) >= (from)) ? 1.0 : -1.0; \
         for (double angle_ = (from); sign_ * ((to) - angle_) > 1e-9; ) { \
             angle_ = (sign_ > 0) ? std::min(angle_ + (step), (double)(to)) : std::max(angle_ - (step), (double)(to)); \
-            MOVE_HAND_TO((hand), angle_); \
+            TURN_HAND_TO((hand), angle_); \
             FRAMES(1); \
         } \
     } while (0)
@@ -227,7 +116,7 @@ TEST_F(CompanionModTest, AfterLettingGoTheVirtualHandIsDrawnAtTheGripPoseAgain) 
     SetGameTime(10000);
 
     GRAB(kRight, RimPoint(L, kRimRadius, 0.5));
-    MOVE_HAND_TO(kRight, 1.3);  // a yank: the pinned hand lags behind the real one
+    TURN_HAND_TO(kRight, 1.3);  // a yank: the pinned hand lags behind the real one
     ASSERT_GT(Distance(HandDrawnAt(L, "right"), RimPoint(L, kRimRadius, 1.3)), 0.05);
 
     headset.SetHandInputs(kRight, Grip(0.0f));

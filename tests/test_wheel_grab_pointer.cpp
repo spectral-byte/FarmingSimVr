@@ -11,59 +11,22 @@
 // head; a hand "at the rim" is 0.18 m from its axis. The right hand's Click Point is straight ahead of a fingertip
 // held 0.3 m to the right of the head, the left hand's likewise on the left.
 
-#include "companion_mod_fixture.h"
-#include "companion_mod_stubs.h"
+// What the game does each frame before the Companion Mod's update, besides the camera update and the vehicle's own
+// update that acts on the steering input of the frame before: Interactive Control's update of its Click Points.
+#define WHEEL_GRAB_PRE_FRAME_EXTRA_LUA "if StubIC.tick then StubIC.tick() end"
+
+#include "wheel_grab_test_support.h"
 #include <string>
 
 namespace {
 
-using fs25vr::FakeOpenXrControllers;
-using fs25vr::FakeTrackedHeadset;
-using fs25vr::HeadPose;
-using fs25vr::Vector3;
-
-constexpr uint32_t kLeft = 0;
-constexpr uint32_t kRight = 1;
-
-constexpr double kRimRadius = 0.18;  // m from the Steering Wheel's axis: inside the ring, on the rim
-
-struct Point {
-    double x, y, z;
-};
-
-HeadPose HandAt(float x, float y, float z) {
-    HeadPose pose;
-    pose.position = Vector3(x, y, z);
-    pose.isValid = true;
-    pose.positionTracked = true;
-    pose.orientationTracked = true;
-    return pose;
-}
-
-// A hand at a world position of the cab at the origin (see the top of the file).
-HeadPose HandAtWorld(const Point& p) {
-    return HandAt(static_cast<float>(-p.x), static_cast<float>(p.y - 1.5), static_cast<float>(-p.z));
-}
-
-FakeOpenXrControllers::Inputs Grip(float value) {
-    FakeOpenXrControllers::Inputs inputs;
-    inputs.grip = value;
-    return inputs;
-}
+using namespace wheel_grab_test;
 
 FakeOpenXrControllers::Inputs Trigger(float value) {
     FakeOpenXrControllers::Inputs inputs;
     inputs.trigger = value;
     return inputs;
 }
-
-constexpr const char* kConsoleStubs = R"luau(
-    _G.registeredCommands = {}
-    _G.addConsoleCommand = function(name, desc, method, target)
-        _G.registeredCommands[name] = { desc = desc, method = method, target = target }
-    end
-    _G.removeConsoleCommand = function(name) _G.registeredCommands[name] = nil end
-)luau";
 
 // A cab whose vehicle both steers (StubSteer) and has Interactive Control's state (StubIC), with a Click Point
 // straight ahead of each hand, and the mod started.
@@ -89,27 +52,6 @@ void StartMod(lua_State* L, fs25vr::VRBridge& bridge, bool interactiveControlOn 
     )luau", "=addPoints"), 0);
 }
 
-// What the game does each frame before the Companion Mod's update: the camera update, the vehicle's own update that
-// acts on the steering input of the frame before and Interactive Control's update of its Click Points.
-void PreFrame(lua_State* L) {
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        if StubScene.updateCamera then StubScene.updateCamera() end
-        StubSteer.tick(16.667)
-        if StubIC.tick then StubIC.tick() end
-    )luau", "=preFrame"), 0);
-}
-
-double Number(lua_State* L, const std::string& expression) {
-    return std::stod(EvalLua(L, expression));
-}
-
-// The world position of the point on the Steering Wheel `radius` from its axis when the wheel is turned to `angle`.
-Point RimPoint(lua_State* L, double radius, double angle) {
-    const std::string args = "(cab.vehicle, " + std::to_string(radius) + ", " + std::to_string(angle) + ")";
-    return { Number(L, "select(1, StubSteer.rimPoint" + args + ")"), Number(L, "select(2, StubSteer.rimPoint" + args + ")"),
-             Number(L, "select(3, StubSteer.rimPoint" + args + ")") };
-}
-
 std::string PointerHand(lua_State* L) { return EvalLua(L, "VRCompanion:getPointerHand()"); }
 std::string PointerRay(lua_State* L) { return EvalLua(L, "VRCompanion:getPointerRay()"); }
 std::string Executed(lua_State* L) { return EvalLua(L, "table.concat(StubIC.executed, ',')"); }
@@ -119,33 +61,6 @@ std::string InteractiveControlState(lua_State* L) {
 std::string InteractiveControlWrites(lua_State* L) { return EvalLua(L, "#StubIC.stateWrites"); }
 
 } // namespace
-
-#define FRAMES(count) \
-    for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
-
-// A Motion Controller put into use at a spot, then moved to `rim` (a hand counts as in use once it has moved).
-#define BRING_HAND(hand, rim) \
-    do { \
-        headset.SetHandPose((hand), HandAtWorld(Point{ 0.6, 1.0, 0.2 })); \
-        FRAMES(1); \
-        headset.SetHandPose((hand), HandAtWorld(rim)); \
-        FRAMES(1); \
-    } while (0)
-
-// The hand brought to `rim` and the grip squeezed there.
-#define GRAB(hand, rim) \
-    do { \
-        BRING_HAND((hand), (rim)); \
-        headset.SetHandInputs((hand), Grip(1.0f)); \
-        FRAMES(1); \
-    } while (0)
-
-// The hand turned about the wheel's axis to where the rim point of a wheel turned to `angle` is.
-#define TURN_HAND_TO(hand, angle) \
-    do { \
-        headset.SetHandPose((hand), HandAtWorld(RimPoint(L, kRimRadius, (angle)))); \
-        FRAMES(1); \
-    } while (0)
 
 // The free hand lifted and held so that its index fingertip is 0.3 m to its side of the head and 0.3 m ahead, pointing
 // straight ahead at its own Click Point.
@@ -157,6 +72,7 @@ std::string InteractiveControlWrites(lua_State* L) { return EvalLua(L, "#StubIC.
         headset.SetHandPointing((hand), HandAt(side_, 0.0f, -0.3f)); \
         FRAMES(3); \
     } while (0)
+
 
 TEST_F(CompanionModTest, AHandThatGrabsTheSteeringWheelStopsBeingThePointerHandAndItsPointerRayDisappears) {
     FakeTrackedHeadset headset;

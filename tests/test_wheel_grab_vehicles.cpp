@@ -14,135 +14,27 @@
 // The cab is the same as in test_wheel_grab.cpp: at the world origin facing +Z with the head at tracking space
 // origin, the Steering Wheel 0.5 m in front of the head and 0.3 m below it; a hand "at the rim" is 0.18 m from its axis.
 
-#include "companion_mod_fixture.h"
-#include "companion_mod_stubs.h"
+#include "wheel_grab_test_support.h"
 #include <string>
 
 namespace {
 
-using fs25vr::FakeOpenXrControllers;
-using fs25vr::FakeTrackedHeadset;
-using fs25vr::HeadPose;
-using fs25vr::Vector3;
-
-constexpr uint32_t kLeft = 0;
-constexpr uint32_t kRight = 1;
-
-constexpr double kRimRadius = 0.18;  // m from the Steering Wheel's axis: inside the ring, on the rim
+using namespace wheel_grab_test;
 
 // The Steering Wheel turns 540 degrees (three half turns) from straight ahead to full lock in these cabs.
-constexpr double kFullLockAngle = 3.0 * 3.14159265358979;
-
-struct Point {
-    double x, y, z;
-};
-
-HeadPose HandAt(float x, float y, float z) {
-    HeadPose pose;
-    pose.position = Vector3(x, y, z);
-    pose.isValid = true;
-    pose.positionTracked = true;
-    pose.orientationTracked = true;
-    return pose;
-}
-
-// A hand at a world position of the cab at the origin (see the top of the file).
-HeadPose HandAtWorld(const Point& p) {
-    return HandAt(static_cast<float>(-p.x), static_cast<float>(p.y - 1.5), static_cast<float>(-p.z));
-}
-
-FakeOpenXrControllers::Inputs Grip(float value) {
-    FakeOpenXrControllers::Inputs inputs;
-    inputs.grip = value;
-    return inputs;
-}
-
-// A cab with a steerable vehicle: the Steering Wheel hangs in the cab's node, the way the game builds one.
-// `options` are more StubSteer.equip options, e.g. "turnedSeat = true".
-std::string SteerableCab(const std::string& options = "") {
-    return "StubSteer.install()\n"
-           "local cab = StubScene.cab({})\n"
-           "StubSteer.equip(cab.vehicle, { parent = cab.parent, " + options + " })\n"
-           "_G.cab = cab\n";
-}
+constexpr double kFullLockAngle = 3.0 * kPi;
 
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& scene = SteerableCab()) {
-    ASSERT_TRUE(bridge.Inject(L));
-    ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubSceneGraph, "=sceneGraph"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubSteeringVehicle, "=steeringVehicle"), 0);
-    ASSERT_EQ(RunLuauChunk(L, scene.c_str(), "=scene"), 0);
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
-    // These tests turn the hand faster and further than the wheel follows, which would let go of the wheel by the
-    // pull-away rule: that rule is tested in test_wheel_grab_pinned_hand.cpp.
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.WHEEL_GRAB_PULL_AWAY_DISTANCE = 1000", "=noPullAway"), 0);
+    StartOptions options;
+    options.consoleStubs = false;
+    options.noPullAway = true;
+    ASSERT_NO_FATAL_FAILURE(StartWheelGrabMod(L, bridge, scene, options));
 }
 
-// What the game does each frame before the Companion Mod's update: the camera update that places the head in
-// the world, and the vehicle's own update that acts on the steering input of the frame before.
-void PreFrame(lua_State* L) {
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        if StubScene.updateCamera then StubScene.updateCamera() end
-        StubSteer.tick(16.667)
-    )luau", "=preFrame"), 0);
-}
-
-double Number(lua_State* L, const std::string& expression) {
-    return std::stod(EvalLua(L, expression));
-}
-
-// The world position of the point on the Steering Wheel `radius` from its axis when the wheel is turned to `angle`.
-Point RimPoint(lua_State* L, double radius, double angle) {
-    const std::string args = "(cab.vehicle, " + std::to_string(radius) + ", " + std::to_string(angle) + ")";
-    return { Number(L, "select(1, StubSteer.rimPoint" + args + ")"), Number(L, "select(2, StubSteer.rimPoint" + args + ")"),
-             Number(L, "select(3, StubSteer.rimPoint" + args + ")") };
-}
-
-double WheelAngle(lua_State* L) { return Number(L, "StubSteer.wheelAngle(cab.vehicle)"); }
 double RoadWheelAngle(lua_State* L) { return Number(L, "StubSteer.roadWheelAngle(cab.vehicle)"); }
 int SteeringCalls(lua_State* L) { return static_cast<int>(Number(L, "#StubSteer.calls")); }
 
 } // namespace
-
-#define FRAMES(count) \
-    for (int frame_ = 0; frame_ < (count); ++frame_) { PreFrame(L); NextFrame(&headset); }
-
-// A Motion Controller put into use at a spot, then moved to `rim` (a hand counts as in use once it has moved).
-#define BRING_HAND(hand, rim) \
-    do { \
-        headset.SetHandPose((hand), HandAtWorld(Point{ 0.6, 1.0, 0.2 })); \
-        FRAMES(1); \
-        headset.SetHandPose((hand), HandAtWorld(rim)); \
-        FRAMES(1); \
-    } while (0)
-
-// The hand brought to `rim` and the grip squeezed there.
-#define GRAB(hand, rim) \
-    do { \
-        BRING_HAND((hand), (rim)); \
-        headset.SetHandInputs((hand), Grip(1.0f)); \
-        FRAMES(1); \
-    } while (0)
-
-// The hand turned about the wheel's axis to where the rim point of a wheel turned to `angle` is.
-#define TURN_HAND_TO(hand, angle) \
-    do { \
-        headset.SetHandPose((hand), HandAtWorld(RimPoint(L, kRimRadius, (angle)))); \
-        FRAMES(1); \
-    } while (0)
-
-// The hand brought to the rim, the grip squeezed and the hand turned a little, then the grip let go again: what a
-// player does to steer, whatever comes of it.
-#define TRY_TO_STEER(hand) \
-    do { \
-        GRAB((hand), RimPoint(L, kRimRadius, 0.0)); \
-        for (int step_ = 1; step_ <= 4; ++step_) { \
-            TURN_HAND_TO((hand), 0.2 * step_); \
-        } \
-        FRAMES(5); \
-        headset.SetHandInputs((hand), Grip(0.0f)); \
-        FRAMES(2); \
-    } while (0)
 
 // The hand takes hold at 0.5 radians and turns on to 1.1; the game's steering catches up.
 #define TURN_CLOCKWISE_BY_SIX_TENTHS(hand) \
@@ -153,6 +45,7 @@ int SteeringCalls(lua_State* L) { return static_cast<int>(Number(L, "#StubSteer.
         } \
         FRAMES(30); \
     } while (0)
+
 
 // ---- Turned seats ---------------------------------------------------------------------------------------------------
 
