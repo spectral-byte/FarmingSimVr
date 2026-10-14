@@ -181,6 +181,40 @@ TEST(DxgiProxyTest, RuntimeCreatingAFactoryDuringInitializationDoesNotDeadlock) 
     delete runtime;
 }
 
+// Like a real runtime: a session needs a graphics binding once a graphics extension is enabled.
+class GraphicsBindingRequiredOpenXrRuntime : public FakeOpenXrRuntime {
+public:
+    uint32_t createSessionCalls = 0;
+
+    XrResult CreateSession(XrInstance instance, const XrSessionCreateInfo* createInfo, XrSession* session) override {
+        ++createSessionCalls;
+        if (!createInfo || !createInfo->next) return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+        return FakeOpenXrRuntime::CreateSession(instance, createInfo, session);
+    }
+};
+
+TEST(DxgiProxyTest, SessionWaitsForTheGamesD3D12DeviceInsteadOfBeingCreatedAtStartup) {
+    auto runtime = std::make_shared<GraphicsBindingRequiredOpenXrRuntime>();
+    auto openXrManager = std::make_shared<OpenXrManager>(runtime);
+    DxgiProxy proxy(std::make_shared<SystemDxgi>(), openXrManager, nullptr, nullptr,
+                    std::make_shared<MirrorWindowController>(), nullptr);
+
+    // The game asks for a factory before it has a device to bind a session to.
+    ComPtr<IDXGIFactory1> factory;
+    ASSERT_EQ(proxy.CreateDXGIFactory1(IID_PPV_ARGS(&factory)), S_OK);
+    EXPECT_TRUE(openXrManager->IsActive());
+    EXPECT_EQ(runtime->createSessionCalls, 0u);
+    EXPECT_FALSE(openXrManager->HasSession());
+
+    // Its swap chain then supplies the device and queue, and the session is created once, bound to them.
+    auto* device = reinterpret_cast<ID3D12Device*>(static_cast<uintptr_t>(0x1000));
+    auto* queue = reinterpret_cast<ID3D12CommandQueue*>(static_cast<uintptr_t>(0x2000));
+    openXrManager->SetD3D12DeviceAndQueue(device, queue);
+    EXPECT_EQ(runtime->createSessionCalls, 1u);
+    EXPECT_TRUE(openXrManager->HasSession());
+    EXPECT_TRUE(openXrManager->HasTrackingSpaces());
+}
+
 TEST(DxgiProxyTest, BinaryLoadsAndInterceptsStartupInPassThrough) {
     HMODULE hProxy = LoadLibraryA("dxgi.dll");
     if (!hProxy) {

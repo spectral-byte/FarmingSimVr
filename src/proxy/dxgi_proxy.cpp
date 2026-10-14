@@ -94,9 +94,9 @@ void DxgiProxy::EnsureVrInitialized() {
             if (m_openXrManager->IsPassThrough()) {
                 LogInfo("Injector operating in Pass-Through Mode (forwarding all calls silently).");
             } else if (m_openXrManager->IsActive()) {
+                // No session yet: the game has no D3D12 device to bind one to until it creates its
+                // swap chain, and SetD3D12DeviceAndQueue creates the session then.
                 LogInfo("Injector operating in Active VR Mode.");
-                m_openXrManager->CreateSession();
-                m_openXrManager->CreateTrackingSpaces();
             }
         }
         if (m_luauInterceptor && m_luauInterceptor->AttachToEngine()) {
