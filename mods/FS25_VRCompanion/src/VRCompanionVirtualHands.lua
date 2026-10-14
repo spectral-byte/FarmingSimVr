@@ -21,7 +21,7 @@
 -- Frame Rendering each rendered frame places it again.
 -- A hand that holds the Steering Wheel (Wheel Grab, VRCompanion:getWheelGrabHandPose) is not placed at its grip pose but
 -- pinned to the rim point where it grabbed, turning with the wheel node's actual rotation; it stays shown however long it
--- is held still (a holding hand counts as in use), and its fingers still curl with the real grip.
+-- is held still (the Motion Controller module keeps a holding hand in use), and its fingers still curl with the real grip.
 --
 -- THE MODELS: the Gloved Hand work glove (CC BY, see models/VirtualHand_ATTRIBUTION.txt), two i3d files at
 -- VRCompanion.modDirectory .. VRCompanion.VIRTUAL_HAND_MODEL_LEFT / VIRTUAL_HAND_MODEL_RIGHT: the glove as a left
@@ -443,11 +443,6 @@ end
 
 local describeEngineGeometry  -- defined below with the diagnostics
 
--- A hand holding the Steering Wheel stays shown however long it is held still: it is in use as long as it holds.
-local function holdsSteeringWheel(self, hand)
-    return type(self.isHandHoldingSteeringWheel) == "function" and self:isHandHoldingSteeringWheel(hand) == true
-end
-
 -- Places one hand at its grip pose, or hides it; returns the hand's status for the diagnostics.
 local function updateHand(self, hand, unavailable)
     local entry = state.hands[hand]
@@ -455,7 +450,7 @@ local function updateHand(self, hand, unavailable)
     local status
     if unavailable ~= nil then
         status = "hidden (" .. unavailable .. ")"
-    elseif not self:isHandInUse(hand) and not holdsSteeringWheel(self, hand) then
+    elseif not self:isHandInUse(hand) then
         status = "hidden (Motion Controller not in use)"
     else
         local pose = self:getHandState(hand)

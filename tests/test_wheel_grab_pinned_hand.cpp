@@ -252,7 +252,9 @@ TEST_F(CompanionModTest, AHandHeldStillOnTheWheelStaysShownLongerThanTheInUseTim
 
     headset.SetHandInputs(kRight, Grip(0.0f));
     FRAMES(3);
-    EXPECT_EQ(EvalLua(L, "handIsShown('right')"), "false") << "once it lets go it is a hand at rest like any other";
+    AdvanceGameTime(5000);
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "handIsShown('right')"), "false") << "once it has let go it is a hand at rest like any other";
 }
 
 TEST_F(CompanionModTest, PullingTheRealHandAwayFromThePinnedPointEndsTheGrabWithTheGripStillSqueezed) {

@@ -693,9 +693,15 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
 // Wheels.lua updateVehiclePhysics), so a test sees what the player would: the calls that reached the vehicle and how
 // the Steering Wheel turned.
 //
-// StubSteer.install()  defines the globals the game defines: InputDevice.CATEGORY and the Drivable class whose
+// StubSteer.install(variant)  defines the globals the game defines: InputDevice.CATEGORY and the Drivable class whose
 //   setSteeringInput records every call that reaches a vehicle in StubSteer.calls as { value, analog, category }
 //   and then stores the input like the game (the analog flag and category only change on a non-zero input).
+//   variant: nil ("ok"), "missing" (a game update renamed it: the class has setSteeringAxis, same arguments, and no
+//   setSteeringInput) or "reshaped" (setSteeringInput(vehicle, { value, isAnalog, category }) takes one table).
+//   Run it BEFORE loading the Companion Mod to have Drivable there at file load, like the game; StubSteer.original is
+//   the unwrapped function of the "ok" variant.
+// StubSteer.keyboard / gamepad / wheelPeripheral (vehicle, value)  another device steering: the call it makes (by the
+//   variant's entry point); StubSteer.send(vehicle, value, isAnalog, category) is the general form.
 // StubSteer.equip(vehicle, options) -> vehicle   makes a StubScene.cab vehicle steerable. Like the game it COPIES
 //   Drivable.setSteeringInput onto the vehicle instance, so wrapping only the class afterwards would not reach it.
 //   options:
@@ -711,16 +717,26 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
 //     noWheel           true: the vehicle has no Steering Wheel node
 //     powered           false: the motor is off, the vehicle does not steer
 //     controlAllowed    false: getIsPlayerVehicleControlAllowed says no (an attached tool blocks the steering)
+//     turnedSeat        true: the driver's seat is turned to drive backwards. Like ReverseDriving it flips BOTH the direction
+//                       the game turns the Steering Wheel node in (-1) and getSteeringDirection() (-1)
+//     turnedSeatWheel   with turnedSeat: the vehicle has a Steering Wheel of its own for the turned seat (another node,
+//                       spec_reverseDriving.steeringWheel), which the game turns instead of the drivable's
+//     helper            true: a hired helper is driving (getIsAIActive says yes), as in StubSteer.setHelper
+//     copyOfOriginal    true: the vehicle's copy of setSteeringInput is the unwrapped StubSteer.original, as if it was
+//                       copied before the Companion Mod wrapped the class
 // StubSteer.tick(dtMs)  one frame of the game's vehicle update for every equipped vehicle: the steering input of the
 //   last frame moves the steering value toward it (analog input at 2.5 steering durations per full range, keyboard
 //   input at 1), the input is cleared (so it must be sent again every frame), the wheels' rotated time follows, and the
 //   Steering Wheel node is set to (0, angle, 0). With no input the value goes back to centre at the rate of the last
 //   non-zero input, which stays "analog" after a Wheel Peripheral or Wheel Grab (the game's analog steering back).
 // StubSteer.calls                every setSteeringInput that reached a vehicle, in order
+// StubSteer.setHelper(vehicle, driving)  a hired helper starts (true) or stops driving the vehicle
 // StubSteer.changeCamera(vehicle, cam)  the vehicle's active camera becomes cam (e.g. { isInside = false }, an Outside
 //   Camera, or { isInside = true, isPassengerCamera = true })
 // StubSteer.wheelAngle(vehicle)  the node's angle in radians, unwrapped (rotatedTime * in-cab rotation), 0 without a wheel
-// StubSteer.wheelNode(vehicle)   the Steering Wheel node; StubSteer.wheelBase(vehicle) the node above it
+// StubSteer.wheelNode(vehicle)   the Steering Wheel node the game turns now; StubSteer.wheelBase(vehicle) the node above it
+// StubSteer.roadWheelAngle(vehicle)  rotatedTime: how far the vehicle's wheels on the ground are turned (positive and
+//   negative are the two ways the vehicle steers)
 // StubSteer.rimPoint(vehicle, radius, angle, lift) -> x, y, z   the world position of the point on the wheel at
 //   `radius` from its axis and `lift` along it (default 0) when the wheel is turned to `angle` radians
 inline constexpr const char* kStubSteeringVehicle = R"luau(
@@ -728,12 +744,14 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
     StubSteer.calls = {}
     local equipped = {}
 
-    function StubSteer.install()
+    function StubSteer.install(variant)
         _G.InputDevice = { CATEGORY = { UNKNOWN = 0, KEYBOARD_MOUSE = 1, GAMEPAD = 2, WHEEL = 3 } }
         StubSteer.calls = {}
+        StubSteer.variant = variant or "ok"
+        StubSteer.original = nil
         equipped = {}
         _G.Drivable = {}
-        function Drivable.setSteeringInput(self, inputValue, isAnalog, deviceCategory)
+        local function steer(self, inputValue, isAnalog, deviceCategory)
             table.insert(StubSteer.calls, { value = inputValue, analog = isAnalog, category = deviceCategory })
             local last = self.spec_drivable.lastInputValues
             last.axisSteer = inputValue
@@ -742,7 +760,30 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
                 last.axisSteerDeviceCategory = deviceCategory
             end
         end
+        if StubSteer.variant == "missing" then
+            Drivable.setSteeringAxis = steer
+        elseif StubSteer.variant == "reshaped" then
+            function Drivable.setSteeringInput(self, input) steer(self, input.value, input.isAnalog, input.category) end
+        else
+            Drivable.setSteeringInput = steer
+            StubSteer.original = steer
+        end
     end
+
+    -- Another device steering: the call the keyboard, a gamepad or a Wheel Peripheral makes, through whatever the
+    -- installed game variant calls its steering function.
+    function StubSteer.send(vehicle, value, isAnalog, category)
+        if StubSteer.variant == "missing" then
+            vehicle:setSteeringAxis(value, isAnalog, category)
+        elseif StubSteer.variant == "reshaped" then
+            vehicle:setSteeringInput({ value = value, isAnalog = isAnalog, category = category })
+        else
+            vehicle:setSteeringInput(value, isAnalog, category)
+        end
+    end
+    function StubSteer.keyboard(vehicle, value) StubSteer.send(vehicle, value, false, InputDevice.CATEGORY.KEYBOARD_MOUSE) end
+    function StubSteer.gamepad(vehicle, value) StubSteer.send(vehicle, value, true, InputDevice.CATEGORY.GAMEPAD) end
+    function StubSteer.wheelPeripheral(vehicle, value) StubSteer.send(vehicle, value, true, InputDevice.CATEGORY.WHEEL) end
 
     function StubSteer.equip(vehicle, options)
         options = options or {}
@@ -760,16 +801,30 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
         else
             spec.axisSide = vehicle.minRotTime ~= 0 and vehicle.rotatedTime / vehicle.minRotTime or 0
         end
-        if not options.noWheel then
+        local function newWheel()
             local base = StubScene.newNode("steeringWheelBase", options.parent or 0, position.x, position.y, position.z,
                 options.tilt or -0.6, 0, 0)
             local node = StubScene.newNode("steeringWheel", base, 0, 0, 0)
-            spec.steeringWheel = { node = node, indoorRotation = rotation, outdoorRotation = rotation / 2 }
-            vehicle.stubBase = base
+            return { node = node, base = base, indoorRotation = rotation, outdoorRotation = rotation / 2 }
+        end
+        if not options.noWheel then
+            spec.steeringWheel = newWheel()
         end
         vehicle.spec_drivable = spec
+        if options.turnedSeat then
+            vehicle.spec_reverseDriving = { isReverseDriving = true, steeringWheel = options.turnedSeatWheel and newWheel() or nil }
+        end
+        vehicle.stubHelper = options.helper == true
         vehicle.setSteeringInput = Drivable.setSteeringInput  -- Vehicle:load copies the class functions onto the instance
-        function vehicle:getSteeringDirection() return 1 end
+        vehicle.setSteeringAxis = Drivable.setSteeringAxis    -- (the "missing" variant renames it)
+        if options.copyOfOriginal then
+            vehicle.setSteeringInput = StubSteer.original      -- a copy taken before anything wrapped the class
+        end
+        function vehicle:getSteeringDirection()
+            local reverse = self.spec_reverseDriving  -- ReverseDriving:getSteeringDirection (settled: the seat is not turning)
+            return (reverse ~= nil and reverse.isReverseDriving) and -1 or 1
+        end
+        function vehicle:getIsAIActive() return self.stubHelper end
         function vehicle:getIsEntered() return true end
         function vehicle:getIsPowered() return self.stubPowered end
         function vehicle:getIsPlayerVehicleControlAllowed() return self.stubControlAllowed end
@@ -778,17 +833,32 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
         return vehicle
     end
 
-    function StubSteer.wheelNode(vehicle)
+    -- The wheel the game turns now, and the direction it turns the node in (ReverseDriving:updateSteeringWheel).
+    local function activeWheel(vehicle)
         local wheel = vehicle.spec_drivable.steeringWheel
+        local reverse = vehicle.spec_reverseDriving
+        if reverse ~= nil and reverse.isReverseDriving then
+            return reverse.steeringWheel or wheel, -1
+        end
+        return wheel, 1
+    end
+
+    function StubSteer.wheelNode(vehicle)
+        local wheel = activeWheel(vehicle)
         return wheel and wheel.node or nil
     end
-    function StubSteer.wheelBase(vehicle) return vehicle.stubBase end
+    function StubSteer.wheelBase(vehicle)
+        local wheel = activeWheel(vehicle)
+        return wheel and wheel.base or nil
+    end
+    function StubSteer.setHelper(vehicle, driving) vehicle.stubHelper = driving == true end
     function StubSteer.changeCamera(vehicle, cam) vehicle.getActiveCamera = function() return cam end end
     function StubSteer.wheelAngle(vehicle) return vehicle.stubWheelAngle or 0 end
+    function StubSteer.roadWheelAngle(vehicle) return vehicle.rotatedTime end
 
     function StubSteer.rimPoint(vehicle, radius, angle, lift)
         -- the wheel node is turned about its Y axis: a point at (radius, lift, 0) goes to (r cos a, lift, -r sin a)
-        return localToWorld(vehicle.stubBase, radius * math.cos(angle), lift or 0, -radius * math.sin(angle))
+        return localToWorld(StubSteer.wheelBase(vehicle), radius * math.cos(angle), lift or 0, -radius * math.sin(angle))
     end
 
     -- One frame of the vehicle update for one vehicle (dt in ms).
@@ -813,12 +883,12 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
             vehicle.rotatedTime = math.max(vehicle.minRotTime * axisSide, vehicle.minRotTime)
         end
         -- Drivable:updateSteeringWheel: the in-cab rotation in an inside camera that is not a passenger's
-        local wheel = spec.steeringWheel
+        local wheel, direction = activeWheel(vehicle)
         if wheel ~= nil then
             local camera = vehicle:getActiveCamera()
             local maxRotation = wheel.outdoorRotation
             if camera ~= nil and camera.isInside and not camera.isPassengerCamera then maxRotation = wheel.indoorRotation end
-            vehicle.stubWheelAngle = vehicle.rotatedTime * maxRotation
+            vehicle.stubWheelAngle = vehicle.rotatedTime * maxRotation * direction
             setRotation(wheel.node, 0, vehicle.stubWheelAngle, 0)
         end
     end
