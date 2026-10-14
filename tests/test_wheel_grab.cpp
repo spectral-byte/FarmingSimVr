@@ -107,6 +107,9 @@ void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& scene =
     ASSERT_EQ(RunLuauChunk(L, extraStubs, "=extraStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, scene.c_str(), "=scene"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
+    // These tests turn the hand faster and further than an arm could while the wheel follows (stops, hand-over-hand),
+    // which would let go of the wheel by the pull-away rule: that rule is tested in test_wheel_grab_pinned_hand.cpp.
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.WHEEL_GRAB_PULL_AWAY_DISTANCE = 1000", "=noPullAway"), 0);
 }
 
 // What the game does each frame before the Companion Mod's update: the camera update that places the head in

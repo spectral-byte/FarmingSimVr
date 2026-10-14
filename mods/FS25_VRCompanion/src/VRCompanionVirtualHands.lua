@@ -19,6 +19,9 @@
 -- world by VRCompanion:headRelativePoseToWorld, the same transform the Pointer Ray uses. It is placed once
 -- per update, so under Sequential Dual-Pass both eye passes see the same placement and under Alternate
 -- Frame Rendering each rendered frame places it again.
+-- A hand that holds the Steering Wheel (Wheel Grab, VRCompanion:getWheelGrabHandPose) is not placed at its grip pose but
+-- pinned to the rim point where it grabbed, turning with the wheel node's actual rotation; it stays shown however long it
+-- is held still (a holding hand counts as in use), and its fingers still curl with the real grip.
 --
 -- THE MODELS: the Gloved Hand work glove (CC BY, see models/VirtualHand_ATTRIBUTION.txt), two i3d files at
 -- VRCompanion.modDirectory .. VRCompanion.VIRTUAL_HAND_MODEL_LEFT / VIRTUAL_HAND_MODEL_RIGHT: the glove as a left
@@ -440,6 +443,11 @@ end
 
 local describeEngineGeometry  -- defined below with the diagnostics
 
+-- A hand holding the Steering Wheel stays shown however long it is held still: it is in use as long as it holds.
+local function holdsSteeringWheel(self, hand)
+    return type(self.isHandHoldingSteeringWheel) == "function" and self:isHandHoldingSteeringWheel(hand) == true
+end
+
 -- Places one hand at its grip pose, or hides it; returns the hand's status for the diagnostics.
 local function updateHand(self, hand, unavailable)
     local entry = state.hands[hand]
@@ -447,7 +455,7 @@ local function updateHand(self, hand, unavailable)
     local status
     if unavailable ~= nil then
         status = "hidden (" .. unavailable .. ")"
-    elseif not self:isHandInUse(hand) then
+    elseif not self:isHandInUse(hand) and not holdsSteeringWheel(self, hand) then
         status = "hidden (Motion Controller not in use)"
     else
         local pose = self:getHandState(hand)
@@ -458,6 +466,13 @@ local function updateHand(self, hand, unavailable)
             local ok, why = self:headRelativePoseToWorld(pose.gripPoseX, pose.gripPoseY, pose.gripPoseZ,
                 pose.gripPoseQx, pose.gripPoseQy, pose.gripPoseQz, pose.gripPoseQw, world)
             if ok then
+                -- A hand holding the Steering Wheel is drawn pinned to the rim where it grabbed (Wheel Grab).
+                if type(self.getWheelGrabHandPose) == "function" then
+                    local x, y, z, qx, qy, qz, qw = self:getWheelGrabHandPose(hand)
+                    if x ~= nil then
+                        world.x, world.y, world.z, world.qx, world.qy, world.qz, world.qw = x, y, z, qx, qy, qz, qw
+                    end
+                end
                 engine("setWorldTranslation")(entry.holder, world.x, world.y, world.z)
                 engine("setWorldQuaternion")(entry.holder, world.qx, world.qy, world.qz, world.qw)
                 curlFingers(entry, pose)

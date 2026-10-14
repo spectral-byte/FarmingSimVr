@@ -33,6 +33,16 @@
 -- The game steers toward the value at a capped rate, so the node lags a fast hand; it is the node's actual rotation the
 -- hand has to follow, never the target.
 --
+-- THE PINNED HAND: at the grab the hand's grip pose (position and orientation) is stored in the LOCAL frame of the wheel
+-- node. While the hand holds, getWheelGrabHandPose(hand) carries it back to the world through the node's ACTUAL rotation
+-- (not the target), so the Virtual Hand turns with the wheel exactly as the game turns it, the steering rate lag shows as
+-- the hand staying on the wheel, and no angle is kept or wrapped. VRCompanionVirtualHands.lua draws the hand there. A hand
+-- whose real grip position is more than WHEEL_GRAB_PULL_AWAY_DISTANCE from its pinned point lets go.
+--
+-- HAPTICS: one short pulse in a hand when it grabs, one firmer pulse in every holding hand when the target reaches full
+-- lock (again only after the target has left the stop; a hand that grabs while another holds at the stop feels only its own
+-- grab), none on release.
+--
 -- AVAILABILITY (findSteeringWheel): the mod is on (`vrWheelGrab`, Motion Controllers on), the player is driving the
 -- controlled vehicle from its in-cab camera (not a passenger camera, not an Outside Camera), and the vehicle has a
 -- Steering Wheel and a setSteeringInput. When it stops being available every hold ends as if the grip were let go.
@@ -52,6 +62,11 @@
 --   VRCompanion:updateWheelGrab(dt)         once per update, called by updateMotionControllers after the hands are polled
 --   VRCompanion:isHandHoldingSteeringWheel(hand) -> boolean   the hand holds the Steering Wheel (as of the last update)
 --   VRCompanion:isSteeringWheelHeld() -> boolean              some hand does
+--   VRCompanion.WHEEL_GRAB_PULL_AWAY_DISTANCE               real grip position this far (m) from its pin lets go
+--   VRCompanion.WHEEL_GRAB_GRAB_PULSE_MS / _STRENGTH        the pulse in the hand that grabs
+--   VRCompanion.WHEEL_GRAB_FULL_LOCK_PULSE_MS / _STRENGTH   the pulse in every holding hand at full lock
+--   VRCompanion:getWheelGrabHandPose(hand) -> x, y, z, qx, qy, qz, qw   where a holding hand's Virtual Hand is drawn (world),
+--                                                             or nil when the hand does not hold
 --   VRCompanion:isWheelGrabAvailable() -> boolean, reason     whether a grab is possible now (as of the last update)
 --   VRCompanion:isWheelGrabSendingSteering() -> boolean       true only while Wheel Grab's own setSteeringInput call
 --                                                             runs: the way to tell it from every other device's call
@@ -64,6 +79,8 @@
 -- Hooks into the rest of the mod (each a single guarded call):
 --   MotionControllers  updateMotionControllers -> updateWheelGrab(dt), after the hands are polled; the saved setting, the
 --                      console commands and the reset chain through the Motion Controller functions of the same names
+--   VirtualHands       updateHand asks getWheelGrabHandPose(hand): a holding hand is drawn there, and stays shown however
+--                      long it is held still
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -86,6 +103,20 @@ VRCompanion.WHEEL_GRAB_GRIP_RELEASE = 0.3
 VRCompanion.WHEEL_GRAB_RING_INNER = 0.10
 VRCompanion.WHEEL_GRAB_RING_OUTER = 0.25
 VRCompanion.WHEEL_GRAB_RING_HALF_THICKNESS = 0.05
+
+-- PULL-AWAY: a holding hand's real grip position this far (m) from the point its Virtual Hand is pinned to ends the
+-- grab, as if the grip were let go: the player cannot steer from somewhere they obviously could not reach. The pinned hand
+-- lags the real one by a few cm while the game's steering catches up with a quick turn; 20 cm is well past that, yet short
+-- of walking away from the cab. Tune in the headset: `vrWheelGrabDiagnostics` reports each hand's distance to its pin.
+VRCompanion.WHEEL_GRAB_PULL_AWAY_DISTANCE = 0.20
+
+-- HAPTICS (milliseconds, strength 0..1): a short pulse in the hand that grabs, a firmer, longer one in every holding
+-- hand when the target reaches full lock. Nothing on release and no continuous rumble. For scale, the Pointer Hand's
+-- Click Point select is 25 ms at 0.25 and a click is 45 ms at 0.6 (VRCompanionMotionControllers.lua).
+VRCompanion.WHEEL_GRAB_GRAB_PULSE_MS = 30
+VRCompanion.WHEEL_GRAB_GRAB_PULSE_STRENGTH = 0.4
+VRCompanion.WHEEL_GRAB_FULL_LOCK_PULSE_MS = 70
+VRCompanion.WHEEL_GRAB_FULL_LOCK_PULSE_STRENGTH = 0.8
 
 local HANDS = { 0, 1 }
 local HAND_NAMES = { [0] = "left", [1] = "right" }
@@ -268,7 +299,63 @@ end
 -- ---- The update ------------------------------------------------------------------------------------------------------
 
 local function releaseHand(hand)
-    state.hands[hand].holding = false
+    local entry = state.hands[hand]
+    entry.holding = false
+    entry.pin = nil
+end
+
+-- Stores the hand's grip pose, which measureHand has just left in state.scratch (world), in the local frame of the wheel
+-- node: the point the Virtual Hand is pinned to. Without the engine's node functions the hand is not pinned and is drawn
+-- at its grip pose as usual.
+local function pinHand(hand, wheel)
+    local entry = state.hands[hand]
+    entry.pin = nil
+    local worldToLocal, getWorldQuaternion = engine("worldToLocal"), engine("getWorldQuaternion")
+    if type(worldToLocal) ~= "function" or type(getWorldQuaternion) ~= "function" then return end
+    local world = state.scratch
+    local ok, lx, ly, lz, nx, ny, nz, nw = pcall(function()
+        local x, y, z = worldToLocal(wheel.node, world.x, world.y, world.z)
+        local qx, qy, qz, qw = getWorldQuaternion(wheel.node)
+        return x, y, z, qx, qy, qz, qw
+    end)
+    if not ok or type(lx) ~= "number" then return end
+    -- the grip's rotation in the node's frame: the inverse of the node's world rotation, then the grip's
+    local qx, qy, qz, qw = VRCompanion.multiplyQuaternions(-nx, -ny, -nz, nw, world.qx, world.qy, world.qz, world.qw)
+    entry.pin = { node = wheel.node, x = lx, y = ly, z = lz, qx = qx, qy = qy, qz = qz, qw = qw }
+end
+
+-- Where a pin is in the world right now, carried through the wheel node's actual rotation: x, y, z, qx, qy, qz, qw, or
+-- nil when the engine cannot say.
+local function pinInTheWorld(pin)
+    local localToWorld, getWorldQuaternion = engine("localToWorld"), engine("getWorldQuaternion")
+    if pin == nil or type(localToWorld) ~= "function" or type(getWorldQuaternion) ~= "function" then return nil end
+    local ok, x, y, z, nx, ny, nz, nw = pcall(function()
+        local px, py, pz = localToWorld(pin.node, pin.x, pin.y, pin.z)
+        local qx, qy, qz, qw = getWorldQuaternion(pin.node)
+        return px, py, pz, qx, qy, qz, qw
+    end)
+    if not ok or type(x) ~= "number" then return nil end
+    local qx, qy, qz, qw = VRCompanion.multiplyQuaternions(nx, ny, nz, nw, pin.qx, pin.qy, pin.qz, pin.qw)
+    return x, y, z, qx, qy, qz, qw
+end
+
+-- How far the hand just measured (measureHand leaves its grip position in state.scratch) is from its pinned point, or nil
+-- when the hand is not pinned.
+local function distanceToPin(hand)
+    local x, y, z = pinInTheWorld(state.hands[hand].pin)
+    if x == nil then return nil end
+    local world = state.scratch
+    local dx, dy, dz = world.x - x, world.y - y, world.z - z
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+-- Vibrates one hand (never the other). Nothing happens while Motion Controllers are off, or when the Injector has no
+-- haptics call or the runtime refuses it.
+local function pulseHand(self, hand, durationMs, strength)
+    if self.motionControllersEnabled == false then return end
+    local bridge = VRBridge or engine("VRBridge")
+    if bridge == nil or type(bridge.pulseHaptic) ~= "function" then return end
+    pcall(bridge.pulseHaptic, hand, durationMs, strength)
 end
 
 local function anyHolding()
@@ -312,6 +399,7 @@ function VRCompanion:updateWheelGrab(dt)
     if wheel == nil then return end
 
     -- Every holding hand's turn since the last update is counted; a hand that grabs now counts as holding with no turn.
+    local wasAtFullLock = state.atFullLock
     local sum, count = 0, 0
     for _, hand in ipairs(HANDS) do
         local entry = state.hands[hand]
@@ -321,9 +409,14 @@ function VRCompanion:updateWheelGrab(dt)
             if angle == nil then
                 releaseHand(hand)  -- the hand can no longer be located
             else
-                sum = sum + wrapAngle(angle - entry.angle)
-                count = count + 1
-                entry.angle = angle
+                local away = distanceToPin(hand)
+                if away ~= nil and away > self.WHEEL_GRAB_PULL_AWAY_DISTANCE then
+                    releaseHand(hand)  -- pulled away from the wheel with the grip still squeezed: as if let go
+                else
+                    sum = sum + wrapAngle(angle - entry.angle)
+                    count = count + 1
+                    entry.angle = angle
+                end
             end
         elseif entry.pressed and self:isHandInUse(hand) then
             local angle, radial, axial = measureHand(self, hand, wheel)
@@ -335,6 +428,8 @@ function VRCompanion:updateWheelGrab(dt)
                 end
                 entry.holding = true
                 entry.angle = angle
+                pinHand(hand, wheel)
+                pulseHand(self, hand, self.WHEEL_GRAB_GRAB_PULSE_MS, self.WHEEL_GRAB_GRAB_PULSE_STRENGTH)
                 count = count + 1
             end
         end
@@ -347,6 +442,14 @@ function VRCompanion:updateWheelGrab(dt)
     local low, high = angleLimits(vehicle, wheel, direction)
     state.target = math.max(low, math.min(high, state.target + sum / count))
     state.atFullLock = state.target <= low or state.target >= high
+    if state.atFullLock and not wasAtFullLock then
+        -- The target reached a stop: every holding hand feels it, once, until the target has left the stop again.
+        for _, hand in ipairs(HANDS) do
+            if state.hands[hand].holding then
+                pulseHand(self, hand, self.WHEEL_GRAB_FULL_LOCK_PULSE_MS, self.WHEEL_GRAB_FULL_LOCK_PULSE_STRENGTH)
+            end
+        end
+    end
     local value = steeringValue(vehicle, wheel, direction, state.target)
     state.sent = value
     if value ~= nil then sendSteering(vehicle, value) end
@@ -355,6 +458,14 @@ end
 function VRCompanion:isHandHoldingSteeringWheel(hand)
     local entry = state.hands[hand]
     return entry ~= nil and entry.holding
+end
+
+-- Where the hand's Virtual Hand is drawn while the hand holds: x, y, z (world) and qx, qy, qz, qw (unit world rotation).
+-- nil for a hand that does not hold, and for one the engine cannot place (it is then drawn at its grip pose).
+function VRCompanion:getWheelGrabHandPose(hand)
+    local entry = state.hands[hand]
+    if entry == nil or not entry.holding then return nil end
+    return pinInTheWorld(entry.pin)
 end
 
 function VRCompanion:isSteeringWheelHeld()
@@ -442,6 +553,12 @@ local function describeHand(self, hand, wheel)
             local distance = ringDistance(self, radial, axial)
             where = distance == 0 and "inside the ring" or string.format("%.2f m from the ring", distance)
             detail = string.format(" (%.2f m from the axis, %.2f m from the plane)", radial, axial)
+            -- A holding hand also says how far its real grip position is from the point its Virtual Hand is pinned to:
+            -- the number the pull-away distance is tuned by.
+            local away = state.hands[hand].holding and distanceToPin(hand) or nil
+            if away ~= nil then
+                detail = detail .. string.format(", %.2f m from its pinned point", away)
+            end
         end
     end
     local name = (HAND_NAMES[hand]:gsub("^%l", string.upper))
