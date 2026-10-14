@@ -414,22 +414,17 @@ TEST_F(VirtualGamepadTest, ItReportsAnOrdinaryGamepadWithFullRangeInputsAndOnlyI
     }
 }
 
-TEST_F(VirtualGamepadTest, ItIsOffByDefaultAndTheGameSeesNoPadUntilThePlayerTurnsItOn) {
+TEST_F(VirtualGamepadTest, ItIsOnByDefaultAndTheGameSeesThePadWithoutThePlayerTurningItOn) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
     Hold(kRight, Trigger(1.0f));
 
-    XINPUT_STATE state{};
-    for (DWORD slot = 0; slot < 4; ++slot) {
-        EXPECT_EQ(Pad().GetState(slot, &state), static_cast<DWORD>(ERROR_DEVICE_NOT_CONNECTED)) << "slot " << slot;
-    }
-    EXPECT_EQ(EvalLua(L, "select(1, VRBridge.getVirtualGamepad())"), "false");
-    EXPECT_FALSE(Pad().AreHooksInstalled());
-    for (const std::string& line : s_capturedLogs) {
-        EXPECT_EQ(line.find("Virtual Gamepad:"), std::string::npos) << "a player who never turned it on reads nothing: " << line;
-    }
-
-    TurnOn();
     EXPECT_EQ(Read().Gamepad.bRightTrigger, 255);
+    EXPECT_EQ(EvalLua(L, "select(1, VRBridge.getVirtualGamepad())"), "true");
+    bool appeared = false;
+    for (const std::string& line : s_capturedLogs) {
+        if (line.find("Virtual Gamepad: present in XInput slot 3") != std::string::npos) appeared = true;
+    }
+    EXPECT_TRUE(appeared) << "the game log says it appeared and where";
 }
 
 TEST_F(VirtualGamepadTest, TurningItOffRemovesThePadFromTheGameAgain) {
@@ -529,9 +524,8 @@ TEST_F(VirtualGamepadTest, ThereIsNoPadWithoutAnOpenXrSessionAndNoPadWhenTheRunt
 }
 
 TEST_F(VirtualGamepadTest, ThePadTakesTheHighestSlotNoRealPadOccupiesSoARealPadKeepsTheFirstOne) {
+    Pad().SetRealPadProbeForTesting([](DWORD slot) { return slot == 0 || slot == 3; });  // before the pad appears
     ASSERT_NO_FATAL_FAILURE(StartMod());
-    Pad().SetRealPadProbeForTesting([](DWORD slot) { return slot == 0 || slot == 3; });
-    TurnOn();
 
     EXPECT_EQ(EvalLua(L, "select(2, VRBridge.getVirtualGamepad())"), "2");
     EXPECT_EQ(Read(2).dwPacketNumber, 0u);
@@ -541,9 +535,8 @@ TEST_F(VirtualGamepadTest, ThePadTakesTheHighestSlotNoRealPadOccupiesSoARealPadK
 }
 
 TEST_F(VirtualGamepadTest, WithAllFourSlotsTakenByRealPadsThereIsNoPadAndTheLogSaysSoOnce) {
+    Pad().SetRealPadProbeForTesting([](DWORD) { return true; });  // before the pad appears
     ASSERT_NO_FATAL_FAILURE(StartMod());
-    Pad().SetRealPadProbeForTesting([](DWORD) { return true; });
-    TurnOn();
     for (int i = 0; i < 5; ++i) NextFrame(&headset);
 
     XINPUT_STATE state{};
@@ -566,9 +559,6 @@ TEST_F(VirtualGamepadTest, WithAllFourSlotsTakenByRealPadsThereIsNoPadAndTheLogS
 
 TEST_F(VirtualGamepadTest, TheGameLogAndTheStatusCommandSayWhetherThePadIsThereAndInWhichSlot) {
     ASSERT_NO_FATAL_FAILURE(StartMod());
-    EXPECT_NE(Command("'vrMotionControllerStatus'").find("Virtual Gamepad: not present (off)"), std::string::npos);
-
-    TurnOn();
     bool appeared = false;
     for (const std::string& line : s_capturedLogs) {
         if (line.find("Virtual Gamepad: present in XInput slot 3") != std::string::npos) appeared = true;

@@ -59,20 +59,22 @@ protected:
     std::unique_ptr<fs25vr::VRBridge> bridgeOwner = std::make_unique<fs25vr::VRBridge>(headset.manager, nullptr);
 
     // Starts the Companion Mod over the headset with the game's bindings as `bindings` (Lua options for StubInput.install)
-    // and the settings file as `settingsFile` (Lua that fills savedXml: what an earlier game session left), then turns the
-    // Virtual Gamepad on and lets a few frames run.
+    // and the settings file as `settingsFile` (Lua that fills savedXml: what an earlier game session left), and lets a few
+    // frames run. The Virtual Gamepad is on out of the box; with `turnOn` false the settings file has the player's `off`
+    // saved, for a test that turns it on itself.
     void StartGame(const std::string& bindings = "{}", const std::string& settingsFile = "", bool turnOn = true) {
         ASSERT_TRUE(bridgeOwner->Inject(L));
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
         ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
         ASSERT_EQ(RunLuauChunk(L, kXmlStubs, "=xmlStubs"), 0);
         ASSERT_EQ(RunLuauChunk(L, settingsFile, "=settingsFile"), 0);
+        if (!turnOn) ASSERT_EQ(RunLuauChunk(L, "savedXml['vrSettings.virtualGamepad'] = false", "=padSavedOff"), 0);
         ASSERT_EQ(RunLuauChunk(L, kStubInputBinding, "=inputBindingStub"), 0);
         ASSERT_EQ(RunLuauChunk(L, "StubInput.install(" + bindings + ")", "=installBindings"), 0);
         ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
         SetGameTime(10000);
         NextFrame(&headset);
-        if (turnOn) TurnOn();
+        if (turnOn) Frames(5);
     }
 
     void Frames(int count) {

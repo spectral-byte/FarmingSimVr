@@ -101,10 +101,9 @@
 --     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
 --                 setting rides on save/loadMotionControllerSettings, the status command ends with the pad's state and
 --                 the console command registers next to the others (VRCompanionVirtualGamepad.lua, ADR-0028)
---     ControllerMap (VRCompanionMotionControllerMap.lua) is driven from here: updateMotionControllers ->
---                 processMotionControllerButtons(), and the save/load/register/reset functions below call its
---                 saveMotionControllerMapSettings / loadMotionControllerMapSettings / registerMotionControllerMapConsoleCommands /
---                 unregisterMotionControllerMapConsoleCommands
+--     The buttons, triggers and thumbsticks do nothing here beyond the uses above (pointing, Click Points, menus, Wheel Grab):
+--                 Snap Turn, the Recenter Action and the HUD Toggle Action from the Motion Controllers arrive only as game actions
+--                 bound on the Virtual Gamepad (ADR-0028). The old button mapping and its settings are gone.
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -381,7 +380,6 @@ function VRCompanion:updateMotionControllers(dt)
             clearHands()
             state.ignoredCleared = true
         end
-        if type(self.resetMotionControllerButtons) == "function" then self:resetMotionControllerButtons() end
         if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end  -- lets go of the Steering Wheel
         settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
@@ -461,7 +459,6 @@ function VRCompanion:updateMotionControllers(dt)
     if state.pointerHand ~= nil and state.movedThisUpdate[state.pointerHand] then
         self:notePointerRayMoved()
     end
-    if type(self.processMotionControllerButtons) == "function" then self:processMotionControllerButtons() end
     self:updatePointerRay(dt)
     updatePointerUsers(self, dt)
 end
@@ -832,7 +829,6 @@ function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
     end
     self:savePointerConeSetting(xmlFile, xml)
     if type(self.saveWheelGrabSetting) == "function" then self:saveWheelGrabSetting(xmlFile, xml) end
-    if type(self.saveMotionControllerMapSettings) == "function" then self:saveMotionControllerMapSettings(xmlFile, xml) end
     if type(self.saveVirtualGamepadSetting) == "function" then self:saveVirtualGamepadSetting(xmlFile, xml) end
 end
 
@@ -852,7 +848,6 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
     end
     self:loadPointerConeSetting(xmlFile, xml)
     if type(self.loadWheelGrabSetting) == "function" then self:loadWheelGrabSetting(xmlFile, xml) end
-    if type(self.loadMotionControllerMapSettings) == "function" then self:loadMotionControllerMapSettings(xmlFile, xml) end
     if type(self.loadVirtualGamepadSetting) == "function" then self:loadVirtualGamepadSetting(xmlFile, xml) end
 end
 
@@ -993,7 +988,6 @@ function VRCompanion:registerMotionControllerConsoleCommands()
     addConsoleCommand("vrPointerCone", "How wide (degrees) the cone around the Pointer Ray is inside which the nearest Click Point is selected (saved): vrPointerCone [degrees]", "consoleCommandSetPointerCone", self)
     if type(self.registerVirtualHandsConsoleCommands) == "function" then self:registerVirtualHandsConsoleCommands() end
     if type(self.registerWheelGrabConsoleCommands) == "function" then self:registerWheelGrabConsoleCommands() end
-    if type(self.registerMotionControllerMapConsoleCommands) == "function" then self:registerMotionControllerMapConsoleCommands() end
     if type(self.registerVirtualGamepadConsoleCommands) == "function" then self:registerVirtualGamepadConsoleCommands() end
 end
 
@@ -1021,7 +1015,6 @@ function VRCompanion:resetMotionControllers()
     state = newState()
     initHands()
     self.pointerHand = nil
-    if type(self.unregisterMotionControllerMapConsoleCommands) == "function" then self:unregisterMotionControllerMapConsoleCommands() end
 end
 -- Export to MotionControllers subsystem table
 VRCompanion.MotionControllers.getHandState = function(self, ...) return VRCompanion.getHandState(VRCompanion, ...) end

@@ -399,28 +399,32 @@ TEST_F(CompanionModTest, TheStatusCommandReportsEachHandsTrackedAndInUseStateAnd
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_NO_FATAL_FAILURE(StartMod(L, headset, bridge));
     SetGameTime(10000);
+    // The status command ends with the Virtual Gamepad's state (test_virtual_gamepad.cpp); this test is about the hands.
+    auto HandsPartOfStatus = [&] {
+        return EvalLua(L, "(runCommand('vrMotionControllerStatus'):gsub(' | Virtual Gamepad:.*', ''))");
+    };
     headset.SetHandPose(kLeft, HandAt(-0.30f, 1.10f, -0.35f), /*tracked=*/false);
     headset.SetHandPose(kRight, HandAt(0.30f, 1.20f, -0.40f));
     NextFrame(&headset);
-    EXPECT_EQ(EvalLua(L, "runCommand('vrMotionControllerStatus')"),
-              "Motion Controllers: on | Left: not tracked, not in use | Right: tracked, not in use | Pointer Hand: none | Virtual Gamepad: not present (off)");
+    EXPECT_EQ(HandsPartOfStatus(),
+              "Motion Controllers: on | Left: not tracked, not in use | Right: tracked, not in use | Pointer Hand: none");
 
     headset.SetHandPose(kRight, HandAt(0.40f, 1.20f, -0.40f));
     NextFrame(&headset);
-    EXPECT_EQ(EvalLua(L, "runCommand('vrMotionControllerStatus')"),
-              "Motion Controllers: on | Left: not tracked, not in use | Right: tracked, in use | Pointer Hand: right | Virtual Gamepad: not present (off)");
+    EXPECT_EQ(HandsPartOfStatus(),
+              "Motion Controllers: on | Left: not tracked, not in use | Right: tracked, in use | Pointer Hand: right");
 
     headset.SetHandPose(kLeft, HandAt(-0.30f, 1.10f, -0.35f));
     NextFrame(&headset);
     headset.SetHandPose(kLeft, HandAt(-0.20f, 1.10f, -0.35f));
     NextFrame(&headset);
-    EXPECT_EQ(EvalLua(L, "runCommand('vrMotionControllerStatus')"),
-              "Motion Controllers: on | Left: tracked, in use | Right: tracked, in use | Pointer Hand: right | Virtual Gamepad: not present (off)");
+    EXPECT_EQ(HandsPartOfStatus(),
+              "Motion Controllers: on | Left: tracked, in use | Right: tracked, in use | Pointer Hand: right");
 
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrMotionControllers', 'off')", "=off"), 0);
     NextFrame(&headset);
-    EXPECT_EQ(EvalLua(L, "runCommand('vrMotionControllerStatus')"),
-              "Motion Controllers: off (Motion Controller input is ignored) | Left: ignored | Right: ignored | Pointer Hand: none | Virtual Gamepad: not present (off)");
+    EXPECT_EQ(HandsPartOfStatus(),
+              "Motion Controllers: off (Motion Controller input is ignored) | Left: ignored | Right: ignored | Pointer Hand: none");
 }
 
 // ---- Nothing to track ----

@@ -18,7 +18,7 @@
 --   VRBridge.setVirtualGamepadUse(leftInputs, rightInputs)   which inputs of each hand the Companion Mod is using itself
 --                                                    (bit set, see INPUT_BITS below); sent every update
 --
---   VRCompanion.virtualGamepadEnabled  boolean, default false (the last ticket of spec #98 turns it on), saved
+--   VRCompanion.virtualGamepadEnabled  boolean, default true, saved
 --                                      (`vrVirtualGamepad on|off`).
 --   VRCompanion:getVirtualGamepadStatus() -> string  one phrase for the status command
 --
@@ -73,7 +73,7 @@ VRCompanion = VRCompanion or {}
 VRCompanion.VirtualGamepad = VRCompanion.VirtualGamepad or {}
 
 -- vrVirtualGamepad on|off: saved. Off removes the pad from the game altogether.
-VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_ENABLED = false
+VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_ENABLED = true
 VRCompanion.virtualGamepadEnabled = VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_ENABLED
 
 -- Set once the VR-comfort default bindings have been written to the Virtual Gamepad and saved. Saved: never rewrites again.

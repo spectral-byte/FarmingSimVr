@@ -224,7 +224,9 @@ TEST_F(VirtualGamepadRumbleTest, VibrationWhileMotionControllersAreOffReachesNoH
 }
 
 TEST_F(VirtualGamepadRumbleTest, VibrationWithoutTheVirtualGamepadReachesNoHand) {
-    // The pad is off until the player turns it on: the game's call for any slot goes to the real devices.
+    // The player turned the pad off: the game's call for any slot goes to the real devices.
+    EvalLua(L, "runCommand('vrVirtualGamepad', 'off')");
+    NextFrame(&headset);
     EXPECT_EQ(GameRumbles(kFull, kFull), static_cast<DWORD>(ERROR_DEVICE_NOT_CONNECTED));
     for (int i = 0; i < 3; ++i) Frame();
     EXPECT_TRUE(headset.HapticPulses().empty());

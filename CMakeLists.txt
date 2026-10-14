@@ -211,7 +211,7 @@ add_executable(fs25_vr_tests
     tests/test_menu_pointer_panel.cpp
     tests/test_menu_pointer.cpp
     tests/test_pointer_hand_switch.cpp
-    tests/test_motion_controller_button_mappings.cpp
+    tests/test_virtual_gamepad_buttons.cpp
     tests/test_menu_scroll_back.cpp
     tests/test_wheel_grab_steering_wrap.cpp
     tests/test_wheel_grab.cpp

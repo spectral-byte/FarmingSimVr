@@ -34,10 +34,8 @@
 --     and slider elements read the wheel by polling Input.isMouseButtonPressed while handling a mouse
 --     event, so the module sends g_gui:mouseEvent(x, y, true, false, wheel button) with that poll
 --     answering "pressed" for that one call (see sendWheel; the original is restored after).
---   * Snap Turn is off in menus (VRCompanion:snapTurn refuses). A world action the player mapped onto
---     the lower face button (vrMotionControllerMap) yields to back while a menu shows (MotionControllerMap).
---
--- Button mappings of the world actions are in VRCompanionMotionControllerMap.lua.
+--   * Snap Turn is off in menus (VRCompanion:snapTurn refuses). The Virtual Gamepad reads neutral while a menu
+--     shows (VRCompanionVirtualGamepad.lua), so a game action bound on one of these inputs yields to them.
 --
 -- PUBLIC SURFACE
 --   VRCompanion.MENU_BACK_PRESS / MENU_BACK_RELEASE                      grip thresholds (0..1)

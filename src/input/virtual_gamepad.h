@@ -102,8 +102,8 @@ private:
     static constexpr double kRumblePulseMs = 50.0;
 
     // The right-stick D-pad chord (ADR-0028): with the right stick click held, a push of that stick is the D-pad
-    // and the stick reads centred. The thresholds are the ones the Snap Turn push used (the Companion Mod's
-    // VRCompanion.MOTION_CONTROLLER_STICK_ENGAGE / _RELEASE, 0.7 / 0.4).
+    // and the stick reads centred. The thresholds are the ones the Companion Mod's own Snap Turn push used before
+    // that mapping was removed (0.7 / 0.4).
     static constexpr float kStickEngage = 0.7f;
     static constexpr float kStickRelease = 0.4f;
 

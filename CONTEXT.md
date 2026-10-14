@@ -145,7 +145,7 @@ A tracked handheld VR input device, one per hand. The player may set it down at 
 _Avoid_: VR controller, wand, hand controller, controller (in the Interactive Control mod a "controller" is a switch or lever)
 
 **Virtual Gamepad**:
-The Xbox-style gamepad the game sees in place of the Motion Controllers' triggers, grips, thumbsticks and buttons, so that every one of them is bound in the game's own Controls screen like any gamepad. Each physical control on each hand is its own gamepad input; a binding stays with the physical hand, never with the Pointer Hand. Hand poses never go through it. While the mod itself is using an input (a menu is showing, the Pointer Ray is on a Click Point, a Virtual Hand is holding the Steering Wheel), that input reads as released on it, except that an input already held when that use begins keeps its binding until it is let go.
+The Xbox-style gamepad the game sees in place of the Motion Controllers' triggers, grips, thumbsticks and buttons, so that every one of them is bound in the game's own Controls screen like any gamepad. Each physical control on each hand is its own gamepad input; a binding stays with the physical hand, never with the Pointer Hand. Hand poses never go through it. While the mod itself is using an input (a menu is showing, the Pointer Ray is on a Click Point, a Virtual Hand is holding the Steering Wheel), that input reads as released on it, except that an input already held when that use begins keeps its binding until it is let go. It is on by default; the player can turn it off, and the Motion Controllers then bind nothing.
 _Avoid_: Emulated controller, fake pad, XInput pad, virtual controller
 
 **Wheel Peripheral**:
