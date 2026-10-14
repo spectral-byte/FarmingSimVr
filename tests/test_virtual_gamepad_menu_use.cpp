@@ -93,14 +93,15 @@ FakeOpenXrControllers::Inputs Stick(float x, float y) {
     return inputs;
 }
 
-// Every control of a hand at once.
-FakeOpenXrControllers::Inputs Everything() {
+// Every control of a hand at once. (The right stick click is also the D-pad chord and reports RS on release, so a test that wants a quiet
+// pad after letting go leaves it out.)
+FakeOpenXrControllers::Inputs Everything(bool stickClick = true) {
     FakeOpenXrControllers::Inputs inputs;
     inputs.trigger = 1.0f;
     inputs.grip = 1.0f;
     inputs.thumbX = 1.0f;
     inputs.thumbY = 1.0f;
-    inputs.thumbClick = true;
+    inputs.thumbClick = stickClick;
     inputs.buttonLower = true;
     inputs.buttonUpper = true;
     inputs.menu = true;
@@ -163,7 +164,7 @@ TEST_F(VirtualGamepadMenuUseTest, WhileAMenuShowsTheWholePadReadsNeutralOnBothHa
 
     // No menu: everything reaches the pad.
     headset.SetHandInputs(kLeft, Everything());
-    headset.SetHandInputs(kRight, Everything());
+    headset.SetHandInputs(kRight, Everything(false));
     NextFrame(&headset);
     ASSERT_FALSE(IsNeutral(Pad())) << "outside menus the pad carries the Motion Controllers";
     Release(kLeft);
@@ -296,7 +297,7 @@ TEST_F(CompanionModTest, TheInputsTheCompanionModSaysItIsUsingReadReleasedOnTheP
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(RunLuauChunk(L, "VRBridge.setVirtualGamepad(true, true)", "=padOn"), 0);
     headset.SetHandInputs(kLeft, Everything());
-    headset.SetHandInputs(kRight, Everything());
+    headset.SetHandInputs(kRight, Everything(false));
     headset.NextFrame();
     const auto read = [&] {
         XINPUT_STATE state{};
@@ -304,12 +305,12 @@ TEST_F(CompanionModTest, TheInputsTheCompanionModSaysItIsUsingReadReleasedOnTheP
         return state.Gamepad;
     };
     const WORD all = XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER | XINPUT_GAMEPAD_LEFT_THUMB |
-                     XINPUT_GAMEPAD_RIGHT_THUMB | XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_X |
+                     XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_X |
                      XINPUT_GAMEPAD_Y | XINPUT_GAMEPAD_START;
     ASSERT_EQ(read().wButtons, all);
 
     // Bits: 1 trigger, 2 grip, 4 thumbstick, 8 thumbstick click, 16 lower, 32 upper, 64 menu.
-    ASSERT_EQ(RunLuauChunk(L, "VRBridge.setVirtualGamepadUse(1 + 2, 4 + 8)", "=use"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRBridge.setVirtualGamepadUse(1 + 2 + 8, 4)", "=use"), 0);
     XINPUT_GAMEPAD pad = read();
     EXPECT_EQ(pad.bLeftTrigger, 0);
     EXPECT_EQ(pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER, 0);
@@ -317,9 +318,8 @@ TEST_F(CompanionModTest, TheInputsTheCompanionModSaysItIsUsingReadReleasedOnTheP
     EXPECT_NE(pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER, 0);
     EXPECT_EQ(pad.sThumbRX, 0);
     EXPECT_EQ(pad.sThumbRY, 0);
-    EXPECT_EQ(pad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB, 0);
-    EXPECT_EQ(pad.sThumbLX, 32767) << "the left thumbstick is not in use";
-    EXPECT_NE(pad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB, 0);
+    EXPECT_EQ(pad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB, 0) << "the left thumbstick click is in use";
+    EXPECT_EQ(pad.sThumbLX, 32767) << "the left thumbstick is not";
     EXPECT_NE(pad.wButtons & (XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_X | XINPUT_GAMEPAD_Y | XINPUT_GAMEPAD_START), 0);
 
     ASSERT_EQ(RunLuauChunk(L, "VRBridge.setVirtualGamepadUse(16 + 32 + 64, 16 + 32 + 64)", "=buttons"), 0);
