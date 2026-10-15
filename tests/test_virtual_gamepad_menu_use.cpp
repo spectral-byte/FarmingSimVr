@@ -58,6 +58,18 @@ constexpr const char* kGuiStubs = R"luau(
             table.insert(_G.backs, { action = action, value = value })
         end,
     }
+    -- The pause menu as measured in the game: while it shows, g_gui.currentGuiName is "InGameMenu" and
+    -- g_inGameMenu.currentPage is the page object whose id says which page ("pageSettings" holds the Controls screen).
+    _G.g_inGameMenu = {
+        pageSettings = { id = "pageSettings", name = "ingameMenuSettings" },
+        pageMapOverview = { id = "pageMapOverview", name = "ingameMenuMapOverview" },
+        pageSave = { id = "pageSave", name = "ingameMenuSave" },
+    }
+    _G.showPausePage = function(pageName)
+        g_gui.visible = true
+        g_gui.currentGuiName = "InGameMenu"
+        g_inGameMenu.currentPage = g_inGameMenu[pageName]
+    end
 )luau";
 
 HeadPose PoseAt(float x, float y, float z) {
@@ -131,6 +143,11 @@ protected:
     }
 
     void OpenMenu() { ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=openMenu"), 0); NextFrame(&headset); }
+    // The pause menu showing one of its pages (g_inGameMenu field name: "pageSettings", "pageMapOverview", "pageSave").
+    void ShowPausePage(const char* page) {
+        ASSERT_EQ(RunLuauChunk(L, (std::string("showPausePage('") + page + "')").c_str(), "=showPausePage"), 0);
+        NextFrame(&headset);
+    }
     void CloseMenu() { ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenu"), 0); NextFrame(&headset); }
 
     void Hold(uint32_t hand, const FakeOpenXrControllers::Inputs& inputs) {
@@ -263,6 +280,117 @@ TEST_F(VirtualGamepadMenuUseTest, AnInputThePlayerPressedInTheMenuStaysOffThePad
     Release(kRight);
     Hold(kRight, Grip(1.0f));
     EXPECT_NE(Pad().wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER, 0) << "pressed afresh outside the menu it is the pad's again";
+}
+
+// ---- The pause menu's Settings page (the Controls screen is a sub-page of it): the player must be able to bind the pad ----
+
+TEST_F(VirtualGamepadMenuUseTest, OnThePauseMenusSettingsPageTheMotionControllersReachThePadSoTheyCanBeBoundInTheControlsScreen) {
+    StartWithPadOn();
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_NO_FATAL_FAILURE(ShowPausePage("pageSettings"));
+
+    headset.SetHandInputs(kLeft, Everything());
+    headset.SetHandInputs(kRight, Everything(false));
+    NextFrame(&headset);
+    const XINPUT_GAMEPAD pad = Pad();
+    EXPECT_EQ(pad.bLeftTrigger, 255) << "the pad is not neutral here: the game's binding capture needs its inputs";
+    EXPECT_EQ(pad.bRightTrigger, 255);
+    EXPECT_NE(pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER, 0);
+    EXPECT_NE(pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER, 0);
+    EXPECT_NE(pad.wButtons & XINPUT_GAMEPAD_A, 0);
+    EXPECT_NE(pad.wButtons & XINPUT_GAMEPAD_START, 0);
+    EXPECT_NE(pad.sThumbLX, 0);
+    EXPECT_NE(pad.sThumbRX, 0);
+    EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerStatus')").find("the Companion Mod is using: none"), std::string::npos)
+        << EvalLua(L, "runCommand('vrMotionControllerStatus')");
+}
+
+TEST_F(VirtualGamepadMenuUseTest, OnTheSettingsPageThePointerRayMenuStillWorksAndItsTriggerClickAlsoReachesTheGameAsRT) {
+    StartWithPadOn();
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_NO_FATAL_FAILURE(ShowPausePage("pageSettings"));
+
+    Hold(kRight, Trigger(1.0f));
+    EXPECT_EQ(Clicks(), 1) << "the Pointer Hand's trigger still clicks at the cursor";
+    EXPECT_EQ(Pad().bRightTrigger, 255) << "the documented trade-off: the click is also RT on the pad";
+    Release(kRight);
+
+    Hold(kRight, Grip(1.0f));
+    EXPECT_EQ(Backs(), 1) << "the grip still goes back";
+}
+
+TEST_F(VirtualGamepadMenuUseTest, EveryOtherPausePageKeepsThePadNeutral) {
+    StartWithPadOn();
+    ASSERT_FALSE(HasFatalFailure());
+    for (const char* page : { "pageMapOverview", "pageSave" }) {
+        ASSERT_NO_FATAL_FAILURE(ShowPausePage(page));
+        Hold(kLeft, Everything());
+        Hold(kRight, Everything());
+        EXPECT_TRUE(IsNeutral(Pad())) << page;
+        Release(kLeft);
+        Release(kRight);
+    }
+}
+
+TEST_F(VirtualGamepadMenuUseTest, MovingFromAnotherPageToSettingsAKeptInputStaysOffThePadUntilLetGoAndThenItIsThePads) {
+    StartWithPadOn();
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_NO_FATAL_FAILURE(ShowPausePage("pageMapOverview"));
+
+    Hold(kRight, Trigger(1.0f));   // the menu's click
+    ASSERT_EQ(Pad().bRightTrigger, 0);
+    ASSERT_NO_FATAL_FAILURE(ShowPausePage("pageSettings"));
+    EXPECT_EQ(Pad().bRightTrigger, 0) << "taken by the menu, it does not fire a binding as the page changes";
+    Release(kRight);
+    Hold(kRight, Trigger(1.0f));
+    EXPECT_EQ(Pad().bRightTrigger, 255) << "pressed afresh on the Settings page it is the pad's";
+}
+
+TEST_F(VirtualGamepadMenuUseTest, MovingFromSettingsToAnotherPageAnInputHeldOnTheSettingsPageKeepsItsBindingUntilLetGo) {
+    StartWithPadOn();
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_NO_FATAL_FAILURE(ShowPausePage("pageSettings"));
+
+    Hold(kRight, Trigger(1.0f));
+    ASSERT_EQ(Pad().bRightTrigger, 255);
+    ASSERT_NO_FATAL_FAILURE(ShowPausePage("pageSave"));
+    EXPECT_EQ(Pad().bRightTrigger, 255) << "already held when the menu use began, so it keeps its binding";
+    Hold(kLeft, Grip(1.0f));
+    EXPECT_EQ(Pad().wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER, 0) << "while anything pressed there is the menu's";
+    Release(kRight);
+    EXPECT_EQ(Pad().bRightTrigger, 0);
+    Hold(kRight, Trigger(1.0f));
+    EXPECT_EQ(Pad().bRightTrigger, 0) << "pulled afresh on the other page it is the menu's click";
+}
+
+TEST_F(VirtualGamepadMenuUseTest, LeavingTheSettingsPageForTheGameGivesTheSamePadAsAnyOtherTime) {
+    StartWithPadOn();
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_NO_FATAL_FAILURE(ShowPausePage("pageSettings"));
+    CloseMenu();
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.currentGuiName = ''", "=guiGone"), 0);
+    Hold(kRight, Trigger(1.0f));
+    EXPECT_EQ(Pad().bRightTrigger, 255);
+}
+
+TEST_F(VirtualGamepadMenuUseTest, WithoutTheInGameMenuOrAPageTheMenuIsTreatedAsAnyOtherAndNothingRaises) {
+    StartWithPadOn();
+    ASSERT_FALSE(HasFatalFailure());
+
+    // The pause menu is the current GUI but the game gives no page object: not the Settings page as far as anyone can tell.
+    ASSERT_EQ(RunLuauChunk(L, "showPausePage('pageSettings'); g_inGameMenu.currentPage = nil", "=noPage"), 0);
+    Hold(kRight, Trigger(1.0f));
+    EXPECT_EQ(Pad().bRightTrigger, 0);
+    Release(kRight);
+
+    ASSERT_EQ(RunLuauChunk(L, "_G.g_inGameMenu = nil", "=noMenu"), 0);
+    Hold(kRight, Trigger(1.0f));
+    EXPECT_EQ(Pad().bRightTrigger, 0);
+    Release(kRight);
+
+    ASSERT_EQ(RunLuauChunk(L, "_G.g_gui.currentGuiName = nil; _G.g_gui.visible = true", "=noName"), 0);
+    Hold(kRight, Trigger(1.0f));
+    EXPECT_EQ(Pad().bRightTrigger, 0);
 }
 
 TEST_F(VirtualGamepadMenuUseTest, TheStatusCommandListsTheInputsTheCompanionModIsUsing) {

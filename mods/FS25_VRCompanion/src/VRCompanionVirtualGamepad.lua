@@ -35,6 +35,17 @@
 -- Uses made here, at the end of every update: every input of both hands while a menu shows (the Pointer Ray menus act on
 -- the raw hand state, as they always did), and the grip of a hand holding the Steering Wheel. Interactive Control's click
 -- asks for the Pointer Hand's trigger itself, as the ray lands on a Click Point.
+-- THE SETTINGS PAGE EXCEPTION: the player binds the pad in the Controls screen, which is part of the pause menu's Settings page,
+-- and the game's binding capture needs the pad's inputs to arrive (a pad that reads neutral cannot be bound). So while the
+-- pause menu shows its Settings page (g_gui.currentGuiName == "InGameMenu" and g_inGameMenu.currentPage.id == "pageSettings",
+-- both measured in the game) the menu does NOT take the pad's inputs; every other menu and page keeps taking them. The
+-- Controls pages are sub-pages of Settings and cannot be told apart from it, so the exception covers all of Settings.
+-- (g_inputBinding.isInputCapturing does not turn true during binding, so it cannot be used instead.) THE TRADE-OFF: on the
+-- Settings page the Pointer Ray menu still works, and a trigger click there also reaches the game as RT (likewise the
+-- grip or lower face button that goes back, and the stick that scrolls); that only matters for a binding the player has
+-- on those inputs. If g_gui, g_inGameMenu or the page is missing, the menu counts as any other menu. The held-input rule
+-- holds on the way into and out of the Settings page: what the menu took stays off the pad until it is let go, and what was
+-- held on the Settings page keeps its binding when another page's menu use begins.
 -- THE HELD-INPUT RULE: an input already held (as the pad reads it) when a use begins keeps its binding until it is let go,
 -- and the use does not act on it meanwhile. The same holds the other way round: an input a use took stays off the pad
 -- until it is let go, even if the use ends first (a grip that closed a menu does not fire its binding as the menu goes).
@@ -43,12 +54,17 @@
 -- one device, so the first time the Virtual Gamepad is among the game's input devices this module edits that one device's
 -- bindings, as the Controls screen would, and saves them (the calls are the ones spike #99 proved in the game:
 -- g_inputBinding:getActionByName, action.bindings, Binding.new + addBinding, taking a binding out of action.bindings, and
--- saveToXMLFile). The layout (button numbers are the game's own for an Xbox pad: 5 / 6 LB / RB, 10 Start, 11 / 12 the
+-- saveToXMLFile; plus resetActiveActionBindings, see below). The layout (button numbers are the game's own for an Xbox pad: 5 / 6 LB / RB, 10 Start, 11 / 12 the
 -- left / right stick click, AXIS_3 the right stick X):
 --   - Snap Turn left / right on the right stick's left / right half (AXIS_3- / AXIS_3+), off LB / RB
 --   - the game's smooth look left / right (AXIS_LOOK_LEFTRIGHT_PLAYER and _VEHICLE) off the right stick X
 --   - the Recenter Action on RS (BUTTON_12), off LS (the Companion Mod's own GAMEPAD_DEFAULT)
 --   - the VR View Toggle Action on left stick click + Start, off Back (which the pad never sends)
+-- Two things measured in the headset: (1) Binding.new(deviceId, inputNames, axisComponent, negative) takes an axis input's sign
+-- from the fourth argument alone and silently drops a "-" inside the name, so Snap Turn left is Binding.new(device, { "AXIS_3" },
+-- "+", true) (inputString "AXIS_3-"); (2) taking a binding out of action.bindings only changes what the Controls screen shows, the
+-- game acts on action.activeBindings until g_inputBinding:resetActiveActionBindings() rebuilds it, so the rewrite calls that
+-- after its changes (before saving).
 -- A new binding takes the `index` slot the binding it replaces had, otherwise the lowest one the device has free on that
 -- action (addBinding refuses an occupied slot). Only bindings of the Virtual Gamepad's device are looked at; a real pad's are
 -- never touched. The device is "<slot>_XINPUT_GAMEPAD" with the slot VRBridge reports. It counts as among the game's input
@@ -63,7 +79,7 @@
 -- the slot ever does change, the new device keeps the game's defaults: that is the lesser harm next to rewriting a player's
 -- bindings a second time. Once set (after the bindings were saved) the rewrite never runs again, so what the player changes
 -- in the Controls screen sticks.
--- THE FALLBACK: the binding API missing (g_inputBinding, Binding.new, getActionByName, addBinding or saveToXMLFile) or raising
+-- THE FALLBACK: the binding API missing (g_inputBinding, Binding.new, getActionByName, addBinding, resetActiveActionBindings or saveToXMLFile) or raising
 -- is one warning in the game log for the session, no flag, and the bindings put back as they were. The pad then keeps the
 -- game's defaults plus the Companion Mod's GAMEPAD_DEFAULT bindings, and the player rebinds in the Controls screen.
 --
@@ -234,10 +250,26 @@ local function describeUse()
     return #names > 0 and table.concat(names, ", ") or "none"
 end
 
+-- Whether the pause menu's Settings page is the page showing (the Controls screen is a sub-page of it and cannot be told apart).
+-- Measured in the game: while it shows, g_gui.currentGuiName is "InGameMenu" and g_inGameMenu.currentPage is the page object whose
+-- id is "pageSettings" (it is also g_inGameMenu.pageSettings). Anything missing or raising counts as not showing.
+local function isSettingsPageShowing()
+    local ok, showing = pcall(function()
+        local gui = g_gui or (_G and _G.g_gui)
+        local menu = g_inGameMenu or (_G and _G.g_inGameMenu)
+        if type(gui) ~= "table" or gui.currentGuiName ~= "InGameMenu" then return false end
+        if type(menu) ~= "table" then return false end
+        local page = menu.currentPage
+        if type(page) ~= "table" then return false end
+        return page.id == "pageSettings" or (menu.pageSettings ~= nil and page == menu.pageSettings)
+    end)
+    return ok and showing == true
+end
+
 -- Last of the Companion Mod's update: the uses made here, then which inputs are off the pad this update, told to the Injector.
 function VRCompanion:updateVirtualGamepadUse(dt)
     if self.motionControllersEnabled ~= false then
-        if self.isMenuVisible == true then
+        if self.isMenuVisible == true and not isSettingsPageShowing() then
             -- Every input of both hands: the Pointer Ray menus act on the raw hand state themselves.
             for _, hand in ipairs(HANDS) do
                 for _, input in ipairs(INPUTS) do
@@ -309,6 +341,24 @@ local GIVEN = {
     { action = "VR_TOGGLE_VIEW", inputs = { "BUTTON_11", "BUTTON_10" } },
 }
 
+-- Binding.new(deviceId, inputNames, axisComponent, negative) takes the sign of an axis input from its fourth argument alone:
+-- a "-" inside the name is dropped ({ "AXIS_3-" } comes out "AXIS_3+", measured in the game). So a GIVEN input such as
+-- "AXIS_3-" is passed as the name "AXIS_3" and negative = true; a name without a "-" passes nil (any non-nil value makes the
+-- input negative). A combination such as { "BUTTON_11", "BUTTON_10" } has no axis and passes as it is.
+local function bindingArguments(inputs)
+    local names, negative = {}, nil
+    for i, text in ipairs(inputs) do
+        local name, sign = string.match(text, "^(AXIS_.-)([%+%-])$")
+        if name ~= nil then
+            names[i] = name
+            if sign == "-" then negative = true end
+        else
+            names[i] = text
+        end
+    end
+    return names, negative
+end
+
 local RECHECK_MS = 1000
 
 -- Why the rewrite will not be tried again this game session (the one warning has been logged), or nil.
@@ -319,7 +369,7 @@ local function inputBindingApi()
     local bindingClass = Binding or (_G and _G.Binding)
     if inputBinding == nil then return nil, "g_inputBinding is missing" end
     if bindingClass == nil or type(bindingClass.new) ~= "function" then return nil, "Binding.new is missing" end
-    for _, method in ipairs({ "getActionByName", "addBinding", "saveToXMLFile" }) do
+    for _, method in ipairs({ "getActionByName", "addBinding", "resetActiveActionBindings", "saveToXMLFile" }) do
         if type(inputBinding[method]) ~= "function" then return nil, "g_inputBinding:" .. method .. " is missing" end
     end
     return inputBinding, bindingClass
@@ -388,7 +438,8 @@ local function planRewrite(inputBinding, deviceId)
                 index = 1
                 while used[index] do index = index + 1 end
             end
-            step.give[#step.give + 1] = { inputs = given.inputs, index = index }
+            local names, negative = bindingArguments(given.inputs)
+            step.give[#step.give + 1] = { inputs = given.inputs, names = names, negative = negative, index = index }
         end
     end
     return plan
@@ -409,8 +460,8 @@ local function applyRewrite(inputBinding, bindingClass, deviceId, plan)
             changes = changes + 1
         end
         for _, give in ipairs(step.give) do
-            local binding = bindingClass.new(deviceId, give.inputs)
-            binding.axisComponent = "+"
+            -- axisComponent "+" and, for the left half of the stick, negative (see GIVEN and bindingArguments).
+            local binding = bindingClass.new(deviceId, give.names, "+", give.negative)
             binding.neutralInput = 0
             binding.index = give.index
             binding:makeId()
@@ -420,6 +471,9 @@ local function applyRewrite(inputBinding, bindingClass, deviceId, plan)
             changes = changes + 1
         end
     end
+    -- The Controls screen shows action.bindings, the game acts on action.activeBindings: a binding taken out of the former
+    -- keeps acting (the smooth look went on turning the view) until the latter is rebuilt from it.
+    inputBinding:resetActiveActionBindings()
     inputBinding:saveToXMLFile()
     return changes
 end
@@ -479,6 +533,10 @@ function VRCompanion:updateVirtualGamepadDefaults(dt, present, slot)
     local applied, changes = pcall(applyRewrite, inputBinding, bindingClass, deviceId, plan)
     if not applied then
         restorePlan(plan, copies)
+        -- What the game acts on goes back with them (it may have been rebuilt from the changed bindings before the failure).
+        if type(inputBinding.resetActiveActionBindings) == "function" then
+            pcall(inputBinding.resetActiveActionBindings, inputBinding)
+        end
         giveUpOnRewrite("the game's binding API raised: " .. tostring(changes))
         return
     end

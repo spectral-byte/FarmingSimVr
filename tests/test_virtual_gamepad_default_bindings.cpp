@@ -146,6 +146,30 @@ TEST_F(VirtualGamepadDefaultBindingsTest, TheFirstSessionRewritesTheVirtualGamep
     EXPECT_EQ(LogLinesContaining("Virtual Gamepad default bindings written"), 1) << "the game log says the rewrite ran";
 }
 
+TEST_F(VirtualGamepadDefaultBindingsTest, SnapTurnLeftAndRightLandOnTheTwoDifferentHalvesOfTheRightStick) {
+    // The game's Binding.new takes the sign of an axis input from its fourth argument alone (a "-" in the name is dropped), so
+    // Snap Turn left must be asked for as a negative AXIS_3 with the axisComponent "+" the game saves for a half-axis action.
+    ASSERT_NO_FATAL_FAILURE(StartGame());
+    EXPECT_EQ(List("VR_SNAP_TURN_LEFT", kPad), "AXIS_3-/+@4") << "the left half, not the right one";
+    EXPECT_EQ(List("VR_SNAP_TURN_RIGHT", kPad), "AXIS_3+/+@4");
+    EXPECT_EQ(Lua("StubInput.get('VR_SNAP_TURN_LEFT', '3_XINPUT_GAMEPAD').inputComponent"), "-");
+    EXPECT_EQ(Lua("StubInput.get('VR_SNAP_TURN_RIGHT', '3_XINPUT_GAMEPAD').inputComponent"), "+");
+}
+
+TEST_F(VirtualGamepadDefaultBindingsTest, ABindingTakenOffTheVirtualGamepadStopsActingInTheGameAndARealPadsKeepsActing) {
+    // The Controls screen shows action.bindings, the game acts on action.activeBindings: both must lose the smooth look.
+    ASSERT_NO_FATAL_FAILURE(StartGame("{ devices = { '0_XINPUT_GAMEPAD', '3_XINPUT_GAMEPAD' } }", "", false));
+    ASSERT_EQ(Lua("StubInput.listActive('AXIS_LOOK_LEFTRIGHT_PLAYER', '3_XINPUT_GAMEPAD')"), "AXIS_3+/+@4 ; AXIS_3-/-@4");
+    TurnOn();
+
+    EXPECT_EQ(Lua("StubInput.listActive('AXIS_LOOK_LEFTRIGHT_PLAYER', '3_XINPUT_GAMEPAD')"), "") << "no smooth look on the pad on foot";
+    EXPECT_EQ(Lua("StubInput.listActive('AXIS_LOOK_LEFTRIGHT_VEHICLE', '3_XINPUT_GAMEPAD')"), "") << "nor in vehicles";
+    EXPECT_EQ(Lua("StubInput.listActive('VR_SNAP_TURN_LEFT', '3_XINPUT_GAMEPAD')"), "AXIS_3-/+@4") << "and what was given acts";
+    EXPECT_EQ(Lua("StubInput.listActive('VR_SNAP_TURN_RIGHT', '3_XINPUT_GAMEPAD')"), "AXIS_3+/+@4");
+    EXPECT_EQ(Lua("StubInput.listActive('VR_SNAP_TURN_LEFT', '0_XINPUT_GAMEPAD')"), "BUTTON_5/+@1") << "a real pad is as it was";
+    EXPECT_EQ(Lua("StubInput.listActive('AXIS_LOOK_LEFTRIGHT_PLAYER', '0_XINPUT_GAMEPAD')"), "AXIS_3+/+@1 ; AXIS_3-/-@1");
+}
+
 TEST_F(VirtualGamepadDefaultBindingsTest, ARealPadsBindingsAndEveryOtherDevicesAreNeverTouched) {
     ASSERT_NO_FATAL_FAILURE(StartGame("{ devices = { '0_XINPUT_GAMEPAD', '1_XINPUT_GAMEPAD', '3_XINPUT_GAMEPAD' } }", "", false));
     const std::string realPad = Dump(kRealPad);
@@ -276,11 +300,13 @@ TEST_P(VirtualGamepadDefaultBindingsFallbackTest, GivesOneWarningNoFlagAndUnchan
     ASSERT_NO_FATAL_FAILURE(StartGame(std::string("{ variant = '") + GetParam() + "' }", "", false));
     const bool hasBindings = Lua("g_inputBinding ~= nil") == "true";
     const std::string before = hasBindings ? Lua("StubInput.dump(nil)") : "";
+    const std::string activeBefore = hasBindings ? Lua("StubInput.dumpActive(nil)") : "";
 
     TurnOn();
     PlayFor(5);
 
     if (hasBindings) EXPECT_EQ(Lua("StubInput.dump(nil)"), before) << "the bindings are as the game had them";
+    if (hasBindings) EXPECT_EQ(Lua("StubInput.dumpActive(nil)"), activeBefore) << "and so are the ones the game acts on";
     EXPECT_EQ(Lua("StubInput.saves"), "0") << "and nothing was saved";
     EXPECT_NE(Lua("savedXml['vrSettings.virtualGamepadDefaultsWritten']"), "true") << "the flag stays unset";
     EXPECT_EQ(LogLinesContaining("[Warning] Virtual Gamepad default bindings not written"), 1) << "one warning for the session";
@@ -289,4 +315,4 @@ TEST_P(VirtualGamepadDefaultBindingsFallbackTest, GivesOneWarningNoFlagAndUnchan
 }
 
 INSTANTIATE_TEST_SUITE_P(BindingApi, VirtualGamepadDefaultBindingsFallbackTest,
-    ::testing::Values("missing", "reshaped", "raises", "saveRaises"));
+    ::testing::Values("missing", "reshaped", "raises", "saveRaises", "noReset", "resetRaises"));

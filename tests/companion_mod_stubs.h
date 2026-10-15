@@ -914,12 +914,17 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
 //   - g_inputBinding:getActionByName(name) -> action | nil. action.bindings is an array of Binding objects (deviceId,
 //     inputString, axisComponent, neutralInput, index, id), those of devices that are not plugged in included. The methods
 //     are on the metatable, so pairs(g_inputBinding) does not list them.
-//   - Binding.new(deviceId, { inputs }) with the fields set by hand and b:makeId(); g_inputBinding:addBinding(action, b)
+//   - Binding.new(deviceId, { inputs }, axisComponent, negative) as the game measured it: the sign of an axis input comes only
+//     from `negative` (any non-nil value), a "-" inside the name is dropped ({"AXIS_3-"} becomes "AXIS_3+"), and the
+//     argument after the list is the axisComponent. Then the fields set by hand and b:makeId(); g_inputBinding:addBinding(action, b)
 //     is true when added, false (after the game's "occupied slot" log line) when the device already has a binding of that
 //     action at b.index.
 //   - g_inputBinding:getDeviceById(deviceId) is the device table while the pad is connected and nil for a pad that is only saved (an unplugged
 //     one); g_inputBinding:getMissingDeviceById(deviceId) is the other way round (the spike's finding).
-//   - g_inputBinding:deleteBinding(...) says true and removes nothing. Taking a binding out of action.bindings does remove it.
+//   - g_inputBinding:deleteBinding(...) says true and removes nothing. Taking a binding out of action.bindings does remove it,
+//     but not from action.activeBindings, which is what the game acts on (the Controls screen shows .bindings): a removed
+//     binding keeps acting until g_inputBinding:resetActiveActionBindings() rebuilds activeBindings from bindings.
+//     addBinding adds to .bindings only.
 //   - g_inputBinding:saveToXMLFile() takes no path; StubInput.saves counts the calls and StubInput.saved is the listing at the
 //     last one.
 //
@@ -932,7 +937,8 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
 //     options.unplugged  a list of device ids in devices whose pad is saved but not connected: getDeviceById says nil for them
 //                      until StubInput.plug(deviceId)
 //     options.variant  "ok" (default); "missing": no g_inputBinding; "reshaped": no addBinding; "raises": addBinding raises
-//                      on its second call, after the Companion Mod has taken bindings out; "saveRaises": saveToXMLFile raises
+//                      on its second call, after the Companion Mod has taken bindings out; "saveRaises": saveToXMLFile raises;
+//                      "noReset": no resetActiveActionBindings; "resetRaises": resetActiveActionBindings raises
 //     options.omit     a list of "ACTION@device" default bindings left out
 //     options.extra    a list of { action, device, input, index } bindings added to the defaults
 //     options.state    a string from StubInput.serialize(): the bindings of an earlier game session, in place of the defaults
@@ -940,6 +946,8 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
 //   StubInput.plug(deviceId)           the game attaches a listed pad as a connected device
 //   StubInput.list(action, deviceId) -> string   the device's bindings of the action as "input/axisComponent@index", sorted,
 //                      separated by ' ; ' ("" when there are none)
+//   StubInput.listActive(action, deviceId) / StubInput.dumpActive(deviceId)   the same for action.activeBindings
+//   StubInput.get(action, deviceId) -> Binding   the device's first binding of the action
 //   StubInput.dump(deviceId) -> string   all of the device's bindings as "ACTION: list" lines (every device when nil)
 //   StubInput.change(action, deviceId, from, to)   the player changes a binding in the Controls screen: its input becomes `to`
 //   StubInput.serialize() -> string    every binding, for a later game session
@@ -954,11 +962,26 @@ inline constexpr const char* kStubInputBinding = R"luau(
 
     local Binding = {}
     Binding.__index = Binding
-    function Binding.new(deviceId, inputs)
+    -- The game's Binding.new(deviceId, inputNames, axisComponent, negative), as measured in the game: the second argument after
+    -- the list is the axisComponent, and ANY non-nil fourth argument makes the input negative. The sign of an axis input
+    -- comes from that flag alone: a "-" (or "+") given inside the name is dropped, so {"AXIS_3-"} comes out "AXIS_3+".
+    -- inputComponent is "-" for a negative input, otherwise "+".
+    function Binding.new(deviceId, inputs, axisComponent, negative)
         local b = setmetatable({}, Binding)
+        local names = {}
+        for i, name in ipairs(inputs) do
+            if string.sub(name, 1, 5) == "AXIS_" then name = (string.gsub(name, "[%+%-]$", "")) end
+            names[i] = name
+        end
+        local isNegative = negative ~= nil
+        local last = names[#names]
+        if last ~= nil and string.sub(last, 1, 5) == "AXIS_" then
+            names[#names] = last .. (isNegative and "-" or "+")
+        end
         b.deviceId = deviceId
-        b.inputString = table.concat(inputs, " ")
-        b.axisComponent = "+"
+        b.inputString = table.concat(names, " ")
+        b.inputComponent = isNegative and "-" or "+"
+        b.axisComponent = axisComponent or "+"
         b.neutralInput = 0
         b.index = 1
         return b
@@ -970,25 +993,30 @@ inline constexpr const char* kStubInputBinding = R"luau(
     local function actionNamed(name)
         local action = actions[name]
         if action == nil then
-            action = { name = name, bindings = {} }
+            action = { name = name, bindings = {}, activeBindings = {} }
             actions[name] = action
             table.insert(actionOrder, name)
         end
         return action
     end
 
-    local function put(name, deviceId, input, axisComponent, index)
-        local b = Binding.new(deviceId, { input })
-        b.axisComponent = axisComponent or "+"
-        b.index = index
-        b:makeId()
-        table.insert(actionNamed(name).bindings, b)
-    end
-
     local function split(text, separator)
         local parts = {}
         for part in string.gmatch(text, "[^" .. separator .. "]+") do table.insert(parts, part) end
         return parts
+    end
+
+    -- The game loading or applying a binding: it is in action.bindings and in action.activeBindings (what the game acts on).
+    -- A trailing "-" on an axis input is the binding's negative flag.
+    local function put(name, deviceId, input, axisComponent, index)
+        local negative = nil
+        if string.match(input, "AXIS_[%w_]*%-$") then negative = true end
+        local b = Binding.new(deviceId, split(input, " "), axisComponent or "+", negative)
+        b.index = index
+        b:makeId()
+        local action = actionNamed(name)
+        table.insert(action.bindings, b)
+        table.insert(action.activeBindings, b)
     end
 
     local methods = {}
@@ -1010,6 +1038,16 @@ inline constexpr const char* kStubInputBinding = R"luau(
     function methods:getDeviceById(deviceId) if connected[deviceId] then return { id = deviceId } end return nil end
     function methods:getMissingDeviceById(deviceId) if not connected[deviceId] then return { id = deviceId } end return nil end
     function methods:deleteBinding(...) return true end
+    -- Rebuilds every action's activeBindings (what the game acts on) from its bindings (what the Controls screen shows).
+    local function resetActiveImpl(self)
+        if variant == "resetRaises" then error("InputBinding:resetActiveActionBindings: attempt to index nil") end
+        for _, name in ipairs(actionOrder) do
+            local action = actions[name]
+            action.activeBindings = {}
+            for i, b in ipairs(action.bindings) do action.activeBindings[i] = b end
+        end
+    end
+    methods.resetActiveActionBindings = resetActiveImpl
     function methods:saveToXMLFile()
         if variant == "saveRaises" then error("InputBinding:saveToXMLFile: attempt to call a nil value") end
         StubInput.saves = StubInput.saves + 1
@@ -1068,6 +1106,7 @@ inline constexpr const char* kStubInputBinding = R"luau(
         _G.Binding = Binding
         local inputBinding = setmetatable({}, methods)
         methods.addBinding = (variant ~= "reshaped") and addBindingImpl or nil
+        methods.resetActiveActionBindings = (variant ~= "noReset") and resetActiveImpl or nil
         _G.g_inputBinding = inputBinding
 
         if options.state ~= nil then
@@ -1091,29 +1130,42 @@ inline constexpr const char* kStubInputBinding = R"luau(
 
     local function describe(b) return b.inputString .. "/" .. b.axisComponent .. "@" .. tostring(b.index) end
 
-    function StubInput.list(name, deviceId)
+    local function listField(field, name, deviceId)
         local action = actions[name]
         local parts = {}
-        for _, b in ipairs(action and action.bindings or {}) do
+        for _, b in ipairs(action and action[field] or {}) do
             if b.deviceId == deviceId then table.insert(parts, describe(b)) end
         end
         table.sort(parts)
         return table.concat(parts, " ; ")
     end
+    function StubInput.list(name, deviceId) return listField("bindings", name, deviceId) end
+    -- the same for action.activeBindings: what the game acts on
+    function StubInput.listActive(name, deviceId) return listField("activeBindings", name, deviceId) end
 
-    function StubInput.dump(deviceId)
+    local function dumpField(field, deviceId)
         local lines = {}
         for _, name in ipairs(actionOrder) do
             local devices = {}
-            for _, b in ipairs(actions[name].bindings) do
+            for _, b in ipairs(actions[name][field]) do
                 if deviceId == nil or b.deviceId == deviceId then devices[b.deviceId] = true end
             end
             local ids = {}
             for id in pairs(devices) do table.insert(ids, id) end
             table.sort(ids)
-            for _, id in ipairs(ids) do table.insert(lines, name .. " " .. id .. ": " .. StubInput.list(name, id)) end
+            for _, id in ipairs(ids) do table.insert(lines, name .. " " .. id .. ": " .. listField(field, name, id)) end
         end
         return table.concat(lines, "\n")
+    end
+    function StubInput.dump(deviceId) return dumpField("bindings", deviceId) end
+    function StubInput.dumpActive(deviceId) return dumpField("activeBindings", deviceId) end
+
+    -- the device's first binding of the action (the Binding object), for the fields list() does not show
+    function StubInput.get(name, deviceId)
+        for _, b in ipairs(actions[name].bindings) do
+            if b.deviceId == deviceId then return b end
+        end
+        return nil
     end
 
     function StubInput.change(name, deviceId, from, to)
