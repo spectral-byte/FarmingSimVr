@@ -402,60 +402,51 @@ TEST_F(MenuScrollBackTest, AGameThatDoesNotLetTheWheelStateBeSetNeverBreaksTheUp
     EXPECT_GE(std::stoi(EvalLua(L, "#guiEvents")), 2) << "the wheel events were still delivered";
 }
 
-// ---- Snap Turn and the lower face button stay out of the way in menus ----
+// ---- The Virtual Gamepad stays out of the way in menus (ADR-0028) ----
 
 namespace {
 
-// The player sits in a vehicle cab: Snap Turn steps cam.rotY. recenterCalls counts the Recenter
-// Actions that reach the Injector bridge.
-constexpr const char* kCabAndRecenterCounter = R"luau(
-    _G.cam = { isInside = true, cameraNode = 101, origRotY = 0.0, rotY = 0.0 }
-    _G.g_currentMission = { controlledVehicle = { getActiveCamera = function() return _G.cam end } }
-    _G.recenterCalls = 0
-    local realRecenter = VRBridge.recenter
-    VRBridge.recenter = function(...)
-        _G.recenterCalls = _G.recenterCalls + 1
-        return realRecenter(...)
-    end
-)luau";
+// What the game reads from the Virtual Gamepad (XInput slot 3, the highest free slot of a machine without real pads).
+XINPUT_GAMEPAD PadState(fs25vr::VRBridge& bridge) {
+    XINPUT_STATE state{};
+    EXPECT_EQ(bridge.GetVirtualGamepad().GetState(3, &state), static_cast<DWORD>(ERROR_SUCCESS));
+    return state.Gamepad;
+}
 
 } // namespace
 
-TEST_F(MenuScrollBackTest, SnapTurnStaysOffWhileAMenuIsShowingEvenAsTheStickScrolls) {
+TEST_F(MenuScrollBackTest, TheVirtualGamepadReadsNeutralWhileAMenuIsShowingEvenAsTheStickScrolls) {
     StartWithMenuOpen();
     ASSERT_FALSE(HasFatalFailure());
-    ASSERT_EQ(RunLuauChunk(L, kCabAndRecenterCounter, "=cab"), 0);
 
     Hold(kRight, Stick(1.0f, 0.0f));
+    EXPECT_EQ(PadState(bridge).sThumbRX, 0) << "a game action bound on the stick cannot fire with a menu showing";
     Release(kRight);
     AdvanceGameTime(300);
     Hold(kRight, Stick(0.0f, 1.0f));
+    EXPECT_EQ(PadState(bridge).sThumbRY, 0);
     Release(kRight);
-    EXPECT_NEAR(std::stod(EvalLua(L, "_G.cam.rotY")), 0.0, 1e-6) << "no Snap Turn with a menu showing";
     EXPECT_EQ(Scrolls(), 1) << "the vertical push scrolled";
 
     CloseMenu();
+    NextFrame(&headset);
     AdvanceGameTime(300);
     Hold(kRight, Stick(1.0f, 0.0f));
-    EXPECT_NEAR(std::stod(EvalLua(L, "_G.cam.rotY")), -3.14159265 / 2.0, 1e-4) << "Snap Turn is back with the menu closed";
+    EXPECT_EQ(PadState(bridge).sThumbRX, 32767) << "the stick is the game's again with the menu closed";
 }
 
-TEST_F(MenuScrollBackTest, AWorldActionOnTheLowerFaceButtonYieldsToBackWhileAMenuIsShowing) {
+TEST_F(MenuScrollBackTest, TheLowerFaceButtonGoesBackInAMenuAndIsAOnTheVirtualGamepadOutsideOne) {
     StartWithMenuOpen();
     ASSERT_FALSE(HasFatalFailure());
-    ASSERT_EQ(RunLuauChunk(L, kCabAndRecenterCounter, "=cab"), 0);
-    ASSERT_EQ(RunLuauChunk(L, "assert(VRCompanion:setMotionControllerMapping('recenter', 'buttonLower'))", "=mapRecenter"), 0);
-    NextFrame(&headset);
 
     Hold(kRight, LowerButton());
-    Release(kRight);
     EXPECT_EQ(Backs(), 1) << "in a menu the button goes back";
-    EXPECT_EQ(EvalLua(L, "_G.recenterCalls"), "0") << "and does not also recenter";
+    EXPECT_EQ(PadState(bridge).wButtons & XINPUT_GAMEPAD_A, 0) << "and is not also A";
+    Release(kRight);
 
     CloseMenu();
     NextFrame(&headset);
     Hold(kRight, LowerButton());
-    Release(kRight);
     EXPECT_EQ(Backs(), 1) << "outside menus it does not go back";
-    EXPECT_EQ(EvalLua(L, "_G.recenterCalls"), "1") << "it does what the player mapped it to";
+    EXPECT_EQ(PadState(bridge).wButtons & XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_A) << "it is A for whatever the player bound";
 }

@@ -64,8 +64,8 @@ To disable VR, rename or delete `dxgi.dll`.
 
 | Action | Keyboard | Gamepad |
 | :--- | :--- | :--- |
-| Recenter view | `NumPad 5` | R3 (right stick click) |
-| Toggle 3D VR / 2D window | `Right Ctrl + V` | L3 (left stick click) |
+| Recenter view | `NumPad 5` | L3 (left stick click) |
+| Toggle 3D VR / 2D window | `Right Ctrl + V` | Back (Button 9); on the Virtual Gamepad L3 + Start |
 | Cycle HUD (Full, Streamlined, Hidden) | `Right Ctrl + H` | Button 10 |
 | Snap turn left | `NumPad 4` | LB |
 | Snap turn right | `NumPad 6` | RB |
@@ -86,7 +86,8 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrHudGroupShow <group> <streamlined\|full> <on\|off>` | Choose which groups show in each HUD state |
 | `vrHudSafeArea <horizontal> <vertical>` | Keep other HUD elements (warnings, notifications, other mods) inside the lens |
 | `vrMotionControllers <on\|off>` | Use Motion Controllers (default `on`, saved). `off` makes the mod ignore Motion Controller input |
-| `vrMotionControllerStatus` | Report each Motion Controller's tracked and in-use state and the Pointer Hand |
+| `vrMotionControllerStatus` | Report each Motion Controller's tracked and in-use state, the Pointer Hand and whether the Virtual Gamepad is present (and in which XInput slot) |
+| `vrVirtualGamepad <on\|off>` | The Motion Controllers' triggers, grips, thumbsticks and buttons as an Xbox pad in the game, bound in the game's Controls screen (default `on`, saved). Appears in the highest XInput slot no real pad occupies, `off` removes it from the game, either way without a restart, and it reads neutral while `vrMotionControllers` is `off`. The first time the game lists it, the Companion Mod writes VR-comfortable bindings to that pad only, once (Snap Turn on the right stick instead of smooth look, the VR View Toggle Action on left stick click + Start; the Recenter Action stays on the left stick click, and a profile from an earlier build that had it on RS is moved back once); after that every change in the Controls screen sticks, and real pads are never touched. The game log says whether it ran |
 | `vrPointerDiagnostics` | Report why the Pointer Ray may not select Click Points (ray placement, who controls the pointer, Interactive Control support; also each hand's aim pose and grip pose and whether they are tracked, how far each index finger points from the aim direction, and each Virtual Hand's state) |
 | `vrVirtualHandsDiagnostics` | Report whether the Virtual Hands (gloved hands drawn where the Motion Controllers are held) are available, and each hand's state with the reason when it is hidden |
 | `vrPointerCone <degrees>` | How wide a cone around the Pointer Ray selects the nearest Interactive Control Click Point (default `5`, saved) |
@@ -95,22 +96,22 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 
 ### Motion Controller buttons
 
-With Motion Controllers on, these inputs work on either hand (a push or press acts once, with the same debounce as the keys):
+The Motion Controllers' buttons, triggers, grips and thumbsticks reach the game as the Virtual Gamepad, an Xbox-style pad (`vrVirtualGamepad`, on by default). Bind it in the game's Controls screen like any gamepad, for any game action and for the VR actions (Snap turn, Recenter view, Cycle HUD, Toggle 3D VR / 2D window). Each control on each hand is its own pad input:
 
-| Input | Action |
+| Motion Controller | Pad input |
 | :--- | :--- |
-| Thumbstick left / right | Snap turn left / right (off while a menu is showing) |
-| Thumbstick click | Recenter |
-| Menu button | Toggle the HUD |
+| Trigger (left / right) | LT / RT |
+| Grip (left / right) | LB / RB |
+| Thumbstick (left / right) | Left / right stick |
+| Thumbstick click (left / right) | LS / RS |
+| Lower / upper face button, left hand | X / Y |
+| Lower / upper face button, right hand | A / B |
+| Left menu button | Start |
+| Right stick click held, then push the right stick | D-pad in that direction |
 
-The menu button is on the left Motion Controller only on Touch and does not exist on Index, so the HUD toggle needs another input there. `vrMotionControllerMap` changes or removes each mapping and saves it:
+A right stick click let go without a push is an ordinary RS press. The menu button is on the left Motion Controller only on Touch and does not exist on Index, so Index has no Start. Out of the box Snap turn is on the right stick's left and right and Recenter view on LS (left stick click). Don't bind Recenter view to RS: the game stops firing it there.
 
-| Command | Purpose |
-| :--- | :--- |
-| `vrMotionControllerMap` | Show the current mappings |
-| `vrMotionControllerMap <snapTurn\|recenter\|hudToggle> <input>` | Put an action on an input: `thumbClick`, `buttonLower`, `buttonUpper` or `menu` (`snapTurn` only takes `thumbX`) |
-| `vrMotionControllerMap <action> none` | Remove the mapping |
-| `vrMotionControllerMap <action> default` / `vrMotionControllerMap reset` | Restore one / all defaults |
+The Companion Mod's own uses of the controllers keep working, and while one is in use that input does nothing else: the trigger clicks a Click Point under the Pointer Ray, the grip grabs the Steering Wheel when your hand is at its rim, and while a menu shows the pad does nothing and the Pointer Ray works the menu (trigger click, grip or lower face button for back, thumbstick to scroll). With `vrVirtualGamepad off` the Motion Controllers bind nothing, but pointing, Click Points, menus and Wheel Grab still work.
 
 `hudConvergenceDepth` (default `1.8`) is set in `settings.xml` only.
 

@@ -7,6 +7,7 @@
 #include "lua.h"
 #include "lualib.h"
 #include "core/camera_records.h"
+#include "input/virtual_gamepad.h"
 #include "openxr/openxr_manager.h"
 
 namespace fs25vr {
@@ -44,6 +45,10 @@ public:
     // A short vibration on one hand (0 = left, 1 = right): `durationMs` long at `strength` (0..1).
     // False when nothing played: no runtime, the action set was refused, or an unknown hand.
     bool PulseHaptic(uint32_t hand, float durationMs, float strength);
+    // The Virtual Gamepad the game sees in place of the Motion Controllers' buttons (ADR-0028). The Companion Mod
+    // sets it through VRBridge.setVirtualGamepad and reads it back through VRBridge.getVirtualGamepad; the XInput
+    // hooks of the Injector answer the game from it.
+    VirtualGamepad& GetVirtualGamepad() { return m_virtualGamepad; }
     // Where one hand's ray lands on the visible menu / 2D Floating Window Mode panel, in normalized
     // panel coordinates (PanelHit). A miss when no panel is showing, the hand is untracked or there is
     // no runtime. The Injector owns the panel pose and size, so the geometry stays here (ADR-0006, ADR-0008).
@@ -122,6 +127,9 @@ public:
     static int Lua_GetHeadPose(lua_State* L);
     static int Lua_GetHandState(lua_State* L);
     static int Lua_PulseHaptic(lua_State* L);
+    static int Lua_SetVirtualGamepad(lua_State* L);
+    static int Lua_GetVirtualGamepad(lua_State* L);
+    static int Lua_SetVirtualGamepadUse(lua_State* L);
     static int Lua_Recenter(lua_State* L);
     static int Lua_AlignMenuQuad(lua_State* L);
     static int Lua_GetPanelHit(lua_State* L);
@@ -184,6 +192,9 @@ public:
         {"getHeadPose", &Lua_GetHeadPose},
         {"getHandState", &Lua_GetHandState},
         {"pulseHaptic", &Lua_PulseHaptic},
+        {"setVirtualGamepad", &Lua_SetVirtualGamepad},
+        {"getVirtualGamepad", &Lua_GetVirtualGamepad},
+        {"setVirtualGamepadUse", &Lua_SetVirtualGamepadUse},
         {"recenter", &Lua_Recenter},
         {"getEyeProjection", &Lua_GetEyeProjection},
         {"getFrameParity", &Lua_GetFrameParity},
@@ -227,6 +238,7 @@ private:
 
     std::shared_ptr<OpenXrManager> m_openXrManager;
     std::shared_ptr<NgxInterceptor> m_ngxInterceptor;
+    VirtualGamepad m_virtualGamepad{m_openXrManager};
     CameraRecordStore m_cameraRecords;
     std::string m_version = "1.0.0";
     bool m_handshakeCompleted = false;

@@ -33,6 +33,25 @@ void OpenXrManager::SetPerformanceCounterSource(PerformanceCounterSource source)
     m_counterSource = std::move(source);
 }
 
+void OpenXrManager::SetFrameBeginObserver(const void* owner, FrameBeginObserver observer) {
+    std::lock_guard<std::mutex> lock(m_frameBeginObserversMutex);
+    auto edited = std::make_shared<FrameBeginObserverList>();
+    for (const auto& entry : *m_frameBeginObservers) {
+        if (entry.first != owner) edited->push_back(entry);
+    }
+    edited->emplace_back(owner, std::move(observer));
+    m_frameBeginObservers = std::move(edited);
+}
+
+void OpenXrManager::ClearFrameBeginObserver(const void* owner) {
+    std::lock_guard<std::mutex> lock(m_frameBeginObserversMutex);
+    auto edited = std::make_shared<FrameBeginObserverList>();
+    for (const auto& entry : *m_frameBeginObservers) {
+        if (entry.first != owner) edited->push_back(entry);
+    }
+    m_frameBeginObservers = std::move(edited);
+}
+
 OpenXrManager::PerformanceCounterSample OpenXrManager::ReadPerformanceCounter() const {
     if (m_counterSource) return m_counterSource();
     LARGE_INTEGER qpc;
@@ -1074,6 +1093,14 @@ bool OpenXrManager::BeginFrame() {
         PollHeadPose(m_frameState.predictedDisplayTime);
     }
 
+    // The list this frame began with: an observer may add or clear observers (or another thread may), which shows from the
+    // next frame on. Holding a reference copies nothing.
+    std::shared_ptr<const FrameBeginObserverList> observers;
+    {
+        std::lock_guard<std::mutex> lock(m_frameBeginObserversMutex);
+        observers = m_frameBeginObservers;
+    }
+    for (const auto& entry : *observers) entry.second();
     return true;
 }
 

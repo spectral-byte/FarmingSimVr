@@ -98,6 +98,8 @@ set(CORE_SOURCES
     src/core/injector_runtime.h
     src/core/dll_lifecycle.cpp
     src/core/dll_lifecycle.h
+    src/input/virtual_gamepad.cpp
+    src/input/virtual_gamepad.h
     src/luau/vr_bridge.cpp
     src/luau/vr_bridge.h
     src/luau/luau_interceptor.cpp
@@ -202,11 +204,14 @@ add_executable(fs25_vr_tests
     tests/test_virtual_hands.cpp
     tests/test_pointer_handover.cpp
     tests/test_haptics.cpp
+    tests/test_virtual_gamepad.cpp
+    tests/test_virtual_gamepad_rumble.cpp
+    tests/test_xinput_hooks.cpp
     tests/test_interactive_control_auto_on.cpp
     tests/test_menu_pointer_panel.cpp
     tests/test_menu_pointer.cpp
     tests/test_pointer_hand_switch.cpp
-    tests/test_motion_controller_button_mappings.cpp
+    tests/test_virtual_gamepad_buttons.cpp
     tests/test_menu_scroll_back.cpp
     tests/test_wheel_grab_steering_wrap.cpp
     tests/test_wheel_grab.cpp
@@ -215,6 +220,9 @@ add_executable(fs25_vr_tests
     tests/test_wheel_grab_pointer.cpp
     tests/test_wheel_grab_ending.cpp
     tests/test_wheel_grab_two_hands.cpp
+    tests/test_virtual_gamepad_menu_use.cpp
+    tests/test_virtual_gamepad_cab_use.cpp
+    tests/test_virtual_gamepad_default_bindings.cpp
     tests/test_virtual_ngx_handle.cpp
     tests/test_dlss_evaluation.cpp
     tests/test_ngx_interceptor.cpp
@@ -228,6 +236,7 @@ target_link_libraries(fs25_vr_tests PRIVATE
     GTest::gtest_main
     Luau.Compiler
     dxgi.lib
+    xinput.lib
 )
 
 # The binary-load test loads the freshly built dxgi.dll next to the test executable

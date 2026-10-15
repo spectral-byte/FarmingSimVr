@@ -9,6 +9,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include <wrl/client.h>
@@ -110,6 +111,13 @@ public:
     void SetPerformanceCounterSource(PerformanceCounterSource source);
     // counter / frequency in nanoseconds without overflowing for any int64 counter.
     static int64_t PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency);
+
+    // `observer` runs at the end of every BeginFrame that began a frame, after the hand state is synced. One
+    // observer per `owner` (the Virtual Gamepad publishes its snapshot and plays its rumble from here); clearing is by the same
+    // owner. Safe from any thread, and from inside an observer: a frame calls the observers it began with.
+    using FrameBeginObserver = std::function<void()>;
+    void SetFrameBeginObserver(const void* owner, FrameBeginObserver observer);
+    void ClearFrameBeginObserver(const void* owner);
     const EyeProjection& GetEyeProjection(uint32_t eyeIndex = 0) const;
     static EyeProjection ComputeProjectionFromFov(const XrFovf& fov);
 
@@ -300,6 +308,11 @@ private:
     XrTime m_lastPredictedDisplayTime = 0;
     int64_t m_lastPredictedQpc = 0;
     PerformanceCounterSource m_counterSource;
+    // Copy-on-write: an edit builds a new list under the mutex, a frame takes a reference to the current one (no copy, no
+    // allocation) and walks it without the lock.
+    using FrameBeginObserverList = std::vector<std::pair<const void*, FrameBeginObserver>>;
+    std::mutex m_frameBeginObserversMutex;
+    std::shared_ptr<const FrameBeginObserverList> m_frameBeginObservers = std::make_shared<const FrameBeginObserverList>();
     bool m_win32TimeConversionAvailable = false;
     PerformanceCounterSample ReadPerformanceCounter() const;
     XrTime m_lastPolledTime = 0;

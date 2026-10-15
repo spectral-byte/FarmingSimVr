@@ -253,8 +253,11 @@ end
 
 -- One trigger pull runs Interactive Control's own execute path once; an analog Click Point keeps
 -- acting every update while the trigger is held. Only the pull itself is a click event (the haptic pulse).
-local function clickSelected(self)
+local function clickSelected(self, mayUseTrigger)
     local pressed, held = self:getPointerTrigger()
+    -- A trigger already held for a Virtual Gamepad binding when the ray landed on the Click Point stays that binding's until
+    -- it is let go (VRCompanionVirtualGamepad.lua): it clicks nothing.
+    if mayUseTrigger == false then pressed, held = false, false end
     -- Only a pull that went down while the ray had control can keep an analog Click Point acting; one
     -- that began under the mouse never turns into a click when the hand moves later.
     if pressed then
@@ -395,7 +398,14 @@ function VRCompanion:updateInteractiveControl(dt)
         notify(self, "selected", selected)
     end
     if ray ~= nil then
-        clickSelected(self)
+        -- While the ray is on a Click Point the Pointer Hand's trigger is Interactive Control's: it reads released on the
+        -- Virtual Gamepad, unless it was already held when the ray landed.
+        local mayUseTrigger = true
+        local pointerHand = self:getPointerHand()
+        if selected ~= nil and pointerHand ~= nil and type(self.takeVirtualGamepadInput) == "function" then
+            mayUseTrigger = self:takeVirtualGamepadInput(pointerHand, "trigger")
+        end
+        clickSelected(self, mayUseTrigger)
     else
         state.pullArmed = false
     end

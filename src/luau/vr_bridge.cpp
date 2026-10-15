@@ -236,7 +236,10 @@ HandState VRBridge::GetHandState(uint32_t hand) {
 
 bool VRBridge::PulseHaptic(uint32_t hand, float durationMs, float strength) {
     if (m_openXrManager) {
-        return m_openXrManager->PulseHaptic(hand, durationMs / 1000.0, strength);
+        const bool played = m_openXrManager->PulseHaptic(hand, durationMs / 1000.0, strength);
+        // The Companion Mod's own pulses win over the game's rumble on that hand while they play.
+        if (played) m_virtualGamepad.NoteCompanionPulse(hand, durationMs);
+        return played;
     }
     return false;
 }
@@ -482,6 +485,54 @@ int VRBridge::Lua_PulseHaptic(lua_State* L) {
     const float strength = lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : 0.0f;
     lua_pushboolean(L, self->PulseHaptic(hand, durationMs, strength) ? 1 : 0);
     return 1;
+}
+
+// VRBridge.setVirtualGamepad(enabled, live): the Companion Mod's settings for the Virtual Gamepad. `enabled` is
+// the saved vrVirtualGamepad setting (the pad is wanted at all); `live` says Motion Controller input is on
+// (vrMotionControllers), without which the pad stays present but reads neutral. A missing `live` is true.
+int VRBridge::Lua_SetVirtualGamepad(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setVirtualGamepad");
+    const bool enabled = lua_toboolean(L, 1) != 0;
+    const bool live = lua_isnoneornil(L, 2) || lua_toboolean(L, 2) != 0;
+    self->m_virtualGamepad.Configure(enabled, live);
+    return 0;
+}
+
+// VRBridge.getVirtualGamepad() -> present, slot, reason, leftGripHeld, rightGripHeld: whether the game sees the Virtual
+// Gamepad, its XInput slot (0..3, nil while absent) and, while absent, why not ("off", "no OpenXR session", ...), then
+// whether each hand's grip is held as the pad reads it (LB / RB, with the pad's own hysteresis), present or not. Returns
+// plain values so a per-frame caller allocates nothing.
+int VRBridge::Lua_GetVirtualGamepad(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.getVirtualGamepad");
+    const VirtualGamepad::Status status = self->m_virtualGamepad.GetStatus();
+    lua_pushboolean(L, status.present ? 1 : 0);
+    if (status.present) {
+        lua_pushinteger(L, status.slot);
+    } else {
+        lua_pushnil(L);
+    }
+    lua_pushstring(L, status.reason);
+    lua_pushboolean(L, status.gripHeld[0] ? 1 : 0);
+    lua_pushboolean(L, status.gripHeld[1] ? 1 : 0);
+    return 5;
+}
+
+// VRBridge.setVirtualGamepadUse(leftInputs, rightInputs): which inputs of each hand the Companion Mod is using itself
+// right now (bit set: 1 trigger, 2 grip, 4 thumbstick, 8 thumbstick click, 16 lower face button, 32 upper face button,
+// 64 menu button). Those inputs read as released or centred on the Virtual Gamepad. Sent each update; a missing mask is 0.
+int VRBridge::Lua_SetVirtualGamepadUse(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setVirtualGamepadUse");
+    for (uint32_t hand = 0; hand < 2; ++hand) {
+        const double mask = lua_isnumber(L, static_cast<int>(hand) + 1) ? lua_tonumber(L, static_cast<int>(hand) + 1) : 0.0;
+        self->m_virtualGamepad.SetInputsInUse(hand, static_cast<uint32_t>(mask > 0.0 ? mask : 0.0));
+    }
+    return 0;
 }
 
 int VRBridge::Lua_Recenter(lua_State* L) {

@@ -5,7 +5,9 @@
 #include <gtest/gtest.h>
 #include "fake_openxr_runtime.h"
 #include <algorithm>
+#include <atomic>
 #include <functional>
+#include <thread>
 
 namespace fs25vr {
 namespace {
@@ -620,5 +622,60 @@ TEST(OpenXrManagerTest, HapticFeedbackAppliedThroughTheDispatchReachesTheNamedHa
     EXPECT_FLOAT_EQ(headset.HapticPulses()[0].amplitude, 0.5f);
     EXPECT_EQ(controllers.stopHapticCalls, 1u);
 }
+
+// ---- The frame-begin observers (the Virtual Gamepad publishes its snapshot and plays rumble from here) -------------
+
+TEST(OpenXrManagerTest, FrameBeginObserversRunOncePerFrameAfterTheHandStateIsSyncedAndMayEditTheListFromInsideTheCall) {
+    FakeTrackedHeadset headset;
+    FakeOpenXrControllers::Inputs squeezed;
+    squeezed.trigger = 1.0f;
+    headset.SetHandInputs(1, squeezed);
+
+    int first = 0, second = 0, late = 0;
+    float triggerSeen = -1.0f;
+    const int ownerA = 0, ownerB = 0, ownerC = 0;
+    headset.manager->SetFrameBeginObserver(&ownerA, [&] {
+        ++first;
+        triggerSeen = headset.manager->GetHandState(1).trigger;
+        headset.manager->ClearFrameBeginObserver(&ownerB);                         // removes another observer mid-call
+        headset.manager->SetFrameBeginObserver(&ownerC, [&] { ++late; });  // adds one mid-call
+    });
+    headset.manager->SetFrameBeginObserver(&ownerB, [&] { ++second; });
+
+    headset.NextFrame();
+    EXPECT_EQ(first, 1);
+    EXPECT_EQ(second, 1) << "the frame began with both; the edit shows from the next frame on";
+    EXPECT_EQ(late, 0);
+    EXPECT_FLOAT_EQ(triggerSeen, 1.0f) << "after the sync";
+
+    headset.NextFrame();
+    EXPECT_EQ(first, 2);
+    EXPECT_EQ(second, 1);
+    EXPECT_EQ(late, 1);
+    headset.manager->ClearFrameBeginObserver(&ownerA);
+    headset.manager->ClearFrameBeginObserver(&ownerC);
+}
+
+TEST(OpenXrManagerTest, FrameBeginObserversCanBeEditedFromAnotherThreadWhileFramesBegin) {
+    FakeTrackedHeadset headset;
+    std::atomic<bool> stop{false};
+    std::atomic<int> calls{0};
+    const int owners[8] = {};
+
+    std::thread editor([&] {
+        int i = 0;
+        while (!stop.load()) {
+            const void* owner = &owners[i++ % 8];
+            headset.manager->SetFrameBeginObserver(owner, [&calls] { calls.fetch_add(1); });
+            headset.manager->ClearFrameBeginObserver(&owners[(i + 3) % 8]);
+        }
+        for (const int& owner : owners) headset.manager->ClearFrameBeginObserver(&owner);
+    });
+    for (int frame = 0; frame < 3000; ++frame) headset.NextFrame();
+    stop = true;
+    editor.join();
+    EXPECT_GT(calls.load(), 0);
+}
+
 
 } // namespace fs25vr
