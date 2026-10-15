@@ -229,6 +229,26 @@ TEST_F(VirtualGamepadDefaultBindingsTest, ItWaitsQuietlyUntilTheGameListsTheDevi
     EXPECT_EQ(Lua("savedXml['vrSettings.virtualGamepadDefaultsWritten']"), "true");
 }
 
+TEST_F(VirtualGamepadDefaultBindingsTest, BindingsOfAnOldPadThatUsedTheSameSlotAreNotRewrittenUntilTheGameHasThePadAttached) {
+    // An unplugged pad once sat in slot 3: the game still lists its saved bindings (and the Companion Mod's defaults on them),
+    // but there is no connected device behind them yet.
+    ASSERT_NO_FATAL_FAILURE(StartGame("{ devices = { '0_XINPUT_GAMEPAD', '3_XINPUT_GAMEPAD' }, unplugged = { '3_XINPUT_GAMEPAD' } }"));
+    ASSERT_EQ(Lua("select(2, VRBridge.getVirtualGamepad())"), "3");
+    const std::string oldPad = Dump(kPad);
+    PlayFor(3);
+
+    EXPECT_EQ(Dump(kPad), oldPad) << "the old pad's saved bindings are left alone";
+    EXPECT_EQ(Lua("StubInput.saves"), "0");
+    EXPECT_NE(Lua("savedXml['vrSettings.virtualGamepadDefaultsWritten']"), "true") << "and no flag is set for a device the game has not attached";
+
+    // The game attaches the Virtual Gamepad as that device.
+    ASSERT_EQ(RunLuauChunk(L, "StubInput.plug('3_XINPUT_GAMEPAD')", "=plug"), 0);
+    PlayFor(2);
+    EXPECT_EQ(List("VR_SNAP_TURN_LEFT", kPad), "AXIS_3-/+@4");
+    EXPECT_EQ(Lua("StubInput.saves"), "1");
+    EXPECT_EQ(Lua("savedXml['vrSettings.virtualGamepadDefaultsWritten']"), "true");
+}
+
 TEST_F(VirtualGamepadDefaultBindingsTest, ANewBindingTakesAFreeIndexSlotWhenThereIsNoBindingToReplace) {
     // The pad has no Recenter binding of the game's defaults left, and an alternative of the player's in slot 1.
     ASSERT_NO_FATAL_FAILURE(StartGame(

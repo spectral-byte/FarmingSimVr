@@ -917,6 +917,8 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
 //   - Binding.new(deviceId, { inputs }) with the fields set by hand and b:makeId(); g_inputBinding:addBinding(action, b)
 //     is true when added, false (after the game's "occupied slot" log line) when the device already has a binding of that
 //     action at b.index.
+//   - g_inputBinding:getDeviceById(deviceId) is the device table while the pad is connected and nil for a pad that is only saved (an unplugged
+//     one); g_inputBinding:getMissingDeviceById(deviceId) is the other way round (the spike's finding).
 //   - g_inputBinding:deleteBinding(...) says true and removes nothing. Taking a binding out of action.bindings does remove it.
 //   - g_inputBinding:saveToXMLFile() takes no path; StubInput.saves counts the calls and StubInput.saved is the listing at the
 //     last one.
@@ -927,12 +929,15 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
 //                      GAMEPAD_DEFAULT bindings (VR_RECENTER_VIEW BUTTON_11, VR_HUD_TOGGLE BUTTON_10, VR_SNAP_TURN_LEFT BUTTON_5,
 //                      VR_SNAP_TURN_RIGHT BUTTON_6, VR_TOGGLE_VIEW BUTTON_9) and the game's own (smooth look on the right
 //                      stick X on foot and in vehicles, JUMP and look up / down), next to the keyboard's.
+//     options.unplugged  a list of device ids in devices whose pad is saved but not connected: getDeviceById says nil for them
+//                      until StubInput.plug(deviceId)
 //     options.variant  "ok" (default); "missing": no g_inputBinding; "reshaped": no addBinding; "raises": addBinding raises
 //                      on its second call, after the Companion Mod has taken bindings out; "saveRaises": saveToXMLFile raises
 //     options.omit     a list of "ACTION@device" default bindings left out
 //     options.extra    a list of { action, device, input, index } bindings added to the defaults
 //     options.state    a string from StubInput.serialize(): the bindings of an earlier game session, in place of the defaults
-//   StubInput.addDevice(deviceId)      the game lists one more pad and applies GAMEPAD_DEFAULT to it
+//   StubInput.addDevice(deviceId)      the game lists one more pad (connected) and applies GAMEPAD_DEFAULT to it
+//   StubInput.plug(deviceId)           the game attaches a listed pad as a connected device
 //   StubInput.list(action, deviceId) -> string   the device's bindings of the action as "input/axisComponent@index", sorted,
 //                      separated by ' ; ' ("" when there are none)
 //   StubInput.dump(deviceId) -> string   all of the device's bindings as "ACTION: list" lines (every device when nil)
@@ -945,6 +950,7 @@ inline constexpr const char* kStubInputBinding = R"luau(
     local actionOrder = {}
     local variant = "ok"
     local addCalls = 0
+    local connected = {}
 
     local Binding = {}
     Binding.__index = Binding
@@ -1001,6 +1007,8 @@ inline constexpr const char* kStubInputBinding = R"luau(
         return true
     end
     methods.addBinding = addBindingImpl
+    function methods:getDeviceById(deviceId) if connected[deviceId] then return { id = deviceId } end return nil end
+    function methods:getMissingDeviceById(deviceId) if not connected[deviceId] then return { id = deviceId } end return nil end
     function methods:deleteBinding(...) return true end
     function methods:saveToXMLFile()
         if variant == "saveRaises" then error("InputBinding:saveToXMLFile: attempt to call a nil value") end
@@ -1019,7 +1027,17 @@ inline constexpr const char* kStubInputBinding = R"luau(
     end
 
     local pendingOptions = {}
+    local function isUnplugged(deviceId)
+        for _, id in ipairs(pendingOptions.unplugged or {}) do
+            if id == deviceId then return true end
+        end
+        return false
+    end
+
+    function StubInput.plug(deviceId) connected[deviceId] = true end
+
     function StubInput.addDevice(deviceId)
+        connected[deviceId] = not isUnplugged(deviceId)
         local index = slotIndex(deviceId)
         local function pad(name, input, axisComponent)
             if not omitted(pendingOptions, name, deviceId) then put(name, deviceId, input, axisComponent, index) end
@@ -1042,7 +1060,7 @@ inline constexpr const char* kStubInputBinding = R"luau(
         options = options or {}
         pendingOptions = options
         variant = options.variant or "ok"
-        actions, actionOrder, addCalls = {}, {}, 0
+        actions, actionOrder, addCalls, connected = {}, {}, 0, {}
         StubInput.saves, StubInput.saved = 0, nil
         _G.g_inputBinding = nil
         if variant == "missing" then return end
@@ -1056,6 +1074,7 @@ inline constexpr const char* kStubInputBinding = R"luau(
             for _, line in ipairs(split(options.state, "\n")) do
                 local f = split(line, "|")
                 put(f[1], f[2], f[3], f[4], tonumber(f[5]))
+                if not isUnplugged(f[2]) then connected[f[2]] = true end
             end
         else
             for _, name in ipairs({ "VR_RECENTER_VIEW", "VR_HUD_TOGGLE", "VR_SNAP_TURN_LEFT", "VR_SNAP_TURN_RIGHT", "VR_TOGGLE_VIEW" }) do

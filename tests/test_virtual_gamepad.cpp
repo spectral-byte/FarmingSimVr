@@ -571,3 +571,58 @@ TEST_F(VirtualGamepadTest, TheGameLogAndTheStatusCommandSayWhetherThePadIsThereA
     NextFrame(&headset);
     EXPECT_NE(Command("'vrMotionControllerStatus'").find("Virtual Gamepad: not present (off)"), std::string::npos);
 }
+
+// ---- The game's thread never touches OpenXR (review of #98) ---------------------------------------------
+
+TEST_F(VirtualGamepadTest, TheGameReadsTheSnapshotOfTheLastFrameAndAReadNeverSyncsOpenXr) {
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+    TurnOn();
+    Hold(kRight, Trigger(1.0f));
+    ASSERT_EQ(Read().Gamepad.bRightTrigger, 255);
+
+    // The controller moves between two frames (the frame has ended, the next has not begun). XInput is polled off the render
+    // thread, so the poll answers from what the last frame began with and asks OpenXR for nothing (a read with no frame in
+    // flight would sync the actions again, and xrSyncActions is the render thread's alone).
+    headset.manager->EndFrame();
+    headset.SetHandInputs(kRight, {});
+    EXPECT_EQ(Read().Gamepad.bRightTrigger, 255) << "still the last frame's snapshot";
+    EXPECT_EQ(Read().Gamepad.bRightTrigger, 255);
+
+    NextFrame(&headset);
+    EXPECT_EQ(Read().Gamepad.bRightTrigger, 0) << "the next frame publishes the new one";
+}
+
+TEST_F(VirtualGamepadTest, AGripAsThePadReadsItIsExposedThroughTheBridgeSoTheCompanionModKeepsNoThresholdsOfItsOwn) {
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+    TurnOn();
+
+    const auto gripHeld = [&](uint32_t hand, float grip) {
+        FakeOpenXrControllers::Inputs inputs;
+        inputs.grip = grip;
+        Hold(hand, inputs);
+        return EvalLua(L, "select(" + std::string(hand == kLeft ? "4" : "5") + ", VRBridge.getVirtualGamepad())");
+    };
+    EXPECT_EQ(gripHeld(kLeft, 0.5f), "false") << "half way from rest is not held";
+    EXPECT_EQ(gripHeld(kLeft, 0.7f), "true");
+    EXPECT_EQ(gripHeld(kLeft, 0.5f), "true") << "the pad's own hysteresis";
+    EXPECT_EQ(gripHeld(kLeft, 0.3f), "false");
+    EXPECT_EQ(gripHeld(kRight, 1.0f), "true");
+    EXPECT_EQ(EvalLua(L, "select(4, VRBridge.getVirtualGamepad())"), "false") << "the left hand is its own";
+}
+
+TEST_F(VirtualGamepadTest, ARealPadPluggedIntoThePadsSlotMakesItGiveTheSlotUpAndTakeTheHighestFreeOne) {
+    bool realPadInSlot3 = false;
+    Pad().SetRealPadProbeForTesting([&](DWORD slot) { return slot == 3 && realPadInSlot3; });
+    ASSERT_NO_FATAL_FAILURE(StartMod());
+    ASSERT_EQ(EvalLua(L, "select(2, VRBridge.getVirtualGamepad())"), "3");
+
+    realPadInSlot3 = true;
+    AdvanceGameTime(2000);  // the pad looks again about once a second, not on every poll
+    NextFrame(&headset);
+
+    EXPECT_EQ(EvalLua(L, "select(2, VRBridge.getVirtualGamepad())"), "2") << "the real pad keeps the slot it plugged into";
+    Hold(kRight, Trigger(1.0f));
+    EXPECT_EQ(Read(2).Gamepad.bRightTrigger, 255);
+    XINPUT_STATE state{};
+    EXPECT_EQ(Pad().GetState(3, &state), static_cast<DWORD>(ERROR_DEVICE_NOT_CONNECTED)) << "slot 3 is the real pad's now";
+}

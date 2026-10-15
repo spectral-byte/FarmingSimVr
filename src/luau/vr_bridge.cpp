@@ -500,9 +500,10 @@ int VRBridge::Lua_SetVirtualGamepad(lua_State* L) {
     return 0;
 }
 
-// VRBridge.getVirtualGamepad() -> present, slot, reason: whether the game sees the Virtual Gamepad, its XInput
-// slot (0..3, nil while absent) and, while absent, why not ("off", "no OpenXR session", ...). Returns plain
-// values so a per-frame caller allocates nothing.
+// VRBridge.getVirtualGamepad() -> present, slot, reason, leftGripHeld, rightGripHeld: whether the game sees the Virtual
+// Gamepad, its XInput slot (0..3, nil while absent) and, while absent, why not ("off", "no OpenXR session", ...), then
+// whether each hand's grip is held as the pad reads it (LB / RB, with the pad's own hysteresis), present or not. Returns
+// plain values so a per-frame caller allocates nothing.
 int VRBridge::Lua_GetVirtualGamepad(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
@@ -515,7 +516,9 @@ int VRBridge::Lua_GetVirtualGamepad(lua_State* L) {
         lua_pushnil(L);
     }
     lua_pushstring(L, status.reason);
-    return 3;
+    lua_pushboolean(L, status.gripHeld[0] ? 1 : 0);
+    lua_pushboolean(L, status.gripHeld[1] ? 1 : 0);
+    return 5;
 }
 
 // VRBridge.setVirtualGamepadUse(leftInputs, rightInputs): which inputs of each hand the Companion Mod is using itself

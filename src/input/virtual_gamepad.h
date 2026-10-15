@@ -1,9 +1,11 @@
 #pragma once
 
 #include "core/detour.h"
+#include "openxr/openxr_types.h"
 #include <windows.h>
 #include <xinput.h>
 #include <array>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -11,7 +13,6 @@
 namespace fs25vr {
 
 class OpenXrManager;
-struct HandState;
 
 // The Virtual Gamepad (ADR-0028): the Motion Controllers' triggers, grips, thumbsticks and buttons presented to
 // the game as an Xbox pad it reads through XInput. The Injector answers the game's XInputGetState,
@@ -20,9 +21,14 @@ struct HandState;
 // set already delivers (ADR-0025); what it feeds is fixed here, what each input does is bound in the game's own
 // Controls screen.
 //
-// The Companion Mod owns the saved setting and the Motion Controller switch and tells this class through VRBridge
-// (Configure). The XInput hooks are installed only while the pad is enabled and a live InjectorRuntime owns it,
-// so a player who never turns it on has no hook in the game.
+// The pad is wanted from the start (the Companion Mod's saved setting can turn it off, and tells this class through VRBridge
+// with Configure, as it does the Motion Controller switch). The XInput hooks are installed once a live InjectorRuntime owns
+// the pad, it is wanted, and the OpenXR session is active with its Motion Controller action set: the main menu and the
+// Controls screen reached from it already list the pad, and a game in Pass-Through Mode (no session) has no hook at all.
+//
+// Threads: the game polls XInput from a thread of its own. That thread never calls OpenXR: the render thread publishes
+// an immutable snapshot of both hands at the start of every OpenXR frame (and once at start) and the poll reads only that,
+// under the pad's mutex.
 class VirtualGamepad {
 public:
     explicit VirtualGamepad(std::shared_ptr<OpenXrManager> openXrManager);
@@ -52,9 +58,12 @@ public:
         bool present = false;
         int slot = -1;                      // 0..3 while present
         const char* reason = "off";         // why there is no pad, or "present"
+        std::array<bool, 2> gripHeld{};     // per hand: the grip as the pad reads it (LB / RB), with its hysteresis
     };
     // Whether the pad exists now and in which slot. It exists while it is enabled, the OpenXR session is active
-    // with its Motion Controller action set attached, and a slot is free.
+    // with its Motion Controller action set attached, the XInput hooks are installed (when a runtime owns the pad), and a
+    // slot is free. A real pad that plugs into the pad's slot makes the pad give the slot up and take a free one (looked
+    // at about once a second).
     Status GetStatus();
 
     // The answers the XInput hooks route the game's calls to. Calls for any slot but the pad's go to the real
@@ -68,7 +77,8 @@ public:
     void NoteCompanionPulse(uint32_t hand, double durationMs);
 
     // Detours are installed only while a live InjectorRuntime owns the pad, so the hooks can always find the pad
-    // that holds their originals.
+    // that holds their originals. They are put in when the pad is wanted and the OpenXR session has its action set (checked
+    // when ownership begins, when the setting changes and at the start of every OpenXR frame).
     void SetOwnedByRuntime(bool owned);
     bool AreHooksInstalled() const { return m_detourGetState.IsInstalled(); }
 
@@ -82,6 +92,12 @@ public:
     // Companion Mod's own pulses.
     using ClockMs = std::function<double()>;
     void SetClockForTesting(ClockMs clock);
+
+    // Tests only: the originals of the three hooked functions as the hook layer holds them, to test a call that reaches no pad.
+    using GetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
+    using GetCapabilitiesFn = DWORD(WINAPI*)(DWORD, DWORD, XINPUT_CAPABILITIES*);
+    using SetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_VIBRATION*);
+    static void SetHookOriginalsForTesting(GetStateFn getState, GetCapabilitiesFn getCapabilities, SetStateFn setState);
 
     // Detour entry points, acting for the pad of the live runtime that installed them.
     static DWORD WINAPI Intercept_XInputGetState(DWORD userIndex, XINPUT_STATE* state);
@@ -110,13 +126,21 @@ private:
     // A click let go without a push is reported as RS pressed for this long, so the game sees a press.
     static constexpr double kRsReleasePulseMs = 100.0;
 
+    // How often the pad looks again whether a real pad has plugged into its slot (a real XInputGetState call).
+    static constexpr double kSlotRecheckMs = 1000.0;
+
     enum class Push { None, Up, Down, Left, Right };
 
     static VirtualGamepad* ForHook(FunctionDetour VirtualGamepad::*detour);
 
+    void OnFrameBegin();
+    void RefreshSnapshot();
+    void EnsureHooks();
     void PlayRumble();
 
-    // The three below run with m_mutex held.
+    // The ones below run with m_mutex held.
+    const char* SessionProblemLocked() const;
+    bool AllHooksInstalledLocked() const;
     Status EvaluateLocked();
     bool IsPadSlotLocked(DWORD userIndex);
     bool RealPadPresentLocked(DWORD slot);
@@ -125,13 +149,18 @@ private:
     void ResetRightStickChordLocked();
 
     void InstallHooksLocked();
+    void RollBackHooksLocked();
     void UninstallHooksLocked();
 
     std::shared_ptr<OpenXrManager> m_openXrManager;
     std::mutex m_mutex;
-    bool m_enabled = false;
+    bool m_enabled = true;
     bool m_live = true;
     bool m_owned = false;
+    bool m_hooksFailed = false;      // an install was tried and failed: not tried again until the setting or the owner changes
+    bool m_snapshotTaken = false;
+    std::array<HandState, 2> m_snapshot{};  // both hands as the last OpenXR frame began; all the poll reads
+    double m_nextSlotCheckMs = 0.0;
     int m_slot = kNoSlot;
     const char* m_reason = "off";
     bool m_loggedSlotsFull = false;

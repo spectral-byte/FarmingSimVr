@@ -6,8 +6,10 @@
 #include <gtest/gtest.h>
 #include "core/injector_runtime.h"
 #include "fake_openxr_runtime.h"
+#include "input/virtual_gamepad.h"
 #include "luau/vr_bridge.h"
 #include <array>
+#include <string>
 
 namespace {
 
@@ -67,9 +69,7 @@ TEST_F(XInputHooksTest, TheVirtualGamepadAnswersInTheHighestFreeSlotAndEveryOthe
     InjectorRuntime::Dependencies deps;
     deps.vrBridge = bridge;
     InjectorRuntime runtime(std::move(deps));
-    EXPECT_FALSE(bridge->GetVirtualGamepad().AreHooksInstalled()) << "a pad nobody turned on hooks nothing";
-    EXPECT_EQ(RealSlots::Read().state, real.state);
-
+    ASSERT_TRUE(bridge->GetVirtualGamepad().AreHooksInstalled()) << "the pad is there from the moment the OpenXR session has its action set";
     bridge->GetVirtualGamepad().Configure(/*enabled=*/true, /*live=*/true);
     ASSERT_TRUE(bridge->GetVirtualGamepad().AreHooksInstalled());
 
@@ -98,6 +98,83 @@ TEST_F(XInputHooksTest, TheVirtualGamepadAnswersInTheHighestFreeSlotAndEveryOthe
     EXPECT_EQ(after.state, real.state);
     EXPECT_EQ(after.capabilities, real.capabilities);
     EXPECT_EQ(after.vibration, real.vibration);
+}
+
+TEST_F(XInputHooksTest, TheHooksComeWithTheOpenXrSessionAndItsActionSetWithoutTheCompanionModAndNotInPassThroughMode) {
+    // Pass-Through Mode: an OpenXR manager that never started a session. The game keeps its XInput untouched.
+    auto passThroughManager = std::make_shared<fs25vr::OpenXrManager>(std::make_shared<fs25vr::FakeOpenXrRuntime>());
+    auto passThroughBridge = std::make_shared<VRBridge>(passThroughManager, nullptr);
+    {
+        InjectorRuntime::Dependencies deps;
+        deps.vrBridge = passThroughBridge;
+        InjectorRuntime runtime(std::move(deps));
+        EXPECT_FALSE(passThroughBridge->GetVirtualGamepad().AreHooksInstalled());
+        EXPECT_FALSE(passThroughBridge->GetVirtualGamepad().GetStatus().present);
+    }
+
+    // The session starts after the Injector is up (the game reaches its first frame): the pad appears with the first frame, no
+    // Companion Mod needed, so the main menu and the Controls screen reached from it already list it.
+    auto fakeRuntime = std::make_shared<fs25vr::FakeOpenXrRuntime>();
+    auto manager = std::make_shared<fs25vr::OpenXrManager>(fakeRuntime);
+    auto lateBridge = std::make_shared<VRBridge>(manager, nullptr);
+    InjectorRuntime::Dependencies deps;
+    deps.vrBridge = lateBridge;
+    InjectorRuntime runtime(std::move(deps));
+    EXPECT_FALSE(lateBridge->GetVirtualGamepad().AreHooksInstalled()) << "no session yet";
+
+    ASSERT_TRUE(manager->Initialize() && manager->CreateSession() && manager->CreateTrackingSpaces());
+    manager->PollEvents();
+    ASSERT_TRUE(manager->BeginFrame());
+    EXPECT_TRUE(lateBridge->GetVirtualGamepad().AreHooksInstalled());
+    EXPECT_TRUE(lateBridge->GetVirtualGamepad().GetStatus().present);
+}
+
+TEST_F(XInputHooksTest, WhenTheHooksCannotBeInstalledThereIsNoPadAndTheReasonSaysSo) {
+    InjectorRuntime::Dependencies firstDeps;
+    firstDeps.vrBridge = bridge;
+    InjectorRuntime first(std::move(firstDeps));
+    ASSERT_TRUE(bridge->GetVirtualGamepad().AreHooksInstalled());
+
+    // A second Injector in the process cannot hook what the first has hooked: the game could never see its pad.
+    FakeTrackedHeadset secondHeadset;
+    auto secondBridge = std::make_shared<VRBridge>(secondHeadset.manager, nullptr);
+    InjectorRuntime::Dependencies secondDeps;
+    secondDeps.vrBridge = secondBridge;
+    InjectorRuntime second(std::move(secondDeps));
+    secondHeadset.NextFrame();
+    ASSERT_FALSE(secondBridge->GetVirtualGamepad().AreHooksInstalled());
+
+    secondBridge->GetVirtualGamepad().Configure(true, true);
+    const auto status = secondBridge->GetVirtualGamepad().GetStatus();
+    EXPECT_FALSE(status.present) << "a pad the game cannot see is no pad";
+    EXPECT_NE(std::string(status.reason).find("hook"), std::string::npos) << status.reason;
+}
+
+TEST_F(XInputHooksTest, ACallThatReachesNoPadStillGoesToTheRealFunctionSoRealPadsDoNotVanish) {
+    // The hook entry points can run with no pad to answer (a runtime going away under a call already in flight). The original
+    // functions are kept by the hook layer itself, so such a call reaches the real XInput.
+    static DWORD s_stateSlot = 99;
+    const auto realGetState = +[](DWORD slot, XINPUT_STATE* state) -> DWORD {
+        s_stateSlot = slot;
+        state->Gamepad.wButtons = 0x1234;
+        return ERROR_SUCCESS;
+    };
+    const auto realGetCapabilities = +[](DWORD, DWORD, XINPUT_CAPABILITIES*) -> DWORD { return 4242; };
+    const auto realSetState = +[](DWORD, XINPUT_VIBRATION*) -> DWORD { return 4343; };
+    fs25vr::VirtualGamepad::SetHookOriginalsForTesting(realGetState, realGetCapabilities, realSetState);
+
+    XINPUT_STATE state{};
+    XINPUT_CAPABILITIES caps{};
+    XINPUT_VIBRATION vibration{};
+    EXPECT_EQ(fs25vr::VirtualGamepad::Intercept_XInputGetState(2, &state), static_cast<DWORD>(ERROR_SUCCESS));
+    EXPECT_EQ(s_stateSlot, 2u);
+    EXPECT_EQ(state.Gamepad.wButtons, 0x1234);
+    EXPECT_EQ(fs25vr::VirtualGamepad::Intercept_XInputGetCapabilities(2, 0, &caps), 4242u);
+    EXPECT_EQ(fs25vr::VirtualGamepad::Intercept_XInputSetState(2, &vibration), 4343u);
+
+    fs25vr::VirtualGamepad::SetHookOriginalsForTesting(nullptr, nullptr, nullptr);
+    EXPECT_EQ(fs25vr::VirtualGamepad::Intercept_XInputGetState(2, &state), static_cast<DWORD>(ERROR_DEVICE_NOT_CONNECTED))
+        << "with nothing to call there is nothing there";
 }
 
 TEST_F(XInputHooksTest, TheLibraryIsRestoredWhenTheInjectorGoesAwayWithThePadStillOn) {

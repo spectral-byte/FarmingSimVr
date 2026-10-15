@@ -12,8 +12,9 @@
 --   VRBridge.setVirtualGamepad(enabled, live)       tell the Injector what is wanted (sent when it changes)
 --     enabled  the saved `vrVirtualGamepad` setting
 --     live     Motion Controller input is on (`vrMotionControllers`); the pad reads neutral while it is not
---   VRBridge.getVirtualGamepad() -> present, slot, reason   what the game sees: the XInput slot (0..3) while
---                                                    present, otherwise why not
+--   VRBridge.getVirtualGamepad() -> present, slot, reason, leftGripHeld, rightGripHeld   what the game sees: the XInput
+--                                                    slot (0..3) while present, otherwise why not; and whether each hand's grip is
+--                                                    held as the pad reads it (the Injector owns that threshold and its hysteresis)
 --
 --   VRBridge.setVirtualGamepadUse(leftInputs, rightInputs)   which inputs of each hand the Companion Mod is using itself
 --                                                    (bit set, see INPUT_BITS below); sent every update
@@ -51,8 +52,12 @@
 -- A new binding takes the `index` slot the binding it replaces had, otherwise the lowest one the device has free on that
 -- action (addBinding refuses an occupied slot). Only bindings of the Virtual Gamepad's device are looked at; a real pad's are
 -- never touched. The device is "<slot>_XINPUT_GAMEPAD" with the slot VRBridge reports. It counts as among the game's input
--- devices once the game has bindings for it on the Companion Mod's own actions (the game applies GAMEPAD_DEFAULT to every
--- pad it lists); until then the module looks again about once a second and says only that it is waiting.
+-- devices once the game has attached it as a connected device (g_inputBinding:getDeviceById(<device>) is a table; the spike
+-- found it nil for a pad that is only saved, where getMissingDeviceById has the table) and has bindings for it on the Companion
+-- Mod's own actions (the game applies GAMEPAD_DEFAULT to every pad it lists). The bindings alone are not enough: an unplugged
+-- pad that once sat in the same slot keeps its saved bindings, and editing those would set the flag before the game has the
+-- Virtual Gamepad. Until then the module looks again about once a second and says only that it is waiting. (Without
+-- getDeviceById the bindings alone are the signal.)
 -- THE SAVED FLAG is one global flag (the spec's single saved flag), not one per device. The pad takes its slot once, when it
 -- appears, and a real pad plugged in later takes a lower one, so the device is normally the same session after session. If
 -- the slot ever does change, the new device keeps the game's defaults: that is the lesser harm next to rewriting a player's
@@ -94,11 +99,10 @@ local HANDS = { 0, 1 }
 local HAND_NAMES = { [0] = "left", [1] = "right" }
 
 -- When an input counts as held, as the pad reads it (pressed above the first number, let go below the second): the trigger
--- is analog, so any pull the game would notice counts; the grip is the pad's digital LB / RB; the thumbstick is held out of
--- the game's dead zone.
+-- is analog, so any pull the game would notice counts; the thumbstick is held out of the game's dead zone. The grip is the
+-- pad's digital LB / RB: the Injector decides when it is held, and tells through VRBridge.getVirtualGamepad.
 local HELD_THRESHOLDS = {
     trigger = { 0.12, 0.08 },
-    grip = { 0.6, 0.4 },
     stick = { 0.25, 0.15 },
 }
 
@@ -171,6 +175,14 @@ end
 
 -- Whether the input is held on the pad right now, with hysteresis against a trigger or grip that rests half-way.
 local function isHeld(self, hand, input, wasDown)
+    if input == "grip" then
+        local b = bridge()
+        if b == nil or type(b.getVirtualGamepad) ~= "function" then return false end
+        local _, _, _, leftHeld, rightHeld = b.getVirtualGamepad()
+        local held = leftHeld
+        if hand ~= 0 then held = rightHeld end
+        return held == true
+    end
     local hands = self:getHandState(hand)
     if hands == nil or hands.tracked ~= true then return false end
     local thresholds = HELD_THRESHOLDS[input]
@@ -178,8 +190,7 @@ local function isHeld(self, hand, input, wasDown)
         local magnitude = math.max(math.abs(hands.thumbX or 0), math.abs(hands.thumbY or 0))
         return magnitude >= (wasDown and thresholds[2] or thresholds[1])
     elseif thresholds ~= nil then
-        local value = (input == "trigger") and hands.trigger or hands.grip
-        return (value or 0) >= (wasDown and thresholds[2] or thresholds[1])
+        return (hands.trigger or 0) >= (wasDown and thresholds[2] or thresholds[1])
     elseif input == "stickClick" then
         return hands.thumbClick == true
     elseif input == "lower" then
@@ -270,7 +281,7 @@ end
 -- ---- The one-time default rewrite ---------------------------------------------------------------------
 
 -- The VR actions: the game applies GAMEPAD_DEFAULT to every pad it lists, so a binding of one of these on the Virtual
--- Gamepad's device is how the Companion Mod knows the game lists the device.
+-- Gamepad's device is how the Companion Mod knows the game has given the device its defaults.
 local VR_ACTIONS = { "VR_SNAP_TURN_LEFT", "VR_SNAP_TURN_RIGHT", "VR_RECENTER_VIEW", "VR_TOGGLE_VIEW", "VR_HUD_TOGGLE" }
 
 -- What the rewrite takes off the Virtual Gamepad's device (action, the binding's input string), and what it puts on.
@@ -284,6 +295,13 @@ local TAKEN = {
     { action = "VR_RECENTER_VIEW", input = "BUTTON_11" },
     { action = "VR_TOGGLE_VIEW", input = "BUTTON_9" },
 }
+-- axisComponent is "+" on every binding the rewrite adds, Snap Turn's two stick halves included. The Snap Turn actions are
+-- plain (axisType HALF) actions, and the game stores a stick half on such an action with axisComponent "+" whatever its
+-- sign: the shipped templates and the player's saved inputBinding.xml give every button and key binding of these actions "+",
+-- and a half-axis action a player bound to a stick half by hand in the Controls screen (AutoDrive's
+-- ADSelectPreviousTargetUnload on "BUTTON_5 BUTTON_6 AXIS_3-", ADDebugChangeNeighbor on "AXIS_4-", ADSelectNextFillType on
+-- "AXIS_2-") is saved with axisComponent="+". The sign-matching pairs (AXIS_3- with "-") belong to FULL-axis actions such as
+-- AXIS_LOOK_LEFTRIGHT_PLAYER, which the rewrite takes off the pad rather than adds.
 local GIVEN = {
     { action = "VR_SNAP_TURN_LEFT", inputs = { "AXIS_3-" } },
     { action = "VR_SNAP_TURN_RIGHT", inputs = { "AXIS_3+" } },
@@ -310,6 +328,9 @@ end
 -- Looks at the game's bindings for what the rewrite would change on `deviceId`: nil and a word when the game does not list
 -- the device yet, otherwise the plan: for each action, the bindings of the device to take out and the ones to put in.
 local function planRewrite(inputBinding, deviceId)
+    if type(inputBinding.getDeviceById) == "function" and inputBinding:getDeviceById(deviceId) == nil then
+        return nil, "the game has not attached it as a connected device yet"
+    end
     local byName, plan, listed = {}, {}, false
     local function entry(name)
         local step = byName[name]

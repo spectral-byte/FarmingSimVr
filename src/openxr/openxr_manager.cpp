@@ -34,15 +34,22 @@ void OpenXrManager::SetPerformanceCounterSource(PerformanceCounterSource source)
 }
 
 void OpenXrManager::SetFrameBeginObserver(const void* owner, FrameBeginObserver observer) {
-    ClearFrameBeginObserver(owner);
-    m_frameBeginObservers.emplace_back(owner, std::move(observer));
+    std::lock_guard<std::mutex> lock(m_frameBeginObserversMutex);
+    auto edited = std::make_shared<FrameBeginObserverList>();
+    for (const auto& entry : *m_frameBeginObservers) {
+        if (entry.first != owner) edited->push_back(entry);
+    }
+    edited->emplace_back(owner, std::move(observer));
+    m_frameBeginObservers = std::move(edited);
 }
 
 void OpenXrManager::ClearFrameBeginObserver(const void* owner) {
-    m_frameBeginObservers.erase(
-        std::remove_if(m_frameBeginObservers.begin(), m_frameBeginObservers.end(),
-                       [owner](const auto& entry) { return entry.first == owner; }),
-        m_frameBeginObservers.end());
+    std::lock_guard<std::mutex> lock(m_frameBeginObserversMutex);
+    auto edited = std::make_shared<FrameBeginObserverList>();
+    for (const auto& entry : *m_frameBeginObservers) {
+        if (entry.first != owner) edited->push_back(entry);
+    }
+    m_frameBeginObservers = std::move(edited);
 }
 
 OpenXrManager::PerformanceCounterSample OpenXrManager::ReadPerformanceCounter() const {
@@ -1086,9 +1093,14 @@ bool OpenXrManager::BeginFrame() {
         PollHeadPose(m_frameState.predictedDisplayTime);
     }
 
-    // Copy first: an observer may add or clear observers.
-    const auto observers = m_frameBeginObservers;
-    for (const auto& entry : observers) entry.second();
+    // The list this frame began with: an observer may add or clear observers (or another thread may), which shows from the
+    // next frame on. Holding a reference copies nothing.
+    std::shared_ptr<const FrameBeginObserverList> observers;
+    {
+        std::lock_guard<std::mutex> lock(m_frameBeginObserversMutex);
+        observers = m_frameBeginObservers;
+    }
+    for (const auto& entry : *observers) entry.second();
     return true;
 }
 

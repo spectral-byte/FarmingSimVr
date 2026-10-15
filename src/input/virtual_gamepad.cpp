@@ -7,10 +7,12 @@
 #include "openxr/openxr_manager.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <type_traits>
 
 namespace fs25vr {
 
@@ -20,6 +22,7 @@ constexpr const char* kReasonOff = "off";
 constexpr const char* kReasonNoSession = "no OpenXR session";
 constexpr const char* kReasonNoActions = "the OpenXR runtime refused the Motion Controller action set";
 constexpr const char* kReasonSlotsFull = "all four XInput slots hold real pads";
+constexpr const char* kReasonNoHooks = "the XInput hooks are not installed";
 constexpr const char* kReasonPresent = "present";
 
 BYTE ToTrigger(float value) {
@@ -34,11 +37,26 @@ bool Engaged(float axis, float other, float engage) {
     return std::fabs(axis) >= engage && std::fabs(axis) > std::fabs(other);
 }
 
+// The real XInput functions, kept by the hook layer itself (set when a pad installs its detours, cleared when it removes
+// them): a hooked call that finds no pad to answer for it (a runtime going away under a call in flight) still reaches the
+// real function, so a real pad never vanishes from the game.
+std::atomic<VirtualGamepad::GetStateFn> g_originalGetState{nullptr};
+std::atomic<VirtualGamepad::GetCapabilitiesFn> g_originalGetCapabilities{nullptr};
+std::atomic<VirtualGamepad::SetStateFn> g_originalSetState{nullptr};
+
+// The real function a call for a slot that is not the pad's goes to: the pad's own original while its detour is installed,
+// otherwise the hook layer's (a hook entry point can be routed to a pad whose detour is not the installed one).
+template <typename Fn>
+Fn RealFunction(const FunctionDetour& detour, const std::atomic<Fn>& kept) {
+    const Fn own = detour.IsInstalled() ? reinterpret_cast<Fn>(detour.GetOriginal()) : nullptr;
+    return own ? own : kept.load();
+}
+
 } // namespace
 
 VirtualGamepad::VirtualGamepad(std::shared_ptr<OpenXrManager> openXrManager)
     : m_openXrManager(std::move(openXrManager)) {
-    if (m_openXrManager) m_openXrManager->SetFrameBeginObserver(this, [this] { PlayRumble(); });
+    if (m_openXrManager) m_openXrManager->SetFrameBeginObserver(this, [this] { OnFrameBegin(); });
 }
 
 VirtualGamepad::~VirtualGamepad() {
@@ -56,33 +74,75 @@ VirtualGamepad* VirtualGamepad::ForHook(FunctionDetour VirtualGamepad::*detour) 
 }
 
 void VirtualGamepad::Configure(bool enabled, bool live) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_live = live;
-    if (enabled == m_enabled) return;
-    m_enabled = enabled;
-    if (enabled) {
-        InstallHooksLocked();
-    } else {
-        m_loggedSlotsFull = false;
+    bool needSnapshot = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_live = live;
+        needSnapshot = !m_snapshotTaken;
+        if (enabled != m_enabled) {
+            m_enabled = enabled;
+            if (enabled) {
+                m_hooksFailed = false;
+                if (m_owned && !SessionProblemLocked()) InstallHooksLocked();
+            } else {
+                m_loggedSlotsFull = false;
+            }
+            EvaluateLocked();
+            if (!enabled) UninstallHooksLocked();
+        }
     }
-    EvaluateLocked();
-    if (!enabled) UninstallHooksLocked();
+    if (needSnapshot) RefreshSnapshot();
 }
 
 void VirtualGamepad::SetInputsInUse(uint32_t hand, uint32_t inputs) {
     if (hand >= m_inUse.size()) return;
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_inUse[hand] = inputs;
+    bool needSnapshot = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_inUse[hand] = inputs;
+        needSnapshot = !m_snapshotTaken;
+    }
+    // The Companion Mod runs on the render thread's side of the game: it may publish the first snapshot if no frame has yet.
+    if (needSnapshot) RefreshSnapshot();
 }
 
 void VirtualGamepad::SetOwnedByRuntime(bool owned) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_owned = owned;
-    if (owned && m_enabled) {
-        InstallHooksLocked();
-    } else if (!owned) {
+    m_hooksFailed = false;
+    if (owned) {
+        if (m_enabled && !SessionProblemLocked()) InstallHooksLocked();
+    } else {
         UninstallHooksLocked();
     }
+}
+
+// The start of every OpenXR frame, on the render thread, after the hand state is synced.
+void VirtualGamepad::OnFrameBegin() {
+    RefreshSnapshot();
+    EnsureHooks();
+    PlayRumble();
+}
+
+// Publishes both hands as this frame began, the only thing the game's XInput thread reads. OpenXR is asked here, with no
+// lock held; the game's thread never asks it.
+void VirtualGamepad::RefreshSnapshot() {
+    std::array<HandState, 2> hands{};
+    if (m_openXrManager) {
+        for (uint32_t hand = OpenXrInput::kLeft; hand <= OpenXrInput::kRight; ++hand) hands[hand] = m_openXrManager->GetHandState(hand);
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_snapshot = hands;
+    m_snapshotTaken = true;
+    for (uint32_t hand = OpenXrInput::kLeft; hand <= OpenXrInput::kRight; ++hand) {
+        m_gripDown[hand] = hands[hand].tracked && hands[hand].grip >= (m_gripDown[hand] ? kGripRelease : kGripPress);
+    }
+}
+
+void VirtualGamepad::EnsureHooks() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_enabled || !m_owned || m_hooksFailed || AllHooksInstalledLocked() || SessionProblemLocked()) return;
+    InstallHooksLocked();
 }
 
 void VirtualGamepad::SetClockForTesting(ClockMs clock) {
@@ -105,9 +165,18 @@ VirtualGamepad::Status VirtualGamepad::GetStatus() {
     return EvaluateLocked();
 }
 
+const char* VirtualGamepad::SessionProblemLocked() const {
+    if (!m_openXrManager || !m_openXrManager->IsActive() || !m_openXrManager->HasSession()) return kReasonNoSession;
+    if (!m_openXrManager->HasMotionControllerActions()) return kReasonNoActions;
+    return nullptr;
+}
+
+bool VirtualGamepad::AllHooksInstalledLocked() const {
+    return m_detourGetState.IsInstalled() && m_detourGetCapabilities.IsInstalled() && m_detourSetState.IsInstalled();
+}
+
 bool VirtualGamepad::RealPadPresentLocked(DWORD slot) {
     if (m_realPadProbe) return m_realPadProbe(slot);
-    using GetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
     const auto real = reinterpret_cast<GetStateFn>(m_detourGetState.GetOriginal());
     if (!real) return false;
     XINPUT_STATE ignored{};
@@ -118,10 +187,24 @@ VirtualGamepad::Status VirtualGamepad::EvaluateLocked() {
     const char* reason = kReasonPresent;
     if (!m_enabled) {
         reason = kReasonOff;
-    } else if (!m_openXrManager || !m_openXrManager->IsActive() || !m_openXrManager->HasSession()) {
-        reason = kReasonNoSession;
-    } else if (!m_openXrManager->HasMotionControllerActions()) {
-        reason = kReasonNoActions;
+    } else if (const char* problem = SessionProblemLocked()) {
+        reason = problem;
+    } else if (m_owned && !AllHooksInstalledLocked()) {
+        // A pad the game cannot see is no pad: the Companion Mod would write bindings for it and set its permanent flag.
+        reason = kReasonNoHooks;
+    }
+
+    const auto dropSlot = [this](const std::string& why) {
+        LogInfo("VirtualGamepad: removed from XInput slot " + std::to_string(m_slot) + " (" + why + ")");
+        m_slot = kNoSlot;
+        m_motorSpeed.fill(0);
+        ResetRightStickChordLocked();
+    };
+
+    // A real pad that plugs into the pad's slot keeps it: the pad gives the slot up and takes a free one below.
+    if (reason == kReasonPresent && m_slot != kNoSlot && NowMs() >= m_nextSlotCheckMs) {
+        m_nextSlotCheckMs = NowMs() + kSlotRecheckMs;
+        if (RealPadPresentLocked(static_cast<DWORD>(m_slot))) dropSlot("a real pad plugged into it");
     }
 
     if (reason == kReasonPresent && m_slot == kNoSlot) {
@@ -129,6 +212,7 @@ VirtualGamepad::Status VirtualGamepad::EvaluateLocked() {
         for (int slot = kSlotCount - 1; slot >= 0; --slot) {
             if (!RealPadPresentLocked(static_cast<DWORD>(slot))) {
                 m_slot = slot;
+                m_nextSlotCheckMs = NowMs() + kSlotRecheckMs;
                 m_loggedSlotsFull = false;
                 LogInfo("VirtualGamepad: appeared in XInput slot " + std::to_string(slot));
                 break;
@@ -142,12 +226,7 @@ VirtualGamepad::Status VirtualGamepad::EvaluateLocked() {
             }
         }
     } else if (reason != kReasonPresent && m_slot != kNoSlot) {
-        LogInfo(std::string("VirtualGamepad: removed from XInput slot ") + std::to_string(m_slot) + " (" + reason + ")");
-        m_slot = kNoSlot;
-        m_gripDown.fill(false);
-        m_motorSpeed.fill(0);
-
-        ResetRightStickChordLocked();
+        dropSlot(reason);
     }
 
     m_reason = (m_slot != kNoSlot) ? kReasonPresent : reason;
@@ -155,6 +234,7 @@ VirtualGamepad::Status VirtualGamepad::EvaluateLocked() {
     status.present = (m_slot != kNoSlot);
     status.slot = m_slot;
     status.reason = m_reason;
+    status.gripHeld = m_gripDown;
     return status;
 }
 
@@ -166,22 +246,19 @@ bool VirtualGamepad::IsPadSlotLocked(DWORD userIndex) {
 XINPUT_GAMEPAD VirtualGamepad::BuildGamepadLocked() {
     XINPUT_GAMEPAD pad{};
     if (!m_live) {
-        m_gripDown.fill(false);
         ResetRightStickChordLocked();
         return pad;
     }
     // Each physical control on each hand is its own pad input (ADR-0028). Back is never fed; the D-pad comes only from the right stick chord below.
     for (uint32_t hand = OpenXrInput::kLeft; hand <= OpenXrInput::kRight; ++hand) {
-        HandState state = m_openXrManager->GetHandState(hand);
+        HandState state = m_snapshot[hand];  // as the last frame began: the game's thread asks OpenXR for nothing
         if (!state.tracked) {
-            m_gripDown[hand] = false;
             if (hand == OpenXrInput::kRight) ResetRightStickChordLocked();
             continue;
         }
         const bool left = (hand == OpenXrInput::kLeft);
-        m_gripDown[hand] = state.grip >= (m_gripDown[hand] ? kGripRelease : kGripPress);
 
-        // An input the Companion Mod is using reads as released (the grip above keeps tracking its hysteresis).
+        // An input the Companion Mod is using reads as released (the grip's hysteresis keeps tracking underneath).
         const uint32_t used = m_inUse[hand];
         if (used & kInputTrigger) state.trigger = 0.0f;
         if (used & kInputStick) state.thumbX = state.thumbY = 0.0f;
@@ -258,7 +335,6 @@ void VirtualGamepad::ApplyRightStickChordLocked(const HandState& right, XINPUT_G
 }
 
 DWORD VirtualGamepad::GetState(DWORD userIndex, XINPUT_STATE* state) {
-    using GetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
     std::unique_lock<std::mutex> lock(m_mutex);
     if (IsPadSlotLocked(userIndex)) {
         if (!state) return ERROR_BAD_ARGUMENTS;
@@ -271,13 +347,12 @@ DWORD VirtualGamepad::GetState(DWORD userIndex, XINPUT_STATE* state) {
         state->Gamepad = pad;
         return ERROR_SUCCESS;
     }
-    const auto real = reinterpret_cast<GetStateFn>(m_detourGetState.GetOriginal());
+    const GetStateFn real = RealFunction(m_detourGetState, g_originalGetState);
     lock.unlock();
     return real ? real(userIndex, state) : ERROR_DEVICE_NOT_CONNECTED;
 }
 
 DWORD VirtualGamepad::GetCapabilities(DWORD userIndex, DWORD flags, XINPUT_CAPABILITIES* capabilities) {
-    using GetCapabilitiesFn = DWORD(WINAPI*)(DWORD, DWORD, XINPUT_CAPABILITIES*);
     std::unique_lock<std::mutex> lock(m_mutex);
     if (IsPadSlotLocked(userIndex)) {
         if (!capabilities) return ERROR_BAD_ARGUMENTS;
@@ -296,13 +371,12 @@ DWORD VirtualGamepad::GetCapabilities(DWORD userIndex, DWORD flags, XINPUT_CAPAB
         capabilities->Vibration.wRightMotorSpeed = 255;
         return ERROR_SUCCESS;
     }
-    const auto real = reinterpret_cast<GetCapabilitiesFn>(m_detourGetCapabilities.GetOriginal());
+    const GetCapabilitiesFn real = RealFunction(m_detourGetCapabilities, g_originalGetCapabilities);
     lock.unlock();
     return real ? real(userIndex, flags, capabilities) : ERROR_DEVICE_NOT_CONNECTED;
 }
 
 DWORD VirtualGamepad::SetState(DWORD userIndex, XINPUT_VIBRATION* vibration) {
-    using SetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_VIBRATION*);
     std::unique_lock<std::mutex> lock(m_mutex);
     if (IsPadSlotLocked(userIndex)) {
         // Played from the next OpenXR frame on (PlayRumble); the left motor is the left hand's.
@@ -310,7 +384,7 @@ DWORD VirtualGamepad::SetState(DWORD userIndex, XINPUT_VIBRATION* vibration) {
         m_motorSpeed[OpenXrInput::kRight] = vibration ? vibration->wRightMotorSpeed : 0;
         return ERROR_SUCCESS;
     }
-    const auto real = reinterpret_cast<SetStateFn>(m_detourSetState.GetOriginal());
+    const SetStateFn real = RealFunction(m_detourSetState, g_originalSetState);
     lock.unlock();
     return real ? real(userIndex, vibration) : ERROR_DEVICE_NOT_CONNECTED;
 }
@@ -333,44 +407,78 @@ void VirtualGamepad::PlayRumble() {
 }
 
 void VirtualGamepad::InstallHooksLocked() {
-    if (!m_owned || m_detourGetState.IsInstalled()) return;
+    if (!m_owned || m_hooksFailed || AllHooksInstalledLocked()) return;
     HMODULE xinput = LoadLibraryW(L"xinput1_4.dll");
     if (!xinput) {
         LogWarn("VirtualGamepad: xinput1_4.dll is not available; the Virtual Gamepad cannot answer the game.");
+        m_hooksFailed = true;
         return;
     }
-    const auto install = [xinput](FunctionDetour& detour, const char* name, void* intercept) {
+    bool ok = true;
+    const auto install = [xinput, &ok](FunctionDetour& detour, const char* name, void* intercept) {
+        if (detour.IsInstalled()) return;
         void* target = reinterpret_cast<void*>(GetProcAddress(xinput, name));
         if (!target || !detour.Install(target, intercept)) {
             LogWarn(std::string("VirtualGamepad: could not hook ") + name);
+            ok = false;
         }
     };
     install(m_detourGetCapabilities, "XInputGetCapabilities", reinterpret_cast<void*>(&VirtualGamepad::Intercept_XInputGetCapabilities));
     install(m_detourSetState, "XInputSetState", reinterpret_cast<void*>(&VirtualGamepad::Intercept_XInputSetState));
     // The state hook goes last: it is the one the other calls and the slot probe wait for.
     install(m_detourGetState, "XInputGetState", reinterpret_cast<void*>(&VirtualGamepad::Intercept_XInputGetState));
+    if (!ok) {
+        // Half a set of hooks would show the game a pad it cannot poll: none, and no pad (see EvaluateLocked).
+        RollBackHooksLocked();
+        m_hooksFailed = true;
+        return;
+    }
+    g_originalGetCapabilities.store(reinterpret_cast<GetCapabilitiesFn>(m_detourGetCapabilities.GetOriginal()));
+    g_originalSetState.store(reinterpret_cast<SetStateFn>(m_detourSetState.GetOriginal()));
+    g_originalGetState.store(reinterpret_cast<GetStateFn>(m_detourGetState.GetOriginal()));
+}
+
+void VirtualGamepad::RollBackHooksLocked() {
+    UninstallHooksLocked();
 }
 
 void VirtualGamepad::UninstallHooksLocked() {
+    // The kept originals go before the trampolines they point into.
+    const auto forget = [](auto& kept, const FunctionDetour& detour) {
+        using Fn = typename std::decay_t<decltype(kept)>::value_type;
+        Fn expected = reinterpret_cast<Fn>(detour.GetOriginal());
+        if (detour.IsInstalled()) kept.compare_exchange_strong(expected, nullptr);
+    };
+    forget(g_originalGetState, m_detourGetState);
+    forget(g_originalGetCapabilities, m_detourGetCapabilities);
+    forget(g_originalSetState, m_detourSetState);
     m_detourGetState.Uninstall();
     m_detourGetCapabilities.Uninstall();
     m_detourSetState.Uninstall();
 }
 
+void VirtualGamepad::SetHookOriginalsForTesting(GetStateFn getState, GetCapabilitiesFn getCapabilities, SetStateFn setState) {
+    g_originalGetState.store(getState);
+    g_originalGetCapabilities.store(getCapabilities);
+    g_originalSetState.store(setState);
+}
+
 DWORD WINAPI VirtualGamepad::Intercept_XInputGetState(DWORD userIndex, XINPUT_STATE* state) {
-    VirtualGamepad* pad = ForHook(&VirtualGamepad::m_detourGetState);
-    return pad ? pad->GetState(userIndex, state) : ERROR_DEVICE_NOT_CONNECTED;
+    if (VirtualGamepad* pad = ForHook(&VirtualGamepad::m_detourGetState)) return pad->GetState(userIndex, state);
+    const GetStateFn real = g_originalGetState.load();
+    return real ? real(userIndex, state) : ERROR_DEVICE_NOT_CONNECTED;
 }
 
 DWORD WINAPI VirtualGamepad::Intercept_XInputGetCapabilities(DWORD userIndex, DWORD flags, XINPUT_CAPABILITIES* capabilities) {
-    VirtualGamepad* pad = ForHook(&VirtualGamepad::m_detourGetCapabilities);
-    return pad ? pad->GetCapabilities(userIndex, flags, capabilities) : ERROR_DEVICE_NOT_CONNECTED;
+    if (VirtualGamepad* pad = ForHook(&VirtualGamepad::m_detourGetCapabilities)) return pad->GetCapabilities(userIndex, flags, capabilities);
+    const GetCapabilitiesFn real = g_originalGetCapabilities.load();
+    return real ? real(userIndex, flags, capabilities) : ERROR_DEVICE_NOT_CONNECTED;
 }
 
 DWORD WINAPI VirtualGamepad::Intercept_XInputSetState(DWORD userIndex, XINPUT_VIBRATION* vibration) {
-    VirtualGamepad* pad = ForHook(&VirtualGamepad::m_detourSetState);
-    return pad ? pad->SetState(userIndex, vibration) : ERROR_DEVICE_NOT_CONNECTED;
+    if (VirtualGamepad* pad = ForHook(&VirtualGamepad::m_detourSetState)) return pad->SetState(userIndex, vibration);
+    const SetStateFn real = g_originalSetState.load();
+    return real ? real(userIndex, vibration) : ERROR_DEVICE_NOT_CONNECTED;
 }
-
 } // namespace fs25vr
 
