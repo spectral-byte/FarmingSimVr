@@ -25,6 +25,8 @@
 --
 --   VRCompanion.virtualGamepadDefaultsWritten  boolean, default false, saved: the VR-comfort default bindings have been
 --                                      written to the Virtual Gamepad, once and for good (see THE ONE-TIME DEFAULT REWRITE).
+--   VRCompanion.virtualGamepadRecenterMigrated  boolean, default false, saved: the Recenter migration has run or was not needed
+--                                      (see THE RECENTER MIGRATION).
 --
 -- THE MOD'S OWN USES (ticket #101, ADR-0028): while the Companion Mod is using a Motion Controller input itself, that input
 -- reads as released on the pad, so a VR use never also fires a game binding. A use asks for an input every update it wants
@@ -58,8 +60,11 @@
 -- left / right stick click, AXIS_3 the right stick X):
 --   - Snap Turn left / right on the right stick's left / right half (AXIS_3- / AXIS_3+), off LB / RB
 --   - the game's smooth look left / right (AXIS_LOOK_LEFTRIGHT_PLAYER and _VEHICLE) off the right stick X
---   - the Recenter Action on RS (BUTTON_12), off LS (the Companion Mod's own GAMEPAD_DEFAULT)
 --   - the VR View Toggle Action on left stick click + Start, off Back (which the pad never sends)
+-- The Recenter Action is NOT rewritten: it keeps the Companion Mod's own GAMEPAD_DEFAULT for the pad, the left stick click
+-- (BUTTON_11). Measured in the game: while VR_RECENTER_VIEW carries an XInput BUTTON_12 binding the engine never fires the action
+-- in the world at all, keyboard numpad 5 included (BUTTON_8 and BUTTON_11 do not do that). An earlier build put Recenter on RS; see
+-- THE RECENTER MIGRATION below.
 -- Two things measured in the headset: (1) Binding.new(deviceId, inputNames, axisComponent, negative) takes an axis input's sign
 -- from the fourth argument alone and silently drops a "-" inside the name, so Snap Turn left is Binding.new(device, { "AXIS_3" },
 -- "+", true) (inputString "AXIS_3-"); (2) taking a binding out of action.bindings only changes what the Controls screen shows, the
@@ -79,6 +84,13 @@
 -- the slot ever does change, the new device keeps the game's defaults: that is the lesser harm next to rewriting a player's
 -- bindings a second time. Once set (after the bindings were saved) the rewrite never runs again, so what the player changes
 -- in the Controls screen sticks.
+-- THE RECENTER MIGRATION: a profile whose rewrite already ran in a build that put Recenter on RS has VR_RECENTER_VIEW on
+-- BUTTON_12 of the Virtual Gamepad's device, which stops the engine firing the action. A second saved flag
+-- (virtualGamepadRecenterMigrated, default false) makes the next session, once the device is listed as for the rewrite, take a
+-- VR_RECENTER_VIEW binding of that device whose input is exactly BUTTON_12 out of action.bindings, add BUTTON_11 for that device
+-- unless the action already has it there (same index rule as the rewrite), rebuild the active bindings, save, and set the flag.
+-- Nothing is changed when there is no such binding (a Recenter the player moved elsewhere stays), and no other device is looked
+-- at. A fresh profile's rewrite sets the flag too. The fallback is the rewrite's: one warning, bindings restored, no flag.
 -- THE FALLBACK: the binding API missing (g_inputBinding, Binding.new, getActionByName, addBinding, resetActiveActionBindings or saveToXMLFile) or raising
 -- is one warning in the game log for the session, no flag, and the bindings put back as they were. The pad then keeps the
 -- game's defaults plus the Companion Mod's GAMEPAD_DEFAULT bindings, and the player rebinds in the Controls screen.
@@ -101,8 +113,14 @@ VRCompanion.virtualGamepadEnabled = VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_ENABLED
 VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_DEFAULTS_WRITTEN = false
 VRCompanion.virtualGamepadDefaultsWritten = VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_DEFAULTS_WRITTEN
 
+-- Set once the Recenter migration (see THE RECENTER MIGRATION) has run, or was not needed: a fresh profile's rewrite sets it too.
+-- Saved: the migration never runs again.
+VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_RECENTER_MIGRATED = false
+VRCompanion.virtualGamepadRecenterMigrated = VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_RECENTER_MIGRATED
+
 local SETTING_KEY_ENABLED = "vrSettings.virtualGamepad"
 local SETTING_KEY_DEFAULTS_WRITTEN = "vrSettings.virtualGamepadDefaultsWritten"
+local SETTING_KEY_RECENTER_MIGRATED = "vrSettings.virtualGamepadRecenterMigrated"
 
 -- The inputs of a hand a use can take, with the bit the Injector knows each by (VirtualGamepad::kInput*).
 local INPUTS = { "trigger", "grip", "stick", "stickClick", "lower", "upper", "menu" }
@@ -324,7 +342,6 @@ local TAKEN = {
     { action = "AXIS_LOOK_LEFTRIGHT_VEHICLE", input = "AXIS_3+" },
     { action = "VR_SNAP_TURN_LEFT", input = "BUTTON_5" },
     { action = "VR_SNAP_TURN_RIGHT", input = "BUTTON_6" },
-    { action = "VR_RECENTER_VIEW", input = "BUTTON_11" },
     { action = "VR_TOGGLE_VIEW", input = "BUTTON_9" },
 }
 -- axisComponent is "+" on every binding the rewrite adds, Snap Turn's two stick halves included. The Snap Turn actions are
@@ -337,8 +354,18 @@ local TAKEN = {
 local GIVEN = {
     { action = "VR_SNAP_TURN_LEFT", inputs = { "AXIS_3-" } },
     { action = "VR_SNAP_TURN_RIGHT", inputs = { "AXIS_3+" } },
-    { action = "VR_RECENTER_VIEW", inputs = { "BUTTON_12" } },
     { action = "VR_TOGGLE_VIEW", inputs = { "BUTTON_11", "BUTTON_10" } },
+}
+local REWRITE_RULES = { taken = TAKEN, given = GIVEN, onlyIfTaken = false }
+
+-- THE RECENTER MIGRATION: an earlier build's rewrite put the Recenter Action on RS (BUTTON_12), and the engine then never fires
+-- that action at all (measured in the game: keyboard numpad 5 too). For a profile whose rewrite already ran, the migration takes a
+-- VR_RECENTER_VIEW binding that is exactly BUTTON_12 off the Virtual Gamepad's device and, only then, gives it the stick click
+-- (BUTTON_11, the Companion Mod's own GAMEPAD_DEFAULT for the action) unless the device already has it on the action.
+local MIGRATION_RULES = {
+    taken = { { action = "VR_RECENTER_VIEW", input = "BUTTON_12" } },
+    given = { { action = "VR_RECENTER_VIEW", inputs = { "BUTTON_11" } } },
+    onlyIfTaken = true,
 }
 
 -- Binding.new(deviceId, inputNames, axisComponent, negative) takes the sign of an axis input from its fourth argument alone:
@@ -377,7 +404,7 @@ end
 
 -- Looks at the game's bindings for what the rewrite would change on `deviceId`: nil and a word when the game does not list
 -- the device yet, otherwise the plan: for each action, the bindings of the device to take out and the ones to put in.
-local function planRewrite(inputBinding, deviceId)
+local function planRewrite(inputBinding, deviceId, rules)
     if type(inputBinding.getDeviceById) == "function" and inputBinding:getDeviceById(deviceId) == nil then
         return nil, "the game has not attached it as a connected device yet"
     end
@@ -402,7 +429,7 @@ local function planRewrite(inputBinding, deviceId)
     end
     if not listed then return nil, "no bindings of its yet" end
 
-    for _, taken in ipairs(TAKEN) do
+    for _, taken in ipairs(rules.taken) do
         local step = entry(taken.action)
         if step == nil then return nil, "the game does not know the action " .. taken.action end
         for _, binding in ipairs(step.action.bindings) do
@@ -412,8 +439,9 @@ local function planRewrite(inputBinding, deviceId)
         end
     end
 
-    for _, given in ipairs(GIVEN) do
-        local step = byName[given.action]
+    for _, given in ipairs(rules.given) do
+        local step = entry(given.action)
+        if step == nil then return nil, "the game does not know the action " .. given.action end
         local inputString = table.concat(given.inputs, " ")
         local present, used, firstFree = false, {}, 1
         local replaced = {}
@@ -431,7 +459,7 @@ local function planRewrite(inputBinding, deviceId)
                 end
             end
         end
-        if not present then
+        if not present and (not rules.onlyIfTaken or #step.take > 0) then
             -- The slot of the binding it replaces if there is one, otherwise the lowest the device has free on the action.
             local index = replaced[1]
             if index == nil or used[index] then
@@ -495,15 +523,29 @@ local function restorePlan(plan, copies)
     end
 end
 
-local function giveUpOnRewrite(reason)
-    rewriteProblem = reason
-    print("[FS25_VR] [Warning] Virtual Gamepad default bindings not written: " .. reason .. ". The Virtual Gamepad keeps the "
-        .. "game's default bindings plus the Companion Mod's gamepad defaults; rebind Snap Turn in the Controls screen.")
+local function countChanges(plan)
+    local changes = 0
+    for _, step in ipairs(plan) do changes = changes + #step.take + #step.give end
+    return changes
 end
 
--- Once the Virtual Gamepad is present: writes the VR-comfort default bindings to its device, once for good.
+local function giveUpOnRewrite(reason, migrating)
+    rewriteProblem = reason
+    if migrating then
+        print("[FS25_VR] [Warning] Virtual Gamepad Recenter binding not migrated: " .. reason .. ". The Recenter Action may stay on "
+            .. "the Virtual Gamepad's right stick click, where the game does not fire it; rebind Recenter in the Controls screen.")
+    else
+        print("[FS25_VR] [Warning] Virtual Gamepad default bindings not written: " .. reason .. ". The Virtual Gamepad keeps the "
+            .. "game's default bindings plus the Companion Mod's gamepad defaults; rebind Snap Turn in the Controls screen.")
+    end
+end
+
+-- Once the Virtual Gamepad is present: writes the VR-comfort default bindings to its device, once for good. A profile whose
+-- rewrite already ran in an earlier build gets the Recenter migration instead (also once for good, see MIGRATION_RULES).
 function VRCompanion:updateVirtualGamepadDefaults(dt, present, slot)
-    if self.virtualGamepadDefaultsWritten == true or rewriteProblem ~= nil then return end
+    local migrating = self.virtualGamepadDefaultsWritten == true
+    if migrating and self.virtualGamepadRecenterMigrated == true then return end
+    if rewriteProblem ~= nil then return end
     if not present or type(slot) ~= "number" then return end
     state.defaultsWait = (state.defaultsWait or 0) - (dt or 0)
     if state.defaultsWait > 0 then return end
@@ -511,14 +553,15 @@ function VRCompanion:updateVirtualGamepadDefaults(dt, present, slot)
 
     local inputBinding, bindingClass = inputBindingApi()
     if inputBinding == nil then
-        giveUpOnRewrite("the game's binding API is not there (" .. tostring(bindingClass) .. ")")
+        giveUpOnRewrite("the game's binding API is not there (" .. tostring(bindingClass) .. ")", migrating)
         return
     end
 
     local deviceId = string.format("%d_XINPUT_GAMEPAD", slot)
-    local ok, plan, why = pcall(planRewrite, inputBinding, deviceId)
+    local rules = migrating and MIGRATION_RULES or REWRITE_RULES
+    local ok, plan, why = pcall(planRewrite, inputBinding, deviceId, rules)
     if not ok then
-        giveUpOnRewrite("looking at the game's bindings raised: " .. tostring(plan))
+        giveUpOnRewrite("looking at the game's bindings raised: " .. tostring(plan), migrating)
         return
     end
     if plan == nil then
@@ -529,20 +572,33 @@ function VRCompanion:updateVirtualGamepadDefaults(dt, present, slot)
         return
     end
 
-    local copies = snapshotPlan(plan)
-    local applied, changes = pcall(applyRewrite, inputBinding, bindingClass, deviceId, plan)
-    if not applied then
-        restorePlan(plan, copies)
-        -- What the game acts on goes back with them (it may have been rebuilt from the changed bindings before the failure).
-        if type(inputBinding.resetActiveActionBindings) == "function" then
-            pcall(inputBinding.resetActiveActionBindings, inputBinding)
+    -- A profile that needs no migration changes nothing and saves no bindings: it is only flagged.
+    local changes = 0
+    if not migrating or countChanges(plan) > 0 then
+        local copies = snapshotPlan(plan)
+        local applied
+        applied, changes = pcall(applyRewrite, inputBinding, bindingClass, deviceId, plan)
+        if not applied then
+            restorePlan(plan, copies)
+            -- What the game acts on goes back with them (it may have been rebuilt from the changed bindings before the failure).
+            if type(inputBinding.resetActiveActionBindings) == "function" then
+                pcall(inputBinding.resetActiveActionBindings, inputBinding)
+            end
+            giveUpOnRewrite("the game's binding API raised: " .. tostring(changes), migrating)
+            return
         end
-        giveUpOnRewrite("the game's binding API raised: " .. tostring(changes))
-        return
     end
 
-    self.virtualGamepadDefaultsWritten = true
-    print(string.format("[FS25_VR] Virtual Gamepad default bindings written to %s (%d changes) and saved", deviceId, changes))
+    -- A fresh profile gets the layout without Recenter on RS, so it never needs the migration either.
+    self.virtualGamepadRecenterMigrated = true
+    if migrating then
+        if changes > 0 then
+            print(string.format("[FS25_VR] Virtual Gamepad Recenter binding migrated on %s (RS to the left stick click, %d changes) and saved", deviceId, changes))
+        end
+    else
+        self.virtualGamepadDefaultsWritten = true
+        print(string.format("[FS25_VR] Virtual Gamepad default bindings written to %s (%d changes) and saved", deviceId, changes))
+    end
     if type(self.saveConfiguration) == "function" then
         self:saveConfiguration()
     end
@@ -559,6 +615,9 @@ function VRCompanion:getVirtualGamepadStatus()
         text = text .. "; the Companion Mod is using: " .. describeUse()
         if self.virtualGamepadDefaultsWritten == true then
             text = text .. "; default bindings written"
+            if self.virtualGamepadRecenterMigrated ~= true and rewriteProblem ~= nil then
+                text = text .. "; Recenter binding not migrated (" .. rewriteProblem .. ")"
+            end
         elseif rewriteProblem ~= nil then
             text = text .. "; default bindings not written (" .. rewriteProblem .. ")"
         else
@@ -572,6 +631,7 @@ function VRCompanion:saveVirtualGamepadSetting(xmlFile, xml)
     if type(xml.setBool) == "function" then
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.virtualGamepadEnabled == true)
         xml.setBool(xmlFile, SETTING_KEY_DEFAULTS_WRITTEN, self.virtualGamepadDefaultsWritten == true)
+        xml.setBool(xmlFile, SETTING_KEY_RECENTER_MIGRATED, self.virtualGamepadRecenterMigrated == true)
     end
 end
 
@@ -591,6 +651,10 @@ function VRCompanion:loadVirtualGamepadSetting(xmlFile, xml)
         local written = xml.getBool(xmlFile, SETTING_KEY_DEFAULTS_WRITTEN)
         if written ~= nil then
             self.virtualGamepadDefaultsWritten = written
+        end
+        local migrated = xml.getBool(xmlFile, SETTING_KEY_RECENTER_MIGRATED)
+        if migrated ~= nil then
+            self.virtualGamepadRecenterMigrated = migrated
         end
     end
 end

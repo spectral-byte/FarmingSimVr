@@ -82,10 +82,13 @@ protected:
     }
 
     // A new game session over the same headset: a fresh Lua state and a fresh Injector bridge. The game loads the bindings
-    // the last session saved (what the stand-in holds now, as the saved file would), and the Companion Mod's settings file\n    // is what the last session left.
-    void RestartGameSession() {
+    // the last session saved (what the stand-in holds now, as the saved file would), and the Companion Mod's settings file\n    // is what the last session left. `stubOptions` adds StubInput.install options (Lua, e.g. "variant = 'saveRaises'").
+    // `settingsOfAnEarlierBuild` leaves the Recenter migration flag out of the settings file, as a build from before the Recenter
+    // fix did (its rewrite had run and saved the first flag only).
+    void RestartGameSession(const std::string& stubOptions = "", bool settingsOfAnEarlierBuild = false) {
         const std::string saved = EvalLua(L, "StubInput.serialize()");
         const std::string flag = EvalLua(L, "savedXml['vrSettings.virtualGamepadDefaultsWritten']");
+        const std::string migrated = EvalLua(L, "savedXml['vrSettings.virtualGamepadRecenterMigrated']");
         const std::string enabled = EvalLua(L, "savedXml['vrSettings.virtualGamepad']");
         lua_close(L);
         L = luaL_newstate();
@@ -96,8 +99,9 @@ protected:
         bridgeOwner = std::make_unique<fs25vr::VRBridge>(headset.manager, nullptr);
         std::string seed = "_G.savedXml = {}";
         if (flag != "nil") seed += "; savedXml['vrSettings.virtualGamepadDefaultsWritten'] = " + flag;
+        if (migrated != "nil" && !settingsOfAnEarlierBuild) seed += "; savedXml['vrSettings.virtualGamepadRecenterMigrated'] = " + migrated;
         if (enabled != "nil") seed += "; savedXml['vrSettings.virtualGamepad'] = " + enabled;
-        StartGame("{ state = [[" + saved + "]] }", seed, false);
+        StartGame("{ state = [[" + saved + "]]" + (stubOptions.empty() ? "" : ", " + stubOptions) + " }", seed, false);
         TurnOn();
     }
 
@@ -134,7 +138,10 @@ TEST_F(VirtualGamepadDefaultBindingsTest, TheFirstSessionRewritesTheVirtualGamep
     EXPECT_EQ(List("VR_SNAP_TURN_RIGHT", kPad), "AXIS_3+/+@4") << "Snap Turn right on the right stick's right half, off RB";
     EXPECT_EQ(List("AXIS_LOOK_LEFTRIGHT_PLAYER", kPad), "") << "smooth look is off the right stick X on foot";
     EXPECT_EQ(List("AXIS_LOOK_LEFTRIGHT_VEHICLE", kPad), "") << "and in vehicles";
-    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_12/+@4") << "the Recenter Action on RS";
+    // The engine drops VR_RECENTER_VIEW altogether (keyboard numpad 5 too) while it carries an XInput BUTTON_12 binding, measured
+    // in the game: the rewrite leaves Recenter on the Companion Mod's own GAMEPAD_DEFAULT (the left stick click).
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_11/+@4") << "the Recenter Action keeps the game's default for the pad";
+    EXPECT_EQ(Lua("StubInput.get('VR_RECENTER_VIEW', 'KB_MOUSE_DEFAULT').inputString"), "KEY_numPad5") << "and the keyboard's";
     EXPECT_EQ(List("VR_TOGGLE_VIEW", kPad), "BUTTON_11 BUTTON_10/+@4") << "the VR View Toggle Action on left stick click + Start";
     EXPECT_EQ(List("VR_HUD_TOGGLE", kPad), "BUTTON_10/+@4") << "the rest of the Companion Mod's pad defaults stay";
     EXPECT_EQ(List("JUMP", kPad), "BUTTON_2/+@4") << "and so do the game's other bindings";
@@ -143,8 +150,198 @@ TEST_F(VirtualGamepadDefaultBindingsTest, TheFirstSessionRewritesTheVirtualGamep
     EXPECT_EQ(Lua("StubInput.saves"), "1") << "the bindings were saved, once";
     EXPECT_EQ(Lua("StubInput.saved == StubInput.dump(nil)"), "true") << "after the rewrite, not before";
     EXPECT_EQ(Lua("savedXml['vrSettings.virtualGamepadDefaultsWritten']"), "true") << "and the flag is saved with the settings";
+    EXPECT_EQ(Lua("savedXml['vrSettings.virtualGamepadRecenterMigrated']"), "true")
+        << "a fresh profile also saves the migration flag: it never needs the Recenter migration";
     EXPECT_EQ(LogLinesContaining("Virtual Gamepad default bindings written"), 1) << "the game log says the rewrite ran";
 }
+
+TEST_F(VirtualGamepadDefaultBindingsTest, AFreshProfileNeverRunsTheRecenterMigrationLater) {
+    ASSERT_NO_FATAL_FAILURE(StartGame());
+    ASSERT_EQ(Lua("StubInput.saves"), "1");
+
+    // The player puts Recenter on RS in the Controls screen themselves: it is theirs, in this session and in the next.
+    ASSERT_EQ(RunLuauChunk(L, "StubInput.change('VR_RECENTER_VIEW', '3_XINPUT_GAMEPAD', 'BUTTON_11', 'BUTTON_12')", "=playerChange"), 0);
+    ASSERT_NO_FATAL_FAILURE(RestartGameSession());
+    PlayFor(3);
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_12/+@4");
+    EXPECT_EQ(Lua("StubInput.saves"), "0");
+    EXPECT_EQ(LogLinesContaining("Recenter binding"), 0);
+}
+
+// ---- The Recenter migration: profiles whose rewrite ran in a build that put Recenter on RS (BUTTON_12) -------------------------
+//
+// The engine drops VR_RECENTER_VIEW while it carries an XInput BUTTON_12 binding, so such a profile's saved inputBinding.xml
+// has to be put right. The tests build that profile from a normal first session (LeaveProfileOfAnEarlierBuild): the saved
+// bindings are edited as the earlier build left them (Recenter on BUTTON_12 on the device(s) named) and the settings file has
+// the first flag only. The next session (StartNextSession) is the one in which the migration may run.
+class VirtualGamepadRecenterMigrationTest : public VirtualGamepadDefaultBindingsTest {
+protected:
+    void LeaveProfileOfAnEarlierBuild(const std::string& edits, const std::string& firstSession = "{}") {
+        ASSERT_NO_FATAL_FAILURE(StartGame(firstSession));
+        ASSERT_EQ(RunLuauChunk(L, edits, "=profileEdits"), 0);
+    }
+
+    // `stubOptions`: more StubInput.install options for the game's bindings of this session.
+    void StartNextSession(const std::string& stubOptions = "") {
+        ASSERT_NO_FATAL_FAILURE(RestartGameSession(stubOptions, true));
+    }
+
+    static std::string RecenterOnRs(const std::string& device) {
+        return "StubInput.change('VR_RECENTER_VIEW', '" + device + "', 'BUTTON_11', 'BUTTON_12')";
+    }
+
+    std::string Logs() {
+        std::string all;
+        for (const std::string& line : s_capturedLogs) all += line + "\n";
+        return all;
+    }
+};
+
+TEST_F(VirtualGamepadRecenterMigrationTest, RecenterOnRsOfTheVirtualGamepadGoesBackToTheStickClickOnceAndIsSaved) {
+    ASSERT_NO_FATAL_FAILURE(LeaveProfileOfAnEarlierBuild(RecenterOnRs(kPad)));
+    ASSERT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_12/+@4") << "the profile the earlier build left";
+    std::string expectedDump = Dump(kPad);
+    const std::string rsLine = "VR_RECENTER_VIEW 3_XINPUT_GAMEPAD: BUTTON_12/+@4";
+    ASSERT_NE(expectedDump.find(rsLine), std::string::npos);
+    expectedDump.replace(expectedDump.find(rsLine), rsLine.size(), "VR_RECENTER_VIEW 3_XINPUT_GAMEPAD: BUTTON_11/+@4");
+
+    ASSERT_NO_FATAL_FAILURE(StartNextSession());
+    PlayFor(3);
+
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_11/+@4") << "off RS, onto the left stick click, in the slot RS had";
+    EXPECT_EQ(Lua("StubInput.listActive('VR_RECENTER_VIEW', '3_XINPUT_GAMEPAD')"), "BUTTON_11/+@4") << "and what the game acts on follows";
+    EXPECT_EQ(Lua("StubInput.get('VR_RECENTER_VIEW', 'KB_MOUSE_DEFAULT').inputString"), "KEY_numPad5") << "the keyboard keeps numpad 5";
+    EXPECT_EQ(Lua("StubInput.saves"), "1") << "saved, once";
+    EXPECT_EQ(Lua("StubInput.saved == StubInput.dump(nil)"), "true") << "after the change, not before";
+    EXPECT_EQ(Lua("savedXml['vrSettings.virtualGamepadRecenterMigrated']"), "true");
+    EXPECT_EQ(LogLinesContaining("Virtual Gamepad Recenter binding migrated"), 1) << "the game log says it ran";
+    EXPECT_EQ(LogLinesContaining("default bindings written"), 0) << "the comfort rewrite does not run again";
+    EXPECT_EQ(Dump(kPad), expectedDump) << "nothing else of the device was touched";
+}
+
+TEST_F(VirtualGamepadRecenterMigrationTest, ItNeverRunsAgainEvenIfThePlayerPutsRecenterBackOnRs) {
+    ASSERT_NO_FATAL_FAILURE(LeaveProfileOfAnEarlierBuild(RecenterOnRs(kPad)));
+    ASSERT_NO_FATAL_FAILURE(StartNextSession());
+    PlayFor(3);
+    ASSERT_EQ(Lua("StubInput.saves"), "1");
+    ASSERT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_11/+@4");
+
+    ASSERT_EQ(RunLuauChunk(L, RecenterOnRs(kPad), "=playerChange"), 0);
+    ASSERT_NO_FATAL_FAILURE(RestartGameSession());
+    PlayFor(3);
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_12/+@4") << "their choice, however the engine takes it";
+    EXPECT_EQ(Lua("StubInput.saves"), "0");
+    EXPECT_EQ(LogLinesContaining("Recenter binding"), 0);
+}
+
+TEST_F(VirtualGamepadRecenterMigrationTest, ARealPadsRecenterOnRsAndEveryOtherDevicesBindingsAreNeverTouched) {
+    const std::string devices = "{ devices = { '0_XINPUT_GAMEPAD', '1_XINPUT_GAMEPAD', '3_XINPUT_GAMEPAD' } }";
+    ASSERT_NO_FATAL_FAILURE(LeaveProfileOfAnEarlierBuild(
+        RecenterOnRs(kPad) + "; " + RecenterOnRs(kRealPad) + "; " + RecenterOnRs("1_XINPUT_GAMEPAD"), devices));
+    const std::string realPad = Dump(kRealPad);
+    const std::string unpluggedPad = Dump("1_XINPUT_GAMEPAD");
+    const std::string keyboard = Dump("KB_MOUSE_DEFAULT");
+    ASSERT_EQ(List("VR_RECENTER_VIEW", kRealPad), "BUTTON_12/+@1");
+
+    ASSERT_NO_FATAL_FAILURE(StartNextSession());
+    PlayFor(3);
+
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_11/+@4") << "the Virtual Gamepad was migrated";
+    EXPECT_EQ(Dump(kRealPad), realPad) << "a real pad that has BUTTON_12 on Recenter keeps it";
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kRealPad), "BUTTON_12/+@1");
+    EXPECT_EQ(Dump("1_XINPUT_GAMEPAD"), unpluggedPad) << "also a pad that is not plugged in";
+    EXPECT_EQ(Dump("KB_MOUSE_DEFAULT"), keyboard);
+}
+
+TEST_F(VirtualGamepadRecenterMigrationTest, AProfileWhoseRecenterIsAlreadyRightIsLeftAloneAndFlagged) {
+    ASSERT_NO_FATAL_FAILURE(LeaveProfileOfAnEarlierBuild("-- the file is as the new build writes it"));
+    const std::string all = Lua("StubInput.dump(nil)");
+    ASSERT_NE(Lua("savedXml['vrSettings.virtualGamepadDefaultsWritten']"), "nil");
+
+    ASSERT_NO_FATAL_FAILURE(StartNextSession());
+    PlayFor(3);
+
+    EXPECT_EQ(Lua("StubInput.dump(nil)"), all);
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_11/+@4");
+    EXPECT_EQ(Lua("StubInput.saves"), "0") << "nothing to change, nothing saved";
+    EXPECT_EQ(Lua("savedXml['vrSettings.virtualGamepadRecenterMigrated']"), "true") << "and it is not looked at again";
+    EXPECT_EQ(LogLinesContaining("Recenter binding migrated"), 0);
+    EXPECT_EQ(LogLinesContaining("[Warning] Virtual Gamepad"), 0) << Logs();
+}
+
+TEST_F(VirtualGamepadRecenterMigrationTest, ARecenterThePlayerMovedElsewhereIsLeftAlone) {
+    ASSERT_NO_FATAL_FAILURE(LeaveProfileOfAnEarlierBuild(
+        "StubInput.change('VR_RECENTER_VIEW', '3_XINPUT_GAMEPAD', 'BUTTON_11', 'BUTTON_8')"));
+    ASSERT_NO_FATAL_FAILURE(StartNextSession());
+    PlayFor(3);
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_8/+@4") << "no BUTTON_12 on it: not ours to move";
+    EXPECT_EQ(Lua("StubInput.saves"), "0");
+    EXPECT_EQ(Lua("savedXml['vrSettings.virtualGamepadRecenterMigrated']"), "true");
+}
+
+TEST_F(VirtualGamepadRecenterMigrationTest, OtherBindingsOfThePlayerOnRecenterStayWhenRsGoesAndTheStickClickComes) {
+    ASSERT_NO_FATAL_FAILURE(LeaveProfileOfAnEarlierBuild(
+        RecenterOnRs(kPad) + "; StubInput.add('VR_RECENTER_VIEW', '3_XINPUT_GAMEPAD', 'BUTTON_2', 1)"));
+    ASSERT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_12/+@4 ; BUTTON_2/+@1");
+    ASSERT_NO_FATAL_FAILURE(StartNextSession());
+    PlayFor(3);
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_11/+@4 ; BUTTON_2/+@1") << "RS out, the stick click in, the player's own kept";
+    EXPECT_EQ(Lua("StubInput.saves"), "1");
+}
+
+TEST_F(VirtualGamepadRecenterMigrationTest, WhenTheStickClickIsAlreadyOnRecenterAlongsideRsOnlyRsGoes) {
+    ASSERT_NO_FATAL_FAILURE(LeaveProfileOfAnEarlierBuild(
+        "StubInput.add('VR_RECENTER_VIEW', '3_XINPUT_GAMEPAD', 'BUTTON_12', 1)"));
+    ASSERT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_11/+@4 ; BUTTON_12/+@1");
+    ASSERT_NO_FATAL_FAILURE(StartNextSession());
+    PlayFor(3);
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_11/+@4") << "no second BUTTON_11";
+    EXPECT_EQ(Lua("StubInput.listActive('VR_RECENTER_VIEW', '3_XINPUT_GAMEPAD')"), "BUTTON_11/+@4");
+    EXPECT_EQ(Lua("StubInput.saves"), "1");
+}
+
+TEST_F(VirtualGamepadRecenterMigrationTest, ItWaitsUntilTheGameHasTheVirtualGamepadAttachedAndLeavesAnOldPadsBindingsMeanwhile) {
+    ASSERT_NO_FATAL_FAILURE(LeaveProfileOfAnEarlierBuild(RecenterOnRs(kPad)));
+    ASSERT_NO_FATAL_FAILURE(StartNextSession("unplugged = { '3_XINPUT_GAMEPAD' }"));
+    const std::string oldPad = Dump(kPad);
+    PlayFor(3);
+    EXPECT_EQ(Dump(kPad), oldPad);
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_12/+@4");
+    EXPECT_EQ(Lua("StubInput.saves"), "0");
+    EXPECT_NE(Lua("savedXml['vrSettings.virtualGamepadRecenterMigrated']"), "true");
+    EXPECT_EQ(LogLinesContaining("[Warning] Virtual Gamepad"), 0) << Logs();
+
+    ASSERT_EQ(RunLuauChunk(L, "StubInput.plug('3_XINPUT_GAMEPAD')", "=plug"), 0);
+    PlayFor(2);
+    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_11/+@4");
+    EXPECT_EQ(Lua("savedXml['vrSettings.virtualGamepadRecenterMigrated']"), "true");
+}
+
+class VirtualGamepadRecenterMigrationFallbackTest : public VirtualGamepadRecenterMigrationTest,
+                                                    public ::testing::WithParamInterface<const char*> {};
+
+// The binding API missing or raising: one warning, no flag, and the bindings (and the saved file) as the game had them.
+TEST_P(VirtualGamepadRecenterMigrationFallbackTest, GivesOneWarningNoFlagAndUnchangedBindings) {
+    ASSERT_NO_FATAL_FAILURE(LeaveProfileOfAnEarlierBuild(RecenterOnRs(kPad)));
+    const std::string before = Lua("StubInput.dump(nil)");
+    const std::string activeBefore = Lua("StubInput.dumpActive(nil)");
+
+    ASSERT_NO_FATAL_FAILURE(StartNextSession(std::string("variant = '") + GetParam() + "'"));
+    PlayFor(5);
+
+    if (Lua("g_inputBinding ~= nil") == "true") {
+        EXPECT_EQ(Lua("StubInput.dump(nil)"), before) << "the bindings are as the game had them";
+        EXPECT_EQ(Lua("StubInput.dumpActive(nil)"), activeBefore) << "and so are the ones the game acts on";
+        EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_12/+@4");
+    }
+    EXPECT_EQ(Lua("StubInput.saves"), "0") << "and nothing was saved";
+    EXPECT_NE(Lua("savedXml['vrSettings.virtualGamepadRecenterMigrated']"), "true") << "the flag stays unset";
+    EXPECT_EQ(LogLinesContaining("[Warning] Virtual Gamepad Recenter binding not migrated"), 1) << "one warning for the session";
+    EXPECT_EQ(LogLinesContaining("Recenter binding migrated"), 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(BindingApi, VirtualGamepadRecenterMigrationFallbackTest,
+    ::testing::Values("missing", "reshaped", "saveRaises", "noReset", "resetRaises"));
 
 TEST_F(VirtualGamepadDefaultBindingsTest, SnapTurnLeftAndRightLandOnTheTwoDifferentHalvesOfTheRightStick) {
     // The game's Binding.new takes the sign of an axis input from its fourth argument alone (a "-" in the name is dropped), so
@@ -274,10 +471,10 @@ TEST_F(VirtualGamepadDefaultBindingsTest, BindingsOfAnOldPadThatUsedTheSameSlotA
 }
 
 TEST_F(VirtualGamepadDefaultBindingsTest, ANewBindingTakesAFreeIndexSlotWhenThereIsNoBindingToReplace) {
-    // The pad has no Recenter binding of the game's defaults left, and an alternative of the player's in slot 1.
+    // The pad has no VR View Toggle binding of the game's defaults left, and an alternative of the player's in slot 1.
     ASSERT_NO_FATAL_FAILURE(StartGame(
-        "{ omit = { 'VR_RECENTER_VIEW@3_XINPUT_GAMEPAD' }, extra = { { action = 'VR_RECENTER_VIEW', device = '3_XINPUT_GAMEPAD', input = 'BUTTON_2', index = 1 } } }"));
-    EXPECT_EQ(List("VR_RECENTER_VIEW", kPad), "BUTTON_12/+@2 ; BUTTON_2/+@1") << "the first slot the device has free on the action";
+        "{ omit = { 'VR_TOGGLE_VIEW@3_XINPUT_GAMEPAD' }, extra = { { action = 'VR_TOGGLE_VIEW', device = '3_XINPUT_GAMEPAD', input = 'BUTTON_2', index = 1 } } }"));
+    EXPECT_EQ(List("VR_TOGGLE_VIEW", kPad), "BUTTON_11 BUTTON_10/+@2 ; BUTTON_2/+@1") << "the first slot the device has free on the action";
     EXPECT_EQ(List("VR_SNAP_TURN_LEFT", kPad), "AXIS_3-/+@4") << "a replaced binding hands its slot on";
     EXPECT_EQ(Lua("StubInput.saves"), "1");
 }

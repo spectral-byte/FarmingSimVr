@@ -949,6 +949,7 @@ inline constexpr const char* kStubSteeringVehicle = R"luau(
 //   StubInput.listActive(action, deviceId) / StubInput.dumpActive(deviceId)   the same for action.activeBindings
 //   StubInput.get(action, deviceId) -> Binding   the device's first binding of the action
 //   StubInput.dump(deviceId) -> string   all of the device's bindings as "ACTION: list" lines (every device when nil)
+//   StubInput.add(action, deviceId, input, index)   one more binding on the device (in bindings and activeBindings)
 //   StubInput.change(action, deviceId, from, to)   the player changes a binding in the Controls screen: its input becomes `to`
 //   StubInput.serialize() -> string    every binding, for a later game session
 //   StubInput.saves, StubInput.saved   see above
@@ -1167,6 +1168,9 @@ inline constexpr const char* kStubInputBinding = R"luau(
         end
         return nil
     end
+
+    -- the player (or a pad profile an earlier build left behind) has one more binding on the device
+    function StubInput.add(name, deviceId, input, index) put(name, deviceId, input, "+", index) end
 
     function StubInput.change(name, deviceId, from, to)
         for _, b in ipairs(actions[name].bindings) do
