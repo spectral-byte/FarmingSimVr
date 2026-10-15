@@ -979,6 +979,7 @@ function VRCompanion:deleteMap()
     self.snapLeftActionEventId = nil
     self.snapRightActionEventId = nil
     self.toggleViewActionEventId = nil
+    self.actionEventsContextName = nil
     self.hudToggleLoggedOnce = false
     self.recenterLoggedOnce = false
     self.snapLeftLoggedOnce = false
