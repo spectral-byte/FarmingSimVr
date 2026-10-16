@@ -235,6 +235,7 @@ add_executable(fs25_vr_tests
     tests/test_luau_suites.cpp
     tests/test_hand_tools_left_hand.cpp
     tests/test_hand_tools_chainsaw.cpp
+    tests/test_hand_tools_haptics.cpp
     tests/test_hand_tools_wrist_roll.cpp
 )
 
