@@ -1539,7 +1539,7 @@ inline constexpr const char* kStubHandTool = R"luau(
         -- the registered action events
         local event = { actionName = "ACTIVATE_HANDTOOL", target = tool, triggerUp = true, triggerDown = true,
                         triggerAlways = false, isActive = true, isDown = false }
-        event.callback = function(target, actionName, inputValue) return _G.OtherModHandTool.onUseAction(target, actionName, inputValue) end
+        event.callback = class.onUseAction  -- the function itself, as the game's registerActionEvent keeps it
         tool.actionEvents = {
             event,
             { actionName = "AXIS_ROTATE_HANDTOOL", target = tool, callback = class.onRollAction, triggerUp = false, triggerDown = false,

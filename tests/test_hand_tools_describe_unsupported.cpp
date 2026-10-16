@@ -120,3 +120,27 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheFunctionsOnTheToolsTyp
     EXPECT_NE(line.find("getFloatDepth"), std::string::npos) << Joined(lines);
     EXPECT_NE(line.find("isOtherModReeling"), std::string::npos) << Joined(lines);
 }
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, EveryRegisteredActionEventIsLoggedWithItsCallbacksNameAndTheEdgesItFiresOn) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+
+    RunCommand();
+
+    const auto lines = Probe();
+    const std::string use = LineWith(lines, { "action event ACTIVATE_HANDTOOL" });
+    EXPECT_NE(use.find("OtherModHandTool.onUseAction"), std::string::npos) << "the callback is named from the class: " << Joined(lines);
+    EXPECT_NE(use.find("press"), std::string::npos) << use;
+    EXPECT_NE(use.find("release"), std::string::npos) << use;
+    EXPECT_EQ(use.find("every frame"), std::string::npos) << use;
+
+    const std::string roll = LineWith(lines, { "action event AXIS_ROTATE_HANDTOOL" });
+    EXPECT_NE(roll.find("OtherModHandTool.onRollAction"), std::string::npos) << Joined(lines);
+    EXPECT_NE(roll.find("every frame"), std::string::npos) << roll;
+    EXPECT_EQ(roll.find("press"), std::string::npos) << roll;
+    EXPECT_EQ(roll.find("release"), std::string::npos) << roll;
+
+    const std::string nudge = LineWith(lines, { "action event AXIS_OTHERMOD_NUDGE" });
+    EXPECT_NE(nudge.find("callback not found"), std::string::npos) << "a callback that is on no class is said so: " << Joined(lines);
+    EXPECT_NE(nudge.find("release"), std::string::npos) << nudge;
+    EXPECT_EQ(nudge.find("press"), std::string::npos) << nudge;
+}

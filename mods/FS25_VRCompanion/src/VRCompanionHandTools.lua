@@ -1144,6 +1144,82 @@ local function describeTypeFunctions(tool, add)
     add(string.format("type %s: functions: %s", tostring(toolType.name or tool.typeName), functionNames(toolType.functions)))
 end
 
+-- What the callback of an action event is called: found by looking it up among the functions of the specialization classes (named
+-- by the global the class is kept under), of the tool's type and of the tool itself.
+local function callbackName(tool, callback)
+    if type(callback) ~= "function" then return nil end
+    if type(tool.specializations) == "table" then
+        for _, class in ipairs(tool.specializations) do
+            if type(class) == "table" then
+                for name, fn in pairs(class) do
+                    if fn == callback then return (globalNameOf(class) or "(class)") .. "." .. tostring(name) end
+                end
+            end
+        end
+    end
+    local toolType = tool.type
+    if type(toolType) == "table" and type(toolType.functions) == "table" then
+        for name, fn in pairs(toolType.functions) do
+            if fn == callback then return "type function " .. tostring(name) end
+        end
+    end
+    for name, fn in pairs(tool) do
+        if fn == callback then return "tool." .. tostring(name) end
+    end
+    return nil
+end
+
+-- The field names of a table, sorted, as one text.
+local function fieldNames(t)
+    local names = {}
+    for _, key in ipairs(sortedKeys(t)) do names[#names + 1] = tostring(key) end
+    return table.concat(names, ", ")
+end
+
+-- The edges an action event fires on, as registerActionEvent takes them: triggerDown (the press), triggerUp (the release) and
+-- triggerAlways (every frame the input is held).
+local function edgesOf(read)
+    local down, up, always = read("triggerDown"), read("triggerUp"), read("triggerAlways")
+    if type(down) ~= "boolean" and type(up) ~= "boolean" and type(always) ~= "boolean" then return nil end
+    local edges = {}
+    if down == true then edges[#edges + 1] = "press" end
+    if up == true then edges[#edges + 1] = "release" end
+    if always == true then edges[#edges + 1] = "every frame" end
+    return #edges > 0 and table.concat(edges, ", ") or "nothing"
+end
+
+-- The tool's registered action events, as the game keeps them: the action's name, the callback's name where it can be found, and
+-- the edges. The game may keep the details with the input binding's event (named by `actionEventId`): read from there too.
+local function describeActionEvents(tool, add)
+    local events = tool.actionEvents
+    if type(events) ~= "table" then return end
+    local inputBinding = engine("g_inputBinding")
+    local lines = {}
+    for key, entry in pairs(events) do
+        local ok, err = pcall(function()
+            if type(entry) ~= "table" then return end
+            local bound = type(inputBinding) == "table" and type(inputBinding.events) == "table"
+                and entry.actionEventId ~= nil and inputBinding.events[entry.actionEventId] or nil
+            local function read(field)
+                local value = entry[field]
+                if value == nil and type(bound) == "table" then value = bound[field] end
+                return value
+            end
+            local actionName = read("actionName") or (type(key) == "string" and key or nil) or "(unnamed)"
+            local callback = read("callback")
+            local name = callbackName(tool, callback)
+            local callbackText = name ~= nil and ("callback " .. name)
+                or (type(callback) == "function" and "callback not found among the class and type functions" or "callback not readable")
+            local edges = edgesOf(read)
+            local edgesText = edges ~= nil and ("fires on: " .. edges) or ("edges not readable (fields: " .. fieldNames(entry) .. ")")
+            lines[#lines + 1] = string.format("action event %s: %s, %s", tostring(actionName), callbackText, edgesText)
+        end)
+        if not ok then lines[#lines + 1] = string.format("action event %s could not be read (%s)", tostring(key), tostring(err)) end
+    end
+    table.sort(lines)
+    for _, line in ipairs(lines) do add(line) end
+end
+
 -- Runs one part of the description; a failure becomes a line, and the other parts go on.
 local function guarded(what, part, tool, add)
     local ok, err = pcall(part, tool, add)
@@ -1158,6 +1234,7 @@ local function describeUnsupportedTool(tool)
     guarded("spec tables", describeSpecTables, tool, add)
     guarded("specializations", describeSpecializationClasses, tool, add)
     guarded("type", describeTypeFunctions, tool, add)
+    guarded("action events", describeActionEvents, tool, add)
     return lines
 end
 
