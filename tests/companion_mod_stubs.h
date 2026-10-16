@@ -17,13 +17,13 @@
 //   kStubHandTool            a player on foot who holds Hand Tools (StubHandTool): the game's HandTool, Player and
 //                            PlayerTargeter, the pressure washer lance and one unsupported tool (the spray can), with
 //                            attachToolToCamera / getLookRay install variants and extension points for the flashlight,
-//                            the chainsaw and the look ray (spec #109, ADR-0029)
-//   kStubHandToolFlashlight  the flashlight for StubHandTool (ticket #113): the game's HandToolFlashlight class with
+//                            the chainsaw and the look ray (ADR-0029)
+//   kStubHandToolFlashlight  the flashlight for StubHandTool: the game's HandToolFlashlight class with
 //                            onUpdate install variants, StubHandTool.flashlight (light node, lens, the flashlight's own
 //                            switch) and setDirection. Run after kStubHandTool and kStubModelLoading.
-//   kStubHandToolChainsaw    the chainsaw for StubHandTool (ticket #114): HandToolChainsaw with its update, cut handler and
+//   kStubHandToolChainsaw    the chainsaw for StubHandTool: HandToolChainsaw with its update, cut handler and
 //                            roll handler, the cut-state machine, the model, camera-rotation and split plane nodes, trees to
-//                            target, and the install variants (spec #109, ADR-0029)
+//                            target, and the install variants (ADR-0029)
 //
 // They model only the names and shapes the Companion Mod depends on (ADR-0026, ADR-0027). Nothing here is
 // copied from Interactive Control or from the game.
@@ -1212,7 +1212,7 @@ inline constexpr const char* kStubInputBinding = R"luau(
     StubInput.saves, StubInput.saved = 0, nil
 )luau";
 
-// ---- Hand Tools (spec #109, ADR-0029) ---------------------------------------------------------------------------------
+// ---- Hand Tools (ADR-0029) ---------------------------------------------------------------------------------
 // A player on foot who can hold a Hand Tool, shaped after the game's HandTool, Player and PlayerTargeter. Run after
 // kStubSceneGraph (and after kStubModelLoading when the Virtual Hands are needed: a hand tool goes into a Virtual Hand).
 // Run StubHandTool.install BEFORE loading the Companion Mod to have HandTool and Player there at file load, like the game.
@@ -1222,7 +1222,7 @@ inline constexpr const char* kStubInputBinding = R"luau(
 //             to attachToolToCameraNode: the class has no attachToolToCamera, the game attaches through the new name) or
 //             "reshaped" (it takes no parameters at all, and attaches the tool being held)
 //   options   getLookRay  "ok" (default), "missing" (Player has lookRay instead) or "reshaped" (Player.getLookRay takes no
-//             parameters): for the look ray wrap (#112). The targeter reads Player.lookRay in the "missing" game.
+//             parameters): for the look ray wrap. The targeter reads Player.lookRay in the "missing" game.
 //             StubHandTool.originalGetLookRay is the game's own function ("ok" game only: nil in the others).
 // StubHandTool.onFoot(options) -> { player, cam, parent, yawNode, firstPersonCamera }   StubScene.onFoot(options) with a
 //   Player: g_currentMission.player and g_localPlayer are it. player.camera is the camera of StubScene.onFoot (isFirstPerson,
@@ -1254,7 +1254,7 @@ inline constexpr const char* kStubInputBinding = R"luau(
 //   StubHandTool.updaters   a list of function(dt) the tick runs after the targeter: a tool's own onUpdate goes in here
 //   StubHandTool.makeTool(player, name, specName, options) -> tool   the common tool: a root node, a firstPersonNode at its
 //     origin, spec table `specName`, the HandTool methods through the class; a tool type adds its own nodes and handlers
-//   (flashlight #113, chainsaw #114 and the look ray tickets add StubHandTool.flashlight / chainsaw / ...)
+//   (the flashlight and the chainsaw add StubHandTool.flashlight / chainsaw, in their own chunks)
 inline constexpr const char* kStubHandTool = R"luau(
     StubHandTool = { useCalls = {}, rays = {}, tools = {}, updaters = {}, cameraAttaches = 0 }
     StubHandTool.CAMERA_PLACEMENT = { x = 0.2, y = -0.15, z = 0.5 }
@@ -1450,11 +1450,11 @@ inline constexpr const char* kStubHandTool = R"luau(
         return tool
     end
 
-    -- ---- The chainsaw (#114) and the look ray (#112): their own chunks add StubHandTool.chainsaw / ... with
-    -- StubHandTool.makeTool and StubHandTool.updaters; nothing above changes. The flashlight (#113) is kStubHandToolFlashlight.
+    -- ---- The chainsaw and the look ray: their own chunks add StubHandTool.chainsaw / ... with
+    -- StubHandTool.makeTool and StubHandTool.updaters; nothing above changes. The flashlight is kStubHandToolFlashlight.
 )luau";
 
-// ---- Hand Tools: the flashlight (ticket #113) ---------------------------------------------------------------------------
+// ---- Hand Tools: the flashlight ---------------------------------------------------------------------------
 // Run after kStubHandTool (and after kStubModelLoading: it uses setVisibility and setWorldQuaternion). Its own chunk, so that
 // the other Hand Tools tickets do not edit the same lines. Shaped after the game's HandToolFlashlight (the readable source in
 // the SDK's gameSource.zip), with the game's placement of the light as ADR-0029 describes it: at the first person camera.
@@ -1590,7 +1590,7 @@ inline constexpr const char* kStubHandToolFlashlight = R"luau(
     end
 )luau";
 
-// ---- Hand Tools: the chainsaw (spec #109, ticket #114, ADR-0029) -------------------------------------------------------
+// ---- Hand Tools: the chainsaw (ADR-0029) -------------------------------------------------------
 // The chainsaw for StubHandTool, shaped after the game's HandToolChainsaw. Run after kStubHandTool (and after the Companion
 // Mod is loaded or before it: HandToolChainsaw is read at map load too), then call StubHandTool.installChainsaw(variant).
 //
@@ -1598,7 +1598,7 @@ inline constexpr const char* kStubHandToolFlashlight = R"luau(
 //   PlayerCamera and g_cameraManager, and makes the targeter target trees for a held chainsaw.
 //   variant   how HandToolChainsaw.onUpdate is in this "game version": nil / "ok", "missing" (a game update renamed it to
 //             onUpdateTick, which the event dispatch calls instead) or "reshaped" (it takes no parameters, and updates the
-//             chainsaw being held), or (ticket #115) "rollMissing" / "rollReshaped" (the roll action's handler,
+//             chainsaw being held), or "rollMissing" / "rollReshaped" (the roll action's handler,
 //             HandToolChainsaw.onRollAction, is gone / takes no parameters; onUpdate is as "ok")
 // The game keeps the chainsaw's handlers on the specialization class and its event dispatch calls them as
 // Class.handler(tool, ...) (SpecializationUtil.raiseEvent: spec[eventName](object, ...)). So they are here:
@@ -1980,7 +1980,7 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
         function Class.onRollAction(self, _, inputDelta)
             self.spec_chainsaw.rollInput = self.spec_chainsaw.rollInput + inputDelta
         end
-        -- ticket #115: the roll action's handler gone, or reshaped to take no parameters
+        -- the roll action's handler gone, or reshaped to take no parameters
         if variant == "rollMissing" then
             Class.onRollAction = nil
         elseif variant == "rollReshaped" then

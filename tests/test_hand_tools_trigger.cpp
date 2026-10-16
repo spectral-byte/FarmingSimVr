@@ -1,4 +1,4 @@
-// Hand Tools, the Tool Hand's trigger (spec #109, ticket #111, ADR-0029), seen from outside: the real Companion Mod runs
+// Hand Tools, the Tool Hand's trigger (ADR-0029), seen from outside: the real Companion Mod runs
 // against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h,
 // StubHandTool). The test moves the fake Motion Controllers, drives frames the way the game would and asserts what the game
 // would see: the calls of the lance's own use handler (the one the game's ACTIVATE_HANDTOOL binding calls), what XInput

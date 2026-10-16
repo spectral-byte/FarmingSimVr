@@ -1,4 +1,4 @@
-// Hand Tools, haptics on the Tool Hand (spec #109, ticket #116, ADR-0029), seen from outside: the real Companion Mod runs against
+// Hand Tools, haptics on the Tool Hand (ADR-0029), seen from outside: the real Companion Mod runs against
 // the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool: the
 // lance, the chainsaw with its cut-state machine and trees, the flashlight). A test moves the fake Motion Controllers, drives
 // frames the way the game would and asserts what the player would feel: which haptic pulses reached which fake Motion

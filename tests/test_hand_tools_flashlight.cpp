@@ -1,4 +1,4 @@
-// Hand Tools, the flashlight (spec #109, ticket #113, ADR-0029), seen from outside: the real Companion Mod runs against the
+// Hand Tools, the flashlight (ADR-0029), seen from outside: the real Companion Mod runs against the
 // real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool and its
 // flashlight chunk kStubHandToolFlashlight). A test moves the fake Motion Controllers and the game clock, drives frames the
 // way the game would (each frame the game's targeter and the flashlight's onUpdate run, then the Companion Mod's update) and

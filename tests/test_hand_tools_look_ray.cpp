@@ -1,4 +1,4 @@
-// Hand Tools, the look ray (spec #109, ticket #112, ADR-0029), seen from outside: the real Companion Mod runs against the
+// Hand Tools, the look ray (ADR-0029), seen from outside: the real Companion Mod runs against the
 // real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool). The
 // game's PlayerTargeter reads Player:getLookRay() once per update, as the game's does, and the stub keeps the ray it cast
 // (StubHandTool.lastRay()). A test asserts only that ray: where it starts and which way it points, against the head's (the

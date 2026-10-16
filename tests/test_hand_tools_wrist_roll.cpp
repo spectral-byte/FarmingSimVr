@@ -1,11 +1,11 @@
-// Hand Tools, the wrist's roll sets the chainsaw's cut angle (spec #109, ticket #115, ADR-0029), seen from outside: the real
+// Hand Tools, the wrist's roll sets the chainsaw's cut angle (ADR-0029), seen from outside: the real
 // Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h:
 // StubHandTool and its chainsaw, kStubHandToolChainsaw, whose update takes the roll action's input and lays the cut plane out
 // from the roll). The test rolls the fake Motion Controller about the chainsaw's bar and asserts what the game or the player
 // would see: the plane the game would cut along, the roll the game holds for it, the plane a finished cut sliced along, what
 // the roll action (AXIS_ROTATE_HANDTOOL, HandToolChainsaw.onRollAction) does, the stub's input locks, the log. Never the mod's
 // own state.
-// Prior art: test_hand_tools_chainsaw.cpp (the chainsaw by its bar; the seam this ticket fills, VRCompanion:getChainsawCutRoll).
+// Prior art: test_hand_tools_chainsaw.cpp (the chainsaw by its bar).
 
 #include "hand_tools_test_support.h"
 #include <cmath>

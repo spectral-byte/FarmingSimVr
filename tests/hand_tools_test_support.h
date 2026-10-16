@@ -1,4 +1,4 @@
-// What the Hand Tools tests (tests/test_hand_tools_*.cpp, spec #109, ADR-0029) share: how the mod is started on a player
+// What the Hand Tools tests (tests/test_hand_tools_*.cpp, ADR-0029) share: how the mod is started on a player
 // on foot who can hold Hand Tools (StubHandTool, companion_mod_stubs.h), the frame the game runs before the Companion Mod's
 // update, the fake hands, the engine's console stubs and the macros that move the Motion Controllers. Header-only
 // (inline), in its own namespace; a test file brings it in with `using namespace hand_tools_test;` inside its anonymous
@@ -194,7 +194,7 @@ inline int CountLogLines(const std::string& text) {
 inline constexpr const char* kHoldLance = "_G.lance = StubHandTool.lance(foot.player); StubHandTool.hold(lance)";
 inline void HoldLance(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldLance, "=holdLance"), 0); }
 
-// The flashlight (ticket #113): the game's flashlight class and the flashlight, as _G.flashlight, with the player taking it
+// The flashlight: the game's flashlight class and the flashlight, as _G.flashlight, with the player taking it
 // in hand. Not part of the common start: a test that has a flashlight sets StartOptions::gameStubs to FlashlightGame(variant),
 // which installs the game's HandToolFlashlight before the Companion Mod's files load, as the game has it. The flashlight is
 // made and held by HoldFlashlight / kHoldFlashlight.
@@ -208,7 +208,7 @@ inline void HoldFlashlight(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldFlashl
 inline constexpr const char* kHoldSprayCan = "_G.sprayCan = StubHandTool.sprayCan(foot.player); StubHandTool.hold(sprayCan)";
 inline void HoldSprayCan(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldSprayCan, "=holdSprayCan"), 0); }
 
-// ---- chainsaw (ticket #114) -----------------------------------------------------------------------------------------------
+// ---- chainsaw -----------------------------------------------------------------------------------------------
 // The chainsaw's game-side stub (kStubHandToolChainsaw) is not part of every test's game: a test that wants it passes
 // ChainsawStubs(variant) as StartOptions::extraStubs. variant is how HandToolChainsaw.onUpdate is: "ok", "missing", "reshaped".
 inline std::string ChainsawStubs(const char* variant = "ok") {

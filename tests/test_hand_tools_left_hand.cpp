@@ -1,4 +1,4 @@
-// Hand Tools, choosing the left hand as the Tool Hand (spec #109, ticket #117, ADR-0029), seen from outside: the real Companion
+// Hand Tools, choosing the left hand as the Tool Hand (ADR-0029), seen from outside: the real Companion
 // Mod runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h,
 // StubHandTool). The pressure washer lance is the tool: whatever the Tool Hand does for it, it does for every supported tool.
 // The test moves the fake Motion Controllers, drives frames the way the game would and asserts what the player or the game

@@ -1,4 +1,4 @@
-// Hand Tools, the pressure washer lance (spec #109, ticket #110, ADR-0029), seen from outside: the real Companion Mod runs
+// Hand Tools, the pressure washer lance (ADR-0029), seen from outside: the real Companion Mod runs
 // against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h,
 // StubHandTool: a player on foot, HandTool.attachToolToCamera, the lance, a tool the mod does not support). A test moves
 // the fake Motion Controllers and the game clock, drives frames the way the game would and asserts what the player or the
