@@ -41,7 +41,8 @@
 --   VRCompanion:placeHandToolsForRender()               before every rendered frame, called by placeVirtualHandsForRender
 --   VRCompanion:getHandToolsDiagnostics() -> string     the state of Hand Tools, one line
 --   VRCompanion:registerHandToolsConsoleCommands() / resetHandTools()   map load / unload
---   Console: vrHandTools [on|off], vrToolHand [left|right], vrHandToolsDiagnostics
+--   Console: vrHandTools [on|off], vrToolHand [left|right], vrHandToolsDiagnostics,
+--     vrHandToolOffset <tool> <nudge|turn|reset> (tuning HAND_TOOL_HANDLE_OFFSETS live; not saved)
 --
 -- Hooks into the rest of the mod (each a single guarded call):
 --   MotionControllers  updateMotionControllers -> updateHandTools(dt) on every path (also when input is ignored or the
@@ -207,6 +208,19 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
         rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
     },
 }
+
+local function copyOffset(offset)
+    return {
+        position = { x = offset.position.x, y = offset.position.y, z = offset.position.z },
+        rotation = { x = offset.rotation.x, y = offset.rotation.y, z = offset.rotation.z, w = offset.rotation.w },
+    }
+end
+
+-- The table as shipped, for `vrHandToolOffset <tool> reset`.
+local DEFAULT_HANDLE_OFFSETS = {}
+for kind, offset in pairs(VRCompanion.HAND_TOOL_HANDLE_OFFSETS) do
+    DEFAULT_HANDLE_OFFSETS[kind] = copyOffset(offset)
+end
 
 -- WHERE EACH TOOL POINTS (the look ray): the ray the game's targeter casts starts at `node(tool)`'s origin and runs
 -- along `direction`, a unit vector in that node's own axes. One entry per tool kind, the place to adjust how a tool aims.
@@ -1018,10 +1032,98 @@ function VRCompanion:consoleCommandHandToolsDiagnostics()
     return self:getHandToolsDiagnostics()
 end
 
+-- ---- Tuning: vrHandToolOffset -------------------------------------------------------------------------------------------
+-- Moves or turns a tool in the Tool Hand while the game runs, to find the numbers of HAND_TOOL_HANDLE_OFFSETS in the headset
+-- (this session only: the table in this file is what ships). The answer, and the log, carry the resulting numbers as the
+-- table has them, ready to be written down.
+
+local MAX_NUDGE_METRES = 0.5
+local MAX_TURN_DEGREES = 360
+
+local function quaternionProduct(a, b)
+    return {
+        w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+        x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    }
+end
+
+local function quaternionAbout(axis, degrees)
+    local half = math.rad(degrees) / 2
+    local s = math.sin(half)
+    return { x = axis == "x" and s or 0.0, y = axis == "y" and s or 0.0, z = axis == "z" and s or 0.0, w = math.cos(half) }
+end
+
+local function describeOffset(kind, offset)
+    return string.format("%s: position = { x = %.4f, y = %.4f, z = %.4f }, rotation = { x = %.4f, y = %.4f, z = %.4f, w = %.4f }",
+        kind, offset.position.x, offset.position.y, offset.position.z,
+        offset.rotation.x, offset.rotation.y, offset.rotation.z, offset.rotation.w)
+end
+
+local TUNING_USAGE = "Usage: vrHandToolOffset <lance|flashlight|chainsaw> <nudge dx dy dz | turn rx ry rz | reset> "
+    .. "(nudge: metres, turn: degrees about the hand's X, Y, Z axes; this session only)"
+
+-- The held tool is put where the numbers say, at once.
+local function replaceHeldToolInTheHand(self)
+    local tool = state.linkedTool
+    if tool ~= nil and state.linkedHand ~= nil and heldTool() == tool then
+        linkIntoHand(self, tool, state.linkedHand)
+    end
+end
+
+function VRCompanion:consoleCommandHandToolOffset(kind, action, a, b, c)
+    local offsets = self.HAND_TOOL_HANDLE_OFFSETS
+    local name = kind ~= nil and string.lower(tostring(kind)) or ""
+    if name == "" or name == "status" then
+        local lines = {}
+        for _, entry in ipairs(SUPPORTED_TOOLS) do
+            table.insert(lines, describeOffset(entry.kind, offsets[entry.kind]))
+        end
+        return table.concat(lines, "\n") .. "\n" .. TUNING_USAGE
+    end
+    local offset = offsets[name]
+    if offset == nil then return TUNING_USAGE end
+    action = action ~= nil and string.lower(tostring(action)) or "status"
+
+    if action == "status" then
+        return describeOffset(name, offset)
+    elseif action == "reset" then
+        offsets[name] = copyOffset(DEFAULT_HANDLE_OFFSETS[name])
+    elseif action == "nudge" then
+        local dx, dy, dz = tonumber(a), tonumber(b), tonumber(c)
+        if dx == nil or dy == nil or dz == nil or math.abs(dx) > MAX_NUDGE_METRES or math.abs(dy) > MAX_NUDGE_METRES
+            or math.abs(dz) > MAX_NUDGE_METRES then
+            return TUNING_USAGE
+        end
+        offset.position.x, offset.position.y, offset.position.z = offset.position.x + dx, offset.position.y + dy, offset.position.z + dz
+    elseif action == "turn" then
+        local rx, ry, rz = tonumber(a), tonumber(b), tonumber(c)
+        if rx == nil or ry == nil or rz == nil or math.abs(rx) > MAX_TURN_DEGREES or math.abs(ry) > MAX_TURN_DEGREES
+            or math.abs(rz) > MAX_TURN_DEGREES then
+            return TUNING_USAGE
+        end
+        -- About the hand's own axes: the turn goes in front of the tool's rotation in the grip frame.
+        local turn = quaternionProduct(quaternionAbout("z", rz), quaternionProduct(quaternionAbout("y", ry), quaternionAbout("x", rx)))
+        local q = quaternionProduct(turn, { x = offset.rotation.x, y = offset.rotation.y, z = offset.rotation.z, w = offset.rotation.w })
+        local length = math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
+        offset.rotation = { x = q.x / length, y = q.y / length, z = q.z / length, w = q.w / length }
+    else
+        return TUNING_USAGE
+    end
+
+    offset = offsets[name]
+    replaceHeldToolInTheHand(self)
+    local text = describeOffset(name, offset)
+    print("[FS25_VR] Hand Tools offset " .. text)
+    return text
+end
+
 function VRCompanion:registerHandToolsConsoleCommands()
     wrapAll()    -- map load: the class again (resetHandTools lifted the wrap with the last map)
     checkWraps()
     if addConsoleCommand == nil then return end
+    addConsoleCommand("vrHandToolOffset", "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw> <nudge dx dy dz | turn rx ry rz | reset>", "consoleCommandHandToolOffset", self)
     addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw and pressure washer lance held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
     addConsoleCommand("vrToolHand", "Choose the Motion Controller that holds Hand Tools, left or right (saved; right by default): vrToolHand [left|right]", "consoleCommandSetToolHand", self)
     addConsoleCommand("vrHandToolsDiagnostics", "Report the Tool Hand, the held Hand Tool, whether it is in the hand and where the look ray starts: vrHandToolsDiagnostics", "consoleCommandHandToolsDiagnostics", self)
@@ -1046,6 +1148,7 @@ function VRCompanion:resetHandTools()
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrHandTools")
         removeConsoleCommand("vrToolHand")
+        removeConsoleCommand("vrHandToolOffset")
         removeConsoleCommand("vrHandToolsDiagnostics")
     end
     state = newState()
