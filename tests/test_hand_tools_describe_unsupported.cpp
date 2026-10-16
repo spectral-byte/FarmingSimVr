@@ -183,3 +183,108 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AToolTheGameNeverPlacedTh
     EXPECT_FALSE(LineWith(lines, { "config file: mods/FS25_OtherMod" }).empty()) << Joined(lines);
     EXPECT_FALSE(LineWith(lines, { "placement: not through attachToolToCamera" }).empty()) << Joined(lines);
 }
+
+// ---- nothing to describe, and the answer ---------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheOneLineAnswerStaysTheSameAndOnlySaysTheToolIsUnsupported) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+
+    const std::string reply = RunCommand();
+
+    EXPECT_EQ(reply, EvalLua(L, "VRCompanion:getHandToolsDiagnostics()")) << "the answer is the one-line diagnostics";
+    EXPECT_NE(reply.find("held Hand Tool: unsupported | in the Tool Hand: no (the Hand Tool is not supported)"), std::string::npos) << reply;
+    EXPECT_EQ(reply.find("probe"), std::string::npos) << "the description goes to the log, not into the answer: " << reply;
+    EXPECT_EQ(reply.find("config file"), std::string::npos) << reply;
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, WithNothingHeldTheCommandLogsExactlyTheLinesItsAnswerHas) {
+    headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
+    ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge));
+    SetGameTime(10000);
+
+    const std::string reply = RunCommand();
+
+    EXPECT_NE(reply.find("held Hand Tool: none"), std::string::npos) << reply;
+    EXPECT_TRUE(Probe().empty()) << Joined(Probe());
+    // One log line per field of the answer, nothing else: the command logs what it logged before.
+    int fields = 1;
+    for (size_t at = reply.find(" | "); at != std::string::npos; at = reply.find(" | ", at + 3)) ++fields;
+    EXPECT_EQ(static_cast<int>(s_capturedLogs.size()), fields) << reply;
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, WithASupportedToolHeldTheCommandLogsExactlyTheLinesItsAnswerHas) {
+    headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
+    ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge));
+    SetGameTime(10000);
+    ASSERT_NO_FATAL_FAILURE(HoldLance(L));
+
+    const std::string reply = RunCommand();
+
+    EXPECT_NE(reply.find("held Hand Tool: lance (supported)"), std::string::npos) << reply;
+    EXPECT_TRUE(Probe().empty()) << Joined(Probe());
+    int fields = 1;
+    for (size_t at = reply.find(" | "); at != std::string::npos; at = reply.find(" | ", at + 3)) ++fields;
+    EXPECT_EQ(static_cast<int>(s_capturedLogs.size()), fields) << reply;
+}
+
+// Multiplayer: the game attaches the Hand Tool of every player in the session through the same function. Only the local
+// player's own tool is described.
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AnotherPlayersToolIsNeverDescribed) {
+    headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
+    ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge));
+    SetGameTime(10000);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local pitch = StubScene.newNode("remotePitch", 0, 4, 1.7, 4)
+        local remote = setmetatable({ isOwner = false, camera = { isFirstPerson = true, pitchNode = pitch } }, { __index = _G.Player })
+        _G.remoteTool = StubHandTool.makeTool(remote, "remoteTool", "spec_remoteTool")
+        remoteTool.configFileName = "mods/FS25_Remote/handTools/remote.xml"
+        remoteTool.isHeld = true
+        remoteTool.carryingPlayer = remote
+        remote.currentHandTool = remoteTool
+        remoteTool:attachTool()
+    )luau", "=remoteTool"), 0);
+
+    const std::string reply = RunCommand();
+
+    EXPECT_NE(reply.find("held Hand Tool: none"), std::string::npos) << reply;
+    EXPECT_TRUE(Probe().empty()) << Joined(Probe());
+    for (const auto& line : s_capturedLogs) EXPECT_EQ(line.find("remote.xml"), std::string::npos) << line;
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AnotherPlayersToolAttachedWhileTheLocalPlayerHoldsOneDoesNotReplaceTheLocalDescription) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local pitch = StubScene.newNode("remotePitch", 0, 4, 1.7, 4)
+        local remote = setmetatable({ isOwner = false, camera = { isFirstPerson = true, pitchNode = pitch } }, { __index = _G.Player })
+        _G.remoteTool = StubHandTool.makeTool(remote, "remoteTool", "spec_remoteTool")
+        remoteTool.configFileName = "mods/FS25_Remote/handTools/remote.xml"
+        remoteTool.isHeld = true
+        remoteTool.carryingPlayer = remote
+        remote.currentHandTool = remoteTool
+        remoteTool:attachTool()
+    )luau", "=remoteTool"), 0);
+
+    RunCommand();
+
+    const auto lines = Probe();
+    EXPECT_FALSE(LineWith(lines, { "config file: mods/FS25_OtherMod" }).empty()) << Joined(lines);
+    EXPECT_TRUE(LineWith(lines, { "remote.xml" }).empty()) << Joined(lines);
+}
+
+// ---- partial reads and caps ---------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASpecTableThatThrowsWhenReadGivesAPartialDescriptionAndNoError) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ brokenSpec = true }"));
+
+    std::string reply;
+    ASSERT_NO_THROW(reply = RunCommand());
+
+    EXPECT_NE(reply.find("held Hand Tool: unsupported"), std::string::npos) << "the command still answers: " << reply;
+    const auto lines = Probe();
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModBroken.first (number) = 1" }).empty()) << "what can be read of the table is there: " << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModBroken.last (number) = 2" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModBroken.gone", "could not be read", "is gone" }).empty()) << "what cannot says so: " << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.charge (number) = 5" }).empty()) << "and the other tables are described as ever";
+    EXPECT_FALSE(LineWith(lines, { "node otherModRoot/otherModRod" }).empty()) << "and so are the nodes";
+    for (const auto& line : s_capturedLogs) EXPECT_EQ(line.find("Error"), std::string::npos) << line;
+}

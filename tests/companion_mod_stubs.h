@@ -1514,7 +1514,7 @@ inline constexpr const char* kStubHandTool = R"luau(
         end
         if options.brokenSpec then
             local brokenNode = StubScene.newNode("otherModBroken", 0)
-            tool.spec_otherModBroken = { before = 1, gone = brokenNode, after = 2 }
+            tool.spec_otherModBroken = { first = 1, gone = brokenNode, last = 2 }
             local plainGetName = _G.getName
             _G.getName = function(id)
                 if id == brokenNode then error("the node " .. tostring(id) .. " is gone") end
