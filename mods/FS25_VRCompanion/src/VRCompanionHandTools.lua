@@ -400,10 +400,38 @@ function VRCompanion:getHeldHandTool()
     return tool, (supportedKind(tool))
 end
 
+-- The player who carries the tool, when that is the local player: the one whose Motion Controllers these are. The game attaches
+-- the Hand Tools of the other players of a multiplayer session through the same functions, and those stay the game's (they are
+-- drawn in the avatar's hand as ever); nil for them, and when the game does not say who the local player is.
+local function carryingPlayer(tool)
+    local player = type(tool.getCarryingPlayer) == "function" and tool:getCarryingPlayer() or nil
+    return type(player) == "table" and player or nil
+end
+
+local function localPlayer()
+    local player = engine("g_localPlayer")
+    if player == nil then
+        local mission = engine("g_currentMission")
+        player = type(mission) == "table" and mission.player or nil
+    end
+    return player
+end
+
+local function localCarryingPlayer(tool)
+    local player = carryingPlayer(tool)
+    return (player ~= nil and player == localPlayer()) and player or nil
+end
+
+-- The tool is carried by somebody else (a player of a multiplayer session): the game's, never ours.
+local function isAnotherPlayersTool(tool)
+    local player = carryingPlayer(tool)
+    return player ~= nil and player ~= localPlayer()
+end
+
 -- Whether the Tool Hand holds the tool now: the feature is on, Motion Controllers are on, the tool is supported and held
--- in the first person view (the game keeps its own third person placement), and the Tool Hand's Virtual Hand is there to
--- hold it (the hand in use, its grip pose tracked, the head placed in the world). Answers the hand, or nil and why not.
--- Read live, never cached, by the wraps and by the update.
+-- by the local player in the first person view (the game keeps its own third person placement), and the Tool Hand's Virtual
+-- Hand is there to hold it (the hand in use, its grip pose tracked, the head placed in the world). Answers the hand, or nil
+-- and why not. Read live, never cached, by the wraps and by the update.
 local function toolHandFor(self, tool)
     if self.handToolsEnabled == false then return nil, "Hand Tools are off" end
     if self.motionControllersEnabled == false then return nil, "Motion Controllers are off" end
@@ -411,8 +439,9 @@ local function toolHandFor(self, tool)
     if state.givingBack then return nil, "the tool is being given back to the game" end
     if tool == nil then return nil, "no Hand Tool is held" end
     if supportedKind(tool) == nil then return nil, "the Hand Tool is not supported" end
-    local player = type(tool.getCarryingPlayer) == "function" and tool:getCarryingPlayer() or nil
-    if player == nil or player.camera == nil or player.camera.isFirstPerson ~= true then
+    local player = localCarryingPlayer(tool)
+    if player == nil then return nil, "the Hand Tool is not the local player's" end
+    if player.camera == nil or player.camera.isFirstPerson ~= true then
         return nil, "not in the first person view"
     end
     local hand = self:getToolHand()
@@ -476,7 +505,7 @@ end
 -- everything while the hand does not) is the game's own.
 WRAP_SPECS.attachToolToCamera.make = function(original)
     return function(tool, ...)
-        if type(tool) == "table" then
+        if type(tool) == "table" and not isAnotherPlayersTool(tool) then
             state.tool = tool
             local hand = toolHandFor(VRCompanion, tool)
             if hand ~= nil and linkIntoHand(VRCompanion, tool, hand) then

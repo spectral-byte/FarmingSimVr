@@ -188,6 +188,69 @@ TEST_F(CompanionModTest, SwitchingFromTheLanceToAnUnsupportedToolAndBackMovesThe
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true");
 }
 
+// Multiplayer (story 46): the game attaches a Hand Tool of every player in the session through the same function, and a
+// remote player's camera can be in first person as far as the tool is concerned. Only the local player's tool goes into the
+// Tool Hand; another player's tool is the game's.
+constexpr const char* kRemotePlayerHelpers = R"luau(
+    -- another player of the session: not the local one, with a camera of their own, holding a lance in the game's way
+    function _G.holdRemoteLance()
+        local pitch = StubScene.newNode("remotePitch", 0, 4, 1.7, 4)
+        local remote = setmetatable({ isOwner = false, camera = { isFirstPerson = true, pitchNode = pitch } }, { __index = _G.Player })
+        _G.remoteLance = StubHandTool.makeTool(remote, "remoteLance", "spec_highPressureWasherLance")
+        local spec = remoteLance.spec_highPressureWasherLance
+        spec.raycastNode = StubScene.newNode("remoteNozzle", remoteLance.rootNode, 0, 0, 0.5)
+        remoteLance.isHeld = true
+        remoteLance.carryingPlayer = remote
+        remoteLance:attachTool()
+    end
+    function _G.remoteLanceIsWhereTheGamePutsIt()
+        local p = StubHandTool.CAMERA_PLACEMENT
+        local x, y, z = getTranslation(remoteLance.rootNode)
+        return getParent(remoteLance.rootNode) == remoteLance.carryingPlayer.camera.pitchNode
+            and math.abs(x - p.x) < 1e-6 and math.abs(y - p.y) < 1e-6 and math.abs(z - p.z) < 1e-6
+    end
+)luau";
+
+TEST_F(CompanionModTest, AnotherPlayersLanceIsNeverTakenIntoTheToolHandAndStaysWhereTheGamePutsIt) {
+    FakeTrackedHeadset headset;
+    headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kRemotePlayerHelpers, "=remotePlayerHelpers"), 0);
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    ASSERT_EQ(RunLuauChunk(L, "holdRemoteLance()", "=holdRemoteLance"), 0);
+    FRAMES(2);
+
+    EXPECT_EQ(EvalLua(L, "remoteLanceIsWhereTheGamePutsIt()"), "true");
+    EXPECT_EQ(EvalLua(L, "isBelow(remoteLance.rootNode, handHolder('right'))"), "false");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "false");
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "#StubHandTool.useCalls"), "0") << "the Tool Hand's trigger does not use another player's lance";
+}
+
+TEST_F(CompanionModTest, AnotherPlayersToolAttachedWhileTheLocalPlayerHoldsTheLanceLeavesTheLocalLanceInTheHand) {
+    LANCE_IN_THE_RIGHT_HAND();
+    ASSERT_EQ(RunLuauChunk(L, kRemotePlayerHelpers, "=remotePlayerHelpers"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "holdRemoteLance()", "=holdRemoteLance"), 0);
+    FRAMES(3);
+
+    EXPECT_EQ(EvalLua(L, "remoteLanceIsWhereTheGamePutsIt()"), "true") << "the other player's lance is the game's";
+    EXPECT_EQ(EvalLua(L, "isInTheHand(lance, 'right')"), "true") << "and ours stays in the Tool Hand";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true");
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "lance.spec_highPressureWasherLance.isActivated"), "true") << "the trigger washes with our lance";
+    EXPECT_EQ(EvalLua(L, "remoteLance.spec_highPressureWasherLance.isActivated"), "nil") << "and not with theirs";
+    EXPECT_EQ(RunLuauChunk(L, R"luau(
+        assert(#StubHandTool.useCalls > 0)
+        for _, call in ipairs(StubHandTool.useCalls) do assert(call.self == lance, "a use of " .. tostring(call.tool)) end
+    )luau", "=onlyOurLance"), 0);
+}
+
 // Third person on foot keeps the game's placement in the player's hand (out of scope, ADR-0029); first person again, the
 // lance goes back into the Tool Hand.
 TEST_F(CompanionModTest, InThirdPersonTheLanceIsInTheGamesPlayerHandAndBackInTheToolHandInFirstPerson) {
