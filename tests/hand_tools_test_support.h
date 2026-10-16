@@ -187,7 +187,7 @@ inline int CountLogLines(const std::string& text) {
 }
 
 // ---- per tool -------------------------------------------------------------------------------------------------------
-// The tool in the player's hands, as `lance` (a global of the Lua state), `sprayCan`.
+// The tool in the player's hands, as `lance` (a global of the Lua state), `otherTool`.
 
 // The player takes the pressure washer lance in hand: _G.lance. (The Lua chunk, for a macro that cannot use an
 // ASSERT_NO_FATAL_FAILURE twice; HoldLance for a test body.)
@@ -204,9 +204,9 @@ inline std::string FlashlightGame(const char* variant = "ok") {
 inline constexpr const char* kHoldFlashlight = "_G.flashlight = StubHandTool.flashlight(foot.player); StubHandTool.hold(flashlight)";
 inline void HoldFlashlight(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldFlashlight, "=holdFlashlight"), 0); }
 
-// The player takes the spray can (an unsupported Hand Tool) in hand: _G.sprayCan.
-inline constexpr const char* kHoldSprayCan = "_G.sprayCan = StubHandTool.sprayCan(foot.player); StubHandTool.hold(sprayCan)";
-inline void HoldSprayCan(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldSprayCan, "=holdSprayCan"), 0); }
+// The player takes another mod's tool (a Hand Tool the Companion Mod does not support) in hand: _G.otherTool.
+inline constexpr const char* kHoldOtherModTool = "_G.otherTool = StubHandTool.otherModTool(foot.player); StubHandTool.hold(otherTool)";
+inline void HoldOtherModTool(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldOtherModTool, "=holdOtherModTool"), 0); }
 
 // ---- chainsaw -----------------------------------------------------------------------------------------------
 // The chainsaw's game-side stub (kStubHandToolChainsaw) is not part of every test's game: a test that wants it passes

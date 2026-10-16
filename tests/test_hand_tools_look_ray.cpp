@@ -115,12 +115,12 @@ TEST_F(CompanionModTest, WhileTheToolHandIsSetDownOrUntrackedTheTargetersRayIsTh
 TEST_F(CompanionModTest, WithAnUnsupportedHandToolOrNoHandToolHeldTheTargetersRayIsTheHeads) {
     LANCE_IN_THE_RIGHT_HAND();
 
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(lance); _G.sprayCan = StubHandTool.sprayCan(foot.player); StubHandTool.hold(sprayCan)", "=sprayCan"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(lance); _G.otherTool = StubHandTool.otherModTool(foot.player); StubHandTool.hold(otherTool)", "=otherTool"), 0);
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true")
-        << "the spray can is not supported: the targeter cast " << EvalLua(L, "rayText(targeterRay())");
+        << "another mod's tool is not supported: the targeter cast " << EvalLua(L, "rayText(targeterRay())");
 
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(sprayCan)", "=putAway"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(otherTool)", "=putAway"), 0);
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "no Hand Tool held";
 

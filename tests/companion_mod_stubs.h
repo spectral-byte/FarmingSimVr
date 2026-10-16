@@ -1241,6 +1241,11 @@ inline constexpr const char* kStubInputBinding = R"luau(
 //   StubHandTool.nozzleRay(tool) -> x, y, z, dirX, dirY, dirZ   where the lance washes from and along, in the world
 // StubHandTool.sprayCan(player, options) -> tool   an unsupported Hand Tool (spec_sprayCan): the game places it like any
 //   other, in front of the camera; it has an activateAction too
+// StubHandTool.otherModTool(player, options) -> tool   another mod's Hand Tool (spec_otherModTool), which the Companion Mod
+//   does not support: placed like any other by the game. Its use handler is OtherModHandTool.onUseAction(tool, _, inputValue),
+//   on the specialization class only (recorded in StubHandTool.useCalls as tool = "otherMod"), and tool.actionEvents lists
+//   its registered ACTIVATE_HANDTOOL event { actionName, target, callback, triggerUp, triggerDown, triggerAlways, isActive }
+//   (up and down, not always); tool.activateAction, the game's binding, calls it on those edges
 // StubHandTool.hold(tool) / StubHandTool.drop(tool)   the player takes the tool in hand (the game's startHolding: isHeld,
 //   the carrying player, attachTool) and puts it away (detachTool, not held)
 // StubHandTool.pressUseBinding(tool, inputValue)   the game's own binding (X on a pad, the mouse, the keyboard) calling the
@@ -1447,6 +1452,42 @@ inline constexpr const char* kStubHandTool = R"luau(
         local tool = StubHandTool.makeTool(player, "sprayCan", "spec_sprayCan", options)
         local record = useHandler(tool, "sprayCan")
         tool.activateAction = function(self, a, inputValue) record(self, a, inputValue) end
+        return tool
+    end
+
+    -- ---- another mod's tool ---------------------------------------------------------------------------------------
+    -- A Hand Tool the Companion Mod has never heard of, shaped like the tools mods add to the game: its own specialization
+    -- (spec_otherModTool, which no SUPPORTED_TOOLS entry names), a use handler on its specialization class only
+    -- (OtherModHandTool.onUseAction, called with the tool as `self`, like HandToolChainsaw.onCutAction) and an
+    -- ACTIVATE_HANDTOOL action event registered for it (tool.actionEvents), as the game's registerActionEvent keeps one:
+    -- called for trigger down (inputValue 1) and trigger up (0), not on every update the input is held.
+    function StubHandTool.otherModTool(player, options)
+        local class = _G.OtherModHandTool
+        if class == nil then
+            class = {}
+            _G.OtherModHandTool = class
+            function class.onUseAction(self, _, inputValue)
+                table.insert(StubHandTool.useCalls, { tool = "otherMod", value = inputValue, self = self })
+            end
+        end
+        local tool = StubHandTool.makeTool(player, "otherMod", "spec_otherModTool", options)
+        local event = { actionName = "ACTIVATE_HANDTOOL", target = tool, triggerUp = true, triggerDown = true,
+                        triggerAlways = false, isActive = true, isDown = false }
+        event.callback = function(target, actionName, inputValue) return _G.OtherModHandTool.onUseAction(target, actionName, inputValue) end
+        tool.actionEvents = { event }
+        -- the game's input binding: the registered event is called on the edges it was registered for
+        tool.activateAction = function(self, _, inputValue)
+            if not event.isActive then return end
+            local down = inputValue > 0
+            if down and not event.isDown and event.triggerDown then
+                event.callback(event.target, event.actionName, inputValue)
+            elseif down and event.isDown and event.triggerAlways then
+                event.callback(event.target, event.actionName, inputValue)
+            elseif not down and event.isDown and event.triggerUp then
+                event.callback(event.target, event.actionName, inputValue)
+            end
+            event.isDown = down
+        end
         return tool
     end
 

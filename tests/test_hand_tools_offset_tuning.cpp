@@ -127,7 +127,7 @@ TEST_F(VirtualGamepadHandToolsOffsetTuningTest, ANudgeStaysForTheNextTimeTheTool
 TEST_F(VirtualGamepadHandToolsOffsetTuningTest, ABadToolActionOrNumberAnswersWithUsageAndChangesNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheLanceInTheRightHand());
     const std::vector<double> before = Placement();
-    for (const char* arguments : { ", 'spraycan', 'nudge', '0', '0', '0'", ", 'lance', 'wiggle', '0', '0', '0'", ", 'lance', 'nudge', 'a', '0', '0'",
+    for (const char* arguments : { ", 'othermodtool', 'nudge', '0', '0', '0'", ", 'lance', 'wiggle', '0', '0', '0'", ", 'lance', 'nudge', 'a', '0', '0'",
                                    ", 'lance', 'nudge', '0.1'", ", 'lance', 'turn'", ", 'lance', 'nudge', '9', '0', '0'" }) {
         const std::string answer = Command(arguments);
         EXPECT_NE(answer.find("Usage"), std::string::npos) << arguments << " -> " << answer;

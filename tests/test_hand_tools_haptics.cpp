@@ -377,7 +377,7 @@ TEST_F(VirtualGamepadHandToolsHapticsTest, WithMotionControllersOffNothingBuzzes
 
 TEST_F(VirtualGamepadHandToolsHapticsTest, AnUnsupportedToolInTheToolHandDoesNotBuzzIt) {
     ASSERT_NO_FATAL_FAILURE(Start());
-    ASSERT_NO_FATAL_FAILURE(HoldSprayCan(L));
+    ASSERT_NO_FATAL_FAILURE(HoldOtherModTool(L));
     PICK_UP(kRight, 0.25f, -0.35f, -0.30f);
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(3);
