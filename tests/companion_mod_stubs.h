@@ -14,6 +14,10 @@
 //   kStubInputBinding        a stand-in for g_inputBinding and Binding (StubInput), shaped after the finding of spike #99: the\r\n//                            actions and their bindings per device, addBinding, saveToXMLFile, with variants that lack the API or raise\r\n//   kStubSteeringVehicle     a cab vehicle with a Steering Wheel and the game's analog steering (StubSteer): the
 //                            Drivable.setSteeringInput that records every call, a Steering Wheel node and the
 //                            per-frame tick that moves the steering toward the input and turns the node (ADR-0027)
+//   kStubHandTool            a player on foot who holds Hand Tools (StubHandTool): the game's HandTool, Player and
+//                            PlayerTargeter, the pressure washer lance and one unsupported tool (the spray can), with
+//                            attachToolToCamera / getLookRay install variants and extension points for the flashlight,
+//                            the chainsaw and the look ray (spec #109, ADR-0029)
 //
 // They model only the names and shapes the Companion Mod depends on (ADR-0026, ADR-0027). Nothing here is
 // copied from Interactive Control or from the game.
@@ -1200,4 +1204,243 @@ inline constexpr const char* kStubInputBinding = R"luau(
     end
 
     StubInput.saves, StubInput.saved = 0, nil
+)luau";
+
+// ---- Hand Tools (spec #109, ADR-0029) ---------------------------------------------------------------------------------
+// A player on foot who can hold a Hand Tool, shaped after the game's HandTool, Player and PlayerTargeter. Run after
+// kStubSceneGraph (and after kStubModelLoading when the Virtual Hands are needed: a hand tool goes into a Virtual Hand).
+// Run StubHandTool.install BEFORE loading the Companion Mod to have HandTool and Player there at file load, like the game.
+//
+// StubHandTool.install(variant, options)   defines the globals the game defines: HandTool, Player and PlayerTargeter.
+//   variant   how HandTool.attachToolToCamera is in this "game version": nil / "ok", "missing" (a game update renamed it
+//             to attachToolToCameraNode: the class has no attachToolToCamera, the game attaches through the new name) or
+//             "reshaped" (it takes no parameters at all, and attaches the tool being held)
+//   options   getLookRay  "ok" (default), "missing" (Player has lookRay instead) or "reshaped" (Player.getLookRay takes no
+//             parameters): for the look ray wrap (#112). Nothing in the Companion Mod wraps it before that.
+// StubHandTool.onFoot(options) -> { player, cam, parent, yawNode, firstPersonCamera }   StubScene.onFoot(options) with a
+//   Player: g_currentMission.player and g_localPlayer are it. player.camera is the camera of StubScene.onFoot (isFirstPerson,
+//   pitchNode: the node the game links a held tool to). Player:getLookRay() -> x, y, z, dirX, dirY, dirZ is the first
+//   person camera's position and its -Z axis in the world. player.targeter is a PlayerTargeter.
+//   StubHandTool.thirdPerson(player, on)  the camera is (not) in first person; a held tool attaches again.
+// PlayerTargeter:update(dt)   reads player:getLookRay() once, like the game, and keeps it in targeter.lastRayX .. lastRayDirectionZ
+//   (the fields the game keeps) and in StubHandTool.rays, in order, as { x, y, z, dirX, dirY, dirZ }.
+//   StubHandTool.lastRay() -> x, y, z, dirX, dirY, dirZ   of the last update, nil before any
+// StubHandTool.tick(dt)   one frame of the game's player update: the targeter reads the look ray, then every registered
+//   updater (StubHandTool.updaters, below) runs
+// StubHandTool.lance(player, options) -> tool   the pressure washer lance (spec_highPressureWasherLance), not yet held.
+//   tool.rootNode (the node the game links), tool.firstPersonNode, tool.spec_highPressureWasherLance.raycastNode (the
+//   nozzle: it washes from the node's origin along its +Z axis) and tool.activateAction, the function the game's
+//   ACTIVATE_HANDTOOL binding calls (HandToolHPWLance:onWashAction(_, inputValue)).
+//   StubHandTool.nozzleRay(tool) -> x, y, z, dirX, dirY, dirZ   where the lance washes from and along, in the world
+// StubHandTool.sprayCan(player, options) -> tool   an unsupported Hand Tool (spec_sprayCan): the game places it like any
+//   other, in front of the camera; it has an activateAction too
+// StubHandTool.hold(tool) / StubHandTool.drop(tool)   the player takes the tool in hand (the game's startHolding: isHeld,
+//   the carrying player, attachTool) and puts it away (detachTool, not held)
+// StubHandTool.pressUseBinding(tool, inputValue)   the game's own binding (X on a pad, the mouse, the keyboard) calling the
+//   tool's use handler with inputValue (1 pressed or held, 0 released)
+// StubHandTool.useCalls   every call of a tool's use handler, in order, as { tool = <name>, value = <inputValue>, self = tool }
+// StubHandTool.cameraAttaches   how many times the game's own attachToolToCamera ran (whatever placed the tool then)
+// StubHandTool.CAMERA_PLACEMENT   { x, y, z } where the game puts a tool's root below the pitch node (a tool placed the
+//   game's way is there; the lance's firstPersonNode is its root's origin)
+// StubHandTool.tools   every tool made, in order
+// Extension points for the later Hand Tools tickets (each adds its own chunk, run after this one, and touches nothing above):
+//   StubHandTool.updaters   a list of function(dt) the tick runs after the targeter: a tool's own onUpdate goes in here
+//   StubHandTool.makeTool(player, name, specName, options) -> tool   the common tool: a root node, a firstPersonNode at its
+//     origin, spec table `specName`, the HandTool methods through the class; a tool type adds its own nodes and handlers
+//   (flashlight #113, chainsaw #114 and the look ray tickets add StubHandTool.flashlight / chainsaw / ...)
+inline constexpr const char* kStubHandTool = R"luau(
+    StubHandTool = { useCalls = {}, rays = {}, tools = {}, updaters = {}, cameraAttaches = 0 }
+    StubHandTool.CAMERA_PLACEMENT = { x = 0.2, y = -0.15, z = 0.5 }
+    local nodes = StubScene.nodes
+
+    local function placeAtCamera(tool)
+        local camera = tool.carryingPlayer.camera
+        link(camera.pitchNode, tool.rootNode)
+        local p = StubHandTool.CAMERA_PLACEMENT
+        setTranslation(tool.rootNode, p.x, p.y, p.z)
+        setRotation(tool.rootNode, 0, 0, 0)
+    end
+
+    function StubHandTool.install(variant, options)
+        variant = variant or "ok"
+        options = options or {}
+        StubHandTool.variant = variant
+        StubHandTool.useCalls, StubHandTool.rays, StubHandTool.tools, StubHandTool.cameraAttaches = {}, {}, {}, 0
+        StubHandTool.heldTool = nil
+
+        local HandTool = {}
+        _G.HandTool = HandTool
+        function HandTool.getIsCarried(self) return self.carryingPlayer ~= nil end
+        function HandTool.getIsHeld(self) return self:getIsCarried() and self.isHeld == true end
+        function HandTool.getCarryingPlayer(self) return self.carryingPlayer end
+        function HandTool.attachToolToHand(self)
+            link(self.carryingPlayer.handNode, self.rootNode)
+            setTranslation(self.rootNode, 0, 0, 0)
+            setRotation(self.rootNode, 0, 0, 0)
+            return true
+        end
+        function HandTool.attachTool(self)
+            if not self:getIsHeld() then return end
+            if self.carryingPlayer.camera.isFirstPerson then
+                if StubHandTool.variant == "missing" then
+                    self:attachToolToCameraNode()
+                elseif StubHandTool.variant == "reshaped" then
+                    HandTool.attachToolToCamera(self)
+                else
+                    self:attachToolToCamera()
+                end
+            else
+                self:attachToolToHand()
+            end
+            setVisibility(self.rootNode, true)
+        end
+        function HandTool.detachTool(self)
+            setVisibility(self.rootNode, false)
+            unlink(self.rootNode)
+        end
+        -- the game's placement in front of the face, whatever the version calls the function
+        local function attachToCamera(tool)
+            if not tool:getIsHeld() or tool.rootNode == nil then return end
+            StubHandTool.cameraAttaches = StubHandTool.cameraAttaches + 1
+            placeAtCamera(tool)
+        end
+        if variant == "missing" then
+            function HandTool.attachToolToCameraNode(self) attachToCamera(self) end
+        elseif variant == "reshaped" then
+            function HandTool.attachToolToCamera() attachToCamera(StubHandTool.heldTool) end
+        else
+            function HandTool.attachToolToCamera(self) attachToCamera(self) end
+        end
+        StubHandTool.originalAttachToolToCamera = HandTool.attachToolToCamera
+
+        local Player = {}
+        _G.Player = Player
+        local lookRay = function(self)
+            local x, y, z = getWorldTranslation(self.camera.firstPersonCamera)
+            local dx, dy, dz = StubScene.worldDirection(self.camera.firstPersonCamera, 0, 0, -1)
+            return x, y, z, dx, dy, dz
+        end
+        StubHandTool.originalGetLookRay = nil
+        if options.getLookRay == "missing" then
+            Player.lookRay = lookRay
+        elseif options.getLookRay == "reshaped" then
+            Player.getLookRay = function() return lookRay(StubHandTool.player) end
+        else
+            Player.getLookRay = lookRay
+            StubHandTool.originalGetLookRay = lookRay
+        end
+
+        local PlayerTargeter = {}
+        PlayerTargeter.__index = PlayerTargeter
+        _G.PlayerTargeter = PlayerTargeter
+        function PlayerTargeter.new(player) return setmetatable({ player = player }, PlayerTargeter) end
+        function PlayerTargeter:update(dt)
+            self.lastRayX, self.lastRayY, self.lastRayZ, self.lastRayDirectionX, self.lastRayDirectionY, self.lastRayDirectionZ =
+                self.player:getLookRay()
+            table.insert(StubHandTool.rays, { self.lastRayX, self.lastRayY, self.lastRayZ,
+                self.lastRayDirectionX, self.lastRayDirectionY, self.lastRayDirectionZ })
+        end
+    end
+
+    function StubHandTool.onFoot(options)
+        local scene = StubScene.onFoot(options)
+        local camera = scene.cam
+        local player = setmetatable({ camera = camera, isOwner = true }, { __index = _G.Player })
+        player.handNode = StubScene.newNode("thirdPersonRightHand", scene.yawNode, 0.3, 1.2, 0.2)
+        player.targeter = _G.PlayerTargeter.new(player)
+        StubHandTool.player = player
+        _G.g_currentMission.player = player
+        _G.g_localPlayer = player
+        return { player = player, cam = camera, parent = scene.parent, yawNode = scene.yawNode,
+                 firstPersonCamera = scene.firstPersonCamera }
+    end
+
+    function StubHandTool.thirdPerson(player, on)
+        player.camera.isFirstPerson = not on
+        if StubHandTool.heldTool ~= nil then StubHandTool.heldTool:attachTool() end
+    end
+
+    function StubHandTool.tick(dt)
+        local player = _G.g_localPlayer
+        if player ~= nil and player.targeter ~= nil then player.targeter:update(dt or 16.667) end
+        for _, updater in ipairs(StubHandTool.updaters) do updater(dt or 16.667) end
+    end
+
+    function StubHandTool.lastRay()
+        local ray = StubHandTool.rays[#StubHandTool.rays]
+        if ray == nil then return nil end
+        return table.unpack(ray)
+    end
+
+    -- ---- the common tool ----------------------------------------------------------------------------------------
+    -- A tool is what the game makes of a hand tool's i3d file: a root node, the first person node (where the game links
+    -- the tool to the camera: here at the root's origin), the class's methods and the specialization's table.
+    function StubHandTool.makeTool(player, name, specName, options)
+        options = options or {}
+        local tool = setmetatable({ name = name, isHeld = false, carryingPlayer = nil }, { __index = _G.HandTool })
+        tool.rootNode = StubScene.newNode(name .. "Root", 0)
+        tool.firstPersonNode = StubScene.newNode(name .. "FirstPerson", tool.rootNode)
+        tool[specName] = {}
+        tool.player = player
+        setVisibility(tool.rootNode, false)
+        table.insert(StubHandTool.tools, tool)
+        return tool
+    end
+
+    local function useHandler(tool, name)
+        return function(self, _, inputValue)
+            table.insert(StubHandTool.useCalls, { tool = name, value = inputValue, self = self })
+        end
+    end
+
+    function StubHandTool.hold(tool)
+        tool.isHeld = true
+        tool.carryingPlayer = tool.player
+        StubHandTool.heldTool = tool
+        tool:attachTool()
+    end
+
+    function StubHandTool.drop(tool)
+        tool:detachTool()
+        tool.isHeld = false
+        tool.carryingPlayer = nil
+        if StubHandTool.heldTool == tool then StubHandTool.heldTool = nil end
+    end
+
+    function StubHandTool.pressUseBinding(tool, inputValue)
+        tool:activateAction(nil, inputValue)
+    end
+
+    -- ---- the pressure washer lance ------------------------------------------------------------------------------
+    function StubHandTool.lance(player, options)
+        local tool = StubHandTool.makeTool(player, "lance", "spec_highPressureWasherLance", options)
+        local spec = tool.spec_highPressureWasherLance
+        spec.raycastNode = StubScene.newNode("lanceNozzle", tool.rootNode, 0, 0, 0.5)
+        spec.isActivated = false
+        local record = useHandler(tool, "lance")
+        tool.onWashAction = function(self, a, inputValue)
+            self.spec_highPressureWasherLance.isActivated = inputValue > 0
+            record(self, a, inputValue)
+        end
+        tool.activateAction = tool.onWashAction
+        return tool
+    end
+
+    function StubHandTool.nozzleRay(tool)
+        local node = tool.spec_highPressureWasherLance.raycastNode
+        local x, y, z = getWorldTranslation(node)
+        local dx, dy, dz = StubScene.worldDirection(node, 0, 0, 1)
+        return x, y, z, dx, dy, dz
+    end
+
+    -- ---- an unsupported tool: the spray can ---------------------------------------------------------------------
+    function StubHandTool.sprayCan(player, options)
+        local tool = StubHandTool.makeTool(player, "sprayCan", "spec_sprayCan", options)
+        local record = useHandler(tool, "sprayCan")
+        tool.activateAction = function(self, a, inputValue) record(self, a, inputValue) end
+        return tool
+    end
+
+    -- ---- Flashlight (#113), chainsaw (#114) and the look ray (#112): their own chunks add StubHandTool.flashlight /
+    -- StubHandTool.chainsaw / ... with StubHandTool.makeTool and StubHandTool.updaters; nothing above changes.
 )luau";

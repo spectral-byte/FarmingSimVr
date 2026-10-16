@@ -227,6 +227,7 @@ add_executable(fs25_vr_tests
     tests/test_dlss_evaluation.cpp
     tests/test_ngx_interceptor.cpp
     tests/test_fidelityfx_interceptor.cpp
+    tests/test_hand_tools_lance.cpp
     tests/luau_test_runner.cpp
     tests/test_luau_suites.cpp
 )
