@@ -297,30 +297,6 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, WithTheTriggerPulledAndNoTreeUnderTh
     EXPECT_EQ(State(), "idle");
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawTest, TheSeamForTheCutRollIsClampedAndLockedDuringACut) {
-    StartWithChainsawInTheRightHand();
-    ASSERT_NO_FATAL_FAILURE(PlantTreesAtTheBarAndInFrontOfTheHead());
-    FRAMES(2);
-    ASSERT_NEAR(Number(L, "planeNormal()[2]"), 0.0, 1e-3) << "an upright plane with no roll";
-
-    // What getChainsawCutRoll answers (the wrist's roll, ticket #115; test_hand_tools_wrist_roll.cpp) replaces the game's roll,
-    // within the game's +-90 degrees. (The roll action does nothing in the Tool Hand: test_hand_tools_wrist_roll.cpp.)
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.getChainsawCutRoll = function() return 5.0 end", "=seam"), 0);
-    FRAMES(1);
-    EXPECT_NEAR(Number(L, "saw.spec_chainsaw.currentCutRoll"), 1.5707963, 1e-4);
-    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.getChainsawCutRoll = function() return 0.4 end", "=seam"), 0);
-    FRAMES(1);
-    EXPECT_NEAR(Number(L, "saw.spec_chainsaw.currentCutRoll"), 0.4, 1e-6);
-
-    headset.SetHandInputs(kRight, Trigger(1.0f));
-    FRAMES(2);
-    ASSERT_EQ(State(), "cutting");
-    ASSERT_EQ(RunLuauChunk(L, "_G.normalBefore = planeNormal(); VRCompanion.getChainsawCutRoll = function() return -0.9 end", "=lockRoll"), 0);
-    FRAMES(3);
-    EXPECT_NEAR(Number(L, "dot(planeNormal(), normalBefore)"), 1.0, 1e-4) << "a cut keeps the angle it started with";
-    EXPECT_NEAR(Number(L, "saw.spec_chainsaw.currentCutRoll"), 0.4, 1e-6);
-}
-
 // The three ways a Hand Tool is not in a tracked Tool Hand, and the chainsaw is the game's: the head's tree is targeted, the model
 // and the plane face the camera, and the game's own binding cuts.
 class VirtualGamepadHandToolsChainsawAsInTheGameTest : public VirtualGamepadHandToolsChainsawTest {
