@@ -15,7 +15,7 @@ Players want to hold the flashlight, the chainsaw and the pressure washer lance 
 - When the Tool Hand is set down or not tracked, when the feature is switched off (`vrHandTools`), or when a wrapped function is not what the wrap expects, every wrap passes through. The game's head-locked placement and aim come back, and a missing function logs one warning.
 
 ## Status
-Accepted.
+Accepted. Extended by ADR-0030 (the spray can and the horse brush join the supported tools; no crosshair in the middle of the view).
 
 ## Considered Options
 - **Look ray from the tool while it is held** (selected: the chainsaw cuts the trunk its bar is against through the game's own targeter, with no second targeting path to keep in step).
