@@ -255,15 +255,23 @@ end
 --   fn           the function's name on the class, when it is not the key (two classes can have an `onUpdate`)
 --   parameters   how many parameters the wrap needs the function to declare at least (a reshaped function declares fewer)
 --   describe     what the parameters are, for the warning
---   make         function(original) -> the wrapper (filled in by the section that owns the wrap); an entry without one is a
---                function that is only checked at map load (the feature gives up when it is missing or reshaped)
--- Each later wrap is one more entry.
+--   make         function(original) -> the wrapper (attached by the section that owns the wrap, which needs locals defined below
+--                this table); an entry without one is CHECK-ONLY: a function the module depends on but does not wrap, which is
+--                only checked at map load (the feature gives up when it is missing or reshaped)
+-- Every function the module depends on is listed here, so that the give-up check knows all of them.
 local WRAP_SPECS = {
     attachToolToCamera = { class = "HandTool", parameters = 1, describe = "(tool)" },
     getLookRay = { class = "Player", parameters = 1, describe = "(player)" },
-    -- Chainsaw: the specialization's update (the game's event dispatch reads it off the class at every call), and
-    -- the camera's rotation, which the chainsaw's cut plane is aligned from
+    -- The chainsaw: the specialization's update (the game's event dispatch reads it off the class at every call) and its roll
+    -- action's handler
     chainsawOnUpdate = { class = "HandToolChainsaw", fn = "onUpdate", parameters = 2, describe = "(tool, dt)" },
+    chainsawOnRoll = { class = "HandToolChainsaw", fn = "onRollAction", parameters = 3, describe = "(tool, action, inputDelta)" },
+    -- The flashlight's update, which places the light node (the instance's updateTransform is a copy made when the tool was
+    -- made, which a wrap of the class would not reach)
+    flashlightBeam = { class = "HandToolFlashlight", fn = "onUpdate", parameters = 2, describe = "(flashlight, dt)" },
+    -- CHECK-ONLY, never wrapped: the chainsaw's cut plane takes its heading from camera:getRotation, which updateChainsawFromTheTool
+    -- answers differently for the length of the chainsaw's own update by shadowing it on the camera instance. The shadow depends
+    -- on the camera having that function, so a game without it gives Hand Tools up.
     playerCameraGetRotation = { class = "PlayerCamera", fn = "getRotation", parameters = 1, describe = "(camera)" },
 }
 
@@ -437,6 +445,10 @@ function VRCompanion:isHandHoldingHandTool(hand)
     return toolHandFor(self, tool) == hand
 end
 
+local function forgetLink()
+    state.linkedTool, state.linkedHand, state.linkedHolder = nil, nil, nil
+end
+
 -- Links the tool's root below the Virtual Hand's node with the tool's handle offset. Returns whether it did.
 local function linkIntoHand(self, tool, hand)
     local holder = self:getVirtualHandHolder(hand)
@@ -463,7 +475,7 @@ end
 
 -- The game's own placement again: the game's attachTool decides between the camera and the hand of the third person view.
 local function returnToTheGame(tool)
-    state.linkedTool, state.linkedHand, state.linkedHolder = nil, nil, nil
+    forgetLink()
     state.givingBack = true  -- the wrap passes this call through, whatever the hand looks like
     local ok, err = pcall(function()
         if type(tool.attachTool) == "function" then
@@ -501,6 +513,15 @@ end
 -- mouse, the keyboard) still calls the same handler: nothing here replaces it. The flashlight is used by a press instead (a
 -- SUPPORTED_TOOLS entry with `toggle`): one switch per pull, with no vibration, and the same held-input rule.
 
+-- Calls fn(...) for the tool's entry; a failure is logged once per distinct error, not once per frame, and never breaks the update.
+local function callGuarded(entry, what, fn, ...)
+    local ok, err = pcall(fn, ...)
+    if not ok and state.useError ~= tostring(err) then
+        state.useError = tostring(err)
+        print("[FS25_VR] [Warning] Hand Tools: the " .. entry.label .. "'s " .. what .. " failed: " .. tostring(err))
+    end
+end
+
 -- Calls the tool's use handler as the game's action event does: callback(self, actionName, inputValue).
 local function callUseHandler(tool, entry, value)
     local handler = tool[entry.useHandler]
@@ -509,21 +530,13 @@ local function callUseHandler(tool, entry, value)
         handler = type(class) == "table" and class[entry.useHandler] or nil
     end
     if type(handler) ~= "function" then return end
-    local ok, err = pcall(handler, tool, "ACTIVATE_HANDTOOL", value)
-    if not ok and state.useError ~= tostring(err) then
-        state.useError = tostring(err)  -- once per distinct error, not once per frame
-        print("[FS25_VR] [Warning] Hand Tools: the " .. entry.label .. "'s use handler failed: " .. tostring(err))
-    end
+    callGuarded(entry, "use handler", handler, tool, "ACTIVATE_HANDTOOL", value)
 end
 
 -- A tool with a `toggle` (the flashlight) is used by a PRESS instead: the pull calls toggle(tool) once, however long the trigger
 -- stays down, and letting go calls nothing.
 local function callToggle(tool, entry)
-    local ok, err = pcall(entry.toggle, tool)
-    if not ok and state.useError ~= tostring(err) then
-        state.useError = tostring(err)
-        print("[FS25_VR] [Warning] Hand Tools: the " .. entry.label .. "'s switch failed: " .. tostring(err))
-    end
+    callGuarded(entry, "switch", entry.toggle, tool)
 end
 
 -- Ends a use that is in progress (the tool is released), and forgets the trigger.
@@ -678,7 +691,6 @@ end
 -- off, the game's roll action works as in the game, from the roll the wrist last left.
 -- UNCERTAIN until the headset: the direction the plane turns for a wrist roll one way (the roll is taken right-handed about
 -- the bar, as rotateAboutLocalAxis takes the game's own roll).
-WRAP_SPECS.chainsawOnRoll = { class = "HandToolChainsaw", fn = "onRollAction", parameters = 3, describe = "(tool, action, inputDelta)" }
 
 -- The wrist's roll about the bar in radians, or nil when the bar has no roll (it points straight up or down) or has no pose.
 local function wristRoll(tool)
@@ -773,8 +785,6 @@ end
 -- The game's placement runs first and this one after it, so the game's own is what remains whenever the tool is not in the hand.
 -- A frame that is drawn without a game update (the second eye of an alternate frame render) gets the light placed again from
 -- the render-time hook (placeHandToolsForRender, below), so the beam rides along with the hand as the tool does.
-WRAP_SPECS.flashlightBeam = { class = "HandToolFlashlight", fn = "onUpdate", parameters = 2, describe = "(flashlight, dt)" }
-
 local function placeFlashlightBeam(tool)
     local spec = type(tool) == "table" and tool.spec_flashlight or nil
     if spec == nil or spec.lightNode == nil or heldTool() ~= tool then return end
@@ -860,7 +870,7 @@ end
 local function syncPlacement(self)
     local tool = heldTool()
     if tool == nil then
-        state.linkedTool, state.linkedHand, state.linkedHolder = nil, nil, nil
+        forgetLink()
         return
     end
     local hand = toolHandFor(self, tool)
@@ -884,6 +894,14 @@ end
 
 -- ---- Settings command, diagnostics, console commands, reset ---------------------------------------------------------------
 
+-- The on-screen confirmation of a console command, when the mission can show one.
+local function showBlinkingWarning(text)
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function() mission:showBlinkingWarning(text, 2500) end)
+    end
+end
+
 function VRCompanion:setHandToolsEnabled(enabled, save)
     self.handToolsEnabled = (enabled ~= false)
     syncPlacement(self)  -- at once: the tool moves between the hand and the camera without waiting for the next update
@@ -902,12 +920,7 @@ function VRCompanion:consoleCommandSetHandTools(arg)
         return "Usage: vrHandTools <on|off>"
     end
     self:setHandToolsEnabled(enabled, true)
-    local mission = g_currentMission or _G.g_currentMission
-    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
-        pcall(function()
-            mission:showBlinkingWarning(string.format("VR Hand Tools: %s (Saved)", enabled and "on" or "off"), 2500)
-        end)
-    end
+    showBlinkingWarning(string.format("VR Hand Tools: %s (Saved)", enabled and "on" or "off"))
     print(string.format("[FS25_VR] Hand Tools set to: %s", enabled and "on" or "off"))
     return string.format("Hand Tools set to: %s (Saved)", enabled and "on" or "off")
 end
@@ -936,12 +949,7 @@ function VRCompanion:consoleCommandSetToolHand(arg)
         return "Usage: vrToolHand <left|right>"
     end
     self:setToolHand(hand, true)
-    local mission = g_currentMission or _G.g_currentMission
-    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
-        pcall(function()
-            mission:showBlinkingWarning(string.format("VR Tool Hand: %s (Saved)", HAND_NAMES[hand]), 2500)
-        end)
-    end
+    showBlinkingWarning(string.format("VR Tool Hand: %s (Saved)", HAND_NAMES[hand]))
     print(string.format("[FS25_VR] Tool Hand set to: %s", HAND_NAMES[hand]))
     return string.format("Tool Hand set to: %s (Saved)", HAND_NAMES[hand])
 end
@@ -1022,7 +1030,7 @@ function VRCompanion:releaseHandToolsFromHands()
     local tool = state.linkedTool
     endTriggerUse()
     if tool ~= nil and heldTool() == tool then pcall(returnToTheGame, tool) end
-    state.linkedTool, state.linkedHand, state.linkedHolder = nil, nil, nil
+    forgetLink()
 end
 
 -- Map unload: the tool goes back to the game's placement (the Virtual Hand it hangs below is deleted next), the wraps come
