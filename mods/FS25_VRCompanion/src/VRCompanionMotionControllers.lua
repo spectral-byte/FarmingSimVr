@@ -786,6 +786,7 @@ end
 -- points settled in the update: under AFR the update and the draw both run per rendered frame, under
 -- Sequential Dual-Pass the one update's ray is drawn in each pass.
 function VRCompanion:draw()
+    if type(self.drawVirtualHands) == "function" then self:drawVirtualHands() end
     local ray = state.ray
     if not ray.visible then return end
     local drawLine = drawDebugLine or (_G and _G.drawDebugLine)
