@@ -1,69 +1,44 @@
 -- ====================================================================
 -- FS25 VR Companion Mod: Hand Tools
 --
--- Puts the player's Hand Tools into the Tool Hand (spec #109, ADR-0029). In first person on foot the game links a held Hand
--- Tool to the player camera's pitch node (HandTool:attachToolToCamera), so it moves with the head. While the Tool Hand is
--- tracked, this module links a SUPPORTED Hand Tool into the Tool Hand's Virtual Hand instead; when the Tool Hand is set
--- down or loses tracking, or the feature is off, the tool is where the game puts it again.
+-- Puts the player's Hand Tools into the Tool Hand (ADR-0029). In first person on foot the game links a held Hand Tool to the
+-- player camera's pitch node (HandTool:attachToolToCamera), so it moves with the head. While the Tool Hand is tracked, this
+-- module links a SUPPORTED Hand Tool (recognised by its spec_ table: the pressure washer lance, the flashlight, the chainsaw)
+-- into the Tool Hand's Virtual Hand instead; when the Tool Hand is set down or loses tracking, or the feature is off, the tool
+-- is where the game puts it again. Every other Hand Tool (the spray can, other mods' tools) and every other player's tool in
+-- a multiplayer session is left exactly as the game has it. Terms (Hand Tool, Tool Hand): CONTEXT.md.
 --
--- TERMS (CONTEXT.md): a Hand Tool is a tool the player holds on foot (the flashlight, the chainsaw, the pressure washer
--- lance, the spray can). The Tool Hand is the Motion Controller that holds it: the right one by default.
+-- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
+-- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The look ray |
+-- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The flashlight's beam | Haptics | Update |
+-- Diagnostics, console commands, reset.
 --
--- SUPPORTED TOOLS are recognised by the game's specialization (the spec_ table a tool has): the pressure washer lance,
--- SUPPORTED TOOLS are recognised by the game's specialization (the spec_ table a tool has): the pressure washer lance,
--- the flashlight and the chainsaw. Every other Hand Tool (the spray can, the horse
--- brush, other mods' tools) is left exactly as the game has it, and the Virtual Hand holding it is an empty hand.
---
--- SECTIONS of this file (one per concern, so that a ticket adds to its own section):
---   * Settings              vrHandTools on|off, saved
---   * Supported tools       which tools are supported, and where each sits in the hand (HAND_TOOL_HANDLE_OFFSETS)
---   * Wraps                 the game functions this module wraps (WRAP_SPECS, keyed by function name) and how they give up
---   * Placement             the Tool Hand, whether a tool is in it, linking it into the Virtual Hand and back
---   * Trigger               the Tool Hand's trigger uses the tool (its ACTIVATE_HANDTOOL handler held, or a press that switches the
---                           flashlight) and reads released on the pad
---   * The look ray          the tool's pointing ray and the Player:getLookRay wrap (HAND_TOOL_POINTING_AXES)
---   * The chainsaw          the cut plane and the model aligned from the bar, not the camera (wrap of HandToolChainsaw.onUpdate)
---   * The wrist's roll     the chainsaw's cut angle from the wrist about the bar; the roll action does nothing meanwhile (wrap of
---                           HandToolChainsaw.onRollAction)
---   * The flashlight's beam the light node placed from the flashlight's lens (the HandToolFlashlight:onUpdate wrap)
---   * Haptics              the Tool Hand buzzes while the chainsaw runs or cuts and the lance sprays (HAND_TOOL_HAPTICS)
---   * Update               the per-update step
---   * Diagnostics, console commands, reset
---
--- THE WRAPS (ADR-0026, ADR-0027): every wrap passes through to the game's own function when the feature is off, Motion
--- Controllers are off, the Tool Hand is untracked or set down, or the tool is unsupported (the flashlight's beam wrap also
--- when the flashlight is not the tool in the Tool Hand); these are re-checked on every
--- call, never cached from the last update, so that "off" takes effect at once. If a function a wrap expects is missing or
--- has another shape when the map loads, the feature gives up for the map: every wrap is lifted, ONE warning is logged and
--- the game's Hand Tools work unchanged. A wrap is only taken off again when it is still the function the module put there:
--- another mod's later wrap is never undone.
+-- THE WRAPS (ADR-0026, ADR-0027): a wrap passes through to the game's own function whenever the feature is off, Motion
+-- Controllers are off, the tool is not the local player's, is unsupported, or is not in a tracked Tool Hand; this is re-checked
+-- on every call, never cached, so that "off" takes effect at once. If a function a wrap depends on is missing or has another
+-- shape when the map loads, the feature gives up for the map: every wrap is lifted, ONE warning is logged and the game's Hand
+-- Tools work unchanged. A wrap is only taken off again when it is still the function this module put there.
 --
 -- PUBLIC SURFACE
---   VRCompanion.handToolsEnabled                        boolean, default true, saved (`vrHandTools on|off`)
+--   VRCompanion.handToolsEnabled / setHandToolsEnabled(enabled, save)   boolean, default true, saved (`vrHandTools on|off`)
+--   VRCompanion:getToolHand() -> hand / setToolHand(hand, save)   the Motion Controller that holds Hand Tools (0 left, 1 right),
+--                                                       saved (`vrToolHand left|right`); a tool held now moves to the new hand at once
+--   VRCompanion:saveHandToolsSetting / loadHandToolsSetting(xmlFile, xml)   settings chain (the Tool Hand rides along)
 --   VRCompanion.HAND_TOOL_HANDLE_OFFSETS                per tool kind: where the tool's root node sits in the Virtual Hand's grip frame
---   VRCompanion:getToolHand() -> hand                   the Motion Controller that holds Hand Tools (0 left, 1 right), saved (`vrToolHand left|right`)
---   VRCompanion:setToolHand(hand, save)                 chooses it; a tool held now moves to the other hand at once
---   VRCompanion:saveToolHandSetting / loadToolHandSetting   ride on saveHandToolsSetting / loadHandToolsSetting
+--   VRCompanion.HAND_TOOL_POINTING_AXES                 per tool kind: the node a tool aims from and the axis it aims along
 --   VRCompanion:isHandHoldingHandTool(hand) -> boolean  the hand is the Tool Hand and a supported Hand Tool is in it now
---   VRCompanion:getHeldHandTool() -> tool, kind        the Hand Tool the player holds and which supported kind it is (nil kind: unsupported)
+--   VRCompanion:getHeldHandTool() -> tool, kind         the Hand Tool the player holds and its supported kind (nil kind: unsupported)
 --   VRCompanion:isHandToolTriggerDown(hand) -> boolean  the hand's trigger is using its Hand Tool now (Motion Controllers keep that hand in use)
---   VRCompanion.HAND_TOOL_POINTING_AXES                 per tool kind: the node a tool aims from (and optionally the point of it) and the axis it aims along
---   VRCompanion:getHandToolRay([player]) -> x, y, z, dirX, dirY, dirZ   the tool's pointing ray in the world, while a supported tool
---                                                       is in the Tool Hand (nil otherwise: the head's ray is the game's). This is
---                                                       what Player:getLookRay answers then, so what the targeter casts.
---   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   what the chainsaw is doing (the motor is revved
---                                                       unless "idle"); nil when the tool (default: the one held) is no chainsaw
---   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the wrist's roll about the bar (ticket #115) while the chainsaw is in the tracked
---                                                       Tool Hand: the cut plane's tilt, asked before each update that is not
---                                                       cutting (a cut keeps its roll), clamped by the update to the game's +-pi/2;
---                                                       nil (not in the hand, or a bar straight up or down) leaves the roll as it
---                                                       is, to the game's roll action when the chainsaw is not in the hand
---   VRCompanion.HAND_TOOL_HAPTICS                       per tool kind: what the Tool Hand feels now (a key of HAND_TOOL_HAPTIC_PULSES, or nil);
---                                                       a kind with no entry (the flashlight) is silent
---   VRCompanion.HAND_TOOL_HAPTIC_PULSES / _INTERVAL_MS  the pulses (ms, strength) and how often they are requested again
+--   VRCompanion:getHandToolRay([player]) -> x, y, z, dirX, dirY, dirZ   the tool's pointing ray in the world while a supported
+--                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's);
+--                                                       this is what Player:getLookRay answers then, so what the targeter casts
+--   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   nil when the tool (default: the one held) is no chainsaw
+--   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the wrist's roll about the bar while the chainsaw is in the tracked Tool Hand
+--                                                       (nil: leave the roll to the game's roll action)
+--   VRCompanion.HAND_TOOL_HAPTICS / HAND_TOOL_HAPTIC_PULSES / _INTERVAL_MS   per tool kind: what the Tool Hand feels now, the pulses
+--                                                       (ms, strength) and how often they are requested again; no entry: silent
 --   VRCompanion:updateHandTools(dt)                     once per update, called by updateMotionControllers on every path
---   VRCompanion:setHandToolsEnabled(enabled, save)
---   VRCompanion:saveHandToolsSetting(xmlFile, xml) / loadHandToolsSetting(xmlFile, xml)   settings chain
+--   VRCompanion:placeHandToolsForRender()               before every rendered frame, called by placeVirtualHandsForRender
 --   VRCompanion:getHandToolsDiagnostics() -> string     the state of Hand Tools, one line
 --   VRCompanion:registerHandToolsConsoleCommands() / resetHandTools()   map load / unload
 --   Console: vrHandTools [on|off], vrToolHand [left|right], vrHandToolsDiagnostics
@@ -148,7 +123,7 @@ function VRCompanion:loadHandToolsSetting(xmlFile, xml)
     self:loadToolHandSetting(xmlFile, xml)
 end
 
--- ---- Settings: the Tool Hand (ticket #117) ------------------------------------------------------------------------------
+-- ---- Settings: the Tool Hand ------------------------------------------------------------------------------
 -- vrToolHand left|right: saved, default right. VRCompanion.toolHand is nil (the right hand) or a hand id; getToolHand answers it.
 -- Everything the Tool Hand does follows it: the tool's place, the trigger use, the Pointer Hand rule and the held-tool pose all
 -- read getToolHand() live, so changing it moves them on the next update (setToolHand also moves the tool at once).
@@ -170,8 +145,8 @@ function VRCompanion:loadToolHandSetting(xmlFile, xml)
 end
 
 -- ---- Supported tools ----------------------------------------------------------------------------------------------------
--- The tools that go into the Tool Hand, recognised by the specialization table the game gives the tool (`spec`). A later
--- ticket adds its tool here and a HAND_TOOL_HANDLE_OFFSETS entry of the same kind.
+-- The tools that go into the Tool Hand, recognised by the specialization table the game gives the tool (`spec`). A new
+-- tool is added here, with a HAND_TOOL_HANDLE_OFFSETS entry of the same kind.
 -- `useHandler` is the name of the tool's own function the game's ACTIVATE_HANDTOOL binding calls (callback(self, action,
 -- inputValue)); the Tool Hand's trigger calls it too (see "Trigger"). The lance washes while the input is held.
 -- `useHandlerClass` (optional) names the global specialization class to look the handler up on when the tool does not carry it
@@ -181,10 +156,10 @@ end
 -- for it (the chainsaw's, registered for trigger up and down), not on every update the input is held (the lance's).
 -- `toggle` (instead of a useHandler) makes the trigger a PRESS: each pull of the trigger calls toggle(tool) once.
 
--- The flashlight (ticket #113): a press of the trigger switches it on or off through the flashlight's own switch,
+-- The flashlight: a press of the trigger switches it on or off through the flashlight's own switch,
 -- HandToolFlashlight:setFlashlightIsActive (the same call the game's network event makes; no `noEventSend`, so other players see
 -- the light). The player keeps its own flag for the light (Player.isFlashlightActive, which the game restores the light from
--- when a Hand Tool is dropped), so that follows. UNCERTAIN until the headset (#118): which action the game's own toggle
+-- when a Hand Tool is dropped), so that follows. UNCERTAIN until the headset: which action the game's own toggle
 -- (TOGGLE_LIGHTS_FPS, the body of its handler is not in the readable source) uses; only this function changes.
 local function toggleFlashlight(tool)
     local spec = tool.spec_flashlight
@@ -197,7 +172,7 @@ end
 local SUPPORTED_TOOLS = {
     { kind = "lance", label = "pressure washer lance", spec = "spec_highPressureWasherLance", useHandler = "onWashAction" },
     { kind = "flashlight", label = "flashlight", spec = "spec_flashlight", toggle = toggleFlashlight },
-    -- Chainsaw (ticket #114)
+    -- Chainsaw
     { kind = "chainsaw", label = "chainsaw", spec = "spec_chainsaw", useHandler = "onCutAction", useHandlerClass = "HandToolChainsaw", useOnce = true },
 }
 
@@ -208,8 +183,8 @@ local SUPPORTED_TOOLS = {
 -- point: the tool's +Z (the lance's nozzle runs along it) onto the grip frame's -Y, the tool's +Y (up) onto -Z (toward the
 -- thumb), which is the half turn about (0, 1, -1) below. Metres, a unit quaternion.
 -- UNCERTAIN: these are a first guess (the root at the grip origin). Each tool's real handle position is found in the
--- headset (ticket #118); only this table changes.
--- BOTH HANDS use the same entry (ticket #117): the left and right grip frames have the same axes, the right hand being the
+-- headset; only this table changes.
+-- BOTH HANDS use the same entry: the left and right grip frames have the same axes, the right hand being the
 -- left mirrored across X (VRCompanionVirtualHands.lua). The lance's offset has x = 0 and turns about an axis in that mirror
 -- plane, so it is the same in either hand; a tool whose handle sits off the hand's middle line needs its x negated for the right.
 VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
@@ -217,23 +192,23 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
         position = { x = 0.0, y = 0.0, z = 0.0 },
         rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
     },
-    -- The flashlight (#113): the same first guess as the lance, the lens toward the fingertips. UNCERTAIN until the headset (#118).
+    -- The flashlight: the same first guess as the lance, the lens toward the fingertips. UNCERTAIN until the headset.
     flashlight = {
         position = { x = 0.0, y = 0.0, z = 0.0 },
         rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
     },
-    -- Chainsaw (ticket #114): the saw's bar runs along the tool's +Z, as the game turns the model (setDirection) to point
+    -- Chainsaw: the saw's bar runs along the tool's +Z, as the game turns the model (setDirection) to point
     -- its +Z where the camera looks. UNCERTAIN: the same first guess as the lance (the root at the grip origin, the bar along
-    -- the fingers); the handle and the bar's direction are found in the headset (#118).
+    -- the fingers); the handle and the bar's direction are found in the headset.
     chainsaw = {
         position = { x = 0.0, y = 0.0, z = 0.0 },
         rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
     },
 }
 
--- WHERE EACH TOOL POINTS (the look ray, ticket #112): the ray the game's targeter casts starts at `node(tool)`'s origin and runs
+-- WHERE EACH TOOL POINTS (the look ray): the ray the game's targeter casts starts at `node(tool)`'s origin and runs
 -- along `direction`, a unit vector in that node's own axes. One entry per tool kind, the place to adjust how a tool aims.
--- The lance washes from its raycastNode along that node's +Z axis, the nozzle. UNCERTAIN until checked in the headset (#118):
+-- The lance washes from its raycastNode along that node's +Z axis, the nozzle. UNCERTAIN until checked in the headset:
 -- only this table changes. An entry may also have a `position`, the point of the node the ray starts at (default: the node's
 -- origin); `position` and `direction` are tables or functions of the tool that answer one.
 -- The flashlight's beam leaves its lens the way the game's own placement (HandToolFlashlight:updateTransform) takes it out of the
@@ -255,10 +230,10 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
             return { x = spec.lightNodeForwardX or 0.0, y = spec.lightNodeForwardY or 0.0, z = spec.lightNodeForwardZ or 1.0 }
         end,
     },
-    -- Chainsaw (ticket #114): from the tool's root along its +Z, the bar. The root, not the model node: the game turns the
+    -- Chainsaw: from the tool's root along its +Z, the bar. The root, not the model node: the game turns the
     -- model toward the camera each update and moves it along the cut while cutting, while the root stays where the hand put it.
     -- The hit point of this ray on the trunk is where the game puts the cut plane's node, so the cut height is where the bar
-    -- meets the trunk. UNCERTAIN until checked in the headset (#118).
+    -- meets the trunk. UNCERTAIN until checked in the headset.
     chainsaw = {
         node = function(tool) return tool.rootNode end,
         direction = { x = 0.0, y = 0.0, z = 1.0 },
@@ -286,7 +261,7 @@ end
 local WRAP_SPECS = {
     attachToolToCamera = { class = "HandTool", parameters = 1, describe = "(tool)" },
     getLookRay = { class = "Player", parameters = 1, describe = "(player)" },
-    -- Chainsaw (ticket #114): the specialization's update (the game's event dispatch reads it off the class at every call), and
+    -- Chainsaw: the specialization's update (the game's event dispatch reads it off the class at every call), and
     -- the camera's rotation, which the chainsaw's cut plane is aligned from
     chainsawOnUpdate = { class = "HandToolChainsaw", fn = "onUpdate", parameters = 2, describe = "(tool, dt)" },
     playerCameraGetRotation = { class = "PlayerCamera", fn = "getRotation", parameters = 1, describe = "(camera)" },
@@ -602,7 +577,7 @@ function VRCompanion:isHandToolTriggerDown(hand)
     return use.active and use.hand == hand and self:getHandState(hand).tracked == true
 end
 
--- ---- The look ray (ticket #112) -----------------------------------------------------------------------------------------
+-- ---- The look ray -----------------------------------------------------------------------------------------
 
 -- Where the tool points now: the world position of its pointing node and the world direction of its pointing axis, or nil
 -- when the tool has no pointing axis (HAND_TOOL_POINTING_AXES) or the node is not there.
@@ -650,7 +625,7 @@ WRAP_SPECS.getLookRay.make = function(original)
     end
 end
 
--- ---- The chainsaw (ticket #114) -------------------------------------------------------------------------------------------
+-- ---- The chainsaw -------------------------------------------------------------------------------------------
 -- The chainsaw cuts where its bar is. In the Tool Hand it is placed like the other tools (SUPPORTED_TOOLS, the handle offset),
 -- the look ray is its bar (HAND_TOOL_POINTING_AXES), so the game's targeter finds the trunk the bar is against and the game puts
 -- the node the cut plane hangs from (cameraRotationNode) at the hit point: the cut height is where the bar meets the trunk, and
@@ -666,10 +641,10 @@ end
 -- bar is taken off the trunk: updateCutting stops it once the targeter's last ray (now the bar) starts too far from the cut.
 -- Holding the trigger cuts through the chainsaw's own cut handler (HandToolChainsaw.onCutAction: called when the trigger is
 -- pulled and when it is let go, as the game's action event does, "useOnce" above).
--- The cut roll (the plane's tilt about the bar) is the wrist's (see "The wrist's roll", ticket #115): getChainsawCutRoll is
+-- The cut roll (the plane's tilt about the bar) is the wrist's (see "The wrist's roll"): getChainsawCutRoll is
 -- asked before each update that is not cutting; a cut keeps the roll it began with.
 --
--- THE CHAINSAW'S STATE for the haptics (ticket #116): getChainsawCutState(tool) answers "idle", "delimbing" (the motor is
+-- THE CHAINSAW'S STATE for the haptics: getChainsawCutState(tool) answers "idle", "delimbing" (the motor is
 -- revved: the trigger is held without a cut) or "cutting".
 
 -- The chainsaw's state: "idle", "delimbing" (revving without a cut) or "cutting"; nil when the tool is not a chainsaw (the
@@ -691,7 +666,7 @@ local function chainsawInTheHand(tool)
     return toolHandFor(VRCompanion, tool) ~= nil
 end
 
--- ---- The wrist's roll sets the cut angle (ticket #115) ---------------------------------------------------------------------
+-- ---- The wrist's roll sets the cut angle ---------------------------------------------------------------------
 -- While the chainsaw is in a tracked Tool Hand, the tilt of the cut plane about the bar is how far the wrist is rolled about the
 -- bar: the angle, turning right-handed about the bar's direction, from the way up that is square to the bar (the world's up, with
 -- the part along the bar taken off) to the tool's own up (its +Y, the thumb side of the closed hand: HAND_TOOL_HANDLE_OFFSETS).
@@ -701,7 +676,7 @@ end
 -- fight the wrist: its wrap hands the action back to the game whenever the chainsaw is not in the tracked Tool Hand, and the
 -- update empties the input a route past the wrap might have left (rollInput). With the hand untracked, set down, or Hand Tools
 -- off, the game's roll action works as in the game, from the roll the wrist last left.
--- UNCERTAIN until the headset (#118): the direction the plane turns for a wrist roll one way (the roll is taken right-handed about
+-- UNCERTAIN until the headset: the direction the plane turns for a wrist roll one way (the roll is taken right-handed about
 -- the bar, as rotateAboutLocalAxis takes the game's own roll).
 WRAP_SPECS.chainsawOnRoll = { class = "HandToolChainsaw", fn = "onRollAction", parameters = 3, describe = "(tool, action, inputDelta)" }
 
@@ -742,7 +717,7 @@ local function updateChainsawFromTheTool(original, tool, dt, ...)
     local cutting = type(states) == "table" and spec.currentCutState == states.CUTTING
     local chainsaw = state.chainsaw
     if chainsaw.tool ~= tool then chainsaw.tool, chainsaw.yaw = tool, nil end
-    if spec.rollInput ~= nil then spec.rollInput = 0 end  -- the wrist rolls the plane, not the roll action (ticket #115)
+    if spec.rollInput ~= nil then spec.rollInput = 0 end  -- the wrist rolls the plane, not the roll action
 
     if not cutting then
         chainsaw.yaw = barYaw(tool) or chainsaw.yaw  -- a cut keeps the last one
@@ -781,7 +756,7 @@ WRAP_SPECS.chainsawOnUpdate.make = function(original)
     end
 end
 
--- The wrap of the roll action's handler (ticket #115): nothing happens while the chainsaw is in the tracked Tool Hand.
+-- The wrap of the roll action's handler: nothing happens while the chainsaw is in the tracked Tool Hand.
 WRAP_SPECS.chainsawOnRoll.make = function(original)
     return function(tool, ...)
         if chainsawInTheHand(tool) then return end
@@ -789,7 +764,7 @@ WRAP_SPECS.chainsawOnRoll.make = function(original)
     end
 end
 
--- ---- The flashlight's beam (ticket #113) ----------------------------------------------------------------------------------
+-- ---- The flashlight's beam ----------------------------------------------------------------------------------
 -- The game places the flashlight's light node itself each update (HandToolFlashlight:onUpdate -> updateTransform: at the camera,
 -- or out of the tool model while the tool is held). While the flashlight is in the Tool Hand, the beam is placed from the lens
 -- instead: at the point the look ray starts and along the way it points (HAND_TOOL_POINTING_AXES.flashlight), with the game's
@@ -824,7 +799,7 @@ function VRCompanion:placeHandToolsForRender()
     if tool ~= nil and tool.spec_flashlight ~= nil then pcall(placeFlashlightBeam, tool) end
 end
 
--- ---- Haptics (ticket #116) --------------------------------------------------------------------------------------------------
+-- ---- Haptics --------------------------------------------------------------------------------------------------
 -- The Tool Hand buzzes while its tool works, through VRCompanion:pulseHand (VRBridge.pulseHaptic): a light buzz for as long as
 -- the chainsaw is in the hand (idling, or delimbing with the trigger held without a cut), a stronger one while it cuts, a steady
 -- one while the lance sprays, and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
@@ -1006,16 +981,16 @@ local function diagnosticFields(self)
         lookRayWrapText,
         beamWrapText,
     }
-    -- Haptics (ticket #116)
+    -- Haptics
     table.insert(fields, "haptics: " .. tostring(state.haptics.level or "none"))
-    -- Chainsaw (ticket #114)
+    -- Chainsaw
     if kind == "chainsaw" then
         table.insert(fields, string.format("chainsaw: %s, cut plane heading from the %s, cut roll from the %s", tostring(self:getChainsawCutState(tool)),
             (hand ~= nil and state.chainsaw.yaw ~= nil) and "bar" or "camera",
             hand ~= nil and "wrist" or "game's roll action"))
     end
     table.insert(fields, wrapStatus("chainsawOnUpdate"))
-    table.insert(fields, wrapStatus("chainsawOnRoll"))  -- ticket #115
+    table.insert(fields, wrapStatus("chainsawOnRoll"))
     return fields
 end
 
@@ -1071,7 +1046,7 @@ VRCompanion.HandTools.updateHandTools = function(self, ...) return VRCompanion.u
 VRCompanion.HandTools.isHandHoldingHandTool = function(self, ...) return VRCompanion.isHandHoldingHandTool(VRCompanion, ...) end
 VRCompanion.HandTools.getToolHand = function(self, ...) return VRCompanion.getToolHand(VRCompanion, ...) end
 VRCompanion.HandTools.consoleCommandSetToolHand = function(self, ...) return VRCompanion.consoleCommandSetToolHand(VRCompanion, ...) end
-VRCompanion.HandTools.consoleCommandSetHandTools =function(self, ...) return VRCompanion.consoleCommandSetHandTools(VRCompanion, ...) end
+VRCompanion.HandTools.consoleCommandSetHandTools = function(self, ...) return VRCompanion.consoleCommandSetHandTools(VRCompanion, ...) end
 VRCompanion.HandTools.consoleCommandHandToolsDiagnostics = function(self, ...) return VRCompanion.consoleCommandHandToolsDiagnostics(VRCompanion, ...) end
 
 return VRCompanion.HandTools
