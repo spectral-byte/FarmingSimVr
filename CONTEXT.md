@@ -145,7 +145,7 @@ A tracked handheld VR input device, one per hand. The player may set it down at 
 _Avoid_: VR controller, wand, hand controller, controller (in the Interactive Control mod a "controller" is a switch or lever)
 
 **Virtual Gamepad**:
-The Xbox-style gamepad the game sees in place of the Motion Controllers' triggers, grips, thumbsticks and buttons, so that every one of them is bound in the game's own Controls screen like any gamepad. Each physical control on each hand is its own gamepad input; a binding stays with the physical hand, never with the Pointer Hand. Hand poses never go through it. While the mod itself is using an input (a menu is showing, except the pause menu's Settings page, where the player binds the pad in the Controls screen; the Pointer Ray is on a Click Point, a Virtual Hand is holding the Steering Wheel), that input reads as released on it, except that an input already held when that use begins keeps its binding until it is let go. Out of the box its bindings are VR-comfortable (Snap Turn on the right stick instead of smooth look); the Recenter Action keeps the game's default, the left stick click, because the game does not fire it while it is bound to the right stick click. It is on by default; the player can turn it off, and the Motion Controllers then bind nothing.
+The Xbox-style gamepad the game sees in place of the Motion Controllers' triggers, grips, thumbsticks and buttons, so that every one of them is bound in the game's own Controls screen like any gamepad. Each physical control on each hand is its own gamepad input; a binding stays with the physical hand, never with the Pointer Hand. Hand poses never go through it. While the mod itself is using an input (a menu is showing, except the pause menu's Settings page, where the player binds the pad in the Controls screen; the Pointer Ray is on a Click Point, a Virtual Hand is holding the Steering Wheel, the Tool Hand's trigger while it holds a Hand Tool), that input reads as released on it, except that an input already held when that use begins keeps its binding until it is let go. Out of the box its bindings are VR-comfortable (Snap Turn on the right stick instead of smooth look); the Recenter Action keeps the game's default, the left stick click, because the game does not fire it while it is bound to the right stick click. It is on by default; the player can turn it off, and the Motion Controllers then bind nothing.
 _Avoid_: Emulated controller, fake pad, XInput pad, virtual controller
 
 **Wheel Peripheral**:
@@ -161,7 +161,7 @@ Holding the Steering Wheel with a Motion Controller to steer the vehicle being d
 _Avoid_: Grab steering, hand steering, VR steering, wheel grip
 
 **Pointer Hand**:
-The Motion Controller currently pointing. It moves on its own to whichever Motion Controller the player is using, so neither hand is fixed as the pointer. Only the Pointer Hand casts a Pointer Ray. A hand holding the Steering Wheel is never the Pointer Hand.
+The Motion Controller currently pointing. It moves on its own to whichever Motion Controller the player is using, so neither hand is fixed as the pointer. Only the Pointer Hand casts a Pointer Ray. A hand holding the Steering Wheel is never the Pointer Hand, nor is the Tool Hand while it holds a Hand Tool, except in a menu.
 _Avoid_: Dominant hand, main hand, laser hand
 
 **Pointer Ray**:
@@ -169,9 +169,17 @@ The ray from the Pointer Hand that selects what the player is aiming at: a Click
 _Avoid_: Laser, beam, raycast, gaze pointer
 
 **Virtual Hand**:
-A gloved hand drawn in the 3D world where a Motion Controller is held (or, while it holds the Steering Wheel, on the rim where it grabbed, turning with the wheel), its fingers curling with the trigger and grip, one per Motion Controller, shown while that Motion Controller is in use and Motion Controllers are switched on. Like the Pointer Ray, it appears on foot, in the cab and in an Outside Camera, never in a menu or 2D Floating Window Mode. Only the player holding the Motion Controllers sees their Virtual Hands; other players in multiplayer do not. The Pointer Ray of the Pointer Hand starts at the index fingertip of its Virtual Hand.
+A gloved hand drawn in the 3D world where a Motion Controller is held (or, while it holds the Steering Wheel, on the rim where it grabbed, turning with the wheel; while it is the Tool Hand holding a Hand Tool, closed around the tool's handle with only the index finger following the trigger), its fingers curling with the trigger and grip, one per Motion Controller, shown while that Motion Controller is in use and Motion Controllers are switched on. Like the Pointer Ray, it appears on foot, in the cab and in an Outside Camera, never in a menu or 2D Floating Window Mode. Only the player holding the Motion Controllers sees their Virtual Hands; other players in multiplayer do not. The Pointer Ray of the Pointer Hand starts at the index fingertip of its Virtual Hand.
 _Avoid_: Hand model, controller model, avatar hand
 
 **Click Point**:
 A clickable target the Interactive Control mod places in a cab, on a vehicle's exterior, or on a placed object such as a building, shown as an icon.
 _Avoid_: IC button, hotspot, interactive point
+
+**Hand Tool**:
+A tool the player carries and uses on foot, such as the flashlight, the chainsaw or the pressure washer lance; the game's own term. The player gets and switches Hand Tools the game's way. Empty hands, which the game also counts as a hand tool, is not a Hand Tool here.
+_Avoid_: Handtool, equipment, item, tool (alone)
+
+**Tool Hand**:
+The Motion Controller that holds the Hand Tool the player is carrying: the right one, unless the player chooses the left. While it is tracked, the Hand Tool sits in its Virtual Hand, closed around the handle, and follows it: the player aims the Hand Tool, and whatever they would otherwise target by looking, with the tool itself (the chainsaw cuts where its bar meets the trunk, at the angle the wrist is rolled to), its trigger uses the Hand Tool, and it vibrates while the chainsaw runs or the lance sprays. A chainsaw cut keeps the height and angle it started with; taking the bar off the trunk stops it. While it holds a Hand Tool it is never the Pointer Hand in the world. While it is set down or not tracked, the Hand Tool goes back to where the game itself puts it, in front of the view, and is aimed by looking again. Only the flashlight, the chainsaw and the pressure washer lance go into the Tool Hand; every other Hand Tool, such as the spray can, the horse brush or another mod's, stays where the game puts it. It can be switched off on its own, and Hand Tools then behave as in the game.
+_Avoid_: Dominant hand, main hand, tool controller
