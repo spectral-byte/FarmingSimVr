@@ -227,8 +227,17 @@ add_executable(fs25_vr_tests
     tests/test_dlss_evaluation.cpp
     tests/test_ngx_interceptor.cpp
     tests/test_fidelityfx_interceptor.cpp
+    tests/test_hand_tools_lance.cpp
+    tests/test_hand_tools_trigger.cpp
+    tests/test_hand_tools_look_ray.cpp
+    tests/test_hand_tools_flashlight.cpp
     tests/luau_test_runner.cpp
     tests/test_luau_suites.cpp
+    tests/test_hand_tools_left_hand.cpp
+    tests/test_hand_tools_chainsaw.cpp
+    tests/test_hand_tools_haptics.cpp
+    tests/test_hand_tools_wrist_roll.cpp
+    tests/test_hand_tools_offset_tuning.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE

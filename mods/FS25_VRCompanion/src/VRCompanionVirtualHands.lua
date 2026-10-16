@@ -37,6 +37,11 @@
 -- pinned to the rim point where it grabbed, turning with the wheel node's actual rotation (taken into the anchor's
 -- space like the grip pose, so it rides with the cab too); it stays shown however long it
 -- is held still (the Motion Controller module keeps a holding hand in use), and its fingers still curl with the real grip.
+-- A hand that holds a Hand Tool (Hand Tools, VRCompanion:isHandHoldingHandTool) has the tool's root linked below its holder
+-- (the tool rides along on every placement above, including the one before a rendered frame with no update), and is drawn
+-- closed around the handle: the middle, ring and little fingers at VRCompanion.HELD_TOOL_GRIP_CURL whatever the real grip is,
+-- the index finger still following the trigger. The holder is deleted only with the hands, and the tool is given back to the
+-- game's placement first (VRCompanion:releaseHandToolsFromHands).
 -- A holder deleted with the node it hung below (a vehicle deleted with the player in it) is made again, model and all.
 --
 -- THE MODELS: the Gloved Hand work glove (CC BY, see models/VirtualHand_ATTRIBUTION.txt), two i3d files at
@@ -85,8 +90,11 @@
 --   VRCompanion.VIRTUAL_HAND_POINTER         { left = , right = } index fingertip and finger direction in the grip frame: where the Pointer Ray starts and runs
 --   VRCompanion.FINGER_CURL_DEGREES          full curl (value 1) of segment 1, 2 and 3 of a finger, in degrees
 --   VRCompanion.FINGER_CURL_DIRECTION        -1: toward the palm is a negative rotation about a joint's local X
+--   VRCompanion.HELD_TOOL_GRIP_CURL          0..1: how far the grip fingers close around a Hand Tool's handle
+--   VRCompanion:getVirtualHandHolder(hand)   the node that carries a hand's placement (the grip frame), or nil: what a Hand Tool is linked below
 --   VRCompanion:updateVirtualHands(dt)       once per update, called by updateMotionControllers
 --   VRCompanion:placeVirtualHandsForRender() before every rendered frame, called by placeAndBindEyes: places the shown hands again
+--                      (and then placeHandToolsForRender, so the flashlight's light node follows its hand)
 --   VRCompanion:drawVirtualHands()           called by VRCompanion:draw: the vrVirtualHandsTrace line at draw time
 --   VRCompanion:resetVirtualHands()          map unload: deletes the hands and the model, forgets everything
 --   VRCompanion:getVirtualHandsDiagnostics() -> string   the reason and each hand's state, one line
@@ -114,6 +122,11 @@ VRCompanion.VIRTUAL_HAND_MODEL_RIGHT = "models/VirtualHandRight.i3d"
 -- and the palm plane is 0.015 m (0.17 units) in front of it, so the fingertips come to rest on the palm.
 -- The earlier 80, 100, 65 put the index tip end 0.03 BEHIND the knuckle line, 0.2 inside the hand.
 VRCompanion.FINGER_CURL_DEGREES = { 60, 75, 40 }
+
+-- THE HELD-TOOL POSE: a hand that holds a Hand Tool (VRCompanion:isHandHoldingHandTool) has its middle, ring and little
+-- fingers closed around the handle by this much of a full grip (0..1), whatever the real grip is; the index finger still
+-- follows the trigger. Full: the fingers rest on the palm as for a squeezed grip. Tune in the headset (ticket #118).
+VRCompanion.HELD_TOOL_GRIP_CURL = 1.0
 
 -- THE MODEL-TO-GRIP OFFSET: how the model as the file holds it is carried onto the OpenXR grip pose frame (origin
 -- at the centre of the tube the closed non-thumb fingers form, -Z along that tube from the little finger toward
@@ -275,8 +288,10 @@ local function deleteNode(node)
     pcall(deleteFn, node)
 end
 
--- Drops everything this module put into the scene.
+-- Drops everything this module put into the scene. A Hand Tool hangs below a holder (VRCompanionHandTools.lua): it goes
+-- back to the game's placement first, so that deleting the holder does not delete the tool with it.
 local function discardScene()
+    if type(VRCompanion.releaseHandToolsFromHands) == "function" then VRCompanion:releaseHandToolsFromHands() end
     for _, hand in ipairs(HANDS) do
         local entry = state.hands[hand]
         if entry ~= nil then deleteNode(entry.holder) end
@@ -449,11 +464,13 @@ end
 
 -- Sets every finger joint of a shown hand: its rest rotation turned about the joint's own X axis by the curl
 -- its trigger or grip asks for.
-local function curlFingers(entry, pose)
+local function curlFingers(entry, pose, holdsTool)
     local setQuaternion = engine("setQuaternion")
     local degrees = VRCompanion.FINGER_CURL_DEGREES
     for _, joint in ipairs(entry.joints or {}) do
         local value = math.max(0, math.min(1, tonumber(pose[joint.input]) or 0))
+        -- Closed around a Hand Tool's handle whatever the real grip is; the index finger still follows the trigger.
+        if holdsTool and joint.input == "grip" then value = VRCompanion.HELD_TOOL_GRIP_CURL end
         local half = VRCompanion.FINGER_CURL_DIRECTION * math.rad(degrees[joint.segment]) * value * 0.5
         local bx, bw = math.sin(half), math.cos(half)  -- the turn about X, as a quaternion
         -- rest * turn: the turn happens in the joint's own frame
@@ -565,7 +582,9 @@ local function updateHand(self, hand, unavailable)
                 relative.valid = true
                 pinToWheel(self, hand, world)
                 placeHolder(self, entry, world)
-                curlFingers(entry, pose)
+                local holdsTool = type(self.isHandHoldingHandTool) == "function" and self:isHandHoldingHandTool(hand) == true
+                curlFingers(entry, pose, holdsTool)
+                entry.holdsTool = holdsTool
                 status = "shown"
                 if not entry.geometryLogged then
                     entry.geometryLogged = true
@@ -579,6 +598,17 @@ local function updateHand(self, hand, unavailable)
     setShown(entry, status == "shown")
     entry.status = status
     return status
+end
+
+-- The node of a hand's Virtual Hand that carries its placement (the grip pose frame): what a Hand Tool is linked below
+-- (VRCompanionHandTools.lua). nil without the hand (the model is not loaded, or the node is gone). The node is there
+-- whether or not the hand is shown.
+function VRCompanion:getVirtualHandHolder(hand)
+    local entry = state.hands[hand]
+    if entry == nil or entry.holder == nil then return nil end
+    local exists = engine("entityExists")
+    if type(exists) == "function" and not exists(entry.holder) then return nil end
+    return entry.holder
 end
 
 function VRCompanion:updateVirtualHands(dt)
@@ -690,6 +720,8 @@ function VRCompanion:placeVirtualHandsForRender()
             placeHolder(self, entry, world)
         end
     end
+    -- What rides in a hand and is placed by the game's update (the flashlight's light node) follows the hand for this frame too.
+    if type(self.placeHandToolsForRender) == "function" then self:placeHandToolsForRender() end
     traceHands(self, "camera")
 end
 

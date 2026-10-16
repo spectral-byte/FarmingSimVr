@@ -14,6 +14,16 @@
 //   kStubInputBinding        a stand-in for g_inputBinding and Binding (StubInput), shaped after the finding of spike #99: the\r\n//                            actions and their bindings per device, addBinding, saveToXMLFile, with variants that lack the API or raise\r\n//   kStubSteeringVehicle     a cab vehicle with a Steering Wheel and the game's analog steering (StubSteer): the
 //                            Drivable.setSteeringInput that records every call, a Steering Wheel node and the
 //                            per-frame tick that moves the steering toward the input and turns the node (ADR-0027)
+//   kStubHandTool            a player on foot who holds Hand Tools (StubHandTool): the game's HandTool, Player and
+//                            PlayerTargeter, the pressure washer lance and one unsupported tool (the spray can), with
+//                            attachToolToCamera / getLookRay install variants and extension points for the flashlight,
+//                            the chainsaw and the look ray (ADR-0029)
+//   kStubHandToolFlashlight  the flashlight for StubHandTool: the game's HandToolFlashlight class with
+//                            onUpdate install variants, StubHandTool.flashlight (light node, lens, the flashlight's own
+//                            switch) and setDirection. Run after kStubHandTool and kStubModelLoading.
+//   kStubHandToolChainsaw    the chainsaw for StubHandTool: HandToolChainsaw with its update, cut handler and
+//                            roll handler, the cut-state machine, the model, camera-rotation and split plane nodes, trees to
+//                            target, and the install variants (ADR-0029)
 //
 // They model only the names and shapes the Companion Mod depends on (ADR-0026, ADR-0027). Nothing here is
 // copied from Interactive Control or from the game.
@@ -1200,4 +1210,833 @@ inline constexpr const char* kStubInputBinding = R"luau(
     end
 
     StubInput.saves, StubInput.saved = 0, nil
+)luau";
+
+// ---- Hand Tools (ADR-0029) ---------------------------------------------------------------------------------
+// A player on foot who can hold a Hand Tool, shaped after the game's HandTool, Player and PlayerTargeter. Run after
+// kStubSceneGraph (and after kStubModelLoading when the Virtual Hands are needed: a hand tool goes into a Virtual Hand).
+// Run StubHandTool.install BEFORE loading the Companion Mod to have HandTool and Player there at file load, like the game.
+//
+// StubHandTool.install(variant, options)   defines the globals the game defines: HandTool, Player and PlayerTargeter.
+//   variant   how HandTool.attachToolToCamera is in this "game version": nil / "ok", "missing" (a game update renamed it
+//             to attachToolToCameraNode: the class has no attachToolToCamera, the game attaches through the new name) or
+//             "reshaped" (it takes no parameters at all, and attaches the tool being held)
+//   options   getLookRay  "ok" (default), "missing" (Player has lookRay instead) or "reshaped" (Player.getLookRay takes no
+//             parameters): for the look ray wrap. The targeter reads Player.lookRay in the "missing" game.
+//             StubHandTool.originalGetLookRay is the game's own function ("ok" game only: nil in the others).
+// StubHandTool.onFoot(options) -> { player, cam, parent, yawNode, firstPersonCamera }   StubScene.onFoot(options) with a
+//   Player: g_currentMission.player and g_localPlayer are it. player.camera is the camera of StubScene.onFoot (isFirstPerson,
+//   pitchNode: the node the game links a held tool to). Player:getLookRay() -> x, y, z, dirX, dirY, dirZ is the first
+//   person camera's position and its -Z axis in the world. player.targeter is a PlayerTargeter.
+//   StubHandTool.thirdPerson(player, on)  the camera is (not) in first person; a held tool attaches again.
+// PlayerTargeter:update(dt)   reads player:getLookRay() once, like the game, and keeps it in targeter.lastRayX .. lastRayDirectionZ
+//   (the fields the game keeps) and in StubHandTool.rays, in order, as { x, y, z, dirX, dirY, dirZ }.
+//   StubHandTool.lastRay() -> x, y, z, dirX, dirY, dirZ   of the last update, nil before any
+// StubHandTool.tick(dt)   one frame of the game's player update: the targeter reads the look ray, then every registered
+//   updater (StubHandTool.updaters, below) runs
+// StubHandTool.lance(player, options) -> tool   the pressure washer lance (spec_highPressureWasherLance), not yet held.
+//   tool.rootNode (the node the game links), tool.firstPersonNode, tool.spec_highPressureWasherLance.raycastNode (the
+//   nozzle: it washes from the node's origin along its +Z axis) and tool.activateAction, the function the game's
+//   ACTIVATE_HANDTOOL binding calls (HandToolHPWLance:onWashAction(_, inputValue)).
+//   StubHandTool.nozzleRay(tool) -> x, y, z, dirX, dirY, dirZ   where the lance washes from and along, in the world
+// StubHandTool.sprayCan(player, options) -> tool   an unsupported Hand Tool (spec_sprayCan): the game places it like any
+//   other, in front of the camera; it has an activateAction too
+// StubHandTool.hold(tool) / StubHandTool.drop(tool)   the player takes the tool in hand (the game's startHolding: isHeld,
+//   the carrying player, attachTool) and puts it away (detachTool, not held)
+// StubHandTool.pressUseBinding(tool, inputValue)   the game's own binding (X on a pad, the mouse, the keyboard) calling the
+//   tool's use handler with inputValue (1 pressed or held, 0 released)
+// StubHandTool.useCalls   every call of a tool's use handler, in order, as { tool = <name>, value = <inputValue>, self = tool }
+// StubHandTool.cameraAttaches   how many times the game's own attachToolToCamera ran (whatever placed the tool then)
+// StubHandTool.CAMERA_PLACEMENT   { x, y, z } where the game puts a tool's root below the pitch node (a tool placed the
+//   game's way is there; the lance's firstPersonNode is its root's origin)
+// StubHandTool.tools   every tool made, in order
+// Extension points for the later Hand Tools tickets (each adds its own chunk, run after this one, and touches nothing above):
+//   StubHandTool.updaters   a list of function(dt) the tick runs after the targeter: a tool's own onUpdate goes in here
+//   StubHandTool.makeTool(player, name, specName, options) -> tool   the common tool: a root node, a firstPersonNode at its
+//     origin, spec table `specName`, the HandTool methods through the class; a tool type adds its own nodes and handlers
+//   (the flashlight and the chainsaw add StubHandTool.flashlight / chainsaw, in their own chunks)
+inline constexpr const char* kStubHandTool = R"luau(
+    StubHandTool = { useCalls = {}, rays = {}, tools = {}, updaters = {}, cameraAttaches = 0 }
+    StubHandTool.CAMERA_PLACEMENT = { x = 0.2, y = -0.15, z = 0.5 }
+    local nodes = StubScene.nodes
+
+    local function placeAtCamera(tool)
+        local camera = tool.carryingPlayer.camera
+        link(camera.pitchNode, tool.rootNode)
+        local p = StubHandTool.CAMERA_PLACEMENT
+        setTranslation(tool.rootNode, p.x, p.y, p.z)
+        setRotation(tool.rootNode, 0, 0, 0)
+    end
+
+    function StubHandTool.install(variant, options)
+        variant = variant or "ok"
+        options = options or {}
+        StubHandTool.variant = variant
+        StubHandTool.useCalls, StubHandTool.rays, StubHandTool.tools, StubHandTool.cameraAttaches = {}, {}, {}, 0
+        StubHandTool.heldTool = nil
+
+        local HandTool = {}
+        _G.HandTool = HandTool
+        function HandTool.getIsCarried(self) return self.carryingPlayer ~= nil end
+        function HandTool.getIsHeld(self) return self:getIsCarried() and self.isHeld == true end
+        function HandTool.getCarryingPlayer(self) return self.carryingPlayer end
+        function HandTool.attachToolToHand(self)
+            link(self.carryingPlayer.handNode, self.rootNode)
+            setTranslation(self.rootNode, 0, 0, 0)
+            setRotation(self.rootNode, 0, 0, 0)
+            return true
+        end
+        function HandTool.attachTool(self)
+            if not self:getIsHeld() then return end
+            if self.carryingPlayer.camera.isFirstPerson then
+                if StubHandTool.variant == "missing" then
+                    self:attachToolToCameraNode()
+                elseif StubHandTool.variant == "reshaped" then
+                    HandTool.attachToolToCamera(self)
+                else
+                    self:attachToolToCamera()
+                end
+            else
+                self:attachToolToHand()
+            end
+            setVisibility(self.rootNode, true)
+        end
+        function HandTool.detachTool(self)
+            setVisibility(self.rootNode, false)
+            unlink(self.rootNode)
+        end
+        -- the game's placement in front of the face, whatever the version calls the function
+        local function attachToCamera(tool)
+            if not tool:getIsHeld() or tool.rootNode == nil then return end
+            StubHandTool.cameraAttaches = StubHandTool.cameraAttaches + 1
+            placeAtCamera(tool)
+        end
+        if variant == "missing" then
+            function HandTool.attachToolToCameraNode(self) attachToCamera(self) end
+        elseif variant == "reshaped" then
+            function HandTool.attachToolToCamera() attachToCamera(StubHandTool.heldTool) end
+        else
+            function HandTool.attachToolToCamera(self) attachToCamera(self) end
+        end
+        StubHandTool.originalAttachToolToCamera = HandTool.attachToolToCamera
+
+        local Player = {}
+        _G.Player = Player
+        local lookRay = function(self)
+            local x, y, z = getWorldTranslation(self.camera.firstPersonCamera)
+            local dx, dy, dz = StubScene.worldDirection(self.camera.firstPersonCamera, 0, 0, -1)
+            return x, y, z, dx, dy, dz
+        end
+        StubHandTool.originalGetLookRay = nil
+        if options.getLookRay == "missing" then
+            Player.lookRay = lookRay
+        elseif options.getLookRay == "reshaped" then
+            Player.getLookRay = function() return lookRay(StubHandTool.player) end
+        else
+            Player.getLookRay = lookRay
+            StubHandTool.originalGetLookRay = lookRay
+        end
+
+        local PlayerTargeter = {}
+        PlayerTargeter.__index = PlayerTargeter
+        _G.PlayerTargeter = PlayerTargeter
+        function PlayerTargeter.new(player) return setmetatable({ player = player }, PlayerTargeter) end
+        function PlayerTargeter:update(dt)
+            -- a game whose getLookRay was renamed (options.getLookRay == "missing") reads it by the new name
+            local read = self.player.getLookRay or self.player.lookRay
+            self.lastRayX, self.lastRayY, self.lastRayZ, self.lastRayDirectionX, self.lastRayDirectionY, self.lastRayDirectionZ =
+                read(self.player)
+            table.insert(StubHandTool.rays, { self.lastRayX, self.lastRayY, self.lastRayZ,
+                self.lastRayDirectionX, self.lastRayDirectionY, self.lastRayDirectionZ })
+        end
+    end
+
+    function StubHandTool.onFoot(options)
+        local scene = StubScene.onFoot(options)
+        local camera = scene.cam
+        local player = setmetatable({ camera = camera, isOwner = true }, { __index = _G.Player })
+        player.handNode = StubScene.newNode("thirdPersonRightHand", scene.yawNode, 0.3, 1.2, 0.2)
+        player.targeter = _G.PlayerTargeter.new(player)
+        StubHandTool.player = player
+        _G.g_currentMission.player = player
+        _G.g_localPlayer = player
+        return { player = player, cam = camera, parent = scene.parent, yawNode = scene.yawNode,
+                 firstPersonCamera = scene.firstPersonCamera }
+    end
+
+    function StubHandTool.thirdPerson(player, on)
+        player.camera.isFirstPerson = not on
+        if StubHandTool.heldTool ~= nil then StubHandTool.heldTool:attachTool() end
+    end
+
+    function StubHandTool.tick(dt)
+        local player = _G.g_localPlayer
+        if player ~= nil and player.targeter ~= nil then player.targeter:update(dt or 16.667) end
+        for _, updater in ipairs(StubHandTool.updaters) do updater(dt or 16.667) end
+    end
+
+    function StubHandTool.lastRay()
+        local ray = StubHandTool.rays[#StubHandTool.rays]
+        if ray == nil then return nil end
+        return table.unpack(ray)
+    end
+
+    -- ---- the common tool ----------------------------------------------------------------------------------------
+    -- A tool is what the game makes of a hand tool's i3d file: a root node, the first person node (where the game links
+    -- the tool to the camera: here at the root's origin), the class's methods and the specialization's table.
+    function StubHandTool.makeTool(player, name, specName, options)
+        options = options or {}
+        local tool = setmetatable({ name = name, isHeld = false, carryingPlayer = nil }, { __index = _G.HandTool })
+        tool.rootNode = StubScene.newNode(name .. "Root", 0)
+        tool.firstPersonNode = StubScene.newNode(name .. "FirstPerson", tool.rootNode)
+        tool[specName] = {}
+        tool.player = player
+        setVisibility(tool.rootNode, false)
+        table.insert(StubHandTool.tools, tool)
+        return tool
+    end
+
+    local function useHandler(tool, name)
+        return function(self, _, inputValue)
+            table.insert(StubHandTool.useCalls, { tool = name, value = inputValue, self = self })
+        end
+    end
+
+    function StubHandTool.hold(tool)
+        tool.isHeld = true
+        tool.carryingPlayer = tool.player
+        StubHandTool.heldTool = tool
+        tool:attachTool()
+    end
+
+    function StubHandTool.drop(tool)
+        tool:detachTool()
+        tool.isHeld = false
+        tool.carryingPlayer = nil
+        if StubHandTool.heldTool == tool then StubHandTool.heldTool = nil end
+    end
+
+    function StubHandTool.pressUseBinding(tool, inputValue)
+        tool:activateAction(nil, inputValue)
+    end
+
+    -- ---- the pressure washer lance ------------------------------------------------------------------------------
+    function StubHandTool.lance(player, options)
+        local tool = StubHandTool.makeTool(player, "lance", "spec_highPressureWasherLance", options)
+        local spec = tool.spec_highPressureWasherLance
+        spec.raycastNode = StubScene.newNode("lanceNozzle", tool.rootNode, 0, 0, 0.5)
+        spec.isActivated = false
+        local record = useHandler(tool, "lance")
+        tool.onWashAction = function(self, a, inputValue)
+            self.spec_highPressureWasherLance.isActivated = inputValue > 0
+            record(self, a, inputValue)
+        end
+        tool.activateAction = tool.onWashAction
+        return tool
+    end
+
+    function StubHandTool.nozzleRay(tool)
+        local node = tool.spec_highPressureWasherLance.raycastNode
+        local x, y, z = getWorldTranslation(node)
+        local dx, dy, dz = StubScene.worldDirection(node, 0, 0, 1)
+        return x, y, z, dx, dy, dz
+    end
+
+    -- ---- an unsupported tool: the spray can ---------------------------------------------------------------------
+    function StubHandTool.sprayCan(player, options)
+        local tool = StubHandTool.makeTool(player, "sprayCan", "spec_sprayCan", options)
+        local record = useHandler(tool, "sprayCan")
+        tool.activateAction = function(self, a, inputValue) record(self, a, inputValue) end
+        return tool
+    end
+
+    -- ---- The chainsaw and the look ray: their own chunks add StubHandTool.chainsaw / ... with
+    -- StubHandTool.makeTool and StubHandTool.updaters; nothing above changes. The flashlight is kStubHandToolFlashlight.
+)luau";
+
+// ---- Hand Tools: the flashlight ---------------------------------------------------------------------------
+// Run after kStubHandTool (and after kStubModelLoading: it uses setVisibility and setWorldQuaternion). Its own chunk, so that
+// the other Hand Tools tickets do not edit the same lines. Shaped after the game's HandToolFlashlight (the readable source in
+// the SDK's gameSource.zip), with the game's placement of the light as ADR-0029 describes it: at the first person camera.
+//
+// StubHandTool.installFlashlight(variant)   defines the global HandToolFlashlight, the class the game's flashlight is made of.
+//   Run it BEFORE loading the Companion Mod to have it there at file load, or any time before the map is loaded.
+//   variant   how the class's event HandToolFlashlight.onUpdate(tool, dt) is in this "game version": nil / "ok",
+//             "missing" (a game update renamed it to onUpdateBeam: the class has no onUpdate, the game updates through
+//             the new name) or "reshaped" (it takes no parameters at all, and updates the flashlight being held)
+//   StubHandTool.originalFlashlightOnUpdate   is the game's own onUpdate ("ok" game only: nil in the others)
+//   HandToolFlashlight.updateTransform(tool, isHeld)   the game's placement of the light node: at the camera of the carrying
+//     player, along its view. (Each flashlight keeps its own copy of the function, as the game's tools do, so that a wrap of
+//     the class does not reach it.)
+//   The game updates each carried flashlight once per StubHandTool.tick, after the targeter, through the class's onUpdate
+//   looked up at that moment, as the game raises its events.
+// StubHandTool.flashlight(player, options) -> tool   the flashlight (spec_flashlight), not yet held. The spec is the game's:
+//   lightNode (the light, linked to the world root; visible only while the flashlight is on), lightNodeParent (the node the
+//   light was below in the model: the lens, 0.15 m along the tool's +Z), lightNodeOffsetX/Y/Z (where the light sits in the lens)
+//   and lightNodeForwardX/Y/Z (the way it shines in the lens, +Z), isActive.
+//   tool:setFlashlightIsActive(isActive, noEventSend)   the flashlight's own switch; every call is in
+//     StubHandTool.flashlightCalls as { tool = <the flashlight>, isActive = <the argument>, noEventSend = <the argument> }
+//   player.isFlashlightActive   the player's own flag for the light, false at first (the game restores the light from it)
+//   StubHandTool.beam(tool) -> x, y, z, dirX, dirY, dirZ   where the light node is now and the way it shines, in the world
+//   StubHandTool.lensRay(tool) -> x, y, z, dirX, dirY, dirZ   where the light leaves the lens and the way it shines, in the world
+//   StubHandTool.flashlights   every flashlight made, in order
+//   setDirection(node, dirX, dirY, dirZ, upX, upY, upZ)   the engine's call: the node's +Z axis along the direction
+inline constexpr const char* kStubHandToolFlashlight = R"luau(
+    StubHandTool.flashlightCalls = {}
+    StubHandTool.flashlights = {}
+    local nodes = StubScene.nodes
+
+    _G.setDirection = function(node, dx, dy, dz, ux, uy, uz)
+        local function norm(x, y, z) local l = math.sqrt(x * x + y * y + z * z); return x / l, y / l, z / l end
+        local zx, zy, zz = norm(dx, dy, dz)
+        local xx, xy, xz = norm(uy * zz - uz * zy, uz * zx - ux * zz, ux * zy - uy * zx)
+        local yx, yy, yz = zy * xz - zz * xy, zz * xx - zx * xz, zx * xy - zy * xx
+        -- the rotation matrix with columns x, y, z as a quaternion
+        local trace = xx + yy + zz
+        local qx, qy, qz, qw
+        if trace > 0 then
+            local s = math.sqrt(trace + 1) * 2
+            qw, qx, qy, qz = s / 4, (yz - zy) / s, (zx - xz) / s, (xy - yx) / s
+        elseif xx > yy and xx > zz then
+            local s = math.sqrt(1 + xx - yy - zz) * 2
+            qw, qx, qy, qz = (yz - zy) / s, s / 4, (yx + xy) / s, (zx + xz) / s
+        elseif yy > zz then
+            local s = math.sqrt(1 + yy - xx - zz) * 2
+            qw, qx, qy, qz = (zx - xz) / s, (yx + xy) / s, s / 4, (zy + yz) / s
+        else
+            local s = math.sqrt(1 + zz - xx - yy) * 2
+            qw, qx, qy, qz = (xy - yx) / s, (zx + xz) / s, (zy + yz) / s, s / 4
+        end
+        setWorldQuaternion(node, qx, qy, qz, qw)
+    end
+
+    function StubHandTool.installFlashlight(variant)
+        variant = variant or "ok"
+        StubHandTool.flashlightVariant = variant
+        StubHandTool.flashlightCalls, StubHandTool.flashlights = {}, {}
+        local HandToolFlashlight = {}
+        _G.HandToolFlashlight = HandToolFlashlight
+
+        -- the game's placement of the light: at the camera, along the view
+        function HandToolFlashlight.updateTransform(self, isHeld)
+            local player = self:getCarryingPlayer()
+            if player == nil then return end
+            local camera = player.camera.firstPersonCamera
+            local x, y, z = getWorldTranslation(camera)
+            local dx, dy, dz = StubScene.worldDirection(camera, 0, 0, -1)
+            setWorldTranslation(self.spec_flashlight.lightNode, x, y, z)
+            setDirection(self.spec_flashlight.lightNode, dx, dy, dz, 0, 1, 0)
+        end
+        if variant == "missing" then
+            function HandToolFlashlight.onUpdateBeam(self, dt) self:updateTransform(self:getIsHeld()) end
+        elseif variant == "reshaped" then
+            function HandToolFlashlight.onUpdate()
+                local held = StubHandTool.heldTool
+                if held ~= nil and held.spec_flashlight ~= nil then held:updateTransform(true) end
+            end
+        else
+            function HandToolFlashlight.onUpdate(self, dt) self:updateTransform(self:getIsHeld()) end
+        end
+        StubHandTool.originalFlashlightOnUpdate = variant == "ok" and HandToolFlashlight.onUpdate or nil
+
+        if not StubHandTool.flashlightUpdaterAdded then
+            StubHandTool.flashlightUpdaterAdded = true
+            table.insert(StubHandTool.updaters, function(dt)
+                for _, tool in ipairs(StubHandTool.flashlights) do
+                    if tool:getIsCarried() then
+                        local class = _G.HandToolFlashlight
+                        local update = class.onUpdate or class.onUpdateBeam
+                        update(tool, dt)
+                    end
+                end
+            end)
+        end
+    end
+
+    function StubHandTool.flashlight(player, options)
+        local tool = StubHandTool.makeTool(player, "flashlight", "spec_flashlight", options)
+        local spec = tool.spec_flashlight
+        spec.isActive = false
+        spec.lightNodeParent = StubScene.newNode("flashlightLens", tool.rootNode, 0, 0, 0.15)
+        spec.lightNodeOffsetX, spec.lightNodeOffsetY, spec.lightNodeOffsetZ = 0, 0.01, 0.02
+        spec.lightNodeForwardX, spec.lightNodeForwardY, spec.lightNodeForwardZ = 0, 0, 1
+        spec.lightNode = StubScene.newNode("flashlightLight", getRootNode())
+        setVisibility(spec.lightNode, false)
+        player.isFlashlightActive = false
+        -- a tool's functions are copies made when it is made
+        tool.updateTransform = _G.HandToolFlashlight.updateTransform
+        tool.setFlashlightIsActive = function(self, isActive, noEventSend)
+            self.spec_flashlight.isActive = isActive
+            setVisibility(self.spec_flashlight.lightNode, isActive)
+            table.insert(StubHandTool.flashlightCalls, { tool = self, isActive = isActive, noEventSend = noEventSend })
+        end
+        -- the game's own binding for the flashlight is not the use binding: the tool has no activateAction
+        table.insert(StubHandTool.flashlights, tool)
+        return tool
+    end
+
+    function StubHandTool.beam(tool)
+        local node = tool.spec_flashlight.lightNode
+        local x, y, z = getWorldTranslation(node)
+        local dx, dy, dz = StubScene.worldDirection(node, 0, 0, 1)
+        return x, y, z, dx, dy, dz
+    end
+
+    function StubHandTool.lensRay(tool)
+        local spec = tool.spec_flashlight
+        local x, y, z = localToWorld(spec.lightNodeParent, spec.lightNodeOffsetX, spec.lightNodeOffsetY, spec.lightNodeOffsetZ)
+        local dx, dy, dz = StubScene.worldDirection(spec.lightNodeParent, spec.lightNodeForwardX, spec.lightNodeForwardY, spec.lightNodeForwardZ)
+        return x, y, z, dx, dy, dz
+    end
+)luau";
+
+// ---- Hand Tools: the chainsaw (ADR-0029) -------------------------------------------------------
+// The chainsaw for StubHandTool, shaped after the game's HandToolChainsaw. Run after kStubHandTool (and after the Companion
+// Mod is loaded or before it: HandToolChainsaw is read at map load too), then call StubHandTool.installChainsaw(variant).
+//
+// StubHandTool.installChainsaw(variant)   defines the globals the game defines: ChainsawCutState, HandToolChainsaw,
+//   PlayerCamera and g_cameraManager, and makes the targeter target trees for a held chainsaw.
+//   variant   how HandToolChainsaw.onUpdate is in this "game version": nil / "ok", "missing" (a game update renamed it to
+//             onUpdateTick, which the event dispatch calls instead) or "reshaped" (it takes no parameters, and updates the
+//             chainsaw being held), or "rollMissing" / "rollReshaped" (the roll action's handler,
+//             HandToolChainsaw.onRollAction, is gone / takes no parameters; onUpdate is as "ok")
+// The game keeps the chainsaw's handlers on the specialization class and its event dispatch calls them as
+// Class.handler(tool, ...) (SpecializationUtil.raiseEvent: spec[eventName](object, ...)). So they are here:
+//   HandToolChainsaw.onUpdate(tool, dt)       the chainsaw's update (run each tick by StubHandTool.tick): targets the tree the
+//                                             targeter found, aligns the split plane (updateSplitPlane), turns the model to
+//                                             face the camera, validates the cut, shows the ring marker, advances a cut
+//   HandToolChainsaw.onCutAction(tool, _, v)  the ACTIVATE_HANDTOOL handler (v > 0 starts a cut on the targeted tree, or
+//                                             delimbing without one; v = 0 stops); recorded in StubHandTool.useCalls
+//   HandToolChainsaw.onRollAction(tool, _, d) the AXIS_ROTATE_HANDTOOL handler (rollInput += d, applied by the next update
+//                                             when not cutting, to spec.currentCutRoll, clamped to +-pi/2)
+//   HandToolChainsaw.MAXIMUM_CUT_DISTANCE     a cut stops when the targeter's last ray starts this far from the cut node
+// and, as the game's registerFunction does, on the tool itself: updateSplitPlane, calculateCutPlane, updateRingSelector,
+// testIfCutValid, beginCutting, stopCutting, beginDelimbing, stopDelimbing, updateCutting, setCurrentCutState.
+// PlayerCamera.getRotation(camera) -> pitch, yaw, roll   the player camera's rotation from its look direction (the game's):
+//   updateSplitPlane takes the cut plane's yaw from it. The player's camera gets it as a method when a chainsaw is made.
+//
+// StubHandTool.chainsaw(player, options) -> tool   the chainsaw (spec_chainsaw), not yet held. options.cutTime: ms a cut takes
+//   (default 600). tool.rootNode, tool.graphicalNodeParent, tool.graphicalNode (the model), and in tool.spec_chainsaw:
+//   currentCutState (ChainsawCutState.IDLE / CUTTING / DELIMBING), currentCutRoll, cameraRotationNode (the node the cut plane
+//   hangs from: at the targeted tree's hit point while idle), splitPlaneNode, cutGuideNode (the model rides it while cutting),
+//   ringNode (the marker, visible while a tree is targeted), cutNode, targetedTree ({ node, x, y, z }), cuttingTreeNode,
+//   lastDelimbPosX .. lastDelimbNormalZ.
+// StubHandTool.tree(x, z, radius, y0, y1) -> tree   a vertical trunk: node, x, z, radius, y0, y1. A held chainsaw's targeter
+//   hits the closest trunk its look ray meets within 3 m. StubHandTool.trees lists them.
+// StubHandTool.treeAcross(ray, distance, radius) -> tree   a tall trunk whose surface the ray meets, horizontally, at `distance`;
+//   ray = { x, y, z, dirX, dirY, dirZ }
+// StubHandTool.barRay(tool) -> x, y, z, dirX, dirY, dirZ   where the chainsaw's bar points now: the root's origin and +Z
+// StubHandTool.modelDirection(tool) -> dirX, dirY, dirZ   the way the model's +Z points in the world
+// StubHandTool.cuts   every tree the game cut through, in order: { tree, x, y, z, normalX, normalY, normalZ, upX, upY, upZ }
+//   where the plane was (calculateCutPlane); StubHandTool.inputLocks: how many times the cut locked the player's input minus unlocks
+inline constexpr const char* kStubHandToolChainsaw = R"luau(
+    local nodes = StubScene.nodes
+    StubHandTool.trees, StubHandTool.cuts, StubHandTool.inputLocks = {}, {}, 0
+
+    -- ---- engine functions the scene stub lacks ----------------------------------------------------------------------
+    local function qmul(ax, ay, az, aw, bx, by, bz, bw)
+        return aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+               aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz
+    end
+    local function eulerToQuat(rx, ry, rz)
+        local cx, sx = math.cos(rx * 0.5), math.sin(rx * 0.5)
+        local cy, sy = math.cos(ry * 0.5), math.sin(ry * 0.5)
+        local cz, sz = math.cos(rz * 0.5), math.sin(rz * 0.5)
+        local x, y, z, w = qmul(0, sy, 0, cy, sx, 0, 0, cx)
+        return qmul(x, y, z, w, 0, 0, sz, cz)
+    end
+    local function normalize(x, y, z)
+        local length = math.sqrt(x * x + y * y + z * z)
+        if length < 1e-9 then return 0, 0, 1 end
+        return x / length, y / length, z / length
+    end
+    _G.setWorldRotation = function(node, rx, ry, rz)
+        local qx, qy, qz, qw = eulerToQuat(rx, ry, rz)
+        local px, py, pz, pw = getWorldQuaternion(getParent(node))
+        setQuaternion(node, qmul(-px, -py, -pz, pw, qx, qy, qz, qw))
+    end
+    -- the direction is the node's +Z, in the space of its parent; the up vector keeps the node's +Y near it. (The flashlight's
+    -- chunk, kStubHandToolFlashlight, defines one for nodes below the world root; a game that loads both keeps that one.)
+    _G.setDirection = _G.setDirection or function(node, dx, dy, dz, ux, uy, uz)
+        local zx, zy, zz = normalize(dx, dy, dz)
+        local xx, xy, xz = normalize(uy * zz - uz * zy, uz * zx - ux * zz, ux * zy - uy * zx)
+        local yx, yy, yz = zy * xz - zz * xy, zz * xx - zx * xz, zx * xy - zy * xx
+        local trace = xx + yy + zz
+        local qx, qy, qz, qw
+        if trace > 0 then
+            local s = math.sqrt(trace + 1) * 2
+            qw, qx, qy, qz = 0.25 * s, (yz - zy) / s, (zx - xz) / s, (xy - yx) / s
+        elseif xx > yy and xx > zz then
+            local s = math.sqrt(1 + xx - yy - zz) * 2
+            qw, qx, qy, qz = (yz - zy) / s, 0.25 * s, (yx + xy) / s, (zx + xz) / s
+        elseif yy > zz then
+            local s = math.sqrt(1 + yy - xx - zz) * 2
+            qw, qx, qy, qz = (zx - xz) / s, (yx + xy) / s, 0.25 * s, (zy + yz) / s
+        else
+            local s = math.sqrt(1 + zz - xx - yy) * 2
+            qw, qx, qy, qz = (xy - yx) / s, (zx + xz) / s, (zy + yz) / s, 0.25 * s
+        end
+        setQuaternion(node, qx, qy, qz, qw)
+    end
+    _G.rotateAboutLocalAxis = function(node, angle, ax, ay, az)
+        ax, ay, az = normalize(ax, ay, az)
+        local s = math.sin(angle * 0.5)
+        local qx, qy, qz, qw = getQuaternion(node)
+        setQuaternion(node, qmul(qx, qy, qz, qw, ax * s, ay * s, az * s, math.cos(angle * 0.5)))
+    end
+    _G.localDirectionToLocal = function(from, to, x, y, z)
+        local wx, wy, wz = StubScene.worldDirection(from, x, y, z)
+        local tx, ty, tz = getWorldTranslation(to)
+        return worldToLocal(to, tx + wx, ty + wy, tz + wz)
+    end
+
+    -- ---- trees and the targeter ---------------------------------------------------------------------------------------
+    local MAX_TARGET_DISTANCE = 3.0
+
+    function StubHandTool.tree(x, z, radius, y0, y1)
+        local node = StubScene.newNode("tree", 0, x, y0, z)
+        local tree = { node = node, x = x, z = z, radius = radius, y0 = y0, y1 = y1 }
+        table.insert(StubHandTool.trees, tree)
+        return tree
+    end
+
+    function StubHandTool.treeAcross(ray, distance, radius)
+        local x, y, z, dx, dy, dz = table.unpack(ray)
+        local hx, _, hz = normalize(dx, 0, dz)
+        return StubHandTool.tree(x + hx * (distance + radius), z + hz * (distance + radius), radius, y - 10, y + 10)
+    end
+
+    -- the closest trunk a ray meets, as the targeter reports a target: { node, x, y, z }
+    local function castAtTrees(x, y, z, dx, dy, dz)
+        local best = nil
+        for _, tree in ipairs(StubHandTool.trees) do
+            local ox, oz = x - tree.x, z - tree.z
+            local a = dx * dx + dz * dz
+            if a > 1e-9 then
+                local b = ox * dx + oz * dz
+                local disc = b * b - a * (ox * ox + oz * oz - tree.radius ^ 2)
+                if disc >= 0 then
+                    local t = (-b - math.sqrt(disc)) / a
+                    local hitY = y + dy * t
+                    if t >= 0 and t <= MAX_TARGET_DISTANCE and hitY >= tree.y0 and hitY <= tree.y1 and (best == nil or t < best.t) then
+                        best = { t = t, node = tree.node, x = x + dx * t, y = hitY, z = z + dz * t }
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    local function treeOfNode(node)
+        for _, tree in ipairs(StubHandTool.trees) do
+            if tree.node == node then return tree end
+        end
+        return nil
+    end
+
+    -- the game's testSplitShape: how far the tree reaches in the plane, around the node the plane hangs from
+    _G.testSplitShape = function(treeNode, x, y, z, nx, ny, nz, yx, yy, yz, width, depth)
+        local tree = treeOfNode(treeNode)
+        if tree == nil then return nil end
+        return -tree.radius, tree.radius, -tree.radius, tree.radius
+    end
+
+    -- ---- the chainsaw -------------------------------------------------------------------------------------------------
+    function StubHandTool.installChainsaw(variant)
+        variant = variant or "ok"
+        StubHandTool.trees, StubHandTool.cuts, StubHandTool.inputLocks = {}, {}, 0
+        local State = { IDLE = 0, CUTTING = 1, DELIMBING = 2 }
+        _G.ChainsawCutState = State
+        local Class = { MAXIMUM_CUT_DISTANCE = 1.5 }
+        _G.HandToolChainsaw = Class
+        _G.g_cameraManager = { getActiveCamera = function() return getCamera() end }
+
+        local PlayerCamera = {}
+        _G.PlayerCamera = PlayerCamera
+        function PlayerCamera.getRotation(self)
+            local dx, dy, dz = StubScene.worldDirection(self.cameraRootNode, 0, 0, -1)
+            return -math.atan2(dy, math.sqrt(dx * dx + dz * dz)), math.atan2(dx, dz), 0
+        end
+
+        -- the targeter targets the trees a held chainsaw's look ray meets
+        local PlayerTargeter = _G.PlayerTargeter
+        local baseUpdate = PlayerTargeter.update
+        function PlayerTargeter:update(dt)
+            baseUpdate(self, dt)
+            self.closestTargetsByKey = self.closestTargetsByKey or {}
+            local held = StubHandTool.heldTool
+            if held ~= nil and held.spec_chainsaw ~= nil and self.lastRayX ~= nil then
+                self.closestTargetsByKey[Class] = castAtTrees(self.lastRayX, self.lastRayY, self.lastRayZ,
+                    self.lastRayDirectionX, self.lastRayDirectionY, self.lastRayDirectionZ)
+            else
+                self.closestTargetsByKey[Class] = nil
+            end
+        end
+
+        -- a chainsaw put away stops what it is doing
+        local baseDrop = StubHandTool.drop
+        function StubHandTool.drop(tool)
+            if tool.spec_chainsaw ~= nil and tool.spec_chainsaw.currentCutState == State.CUTTING then tool:stopCutting(false) end
+            baseDrop(tool)
+        end
+
+        -- ---- the functions the game registers on the tool
+        local functions = {}
+        function functions.setCurrentCutState(self, cutState, isVerticalCut)
+            self.spec_chainsaw.currentCutState = cutState
+            self.spec_chainsaw.isVerticalCut = isVerticalCut
+        end
+
+        function functions.calculateCutPlane(self)
+            local spec = self.spec_chainsaw
+            local x, y, z = getWorldTranslation(spec.splitPlaneNode)
+            local downX, downY, downZ = localDirectionToWorld(spec.splitPlaneNode, 0, -1, 0)
+            local leftX, leftY, leftZ = localDirectionToWorld(spec.splitPlaneNode, 1, 0, 0)
+            return x, y, z, downX, downY, downZ, leftX, leftY, leftZ, spec.maximumCutDiameter, spec.maximumCutDiameter
+        end
+
+        function functions.updateSplitPlane(self)
+            local spec = self.spec_chainsaw
+            if spec.currentCutState == State.DELIMBING then
+                local x, y, z = localToWorld(self.graphicalNode, 0, -spec.maximumDelimbDiameter * 0.5, 0)
+                setWorldTranslation(spec.cameraRotationNode, x, y, z)
+                local cameraNode = g_cameraManager:getActiveCamera()
+                local upX, upY, upZ = localDirectionToWorld(cameraNode, 0, 1, 0)
+                local dirX, dirY, dirZ = localDirectionToWorld(cameraNode, 0, 0, -1)
+                setDirection(spec.cameraRotationNode, dirX, dirY, dirZ, upX, upY, upZ)
+            else
+                local _, playerYaw = self:getCarryingPlayer().camera:getRotation()
+                setWorldRotation(spec.cameraRotationNode, 0, playerYaw, 0)
+            end
+            rotateAboutLocalAxis(spec.cameraRotationNode, spec.currentCutRoll, 0, 0, 1)
+
+            spec.cutMinimumY, spec.cutMaximumY, spec.cutMinimumZ, spec.cutMaximumZ = nil, nil, nil, nil
+            if spec.currentCutState == State.CUTTING then
+                if spec.cuttingTreeNode == nil or not entityExists(spec.cuttingTreeNode) then return end
+                spec.cutMinimumY, spec.cutMaximumY, spec.cutMinimumZ, spec.cutMaximumZ =
+                    testSplitShape(spec.cuttingTreeNode, self:calculateCutPlane())
+            elseif spec.currentCutState == State.IDLE then
+                if spec.targetedTree == nil or not entityExists(spec.targetedTree.node) then return end
+                setWorldTranslation(spec.cameraRotationNode, spec.targetedTree.x, spec.targetedTree.y, spec.targetedTree.z)
+                spec.cutMinimumY, spec.cutMaximumY, spec.cutMinimumZ, spec.cutMaximumZ =
+                    testSplitShape(spec.targetedTree.node, self:calculateCutPlane())
+            end
+        end
+
+        function functions.testIfCutValid(self, treeNode, cutX, cutZ, minY, maxY, minZ, maxZ)
+            local spec = self.spec_chainsaw
+            if minY == nil or maxY == nil or minZ == nil or maxZ == nil then return false end
+            return not (maxY - minY >= spec.maximumCutDiameter or maxZ - minZ >= spec.maximumCutDiameter)
+        end
+
+        -- the ring marker sits on the targeted trunk at the height of the cut node
+        function functions.updateRingSelector(self, targetedTree, isCutPossible)
+            local spec = self.spec_chainsaw
+            setVisibility(spec.ringNode, targetedTree ~= nil)
+            if targetedTree == nil then return end
+            local tree = treeOfNode(targetedTree.node)
+            local _, cutY = getWorldTranslation(spec.cameraRotationNode)
+            local x, y, z = worldToLocal(getParent(spec.ringNode), tree.x, cutY, tree.z)
+            setTranslation(spec.ringNode, x, y, z)
+            spec.ringIsValid = isCutPossible
+        end
+
+        function functions.beginDelimbing(self)
+            self:setCurrentCutState(State.DELIMBING, true)
+        end
+        function functions.stopDelimbing(self)
+            self:setCurrentCutState(State.IDLE, true)
+        end
+
+        function functions.beginCutting(self)
+            local spec = self.spec_chainsaw
+            setVisibility(spec.ringNode, false)
+            if spec.possibleTreeNode == nil then return end
+            self:setCurrentCutState(State.CUTTING, true)
+            spec.cuttingTreeNode = spec.possibleTreeNode
+            spec.currentCutTime = 0
+            spec.cutStartPositionX, spec.cutStartPositionY, spec.cutStartPositionZ =
+                localToWorld(spec.splitPlaneNode, spec.cutMinimumY, 0, spec.cutMinimumZ)
+            spec.cutEndPositionX, spec.cutEndPositionY, spec.cutEndPositionZ =
+                localToWorld(spec.splitPlaneNode, spec.cutMaximumY, 0, spec.cutMinimumZ)
+            -- the model rides the cut guide, which moves along the cut in the world
+            link(spec.cutGuideNode, self.graphicalNode)
+            setTranslation(self.graphicalNode, 0, 0, 0)
+            setRotation(self.graphicalNode, 0, 0, 0)
+            StubHandTool.inputLocks = StubHandTool.inputLocks + 1
+        end
+
+        function functions.stopCutting(self, sliceTree)
+            local spec = self.spec_chainsaw
+            local cuttingTreeNode = spec.cuttingTreeNode
+            spec.cuttingTreeNode = nil
+            self:setCurrentCutState(State.IDLE, true)
+            spec.currentCutTime = 0
+            link(self.graphicalNodeParent, self.graphicalNode)
+            setTranslation(self.graphicalNode, 0, 0, 0)
+            StubHandTool.inputLocks = StubHandTool.inputLocks - 1
+            if sliceTree and cuttingTreeNode ~= nil then
+                local x, y, z, nx, ny, nz, ux, uy, uz = self:calculateCutPlane()
+                table.insert(StubHandTool.cuts, { tree = cuttingTreeNode, x = x, y = y, z = z,
+                    normalX = nx, normalY = ny, normalZ = nz, upX = ux, upY = uy, upZ = uz })
+            end
+        end
+
+        function functions.updateCutting(self, dt)
+            local spec = self.spec_chainsaw
+            local cutX, cutY, cutZ = getWorldTranslation(spec.cameraRotationNode)
+            local targeter = self:getCarryingPlayer().targeter
+            local dx, dy, dz = targeter.lastRayX - cutX, targeter.lastRayY - cutY, targeter.lastRayZ - cutZ
+            spec.currentCutTime = spec.currentCutTime + dt
+            if math.sqrt(dx * dx + dy * dy + dz * dz) >= Class.MAXIMUM_CUT_DISTANCE then
+                self:stopCutting(false)
+                return
+            end
+            local progress = math.clamp(spec.currentCutTime / spec.cutTime, 0, 1)
+            setWorldTranslation(spec.cutGuideNode,
+                spec.cutStartPositionX + (spec.cutEndPositionX - spec.cutStartPositionX) * progress,
+                spec.cutStartPositionY + (spec.cutEndPositionY - spec.cutStartPositionY) * progress,
+                spec.cutStartPositionZ + (spec.cutEndPositionZ - spec.cutStartPositionZ) * progress)
+            if spec.currentCutTime >= spec.cutTime then self:stopCutting(true) end
+        end
+
+        -- ---- the specialization's own handlers: on the class, not on the tool
+        local function update(self, dt)
+            local spec = self.spec_chainsaw
+            local carryingPlayer = self:getCarryingPlayer()
+            if carryingPlayer == nil or not carryingPlayer.isOwner or not self:getIsHeld() then return end
+            spec.targetedTree = carryingPlayer.targeter.closestTargetsByKey and carryingPlayer.targeter.closestTargetsByKey[Class] or nil
+            spec.possibleTreeNode = nil
+            self:updateSplitPlane()
+
+            if spec.currentCutState ~= State.CUTTING then
+                if spec.rollInput ~= 0 then
+                    spec.currentCutRoll = math.clamp(spec.currentCutRoll + 0.001 * spec.rollInput * dt, -math.pi * 0.5, math.pi * 0.5)
+                    spec.rollInput = 0
+                end
+                -- the model faces the camera
+                local upX, upY, upZ = localDirectionToLocal(spec.cameraRotationNode, getParent(self.graphicalNode), 0, 1, 0)
+                local dirX, dirY, dirZ = localDirectionToLocal(getCamera(), getParent(self.graphicalNode), 0, 0, -1)
+                setDirection(self.graphicalNode, dirX, dirY, dirZ, upX, upY, upZ)
+            end
+
+            local isCutPossible = false
+            if spec.currentCutState == State.IDLE or spec.currentCutState == State.CUTTING then
+                local treeNode = spec.cuttingTreeNode
+                if treeNode == nil and spec.targetedTree ~= nil then treeNode = spec.targetedTree.node end
+                if treeNode ~= nil then
+                    local cutX, _, cutZ = getWorldTranslation(spec.cameraRotationNode)
+                    if not self:testIfCutValid(treeNode, cutX, cutZ, spec.cutMinimumY, spec.cutMaximumY, spec.cutMinimumZ, spec.cutMaximumZ) then
+                        if spec.cuttingTreeNode ~= nil then self:stopCutting(false) end
+                    else
+                        if spec.cuttingTreeNode == nil then spec.possibleTreeNode = treeNode end
+                        isCutPossible = true
+                    end
+                end
+            end
+
+            if spec.currentCutState == State.IDLE then
+                self:updateRingSelector(spec.targetedTree, isCutPossible)
+            elseif spec.currentCutState == State.CUTTING then
+                self:updateCutting(dt)
+            end
+
+            if spec.currentCutState == State.DELIMBING then
+                local x, y, z, nx, ny, nz, ux, uy, uz = self:calculateCutPlane()
+                spec.lastDelimbPosX, spec.lastDelimbPosY, spec.lastDelimbPosZ = x, y, z
+                spec.lastDelimbNormalX, spec.lastDelimbNormalY, spec.lastDelimbNormalZ = nx, ny, nz
+                spec.lastDelimbUpX, spec.lastDelimbUpY, spec.lastDelimbUpZ = ux, uy, uz
+            end
+        end
+        if variant == "missing" then
+            Class.onUpdateTick = update
+        elseif variant == "reshaped" then
+            Class.onUpdate = function() update(StubHandTool.heldTool, 16.667) end
+        else
+            Class.onUpdate = update
+        end
+
+        function Class.onCutAction(self, _, inputValue)
+            local spec = self.spec_chainsaw
+            table.insert(StubHandTool.useCalls, { tool = "chainsaw", value = inputValue, self = self })
+            if not (inputValue > 0) then
+                if spec.currentCutState == State.CUTTING then
+                    self:stopCutting(false)
+                elseif spec.currentCutState == State.DELIMBING then
+                    self:stopDelimbing()
+                else
+                    spec.currentCutState = State.IDLE
+                end
+                return
+            end
+            if spec.targetedTree == nil then
+                self:beginDelimbing()
+            else
+                self:beginCutting()
+                if spec.currentCutState ~= State.CUTTING then self:beginDelimbing() end
+            end
+        end
+
+        function Class.onRollAction(self, _, inputDelta)
+            self.spec_chainsaw.rollInput = self.spec_chainsaw.rollInput + inputDelta
+        end
+        -- the roll action's handler gone, or reshaped to take no parameters
+        if variant == "rollMissing" then
+            Class.onRollAction = nil
+        elseif variant == "rollReshaped" then
+            Class.onRollAction = function() end
+        end
+
+        -- the game's event dispatch: spec[eventName](object, ...), the class read at every call
+        table.insert(StubHandTool.updaters, function(dt)
+            local held = StubHandTool.heldTool
+            if held ~= nil and held.spec_chainsaw ~= nil then
+                local handler = variant == "missing" and Class.onUpdateTick or Class.onUpdate
+                handler(held, dt)
+            end
+        end)
+
+        StubHandTool.chainsawFunctions = functions
+    end
+
+    function StubHandTool.chainsaw(player, options)
+        options = options or {}
+        local tool = StubHandTool.makeTool(player, "chainsaw", "spec_chainsaw", options)
+        local spec = tool.spec_chainsaw
+        if getmetatable(player.camera) == nil then setmetatable(player.camera, { __index = _G.PlayerCamera }) end
+
+        tool.graphicalNodeParent = StubScene.newNode("chainsawModelParent", tool.rootNode)
+        tool.graphicalNode = StubScene.newNode("chainsawModel", tool.graphicalNodeParent)
+        spec.cutNode = StubScene.newNode("chainsawCutNode", tool.graphicalNode, 0, 0, 0.4)
+        spec.cutGuideNode = createTransformGroup("chainsawCutGuideNode")
+        link(getRootNode(), spec.cutGuideNode)
+        spec.cameraRotationNode = createTransformGroup("chainsawCameraRotationNode")
+        link(getRootNode(), spec.cameraRotationNode)
+        spec.splitPlaneNode = createTransformGroup("chainsawSplitPlaneNode")
+        link(spec.cameraRotationNode, spec.splitPlaneNode)
+        setRotation(spec.splitPlaneNode, 0, 0, -math.pi * 0.5)
+        spec.ringNode = StubScene.newNode("chainsawRing", spec.cameraRotationNode)
+        setVisibility(spec.ringNode, false)
+
+        spec.currentCutState = _G.ChainsawCutState.IDLE
+        spec.isVerticalCut = true
+        spec.currentCutRoll, spec.rollInput = 0, 0
+        spec.maximumCutDiameter, spec.maximumDelimbDiameter = 1, 1
+        spec.cutTime, spec.currentCutTime = options.cutTime or 600, 0
+        spec.targetedTree, spec.cuttingTreeNode, spec.possibleTreeNode = nil, nil, nil
+
+        for name, fn in pairs(StubHandTool.chainsawFunctions) do tool[name] = fn end
+        tool.activateAction = function(self, a, inputValue) return _G.HandToolChainsaw.onCutAction(self, a, inputValue) end
+        return tool
+    end
+
+    function StubHandTool.barRay(tool)
+        local x, y, z = getWorldTranslation(tool.rootNode)
+        local dx, dy, dz = StubScene.worldDirection(tool.rootNode, 0, 0, 1)
+        return x, y, z, dx, dy, dz
+    end
+
+    function StubHandTool.modelDirection(tool)
+        return StubScene.worldDirection(tool.graphicalNode, 0, 0, 1)
+    end
 )luau";

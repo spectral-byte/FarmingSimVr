@@ -98,6 +98,14 @@
 --                 next to the others and resetMotionControllers -> resetWheelGrab() (VRCompanionWheelGrab.lua). A hand
 --                 holding the Steering Wheel (isHandHoldingSteeringWheel) stays in use but is never a Pointer Hand
 --                 candidate, so it casts no Pointer Ray; Interactive Control's auto-on keeps its state while it holds.
+--     HandTools   updateMotionControllers -> updateHandTools(dt) on every path, after the hands are polled and before the Pointer Hand
+--                 is chosen (also when input is ignored, or the Injector offers no hand states, so a Hand Tool goes back to
+--                 where the game puts it), the saved setting rides on save/loadMotionControllerSettings (saveHandToolsSetting /
+--                 loadHandToolsSetting), the console commands register next to the others and resetMotionControllers ->
+--                 resetHandTools() before the Virtual Hands go (VRCompanionHandTools.lua, ADR-0029). The Tool Hand holding a
+--                 supported Hand Tool (isHandHoldingHandTool) is never a Pointer Hand candidate in the world, as a hand on the
+--                 Steering Wheel is not; in a menu either hand can. While its trigger uses the tool (isHandToolTriggerDown) the
+--                 Tool Hand stays in use however still it is held, so a held-still cut or spray does not drop the tool.
 --     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
 --                 setting rides on save/loadMotionControllerSettings, the status command ends with the pad's state and
 --                 the console command registers next to the others (VRCompanionVirtualGamepad.lua, ADR-0028)
@@ -247,9 +255,19 @@ local function isHoldingSteeringWheel(self, hand)
     return type(self.isHandHoldingSteeringWheel) == "function" and self:isHandHoldingSteeringWheel(hand) == true
 end
 
+-- The Tool Hand holding a supported Hand Tool is never a candidate either, as it uses the tool with its trigger (Hand Tools,
+-- ADR-0029). That holds in the world only: in a menu the tool is back where the game puts it and either hand can point.
+local function isHoldingHandTool(self, hand)
+    return self.isMenuVisible ~= true and type(self.isHandHoldingHandTool) == "function" and self:isHandHoldingHandTool(hand) == true
+end
+
+local function isPointerCandidate(self, hand)
+    return state.inUse[hand] and not isHoldingSteeringWheel(self, hand) and not isHoldingHandTool(self, hand)
+end
+
 local function choosePointerHand(self)
-    local left = state.inUse[0] and not isHoldingSteeringWheel(self, 0)
-    local right = state.inUse[1] and not isHoldingSteeringWheel(self, 1)
+    local left = isPointerCandidate(self, 0)
+    local right = isPointerCandidate(self, 1)
     if left and not right then return 0 end
     if right and not left then return 1 end
     if not (left and right) then return nil end
@@ -381,6 +399,7 @@ function VRCompanion:updateMotionControllers(dt)
             state.ignoredCleared = true
         end
         if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end  -- lets go of the Steering Wheel
+        if type(self.updateHandTools) == "function" then self:updateHandTools(dt) end  -- the Hand Tool goes back to the game's placement
         settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return
@@ -398,6 +417,7 @@ function VRCompanion:updateMotionControllers(dt)
             clearHands()
         end
         if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end
+        if type(self.updateHandTools) == "function" then self:updateHandTools(dt) end
         settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return
@@ -446,13 +466,17 @@ function VRCompanion:updateMotionControllers(dt)
     end
     -- Wheel Grab decides which hands hold the Steering Wheel from the hands just polled (VRCompanionWheelGrab.lua).
     if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end
-    -- A hand holding the Steering Wheel stays in use (it keeps its Virtual Hand), however still it is held.
+    -- A hand holding the Steering Wheel stays in use (it keeps its Virtual Hand), however still it is held. So does the Tool
+    -- Hand while its trigger is using the Hand Tool: a cut or a spray held with a still hand must not drop the tool.
     for _, hand in ipairs(HANDS) do
-        if isHoldingSteeringWheel(self, hand) then
+        if isHoldingSteeringWheel(self, hand)
+            or (type(self.isHandToolTriggerDown) == "function" and self:isHandToolTriggerDown(hand) == true) then
             state.inUse[hand] = true
             if now ~= nil then state.motion[hand].lastMovedMs = now end
         end
     end
+    -- Hand Tools put the Hand Tool the Tool Hand holds into its Virtual Hand, from the hands just polled (VRCompanionHandTools.lua).
+    if type(self.updateHandTools) == "function" then self:updateHandTools(dt) end
     state.pointerHand = choosePointerHand(self)
     self.pointerHand = state.pointerHand
     -- The Pointer Hand moving is the ray moving: it takes the pointer from the desk mouse.
@@ -830,6 +854,7 @@ function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
     end
     self:savePointerConeSetting(xmlFile, xml)
     if type(self.saveWheelGrabSetting) == "function" then self:saveWheelGrabSetting(xmlFile, xml) end
+    if type(self.saveHandToolsSetting) == "function" then self:saveHandToolsSetting(xmlFile, xml) end
     if type(self.saveVirtualGamepadSetting) == "function" then self:saveVirtualGamepadSetting(xmlFile, xml) end
 end
 
@@ -849,6 +874,7 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
     end
     self:loadPointerConeSetting(xmlFile, xml)
     if type(self.loadWheelGrabSetting) == "function" then self:loadWheelGrabSetting(xmlFile, xml) end
+    if type(self.loadHandToolsSetting) == "function" then self:loadHandToolsSetting(xmlFile, xml) end
     if type(self.loadVirtualGamepadSetting) == "function" then self:loadVirtualGamepadSetting(xmlFile, xml) end
 end
 
@@ -969,6 +995,9 @@ function VRCompanion:getPointerDiagnostics()
     if type(self.getWheelGrabDiagnostics) == "function" then
         virtualHandsText = virtualHandsText .. " | " .. self:getWheelGrabDiagnostics()
     end
+    if type(self.getHandToolsDiagnostics) == "function" then
+        virtualHandsText = virtualHandsText .. " | " .. self:getHandToolsDiagnostics()
+    end
     local pointer = state.pointerHand
     local trigger = pointer ~= nil and state.hands[pointer].trigger or 0
     return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s | Left hand: %s | Right hand: %s%s",
@@ -989,6 +1018,7 @@ function VRCompanion:registerMotionControllerConsoleCommands()
     addConsoleCommand("vrPointerCone", "How wide (degrees) the cone around the Pointer Ray is inside which the nearest Click Point is selected (saved): vrPointerCone [degrees]", "consoleCommandSetPointerCone", self)
     if type(self.registerVirtualHandsConsoleCommands) == "function" then self:registerVirtualHandsConsoleCommands() end
     if type(self.registerWheelGrabConsoleCommands) == "function" then self:registerWheelGrabConsoleCommands() end
+    if type(self.registerHandToolsConsoleCommands) == "function" then self:registerHandToolsConsoleCommands() end
     if type(self.registerVirtualGamepadConsoleCommands) == "function" then self:registerVirtualGamepadConsoleCommands() end
 end
 
@@ -996,6 +1026,9 @@ end
 function VRCompanion:resetMotionControllers()
     if type(self.resetMenuPointer) == "function" then
         self:resetMenuPointer()
+    end
+    if type(self.resetHandTools) == "function" then
+        self:resetHandTools()  -- before the Virtual Hands go: a tool hangs below one
     end
     if type(self.resetVirtualHands) == "function" then
         self:resetVirtualHands()
