@@ -297,18 +297,14 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, WithTheTriggerPulledAndNoTreeUnderTh
     EXPECT_EQ(State(), "idle");
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawTest, TheCutAngleStillComesFromTheGamesRollActionAndTheSeamForTheWristsRollIsClampedAndLockedDuringACut) {
+TEST_F(VirtualGamepadHandToolsChainsawTest, TheSeamForTheCutRollIsClampedAndLockedDuringACut) {
     StartWithChainsawInTheRightHand();
     ASSERT_NO_FATAL_FAILURE(PlantTreesAtTheBarAndInFrontOfTheHead());
     FRAMES(2);
     ASSERT_NEAR(Number(L, "planeNormal()[2]"), 0.0, 1e-3) << "an upright plane with no roll";
 
-    // The game's roll action (a stick or buttons) turns the plane about the bar.
-    ASSERT_EQ(RunLuauChunk(L, "HandToolChainsaw.onRollAction(saw, nil, 30)", "=roll"), 0);
-    FRAMES(2);  // the game applies the roll input in an update and lays the plane out from it in the next
-    EXPECT_GT(std::abs(Number(L, "planeNormal()[2]")), 0.3) << "the plane tilted";
-
-    // Ticket #115 answers the wrist's roll through getChainsawCutRoll; it replaces the game's, within the game's +-90 degrees.
+    // What getChainsawCutRoll answers (the wrist's roll, ticket #115; test_hand_tools_wrist_roll.cpp) replaces the game's roll,
+    // within the game's +-90 degrees. (The roll action does nothing in the Tool Hand: test_hand_tools_wrist_roll.cpp.)
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion.getChainsawCutRoll = function() return 5.0 end", "=seam"), 0);
     FRAMES(1);
     EXPECT_NEAR(Number(L, "saw.spec_chainsaw.currentCutRoll"), 1.5707963, 1e-4);

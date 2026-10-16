@@ -23,6 +23,8 @@
 --                           flashlight) and reads released on the pad
 --   * The look ray          the tool's pointing ray and the Player:getLookRay wrap (HAND_TOOL_POINTING_AXES)
 --   * The chainsaw          the cut plane and the model aligned from the bar, not the camera (wrap of HandToolChainsaw.onUpdate)
+--   * The wrist's roll     the chainsaw's cut angle from the wrist about the bar; the roll action does nothing meanwhile (wrap of
+--                           HandToolChainsaw.onRollAction)
 --   * The flashlight's beam the light node placed from the flashlight's lens (the HandToolFlashlight:onUpdate wrap)
 --   * Update               the per-update step
 --   * Diagnostics, console commands, reset
@@ -50,8 +52,11 @@
 --                                                       what Player:getLookRay answers then, so what the targeter casts.
 --   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   what the chainsaw is doing (the motor is revved
 --                                                       unless "idle"); nil when the tool (default: the one held) is no chainsaw
---   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the seam for the wrist's roll (ticket #115): asked before each update that is
---                                                       not cutting; nil leaves the roll to the game's roll action
+--   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the wrist's roll about the bar (ticket #115) while the chainsaw is in the tracked
+--                                                       Tool Hand: the cut plane's tilt, asked before each update that is not
+--                                                       cutting (a cut keeps its roll), clamped by the update to the game's +-pi/2;
+--                                                       nil (not in the hand, or a bar straight up or down) leaves the roll as it
+--                                                       is, to the game's roll action when the chainsaw is not in the hand
 --   VRCompanion:updateHandTools(dt)                     once per update, called by updateMotionControllers on every path
 --   VRCompanion:setHandToolsEnabled(enabled, save)
 --   VRCompanion:saveHandToolsSetting(xmlFile, xml) / loadHandToolsSetting(xmlFile, xml)   settings chain
@@ -623,8 +628,8 @@ end
 -- bar is taken off the trunk: updateCutting stops it once the targeter's last ray (now the bar) starts too far from the cut.
 -- Holding the trigger cuts through the chainsaw's own cut handler (HandToolChainsaw.onCutAction: called when the trigger is
 -- pulled and when it is let go, as the game's action event does, "useOnce" above).
--- The cut roll (the plane's tilt about the bar) is still the game's: its roll action. getChainsawCutRoll is where the wrist's
--- roll replaces it (ticket #115).
+-- The cut roll (the plane's tilt about the bar) is the wrist's (see "The wrist's roll", ticket #115): getChainsawCutRoll is
+-- asked before each update that is not cutting; a cut keeps the roll it began with.
 --
 -- THE CHAINSAW'S STATE for the haptics (ticket #116): getChainsawCutState(tool) answers "idle", "delimbing" (the motor is
 -- revved: the trigger is held without a cut) or "cutting".
@@ -642,17 +647,46 @@ function VRCompanion:getChainsawCutState(tool)
     return "idle"
 end
 
--- The cut roll the chainsaw should have now, in radians (about its bar; the game clamps it to +-pi/2), or nil to leave it to
--- the game's roll action. Ticket #115 answers the wrist's roll relative to the bar here. Asked before each update that is not
--- cutting; a cut keeps the roll it began with.
-function VRCompanion:getChainsawCutRoll(tool)
-    return nil
-end
-
 -- Whether the chainsaw is the tool this module has put in the Tool Hand, which is the only time the wrap changes anything.
 local function chainsawInTheHand(tool)
     if type(tool) ~= "table" or tool.spec_chainsaw == nil or state.linkedTool ~= tool then return false end
     return toolHandFor(VRCompanion, tool) ~= nil
+end
+
+-- ---- The wrist's roll sets the cut angle (ticket #115) ---------------------------------------------------------------------
+-- While the chainsaw is in a tracked Tool Hand, the tilt of the cut plane about the bar is how far the wrist is rolled about the
+-- bar: the angle, turning right-handed about the bar's direction, from the way up that is square to the bar (the world's up, with
+-- the part along the bar taken off) to the tool's own up (its +Y, the thumb side of the closed hand: HAND_TOOL_HANDLE_OFFSETS).
+-- Zero is the wrist level, thumb up; the game's own clamp to +-90 degrees is applied by the update (below). A bar that points
+-- straight up or down has no such roll: the plane keeps the roll it had.
+-- The game's roll action (AXIS_ROTATE_HANDTOOL, HandToolChainsaw.onRollAction) does nothing meanwhile, so that a stick does not
+-- fight the wrist: its wrap hands the action back to the game whenever the chainsaw is not in the tracked Tool Hand, and the
+-- update empties the input a route past the wrap might have left (rollInput). With the hand untracked, set down, or Hand Tools
+-- off, the game's roll action works as in the game, from the roll the wrist last left.
+-- UNCERTAIN until the headset (#118): the direction the plane turns for a wrist roll one way (the roll is taken right-handed about
+-- the bar, as rotateAboutLocalAxis takes the game's own roll).
+WRAP_SPECS.chainsawOnRoll = { class = "HandToolChainsaw", fn = "onRollAction", parameters = 3, describe = "(tool, action, inputDelta)" }
+
+-- The wrist's roll about the bar in radians, or nil when the bar has no roll (it points straight up or down) or has no pose.
+local function wristRoll(tool)
+    local ok, x, _, _, dx, dy, dz = pcall(toolPointingRay, VRCompanion, tool)
+    if not ok or x == nil then return nil end
+    local ux, uy, uz = -dy * dx, 1 - dy * dy, -dy * dz  -- the world's up with the part along the bar taken off
+    local length = math.sqrt(ux * ux + uy * uy + uz * uz)
+    if length < 1e-3 then return nil end
+    ux, uy, uz = ux / length, uy / length, uz / length
+    local tx, ty, tz = engine("localDirectionToWorld")(tool.rootNode, 0, 1, 0)
+    if type(tx) ~= "number" then return nil end
+    local sine = (uy * tz - uz * ty) * dx + (uz * tx - ux * tz) * dy + (ux * ty - uy * tx) * dz
+    return math.atan2(sine, ux * tx + uy * ty + uz * tz)
+end
+
+-- The cut roll the chainsaw should have now, in radians (about its bar; the game clamps it to +-pi/2), or nil to leave it as it
+-- is (the game's roll action, when the chainsaw is not in the tracked Tool Hand). Asked before each update that is not cutting; a
+-- cut keeps the roll it began with.
+function VRCompanion:getChainsawCutRoll(tool)
+    if not chainsawInTheHand(tool) then return nil end
+    return wristRoll(tool)
 end
 
 -- The heading of the bar: the yaw the game's own alignment would take from the camera (MathUtil.directionToPitchYaw: the
@@ -670,6 +704,7 @@ local function updateChainsawFromTheTool(original, tool, dt, ...)
     local cutting = type(states) == "table" and spec.currentCutState == states.CUTTING
     local chainsaw = state.chainsaw
     if chainsaw.tool ~= tool then chainsaw.tool, chainsaw.yaw = tool, nil end
+    if spec.rollInput ~= nil then spec.rollInput = 0 end  -- the wrist rolls the plane, not the roll action (ticket #115)
 
     if not cutting then
         chainsaw.yaw = barYaw(tool) or chainsaw.yaw  -- a cut keeps the last one
@@ -704,6 +739,14 @@ end
 WRAP_SPECS.chainsawOnUpdate.make = function(original)
     return function(tool, ...)
         if chainsawInTheHand(tool) then return updateChainsawFromTheTool(original, tool, ...) end
+        return original(tool, ...)
+    end
+end
+
+-- The wrap of the roll action's handler (ticket #115): nothing happens while the chainsaw is in the tracked Tool Hand.
+WRAP_SPECS.chainsawOnRoll.make = function(original)
+    return function(tool, ...)
+        if chainsawInTheHand(tool) then return end
         return original(tool, ...)
     end
 end
@@ -864,10 +907,12 @@ local function diagnosticFields(self)
     }
     -- Chainsaw (ticket #114)
     if kind == "chainsaw" then
-        table.insert(fields, string.format("chainsaw: %s, cut plane heading from the %s", tostring(self:getChainsawCutState(tool)),
-            (hand ~= nil and state.chainsaw.yaw ~= nil) and "bar" or "camera"))
+        table.insert(fields, string.format("chainsaw: %s, cut plane heading from the %s, cut roll from the %s", tostring(self:getChainsawCutState(tool)),
+            (hand ~= nil and state.chainsaw.yaw ~= nil) and "bar" or "camera",
+            hand ~= nil and "wrist" or "game's roll action"))
     end
     table.insert(fields, wrapStatus("chainsawOnUpdate"))
+    table.insert(fields, wrapStatus("chainsawOnRoll"))  -- ticket #115
     return fields
 end
 

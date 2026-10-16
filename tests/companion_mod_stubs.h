@@ -1598,7 +1598,8 @@ inline constexpr const char* kStubHandToolFlashlight = R"luau(
 //   PlayerCamera and g_cameraManager, and makes the targeter target trees for a held chainsaw.
 //   variant   how HandToolChainsaw.onUpdate is in this "game version": nil / "ok", "missing" (a game update renamed it to
 //             onUpdateTick, which the event dispatch calls instead) or "reshaped" (it takes no parameters, and updates the
-//             chainsaw being held)
+//             chainsaw being held), or (ticket #115) "rollMissing" / "rollReshaped" (the roll action's handler,
+//             HandToolChainsaw.onRollAction, is gone / takes no parameters; onUpdate is as "ok")
 // The game keeps the chainsaw's handlers on the specialization class and its event dispatch calls them as
 // Class.handler(tool, ...) (SpecializationUtil.raiseEvent: spec[eventName](object, ...)). So they are here:
 //   HandToolChainsaw.onUpdate(tool, dt)       the chainsaw's update (run each tick by StubHandTool.tick): targets the tree the
@@ -1978,6 +1979,12 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
 
         function Class.onRollAction(self, _, inputDelta)
             self.spec_chainsaw.rollInput = self.spec_chainsaw.rollInput + inputDelta
+        end
+        -- ticket #115: the roll action's handler gone, or reshaped to take no parameters
+        if variant == "rollMissing" then
+            Class.onRollAction = nil
+        elseif variant == "rollReshaped" then
+            Class.onRollAction = function() end
         end
 
         -- the game's event dispatch: spec[eventName](object, ...), the class read at every call
