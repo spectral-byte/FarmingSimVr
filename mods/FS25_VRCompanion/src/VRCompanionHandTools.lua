@@ -33,7 +33,9 @@
 -- PUBLIC SURFACE
 --   VRCompanion.handToolsEnabled                        boolean, default true, saved (`vrHandTools on|off`)
 --   VRCompanion.HAND_TOOL_HANDLE_OFFSETS                per tool kind: where the tool's root node sits in the Virtual Hand's grip frame
---   VRCompanion:getToolHand() -> hand                   the Motion Controller that holds Hand Tools (0 left, 1 right)
+--   VRCompanion:getToolHand() -> hand                   the Motion Controller that holds Hand Tools (0 left, 1 right), saved (`vrToolHand left|right`)
+--   VRCompanion:setToolHand(hand, save)                 chooses it; a tool held now moves to the other hand at once
+--   VRCompanion:saveToolHandSetting / loadToolHandSetting   ride on saveHandToolsSetting / loadHandToolsSetting
 --   VRCompanion:isHandHoldingHandTool(hand) -> boolean  the hand is the Tool Hand and a supported Hand Tool is in it now
 --   VRCompanion:getHeldHandTool() -> tool, kind        the Hand Tool the player holds and which supported kind it is (nil kind: unsupported)
 --   VRCompanion:isHandToolTriggerDown(hand) -> boolean  the hand's trigger is using its Hand Tool now (Motion Controllers keep that hand in use)
@@ -46,7 +48,7 @@
 --   VRCompanion:saveHandToolsSetting(xmlFile, xml) / loadHandToolsSetting(xmlFile, xml)   settings chain
 --   VRCompanion:getHandToolsDiagnostics() -> string     the state of Hand Tools, one line
 --   VRCompanion:registerHandToolsConsoleCommands() / resetHandTools()   map load / unload
---   Console: vrHandTools [on|off], vrHandToolsDiagnostics
+--   Console: vrHandTools [on|off], vrToolHand [left|right], vrHandToolsDiagnostics
 --
 -- Hooks into the rest of the mod (each a single guarded call):
 --   MotionControllers  updateMotionControllers -> updateHandTools(dt) on every path (also when input is ignored or the
@@ -100,6 +102,7 @@ function VRCompanion:saveHandToolsSetting(xmlFile, xml)
     if type(xml.setBool) == "function" then
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.handToolsEnabled ~= false)
     end
+    self:saveToolHandSetting(xmlFile, xml)
 end
 
 -- A key that is missing keeps the current value.
@@ -115,6 +118,28 @@ function VRCompanion:loadHandToolsSetting(xmlFile, xml)
     if loaded ~= nil then
         self.handToolsEnabled = loaded
     end
+    self:loadToolHandSetting(xmlFile, xml)
+end
+
+-- ---- Settings: the Tool Hand (ticket #117) ------------------------------------------------------------------------------
+-- vrToolHand left|right: saved, default right. VRCompanion.toolHand is nil (the right hand) or a hand id; getToolHand answers it.
+-- Everything the Tool Hand does follows it: the tool's place, the trigger use, the Pointer Hand rule and the held-tool pose all
+-- read getToolHand() live, so changing it moves them on the next update (setToolHand also moves the tool at once).
+local SETTING_KEY_TOOL_HAND = "vrSettings.toolHand"
+local TOOL_HAND_BY_NAME = { left = 0, right = 1 }
+
+function VRCompanion:saveToolHandSetting(xmlFile, xml)
+    if type(xml.setString) == "function" then
+        xml.setString(xmlFile, SETTING_KEY_TOOL_HAND, HAND_NAMES[self:getToolHand()])
+    end
+end
+
+-- A key that is missing (or not a hand) keeps the current choice.
+function VRCompanion:loadToolHandSetting(xmlFile, xml)
+    if type(xml.getString) ~= "function" then return end
+    local str = xml.getString(xmlFile, SETTING_KEY_TOOL_HAND)
+    local hand = type(str) == "string" and TOOL_HAND_BY_NAME[string.lower(str)] or nil
+    if hand ~= nil then self.toolHand = hand end
 end
 
 -- ---- Supported tools ----------------------------------------------------------------------------------------------------
@@ -134,6 +159,9 @@ local SUPPORTED_TOOLS = {
 -- thumb), which is the half turn about (0, 1, -1) below. Metres, a unit quaternion.
 -- UNCERTAIN: these are a first guess (the root at the grip origin). Each tool's real handle position is found in the
 -- headset (ticket #118); only this table changes.
+-- BOTH HANDS use the same entry (ticket #117): the left and right grip frames have the same axes, the right hand being the
+-- left mirrored across X (VRCompanionVirtualHands.lua). The lance's offset has x = 0 and turns about an axis in that mirror
+-- plane, so it is the same in either hand; a tool whose handle sits off the hand's middle line needs its x negated for the right.
 VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
     lance = {
         position = { x = 0.0, y = 0.0, z = 0.0 },
@@ -532,6 +560,40 @@ function VRCompanion:consoleCommandSetHandTools(arg)
     return string.format("Hand Tools set to: %s (Saved)", enabled and "on" or "off")
 end
 
+-- Chooses the Tool Hand (0 left, 1 right). A tool held now moves to the other hand at once (and a use in progress ends: the
+-- other hand's trigger starts a new one); `save` writes the choice to the settings file.
+function VRCompanion:setToolHand(hand, save)
+    if hand ~= self.MOTION_HAND_LEFT and hand ~= self.MOTION_HAND_RIGHT then return end
+    local changed = hand ~= self:getToolHand()
+    self.toolHand = hand
+    if changed then
+        syncPlacement(self)
+        endTriggerUse()
+    end
+    if save and type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
+end
+
+function VRCompanion:consoleCommandSetToolHand(arg)
+    local hand = TOOL_HAND_BY_NAME[string.lower(tostring(arg or ""))]
+    if arg == nil or arg == "" or string.lower(tostring(arg)) == "status" then
+        return string.format("The Tool Hand is the %s hand. Usage: vrToolHand <left|right> (saved)", HAND_NAMES[self:getToolHand()])
+    end
+    if hand == nil then
+        return "Usage: vrToolHand <left|right>"
+    end
+    self:setToolHand(hand, true)
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR Tool Hand: %s (Saved)", HAND_NAMES[hand]), 2500)
+        end)
+    end
+    print(string.format("[FS25_VR] Tool Hand set to: %s", HAND_NAMES[hand]))
+    return string.format("Tool Hand set to: %s (Saved)", HAND_NAMES[hand])
+end
+
 -- Where the game's look ray starts now, for the diagnostics: the player's own getLookRay.
 local function describeLookRay(tool)
     local player = tool ~= nil and type(tool.getCarryingPlayer) == "function" and tool:getCarryingPlayer() or nil
@@ -585,6 +647,7 @@ function VRCompanion:registerHandToolsConsoleCommands()
     checkWraps()
     if addConsoleCommand == nil then return end
     addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw and pressure washer lance held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
+    addConsoleCommand("vrToolHand", "Choose the Motion Controller that holds Hand Tools, left or right (saved; right by default): vrToolHand [left|right]", "consoleCommandSetToolHand", self)
     addConsoleCommand("vrHandToolsDiagnostics", "Report the Tool Hand, the held Hand Tool, whether it is in the hand and where the look ray starts: vrHandToolsDiagnostics", "consoleCommandHandToolsDiagnostics", self)
 end
 
@@ -606,6 +669,7 @@ function VRCompanion:resetHandTools()
     if tool ~= nil and heldTool() == tool then pcall(returnToTheGame, tool) end
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrHandTools")
+        removeConsoleCommand("vrToolHand")
         removeConsoleCommand("vrHandToolsDiagnostics")
     end
     state = newState()
@@ -616,7 +680,8 @@ wrapAll()  -- the game's HandTool is there as the files load
 VRCompanion.HandTools.updateHandTools = function(self, ...) return VRCompanion.updateHandTools(VRCompanion, ...) end
 VRCompanion.HandTools.isHandHoldingHandTool = function(self, ...) return VRCompanion.isHandHoldingHandTool(VRCompanion, ...) end
 VRCompanion.HandTools.getToolHand = function(self, ...) return VRCompanion.getToolHand(VRCompanion, ...) end
-VRCompanion.HandTools.consoleCommandSetHandTools = function(self, ...) return VRCompanion.consoleCommandSetHandTools(VRCompanion, ...) end
+VRCompanion.HandTools.consoleCommandSetToolHand = function(self, ...) return VRCompanion.consoleCommandSetToolHand(VRCompanion, ...) end
+VRCompanion.HandTools.consoleCommandSetHandTools =function(self, ...) return VRCompanion.consoleCommandSetHandTools(VRCompanion, ...) end
 VRCompanion.HandTools.consoleCommandHandToolsDiagnostics = function(self, ...) return VRCompanion.consoleCommandHandToolsDiagnostics(VRCompanion, ...) end
 
 return VRCompanion.HandTools
