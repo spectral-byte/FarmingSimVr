@@ -186,26 +186,27 @@ local SUPPORTED_TOOLS = {
 -- With that rotation, putting the grip origin on the tool's own point P = (px, py, pz) (tool axes) means the root sits at
 -- (px, pz, py) in the grip frame. The handle points come from the game's own tool models (data/handTools/**.i3d, in the root's
 -- axes): the chainsaw's rear handle is its `rightHandTarget` node.
--- Tuned in the headset for the right hand; only this table changes. BOTH HANDS use the same entry: a point of the tool
--- is put on the grip origin of either hand.
+-- Tuned in the headset (vrHandToolOffset) for the right hand; only this table changes. BOTH HANDS use the same entry: a
+-- point of the tool is put on the grip origin of either hand.
 VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
-    -- The lance: the hand 3 cm further back along the lance (grip at tool z = -0.03) than the root.
+    -- The lance: the hand 4 cm further back along the lance than the root (grip at tool z = -0.04).
     lance = {
-        position = { x = 0.0, y = -0.03, z = 0.0 },
+        position = { x = 0.0, y = -0.04, z = 0.0 },
         rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
     },
     -- The flashlight lies across the fist, its lens out between the index finger and the thumb: the tool's +Z halfway between
-    -- the fingertips (-Y) and the thumb (-Z) of the grip frame, a half turn about (0, 0.9239, -0.3827).
+    -- the fingertips (-Y) and the thumb (-Z) of the grip frame, a half turn about (0, 0.9239, -0.3827); 2 cm along the hand's
+    -- thumb side from the root.
     flashlight = {
-        position = { x = 0.0, y = 0.0, z = 0.0 },
+        position = { x = 0.0, y = 0.0, z = -0.02 },
         rotation = { x = 0.0, y = 0.9238795, z = -0.3826834, w = 0.0 },
     },
     -- Chainsaw: the saw's bar runs along the tool's +Z, as the game turns the model (setDirection) to point
-    -- its +Z where the camera looks. The hand holds the rear handle, at (0.056, -0.042, -0.326) of the root, the fingers
-    -- wrapped toward the bar.
+    -- its +Z where the camera looks. The hand holds the rear handle (the game's model has it at (0.056, -0.042, -0.326) of
+    -- the root), turned like the flashlight, the bar between the index finger and the thumb.
     chainsaw = {
-        position = { x = 0.056, y = -0.326, z = -0.042 },
-        rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
+        position = { x = 0.056, y = -0.276, z = -0.232 },
+        rotation = { x = 0.0, y = 0.9238795, z = -0.3826834, w = 0.0 },
     },
 }
 

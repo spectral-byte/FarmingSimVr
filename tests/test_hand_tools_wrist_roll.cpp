@@ -52,15 +52,19 @@ constexpr const char* kRollHelpers = R"luau(
     end
 )luau";
 
-// A hand at (x, y, z) pitched and turned to `heading`, then rolled by `twist` radians about its own long axis (the axis of the
-// fingers, which the bar runs along when the pitch is a quarter turn), aim and grip pose the same.
+// A hand at (x, y, z) pitched and turned to `heading`, then rolled by `twist` radians about the bar, aim and grip pose the
+// same. The chainsaw sits in the hand with its bar halfway between the fingers and the thumb (a quarter of a half turn about
+// the hand's X axis from the fingers, HAND_TOOL_HANDLE_OFFSETS.chainsaw), so the controller is first turned the other way by
+// that much: the pose that puts the BAR where the test says, as a hand that holds the saw would.
+constexpr float kBarFromTheFingers = static_cast<float>(kPi / 4.0);
 inline fs25vr::HeadPose RolledPose(float x, float y, float z, float pitch, float heading, float twist) {
     using fs25vr::Quaternion;
     fs25vr::HeadPose pose = HandAt(x, y, z);
     const Quaternion yaw(0.0f, std::sin(heading * 0.5f), 0.0f, std::cos(heading * 0.5f));
     const Quaternion tilt(std::sin(pitch * 0.5f), 0.0f, 0.0f, std::cos(pitch * 0.5f));
     const Quaternion roll(0.0f, std::sin(twist * 0.5f), 0.0f, std::cos(twist * 0.5f));
-    pose.orientation = yaw * tilt * roll;
+    const Quaternion hold(std::sin(-kBarFromTheFingers * 0.5f), 0.0f, 0.0f, std::cos(-kBarFromTheFingers * 0.5f));
+    pose.orientation = yaw * tilt * roll * hold;
     return pose;
 }
 
