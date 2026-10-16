@@ -18,7 +18,8 @@
 --   * Supported tools       which tools are supported, and where each sits in the hand (HAND_TOOL_HANDLE_OFFSETS)
 --   * Wraps                 the game functions this module wraps (WRAP_SPECS, keyed by function name) and how they give up
 --   * Placement             the Tool Hand, whether a tool is in it, linking it into the Virtual Hand and back
---   * Update                the per-update step
+--   * The look ray          the tool's pointing ray and the Player:getLookRay wrap (HAND_TOOL_POINTING_AXES)
+--   * Update               the per-update step
 --   * Diagnostics, console commands, reset
 --
 -- THE WRAPS (ADR-0026, ADR-0027): every wrap passes through to the game's own function when the feature is off, Motion
@@ -34,6 +35,10 @@
 --   VRCompanion:getToolHand() -> hand                   the Motion Controller that holds Hand Tools (0 left, 1 right)
 --   VRCompanion:isHandHoldingHandTool(hand) -> boolean  the hand is the Tool Hand and a supported Hand Tool is in it now
 --   VRCompanion:getHeldHandTool() -> tool, kind        the Hand Tool the player holds and which supported kind it is (nil kind: unsupported)
+--   VRCompanion.HAND_TOOL_POINTING_AXES                 per tool kind: the node a tool aims from and the axis of it that it aims along
+--   VRCompanion:getHandToolRay([player]) -> x, y, z, dirX, dirY, dirZ   the tool's pointing ray in the world, while a supported tool
+--                                                       is in the Tool Hand (nil otherwise: the head's ray is the game's). This is
+--                                                       what Player:getLookRay answers then, so what the targeter casts.
 --   VRCompanion:updateHandTools(dt)                     once per update, called by updateMotionControllers on every path
 --   VRCompanion:setHandToolsEnabled(enabled, save)
 --   VRCompanion:saveHandToolsSetting(xmlFile, xml) / loadHandToolsSetting(xmlFile, xml)   settings chain
@@ -121,6 +126,17 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
     },
 }
 
+-- WHERE EACH TOOL POINTS (the look ray, ticket #112): the ray the game's targeter casts starts at `node(tool)`'s origin and runs
+-- along `direction`, a unit vector in that node's own axes. One entry per tool kind, the place to adjust how a tool aims.
+-- The lance washes from its raycastNode along that node's +Z axis, the nozzle. UNCERTAIN until checked in the headset (#118):
+-- only this table changes.
+VRCompanion.HAND_TOOL_POINTING_AXES = {
+    lance = {
+        node = function(tool) return tool.spec_highPressureWasherLance.raycastNode end,
+        direction = { x = 0.0, y = 0.0, z = 1.0 },
+    },
+}
+
 -- The supported kind of a Hand Tool and its entry, or nil for an unsupported one.
 local function supportedKind(tool)
     if type(tool) ~= "table" then return nil end
@@ -139,6 +155,7 @@ end
 -- Each later wrap is one more entry.
 local WRAP_SPECS = {
     attachToolToCamera = { class = "HandTool", parameters = 1, describe = "(tool)" },
+    getLookRay = { class = "Player", parameters = 1, describe = "(player)" },
 }
 
 -- wraps[functionName] = { class = <the table wrapped>, original = <what it was>, wrapper = <what the wrap put there> }
@@ -335,6 +352,47 @@ WRAP_SPECS.attachToolToCamera.make = function(original)
     end
 end
 
+-- ---- The look ray (ticket #112) -----------------------------------------------------------------------------------------
+
+-- Where the tool points now: the world position of its pointing node and the world direction of its pointing axis, or nil
+-- when the tool has no pointing axis (HAND_TOOL_POINTING_AXES) or the node is not there.
+local function toolPointingRay(self, tool)
+    local kind = supportedKind(tool)
+    local axis = kind ~= nil and self.HAND_TOOL_POINTING_AXES[kind] or nil
+    if axis == nil then return nil end
+    local node = axis.node(tool)
+    if node == nil then return nil end
+    local x, y, z = engine("getWorldTranslation")(node)
+    local dx, dy, dz = engine("localDirectionToWorld")(node, axis.direction.x, axis.direction.y, axis.direction.z)
+    if type(x) ~= "number" or type(dx) ~= "number" then return nil end
+    return x, y, z, dx, dy, dz
+end
+
+-- The ray the player aims with while a supported Hand Tool is in the Tool Hand: x, y, z, dirX, dirY, dirZ in the world, or
+-- nil (the head's ray is the game's). `player` limits it to the player who holds the tool (nil: whoever holds it). The tool
+-- must be where this module put it, so that the ray starts where the tool is drawn. Read live by the Player:getLookRay wrap.
+function VRCompanion:getHandToolRay(player)
+    local tool = heldTool()
+    if tool == nil or state.linkedTool ~= tool then return nil end
+    if player ~= nil and tool:getCarryingPlayer() ~= player then return nil end
+    if toolHandFor(self, tool) == nil then return nil end
+    local ok, x, y, z, dx, dy, dz = pcall(toolPointingRay, self, tool)
+    if not ok then return nil end
+    return x, y, z, dx, dy, dz
+end
+
+-- The wrap of Player:getLookRay, the single source PlayerTargeter:update reads (and everything that highlights by look): the
+-- tool's ray while a supported Hand Tool is in a tracked Tool Hand, the game's own (the head's) otherwise.
+WRAP_SPECS.getLookRay.make = function(original)
+    return function(player, ...)
+        if type(player) == "table" then
+            local x, y, z, dx, dy, dz = VRCompanion:getHandToolRay(player)
+            if x ~= nil then return x, y, z, dx, dy, dz end
+        end
+        return original(player, ...)
+    end
+end
+
 -- ---- Update -------------------------------------------------------------------------------------------------------------
 
 -- Brings the held tool to where it belongs now: into the Tool Hand, or back where the game puts it. Cheap when nothing changed.
@@ -397,7 +455,8 @@ local function describeLookRay(tool)
     if player == nil or type(player.getLookRay) ~= "function" then return "look ray: unknown (no player)" end
     local ok, x, y, z = pcall(player.getLookRay, player)
     if not ok or type(x) ~= "number" then return "look ray: unknown (getLookRay failed)" end
-    return string.format("look ray starts at (%.2f, %.2f, %.2f)", x, y, z)
+    local fromTheTool = VRCompanion:getHandToolRay(player) ~= nil
+    return string.format("look ray starts at (%.2f, %.2f, %.2f), from the %s", x, y, z, fromTheTool and "tool" or "head")
 end
 
 local function diagnosticFields(self)
@@ -407,12 +466,12 @@ local function diagnosticFields(self)
     if tool ~= nil then
         toolText = kind ~= nil and ("held Hand Tool: " .. kind .. " (supported)") or "held Hand Tool: unsupported"
     end
-    local wrapText = "attachToolToCamera wrap: not installed"
-    if state.problem ~= nil then
-        wrapText = "attachToolToCamera wrap: gave up (" .. state.problem .. ")"
-    elseif wraps.attachToolToCamera ~= nil then
-        wrapText = "attachToolToCamera wrap: installed"
+    local function wrapStatus(name)
+        if state.problem ~= nil then return name .. " wrap: gave up (" .. state.problem .. ")" end
+        return name .. " wrap: " .. (wraps[name] ~= nil and "installed" or "not installed")
     end
+    local wrapText = wrapStatus("attachToolToCamera")
+    local lookRayWrapText = wrapStatus("getLookRay")
     return {
         string.format("Hand Tools: %s", self.handToolsEnabled ~= false and "on" or "off"),
         string.format("Tool Hand: %s", HAND_NAMES[self:getToolHand()]),
@@ -420,6 +479,7 @@ local function diagnosticFields(self)
         hand ~= nil and "in the Tool Hand: yes" or ("in the Tool Hand: no (" .. tostring(why) .. ")"),
         describeLookRay(tool),
         wrapText,
+        lookRayWrapText,
     }
 end
 

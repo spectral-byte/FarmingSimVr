@@ -1216,7 +1216,8 @@ inline constexpr const char* kStubInputBinding = R"luau(
 //             to attachToolToCameraNode: the class has no attachToolToCamera, the game attaches through the new name) or
 //             "reshaped" (it takes no parameters at all, and attaches the tool being held)
 //   options   getLookRay  "ok" (default), "missing" (Player has lookRay instead) or "reshaped" (Player.getLookRay takes no
-//             parameters): for the look ray wrap (#112). Nothing in the Companion Mod wraps it before that.
+//             parameters): for the look ray wrap (#112). The targeter reads Player.lookRay in the "missing" game.
+//             StubHandTool.originalGetLookRay is the game's own function ("ok" game only: nil in the others).
 // StubHandTool.onFoot(options) -> { player, cam, parent, yawNode, firstPersonCamera }   StubScene.onFoot(options) with a
 //   Player: g_currentMission.player and g_localPlayer are it. player.camera is the camera of StubScene.onFoot (isFirstPerson,
 //   pitchNode: the node the game links a held tool to). Player:getLookRay() -> x, y, z, dirX, dirY, dirZ is the first
@@ -1335,8 +1336,10 @@ inline constexpr const char* kStubHandTool = R"luau(
         _G.PlayerTargeter = PlayerTargeter
         function PlayerTargeter.new(player) return setmetatable({ player = player }, PlayerTargeter) end
         function PlayerTargeter:update(dt)
+            -- a game whose getLookRay was renamed (options.getLookRay == "missing") reads it by the new name
+            local read = self.player.getLookRay or self.player.lookRay
             self.lastRayX, self.lastRayY, self.lastRayZ, self.lastRayDirectionX, self.lastRayDirectionY, self.lastRayDirectionZ =
-                self.player:getLookRay()
+                read(self.player)
             table.insert(StubHandTool.rays, { self.lastRayX, self.lastRayY, self.lastRayZ,
                 self.lastRayDirectionX, self.lastRayDirectionY, self.lastRayDirectionZ })
         end
