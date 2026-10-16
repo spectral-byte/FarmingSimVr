@@ -51,6 +51,15 @@ protected:
         }
         return false;
     }
+    // The first probe line that has all of the texts, or "" when there is none.
+    static std::string LineWith(const std::vector<std::string>& lines, std::initializer_list<const char*> texts) {
+        for (const auto& line : lines) {
+            bool all = true;
+            for (const char* text : texts) all = all && line.find(text) != std::string::npos;
+            if (all) return line;
+        }
+        return "";
+    }
     static std::string Joined(const std::vector<std::string>& lines) {
         std::string all;
         for (const auto& line : lines) all += line + "\n";
@@ -67,4 +76,24 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, HoldingAnotherModsToolThe
 
     const auto lines = Probe();
     EXPECT_TRUE(AnyLineHas(lines, "config file: mods/FS25_OtherMod/handTools/otherModTool.xml")) << Joined(lines);
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, EverySpecTableIsLoggedOneLevelDeepWithEachFieldsNameTypeAndShortValue) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+
+    RunCommand();
+
+    const auto lines = Probe();
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.charge (number) = 5" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.isReeling (boolean) = false" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.lines (table) = 3 keys" }).empty()) << "a table by its key count: " << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.onBite (function)" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModLine.length (number) = 12.5" }).empty()) << "every spec_ table, not only the first: " << Joined(lines);
+
+    const std::string label = LineWith(lines, { "spec_otherModTool.label (string)" });
+    EXPECT_NE(label.find("\"A rather long"), std::string::npos) << label;
+    EXPECT_EQ(label.find("written to the log file"), std::string::npos) << "a long string is cut short: " << label;
+
+    const std::string node = LineWith(lines, { "spec_otherModTool.bobberNode (number)" });
+    EXPECT_NE(node.find("\"otherModBobber\""), std::string::npos) << "a node is named: " << node;
 }

@@ -1044,10 +1044,70 @@ local function unsupportedHeldTool(self)
     return tool
 end
 
+local PROBE_STRING_LENGTH = 30   -- a longer string is cut
+
+-- The keys of a table in a fixed order (a log from one run reads like the next).
+local function sortedKeys(t)
+    local keys = {}
+    for key in pairs(t) do keys[#keys + 1] = key end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    return keys
+end
+
+-- A short text for a field's value: numbers and booleans as they are, a string cut short, a table by its key count, a number
+-- that is a node (an entity id) with the node's name. Nothing for a function.
+local function shortValue(value)
+    local kind = type(value)
+    if kind == "number" then
+        local text = tostring(value)
+        local entityExists, getName = engine("entityExists"), engine("getName")
+        if value > 0 and value == math.floor(value) and type(entityExists) == "function" and type(getName) == "function"
+            and entityExists(value) then
+            text = string.format('%s (node "%s")', text, tostring(getName(value)))
+        end
+        return text
+    elseif kind == "boolean" then
+        return tostring(value)
+    elseif kind == "string" then
+        if #value > PROBE_STRING_LENGTH then return '"' .. string.sub(value, 1, PROBE_STRING_LENGTH) .. '..."' end
+        return '"' .. value .. '"'
+    elseif kind == "table" then
+        local count = 0
+        for _ in pairs(value) do count = count + 1 end
+        return count .. " keys"
+    end
+    return nil
+end
+
+-- Every spec_ table of the tool, one level deep: a line per field with its name, Lua type and short value.
+local function describeSpecTables(tool, add)
+    local specNames = {}
+    for key, value in pairs(tool) do
+        if type(key) == "string" and string.sub(key, 1, 5) == "spec_" and type(value) == "table" then specNames[#specNames + 1] = key end
+    end
+    table.sort(specNames)
+    for _, specName in ipairs(specNames) do
+        local ok, err = pcall(function()
+            local spec = tool[specName]
+            for _, key in ipairs(sortedKeys(spec)) do
+                local fieldOk, text = pcall(function()
+                    local value = spec[key]
+                    local shown = shortValue(value)
+                    return string.format("%s.%s (%s)%s", specName, tostring(key), type(value), shown ~= nil and (" = " .. shown) or "")
+                end)
+                add(fieldOk and text or string.format("%s.%s could not be read (%s)", specName, tostring(key), tostring(text)))
+            end
+        end)
+        if not ok then add(specName .. " could not be read (" .. tostring(err) .. ")") end
+    end
+end
+
 -- The lines that describe the tool, without the tags.
 local function describeUnsupportedTool(tool)
     local lines = {}
-    table.insert(lines, "config file: " .. tostring(tool.configFileName))
+    local function add(line) lines[#lines + 1] = line end
+    add("config file: " .. tostring(tool.configFileName))
+    describeSpecTables(tool, add)
     return lines
 end
 
