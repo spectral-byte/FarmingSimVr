@@ -140,37 +140,34 @@ protected:
 
 // ---- The chainsaw ---------------------------------------------------------------------------------------------------------
 
-TEST_F(VirtualGamepadHandToolsHapticsTest, TheChainsawInTheToolHandBuzzesItLightlyWhileItIdlesAndWhileTheMotorRevs) {
+TEST_F(VirtualGamepadHandToolsHapticsTest, TheChainsawInTheToolHandIsSilentUntilTheTriggerIsHeldThenBuzzesItLightly) {
     ASSERT_NO_FATAL_FAILURE(HoldTheChainsawIn(kRight));
     ForgetPulses();
     FRAMES(10);
     ASSERT_EQ(SawState(), "idle");
-    EXPECT_GE(PulsesTo(kRight), 3u) << "an idling saw buzzes the Tool Hand";
-    EXPECT_GT(WeakestTo(kRight), 0.0f);
-    EXPECT_LT(StrongestTo(kRight), 0.5f) << "lightly";
-    EXPECT_EQ(PulsesTo(kLeft), 0u) << "and only that hand";
-    const float idling = StrongestTo(kRight);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "a saw that is only held does not buzz the Tool Hand, as a lance that is not spraying";
 
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     ASSERT_EQ(SawState(), "delimbing") << "no tree for the bar: the motor revs";
     ForgetPulses();
     FRAMES(10);
-    EXPECT_GE(PulsesTo(kRight), 3u) << "the revving motor buzzes it too";
+    EXPECT_GE(PulsesTo(kRight), 3u) << "the revving motor buzzes it";
+    EXPECT_GT(WeakestTo(kRight), 0.0f);
     EXPECT_LT(StrongestTo(kRight), 0.5f) << "lightly";
-    EXPECT_FLOAT_EQ(StrongestTo(kRight), idling) << "as lightly as the idle";
-    EXPECT_EQ(PulsesTo(kLeft), 0u);
+    EXPECT_EQ(PulsesTo(kLeft), 0u) << "and only that hand";
 
     headset.SetHandInputs(kRight, Trigger(0.0f));
     FRAMES(3);
     ForgetPulses();
     FRAMES(10);
     EXPECT_EQ(SawState(), "idle");
-    EXPECT_GE(PulsesTo(kRight), 3u) << "and letting go of the trigger leaves the idle buzz";
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "and letting go of the trigger ends the buzz";
 }
 
 TEST_F(VirtualGamepadHandToolsHapticsTest, TheChainsawsBuzzEndsWhenTheToolHandIsUntrackedOrTheChainsawIsPutAway) {
     ASSERT_NO_FATAL_FAILURE(HoldTheChainsawIn(kRight));
+    headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(5);
     ASSERT_GE(PulsesTo(kRight), 1u);
 
@@ -182,7 +179,7 @@ TEST_F(VirtualGamepadHandToolsHapticsTest, TheChainsawsBuzzEndsWhenTheToolHandIs
 
     headset.SetHandTracked(kRight, true);
     FRAMES(5);
-    ASSERT_GE(PulsesTo(kRight), 1u) << "and it buzzes again once the hand is back";
+    ASSERT_GE(PulsesTo(kRight), 1u) << "and it buzzes again once the hand is back and the trigger is still held";
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(saw)", "=drop"), 0);
     FRAMES(3);
     ForgetPulses();
@@ -230,7 +227,7 @@ TEST_F(VirtualGamepadHandToolsHapticsTest, CuttingBuzzesTheToolHandHarderThanRev
     EXPECT_EQ(PulsesTo(kLeft), 0u);
 }
 
-TEST_F(VirtualGamepadHandToolsHapticsTest, TheCutEndingGoesBackToTheLightBuzzOfTheIdlingSawWhenTheTriggerIsLetGo) {
+TEST_F(VirtualGamepadHandToolsHapticsTest, LettingGoOfTheTriggerAfterACutEndsTheBuzz) {
     ASSERT_NO_FATAL_FAILURE(HoldTheChainsawIn(kRight));
     ASSERT_EQ(RunLuauChunk(L, "plantTreeAtTheBar()", "=plantTree"), 0);
     FRAMES(2);
@@ -246,8 +243,7 @@ TEST_F(VirtualGamepadHandToolsHapticsTest, TheCutEndingGoesBackToTheLightBuzzOfT
     ForgetPulses();
     FRAMES(8);
     EXPECT_EQ(SawState(), "idle");
-    EXPECT_GE(PulsesTo(kRight), 1u) << "the saw idles in the hand: the light buzz";
-    EXPECT_LT(StrongestTo(kRight), cutting) << "lighter than the cut was";
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "the trigger is let go: the saw is only held again, so silent";
     EXPECT_GT(cutting, 0.0f);
 }
 

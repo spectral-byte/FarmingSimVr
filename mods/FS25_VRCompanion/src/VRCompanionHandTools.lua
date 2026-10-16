@@ -182,26 +182,28 @@ local SUPPORTED_TOOLS = {
 -- tool sits in the hand. The rotation maps the tool's own axes onto the hand's so that the tool points where the fingers
 -- point: the tool's +Z (the lance's nozzle runs along it) onto the grip frame's -Y, the tool's +Y (up) onto -Z (toward the
 -- thumb), which is the half turn about (0, 1, -1) below. Metres, a unit quaternion.
--- UNCERTAIN: these are a first guess (the root at the grip origin). Each tool's real handle position is found in the
--- headset; only this table changes.
--- BOTH HANDS use the same entry: the left and right grip frames have the same axes, the right hand being the
--- left mirrored across X (VRCompanionVirtualHands.lua). The lance's offset has x = 0 and turns about an axis in that mirror
--- plane, so it is the same in either hand; a tool whose handle sits off the hand's middle line needs its x negated for the right.
+-- With that rotation, putting the grip origin on the tool's own point P = (px, py, pz) (tool axes) means the root sits at
+-- (px, pz, py) in the grip frame. The handle points come from the game's own tool models (data/handTools/**.i3d, in the root's
+-- axes): the chainsaw's rear handle is its `rightHandTarget` node.
+-- Tuned in the headset for the right hand; only this table changes. BOTH HANDS use the same entry: a point of the tool
+-- is put on the grip origin of either hand.
 VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
+    -- The lance: the hand 3 cm further back along the lance (grip at tool z = -0.03) than the root.
     lance = {
-        position = { x = 0.0, y = 0.0, z = 0.0 },
+        position = { x = 0.0, y = -0.03, z = 0.0 },
         rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
     },
-    -- The flashlight: the same first guess as the lance, the lens toward the fingertips. UNCERTAIN until the headset.
+    -- The flashlight lies across the fist, its lens out between the index finger and the thumb: the tool's +Z halfway between
+    -- the fingertips (-Y) and the thumb (-Z) of the grip frame, a half turn about (0, 0.9239, -0.3827).
     flashlight = {
         position = { x = 0.0, y = 0.0, z = 0.0 },
-        rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
+        rotation = { x = 0.0, y = 0.9238795, z = -0.3826834, w = 0.0 },
     },
     -- Chainsaw: the saw's bar runs along the tool's +Z, as the game turns the model (setDirection) to point
-    -- its +Z where the camera looks. UNCERTAIN: the same first guess as the lance (the root at the grip origin, the bar along
-    -- the fingers); the handle and the bar's direction are found in the headset.
+    -- its +Z where the camera looks. The hand holds the rear handle, at (0.056, -0.042, -0.326) of the root, the fingers
+    -- wrapped toward the bar.
     chainsaw = {
-        position = { x = 0.0, y = 0.0, z = 0.0 },
+        position = { x = 0.056, y = -0.326, z = -0.042 },
         rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
     },
 }
@@ -811,7 +813,7 @@ end
 
 -- ---- Haptics --------------------------------------------------------------------------------------------------
 -- The Tool Hand buzzes while its tool works, through VRCompanion:pulseHand (VRBridge.pulseHaptic): a light buzz for as long as
--- the chainsaw is in the hand (idling, or delimbing with the trigger held without a cut), a stronger one while it cuts, a steady
+-- the chainsaw's trigger is held (delimbing, without a cut), a stronger one while it cuts, a steady
 -- one while the lance sprays, and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
 -- while the tool is in it (toolHandFor: the feature on, Motion Controllers on, the hand tracked), so an untracked or set-down
 -- Tool Hand, `vrHandTools off` and a tool put away all end the buzz. A pulse is one burst, so the buzz is a pulse requested again
@@ -821,7 +823,7 @@ end
 
 -- What is felt: milliseconds a pulse lasts and its strength (0..1).
 VRCompanion.HAND_TOOL_HAPTIC_PULSES = {
-    running = { ms = 70, strength = 0.2 },   -- the chainsaw's motor, idling or revved
+    running = { ms = 70, strength = 0.2 },   -- the chainsaw's motor revved with the trigger held, no cut yet
     cutting = { ms = 70, strength = 0.6 },   -- the chainsaw cutting
     spraying = { ms = 70, strength = 0.35 }, -- the lance's pressure
 }
@@ -833,7 +835,8 @@ VRCompanion.HAND_TOOL_HAPTICS = {
     chainsaw = function(self, tool)
         local cutState = self:getChainsawCutState(tool)  -- nil: no chainsaw
         if cutState == nil then return nil end
-        return cutState == "cutting" and "cutting" or "running"  -- idle and delimbing: the light buzz
+        if cutState == "idle" then return nil end  -- the motor runs only while the trigger is held, like the lance's spray
+        return cutState == "cutting" and "cutting" or "running"  -- delimbing (trigger held, no cut): the light buzz
     end,
     lance = function(self, tool)
         local spec = tool.spec_highPressureWasherLance
