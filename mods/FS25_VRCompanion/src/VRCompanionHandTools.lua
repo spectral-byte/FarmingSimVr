@@ -796,9 +796,9 @@ function VRCompanion:placeHandToolsForRender()
 end
 
 -- ---- Haptics (ticket #116) --------------------------------------------------------------------------------------------------
--- The Tool Hand buzzes while its tool works, through VRCompanion:pulseHand (VRBridge.pulseHaptic): a light buzz while the
--- chainsaw's motor revs (delimbing: the trigger is held without a cut), a stronger one while it cuts, a steady one while the
--- lance sprays, and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
+-- The Tool Hand buzzes while its tool works, through VRCompanion:pulseHand (VRBridge.pulseHaptic): a light buzz for as long as
+-- the chainsaw is in the hand (idling, or delimbing with the trigger held without a cut), a stronger one while it cuts, a steady
+-- one while the lance sprays, and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
 -- while the tool is in it (toolHandFor: the feature on, Motion Controllers on, the hand tracked), so an untracked or set-down
 -- Tool Hand, `vrHandTools off` and a tool put away all end the buzz. A pulse is one burst, so the buzz is a pulse requested again
 -- every HAND_TOOL_HAPTIC_INTERVAL_MS (and at once when what is felt changes), each lasting a little longer than that so the hand
@@ -807,7 +807,7 @@ end
 
 -- What is felt: milliseconds a pulse lasts and its strength (0..1).
 VRCompanion.HAND_TOOL_HAPTIC_PULSES = {
-    revving = { ms = 70, strength = 0.2 },   -- the chainsaw's motor
+    running = { ms = 70, strength = 0.2 },   -- the chainsaw's motor, idling or revved
     cutting = { ms = 70, strength = 0.6 },   -- the chainsaw cutting
     spraying = { ms = 70, strength = 0.35 }, -- the lance's pressure
 }
@@ -817,10 +817,9 @@ VRCompanion.HAND_TOOL_HAPTIC_INTERVAL_MS = 50
 -- (the flashlight) is silent. The lance sprays while its own flag is set (HandToolHPWLance's spec.isActivated).
 VRCompanion.HAND_TOOL_HAPTICS = {
     chainsaw = function(self, tool)
-        local cutState = self:getChainsawCutState(tool)
-        if cutState == "cutting" then return "cutting" end
-        if cutState == "delimbing" then return "revving" end
-        return nil
+        local cutState = self:getChainsawCutState(tool)  -- nil: no chainsaw
+        if cutState == nil then return nil end
+        return cutState == "cutting" and "cutting" or "running"  -- idle and delimbing: the light buzz
     end,
     lance = function(self, tool)
         local spec = tool.spec_highPressureWasherLance
