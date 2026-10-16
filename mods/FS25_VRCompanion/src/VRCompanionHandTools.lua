@@ -1020,15 +1020,61 @@ local function diagnosticFields(self)
     return fields
 end
 
+-- ---- Describing an unsupported held Hand Tool (ADR-0030) ----------------------------------------------------------------------
+-- While the local player holds a Hand Tool this module does not support (another mod's, a DLC's), vrHandToolsDiagnostics also
+-- writes what the game gives that tool to the log, so that a log from the headset is enough to design the tool's support. It
+-- only reads: no wrap, nothing about the tool, the supported list or the placement changes. Every read is guarded: a failure
+-- becomes a line, never an error. Each line starts with PROBE_TAG after the mod's own tag.
+
+local PROBE_TAG = "Hand Tool probe: "
+
+-- The unsupported Hand Tool the local player holds, or nil (nothing held, a supported tool, another player's tool). The tool
+-- the game last attached to the camera, or else the one the player says it holds (a tool the game put in the hand of the third
+-- person view never went through attachToolToCamera).
+local function unsupportedHeldTool(self)
+    local tool = heldTool()
+    if tool == nil then
+        local player = localPlayer()
+        if type(player) == "table" and type(player.getHeldHandTool) == "function" then
+            local held = player:getHeldHandTool()
+            tool = type(held) == "table" and held or nil
+        end
+    end
+    if tool == nil or supportedKind(tool) ~= nil or isAnotherPlayersTool(tool) then return nil end
+    return tool
+end
+
+-- The lines that describe the tool, without the tags.
+local function describeUnsupportedTool(tool)
+    local lines = {}
+    table.insert(lines, "config file: " .. tostring(tool.configFileName))
+    return lines
+end
+
+-- The description of the unsupported tool held now, [] when there is none.
+local function probeLines(self)
+    local ok, result = pcall(function()
+        local tool = unsupportedHeldTool(self)
+        if tool == nil then return {} end
+        return describeUnsupportedTool(tool)
+    end)
+    if ok then return result end
+    return { "could not be read: " .. tostring(result) }
+end
+
 -- One line (the Pointer diagnostics may carry it too).
 function VRCompanion:getHandToolsDiagnostics()
     return table.concat(diagnosticFields(self), " | ")
 end
 
--- Prints the fields to the game log, one tagged line each, and returns them as one line.
+-- Prints the fields to the game log, one tagged line each, and returns them as one line. A held unsupported Hand Tool is
+-- described after them.
 function VRCompanion:consoleCommandHandToolsDiagnostics()
     for _, field in ipairs(diagnosticFields(self)) do
         print("[FS25_VR] " .. field)
+    end
+    for _, line in ipairs(probeLines(self)) do
+        print("[FS25_VR] " .. PROBE_TAG .. line)
     end
     return self:getHandToolsDiagnostics()
 end
