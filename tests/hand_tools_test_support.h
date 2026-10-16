@@ -142,6 +142,7 @@ struct StartOptions {
     const char* lookRayVariant = "ok";       // StubHandTool.install options.getLookRay
     const char* scene = "_G.foot = StubHandTool.onFoot({})";  // the player on foot; tests that need the lance etc. make them
     const char* extraStubs = "";             // one more Lua chunk, after the stubs and before the scene
+    const char* gameStubs = "";              // one more piece of the game (FlashlightGame()), before the Companion Mod's files load
 };
 
 // The mod loaded and a map started with a player on foot. The game's HandTool and Player are there before the mod's
@@ -155,6 +156,7 @@ inline void StartHandToolsMod(lua_State* L, fs25vr::VRBridge& bridge, const Star
     ASSERT_EQ(RunLuauChunk(L, kSceneHelpers, "=sceneHelpers"), 0);
     const std::string install = std::string("StubHandTool.install('") + options.variant + "', { getLookRay = '" + options.lookRayVariant + "' })";
     ASSERT_EQ(RunLuauChunk(L, install.c_str(), "=installGame"), 0);
+    ASSERT_EQ(RunLuauChunk(L, options.gameStubs, "=gameStubs"), 0);
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
     ASSERT_EQ(RunLuauChunk(L, options.extraStubs, "=extraStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, options.scene, "=scene"), 0);
@@ -191,6 +193,16 @@ inline int CountLogLines(const std::string& text) {
 // ASSERT_NO_FATAL_FAILURE twice; HoldLance for a test body.)
 inline constexpr const char* kHoldLance = "_G.lance = StubHandTool.lance(foot.player); StubHandTool.hold(lance)";
 inline void HoldLance(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldLance, "=holdLance"), 0); }
+
+// The flashlight (ticket #113): the game's flashlight class and the flashlight, as _G.flashlight, with the player taking it
+// in hand. Not part of the common start: a test that has a flashlight sets StartOptions::gameStubs to FlashlightGame(variant),
+// which installs the game's HandToolFlashlight before the Companion Mod's files load, as the game has it. The flashlight is
+// made and held by HoldFlashlight / kHoldFlashlight.
+inline std::string FlashlightGame(const char* variant = "ok") {
+    return std::string(kStubHandToolFlashlight) + "\nStubHandTool.installFlashlight('" + variant + "')";
+}
+inline constexpr const char* kHoldFlashlight = "_G.flashlight = StubHandTool.flashlight(foot.player); StubHandTool.hold(flashlight)";
+inline void HoldFlashlight(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldFlashlight, "=holdFlashlight"), 0); }
 
 // The player takes the spray can (an unsupported Hand Tool) in hand: _G.sprayCan.
 inline constexpr const char* kHoldSprayCan = "_G.sprayCan = StubHandTool.sprayCan(foot.player); StubHandTool.hold(sprayCan)";

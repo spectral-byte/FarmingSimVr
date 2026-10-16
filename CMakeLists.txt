@@ -230,8 +230,10 @@ add_executable(fs25_vr_tests
     tests/test_hand_tools_lance.cpp
     tests/test_hand_tools_trigger.cpp
     tests/test_hand_tools_look_ray.cpp
+    tests/test_hand_tools_flashlight.cpp
     tests/luau_test_runner.cpp
     tests/test_luau_suites.cpp
+    tests/test_hand_tools_left_hand.cpp
     tests/test_hand_tools_chainsaw.cpp
 )
 
