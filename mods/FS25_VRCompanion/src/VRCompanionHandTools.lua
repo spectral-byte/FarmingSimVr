@@ -66,6 +66,7 @@ local HAND_NAMES = { [0] = "left", [1] = "right" }
 local function newState()
     return {
         tool = nil,          -- the Hand Tool the game last attached to the camera (checked to be held before it is used)
+        cameraPlacedTool = nil,  -- the tool the game last placed through attachToolToCamera (read by the description of an unsupported tool)
         linkedTool = nil,    -- the tool this module has linked into a Virtual Hand
         linkedHand = nil,    -- ... and the hand
         linkedHolder = nil,  -- ... and the Virtual Hand's node
@@ -511,6 +512,7 @@ WRAP_SPECS.attachToolToCamera.make = function(original)
     return function(tool, ...)
         if type(tool) == "table" and not isAnotherPlayersTool(tool) then
             state.tool = tool
+            state.cameraPlacedTool = tool  -- for the description of an unsupported tool (placement path)
             local hand = toolHandFor(VRCompanion, tool)
             if hand ~= nil and linkIntoHand(VRCompanion, tool, hand) then
                 reportPlacement(tool, hand)
@@ -1220,6 +1222,46 @@ local function describeActionEvents(tool, add)
     for _, line in ipairs(lines) do add(line) end
 end
 
+local PROBE_NODE_DEPTH = 3   -- levels of nodes below the root that are named
+
+-- The node tree below the tool's root, by name (the path from the root), to a fixed depth. A node at the last level says how many
+-- children it has that are not listed.
+local function describeNodes(tool, add)
+    local root = tool.rootNode
+    local getName, getNumOfChildren, getChildAt = engine("getName"), engine("getNumOfChildren"), engine("getChildAt")
+    if root == nil or type(getName) ~= "function" or type(getNumOfChildren) ~= "function" or type(getChildAt) ~= "function" then
+        add("node tree: the tool has no root node to read")
+        return
+    end
+    local function walk(node, path, depth)
+        local count = getNumOfChildren(node)
+        if depth == PROBE_NODE_DEPTH then
+            return count
+        end
+        for index = 0, count - 1 do
+            local child = getChildAt(node, index)
+            local childPath = path .. "/" .. tostring(getName(child))
+            local notListed = walk(child, childPath, depth + 1)
+            add("node " .. childPath .. ((notListed ~= nil and notListed > 0) and string.format(" (%d child%s not listed)", notListed, notListed == 1 and "" or "ren") or ""))
+        end
+    end
+    walk(root, tostring(getName(root)), 0)
+end
+
+-- Whether the game's last placement of the tool was HandTool:attachToolToCamera (it links the tool to the camera when the player
+-- is in the first person view) or another path (attachToolToHand in the third person view, or whatever else a tool does). The
+-- wrap of attachToolToCamera noted the tools it saw; a tool that went to the hand of the third person view since is another path.
+local function describePlacement(tool, add)
+    local player = carryingPlayer(tool) or localPlayer()
+    local camera = type(player) == "table" and player.camera or nil
+    local inFirstPerson = type(camera) == "table" and camera.isFirstPerson == true
+    if state.cameraPlacedTool == tool and inFirstPerson then
+        add("placement: through attachToolToCamera")
+    else
+        add("placement: not through attachToolToCamera (the game used another path)")
+    end
+end
+
 -- Runs one part of the description; a failure becomes a line, and the other parts go on.
 local function guarded(what, part, tool, add)
     local ok, err = pcall(part, tool, add)
@@ -1235,6 +1277,8 @@ local function describeUnsupportedTool(tool)
     guarded("specializations", describeSpecializationClasses, tool, add)
     guarded("type", describeTypeFunctions, tool, add)
     guarded("action events", describeActionEvents, tool, add)
+    guarded("placement", describePlacement, tool, add)
+    guarded("node tree", describeNodes, tool, add)
     return lines
 end
 

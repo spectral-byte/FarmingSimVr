@@ -144,3 +144,42 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, EveryRegisteredActionEven
     EXPECT_NE(nudge.find("release"), std::string::npos) << nudge;
     EXPECT_EQ(nudge.find("press"), std::string::npos) << nudge;
 }
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheNodesBelowTheToolsRootAreLoggedByNameToAFixedDepth) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+
+    RunCommand();
+
+    const auto lines = Probe();
+    EXPECT_FALSE(LineWith(lines, { "node otherModRoot/otherModFirstPerson" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "node otherModRoot/otherModRod/otherModGuide" }).empty()) << Joined(lines);
+    const std::string tip = LineWith(lines, { "node otherModRoot/otherModRod/otherModGuide/otherModTip" });
+    EXPECT_FALSE(tip.empty()) << Joined(lines);
+    EXPECT_NE(tip.find("1 child not listed"), std::string::npos) << "the depth cut is said: " << tip;
+    EXPECT_EQ(Joined(lines).find("otherModFloat"), std::string::npos) << "below the depth, a node is not named: " << Joined(lines);
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheLogSaysWhetherTheGamePlacedTheToolThroughAttachToolToCamera) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+    RunCommand();
+    EXPECT_FALSE(LineWith(Probe(), { "placement: through attachToolToCamera" }).empty()) << Joined(Probe());
+
+    // The player goes to the third person view: the game puts the tool in the avatar's hand.
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.thirdPerson(foot.player, true)", "=thirdPerson"), 0);
+    RunCommand();
+    EXPECT_FALSE(LineWith(Probe(), { "placement: not through attachToolToCamera" }).empty()) << Joined(Probe());
+    EXPECT_TRUE(LineWith(Probe(), { "placement: through attachToolToCamera" }).empty());
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AToolTheGameNeverPlacedThroughTheCameraIsDescribedToo) {
+    headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
+    ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.thirdPerson(foot.player, true)", "=thirdPerson"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "_G.otherTool = StubHandTool.otherModTool(foot.player); StubHandTool.hold(otherTool)", "=hold"), 0);
+
+    RunCommand();
+
+    const auto lines = Probe();
+    EXPECT_FALSE(LineWith(lines, { "config file: mods/FS25_OtherMod" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "placement: not through attachToolToCamera" }).empty()) << Joined(lines);
+}
