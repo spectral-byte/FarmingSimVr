@@ -254,6 +254,25 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, TheBeamOfTheFlashlightInHandIsPlac
     EXPECT_EQ(EvalLua(L, "sameRay(beamOff, beam())"), "true") << "the same place with the light on";
 }
 
+// The game runs the mod's update once per AFR pair but renders each eye: a frame can be rendered after the player moved again
+// with no game update before it (the Virtual Hands are placed again for it). The light node, which the game's own update
+// places, has to ride with the hand in that frame too, or the beam lags behind the flashlight.
+TEST_F(VirtualGamepadHandToolsFlashlightTest, TheLightNodeIsCarriedAlongByAFrameRenderedWithoutAnUpdateAfterThePlayerMoved) {
+    ASSERT_NO_FATAL_FAILURE(StartWithFlashlightInTheRightHand());
+    ASSERT_TRUE(BeamFromTheLens()) << BeamAndLens();
+    ASSERT_EQ(RunLuauChunk(L, "_G.beamBefore = beam()", "=before"), 0);
+
+    // the second eye: the player moved and the camera followed, but no update ran
+    ASSERT_EQ(RunLuauChunk(L, "setTranslation(foot.parent, 0.12, 0, 0.05); StubScene.updateCamera()", "=moveWithoutUpdate"), 0);
+
+    EXPECT_TRUE(BeamFromTheLens()) << BeamAndLens();
+    EXPECT_EQ(RunLuauChunk(L, R"luau(
+        local now = beam()
+        assert(math.abs(now[1] - beamBefore[1] - 0.12) < 1e-3 and math.abs(now[2] - beamBefore[2]) < 1e-3
+            and math.abs(now[3] - beamBefore[3] - 0.05) < 1e-3, "the light moved by " .. (now[1] - beamBefore[1]) .. " " .. (now[3] - beamBefore[3]))
+    )luau", "=carriedAlong"), 0);
+}
+
 TEST_F(VirtualGamepadHandToolsFlashlightTest, WithTheFlashlightInTheToolHandTheTargetersRayStartsAtTheFlashlightAndPointsAlongItAndIsTheHeadsOtherwise) {
     ASSERT_NO_FATAL_FAILURE(StartWithFlashlightInTheRightHand());
 

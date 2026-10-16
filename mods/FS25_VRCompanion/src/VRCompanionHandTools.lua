@@ -767,8 +767,8 @@ end
 -- own call, setDirection. What is wrapped is the event the game raises each update, onUpdate (looked up on the class each time
 -- it is raised): the instance's updateTransform is a copy made when the tool was made, which a wrap of the class would not reach.
 -- The game's placement runs first and this one after it, so the game's own is what remains whenever the tool is not in the hand.
--- A frame that is drawn without a game update (the second eye of an alternate frame render) shows the light where the last
--- update put it, while the tool itself rides along with the hand.
+-- A frame that is drawn without a game update (the second eye of an alternate frame render) gets the light placed again from
+-- the render-time hook (placeHandToolsForRender, below), so the beam rides along with the hand as the tool does.
 WRAP_SPECS.flashlightBeam = { class = "HandToolFlashlight", fn = "onUpdate", parameters = 2, describe = "(flashlight, dt)" }
 
 local function placeFlashlightBeam(tool)
@@ -786,6 +786,13 @@ WRAP_SPECS.flashlightBeam.make = function(original)
         pcall(placeFlashlightBeam, tool)
         return result
     end
+end
+
+-- Called by the Virtual Hands after they are placed for a rendered frame (placeVirtualHandsForRender), which may have no game
+-- update before it: the light node is placed from the flashlight again, so the beam rides with the hand as the tool does.
+function VRCompanion:placeHandToolsForRender()
+    local tool = state.linkedTool
+    if tool ~= nil and tool.spec_flashlight ~= nil then pcall(placeFlashlightBeam, tool) end
 end
 
 -- ---- Haptics (ticket #116) --------------------------------------------------------------------------------------------------

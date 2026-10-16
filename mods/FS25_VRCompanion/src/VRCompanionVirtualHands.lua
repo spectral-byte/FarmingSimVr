@@ -94,6 +94,7 @@
 --   VRCompanion:getVirtualHandHolder(hand)   the node that carries a hand's placement (the grip frame), or nil: what a Hand Tool is linked below
 --   VRCompanion:updateVirtualHands(dt)       once per update, called by updateMotionControllers
 --   VRCompanion:placeVirtualHandsForRender() before every rendered frame, called by placeAndBindEyes: places the shown hands again
+--                      (and then placeHandToolsForRender, so the flashlight's light node follows its hand)
 --   VRCompanion:drawVirtualHands()           called by VRCompanion:draw: the vrVirtualHandsTrace line at draw time
 --   VRCompanion:resetVirtualHands()          map unload: deletes the hands and the model, forgets everything
 --   VRCompanion:getVirtualHandsDiagnostics() -> string   the reason and each hand's state, one line
@@ -719,6 +720,8 @@ function VRCompanion:placeVirtualHandsForRender()
             placeHolder(self, entry, world)
         end
     end
+    -- What rides in a hand and is placed by the game's update (the flashlight's light node) follows the hand for this frame too.
+    if type(self.placeHandToolsForRender) == "function" then self:placeHandToolsForRender() end
     traceHands(self, "camera")
 end
 
