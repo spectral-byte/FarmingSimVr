@@ -378,3 +378,100 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ARunIsCappedInLinesTheMos
     EXPECT_FALSE(LineWith(lines, { "action event ACTIVATE_HANDTOOL" }).empty());
     EXPECT_FALSE(LineWith(lines, { "placement:" }).empty());
 }
+
+// ---- the probe only reads -----------------------------------------------------------------------------------------
+
+namespace {
+
+// Everything about the tool and the game's Hand Tool functions that the command could change, as one text: which function each
+// name on the game's classes, the tool's type and the tool's action events is (a wrap would show), the tool's own fields and its
+// place in the scene.
+constexpr const char* kSnapshotHelpers = R"luau(
+    function _G.snapshot()
+        local parts = {}
+        local function add(text) parts[#parts + 1] = text end
+        local function functionsOf(label, t)
+            local names = {}
+            for name, value in pairs(t) do names[#names + 1] = tostring(name) .. "=" .. tostring(value) end
+            table.sort(names)
+            add(label .. ": " .. table.concat(names, ";"))
+        end
+        functionsOf("HandTool", _G.HandTool)
+        functionsOf("Player", _G.Player)
+        functionsOf("PlayerTargeter", _G.PlayerTargeter)
+        functionsOf("OtherModHandTool", _G.OtherModHandTool)
+        functionsOf("type", otherTool.type.functions)
+        functionsOf("tool", otherTool)
+        for index, event in ipairs(otherTool.actionEvents) do functionsOf("event" .. index, event) end
+        for name, spec in pairs(otherTool) do
+            if type(name) == "string" and name:sub(1, 5) == "spec_" then functionsOf(name, spec) end
+        end
+        add("parent " .. tostring(getParent(otherTool.rootNode)))
+        add("translation " .. table.concat({ getTranslation(otherTool.rootNode) }, ","))
+        add("world " .. table.concat({ getWorldTranslation(otherTool.rootNode) }, ","))
+        add("uses " .. #StubHandTool.useCalls)
+        return table.concat(parts, "\n")
+    end
+)luau";
+
+}  // namespace
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, RunningTheCommandChangesNothingAboutTheToolNorInstallsAWrapOnTheGamesFunctions) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+    ASSERT_EQ(RunLuauChunk(L, kSnapshotHelpers, "=snapshotHelpers"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "_G.before = snapshot()", "=before"), 0);
+
+    RunCommand();
+    ASSERT_FALSE(Probe().empty());
+    RunCommand();
+
+    ASSERT_EQ(RunLuauChunk(L, "_G.after = snapshot()", "=after"), 0);
+    EXPECT_EQ(EvalLua(L, "before == after"), "true") << "before:\n" << EvalLua(L, "before") << "\nafter:\n" << EvalLua(L, "after");
+    EXPECT_GT(EvalLua(L, "#before").size(), 0u);
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheToolsPlacementLookRayAndTriggerAreTheSameBeforeAndAfterTheCommand) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    FRAMES(2);
+    const std::string placement = "tostring(getParent(otherTool.rootNode)) .. ':' .. table.concat({ getWorldTranslation(otherTool.rootNode) }, ',')";
+    const std::string ray = "table.concat({ StubHandTool.lastRay() }, ',')";
+    const std::string placementBefore = EvalLua(L, placement);
+    const std::string rayBefore = EvalLua(L, ray);
+    ASSERT_NE(rayBefore, "");
+    EXPECT_EQ(EvalLua(L, "isBelow(otherTool.rootNode, foot.cam.pitchNode)"), "true") << "the game's placement, in front of the camera";
+
+    RunCommand();
+    FRAMES(2);
+
+    EXPECT_EQ(EvalLua(L, placement), placementBefore) << "the tool stays where the game put it";
+    EXPECT_EQ(EvalLua(L, ray), rayBefore) << "the look ray is the head's, as before";
+
+    // The trigger: the game's own binding uses the tool, the Tool Hand's trigger does not (the tool is not supported).
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.useCalls = {}", "=forgetUses"), 0);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "#StubHandTool.useCalls"), "0") << "the Tool Hand's trigger does not use another mod's tool";
+    RunCommand();
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "#StubHandTool.useCalls"), "0");
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressUseBinding(otherTool, 1); StubHandTool.pressUseBinding(otherTool, 0)", "=binding"), 0);
+    EXPECT_EQ(EvalLua(L, "#StubHandTool.useCalls"), "2") << "the game's handler is still called on press and release, once each";
+    EXPECT_EQ(EvalLua(L, "StubHandTool.useCalls[1].value"), "1");
+    EXPECT_EQ(EvalLua(L, "StubHandTool.useCalls[2].value"), "0");
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, RunningTheCommandAgainAfterSomethingHappenedShowsWhatChanged) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+    RunCommand();
+    EXPECT_FALSE(LineWith(Probe(), { "spec_otherModTool.isReeling (boolean) = false" }).empty());
+
+    ASSERT_EQ(RunLuauChunk(L, "otherTool.spec_otherModTool.isReeling = true; otherTool.spec_otherModTool.charge = 9", "=cast"), 0);
+    RunCommand();
+
+    const auto lines = Probe();
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.isReeling (boolean) = true" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.charge (number) = 9" }).empty()) << Joined(lines);
+}
