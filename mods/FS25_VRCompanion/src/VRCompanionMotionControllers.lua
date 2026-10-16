@@ -102,7 +102,10 @@
 --                 is chosen (also when input is ignored, or the Injector offers no hand states, so a Hand Tool goes back to
 --                 where the game puts it), the saved setting rides on save/loadMotionControllerSettings (saveHandToolsSetting /
 --                 loadHandToolsSetting), the console commands register next to the others and resetMotionControllers ->
---                 resetHandTools() before the Virtual Hands go (VRCompanionHandTools.lua, ADR-0029)
+--                 resetHandTools() before the Virtual Hands go (VRCompanionHandTools.lua, ADR-0029). The Tool Hand holding a
+--                 supported Hand Tool (isHandHoldingHandTool) is never a Pointer Hand candidate in the world, as a hand on the
+--                 Steering Wheel is not; in a menu either hand can. While its trigger uses the tool (isHandToolTriggerDown) the
+--                 Tool Hand stays in use however still it is held, so a held-still cut or spray does not drop the tool.
 --     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
 --                 setting rides on save/loadMotionControllerSettings, the status command ends with the pad's state and
 --                 the console command registers next to the others (VRCompanionVirtualGamepad.lua, ADR-0028)
@@ -252,9 +255,19 @@ local function isHoldingSteeringWheel(self, hand)
     return type(self.isHandHoldingSteeringWheel) == "function" and self:isHandHoldingSteeringWheel(hand) == true
 end
 
+-- The Tool Hand holding a supported Hand Tool is never a candidate either, as it uses the tool with its trigger (Hand Tools,
+-- ADR-0029). That holds in the world only: in a menu the tool is back where the game puts it and either hand can point.
+local function isHoldingHandTool(self, hand)
+    return self.isMenuVisible ~= true and type(self.isHandHoldingHandTool) == "function" and self:isHandHoldingHandTool(hand) == true
+end
+
+local function isPointerCandidate(self, hand)
+    return state.inUse[hand] and not isHoldingSteeringWheel(self, hand) and not isHoldingHandTool(self, hand)
+end
+
 local function choosePointerHand(self)
-    local left = state.inUse[0] and not isHoldingSteeringWheel(self, 0)
-    local right = state.inUse[1] and not isHoldingSteeringWheel(self, 1)
+    local left = isPointerCandidate(self, 0)
+    local right = isPointerCandidate(self, 1)
     if left and not right then return 0 end
     if right and not left then return 1 end
     if not (left and right) then return nil end
@@ -453,9 +466,11 @@ function VRCompanion:updateMotionControllers(dt)
     end
     -- Wheel Grab decides which hands hold the Steering Wheel from the hands just polled (VRCompanionWheelGrab.lua).
     if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end
-    -- A hand holding the Steering Wheel stays in use (it keeps its Virtual Hand), however still it is held.
+    -- A hand holding the Steering Wheel stays in use (it keeps its Virtual Hand), however still it is held. So does the Tool
+    -- Hand while its trigger is using the Hand Tool: a cut or a spray held with a still hand must not drop the tool.
     for _, hand in ipairs(HANDS) do
-        if isHoldingSteeringWheel(self, hand) then
+        if isHoldingSteeringWheel(self, hand)
+            or (type(self.isHandToolTriggerDown) == "function" and self:isHandToolTriggerDown(hand) == true) then
             state.inUse[hand] = true
             if now ~= nil then state.motion[hand].lastMovedMs = now end
         end

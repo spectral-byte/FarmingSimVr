@@ -18,6 +18,7 @@
 --   * Supported tools       which tools are supported, and where each sits in the hand (HAND_TOOL_HANDLE_OFFSETS)
 --   * Wraps                 the game functions this module wraps (WRAP_SPECS, keyed by function name) and how they give up
 --   * Placement             the Tool Hand, whether a tool is in it, linking it into the Virtual Hand and back
+--   * Trigger               the Tool Hand's trigger uses the tool (its ACTIVATE_HANDTOOL handler) and reads released on the pad
 --   * Update                the per-update step
 --   * Diagnostics, console commands, reset
 --
@@ -34,6 +35,7 @@
 --   VRCompanion:getToolHand() -> hand                   the Motion Controller that holds Hand Tools (0 left, 1 right)
 --   VRCompanion:isHandHoldingHandTool(hand) -> boolean  the hand is the Tool Hand and a supported Hand Tool is in it now
 --   VRCompanion:getHeldHandTool() -> tool, kind        the Hand Tool the player holds and which supported kind it is (nil kind: unsupported)
+--   VRCompanion:isHandToolTriggerDown(hand) -> boolean  the hand's trigger is using its Hand Tool now (Motion Controllers keep that hand in use)
 --   VRCompanion:updateHandTools(dt)                     once per update, called by updateMotionControllers on every path
 --   VRCompanion:setHandToolsEnabled(enabled, save)
 --   VRCompanion:saveHandToolsSetting(xmlFile, xml) / loadHandToolsSetting(xmlFile, xml)   settings chain
@@ -44,7 +46,11 @@
 -- Hooks into the rest of the mod (each a single guarded call):
 --   MotionControllers  updateMotionControllers -> updateHandTools(dt) on every path (also when input is ignored or the
 --                      Injector offers no hand states, so a tool goes back to the camera); the saved setting, the console
---                      commands and the reset chain through the Motion Controller functions of the same names
+--                      commands and the reset chain through the Motion Controller functions of the same names. Pointer Hand
+--                      selection never picks a hand that isHandHoldingHandTool in the world (a menu is not the world: either hand
+--                      can point), and a hand whose isHandToolTriggerDown stays in use however still it is held
+--   VirtualGamepad     updateHandTools asks takeVirtualGamepadInput(toolHand, "trigger") every update the Tool Hand holds a
+--                      supported tool (the use is made here, so VirtualGamepad needs no hook); false is the held-input handover
 --   VirtualHands       getVirtualHandHolder(hand) is the node a tool is linked below; a hand that isHandHoldingHandTool is
 --                      drawn closed around the handle, its index finger still following the trigger
 -- ====================================================================
@@ -64,6 +70,13 @@ local function newState()
         linkedHolder = nil,  -- ... and the Virtual Hand's node
         reported = nil,      -- the placement last logged
         givingBack = false,  -- the tool is being handed back to the game's own placement
+        trigger = {          -- the Tool Hand's trigger as a use of the tool (see "Trigger")
+            tool = nil,      -- the tool the trigger is using
+            entry = nil,     -- ... and its SUPPORTED_TOOLS entry
+            hand = nil,      -- ... and the hand
+            down = false,    -- the trigger counts as pulled (with hysteresis)
+            active = false,  -- the tool's use handler was last called as held, and has not been called as released since
+        },
         problem = nil,       -- why Hand Tools gave up, once it did (the warning is logged then and never again)
     }
 end
@@ -102,8 +115,10 @@ end
 -- ---- Supported tools ----------------------------------------------------------------------------------------------------
 -- The tools that go into the Tool Hand, recognised by the specialization table the game gives the tool (`spec`). A later
 -- ticket adds its tool here (the flashlight, the chainsaw) and a HAND_TOOL_HANDLE_OFFSETS entry of the same kind.
+-- `useHandler` is the name of the tool's own function the game's ACTIVATE_HANDTOOL binding calls (callback(self, action,
+-- inputValue)); the Tool Hand's trigger calls it too (see "Trigger"). The lance washes while the input is held.
 local SUPPORTED_TOOLS = {
-    { kind = "lance", label = "pressure washer lance", spec = "spec_highPressureWasherLance" },
+    { kind = "lance", label = "pressure washer lance", spec = "spec_highPressureWasherLance", useHandler = "onWashAction" },
 }
 
 -- WHERE EACH TOOL SITS IN THE HAND: the pose of the tool's ROOT node in the Virtual Hand's grip frame (the frame of the
@@ -335,6 +350,73 @@ WRAP_SPECS.attachToolToCamera.make = function(original)
     end
 end
 
+-- ---- Trigger ------------------------------------------------------------------------------------------------------------
+-- While a supported tool is in the tracked Tool Hand, that hand's trigger uses it: the Companion Mod calls the tool's own
+-- ACTIVATE_HANDTOOL handler (SUPPORTED_TOOLS[].useHandler) with the input held (1) while the trigger is pulled and with it
+-- released (0) when it is let go, and takes the trigger off the Virtual Gamepad (takeVirtualGamepadInput, ADR-0028) so that
+-- whatever is bound to it does not also fire; the held-input rule applies as for every other use (a trigger already held when
+-- the tool comes into the hand keeps its binding and uses nothing until it is let go). The game's own binding (X on a pad, the
+-- mouse, the keyboard) still calls the same handler: nothing here replaces it.
+
+-- Calls the tool's use handler as the game's action event does: callback(self, actionName, inputValue).
+local function callUseHandler(tool, entry, value)
+    local handler = tool[entry.useHandler]
+    if type(handler) ~= "function" then return end
+    local ok, err = pcall(handler, tool, "ACTIVATE_HANDTOOL", value)
+    if not ok and state.useError ~= tostring(err) then
+        state.useError = tostring(err)  -- once per distinct error, not once per frame
+        print("[FS25_VR] [Warning] Hand Tools: the " .. entry.label .. "'s use handler failed: " .. tostring(err))
+    end
+end
+
+-- Ends a use that is in progress (the tool is released), and forgets the trigger.
+local function endTriggerUse()
+    local use = state.trigger
+    if use.active and use.tool ~= nil and use.entry ~= nil then callUseHandler(use.tool, use.entry, 0) end
+    use.tool, use.entry, use.hand, use.down, use.active = nil, nil, nil, false, false
+end
+
+local function updateTrigger(self)
+    local use = state.trigger
+    local tool = heldTool()
+    local kind, entry = nil, nil
+    if tool ~= nil then kind, entry = supportedKind(tool) end
+    local hand = nil
+    if entry ~= nil and entry.useHandler ~= nil then hand = toolHandFor(self, tool) end
+    if hand == nil then
+        endTriggerUse()
+        return
+    end
+    if use.tool ~= tool or use.hand ~= hand then
+        endTriggerUse()
+        use.tool, use.entry, use.hand = tool, entry, hand
+    end
+    -- The trigger is ours unless it was already held when the tool came into the hand (the pad keeps it until it is let go).
+    local mine = true
+    if type(self.takeVirtualGamepadInput) == "function" then mine = self:takeVirtualGamepadInput(hand, "trigger") end
+    if mine then
+        local value = self:getHandState(hand).trigger or 0
+        use.down = value >= (use.down and self.POINTER_TRIGGER_RELEASE or self.POINTER_TRIGGER_PRESS)
+    else
+        use.down = false
+    end
+    if use.down then
+        callUseHandler(tool, entry, 1)
+        use.active = true
+    elseif use.active then
+        callUseHandler(tool, entry, 0)
+        use.active = false
+    end
+end
+
+-- Whether the hand's trigger is using its Hand Tool right now. The Tool Hand does not stay "in use" just by holding a tool (it
+-- is set down after the in-use timeout like any hand), so Motion Controllers keeps it in use while this is so: a cut or a
+-- spray held with a still hand must not drop the tool.
+function VRCompanion:isHandToolTriggerDown(hand)
+    local use = state.trigger
+    return use.active and use.hand == hand and self:getHandState(hand).tracked == true
+end
+
 -- ---- Update -------------------------------------------------------------------------------------------------------------
 
 -- Brings the held tool to where it belongs now: into the Tool Hand, or back where the game puts it. Cheap when nothing changed.
@@ -359,6 +441,7 @@ end
 -- Once per update, after the hands are polled and before the Virtual Hands are placed (every path of the update).
 function VRCompanion:updateHandTools(dt)
     syncPlacement(self)
+    updateTrigger(self)
 end
 
 -- ---- Settings command, diagnostics, console commands, reset ---------------------------------------------------------------
@@ -366,6 +449,7 @@ end
 function VRCompanion:setHandToolsEnabled(enabled, save)
     self.handToolsEnabled = (enabled ~= false)
     syncPlacement(self)  -- at once: the tool moves between the hand and the camera without waiting for the next update
+    if not self.handToolsEnabled then endTriggerUse() end  -- and a spray in progress ends
     if save and type(self.saveConfiguration) == "function" then
         self:saveConfiguration()
     end
@@ -448,6 +532,7 @@ end
 -- delete the tool. It goes back to where the game puts it.
 function VRCompanion:releaseHandToolsFromHands()
     local tool = state.linkedTool
+    endTriggerUse()
     if tool ~= nil and heldTool() == tool then pcall(returnToTheGame, tool) end
     state.linkedTool, state.linkedHand, state.linkedHolder = nil, nil, nil
 end
@@ -456,6 +541,7 @@ end
 -- off and everything seen this session is forgotten. The saved setting stays as it is.
 function VRCompanion:resetHandTools()
     local tool = state.linkedTool
+    endTriggerUse()
     liftWraps()
     if tool ~= nil and heldTool() == tool then pcall(returnToTheGame, tool) end
     if removeConsoleCommand ~= nil then

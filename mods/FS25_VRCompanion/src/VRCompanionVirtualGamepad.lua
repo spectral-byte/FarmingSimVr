@@ -36,7 +36,8 @@
 --                                      binding (held when the use would have begun): the use must not act on it.
 -- Uses made here, at the end of every update: every input of both hands while a menu shows (the Pointer Ray menus act on
 -- the raw hand state, as they always did), and the grip of a hand holding the Steering Wheel. Interactive Control's click
--- asks for the Pointer Hand's trigger itself, as the ray lands on a Click Point.
+-- asks for the Pointer Hand's trigger itself, as the ray lands on a Click Point, and Hand Tools ask for the trigger of the Tool
+-- Hand while it holds a supported Hand Tool (VRCompanionHandTools.lua, ADR-0029), which calls the tool's use handler with it.
 -- THE SETTINGS PAGE EXCEPTION: the player binds the pad in the Controls screen, which is part of the pause menu's Settings page,
 -- and the game's binding capture needs the pad's inputs to arrive (a pad that reads neutral cannot be bound). So while the
 -- pause menu shows its Settings page (g_gui.currentGuiName == "InGameMenu" and g_inGameMenu.currentPage.id == "pageSettings",
