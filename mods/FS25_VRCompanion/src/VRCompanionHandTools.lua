@@ -9,8 +9,8 @@
 -- TERMS (CONTEXT.md): a Hand Tool is a tool the player holds on foot (the flashlight, the chainsaw, the pressure washer
 -- lance, the spray can). The Tool Hand is the Motion Controller that holds it: the right one by default.
 --
--- SUPPORTED TOOLS are recognised by the game's specialization (the spec_ table a tool has): the pressure washer lance
--- today; the flashlight and the chainsaw are added by their own tickets. Every other Hand Tool (the spray can, the horse
+-- SUPPORTED TOOLS are recognised by the game's specialization (the spec_ table a tool has): the pressure washer lance and
+-- the chainsaw today; the flashlight is added by its own ticket. Every other Hand Tool (the spray can, the horse
 -- brush, other mods' tools) is left exactly as the game has it, and the Virtual Hand holding it is an empty hand.
 --
 -- SECTIONS of this file (one per concern, so that a ticket adds to its own section):
@@ -20,7 +20,8 @@
 --   * Placement             the Tool Hand, whether a tool is in it, linking it into the Virtual Hand and back
 --   * Trigger               the Tool Hand's trigger uses the tool (its ACTIVATE_HANDTOOL handler) and reads released on the pad
 --   * The look ray          the tool's pointing ray and the Player:getLookRay wrap (HAND_TOOL_POINTING_AXES)
---   * Update                the per-update step
+--   * The chainsaw          the cut plane and the model aligned from the bar, not the camera (wrap of HandToolChainsaw.onUpdate)
+--   * Update               the per-update step
 --   * Diagnostics, console commands, reset
 --
 -- THE WRAPS (ADR-0026, ADR-0027): every wrap passes through to the game's own function when the feature is off, Motion
@@ -41,6 +42,10 @@
 --   VRCompanion:getHandToolRay([player]) -> x, y, z, dirX, dirY, dirZ   the tool's pointing ray in the world, while a supported tool
 --                                                       is in the Tool Hand (nil otherwise: the head's ray is the game's). This is
 --                                                       what Player:getLookRay answers then, so what the targeter casts.
+--   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   what the chainsaw is doing (the motor is revved
+--                                                       unless "idle"); nil when the tool (default: the one held) is no chainsaw
+--   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the seam for the wrist's roll (ticket #115): asked before each update that is
+--                                                       not cutting; nil leaves the roll to the game's roll action
 --   VRCompanion:updateHandTools(dt)                     once per update, called by updateMotionControllers on every path
 --   VRCompanion:setHandToolsEnabled(enabled, save)
 --   VRCompanion:saveHandToolsSetting(xmlFile, xml) / loadHandToolsSetting(xmlFile, xml)   settings chain
@@ -82,6 +87,10 @@ local function newState()
             down = false,    -- the trigger counts as pulled (with hysteresis)
             active = false,  -- the tool's use handler was last called as held, and has not been called as released since
         },
+        chainsaw = {         -- the chainsaw's cut plane (see "The chainsaw")
+            tool = nil,      -- the chainsaw it is of
+            yaw = nil,       -- the heading of the plane: the bar's, locked while a cut is made
+        },
         problem = nil,       -- why Hand Tools gave up, once it did (the warning is logged then and never again)
     }
 end
@@ -122,8 +131,15 @@ end
 -- ticket adds its tool here (the flashlight, the chainsaw) and a HAND_TOOL_HANDLE_OFFSETS entry of the same kind.
 -- `useHandler` is the name of the tool's own function the game's ACTIVATE_HANDTOOL binding calls (callback(self, action,
 -- inputValue)); the Tool Hand's trigger calls it too (see "Trigger"). The lance washes while the input is held.
+-- `useHandlerClass` (optional) names the global specialization class to look the handler up on when the tool does not carry it
+-- itself: the game registers some handlers as functions of the tool (the lance's onWashAction) and leaves others on the
+-- specialization class only, called with the tool as `self` by the action event (HandToolChainsaw.onCutAction).
+-- `useOnce` (optional) marks a tool whose handler is called once per press and once per release, as the game's action event does
+-- for it (the chainsaw's, registered for trigger up and down), not on every update the input is held (the lance's).
 local SUPPORTED_TOOLS = {
     { kind = "lance", label = "pressure washer lance", spec = "spec_highPressureWasherLance", useHandler = "onWashAction" },
+    -- Chainsaw (ticket #114)
+    { kind = "chainsaw", label = "chainsaw", spec = "spec_chainsaw", useHandler = "onCutAction", useHandlerClass = "HandToolChainsaw", useOnce = true },
 }
 
 -- WHERE EACH TOOL SITS IN THE HAND: the pose of the tool's ROOT node in the Virtual Hand's grip frame (the frame of the
@@ -139,6 +155,13 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
         position = { x = 0.0, y = 0.0, z = 0.0 },
         rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
     },
+    -- Chainsaw (ticket #114): the saw's bar runs along the tool's +Z, as the game turns the model (setDirection) to point
+    -- its +Z where the camera looks. UNCERTAIN: the same first guess as the lance (the root at the grip origin, the bar along
+    -- the fingers); the handle and the bar's direction are found in the headset (#118).
+    chainsaw = {
+        position = { x = 0.0, y = 0.0, z = 0.0 },
+        rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
+    },
 }
 
 -- WHERE EACH TOOL POINTS (the look ray, ticket #112): the ray the game's targeter casts starts at `node(tool)`'s origin and runs
@@ -148,6 +171,14 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
 VRCompanion.HAND_TOOL_POINTING_AXES = {
     lance = {
         node = function(tool) return tool.spec_highPressureWasherLance.raycastNode end,
+        direction = { x = 0.0, y = 0.0, z = 1.0 },
+    },
+    -- Chainsaw (ticket #114): from the tool's root along its +Z, the bar. The root, not the model node: the game turns the
+    -- model toward the camera each update and moves it along the cut while cutting, while the root stays where the hand put it.
+    -- The hit point of this ray on the trunk is where the game puts the cut plane's node, so the cut height is where the bar
+    -- meets the trunk. UNCERTAIN until checked in the headset (#118).
+    chainsaw = {
+        node = function(tool) return tool.rootNode end,
         direction = { x = 0.0, y = 0.0, z = 1.0 },
     },
 }
@@ -164,13 +195,20 @@ end
 -- ---- Wraps --------------------------------------------------------------------------------------------------------------
 -- WRAP_SPECS is keyed by the name of the function wrapped. Each entry:
 --   class        the name of the global table the function is on
+--   name         the function's name on that table when it is not the entry's key (a key like `chainsawOnUpdate` keeps two
+--                classes' functions of the same name apart)
 --   parameters   how many parameters the wrap needs the function to declare at least (a reshaped function declares fewer)
 --   describe     what the parameters are, for the warning
---   make         function(original) -> the wrapper (filled in by the section that owns the wrap)
+--   make         function(original) -> the wrapper (filled in by the section that owns the wrap); an entry without one is a
+--                function that is only checked at map load (the feature gives up when it is missing or reshaped)
 -- Each later wrap is one more entry.
 local WRAP_SPECS = {
     attachToolToCamera = { class = "HandTool", parameters = 1, describe = "(tool)" },
     getLookRay = { class = "Player", parameters = 1, describe = "(player)" },
+    -- Chainsaw (ticket #114): the specialization's update (the game's event dispatch reads it off the class at every call), and
+    -- the camera's rotation, which the chainsaw's cut plane is aligned from
+    chainsawOnUpdate = { class = "HandToolChainsaw", name = "onUpdate", parameters = 2, describe = "(tool, dt)" },
+    playerCameraGetRotation = { class = "PlayerCamera", name = "getRotation", parameters = 1, describe = "(camera)" },
 }
 
 -- wraps[functionName] = { class = <the table wrapped>, original = <what it was>, wrapper = <what the wrap put there> }
@@ -211,11 +249,12 @@ local function wrapFunction(name)
     if type(class) ~= "table" or spec.make == nil then return end
     local current = wraps[name]
     if current ~= nil and current.class == class then return end
-    local original = class[name]
+    local functionName = spec.name or name
+    local original = class[functionName]
     if shapeProblem(spec, original) ~= nil then return end
     local wrapper = spec.make(original)
-    wraps[name] = { class = class, original = original, wrapper = wrapper }
-    class[name] = wrapper
+    wraps[name] = { class = class, original = original, wrapper = wrapper, name = functionName }
+    class[functionName] = wrapper
 end
 
 local function wrapAll()
@@ -224,8 +263,8 @@ end
 
 -- Takes the wraps off again, each only when it is still the wrapper put there.
 local function liftWraps()
-    for name, wrap in pairs(wraps) do
-        if wrap.class[name] == wrap.wrapper then wrap.class[name] = wrap.original end
+    for _, wrap in pairs(wraps) do
+        if wrap.class[wrap.name] == wrap.wrapper then wrap.class[wrap.name] = wrap.original end
     end
     wraps = {}
 end
@@ -246,9 +285,10 @@ local function checkWraps()
         local class = engine(spec.class)
         if type(class) == "table" then
             local current = wraps[name]
-            local problem = shapeProblem(spec, current ~= nil and current.original or class[name])
+            local functionName = spec.name or name
+            local problem = shapeProblem(spec, current ~= nil and current.original or class[functionName])
             if problem ~= nil then
-                giveUp(spec.class .. "." .. name .. ": " .. problem)
+                giveUp(spec.class .. "." .. functionName .. ": " .. problem)
                 return state.problem
             end
         end
@@ -369,8 +409,8 @@ end
 
 -- ---- Trigger ------------------------------------------------------------------------------------------------------------
 -- While a supported tool is in the tracked Tool Hand, that hand's trigger uses it: the Companion Mod calls the tool's own
--- ACTIVATE_HANDTOOL handler (SUPPORTED_TOOLS[].useHandler) with the input held (1) while the trigger is pulled and with it
--- released (0) when it is let go, and takes the trigger off the Virtual Gamepad (takeVirtualGamepadInput, ADR-0028) so that
+-- ACTIVATE_HANDTOOL handler (SUPPORTED_TOOLS[].useHandler) with the input held (1) while the trigger is pulled (on every update,
+-- or once when the tool is `useOnce`, as the game's action event calls it) and with it released (0) when it is let go, and takes the trigger off the Virtual Gamepad (takeVirtualGamepadInput, ADR-0028) so that
 -- whatever is bound to it does not also fire; the held-input rule applies as for every other use (a trigger already held when
 -- the tool comes into the hand keeps its binding and uses nothing until it is let go). The game's own binding (X on a pad, the
 -- mouse, the keyboard) still calls the same handler: nothing here replaces it.
@@ -378,6 +418,10 @@ end
 -- Calls the tool's use handler as the game's action event does: callback(self, actionName, inputValue).
 local function callUseHandler(tool, entry, value)
     local handler = tool[entry.useHandler]
+    if type(handler) ~= "function" and entry.useHandlerClass ~= nil then
+        local class = engine(entry.useHandlerClass)  -- a handler the game keeps on the specialization class only
+        handler = type(class) == "table" and class[entry.useHandler] or nil
+    end
     if type(handler) ~= "function" then return end
     local ok, err = pcall(handler, tool, "ACTIVATE_HANDTOOL", value)
     if not ok and state.useError ~= tostring(err) then
@@ -418,7 +462,7 @@ local function updateTrigger(self)
         use.down = false
     end
     if use.down then
-        callUseHandler(tool, entry, 1)
+        if not use.active or not entry.useOnce then callUseHandler(tool, entry, 1) end
         use.active = true
     elseif use.active then
         callUseHandler(tool, entry, 0)
@@ -472,6 +516,107 @@ WRAP_SPECS.getLookRay.make = function(original)
             if x ~= nil then return x, y, z, dx, dy, dz end
         end
         return original(player, ...)
+    end
+end
+
+-- ---- The chainsaw (ticket #114) -------------------------------------------------------------------------------------------
+-- The chainsaw cuts where its bar is. In the Tool Hand it is placed like the other tools (SUPPORTED_TOOLS, the handle offset),
+-- the look ray is its bar (HAND_TOOL_POINTING_AXES), so the game's targeter finds the trunk the bar is against and the game puts
+-- the node the cut plane hangs from (cameraRotationNode) at the hit point: the cut height is where the bar meets the trunk, and
+-- the game's ring marker shows it. What the game still takes from the CAMERA, and this section takes from the tool:
+--   * the plane's heading: HandToolChainsaw:updateSplitPlane turns cameraRotationNode to the camera's yaw (camera:getRotation).
+--     The wrap of HandToolChainsaw.onUpdate gives it the bar's yaw instead, while the game's own update runs, so that everything
+--     the update works out (the plane the trunk is tested against, whether a cut is valid, the plane a finished cut slices along)
+--     is of the bar's plane and not of one that is turned afterwards;
+--   * the model: the update turns the model (graphicalNode) to face the camera; afterwards it is put back as the i3d has it,
+--     which is pointing along the tool's root, i.e. along the hand.
+-- A cut keeps the heading it started with (the game does not move the plane while it cuts, and takes the player's look away
+-- while it does; here the heading is locked), so moving the hand does not move the plane. The cut ends as in the game when the
+-- bar is taken off the trunk: updateCutting stops it once the targeter's last ray (now the bar) starts too far from the cut.
+-- Holding the trigger cuts through the chainsaw's own cut handler (HandToolChainsaw.onCutAction: called when the trigger is
+-- pulled and when it is let go, as the game's action event does, "useOnce" above).
+-- The cut roll (the plane's tilt about the bar) is still the game's: its roll action. getChainsawCutRoll is where the wrist's
+-- roll replaces it (ticket #115).
+--
+-- THE CHAINSAW'S STATE for the haptics (ticket #116): getChainsawCutState(tool) answers "idle", "delimbing" (the motor is
+-- revved: the trigger is held without a cut) or "cutting".
+
+-- The chainsaw's state: "idle", "delimbing" (revving without a cut) or "cutting"; nil when the tool is not a chainsaw (the
+-- Hand Tool the player holds when no tool is given).
+function VRCompanion:getChainsawCutState(tool)
+    if tool == nil then tool = heldTool() end
+    if type(tool) ~= "table" or tool.spec_chainsaw == nil then return nil end
+    local states = engine("ChainsawCutState")
+    if type(states) ~= "table" then return nil end
+    local current = tool.spec_chainsaw.currentCutState
+    if current == states.CUTTING then return "cutting" end
+    if current == states.DELIMBING then return "delimbing" end
+    return "idle"
+end
+
+-- The cut roll the chainsaw should have now, in radians (about its bar; the game clamps it to +-pi/2), or nil to leave it to
+-- the game's roll action. Ticket #115 answers the wrist's roll relative to the bar here. Asked before each update that is not
+-- cutting; a cut keeps the roll it began with.
+function VRCompanion:getChainsawCutRoll(tool)
+    return nil
+end
+
+-- Whether the chainsaw is the tool this module has put in the Tool Hand, which is the only time the wrap changes anything.
+local function chainsawInTheHand(tool)
+    if type(tool) ~= "table" or tool.spec_chainsaw == nil or state.linkedTool ~= tool then return false end
+    return toolHandFor(VRCompanion, tool) ~= nil
+end
+
+-- The heading of the bar: the yaw the game's own alignment would take from the camera (MathUtil.directionToPitchYaw: the
+-- angle about the vertical of the direction), or nil when the bar points straight up or down.
+local function barYaw(tool)
+    local ok, x, _, _, dx, _, dz = pcall(toolPointingRay, VRCompanion, tool)
+    if not ok or x == nil or dx * dx + dz * dz < 1e-6 then return nil end
+    return math.atan2(dx, dz)
+end
+
+-- The chainsaw's update with the bar's heading in place of the camera's, and the model back along the tool afterwards.
+local function updateChainsawFromTheTool(original, tool, dt, ...)
+    local spec = tool.spec_chainsaw
+    local states = engine("ChainsawCutState")
+    local cutting = type(states) == "table" and spec.currentCutState == states.CUTTING
+    local chainsaw = state.chainsaw
+    if chainsaw.tool ~= tool then chainsaw.tool, chainsaw.yaw = tool, nil end
+
+    if not cutting then
+        chainsaw.yaw = barYaw(tool) or chainsaw.yaw  -- a cut keeps the last one
+        local roll = VRCompanion:getChainsawCutRoll(tool)
+        if type(roll) == "number" then spec.currentCutRoll = math.max(-math.pi * 0.5, math.min(math.pi * 0.5, roll)) end
+    end
+
+    local player = tool:getCarryingPlayer()
+    local camera = player ~= nil and player.camera or nil
+    local yaw = chainsaw.yaw
+    if yaw ~= nil and type(camera) == "table" and type(camera.getRotation) == "function" then
+        -- The game reads the heading of the plane off the camera: for the length of its update the camera answers the bar's.
+        local own = rawget(camera, "getRotation")  -- nil when the camera has it from its class
+        local gameGetRotation = camera.getRotation
+        camera.getRotation = function(self, ...)
+            local pitch, _, roll = gameGetRotation(self, ...)
+            return pitch, yaw, roll
+        end
+        local ok, err = pcall(original, tool, dt, ...)
+        camera.getRotation = own
+        if not ok then error(err, 0) end
+    else
+        original(tool, dt, ...)  -- no heading to align from (a bar pointing straight up or down has none): the game's
+    end
+
+    -- The update turned the model to face the camera unless it is cutting (it then rides the cut guide): back along the tool.
+    if tool.graphicalNode ~= nil and type(states) == "table" and spec.currentCutState ~= states.CUTTING then
+        engine("setRotation")(tool.graphicalNode, 0, 0, 0)
+    end
+end
+
+WRAP_SPECS.chainsawOnUpdate.make = function(original)
+    return function(tool, ...)
+        if chainsawInTheHand(tool) then return updateChainsawFromTheTool(original, tool, ...) end
+        return original(tool, ...)
     end
 end
 
@@ -556,7 +701,7 @@ local function diagnosticFields(self)
     end
     local wrapText = wrapStatus("attachToolToCamera")
     local lookRayWrapText = wrapStatus("getLookRay")
-    return {
+    local fields = {
         string.format("Hand Tools: %s", self.handToolsEnabled ~= false and "on" or "off"),
         string.format("Tool Hand: %s", HAND_NAMES[self:getToolHand()]),
         toolText,
@@ -565,6 +710,13 @@ local function diagnosticFields(self)
         wrapText,
         lookRayWrapText,
     }
+    -- Chainsaw (ticket #114)
+    if kind == "chainsaw" then
+        table.insert(fields, string.format("chainsaw: %s, cut plane heading from the %s", tostring(self:getChainsawCutState(tool)),
+            (hand ~= nil and state.chainsaw.yaw ~= nil) and "bar" or "camera"))
+    end
+    table.insert(fields, wrapStatus("chainsawOnUpdate"))
+    return fields
 end
 
 -- One line (the Pointer diagnostics may carry it too).

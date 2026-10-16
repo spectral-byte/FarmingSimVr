@@ -196,6 +196,17 @@ inline void HoldLance(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldLance, "=ho
 inline constexpr const char* kHoldSprayCan = "_G.sprayCan = StubHandTool.sprayCan(foot.player); StubHandTool.hold(sprayCan)";
 inline void HoldSprayCan(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldSprayCan, "=holdSprayCan"), 0); }
 
+// ---- chainsaw (ticket #114) -----------------------------------------------------------------------------------------------
+// The chainsaw's game-side stub (kStubHandToolChainsaw) is not part of every test's game: a test that wants it passes
+// ChainsawStubs(variant) as StartOptions::extraStubs. variant is how HandToolChainsaw.onUpdate is: "ok", "missing", "reshaped".
+inline std::string ChainsawStubs(const char* variant = "ok") {
+    return std::string(kStubHandToolChainsaw) + "\nStubHandTool.installChainsaw('" + variant + "')\n";
+}
+
+// The player takes the chainsaw in hand: _G.saw.
+inline constexpr const char* kHoldChainsaw = "_G.saw = StubHandTool.chainsaw(foot.player); StubHandTool.hold(saw)";
+inline void HoldChainsaw(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldChainsaw, "=holdChainsaw"), 0); }
+
 }  // namespace hand_tools_test
 
 // A test file whose game frame has more in it defines this to a Lua chunk before including the header.
