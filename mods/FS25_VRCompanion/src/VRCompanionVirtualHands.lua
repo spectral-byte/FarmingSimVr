@@ -15,13 +15,29 @@
 --     is not a gate: it reads false in the real game.
 --
 -- WHERE: the hand's GRIP pose (not its aim pose, which is only the Pointer Ray's fallback: the ray starts at this
--- hand's index fingertip, VRCompanion.VIRTUAL_HAND_POINTER), carried into the
--- world by VRCompanion:headRelativePoseToWorld, the same transform the Pointer Ray uses. It is placed once
--- per update, so under Sequential Dual-Pass both eye passes see the same placement and under Alternate
--- Frame Rendering each rendered frame places it again.
+-- hand's index fingertip, VRCompanion.VIRTUAL_HAND_POINTER), carried into the world by
+-- VRCompanion:headRelativePoseToWorld, the same transform the Pointer Ray uses. That world pose is then taken into the
+-- space of the ANCHOR and the hand's holder is linked below it, so the hand rides with whatever carries the head: the
+-- game moves a vehicle, and the camera chain with it, after the mod's update, and a hand left at a world position was
+-- drawn a frame's travel behind the cab (a ghost trailing the direction of travel). The anchor is the topmost node
+-- above the Cyclopean Audio Listener Node (the head) below the scene root: in a cab the vehicle's component (the game
+-- links components to the root), on foot the player's root; the scene root itself when that node is hidden. NOT the
+-- head or its camera nodes: hung below the head the hands vanished in the cab (headset check), and the nodes below a
+-- component are moved by camera logic (rotate nodes, seat suspension, the mod's own head placement) and may sit in a
+-- group a vehicle file marks invisible, which hides every shape below it but no camera. A change-only
+-- `[FS25_VR] Virtual Hands ride on <node>` line names the anchor (and why, when it is the scene root), and each hand
+-- logs its geometry again on a new one.
+-- It is placed in the update and AGAIN BEFORE EVERY RENDERED FRAME (VRCompanion:placeVirtualHandsForRender, called by
+-- the camera path once it placed the head), from the grip pose relative to the head as the update found it and the
+-- head's world pose then: the game renders some frames with no update before them (under Alternate Frame Rendering one
+-- update serves both eyes, a headset trace showed), so a hand placed in the update alone was a sharp copy lagging
+-- behind in the second eye. Placing it in the draw was too late: the hand was right at draw time and still lagged.
+-- Under Sequential Dual-Pass both eye passes see the same placement.
 -- A hand that holds the Steering Wheel (Wheel Grab, VRCompanion:getWheelGrabHandPose) is not placed at its grip pose but
--- pinned to the rim point where it grabbed, turning with the wheel node's actual rotation; it stays shown however long it
+-- pinned to the rim point where it grabbed, turning with the wheel node's actual rotation (taken into the anchor's
+-- space like the grip pose, so it rides with the cab too); it stays shown however long it
 -- is held still (the Motion Controller module keeps a holding hand in use), and its fingers still curl with the real grip.
+-- A holder deleted with the node it hung below (a vehicle deleted with the player in it) is made again, model and all.
 --
 -- THE MODELS: the Gloved Hand work glove (CC BY, see models/VirtualHand_ATTRIBUTION.txt), two i3d files at
 -- VRCompanion.modDirectory .. VRCompanion.VIRTUAL_HAND_MODEL_LEFT / VIRTUAL_HAND_MODEL_RIGHT: the glove as a left
@@ -29,7 +45,8 @@
 -- the same way: Wrist > Hand > one base bone per finger (VRCompanion.VIRTUAL_HAND_FINGERS), each with three curl
 -- joints below it, the same bone names in both. The file's first child is the hand's root node. Each file is
 -- loaded once per map load (on the first update with Motion Controllers on) and cloned for its hand. Each hand is
--- a chain  holder -> offset node -> model clone  with the holder linked to the scene root:
+-- a chain  holder -> offset node -> model clone  with the holder linked to the scene root until it is first placed,
+-- and below the anchor from then on (see WHERE):
 --   * the holder carries the placement (the grip pose) and the visibility;
 --   * the offset node carries the model onto the grip pose frame: VRCompanion.VIRTUAL_HAND_MODEL_TO_GRIP (a
 --     rotation and a translation, derived and documented there, one for each hand).
@@ -69,9 +86,13 @@
 --   VRCompanion.FINGER_CURL_DEGREES          full curl (value 1) of segment 1, 2 and 3 of a finger, in degrees
 --   VRCompanion.FINGER_CURL_DIRECTION        -1: toward the palm is a negative rotation about a joint's local X
 --   VRCompanion:updateVirtualHands(dt)       once per update, called by updateMotionControllers
+--   VRCompanion:placeVirtualHandsForRender() before every rendered frame, called by placeAndBindEyes: places the shown hands again
+--   VRCompanion:drawVirtualHands()           called by VRCompanion:draw: the vrVirtualHandsTrace line at draw time
 --   VRCompanion:resetVirtualHands()          map unload: deletes the hands and the model, forgets everything
 --   VRCompanion:getVirtualHandsDiagnostics() -> string   the reason and each hand's state, one line
 --   Console: vrVirtualHandsDiagnostics       prints the same line (also part of vrPointerDiagnostics)
+--   Console: vrVirtualHandsTrace [frames]    logs each shown hand relative to the rendering camera, after the update and
+--                                            at draw time (in VRCompanion:drawVirtualHands)
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -234,9 +255,11 @@ local function newState()
         modelTried = false,      -- the model was loaded (or failed to) this map
         modelFailure = nil,      -- why the model is not available, when it is not
         fileRoots = {},          -- [hand] = the root node of the model file loaded for that hand (never linked into the scene)
-        hands = {},              -- [hand] = { holder, model, shown, status, world = {} }
+        hands = {},              -- [hand] = { holder, model, shown, status, placement = {} (the anchor's space),
+                                 --            world = {} (scratch), relative = {} (the grip pose in the head's space, from the update) }
         reason = nil,            -- the last reason logged
         missingJointsLogged = false,  -- the line about joints the model lacks was logged this map
+        anchor = nil,            -- the node the hands last rode on (logged when it changes)
     }
 end
 
@@ -342,8 +365,8 @@ end
 -- Loads both model files (each once) and makes both hands, hidden. Returns nil on success, otherwise why not (the
 -- first file that failed).
 local function buildHands(self)
-    for _, name in ipairs({ "loadI3DFile", "clone", "link", "createTransformGroup", "getRootNode", "getChildAt",
-                            "setVisibility", "setWorldTranslation", "setWorldQuaternion", "getName",
+    for _, name in ipairs({ "loadI3DFile", "clone", "link", "getParent", "createTransformGroup", "getRootNode", "getChildAt",
+                            "setVisibility", "worldToLocal", "getWorldQuaternion", "getName",
                             "getNumOfChildren", "getQuaternion", "setQuaternion", "setTranslation" }) do
         if type(engine(name)) ~= "function" then return name .. " is not available" end
     end
@@ -368,7 +391,7 @@ local function buildHands(self)
         if template == nil or template == 0 then return path .. " holds no hand node" end
 
         local holder = engine("createTransformGroup")("virtualHand_" .. HAND_NAMES[hand])
-        local entry = { holder = holder, shown = false, status = "hidden", world = {} }
+        local entry = { holder = holder, shown = false, status = "hidden", placement = {}, world = {}, relative = {} }
         state.hands[hand] = entry
         engine("link")(engine("getRootNode")(), holder)
         local model = engine("clone")(template, false, false)
@@ -439,7 +462,83 @@ local function curlFingers(entry, pose)
     end
 end
 
+-- Takes a world pose into the space of `node`, filling out.x..out.qw.
+local function worldToNodeSpace(node, x, y, z, qx, qy, qz, qw, out)
+    out.x, out.y, out.z = engine("worldToLocal")(node, x, y, z)
+    local nqx, nqy, nqz, nqw = engine("getWorldQuaternion")(node)
+    out.qx, out.qy, out.qz, out.qw = VRCompanion.multiplyQuaternions(-nqx, -nqy, -nqz, nqw, qx, qy, qz, qw)
+end
+
+-- The node the hands ride on (see WHERE): the topmost node above `head` (the listener) below the scene root, a
+-- vehicle's component in a cab and the player's root on foot; the scene root when that node is hidden or there is none.
+-- Also why it is the scene root, or nil.
+local function bodyAnchor(head)
+    local getParent, getName, root = engine("getParent"), engine("getName"), engine("getRootNode")()
+    if head == nil or head == 0 then return root, "there is no head node" end
+    local node = head
+    while true do
+        local parent = getParent(node)
+        if parent == root then
+            local getVisibility = engine("getVisibility")
+            if type(getVisibility) == "function" and not getVisibility(node) then
+                return root, tostring(getName(node)) .. " is hidden"
+            end
+            return node, nil
+        end
+        if parent == nil or parent == 0 then
+            if node == head then return root, "the head hangs on nothing" end
+            return root, tostring(getName(node)) .. " is not below the scene root"
+        end
+        node = parent
+    end
+end
+
+-- Logs the node the hands ride on when it changes (and why it is the scene root), and has each hand log its geometry
+-- again on it.
+local function noteAnchor(anchor, why)
+    if anchor == state.anchor then return end
+    state.anchor = anchor
+    local suffix = why ~= nil and (" (" .. why .. ")") or ""
+    print(string.format("[FS25_VR] Virtual Hands ride on %s%s", tostring(engine("getName")(anchor)), suffix))
+    for _, hand in ipairs(HANDS) do
+        if state.hands[hand] ~= nil then state.hands[hand].geometryLogged = false end
+    end
+end
+
+-- A hand holding the Steering Wheel is drawn pinned to the rim where it grabbed (Wheel Grab): its world pose replaces
+-- the grip pose's in `world`.
+local function pinToWheel(self, hand, world)
+    if type(self.getWheelGrabHandPose) ~= "function" then return end
+    local x, y, z, qx, qy, qz, qw = self:getWheelGrabHandPose(hand)
+    if x ~= nil then
+        world.x, world.y, world.z, world.qx, world.qy, world.qz, world.qw = x, y, z, qx, qy, qz, qw
+    end
+end
+
+-- Sets a hand's holder to a world pose of now, taken into the space of the node the hands ride on (see WHERE).
+local function placeHolder(self, entry, world)
+    local anchor, why = bodyAnchor(self.cyclopeanAudioListenerNode)
+    noteAnchor(anchor, why)
+    local placement = entry.placement
+    worldToNodeSpace(anchor, world.x, world.y, world.z, world.qx, world.qy, world.qz, world.qw, placement)
+    if engine("getParent")(entry.holder) ~= anchor then engine("link")(anchor, entry.holder) end
+    engine("setTranslation")(entry.holder, placement.x, placement.y, placement.z)
+    engine("setQuaternion")(entry.holder, placement.qx, placement.qy, placement.qz, placement.qw)
+end
+
+-- Whether a hand's holder is gone: it went with the node it hung below (see WHERE).
+local function handsWereDeleted()
+    local exists = engine("entityExists")
+    if type(exists) ~= "function" then return false end
+    for _, hand in ipairs(HANDS) do
+        local entry = state.hands[hand]
+        if entry ~= nil and not exists(entry.holder) then return true end
+    end
+    return false
+end
+
 local describeEngineGeometry  -- defined below with the diagnostics
+local traceHands              -- defined below with vrVirtualHandsTrace
 
 -- Places one hand at its grip pose, or hides it; returns the hand's status for the diagnostics.
 local function updateHand(self, hand, unavailable)
@@ -459,15 +558,13 @@ local function updateHand(self, hand, unavailable)
             local ok, why = self:headRelativePoseToWorld(pose.gripPoseX, pose.gripPoseY, pose.gripPoseZ,
                 pose.gripPoseQx, pose.gripPoseQy, pose.gripPoseQz, pose.gripPoseQw, world)
             if ok then
-                -- A hand holding the Steering Wheel is drawn pinned to the rim where it grabbed (Wheel Grab).
-                if type(self.getWheelGrabHandPose) == "function" then
-                    local x, y, z, qx, qy, qz, qw = self:getWheelGrabHandPose(hand)
-                    if x ~= nil then
-                        world.x, world.y, world.z, world.qx, world.qy, world.qz, world.qw = x, y, z, qx, qy, qz, qw
-                    end
-                end
-                engine("setWorldTranslation")(entry.holder, world.x, world.y, world.z)
-                engine("setWorldQuaternion")(entry.holder, world.qx, world.qy, world.qz, world.qw)
+                -- The grip pose relative to the head, for the draws until the next update (VRCompanion:drawVirtualHands).
+                local relative = entry.relative
+                worldToNodeSpace(self.cyclopeanAudioListenerNode, world.x, world.y, world.z,
+                    world.qx, world.qy, world.qz, world.qw, relative)
+                relative.valid = true
+                pinToWheel(self, hand, world)
+                placeHolder(self, entry, world)
                 curlFingers(entry, pose)
                 status = "shown"
                 if not entry.geometryLogged then
@@ -485,6 +582,10 @@ local function updateHand(self, hand, unavailable)
 end
 
 function VRCompanion:updateVirtualHands(dt)
+    if state.modelTried and state.modelFailure == nil and handsWereDeleted() then
+        discardScene()
+        state.modelTried = false
+    end
     if self.motionControllersEnabled ~= false and not state.modelTried then
         loadModel(self)
     end
@@ -498,6 +599,7 @@ function VRCompanion:updateVirtualHands(dt)
     for _, hand in ipairs(HANDS) do
         updateHand(self, hand, unavailable)
     end
+    traceHands(self, "update")
 end
 
 -- What the engine itself reports about one hand's nodes (world positions and scale), for a headset check that finds
@@ -524,8 +626,86 @@ function describeEngineGeometry(entry)
         local sx, sy, sz = getScale(entry.model)
         scale = string.format("%.4f %.4f %.4f", sx, sy, sz)
     end
-    return string.format("holder %s, model %s (local scale %s, expect 1.0000: the file is already in metres), Wrist %s, Wrist to Top.001 %s m, Wrist to Top.002 %s m (expect about 0.20: 0.197 and 0.204)",
-        at(entry.holder), at(entry.model), scale, at(wrist), distance(wrist, indexTip), distance(wrist, middleTip))
+    local getParent, getName = engine("getParent"), engine("getName")
+    local parent = type(getParent) == "function" and getParent(entry.holder) or nil
+    local parentName = (parent ~= nil and parent ~= 0 and type(getName) == "function") and tostring(getName(parent)) or "?"
+    return string.format("holder %s on %s %s, model %s (local scale %s, expect 1.0000: the file is already in metres), Wrist %s, Wrist to Top.001 %s m, Wrist to Top.002 %s m (expect about 0.20: 0.197 and 0.204)",
+        at(entry.holder), parentName, parent ~= nil and parent ~= 0 and at(parent) or "", at(entry.model), scale, at(wrist),
+        distance(wrist, indexTip), distance(wrist, middleTip))
+end
+
+-- ---- vrVirtualHandsTrace [frames] -------------------------------------------------------------------
+-- For the next frames (default 16), logs each shown hand's position in the space of the camera rendering the frame,
+-- at the end of the update, after the camera path placed it for a rendered frame (placeVirtualHandsForRender) and at
+-- draw time (VRCompanion:drawVirtualHands), with the eye
+-- the frame renders, the camera's position in the anchor's space and the frame counter. A hand drawn stale in one eye
+-- shows as a hand-in-camera position that differs between the eyes, or between the update and the draw.
+function traceHands(self, moment)
+    if (state.traceFrames or 0) <= 0 then return end
+    local getCamera, getWorldTranslation = engine("getCamera"), engine("getWorldTranslation")
+    if type(getCamera) ~= "function" or type(getWorldTranslation) ~= "function" then return end
+    local camera = getCamera()
+    if camera == nil or camera == 0 then return end
+    local worldToLocal = engine("worldToLocal")
+    local parts = {}
+    for _, hand in ipairs(HANDS) do
+        local entry = state.hands[hand]
+        if entry ~= nil and entry.shown then
+            local x, y, z = worldToLocal(camera, getWorldTranslation(entry.holder))
+            table.insert(parts, string.format("%s in camera (%.4f, %.4f, %.4f)", HAND_NAMES[hand], x, y, z))
+        end
+    end
+    if #parts == 0 then return end
+    local cameraInAnchor = "?"
+    if state.anchor ~= nil then
+        cameraInAnchor = string.format("(%.4f, %.4f, %.4f)", worldToLocal(state.anchor, getWorldTranslation(camera)))
+    end
+    local parity = type(self.getFrameParity) == "function" and self:getFrameParity() or "?"
+    print(string.format("[FS25_VR] Virtual Hands trace %s: frame %s eye %s | %s | camera in anchor %s",
+        moment, tostring(self.frameTicks), tostring(parity), table.concat(parts, " | "), cameraInAnchor))
+end
+
+-- Called by VRCompanion:placeAndBindEyes once it has placed the head (the Cyclopean Audio Listener Node) for a frame,
+-- which happens before every frame the engine renders. The game may render a frame with no update before it (under AFR
+-- the mod's update runs once per eye pair, so the second eye is rendered after the vehicle moved again: a hand placed
+-- only in the update was a sharp copy lagging behind in that eye; placed in the draw it was right at draw time but
+-- still lagged, so the draw comes too late for the frame). So each shown hand is placed again here, from its grip pose
+-- relative to the head as the update found it (head and hand poses are one snapshot per eye pair) and from where the
+-- head is in the world now; a hand holding the Steering Wheel from the rim as it is now.
+function VRCompanion:placeVirtualHandsForRender()
+    local listener = self.cyclopeanAudioListenerNode
+    local localToWorld, getWorldQuaternion = engine("localToWorld"), engine("getWorldQuaternion")
+    if listener == nil or listener == 0 or type(localToWorld) ~= "function" or type(getWorldQuaternion) ~= "function" then
+        return
+    end
+    for _, hand in ipairs(HANDS) do
+        local entry = state.hands[hand]
+        if entry ~= nil and entry.shown and entry.relative.valid then
+            local relative, world = entry.relative, entry.world
+            world.x, world.y, world.z = localToWorld(listener, relative.x, relative.y, relative.z)
+            local lqx, lqy, lqz, lqw = getWorldQuaternion(listener)
+            world.qx, world.qy, world.qz, world.qw = VRCompanion.multiplyQuaternions(lqx, lqy, lqz, lqw,
+                relative.qx, relative.qy, relative.qz, relative.qw)
+            pinToWheel(self, hand, world)
+            placeHolder(self, entry, world)
+        end
+    end
+    traceHands(self, "camera")
+end
+
+-- Called by VRCompanion:draw: the vrVirtualHandsTrace line at draw time.
+function VRCompanion:drawVirtualHands()
+    if (state.traceFrames or 0) > 0 then
+        traceHands(self, "draw")
+        state.traceFrames = state.traceFrames - 1
+    end
+end
+
+function VRCompanion:consoleCommandVirtualHandsTrace(arg)
+    local frames = math.floor(tonumber(arg) or 16)
+    if frames < 1 then return "Usage: vrVirtualHandsTrace [frames, default 16]" end
+    state.traceFrames = frames
+    return string.format("Tracing the Virtual Hands for %d frames into the log", frames)
 end
 
 -- One line: why Virtual Hands are unavailable (or that they are available) and each hand's state.
@@ -552,6 +732,7 @@ function VRCompanion:registerVirtualHandsConsoleCommands()
     if addConsoleCommand == nil then return end
     addConsoleCommand("vrVirtualHandsDiagnostics", "Report why the Virtual Hands are shown or hidden: vrVirtualHandsDiagnostics", "consoleCommandVirtualHandsDiagnostics", self)
     addConsoleCommand("vrVirtualHandsGeometry", "Report where the engine puts the Virtual Hands and how big they are: vrVirtualHandsGeometry", "consoleCommandVirtualHandsGeometry", self)
+    addConsoleCommand("vrVirtualHandsTrace", "Log where each Virtual Hand is relative to the rendering camera, after the update and at draw time, for some frames: vrVirtualHandsTrace [frames]", "consoleCommandVirtualHandsTrace", self)
 end
 
 -- Map unload: the hands and the model go, and the next map loads the model again.
@@ -559,6 +740,7 @@ function VRCompanion:resetVirtualHands()
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrVirtualHandsDiagnostics")
         removeConsoleCommand("vrVirtualHandsGeometry")
+        removeConsoleCommand("vrVirtualHandsTrace")
     end
     discardScene()
     state = newState()

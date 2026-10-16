@@ -381,6 +381,142 @@ TEST_F(CompanionModTest, VirtualHandsStayOnTheHandsAfterASnapTurnTheRecenterActi
     )luau", "=afterDriving"), 0);
 }
 
+// In the game the vehicle moves AFTER the Companion Mod's update in a frame, and its camera (and the head with it)
+// follows before the frame is drawn. A hand placed at a world position in the update would then be drawn where the
+// cab was, a frame's travel behind: a ghost trailing along the direction of travel. The hand must ride with the cab.
+TEST_F(CompanionModTest, AVirtualHandRidesWithTheCabWhenTheVehicleMovesAfterTheModsUpdate) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "_G.cabScene = StubScene.cab({ x = 100, y = 2, z = 50, yaw = 0.7 })"));
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    FRAMES(2);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local cab = { x = 100, y = 2, z = 50, yaw = 0.7 }
+        -- one frame of driving at about 50 km/h, after the mod's update; the camera follows the cab
+        setTranslation(cabScene.parent, cab.x + 0.15, cab.y, cab.z + 0.17)
+        StubScene.updateCamera()
+        cab.x, cab.z = cab.x + 0.15, cab.z + 0.17
+        assert(handIsShown('right'), VRCompanion:getVirtualHandsDiagnostics())
+        local x, y, z = handPosition('right')
+        local ex, ey, ez = expectedOrigin(cab, 0.7 + math.pi, 0.25, -0.10, -0.20)
+        assert(near(x, ex) and near(y, ey) and near(z, ez),
+            string.format("the hand is at %.3f %.3f %.3f, the grip pose in the moved cab at %.3f %.3f %.3f", x, y, z, ex, ey, ez))
+    )luau", "=movedAfterUpdate"), 0);
+}
+
+// A vehicle file may keep its cameras in a transform group marked invisible: a camera there still renders, but a
+// shape below it is hidden. The head hangs below the cab camera's parent, so a hand linked below the head would
+// vanish in such a cab. It hangs below the deepest visible node above the head instead, and still rides with the cab.
+TEST_F(CompanionModTest, AVirtualHandIsShownAndRidesWithTheCabWhenTheCabCamerasHangInAnInvisibleGroup) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, R"luau(
+        _G.cabScene = StubScene.cab({ x = 100, y = 2, z = 50, yaw = 0.7 })
+        local cameras = StubScene.newNode("cameras", cabScene.parent)
+        setVisibility(cameras, false)
+        link(cameras, cabScene.cameraNode)
+        link(cameras, cabScene.headTrackingNode)
+    )luau"));
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    FRAMES(2);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local cab = { x = 100, y = 2, z = 50, yaw = 0.7 }
+        assert(handIsShown('right'), "the hand is shown in the cab: " .. VRCompanion:getVirtualHandsDiagnostics())
+        local x, y, z = handPosition('right')
+        local ex, ey, ez = expectedOrigin(cab, 0.7 + math.pi, 0.25, -0.10, -0.20)
+        assert(near(x, ex) and near(y, ey) and near(z, ez),
+            string.format("the hand is at %.3f %.3f %.3f, the grip pose at %.3f %.3f %.3f", x, y, z, ex, ey, ez))
+
+        setTranslation(cabScene.parent, cab.x + 0.15, cab.y, cab.z + 0.17)
+        StubScene.updateCamera()
+        cab.x, cab.z = cab.x + 0.15, cab.z + 0.17
+        x, y, z = handPosition('right')
+        ex, ey, ez = expectedOrigin(cab, 0.7 + math.pi, 0.25, -0.10, -0.20)
+        assert(near(x, ex) and near(y, ey) and near(z, ez),
+            string.format("after driving the hand is at %.3f %.3f %.3f, the grip pose at %.3f %.3f %.3f", x, y, z, ex, ey, ez))
+    )luau", "=invisibleCameraGroup"), 0);
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands ride on cab"), 1)
+        << "one line names the node the hands ride on: the vehicle's component, below the camera nodes' reach";
+    EXPECT_EQ(CountLogLines(" on cab "), 1) << "the geometry line names it too";
+}
+
+// A component hidden as a whole leaves the hands nothing visible to ride on in the vehicle: they stay at the scene root.
+TEST_F(CompanionModTest, AVirtualHandIsStillShownWhenTheNodeCarryingTheHeadIsHidden) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "_G.cabScene = StubScene.cab({ x = 100, y = 2, z = 50, yaw = 0.7 }); setVisibility(cabScene.parent, false)"));
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(handIsShown('right'), "the hand is shown: " .. VRCompanion:getVirtualHandsDiagnostics())
+        local x, y, z = handPosition('right')
+        local ex, ey, ez = expectedOrigin({ x = 100, y = 2, z = 50, yaw = 0.7 }, 0.7 + math.pi, 0.25, -0.10, -0.20)
+        assert(near(x, ex) and near(y, ey) and near(z, ez), string.format("the hand is at %.3f %.3f %.3f", x, y, z))
+    )luau", "=hiddenComponent"), 0);
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands ride on root"), 1);
+}
+
+// The game runs the mod's update once per AFR pair but renders each eye: the second eye's frame is rendered after the
+// vehicle moved again with no update between (vrVirtualHandsTrace, headset check). A hand placed only in the update was
+// a sharp copy lagging behind in that eye, and placing it in the draw came too late for the frame (the hand was right
+// at draw time in both eyes, the copy stayed). The camera update, which places the eyes before every rendered frame,
+// places the hands too.
+TEST_F(CompanionModTest, AVirtualHandIsPlacedAgainWhenAFrameIsRenderedWithoutAnUpdateAfterTheVehicleMoved) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    // A hidden component leaves the hands on the scene root, as the headset check found them in the cab.
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "_G.cabScene = StubScene.cab({ x = 100, y = 2, z = 50, yaw = 0.7 }); setVisibility(cabScene.parent, false)"));
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+    FRAMES(2);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local cab = { x = 100, y = 2, z = 50, yaw = 0.7 }
+        -- the second eye: the vehicle moved and the camera followed, but no update ran (and no draw yet)
+        setTranslation(cabScene.parent, cab.x + 0.12, cab.y, cab.z + 0.05)
+        StubScene.updateCamera()
+        cab.x, cab.z = cab.x + 0.12, cab.z + 0.05
+        assert(handIsShown('right'), VRCompanion:getVirtualHandsDiagnostics())
+        local x, y, z = handPosition('right')
+        local ex, ey, ez = expectedOrigin(cab, 0.7 + math.pi, 0.25, -0.10, -0.20)
+        assert(near(x, ex) and near(y, ey) and near(z, ez),
+            string.format("drawn at %.3f %.3f %.3f, the grip pose in the moved cab is at %.3f %.3f %.3f", x, y, z, ex, ey, ez))
+    )luau", "=drawWithoutUpdate"), 0);
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands ride on root (cab is hidden)"), 1) << "the line says why the hands are on the root";
+}
+
+// A hand drawn stale in one eye only (a headset check under AFR) is found by where it is relative to the camera that
+// renders each frame: vrVirtualHandsTrace logs that after the update and again at draw time, with the eye, for the
+// frames asked for, then stops by itself.
+TEST_F(CompanionModTest, VrVirtualHandsTraceLogsEachShownHandRelativeToTheRenderingCameraAfterTheUpdateAndAtDrawTime) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "StubScene.cab({ x = 100, y = 2, z = 50, yaw = 0.7 })"));
+    SetGameTime(10000);
+    PICK_UP(kRight, 0.30f, -0.20f, -0.40f, 0.25f, -0.10f, -0.20f);
+
+    const std::string reply = EvalLua(L, "runCommand('vrVirtualHandsTrace', '2')");
+    EXPECT_NE(reply.find("2 frames"), std::string::npos) << reply;
+    for (int frame = 0; frame < 4; ++frame) {
+        FRAMES(1);
+        ASSERT_EQ(RunLuauChunk(L, "VRCompanion:draw()", "=draw"), 0);
+    }
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands trace update"), 2) << "one line per traced frame after the update";
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands trace camera"), 2) << "one after the camera path placed it";
+    EXPECT_EQ(CountLogLines("[FS25_VR] Virtual Hands trace draw"), 2) << "and one at draw time, then it stops";
+    EXPECT_EQ(CountLogLines("right in camera ("), 6) << "each line places the shown right hand in the rendering camera's space";
+    EXPECT_EQ(CountLogLines("left in camera"), 0) << "a hidden hand is left out";
+    EXPECT_EQ(CountLogLines(" eye 0 "), 6) << "each line names the eye the frame renders";
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=unloadMap"), 0);
+    EXPECT_EQ(EvalLua(L, "registeredCommands['vrVirtualHandsTrace']"), "nil");
+}
+
 TEST_F(CompanionModTest, VirtualHandsLookTheSameInBothEyesUnderAlternateFrameRendering) {
     FakeTrackedHeadset headset;
     headset.manager->SetIpd(0.064f);

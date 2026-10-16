@@ -137,7 +137,7 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 
     function StubScene.cab(options)
         options = options or {}
-        local parent = StubScene.newNode("cab", 0, options.x, options.y, options.z, 0, options.yaw or 0, 0)
+        local parent = StubScene.newNode("cab", rootNode, options.x, options.y, options.z, 0, options.yaw or 0, 0)
         local cameraNode = StubScene.newNode("cabCamera", parent, 0, 1.5, 0, 0, math.pi, 0)
         local headTrackingNode = StubScene.newNode("headTracking", parent, 0, 1.5, 0, 0, math.pi, 0)
         local cam = { isInside = true, cameraNode = cameraNode, headTrackingNode = headTrackingNode,
@@ -154,7 +154,7 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 
     function StubScene.outside(options)
         options = options or {}
-        local cameraNode = StubScene.newNode("outsideCamera", 0, options.x, options.y, options.z, 0, options.yaw or 0, 0)
+        local cameraNode = StubScene.newNode("outsideCamera", rootNode, options.x, options.y, options.z, 0, options.yaw or 0, 0)
         local cam = { isInside = false, cameraNode = cameraNode }
         local vehicle = { getActiveCamera = function() return cam end }
         _G.g_currentMission = _G.g_currentMission or {}
@@ -167,7 +167,7 @@ inline constexpr const char* kStubSceneGraph = R"luau(
 
     function StubScene.onFoot(options)
         options = options or {}
-        local root = StubScene.newNode("player", 0, options.x, options.y, options.z)
+        local root = StubScene.newNode("player", rootNode, options.x, options.y, options.z)
         local yawNode = StubScene.newNode("playerYaw", root, 0, 0, 0, 0, options.yaw or 0, 0)
         local pitchNode = StubScene.newNode("playerPitch", yawNode, 0, 1.7, 0)
         local firstPersonCamera = StubScene.newNode("playerCamera", pitchNode, 0, 0, 0)
@@ -452,8 +452,14 @@ inline constexpr const char* kStubModelLoading = R"luau(
         return false
     end
     -- the node of a clone's ancestors that hangs off the scene root: the hand's holder (the grip pose frame)
+    -- the hand's holder above a node (the first ancestor the mod named virtualHand_*), wherever the holder itself hangs
     local function holderOf(id)
-        while nodes[id] ~= nil and nodes[id].parent ~= getRootNode() and nodes[id].parent ~= 0 do id = nodes[id].parent end
+        local node = id
+        while nodes[node] ~= nil do
+            local name = nodes[node].name
+            if name == "virtualHand_left" or name == "virtualHand_right" then return node end
+            node = nodes[node].parent
+        end
         return id
     end
     -- The Virtual Hands, told apart by their holder's name (the mod names them virtualHand_left / virtualHand_right).
