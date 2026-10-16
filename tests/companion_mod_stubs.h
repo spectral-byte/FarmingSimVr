@@ -1477,7 +1477,8 @@ inline constexpr const char* kStubHandTool = R"luau(
     --     (every frame, callback on the class) and AXIS_OTHERMOD_NUDGE (up only, a callback that is on no class)
     --   the nodes: root -> FirstPerson, Rod -> Guide -> Tip -> Float (four levels below the root)
     -- options (all optional): extraSpecFields = N more fields in spec_otherModTool; extraSpecTables = N more specializations of
-    -- 20 fields each; extraNodes = N more children of the root; brokenSpec = true adds spec_otherModBroken, which has a field
+    -- 20 fields each; extraNodes = N more children of the root; extraClassFunctions = N more functions on OtherModHandTool (the
+    -- first tool made in a game decides); brokenSpec = true adds spec_otherModBroken, which has a field
     -- naming a node whose getName raises (a node that is gone while the tool is being read); configFileName replaces the name.
     function StubHandTool.otherModTool(player, options)
         options = options or {}
@@ -1489,6 +1490,7 @@ inline constexpr const char* kStubHandTool = R"luau(
                 table.insert(StubHandTool.useCalls, { tool = "otherMod", value = inputValue, self = self })
             end
             function class.onRollAction(self, _, inputDelta) end
+            for i = 1, options.extraClassFunctions or 0 do class["extraFunction" .. i] = function() end end
         end
         local tool = StubHandTool.makeTool(player, "otherMod", "spec_otherModTool", options)
         tool.configFileName = options.configFileName or "mods/FS25_OtherMod/handTools/otherModTool.xml"

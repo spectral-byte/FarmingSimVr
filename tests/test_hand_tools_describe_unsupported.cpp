@@ -288,3 +288,93 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASpecTableThatThrowsWhenR
     EXPECT_FALSE(LineWith(lines, { "node otherModRoot/otherModRod" }).empty()) << "and so are the nodes";
     for (const auto& line : s_capturedLogs) EXPECT_EQ(line.find("Error"), std::string::npos) << line;
 }
+
+// ---- caps ---------------------------------------------------------------------------------------------------------
+// The fields of a spec table, the functions of a class, the nodes and the lines of a whole run are capped, and each cut says
+// how much was left out: what is shown and what is left out add up to what the tool has.
+
+namespace {
+
+// The N of "N more" in a line, -1 when the line has none.
+int LeftOutCount(const std::string& line) {
+    const size_t more = line.find(" more ");
+    if (more == std::string::npos) return -1;
+    size_t first = more;
+    while (first > 0 && std::isdigit(static_cast<unsigned char>(line[first - 1]))) --first;
+    return first == more ? -1 : std::stoi(line.substr(first, more - first));
+}
+
+int CountLinesStartingWith(const std::vector<std::string>& lines, const std::string& prefix) {
+    int count = 0;
+    for (const auto& line : lines) count += line.rfind(prefix, 0) == 0 ? 1 : 0;
+    return count;
+}
+
+}  // namespace
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASpecTableWithManyFieldsIsCutAndTheLeftOutCountIsLogged) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraSpecFields = 100 }"));  // 6 fields of its own and 100 more
+
+    RunCommand();
+
+    const auto lines = Probe();
+    const int shown = CountLinesStartingWith(lines, "spec_otherModTool.");
+    EXPECT_GT(shown, 5) << "a good part of the table is there";
+    EXPECT_LT(shown, 106) << "but not all of it";
+    const int leftOut = LeftOutCount(LineWith(lines, { "spec_otherModTool: ", "more fields left out" }));
+    EXPECT_GT(leftOut, 0) << Joined(lines);
+    EXPECT_EQ(shown + leftOut, 106) << "what is shown and what is left out are the fields of the table";
+    EXPECT_EQ(CountLinesStartingWith(lines, "spec_otherModLine."), 1) << "another spec table has its own cap";
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AClassWithManyFunctionsIsCutAndTheLeftOutCountIsLogged) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraClassFunctions = 100 }"));  // onUseAction, onRollAction and 100 more
+
+    RunCommand();
+
+    const auto lines = Probe();
+    const std::string line = LineWith(lines, { "class OtherModHandTool", "more left out" });
+    ASSERT_FALSE(line.empty()) << Joined(lines);
+    const size_t listStart = line.find("functions: ") + std::string("functions: ").size();
+    const std::string list = line.substr(listStart, line.find(" (and ") - listStart);
+    int shown = 1;
+    for (size_t at = list.find(", "); at != std::string::npos; at = list.find(", ", at + 2)) ++shown;
+    EXPECT_GT(shown, 5);
+    EXPECT_LT(shown, 102);
+    EXPECT_EQ(shown + LeftOutCount(line), 102) << line;
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ATreeWithManyNodesIsCutAndTheLeftOutCountIsLogged) {
+    // Within three levels the tool has FirstPerson, Rod, Guide, Tip and 100 more children of the root: 104 nodes.
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraNodes = 100 }"));
+
+    RunCommand();
+
+    const auto lines = Probe();
+    const int shown = CountLinesStartingWith(lines, "node otherModRoot/");
+    EXPECT_GT(shown, 3);
+    EXPECT_LT(shown, 104);
+    const int leftOut = LeftOutCount(LineWith(lines, { "node tree: ", "more nodes left out" }));
+    EXPECT_GT(leftOut, 0) << Joined(lines);
+    EXPECT_EQ(shown + leftOut, 104);
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ARunIsCappedInLinesTheMostUsefulLinesSurviveAndTheLeftOutCountIsLogged) {
+    // 15 more specializations of 20 fields each (under the cap of a table): 300 field lines on top of the rest.
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraSpecTables = 15 }"));
+
+    RunCommand();
+
+    const auto lines = Probe();
+    const std::string leftOutLine = LineWith(lines, { "more lines left out" });
+    const int leftOut = LeftOutCount(leftOutLine);
+    EXPECT_GT(leftOut, 0) << "the cut is said";
+    const int shown = static_cast<int>(lines.size()) - 1;  // the last line is the left-out line itself
+    EXPECT_EQ(lines.back(), leftOutLine) << "and it is the last line";
+    EXPECT_LT(shown, 300);
+    EXPECT_GE(shown + leftOut, 300) << "what is shown and what is left out are at least the fields of the 15 tables";
+    EXPECT_FALSE(LineWith(lines, { "config file" }).empty()) << "the first lines survive";
+    EXPECT_FALSE(LineWith(lines, { "class OtherModHandTool" }).empty());
+    EXPECT_FALSE(LineWith(lines, { "action event ACTIVATE_HANDTOOL" }).empty());
+    EXPECT_FALSE(LineWith(lines, { "placement:" }).empty());
+}

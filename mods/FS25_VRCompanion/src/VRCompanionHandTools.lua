@@ -1046,7 +1046,13 @@ local function unsupportedHeldTool(self)
     return tool
 end
 
-local PROBE_STRING_LENGTH = 30   -- a longer string is cut
+-- The caps. Each cut says how much was left out.
+local PROBE_STRING_LENGTH = 30       -- a longer string is cut
+local PROBE_MAX_LINES = 200          -- lines per run (the line that says how many were left out is one more)
+local PROBE_MAX_SPEC_FIELDS = 30     -- fields shown per spec table
+local PROBE_MAX_FUNCTION_NAMES = 40  -- function names shown per class or type
+local PROBE_MAX_NODES = 40           -- nodes shown in the tree
+local PROBE_NODE_DEPTH = 3           -- levels of nodes below the root that are named
 
 -- The keys of a table in a fixed order (a log from one run reads like the next).
 local function sortedKeys(t)
@@ -1091,7 +1097,12 @@ local function describeSpecTables(tool, add)
     for _, specName in ipairs(specNames) do
         local ok, err = pcall(function()
             local spec = tool[specName]
-            for _, key in ipairs(sortedKeys(spec)) do
+            local keys = sortedKeys(spec)
+            for index, key in ipairs(keys) do
+                if index > PROBE_MAX_SPEC_FIELDS then
+                    add(string.format("%s: %d more fields left out", specName, #keys - PROBE_MAX_SPEC_FIELDS))
+                    break
+                end
                 local fieldOk, text = pcall(function()
                     local value = spec[key]
                     local shown = shortValue(value)
@@ -1104,14 +1115,18 @@ local function describeSpecTables(tool, add)
     end
 end
 
--- The names of the functions in a table, sorted, as one text ("none" for no function).
+-- The names of the functions in a table, sorted, as one text ("none" for no function); the names past the cap are counted.
 local function functionNames(t)
     local names = {}
     for key, value in pairs(t) do
         if type(value) == "function" then names[#names + 1] = tostring(key) end
     end
     table.sort(names)
-    return #names > 0 and table.concat(names, ", ") or "none"
+    if #names == 0 then return "none" end
+    if #names <= PROBE_MAX_FUNCTION_NAMES then return table.concat(names, ", ") end
+    local shown = {}
+    for index = 1, PROBE_MAX_FUNCTION_NAMES do shown[index] = names[index] end
+    return string.format("%s (and %d more left out)", table.concat(shown, ", "), #names - PROBE_MAX_FUNCTION_NAMES)
 end
 
 -- The name a global table is kept under, or nil.
@@ -1222,10 +1237,8 @@ local function describeActionEvents(tool, add)
     for _, line in ipairs(lines) do add(line) end
 end
 
-local PROBE_NODE_DEPTH = 3   -- levels of nodes below the root that are named
-
--- The node tree below the tool's root, by name (the path from the root), to a fixed depth. A node at the last level says how many
--- children it has that are not listed.
+-- The node tree below the tool's root, by name (the path from the root), to a fixed depth and a fixed number of nodes. A node at
+-- the last level says how many children it has that are not listed; the nodes past the cap are counted.
 local function describeNodes(tool, add)
     local root = tool.rootNode
     local getName, getNumOfChildren, getChildAt = engine("getName"), engine("getNumOfChildren"), engine("getChildAt")
@@ -1233,19 +1246,24 @@ local function describeNodes(tool, add)
         add("node tree: the tool has no root node to read")
         return
     end
-    local function walk(node, path, depth)
+    local shown, leftOut = 0, 0
+    local function walk(node, path, depth)  -- depth: the levels of `node` below the root
         local count = getNumOfChildren(node)
-        if depth == PROBE_NODE_DEPTH then
-            return count
-        end
         for index = 0, count - 1 do
             local child = getChildAt(node, index)
             local childPath = path .. "/" .. tostring(getName(child))
-            local notListed = walk(child, childPath, depth + 1)
-            add("node " .. childPath .. ((notListed ~= nil and notListed > 0) and string.format(" (%d child%s not listed)", notListed, notListed == 1 and "" or "ren") or ""))
+            local notListed = (depth + 1 == PROBE_NODE_DEPTH) and getNumOfChildren(child) or 0
+            if shown < PROBE_MAX_NODES then
+                shown = shown + 1
+                add("node " .. childPath .. (notListed > 0 and string.format(" (%d child%s not listed)", notListed, notListed == 1 and "" or "ren") or ""))
+            else
+                leftOut = leftOut + 1
+            end
+            if depth + 1 < PROBE_NODE_DEPTH then walk(child, childPath, depth + 1) end
         end
     end
     walk(root, tostring(getName(root)), 0)
+    if leftOut > 0 then add(string.format("node tree: %d more nodes left out", leftOut)) end
 end
 
 -- Whether the game's last placement of the tool was HandTool:attachToolToCamera (it links the tool to the camera when the player
@@ -1268,17 +1286,21 @@ local function guarded(what, part, tool, add)
     if not ok then add(what .. " could not be read (" .. tostring(err) .. ")") end
 end
 
--- The lines that describe the tool, without the tags.
+-- The lines that describe the tool, without the tags, at most PROBE_MAX_LINES and a last line that counts the rest. The parts that
+-- are short and tell most come first; the spec tables, which have no limit of their own, come last and are what a cut takes.
 local function describeUnsupportedTool(tool)
-    local lines = {}
-    local function add(line) lines[#lines + 1] = line end
+    local lines, leftOut = {}, 0
+    local function add(line)
+        if #lines < PROBE_MAX_LINES then lines[#lines + 1] = line else leftOut = leftOut + 1 end
+    end
     guarded("config file", function(t) add("config file: " .. tostring(t.configFileName)) end, tool, add)
-    guarded("spec tables", describeSpecTables, tool, add)
+    guarded("placement", describePlacement, tool, add)
     guarded("specializations", describeSpecializationClasses, tool, add)
     guarded("type", describeTypeFunctions, tool, add)
     guarded("action events", describeActionEvents, tool, add)
-    guarded("placement", describePlacement, tool, add)
     guarded("node tree", describeNodes, tool, add)
+    guarded("spec tables", describeSpecTables, tool, add)
+    if leftOut > 0 then lines[#lines + 1] = string.format("%d more lines left out", leftOut) end
     return lines
 end
 
