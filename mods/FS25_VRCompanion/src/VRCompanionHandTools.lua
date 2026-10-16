@@ -1102,12 +1102,62 @@ local function describeSpecTables(tool, add)
     end
 end
 
+-- The names of the functions in a table, sorted, as one text ("none" for no function).
+local function functionNames(t)
+    local names = {}
+    for key, value in pairs(t) do
+        if type(value) == "function" then names[#names + 1] = tostring(key) end
+    end
+    table.sort(names)
+    return #names > 0 and table.concat(names, ", ") or "none"
+end
+
+-- The name a global table is kept under, or nil.
+local function globalNameOf(value)
+    for name, candidate in pairs(_G) do
+        if candidate == value and type(name) == "string" then return name end
+    end
+    return nil
+end
+
+-- Each specialization of the tool: its class (the game keeps it next to the specialization's name) with the global name it has,
+-- and the functions on it, where handlers kept on the class only (the chainsaw's, the horse brush's) are.
+local function describeSpecializationClasses(tool, add)
+    local names, classes = tool.specializationNames, tool.specializations
+    if type(names) ~= "table" or type(classes) ~= "table" then return end
+    for index, specName in ipairs(names) do
+        local class = classes[index]
+        if type(class) == "table" then
+            local ok, err = pcall(function()
+                add(string.format("specialization %s: class %s, functions: %s", tostring(specName),
+                    globalNameOf(class) or "(no global name)", functionNames(class)))
+            end)
+            if not ok then add(string.format("specialization %s: class could not be read (%s)", tostring(specName), tostring(err))) end
+        end
+    end
+end
+
+-- The functions the tool's type gives it.
+local function describeTypeFunctions(tool, add)
+    local toolType = tool.type
+    if type(toolType) ~= "table" or type(toolType.functions) ~= "table" then return end
+    add(string.format("type %s: functions: %s", tostring(toolType.name or tool.typeName), functionNames(toolType.functions)))
+end
+
+-- Runs one part of the description; a failure becomes a line, and the other parts go on.
+local function guarded(what, part, tool, add)
+    local ok, err = pcall(part, tool, add)
+    if not ok then add(what .. " could not be read (" .. tostring(err) .. ")") end
+end
+
 -- The lines that describe the tool, without the tags.
 local function describeUnsupportedTool(tool)
     local lines = {}
     local function add(line) lines[#lines + 1] = line end
-    add("config file: " .. tostring(tool.configFileName))
-    describeSpecTables(tool, add)
+    guarded("config file", function(t) add("config file: " .. tostring(t.configFileName)) end, tool, add)
+    guarded("spec tables", describeSpecTables, tool, add)
+    guarded("specializations", describeSpecializationClasses, tool, add)
+    guarded("type", describeTypeFunctions, tool, add)
     return lines
 end
 

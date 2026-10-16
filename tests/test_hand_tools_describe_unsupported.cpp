@@ -97,3 +97,26 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, EverySpecTableIsLoggedOne
     const std::string node = LineWith(lines, { "spec_otherModTool.bobberNode (number)" });
     EXPECT_NE(node.find("\"otherModBobber\""), std::string::npos) << "a node is named: " << node;
 }
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, EachSpecializationsGlobalClassIsLoggedWithItsFunctionNamesHandlersKeptOnTheClassOnlyIncluded) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+
+    RunCommand();
+
+    const auto lines = Probe();
+    const std::string line = LineWith(lines, { "class OtherModHandTool", "otherModTool" });
+    EXPECT_NE(line.find("onUseAction"), std::string::npos) << "the use handler is on the class only: " << Joined(lines);
+    EXPECT_NE(line.find("onRollAction"), std::string::npos) << Joined(lines);
+    EXPECT_EQ(LineWith(lines, { "spec_otherModLine", "class" }), "") << "a spec table without a class has no class line: " << Joined(lines);
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheFunctionsOnTheToolsTypeAreLogged) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+
+    RunCommand();
+
+    const auto lines = Probe();
+    const std::string line = LineWith(lines, { "type otherModTool", "functions" });
+    EXPECT_NE(line.find("getFloatDepth"), std::string::npos) << Joined(lines);
+    EXPECT_NE(line.find("isOtherModReeling"), std::string::npos) << Joined(lines);
+}
