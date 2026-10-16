@@ -24,6 +24,7 @@
 --   * The look ray          the tool's pointing ray and the Player:getLookRay wrap (HAND_TOOL_POINTING_AXES)
 --   * The chainsaw          the cut plane and the model aligned from the bar, not the camera (wrap of HandToolChainsaw.onUpdate)
 --   * The flashlight's beam the light node placed from the flashlight's lens (the HandToolFlashlight:onUpdate wrap)
+--   * Haptics              the Tool Hand buzzes while the chainsaw runs or cuts and the lance sprays (HAND_TOOL_HAPTICS)
 --   * Update               the per-update step
 --   * Diagnostics, console commands, reset
 --
@@ -52,6 +53,9 @@
 --                                                       unless "idle"); nil when the tool (default: the one held) is no chainsaw
 --   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the seam for the wrist's roll (ticket #115): asked before each update that is
 --                                                       not cutting; nil leaves the roll to the game's roll action
+--   VRCompanion.HAND_TOOL_HAPTICS                       per tool kind: what the Tool Hand feels now (a key of HAND_TOOL_HAPTIC_PULSES, or nil);
+--                                                       a kind with no entry (the flashlight) is silent
+--   VRCompanion.HAND_TOOL_HAPTIC_PULSES / _INTERVAL_MS  the pulses (ms, strength) and how often they are requested again
 --   VRCompanion:updateHandTools(dt)                     once per update, called by updateMotionControllers on every path
 --   VRCompanion:setHandToolsEnabled(enabled, save)
 --   VRCompanion:saveHandToolsSetting(xmlFile, xml) / loadHandToolsSetting(xmlFile, xml)   settings chain
@@ -96,6 +100,11 @@ local function newState()
         chainsaw = {         -- the chainsaw's cut plane (see "The chainsaw")
             tool = nil,      -- the chainsaw it is of
             yaw = nil,       -- the heading of the plane: the bar's, locked while a cut is made
+        },
+        haptics = {          -- the Tool Hand's buzz (see "Haptics")
+            level = nil,     -- what is being felt now: a key of HAND_TOOL_HAPTIC_PULSES, nil for nothing
+            hand = nil,      -- ... on which hand
+            sinceMs = 0,     -- game milliseconds since the last pulse was requested
         },
         problem = nil,       -- why Hand Tools gave up, once it did (the warning is logged then and never again)
     }
@@ -736,6 +745,62 @@ WRAP_SPECS.flashlightBeam.make = function(original)
     end
 end
 
+-- ---- Haptics (ticket #116) --------------------------------------------------------------------------------------------------
+-- The Tool Hand buzzes while its tool works, through VRCompanion:pulseHand (VRBridge.pulseHaptic): a light buzz while the
+-- chainsaw's motor revs (delimbing: the trigger is held without a cut), a stronger one while it cuts, a steady one while the
+-- lance sprays, and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
+-- while the tool is in it (toolHandFor: the feature on, Motion Controllers on, the hand tracked), so an untracked or set-down
+-- Tool Hand, `vrHandTools off` and a tool put away all end the buzz. A pulse is one burst, so the buzz is a pulse requested again
+-- every HAND_TOOL_HAPTIC_INTERVAL_MS (and at once when what is felt changes), each lasting a little longer than that so the hand
+-- never goes quiet in between. The Companion Mod's pulses win on a hand over the game's rumble (ADR-0028): that rule is the
+-- Injector's and applies to these pulses like to every other.
+
+-- What is felt: milliseconds a pulse lasts and its strength (0..1).
+VRCompanion.HAND_TOOL_HAPTIC_PULSES = {
+    revving = { ms = 70, strength = 0.2 },   -- the chainsaw's motor
+    cutting = { ms = 70, strength = 0.6 },   -- the chainsaw cutting
+    spraying = { ms = 70, strength = 0.35 }, -- the lance's pressure
+}
+VRCompanion.HAND_TOOL_HAPTIC_INTERVAL_MS = 50
+
+-- What each supported tool makes felt now: function(self, tool) -> a key of HAND_TOOL_HAPTIC_PULSES, or nil. A kind with no entry
+-- (the flashlight) is silent. The lance sprays while its own flag is set (HandToolHPWLance's spec.isActivated).
+VRCompanion.HAND_TOOL_HAPTICS = {
+    chainsaw = function(self, tool)
+        local cutState = self:getChainsawCutState(tool)
+        if cutState == "cutting" then return "cutting" end
+        if cutState == "delimbing" then return "revving" end
+        return nil
+    end,
+    lance = function(self, tool)
+        local spec = tool.spec_highPressureWasherLance
+        return (spec ~= nil and spec.isActivated == true) and "spraying" or nil
+    end,
+}
+
+local function updateHaptics(self, dt)
+    local haptics = state.haptics
+    local tool = heldTool()
+    local hand = tool ~= nil and toolHandFor(self, tool) or nil
+    local kind = hand ~= nil and supportedKind(tool) or nil
+    local felt = kind ~= nil and self.HAND_TOOL_HAPTICS[kind] or nil
+    local level = nil
+    if felt ~= nil then
+        local ok, answer = pcall(felt, self, tool)
+        if ok then level = answer end
+    end
+    local pulse = level ~= nil and self.HAND_TOOL_HAPTIC_PULSES[level] or nil
+    if pulse == nil then
+        haptics.level, haptics.hand, haptics.sinceMs = nil, nil, 0
+        return
+    end
+    haptics.sinceMs = haptics.sinceMs + (tonumber(dt) or 0)
+    if haptics.level ~= level or haptics.hand ~= hand or haptics.sinceMs >= self.HAND_TOOL_HAPTIC_INTERVAL_MS then
+        haptics.level, haptics.hand, haptics.sinceMs = level, hand, 0
+        self:pulseHand(hand, pulse.ms, pulse.strength)
+    end
+end
+
 -- ---- Update -------------------------------------------------------------------------------------------------------------
 
 -- Brings the held tool to where it belongs now: into the Tool Hand, or back where the game puts it. Cheap when nothing changed.
@@ -761,6 +826,7 @@ end
 function VRCompanion:updateHandTools(dt)
     syncPlacement(self)
     updateTrigger(self)
+    updateHaptics(self, dt)  -- last: the trigger use above is what starts a cut or a spray
 end
 
 -- ---- Settings command, diagnostics, console commands, reset ---------------------------------------------------------------
@@ -862,6 +928,8 @@ local function diagnosticFields(self)
         lookRayWrapText,
         beamWrapText,
     }
+    -- Haptics (ticket #116)
+    table.insert(fields, "haptics: " .. tostring(state.haptics.level or "none"))
     -- Chainsaw (ticket #114)
     if kind == "chainsaw" then
         table.insert(fields, string.format("chainsaw: %s, cut plane heading from the %s", tostring(self:getChainsawCutState(tool)),
