@@ -244,6 +244,19 @@ inline std::string HorseBrushStubs(const char* handler = "ok", const char* looku
 inline constexpr const char* kHoldHorseBrush = "_G.brush = StubHandTool.horseBrush(foot.player); StubHandTool.hold(brush)";
 inline void HoldHorseBrush(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldHorseBrush, "=holdHorseBrush"), 0); }
 
+// ---- fishing rod (ADR-0031) ---------------------------------------------------------------------------------------
+// The Highlands Fishing DLC's rod (kStubHandToolFishingRod, shaped after the #125 probe dump) is not part of every test's game: a
+// test that wants the DLC passes FishingRodStubs() as StartOptions::extraStubs (concatenated after the other tools' chunks, if
+// any). A game without the DLC simply leaves it out. variant is how the class's ACTIVATE_HANDTOOL handler (onActivateAction) is:
+// "ok", "missing", "reshaped".
+inline std::string FishingRodStubs(const char* variant = "ok") {
+    return std::string(kStubHandToolFishingRod) + "\nStubHandTool.installFishingRod('" + variant + "')\n";
+}
+
+// The player takes the fishing rod in hand: _G.rod.
+inline constexpr const char* kHoldFishingRod = "_G.rod = StubHandTool.fishingRod(foot.player); StubHandTool.hold(rod)";
+inline void HoldFishingRod(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldFishingRod, "=holdFishingRod"), 0); }
+
 }  // namespace hand_tools_test
 
 // A test file whose game frame has more in it defines this to a Lua chunk before including the header.

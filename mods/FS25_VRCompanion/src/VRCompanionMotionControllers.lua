@@ -104,8 +104,9 @@
 --                 loadHandToolsSetting), the console commands register next to the others and resetMotionControllers ->
 --                 resetHandTools() before the Virtual Hands go (VRCompanionHandTools.lua, ADR-0029). The Tool Hand holding a
 --                 supported Hand Tool (isHandHoldingHandTool) is never a Pointer Hand candidate in the world, as a hand on the
---                 Steering Wheel is not; in a menu either hand can. While its trigger uses the tool (isHandToolTriggerDown) the
---                 Tool Hand stays in use however still it is held, so a held-still cut or spray does not drop the tool.
+--                 Steering Wheel is not; in a menu either hand can. While its Hand Tool keeps it in use
+--                 (isHandKeptInUseByHandTool) the Tool Hand stays in use however still it is held, so a held-still cut or spray
+--                 does not drop the tool.
 --     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
 --                 setting rides on save/loadMotionControllerSettings, the status command ends with the pad's state and
 --                 the console command registers next to the others (VRCompanionVirtualGamepad.lua, ADR-0028)
@@ -467,10 +468,10 @@ function VRCompanion:updateMotionControllers(dt)
     -- Wheel Grab decides which hands hold the Steering Wheel from the hands just polled (VRCompanionWheelGrab.lua).
     if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end
     -- A hand holding the Steering Wheel stays in use (it keeps its Virtual Hand), however still it is held. So does the Tool
-    -- Hand while its trigger is using the Hand Tool: a cut or a spray held with a still hand must not drop the tool.
+    -- Hand while its Hand Tool keeps it in use (Hand Tools says when): a cut or a spray held with a still hand must not drop the tool.
     for _, hand in ipairs(HANDS) do
         if isHoldingSteeringWheel(self, hand)
-            or (type(self.isHandToolTriggerDown) == "function" and self:isHandToolTriggerDown(hand) == true) then
+            or (type(self.isHandKeptInUseByHandTool) == "function" and self:isHandKeptInUseByHandTool(hand) == true) then
             state.inUse[hand] = true
             if now ~= nil then state.motion[hand].lastMovedMs = now end
         end
