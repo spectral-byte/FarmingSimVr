@@ -825,6 +825,14 @@ end
 -- warning). Every read is guarded all the same: a field that does not read as expected later, or a read that raises, makes the
 -- state "unknown", which keeps nothing in use and buzzes nothing.
 
+-- The tool (default: the Hand Tool held now) and its SUPPORTED_TOOLS entry when it is a fishing rod; nil otherwise.
+local function fishingRodOf(tool)
+    if tool == nil then tool = heldTool() end
+    local kind, entry = supportedKind(tool)
+    if kind ~= FISHING_ROD_KIND then return nil end
+    return tool, entry
+end
+
 -- The key each recognisable state carries, tried in this order: the first one spec.state has names the state.
 local FISHING_ROD_STATE_KEYS = {
     { key = "angleScale", state = "charging" },
@@ -859,10 +867,9 @@ end
 -- "caught" | "unknown" (the rod's spec cannot be read, or tells no state), then whether its line is out (false when unknown) and its bend factor (0
 -- when unknown). nil when the tool (default: the Hand Tool the local player holds) is no fishing rod.
 function VRCompanion:getFishingRodState(tool)
-    if tool == nil then tool = heldTool() end
-    local kind, entry = supportedKind(tool)
-    if kind ~= FISHING_ROD_KIND then return nil end
-    local ok, rodState, lineOut, bend = pcall(readFishingRod, tool, entry.spec)
+    local rod, entry = fishingRodOf(tool)
+    if rod == nil then return nil end
+    local ok, rodState, lineOut, bend = pcall(readFishingRod, rod, entry.spec)
     if not ok or rodState == nil then return "unknown", false, 0 end
     return rodState, lineOut, bend
 end
@@ -955,29 +962,32 @@ local function liftRodEventWraps()
     rodEventWraps = setmetatable({}, { __mode = "k" })
 end
 
+-- Three of the values fn(...) answers, from the `first` on, as { a, b, c }; nil when fn is no function, the call raises or they
+-- are not all numbers.
+local function threeNumbersFrom(first, fn, ...)
+    if type(fn) ~= "function" then return nil end
+    local answer = { pcall(fn, ...) }
+    if not answer[1] then return nil end
+    local a, b, c = answer[first + 1], answer[first + 2], answer[first + 3]
+    if type(a) ~= "number" or type(b) ~= "number" or type(c) ~= "number" then return nil end
+    return { a, b, c }
+end
+
 -- The way the head looks: the game's own Player:getLookRay (the wrap's original: the wrap answers the tool's ray). nil when unknown.
 local function headDirection(player)
     local wrap = wraps.getLookRay
-    local read = wrap ~= nil and wrap.original or player.getLookRay
-    if type(read) ~= "function" then return nil end
-    local ok, _, _, _, dx, dy, dz = pcall(read, player)
-    if not ok or type(dx) ~= "number" or type(dy) ~= "number" or type(dz) ~= "number" then return nil end
-    return { dx, dy, dz }
+    return threeNumbersFrom(4, wrap ~= nil and wrap.original or player.getLookRay, player)
 end
 
 -- Where the rod's bobber is, or nil when that cannot be read.
 local function bobberPosition(tool)
-    if type(tool.getBobberPosition) ~= "function" then return nil end
-    local ok, x, y, z = pcall(tool.getBobberPosition, tool)
-    if not ok or type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then return nil end
-    return { x, y, z }
+    return threeNumbersFrom(1, tool.getBobberPosition, tool)
 end
 
 -- The rod the local player holds in the Tool Hand now, or nil.
 local function fishingRodInTheHand(self)
-    local tool = heldTool()
-    if tool == nil or supportedKind(tool) ~= FISHING_ROD_KIND then return nil end
-    if toolHandFor(self, tool) == nil then return nil end
+    local tool = fishingRodOf()
+    if tool == nil or toolHandFor(self, tool) == nil then return nil end
     return tool
 end
 
@@ -991,19 +1001,19 @@ local BOBBER_AT_REST_SPEED = 1.0
 local function watchFishingRod(self, dt)
     local inTheHand = fishingRodInTheHand(self)
     if inTheHand ~= nil then pcall(wrapRodSecondaryEvent, inTheHand) else liftRodEventWraps() end
-    local seen = state.fishingRod
-    local tool = heldTool()
+    local rodNotes = state.fishingRod
+    local tool = fishingRodOf()
     local player = tool ~= nil and localCarryingPlayer(tool) or nil
-    if player == nil or supportedKind(tool) ~= FISHING_ROD_KIND then
-        seen.tool, seen.state = nil, nil
+    if player == nil then
+        rodNotes.tool, rodNotes.state = nil, nil
         return
     end
     local rodState = self:getFishingRodState(tool)
-    if seen.tool == tool and seen.state == "charging" and rodState ~= "charging" then
+    if rodNotes.tool == tool and rodNotes.state == "charging" and rodState ~= "charging" then
         local _, _, _, dx, dy, dz = self:getHandToolRay(player)
-        seen.cast = { tool = tool, rod = dx ~= nil and { dx, dy, dz } or nil, head = headDirection(player) }
+        rodNotes.cast = { tool = tool, rod = dx ~= nil and { dx, dy, dz } or nil, head = headDirection(player) }
     end
-    local cast = seen.cast
+    local cast = rodNotes.cast
     if cast ~= nil and cast.tool == tool and rodState == "waiting" and cast.bobber == nil then
         local position = bobberPosition(tool)
         local last, seconds = cast.bobberLast, (tonumber(dt) or 0) / 1000
@@ -1015,11 +1025,12 @@ local function watchFishingRod(self, dt)
         end
         cast.bobberLast = position
     end
-    seen.tool, seen.state = tool, rodState
+    rodNotes.tool, rodNotes.state = tool, rodState
 end
 
-local function tripleText(label, t)
-    return string.format("%s (%.2f, %.2f, %.2f)", label, t[1], t[2], t[3])
+-- A direction or a position with its label, as the log reads it: "label (x, y, z)".
+local function vectorText(label, vector)
+    return string.format("%s (%.2f, %.2f, %.2f)", label, vector[1], vector[2], vector[3])
 end
 
 -- The last cast of the rod, as one text.
@@ -1027,9 +1038,9 @@ local function lastCastText(tool)
     local cast = state.fishingRod.cast
     if cast == nil or cast.tool ~= tool then return "none yet" end
     return table.concat({
-        cast.rod ~= nil and tripleText("rod direction", cast.rod) or "rod direction: none (the rod was not in the Tool Hand)",
-        cast.head ~= nil and tripleText("head direction", cast.head) or "head direction: unknown",
-        cast.bobber ~= nil and tripleText("bobber at", cast.bobber)
+        cast.rod ~= nil and vectorText("rod direction", cast.rod) or "rod direction: none (the rod was not in the Tool Hand)",
+        cast.head ~= nil and vectorText("head direction", cast.head) or "head direction: unknown",
+        cast.bobber ~= nil and vectorText("bobber at", cast.bobber)
             or "bobber: not landed (not seen at rest while the line was out waiting for a bite)",
     }, ", ")
 end
@@ -1440,10 +1451,10 @@ local function updateHaptics(self, dt)
     local tool = heldTool()
     local hand = tool ~= nil and toolHandFor(self, tool) or nil
     local kind = hand ~= nil and supportedKind(tool) or nil
-    local felt = kind ~= nil and self.HAND_TOOL_HAPTICS[kind] or nil
+    local levelOf = kind ~= nil and self.HAND_TOOL_HAPTICS[kind] or nil  -- what the tool makes felt now
     local level, strength = nil, nil
-    if felt ~= nil then
-        local ok, answer, answeredStrength = pcall(felt, self, tool)
+    if levelOf ~= nil then
+        local ok, answer, answeredStrength = pcall(levelOf, self, tool)
         if ok then level, strength = answer, tonumber(answeredStrength) end
     end
     local pulse = level ~= nil and self.HAND_TOOL_HAPTIC_PULSES[level] or nil
