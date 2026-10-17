@@ -210,7 +210,7 @@ inline void HoldOtherModTool(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldOthe
 
 // ---- chainsaw -----------------------------------------------------------------------------------------------
 // The chainsaw's game-side stub (kStubHandToolChainsaw) is not part of every test's game: a test that wants it passes
-// ChainsawStubs(variant) as StartOptions::extraStubs. variant is how HandToolChainsaw.onUpdate is: "ok", "missing", "reshaped".
+// ChainsawStubs(variant) as StartOptions::extraStubs. variant is how HandToolChainsaw is: "ok", "missing", "reshaped" (onUpdate), "drawMissing", "drawReshaped" (onDraw), ...
 inline std::string ChainsawStubs(const char* variant = "ok") {
     return std::string(kStubHandToolChainsaw) + "\nStubHandTool.installChainsaw('" + variant + "')\n";
 }
@@ -222,8 +222,9 @@ inline void HoldChainsaw(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldChainsaw
 // ---- spray can (ADR-0030) -----------------------------------------------------------------------------------------
 // The spray can's game-side stub (kStubHandToolSprayCan) is not part of every test's game: a test that wants it passes
 // SprayCanStubs() as StartOptions::extraStubs (after kXmlStubs, if it uses both: concatenate).
-inline std::string SprayCanStubs() {
-    return std::string(kStubHandToolSprayCan) + "\nStubHandTool.installSprayCan()\n";
+// variant is how HandToolSprayCan.onDraw is: "ok", "missing", "reshaped".
+inline std::string SprayCanStubs(const char* variant = "ok") {
+    return std::string(kStubHandToolSprayCan) + "\nStubHandTool.installSprayCan('" + variant + "')\n";
 }
 
 // The player takes the spray can in hand: _G.can.

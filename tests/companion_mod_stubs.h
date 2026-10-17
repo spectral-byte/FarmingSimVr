@@ -1254,6 +1254,11 @@ inline constexpr const char* kStubInputBinding = R"luau(
 //   the carrying player, attachTool) and puts it away (detachTool, not held)
 // StubHandTool.pressUseBinding(tool, inputValue)   the game's own binding (X on a pad, the mouse, the keyboard) calling the
 //   tool's use handler with inputValue (1 pressed or held, 0 released)
+// StubHandTool.draw()   one frame of the game's draw: every held tool draws what it draws (the spray can's and the chainsaw's
+//   onDraw are in their own chunks; another mod's tool draws "otherModGauge")
+// StubHandTool.rendering(tool) -> text   what the tool rendered in the last draw, in order, joined by "+" ("" for nothing)
+// StubHandTool.drawers   a list of function(tool) the draw runs for each held tool: a tool type's own onDraw goes in here;
+//   StubHandTool.render(tool, overlay) records one thing rendered
 // StubHandTool.useCalls   every call of a tool's use handler, in order, as { tool = <name>, value = <inputValue>, self = tool }
 // StubHandTool.cameraAttaches   how many times the game's own attachToolToCamera ran (whatever placed the tool then)
 // StubHandTool.CAMERA_PLACEMENT   { x, y, z } where the game puts a tool's root below the pitch node (a tool placed the
@@ -1265,7 +1270,7 @@ inline constexpr const char* kStubInputBinding = R"luau(
 //     origin, spec table `specName`, the HandTool methods through the class; a tool type adds its own nodes and handlers
 //   (the flashlight and the chainsaw add StubHandTool.flashlight / chainsaw, in their own chunks)
 inline constexpr const char* kStubHandTool = R"luau(
-    StubHandTool = { useCalls = {}, rays = {}, tools = {}, updaters = {}, cameraAttaches = 0 }
+    StubHandTool = { useCalls = {}, rays = {}, tools = {}, updaters = {}, drawers = {}, rendered = {}, cameraAttaches = 0 }
     StubHandTool.CAMERA_PLACEMENT = { x = 0.2, y = -0.15, z = 0.5 }
     local nodes = StubScene.nodes
 
@@ -1390,6 +1395,27 @@ inline constexpr const char* kStubHandTool = R"luau(
         local ray = StubHandTool.rays[#StubHandTool.rays]
         if ray == nil then return nil end
         return table.unpack(ray)
+    end
+
+    -- One frame of the game's draw: StubHandTool.rendered is emptied, then every held tool draws (each registered drawer, in
+    -- StubHandTool.drawers, runs function(tool) for the tools of its kind, reading the class's onDraw at that moment, like the
+    -- game's event dispatch). A tool's onDraw records what it rendered with StubHandTool.render(tool, overlay).
+    function StubHandTool.render(tool, overlay) table.insert(StubHandTool.rendered, { tool = tool, overlay = overlay }) end
+    function StubHandTool.draw()
+        StubHandTool.rendered = {}
+        for _, tool in ipairs(StubHandTool.tools) do
+            if tool.isHeld and tool.carryingPlayer ~= nil then
+                for _, drawer in ipairs(StubHandTool.drawers) do drawer(tool) end
+            end
+        end
+    end
+    -- what the tool rendered in the last StubHandTool.draw(), in order, as one text ("" for nothing): "markerTypeIcon+treeIcon"
+    function StubHandTool.rendering(tool)
+        local names = {}
+        for _, entry in ipairs(StubHandTool.rendered) do
+            if entry.tool == tool then table.insert(names, entry.overlay) end
+        end
+        return table.concat(names, "+")
     end
 
     -- ---- the common tool ----------------------------------------------------------------------------------------
@@ -1562,6 +1588,8 @@ inline constexpr const char* kStubHandTool = R"luau(
         }
         tool.type = { name = "otherModTool", functions = typeFunctions }
         for name, fn in pairs(typeFunctions) do tool[name] = fn end
+        -- its own overlay, drawn by the game's draw (StubHandTool.draw) and never wrapped by anything of the Companion Mod
+        tool.drawOverlay = function(self) StubHandTool.render(self, "otherModGauge") end
         -- the nodes below the root
         local rod = StubScene.newNode("otherModRod", tool.rootNode, 0, 0, 0.2)
         local guide = StubScene.newNode("otherModGuide", rod, 0, 0, 0.3)
@@ -1597,6 +1625,10 @@ inline constexpr const char* kStubHandTool = R"luau(
         end
         return tool
     end
+
+    table.insert(StubHandTool.drawers, function(tool)
+        if tool.spec_otherModTool ~= nil then tool:drawOverlay() end
+    end)
 
     -- ---- The chainsaw and the look ray: their own chunks add StubHandTool.chainsaw / ... with
     -- StubHandTool.makeTool and StubHandTool.updaters; nothing above changes. The flashlight is kStubHandToolFlashlight.
@@ -1747,12 +1779,16 @@ inline constexpr const char* kStubHandToolFlashlight = R"luau(
 //   variant   how HandToolChainsaw.onUpdate is in this "game version": nil / "ok", "missing" (a game update renamed it to
 //             onUpdateTick, which the event dispatch calls instead) or "reshaped" (it takes no parameters, and updates the
 //             chainsaw being held), or "rollMissing" / "rollReshaped" (the roll action's handler,
-//             HandToolChainsaw.onRollAction, is gone / takes no parameters; onUpdate is as "ok")
+//             HandToolChainsaw.onRollAction, is gone / takes no parameters; onUpdate is as "ok"), or "drawMissing" /
+//             "drawReshaped" (the draw event, HandToolChainsaw.onDraw, is gone: a game update renamed it to onDrawOverlays,
+//             which the draw calls instead / takes no parameters and draws the chainsaw being held; onUpdate is as "ok")
 // The game keeps the chainsaw's handlers on the specialization class and its event dispatch calls them as
 // Class.handler(tool, ...) (SpecializationUtil.raiseEvent: spec[eventName](object, ...)). So they are here:
 //   HandToolChainsaw.onUpdate(tool, dt)       the chainsaw's update (run each tick by StubHandTool.tick): targets the tree the
 //                                             targeter found, aligns the split plane (updateSplitPlane), turns the model to
 //                                             face the camera, validates the cut, shows the ring marker, advances a cut
+//   HandToolChainsaw.onDraw(tool)             the chainsaw's draw (StubHandTool.draw): renders "crosshair", the game's default one at
+//                                             the centre of the view, while the saw is idle
 //   HandToolChainsaw.onCutAction(tool, _, v)  the ACTIVATE_HANDTOOL handler (v > 0 starts a cut on the targeted tree, or
 //                                             delimbing without one; v = 0 stops); recorded in StubHandTool.useCalls
 //   HandToolChainsaw.onRollAction(tool, _, d) the AXIS_ROTATE_HANDTOOL handler (rollInput += d, applied by the next update
@@ -2144,6 +2180,24 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
             end
         end)
 
+        -- the draw: the default crosshair at the centre of the view while the saw is idle
+        local function draw(self)
+            if self.spec_chainsaw.currentCutState == State.IDLE then StubHandTool.render(self, "crosshair") end
+        end
+        if variant == "drawMissing" then
+            Class.onDrawOverlays = draw
+        elseif variant == "drawReshaped" then
+            Class.onDraw = function() draw(StubHandTool.heldTool) end
+        else
+            Class.onDraw = draw
+        end
+        table.insert(StubHandTool.drawers, function(tool)
+            if tool.spec_chainsaw ~= nil then
+                local handler = variant == "drawMissing" and Class.onDrawOverlays or Class.onDraw
+                handler(tool)
+            end
+        end)
+
         StubHandTool.chainsawFunctions = functions
     end
 
@@ -2192,9 +2246,9 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
 // ---- Hand Tools: the spray can (ADR-0030) --------------------------------------------------------------
 // The spray can for StubHandTool, shaped after the game's HandToolSprayCan (the readable source in the SDK's
 // gameSource.zip). Run after kStubHandTool (it needs kStubModelLoading only through the Virtual Hands), then call
-// StubHandTool.installSprayCan() BEFORE loading the Companion Mod, or any time before the map is loaded.
+// StubHandTool.installSprayCan(variant) BEFORE loading the Companion Mod, or any time before the map is loaded.
 //
-// StubHandTool.installSprayCan()   defines the global HandToolSprayCan (the class the game's spray can is made of) and makes the
+// StubHandTool.installSprayCan(variant)   defines the global HandToolSprayCan (the class the game's spray can is made of) and makes the
 //   targeter honour target types: PlayerTargeter:addTargetType(key, mask, minDistance, maxDistance) and :removeTargetType(key),
 //   and each update fills closestTargetsByKey[key] with the closest trunk the look ray meets, measured from the ray's origin and
 //   only between the type's minimum and maximum distance (the game's tryAddTargetWithMask), as { node, x, y, z, distance }.
@@ -2204,6 +2258,10 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
 //     the class at every call: reads the found tree, acts on the RISING edge of spec.activatePressed (a marker event, or the
 //     game's blinking warning when the can is empty or the tree is not the player's), places a delayed marker, shakes the can
 //     node while spraying, ends the spray after its duration (500 ms on g_time) and clears spec.activatePressed.
+//   HandToolSprayCan.onDraw(tool)   the can's draw (StubHandTool.draw), looked up on the class at every call: renders
+//     "markerTypeIcon" and, while a tree is found, "treeIcon" (both at the centre of the view); nothing for an empty can.
+//   variant   how that onDraw is in this "game version": nil / "ok", "missing" (a game update renamed it to onDrawOverlays,
+//     which the draw calls instead) or "reshaped" (it takes no parameters, and draws the can being held)
 //   The functions the game registers on the tool: activateSpraying(_, inputValue) (spec.activatePressed = inputValue ~= 0; the
 //     handler the game's ACTIVATE_HANDTOOL binding calls every frame; recorded in StubHandTool.useCalls as tool = "sprayCan"),
 //     tryToAddTreeMarker, processDelayedMarker, setIsSpraying(isSpraying, force), changeTreeMarkerType(_, inputValue) and
@@ -2274,7 +2332,8 @@ inline constexpr const char* kStubHandToolSprayCan = R"luau(
         return best
     end
 
-    function StubHandTool.installSprayCan()
+    function StubHandTool.installSprayCan(variant)
+        variant = variant or "ok"
         StubHandTool.markers, StubHandTool.placedMarkers, StubHandTool.warnings = {}, {}, {}
         StubHandTool.sprayCans, StubHandTool.forbiddenTrees = {}, {}
         local Class = {}
@@ -2450,12 +2509,35 @@ inline constexpr const char* kStubHandToolSprayCan = R"luau(
             spec.activatePressed = false
         end
 
+        -- the draw (the game's HandToolSprayCan:onDraw): the marker type icon and, with a tree found, the tree icon, both at the
+        -- centre of the view; nothing for a can that has no marker type or is empty
+        local function draw(self)
+            local spec = self.spec_sprayCan
+            if spec.treeMarkerType == nil or spec.remainingNumMarkers == 0 then return end
+            StubHandTool.render(self, "markerTypeIcon")
+            if spec.foundTargetTree ~= nil then StubHandTool.render(self, "treeIcon") end
+        end
+        if variant == "missing" then
+            Class.onDrawOverlays = draw
+        elseif variant == "reshaped" then
+            Class.onDraw = function() draw(StubHandTool.heldTool) end
+        else
+            Class.onDraw = draw
+        end
+        StubHandTool.sprayCanDrawVariant = variant
+
         -- the game's event dispatch: spec[eventName](object, ...), the class read at every call
         if not StubHandTool.sprayCanUpdaterAdded then
             StubHandTool.sprayCanUpdaterAdded = true
             table.insert(StubHandTool.updaters, function(dt)
                 local held = StubHandTool.heldTool
                 if held ~= nil and held.spec_sprayCan ~= nil then _G.HandToolSprayCan.onUpdate(held, dt) end
+            end)
+            table.insert(StubHandTool.drawers, function(tool)
+                if tool.spec_sprayCan == nil then return end
+                local class = _G.HandToolSprayCan
+                local handler = StubHandTool.sprayCanDrawVariant == "missing" and class.onDrawOverlays or class.onDraw
+                handler(tool)
             end)
         end
 
