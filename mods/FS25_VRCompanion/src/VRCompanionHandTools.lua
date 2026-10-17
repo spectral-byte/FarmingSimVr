@@ -1049,9 +1049,10 @@ end
 
 -- The caps. Each cut says how much was left out.
 local PROBE_STRING_LENGTH = 30       -- a longer string is cut
-local PROBE_MAX_LINES = 200          -- lines per run, the line that says how many were left out included
-local PROBE_MAX_SPEC_FIELDS = 30     -- fields shown per spec table
-local PROBE_MAX_FUNCTION_NAMES = 40  -- function names shown per class or type
+local PROBE_MAX_LINES = 400          -- lines per run, the line that says how many were left out included
+local PROBE_MAX_SPEC_FIELDS = 100    -- fields shown per spec table
+local PROBE_MAX_NESTED_KEYS = 40     -- a table field with more keys than this is only counted, not opened
+local PROBE_MAX_FUNCTION_NAMES = 100 -- function names shown per class or type
 local PROBE_MAX_NODES = 40           -- nodes shown in the tree
 local PROBE_NODE_DEPTH = 3           -- levels of nodes below the root that are named
 
@@ -1064,17 +1065,19 @@ local function sortedKeys(t)
 end
 
 -- A short text for a field's value: numbers and booleans as they are, a string cut short, a table by its key count, a number
--- that is a node (an entity id) with the node's name. Nothing for a function. A node is only guessed from the number (a positive
--- whole number the engine says is an entity), so a plain number that happens to be an entity id is shown with a node name as
--- well; in a log read by a person that is harmless.
+-- that is a node (an entity id) with the node's name. Nothing for a function. A node is only guessed from the number: a whole
+-- number above 1 (1 is the engine's root node, and far more often a count or a direction) the engine says is an entity, whose name
+-- is not a file path (images and sounds have ids too). A plain number that happens to be a node's id is still shown with its name;
+-- in a log read by a person that is harmless.
 local function shortValue(value)
     local kind = type(value)
     if kind == "number" then
         local text = tostring(value)
         local entityExists, getName = engine("entityExists"), engine("getName")
-        if value > 0 and value == math.floor(value) and type(entityExists) == "function" and type(getName) == "function"
+        if value > 1 and value == math.floor(value) and type(entityExists) == "function" and type(getName) == "function"
             and entityExists(value) then
-            text = string.format('%s (node "%s")', text, tostring(getName(value)))
+            local name = tostring(getName(value))
+            if name ~= "" and not string.find(name, "[/\\]") then text = string.format('%s (node "%s")', text, name) end
         end
         return text
     elseif kind == "boolean" then
@@ -1088,6 +1091,25 @@ local function shortValue(value)
         return count .. " keys"
     end
     return nil
+end
+
+-- The entries of a table field, one level further than the spec table's own fields (a state or a catch is often kept in a small
+-- table): a line per entry, like a field's. A table with more keys than PROBE_MAX_NESTED_KEYS is only counted (by its own line).
+local function describeNestedTable(path, value, add)
+    if type(value) ~= "table" then return end
+    local ok, err = pcall(function()
+        local keys = sortedKeys(value)
+        if #keys == 0 or #keys > PROBE_MAX_NESTED_KEYS then return end
+        for _, key in ipairs(keys) do
+            local entryOk, text = pcall(function()
+                local entry = value[key]
+                local shown = shortValue(entry)
+                return string.format("%s.%s (%s)%s", path, tostring(key), type(entry), shown ~= nil and (" = " .. shown) or "")
+            end)
+            add(entryOk and text or string.format("%s.%s could not be read (%s)", path, tostring(key), tostring(text)))
+        end
+    end)
+    if not ok then add(path .. " could not be opened (" .. tostring(err) .. ")") end
 end
 
 -- Every spec_ table of the tool, one level deep: a line per field with its name, Lua type and short value.
@@ -1111,6 +1133,7 @@ local function describeSpecTables(tool, add)
                     return string.format("%s.%s (%s)%s", specName, tostring(key), type(value), shown ~= nil and (" = " .. shown) or "")
                 end)
                 add(fieldOk and text or string.format("%s.%s could not be read (%s)", specName, tostring(key), tostring(text)))
+                describeNestedTable(specName .. "." .. tostring(key), spec[key], add)
             end
         end)
         if not ok then add(specName .. " could not be read (" .. tostring(err) .. ")") end

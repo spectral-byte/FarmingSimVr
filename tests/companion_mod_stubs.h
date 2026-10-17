@@ -1502,7 +1502,9 @@ inline constexpr const char* kStubHandTool = R"luau(
     --   tool.actionEvents   three registered events: ACTIVATE_HANDTOOL (up and down, callback on the class), AXIS_ROTATE_HANDTOOL
     --     (every frame, callback on the class) and AXIS_OTHERMOD_NUDGE (up only, a callback that is on no class)
     --   the nodes: root -> FirstPerson, Rod -> Guide -> Tip -> Float (four levels below the root)
-    -- options (all optional): extraSpecFields = N more fields in spec_otherModTool; extraSpecTables = N more specializations of
+    -- options (all optional): nestedTables = true adds spec_otherModTool.nested ({ inner = { deep }, speed, name }) and an empty
+    -- table; bigTable = N adds a table of N entries; pathNamedNode = true adds a field naming an entity whose name is a file path
+    -- (as the engine's images and sounds are); extraSpecFields = N more fields in spec_otherModTool; extraSpecTables = N more specializations of
     -- 20 fields each; extraNodes = N more children of the root; extraClassFunctions = N more functions on OtherModHandTool (the
     -- first tool made in a game decides); brokenSpec = true adds spec_otherModBroken, which has a field
     -- naming a node whose getName raises (a node that is gone while the tool is being read); brokenNode = true adds a last child of
@@ -1531,6 +1533,16 @@ inline constexpr const char* kStubHandTool = R"luau(
         spec.lines = { 1, 2, 3 }
         spec.onBite = function() end
         for i = 1, options.extraSpecFields or 0 do spec["extra" .. i] = i end
+        if options.nestedTables then
+            spec.nested = { inner = { deep = 1 }, speed = 2.5, name = "reel" }
+            spec.emptyTable = {}
+        end
+        if options.bigTable then
+            local big = {}
+            for i = 1, options.bigTable do big["entry" .. i] = i end
+            spec.bigTable = big
+        end
+        if options.pathNamedNode then spec.guiImage = StubScene.newNode("dataS/menu/gui.png", 0) end
         tool.spec_otherModLine = { length = 12.5 }
         tool.specializationNames = { "otherModTool" }
         tool.specializations = { class }
