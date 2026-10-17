@@ -22,9 +22,17 @@ using namespace hand_tools_test;
 constexpr const char* kRodTag = "[FS25_VR] fishing rod ";
 
 // Lua helpers, as the game would know it. Each ray is { x, y, z, dirX, dirY, dirZ } in the world.
-//   headRay()   the first person camera: the ray the game casts without a Hand Tool
+//   headRay()          the first person camera: the ray the game casts without a Hand Tool
+//   useCalls(action)   the values the rod's handler for `action` was called with, in order, as one text ("1,0")
 constexpr const char* kRodDiagnosticsHelpers = R"luau(
     function _G.headRay() return { StubHandTool.originalGetLookRay(foot.player) } end
+    function _G.useCalls(action)
+        local values = {}
+        for _, call in ipairs(StubHandTool.useCalls) do
+            if call.tool == "fishingRod" and call.action == action then table.insert(values, tostring(call.value)) end
+        end
+        return table.concat(values, ",")
+    end
 )luau";
 
 // The hand held so that the rod points well away from the way the head looks (down -Z).
@@ -223,4 +231,41 @@ TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, AfterACastTheCommandLog
     EXPECT_NEAR(bobberLogged.x, bobber[0], 0.01) << line;
     EXPECT_NEAR(bobberLogged.y, bobber[1], 0.01) << line;
     EXPECT_NEAR(bobberLogged.z, bobber[2], 0.01) << line;
+}
+
+// ---- The last action ------------------------------------------------------------------------------------------------------------
+
+// What the secondary action does is not known yet (ADR-0031): the command says which action the rod was given last, the trigger's
+// primary use or a secondary seen through the game's own binding.
+TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, AfterASecondaryThroughTheGamesBindingItLogsThatAsTheLastActionAndAfterATriggerPullThePrimary) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    RunCommand();
+    EXPECT_EQ(RodLine("last action: "), "none yet") << Log();
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressSecondaryBinding(rod, 1)", "=secondaryDown"), 0);
+    FRAMES(1);
+    RunCommand();
+    std::string line = RodLine("last action: ");
+    EXPECT_EQ(line.rfind("secondary", 0), 0u) << Log();
+    EXPECT_NE(line.find("(input 1)"), std::string::npos) << line;
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressSecondaryBinding(rod, 0)", "=secondaryUp"), 0);
+    RunCommand();
+    EXPECT_NE(RodLine("last action: ").find("(input 0)"), std::string::npos) << "the release too: " << Log();
+    EXPECT_EQ(EvalLua(L, "useCalls('ACTIVATE_HANDTOOL_SECONDARY')"), "1,0") << "the rod still got both";
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    RunCommand();
+    line = RodLine("last action: ");
+    EXPECT_EQ(line.rfind("primary", 0), 0u) << Log();
+    EXPECT_NE(line.find("trigger"), std::string::npos) << line;
+    EXPECT_NE(line.find("(input 1)"), std::string::npos) << line;
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    RunCommand();
+    EXPECT_NE(RodLine("last action: ").find("(input 0)"), std::string::npos) << "the let-go: " << Log();
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressSecondaryBinding(rod, 1)", "=secondaryAgain"), 0);
+    RunCommand();
+    EXPECT_EQ(RodLine("last action: ").rfind("secondary", 0), 0u) << "the secondary again: " << Log();
 }
