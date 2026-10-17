@@ -28,7 +28,7 @@ The fishing rod comes from the Highlands Fishing DLC, whose source cannot be rea
   Every read is guarded: a failure is a line, not an error, and the other parts go on; a node that cannot be read ends the node tree, not the description. The caps, each cut saying how much was left out: 400 lines per run (the line that counts the lines left out is one of the 400; the spec tables come last, so they are what a cut takes), 100 fields per spec table, 100 function names per class or type, 40 nodes. The tool is the one the game last attached to the camera, or else the one the player says it holds (`getHeldHandTool()`), since a tool the game put in the hand of the third person view never went through `attachToolToCamera`; another player's tool is never described.
 
 ## Status
-Proposed. The diagnostic dump of an unsupported held Hand Tool (last bullet above) is built and covered by Luau-stub tests; the rest of this decision is not built yet.
+Proposed. The diagnostic dump of an unsupported held Hand Tool (last bullet above) is built and covered by Luau-stub tests; the rest of this decision is not built yet. Extended by ADR-0031 (the fishing rod joins the Tool Hand).
 
 ## Considered Options
 - **Move the ray's origin back by the minimum distance** (selected: the game's targeter, filters and distances stay in charge, with one number per tool).
