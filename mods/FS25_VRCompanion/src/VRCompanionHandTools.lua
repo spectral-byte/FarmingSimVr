@@ -903,7 +903,8 @@ end
 -- callUseHandler) or a secondary seen through the game's own action event. For that, while the rod is in the Tool Hand, the
 -- callback of its ACTIVATE_HANDTOOL_SECONDARY event (onActivateSecondaryAction, which the event holds since it was registered,
 -- so a wrap of the class would not be seen) is wrapped where the game keeps it: the wrap notes the call and passes it on unchanged.
--- Only the local player's rod is watched and described. The one-line answer (getHandToolsDiagnostics) does not carry these lines.
+-- The wrap comes off again (the event's callback is the game's own) as soon as the rod is not in the Tool Hand: set down,
+-- untracked, put away, `vrHandTools off` (at once, ADR-0029) or the map unloaded. Only the local player's rod is watched and described. The one-line answer (getHandToolsDiagnostics) does not carry these lines.
 
 -- The state as the developer reads it: "waiting" is the line out with no bite yet.
 local FISHING_ROD_STATE_TEXT = { waiting = "line out" }
@@ -947,6 +948,7 @@ end
 
 -- Takes the secondary event wraps off again, where each is still the callback this module put there.
 local function liftRodEventWraps()
+    if next(rodEventWraps) == nil then return end
     for holder, wrapped in pairs(rodEventWraps) do
         if holder.callback == wrapped.wrapper then holder.callback = wrapped.original end
     end
@@ -985,10 +987,10 @@ local BOBBER_AT_REST_SPEED = 1.0
 
 -- Once per update, after the trigger (a let-go there throws the cast): notes the local player's rod's cast and where its bobber
 -- landed (the first update the bobber is at rest while the rod waits for a bite; kept from then on, so its drift is not), and
--- wraps its secondary event while it is in the Tool Hand.
+-- wraps its secondary event while it is in the Tool Hand (and takes the wrap off when it is not).
 local function watchFishingRod(self, dt)
     local inTheHand = fishingRodInTheHand(self)
-    if inTheHand ~= nil then pcall(wrapRodSecondaryEvent, inTheHand) end
+    if inTheHand ~= nil then pcall(wrapRodSecondaryEvent, inTheHand) else liftRodEventWraps() end
     local seen = state.fishingRod
     local tool = heldTool()
     local player = tool ~= nil and localCarryingPlayer(tool) or nil
@@ -1579,7 +1581,10 @@ end
 function VRCompanion:setHandToolsEnabled(enabled, save)
     self.handToolsEnabled = (enabled ~= false)
     syncPlacement(self)  -- at once: the tool moves between the hand and the camera without waiting for the next update
-    if not self.handToolsEnabled then endTriggerUse() end  -- and a spray in progress ends
+    if not self.handToolsEnabled then
+        endTriggerUse()  -- and a spray in progress ends
+        liftRodEventWraps()  -- and the rod's secondary event is the game's own
+    end
     if save and type(self.saveConfiguration) == "function" then
         self:saveConfiguration()
     end

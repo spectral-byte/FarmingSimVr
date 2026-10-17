@@ -151,6 +151,39 @@ TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, ARodSpecThatCannotBeRea
     EXPECT_EQ(RodLine("state: "), "unknown") << "a spec that raises on every read: " << Log();
 }
 
+// The secondary action is noted through the game's own action event only while the rod is in the Tool Hand: once the rod leaves
+// the hand, is put away, or Hand Tools are off, the event calls the rod's handler as the game registered it (ADR-0029: off leaves
+// every Hand Tool as the game has it).
+TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, TheSecondaryEventIsTheGamesOwnAgainOnceTheRodLeavesTheHandOrHandToolsAreOff) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    auto gamesOwn = [&]() {
+        return EvalLua(L, "tostring(rod.actionEvents[2].callback == StubHandTool.fishingRodClass.onActivateSecondaryAction)");
+    };
+    ASSERT_EQ(gamesOwn(), "false") << "noted while the rod is in the hand";
+
+    AdvanceGameTime(3100);  // set down
+    FRAMES(1);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "false");
+    EXPECT_EQ(gamesOwn(), "true") << "set down";
+
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    FRAMES(1);
+    ASSERT_EQ(gamesOwn(), "false") << "in the hand again";
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off')", "=off"), 0);
+    EXPECT_EQ(gamesOwn(), "true") << "vrHandTools off, at once";
+    FRAMES(2);
+    EXPECT_EQ(gamesOwn(), "true") << "and it stays the game's";
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressSecondaryBinding(rod, 1); StubHandTool.pressSecondaryBinding(rod, 0)", "=secondaryOff"), 0);
+    EXPECT_EQ(EvalLua(L, "useCalls('ACTIVATE_HANDTOOL_SECONDARY')"), "1,0") << "the game's binding still reaches the rod";
+
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'on')", "=on"), 0);
+    FRAMES(1);
+    ASSERT_EQ(gamesOwn(), "false") << "on again, in the hand";
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(rod)", "=putAway"), 0);
+    FRAMES(1);
+    EXPECT_EQ(gamesOwn(), "true") << "put away";
+}
+
 // ---- What the command logs without the rod in the hand -------------------------------------------------------------------------
 
 // The fields of the one-line answer, counted by its separators.
