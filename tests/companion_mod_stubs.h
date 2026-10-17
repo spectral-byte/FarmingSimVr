@@ -1425,6 +1425,7 @@ inline constexpr const char* kStubHandTool = R"luau(
         tool.carryingPlayer = nil
         if tool.player.currentHandTool == tool then tool.player.currentHandTool = nil end
         if StubHandTool.heldTool == tool then StubHandTool.heldTool = nil end
+        StubHandTool.restoreNameReading(tool)  -- a node name the tool made unreadable (otherModTool) reads again
     end
 
     function StubHandTool.pressUseBinding(tool, inputValue)
@@ -1461,6 +1462,31 @@ inline constexpr const char* kStubHandTool = R"luau(
         return tool
     end
 
+    -- A node whose name cannot be read (a node that is gone while a tool is being read): getName raises for it. The engine's
+    -- getName is replaced only while a tool has such a node, kept in StubHandTool.engineGetName, and put back by drop(tool).
+    local unreadableNames = {}  -- node -> the tool it belongs to
+    function StubHandTool.makeNameUnreadable(tool, node)
+        if StubHandTool.engineGetName == nil then
+            local plainGetName = _G.getName
+            StubHandTool.engineGetName = plainGetName
+            _G.getName = function(id)
+                if unreadableNames[id] ~= nil then error("the node " .. tostring(id) .. " is gone") end
+                return plainGetName(id)
+            end
+        end
+        unreadableNames[node] = tool
+    end
+
+    function StubHandTool.restoreNameReading(tool)
+        for node, owner in pairs(unreadableNames) do
+            if owner == tool then unreadableNames[node] = nil end
+        end
+        if StubHandTool.engineGetName ~= nil and next(unreadableNames) == nil then
+            _G.getName = StubHandTool.engineGetName
+            StubHandTool.engineGetName = nil
+        end
+    end
+
     -- ---- another mod's tool ---------------------------------------------------------------------------------------
     -- A Hand Tool the Companion Mod has never heard of, shaped like the tools mods add to the game: its own specialization
     -- (spec_otherModTool, which no SUPPORTED_TOOLS entry names), a use handler on its specialization class only
@@ -1479,7 +1505,9 @@ inline constexpr const char* kStubHandTool = R"luau(
     -- options (all optional): extraSpecFields = N more fields in spec_otherModTool; extraSpecTables = N more specializations of
     -- 20 fields each; extraNodes = N more children of the root; extraClassFunctions = N more functions on OtherModHandTool (the
     -- first tool made in a game decides); brokenSpec = true adds spec_otherModBroken, which has a field
-    -- naming a node whose getName raises (a node that is gone while the tool is being read); configFileName replaces the name.
+    -- naming a node whose getName raises (a node that is gone while the tool is being read); brokenNode = true adds a last child of
+    -- the root whose name cannot be read the same way; both are the tool's, and StubHandTool.drop(tool) makes the names readable
+    -- again (see makeNameUnreadable); configFileName replaces the name.
     function StubHandTool.otherModTool(player, options)
         options = options or {}
         local class = _G.OtherModHandTool
@@ -1517,11 +1545,7 @@ inline constexpr const char* kStubHandTool = R"luau(
         if options.brokenSpec then
             local brokenNode = StubScene.newNode("otherModBroken", 0)
             tool.spec_otherModBroken = { first = 1, gone = brokenNode, last = 2 }
-            local plainGetName = _G.getName
-            _G.getName = function(id)
-                if id == brokenNode then error("the node " .. tostring(id) .. " is gone") end
-                return plainGetName(id)
-            end
+            StubHandTool.makeNameUnreadable(tool, brokenNode)
             table.insert(tool.specializationNames, "otherModBroken")
             table.insert(tool.specializations, {})
         end
@@ -1538,6 +1562,9 @@ inline constexpr const char* kStubHandTool = R"luau(
         local tip = StubScene.newNode("otherModTip", guide, 0, 0, 0.3)
         StubScene.newNode("otherModFloat", tip, 0, 0, 0.1)
         for i = 1, options.extraNodes or 0 do StubScene.newNode("otherModExtra" .. i, tool.rootNode, 0, 0, 0) end
+        if options.brokenNode then  -- the last child of the root: its name cannot be read
+            StubHandTool.makeNameUnreadable(tool, StubScene.newNode("otherModGone", tool.rootNode, 0, 0, 0))
+        end
         -- the registered action events
         local event = { actionName = "ACTIVATE_HANDTOOL", target = tool, triggerUp = true, triggerDown = true,
                         triggerAlways = false, isActive = true, isDown = false }

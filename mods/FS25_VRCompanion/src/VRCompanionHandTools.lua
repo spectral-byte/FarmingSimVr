@@ -1263,8 +1263,11 @@ local function describeNodes(tool, add)
             if depth + 1 < PROBE_NODE_DEPTH then walk(child, childPath, depth + 1) end
         end
     end
-    walk(root, tostring(getName(root)), 0)
+    -- A node that cannot be read ends the walk, not the description: the lines already added stay, and so does the count of the
+    -- nodes left out before the failure (the failure is a line after it).
+    local ok, err = pcall(function() walk(root, tostring(getName(root)), 0) end)
     if leftOut > 0 then add(string.format("node tree: %d more nodes left out", leftOut)) end
+    if not ok then add("node tree could not be read to the end (" .. tostring(err) .. ")") end
 end
 
 -- Whether the game's last placement of the tool was HandTool:attachToolToCamera (it links the tool to the camera when the player

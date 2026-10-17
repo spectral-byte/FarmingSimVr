@@ -377,6 +377,26 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ATreeWithManyNodesIsCutAn
     EXPECT_EQ(shown + leftOut, 104);
 }
 
+// The tree is read as far as it can be: a node that cannot be read ends the walk, but the nodes already named stay, and so does
+// the count of the nodes that were left out before it (one cut that is not lost to the other).
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ANodeThatCannotBeReadMidwayKeepsTheNodesAlreadyNamedAndTheLeftOutCount) {
+    // 104 nodes within three levels (4 and 100 more children of the root), then a child whose name cannot be read.
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraNodes = 100, brokenNode = true }"));
+
+    std::string reply;
+    ASSERT_NO_THROW(reply = RunCommand());
+
+    EXPECT_NE(reply.find("held Hand Tool: unsupported"), std::string::npos) << "the command still answers: " << reply;
+    const auto lines = Probe();
+    EXPECT_FALSE(LineWith(lines, { "node otherModRoot/otherModRod/otherModGuide" }).empty()) << "the nodes named so far stay: " << Joined(lines);
+    const int shown = CountLinesStartingWith(lines, "node otherModRoot/");
+    const int leftOut = LeftOutCount(LineWith(lines, { "node tree: ", "more nodes left out" }));
+    EXPECT_GT(leftOut, 0) << "the count of what was left out before the failure is kept: " << Joined(lines);
+    EXPECT_EQ(shown + leftOut, 104) << "what is shown and what is left out are the nodes read before the failure";
+    EXPECT_FALSE(LineWith(lines, { "node tree", "could not be read", "is gone" }).empty()) << "and the failure is said: " << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.charge (number) = 5" }).empty()) << "and the rest of the description goes on";
+}
+
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ARunIsCappedInLinesTheMostUsefulLinesSurviveAndTheLeftOutCountIsLogged) {
     // 15 more specializations of 20 fields each (under the cap of a table): 300 field lines on top of the rest.
     ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraSpecTables = 15 }"));
@@ -398,6 +418,20 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ARunIsCappedInLinesTheMos
 }
 
 // ---- the probe only reads -----------------------------------------------------------------------------------------
+// The stub's unreadable node names (brokenSpec, brokenNode) are the tool's: putting the tool away restores the engine's getName,
+// so one test's broken tool cannot make a later read fail (each test also has a Lua state of its own).
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheStubsUnreadableNodeNameIsRestoredWhenTheToolIsPutAway) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ brokenSpec = true, brokenNode = true }"));
+    ASSERT_EQ(RunLuauChunk(L, "_G.brokenSpecNode = otherTool.spec_otherModBroken.gone; _G.engineGetName = StubHandTool.engineGetName", "=nodes"), 0);
+    EXPECT_EQ(EvalLua(L, "tostring((pcall(getName, brokenSpecNode)))"), "false") << "the name cannot be read while the tool is held";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(otherTool)", "=drop"), 0);
+
+    EXPECT_EQ(EvalLua(L, "tostring((pcall(getName, brokenSpecNode)))"), "true") << "and can once it is put away";
+    EXPECT_EQ(EvalLua(L, "getName(brokenSpecNode)"), "otherModBroken");
+    EXPECT_EQ(EvalLua(L, "tostring(getName == engineGetName)"), "true") << "the engine's own function is back, not a wrapper of it";
+}
+
 
 namespace {
 
