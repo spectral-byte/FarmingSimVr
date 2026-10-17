@@ -46,8 +46,9 @@
 --                                                       tool (default: the one held) is no fishing rod. The only reader of the rod's spec
 --   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the wrist's roll about the bar while the chainsaw is in the tracked Tool Hand
 --                                                       (nil: leave the roll to the game's roll action)
---   VRCompanion.HAND_TOOL_HAPTICS / HAND_TOOL_HAPTIC_PULSES / _INTERVAL_MS   per tool kind: what the Tool Hand feels now, the pulses
---                                                       (ms, strength) and how often they are requested again; no entry: silent
+--   VRCompanion.HAND_TOOL_HAPTICS / HAND_TOOL_HAPTIC_PULSES / _INTERVAL_MS   per tool kind: what the Tool Hand feels now (a level,
+--                                                       and optionally its strength), the pulses (ms, strength, optional intervalMs)
+--                                                       and how often they are requested again; no entry: silent
 --   VRCompanion:updateHandTools(dt)                     once per update, called by updateMotionControllers on every path
 --   VRCompanion:placeHandToolsForRender()               before every rendered frame, called by placeVirtualHandsForRender
 --   VRCompanion:getHandToolsDiagnostics() -> string     the state of Hand Tools, one line
