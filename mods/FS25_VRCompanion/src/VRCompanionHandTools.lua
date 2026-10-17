@@ -645,8 +645,8 @@ end
 
 -- ---- The look ray -----------------------------------------------------------------------------------------
 
--- Where the tool points now: the world position of its pointing node and the world direction of its pointing axis, or nil
--- when the tool has no pointing axis (HAND_TOOL_POINTING_AXES) or the node is not there.
+-- Where the tool points now: the world position of its pointing node and the world direction of its pointing axis, then the
+-- HAND_TOOL_POINTING_AXES entry they came from; nil when the tool has no pointing axis or the node is not there.
 local function toolPointingRay(self, tool)
     local kind = supportedKind(tool)
     local axis = kind ~= nil and self.HAND_TOOL_POINTING_AXES[kind] or nil
@@ -663,30 +663,35 @@ local function toolPointingRay(self, tool)
     end
     local dx, dy, dz = engine("localDirectionToWorld")(node, direction.x, direction.y, direction.z)
     if type(x) ~= "number" or type(dx) ~= "number" then return nil end
-    return x, y, z, dx, dy, dz
+    return x, y, z, dx, dy, dz, axis
+end
+
+-- The pointing ray of the tool in the Tool Hand and the HAND_TOOL_POINTING_AXES entry it comes from (the six numbers, then the
+-- entry), or nil: the one place that decides whether there is a ray for `player` (getHandToolRay, getHandToolLookRay).
+local function heldToolPointingRay(self, player)
+    local tool = heldTool()
+    if tool == nil or state.linkedTool ~= tool then return nil end
+    if player ~= nil and tool:getCarryingPlayer() ~= player then return nil end
+    if toolHandFor(self, tool) == nil then return nil end
+    local ok, x, y, z, dx, dy, dz, axis = pcall(toolPointingRay, self, tool)
+    if not ok then return nil end
+    return x, y, z, dx, dy, dz, axis
 end
 
 -- The ray the player aims with while a supported Hand Tool is in the Tool Hand: x, y, z, dirX, dirY, dirZ in the world, or
 -- nil (the head's ray is the game's). `player` limits it to the player who holds the tool (nil: whoever holds it). The tool
 -- must be where this module put it, so that the ray starts where the tool is drawn. Read live by the Player:getLookRay wrap.
 function VRCompanion:getHandToolRay(player)
-    local tool = heldTool()
-    if tool == nil or state.linkedTool ~= tool then return nil end
-    if player ~= nil and tool:getCarryingPlayer() ~= player then return nil end
-    if toolHandFor(self, tool) == nil then return nil end
-    local ok, x, y, z, dx, dy, dz = pcall(toolPointingRay, self, tool)
-    if not ok then return nil end
+    local x, y, z, dx, dy, dz = heldToolPointingRay(self, player)
     return x, y, z, dx, dy, dz
 end
 
 -- The ray the game's targeter casts for the tool in the Tool Hand: the tool's pointing ray (getHandToolRay) with its origin moved
 -- back along the axis by the entry's `reachBehind` (HAND_TOOL_POINTING_AXES), or nil like getHandToolRay.
 function VRCompanion:getHandToolLookRay(player)
-    local x, y, z, dx, dy, dz = self:getHandToolRay(player)
+    local x, y, z, dx, dy, dz, axis = heldToolPointingRay(self, player)
     if x == nil then return nil end
-    local kind = supportedKind(heldTool())
-    local axis = kind ~= nil and self.HAND_TOOL_POINTING_AXES[kind] or nil
-    local behind = axis ~= nil and tonumber(axis.reachBehind) or 0
+    local behind = tonumber(axis.reachBehind) or 0
     return x - dx * behind, y - dy * behind, z - dz * behind, dx, dy, dz
 end
 
