@@ -163,6 +163,9 @@ end
 -- `useHandlerClass` (optional) names the global specialization class to look the handler up on when the tool does not carry it
 -- itself: the game registers some handlers as functions of the tool (the lance's onWashAction) and leaves others on the
 -- specialization class only, called with the tool as `self` by the action event (HandToolChainsaw.onCutAction).
+-- `useHandlerSpecialization` (optional) names the specialization whose class to look the handler up on when that class has no global
+-- name (a DLC's: its scripts run in their own environment): the class is the tool's own, in tool.specializations next to its name
+-- in tool.specializationNames.
 -- `useOnce` (optional) marks a tool whose handler is called once per press and once per release, as the game's action event does
 -- for it (the chainsaw's, registered for trigger up and down), not on every update the input is held (the lance's).
 -- `toggle` (instead of a useHandler) makes the trigger a PRESS: each pull of the trigger calls toggle(tool) once.
@@ -192,8 +195,12 @@ local SUPPORTED_TOOLS = {
     -- like the chainsaw's cut handler; it is called every update the trigger is held, then once with 0 when it is let go or the brush
     -- leaves the hand, because the brush's cleaning flag changes only when the handler is called.
     { kind = "horsebrush", label = "horse brush", spec = "spec_horseBrush", useHandler = "onBrushAction", useHandlerClass = "HandToolHorseBrush" },
-    -- The fishing rod (ADR-0031), from the Highlands Fishing DLC. A game without the DLC never holds one.
-    { kind = "fishingrod", label = "fishing rod", spec = "spec_pdlc_highlandsFishingPack.fishingRod" },
+    -- The fishing rod (ADR-0031), from the Highlands Fishing DLC. A game without the DLC never holds one. Its ACTIVATE_HANDTOOL handler
+    -- fires on press and release only (#125): held, it charges a cast, let go it throws it, and it hooks and reels the same way, so
+    -- it is `useOnce` like the chainsaw's. The handler is on the DLC's specialization class, which has no global name: it is looked
+    -- up among the rod's own specializations by the specialization's name (`useHandlerSpecialization`).
+    { kind = "fishingrod", label = "fishing rod", spec = "spec_pdlc_highlandsFishingPack.fishingRod", useHandler = "onActivateAction",
+      useHandlerSpecialization = "pdlc_highlandsFishingPack.fishingRod", useOnce = true },
 }
 
 -- WHERE EACH TOOL SITS IN THE HAND: the pose of the tool's ROOT node in the Virtual Hand's grip frame (the frame of the
@@ -335,6 +342,35 @@ local function supportedKind(tool)
         if tool[entry.spec] ~= nil then return entry.kind, entry end
     end
     return nil
+end
+
+-- The class of the tool's specialization called `name` (the game keeps the classes in tool.specializations, in step with their
+-- names in tool.specializationNames), or nil.
+local function specializationClass(tool, name)
+    local names, classes = tool.specializationNames, tool.specializations
+    if type(names) ~= "table" or type(classes) ~= "table" then return nil end
+    for index, specName in ipairs(names) do
+        if specName == name then
+            local class = classes[index]
+            return type(class) == "table" and class or nil
+        end
+    end
+    return nil
+end
+
+-- The function the game's ACTIVATE_HANDTOOL binding calls for the tool (SUPPORTED_TOOLS[].useHandler): the tool's own, else the one
+-- on its specialization class (by global name, or among the tool's specializations). Whatever is there, function or not; nil for none.
+local function useHandlerOf(tool, entry)
+    local handler = tool[entry.useHandler]
+    if type(handler) ~= "function" and entry.useHandlerClass ~= nil then
+        local class = engine(entry.useHandlerClass)  -- a handler the game keeps on the specialization class only
+        handler = type(class) == "table" and class[entry.useHandler] or nil
+    end
+    if type(handler) ~= "function" and entry.useHandlerSpecialization ~= nil then
+        local class = specializationClass(tool, entry.useHandlerSpecialization)  -- a class with no global name
+        handler = class ~= nil and class[entry.useHandler] or nil
+    end
+    return handler
 end
 
 -- ---- Wraps --------------------------------------------------------------------------------------------------------------
@@ -621,11 +657,7 @@ end
 
 -- Calls the tool's use handler as the game's action event does: callback(self, actionName, inputValue).
 local function callUseHandler(tool, entry, value)
-    local handler = tool[entry.useHandler]
-    if type(handler) ~= "function" and entry.useHandlerClass ~= nil then
-        local class = engine(entry.useHandlerClass)  -- a handler the game keeps on the specialization class only
-        handler = type(class) == "table" and class[entry.useHandler] or nil
-    end
+    local handler = useHandlerOf(tool, entry)
     if type(handler) ~= "function" then return end
     callGuarded(entry, "use handler", handler, tool, "ACTIVATE_HANDTOOL", value)
 end

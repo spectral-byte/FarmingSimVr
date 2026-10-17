@@ -209,3 +209,120 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodInTheToolHandTheTargeter
     FRAMES(2);
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "set down: the head's ray";
 }
+
+// ---- The trigger: hold to charge, let go to cast, the same trigger hooks and reels ---------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, APullCallsTheRodsHandlerOnceWith1HoldingCallsNothingMoreAndTheLetGoCallsItOnceWith0ThrowingTheCast) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    FRAMES(2);
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(UseCalls(), "1") << "the pull: once, as the game's ACTIVATE_HANDTOOL press";
+    EXPECT_EQ(EvalLua(L, "tostring(StubHandTool.useCalls[1].self == rod)"), "true") << "with the rod as self, off the class";
+    EXPECT_EQ(RodState(), "charging");
+    EXPECT_EQ(Pad().bRightTrigger, 0) << "the trigger that fishes is not also a binding";
+
+    FRAMES(60);
+    EXPECT_EQ(UseCalls(), "1") << "holding calls nothing more";
+    EXPECT_EQ(RodState(), "charging");
+    EXPECT_GT(Number(L, "StubHandTool.rodSpec(rod).state.angleScale"), 0.5) << "the cast charges while the trigger is held";
+    EXPECT_EQ(Pad().bRightTrigger, 0);
+
+    ASSERT_EQ(RunLuauChunk(L, "_G.rayAtTheCast = rodRay()", "=rayAtTheCast"), 0);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    EXPECT_EQ(UseCalls(), "1,0") << "the let-go: once, as the game's release";
+    EXPECT_EQ(RodState(), "waiting") << "the cast is thrown";
+    EXPECT_EQ(Number(L, "#StubHandTool.casts"), 1.0);
+    EXPECT_EQ(EvalLua(L, "sameRay(StubHandTool.casts[1].ray, rayAtTheCast)"), "true")
+        << "thrown along the rod: " << EvalLua(L, "rayText(StubHandTool.casts[1].ray)");
+    FRAMES(10);
+    EXPECT_EQ(UseCalls(), "1,0") << "and nothing while the trigger stays let go";
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, TheSameTriggerHooksABitingFishReelsWhileHeldAndLandsTheCatch) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'waiting')", "=lineOut"), 0);
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.biteRod(rod)", "=bite"), 0);
+    FRAMES(1);
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(RodState(), "reeling") << "a pull in the hook window hooks the fish";
+    FRAMES(200);
+    EXPECT_EQ(RodState(), "caught") << "holding the trigger reels the fish in";
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    EXPECT_EQ(UseCalls(), "1,0") << "one press and one release for the whole reel";
+    EXPECT_EQ(EvalLua(L, "StubHandTool.rodSpec(rod).item.name"), "fishingItem_trout");
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, ATriggerAlreadyHeldWhenTheRodComesIntoTheHandKeepsItsBindingAndDoesNothingUntilLetGo) {
+    ASSERT_NO_FATAL_FAILURE(Start());
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    AimTheHand(kRight, 0.25f, -0.10f, -0.30f);
+    headset.SetHandInputs(kRight, Trigger(1.0f));  // held for a binding, with no Hand Tool in the player's hands
+    FRAMES(2);
+    ASSERT_EQ(Pad().bRightTrigger, 255);
+
+    ASSERT_NO_FATAL_FAILURE(HoldFishingRod(L));
+    FRAMES(30);
+    ASSERT_EQ(InTheHand("right"), "true") << Dump();
+    EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger keeps its binding";
+    EXPECT_EQ(UseCalls(), "") << "and the rod does not charge on its own";
+    EXPECT_EQ(RodState(), "idle");
+
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    EXPECT_EQ(UseCalls(), "") << "nor cast when it is let go";
+    EXPECT_EQ(Pad().bRightTrigger, 0);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(UseCalls(), "1") << "pulled afresh it charges";
+    EXPECT_EQ(Pad().bRightTrigger, 0) << "and is not a binding";
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodLeavingTheHandMidPullSendsTheReleaseWhichThrowsTheChargedCast) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(20);
+    ASSERT_EQ(RodState(), "charging");
+
+    headset.SetHandTracked(kRight, false);
+    FRAMES(1);
+    EXPECT_EQ(UseCalls(), "1,0") << "the hand lost tracking mid-pull: the release is sent";
+    EXPECT_EQ(RodState(), "waiting") << "and the charged cast is thrown, not left charging";
+    FRAMES(10);
+    EXPECT_EQ(UseCalls(), "1,0") << "once";
+
+    // Hand Tools turned off mid-pull, and the rod put away mid-pull, end the use the same way.
+    headset.SetHandTracked(kRight, true);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'idle'); StubHandTool.useCalls = {}", "=lineIn"), 0);
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(5);
+    ASSERT_EQ(UseCalls(), "1");
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off')", "=off"), 0);
+    EXPECT_EQ(UseCalls(), "1,0") << "vrHandTools off mid-pull";
+}
+
+// The game's own binding (X on a pad, the mouse) still calls the same handler, off the class; the secondary action is the pad's.
+TEST_F(VirtualGamepadHandToolsFishingRodTest, TheGamesOwnBindingsStillFishWhileTheRodIsInTheHandAndTheSecondaryActionIsNeverTheTriggers) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressUseBinding(rod, 1)", "=bindingDown"), 0);
+    FRAMES(10);
+    EXPECT_EQ(RodState(), "charging") << "the game's binding charges";
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressUseBinding(rod, 0)", "=bindingUp"), 0);
+    EXPECT_EQ(RodState(), "waiting") << "and casts";
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(5);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "useCalls('ACTIVATE_HANDTOOL_SECONDARY')"), "") << "the trigger never calls the secondary action";
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressSecondaryBinding(rod, 1); StubHandTool.pressSecondaryBinding(rod, 0)", "=secondary"), 0);
+    EXPECT_EQ(EvalLua(L, "useCalls('ACTIVATE_HANDTOOL_SECONDARY')"), "1,0") << "the game's own secondary binding still reaches the rod";
+}
