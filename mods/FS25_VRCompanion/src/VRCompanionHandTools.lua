@@ -3,7 +3,7 @@
 --
 -- Puts the player's Hand Tools into the Tool Hand (ADR-0029). In first person on foot the game links a held Hand Tool to the
 -- player camera's pitch node (HandTool:attachToolToCamera), so it moves with the head. While the Tool Hand is tracked, this
--- module links a SUPPORTED Hand Tool (recognised by its spec_ table: the pressure washer lance, the flashlight, the chainsaw, the spray can)
+-- module links a SUPPORTED Hand Tool (recognised by its spec_ table: the pressure washer lance, the flashlight, the chainsaw, the spray can, the horse brush)
 -- into the Tool Hand's Virtual Hand instead; when the Tool Hand is set down or loses tracking, or the feature is off, the tool
 -- is where the game puts it again. Every other Hand Tool (other mods' tools) and every other player's tool in
 -- a multiplayer session is left exactly as the game has it. Terms (Hand Tool, Tool Hand): CONTEXT.md.
@@ -11,7 +11,7 @@
 -- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
 -- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The look ray |
 -- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The flashlight's beam | No screen-centre overlays (the
--- spray can's and the chainsaw's onDraw) | Haptics | The spray can's feedback (target tick, marker type message) | Update |
+-- spray can's, the horse brush's and the chainsaw's onDraw) | The horse brush's touch (the touching cap) | Haptics | The spray can's feedback (target tick, marker type message) | Update |
 -- Diagnostics, console commands, reset.
 --
 -- THE WRAPS (ADR-0026, ADR-0027): a wrap passes through to the game's own function whenever the feature is off, Motion
@@ -33,7 +33,7 @@
 --   VRCompanion:getHandToolRay([player]) -> x, y, z, dirX, dirY, dirZ   the tool's pointing ray in the world while a supported
 --                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's)
 --   VRCompanion:getHandToolLookRay([player]) -> x, y, z, dirX, dirY, dirZ   that ray with its origin moved back along the axis by the
---                                                       tool's reachBehind field (the spray can's 0.5 m); this is what Player:getLookRay
+--                                                       tool's reachBehind field (the spray can's and the horse brush's 0.5 m); this is what Player:getLookRay
 --                                                       answers then, so what the targeter casts
 --   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   nil when the tool (default: the one held) is no chainsaw
 --   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the wrist's roll about the bar while the chainsaw is in the tracked Tool Hand
@@ -188,6 +188,10 @@ local SUPPORTED_TOOLS = {
     -- The spray can (ADR-0030). The kind is the name `vrHandToolOffset` takes. activateSpraying only sets a flag (the can's
     -- own update acts on its rising edge and clears it), so, as the lance's, it is called every update the trigger is held.
     { kind = "spraycan", label = "spray can", spec = "spec_sprayCan", useHandler = "activateSpraying" },
+    -- The horse brush (ADR-0030). Its handler is held (spec.isCleaning = inputValue > 0) and lives on the specialization class only,
+    -- like the chainsaw's cut handler; it is called every update the trigger is held, then once with 0 when it is let go or the brush
+    -- leaves the hand, because the brush's cleaning flag changes only when the handler is called.
+    { kind = "horsebrush", label = "horse brush", spec = "spec_horseBrush", useHandler = "onBrushAction", useHandlerClass = "HandToolHorseBrush" },
 }
 
 -- WHERE EACH TOOL SITS IN THE HAND: the pose of the tool's ROOT node in the Virtual Hand's grip frame (the frame of the
@@ -227,6 +231,14 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
     spraycan = {
         position = { x = -0.01, y = 0.0, z = 0.05 },
         rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
+    },
+    -- The horse brush's bristles (the `fibers` shape, 4 cm below the brush node) face the tool's -Y; held with the bristles along the
+    -- fingers, the tool's axes the hand's (no turn), so the hand lies on the back of the brush. The hand sits where the game's own
+    -- third person hold does (the tool's `handNode` at (0, -0.009, -0.117) of the root), which puts the root at the opposite of that in
+    -- the grip frame. That was the first guess from the i3d; these numbers were fitted in the headset (vrHandToolOffset horsebrush).
+    horsebrush = {
+        position = { x = 0.03, y = 0.009, z = -0.033 },
+        rotation = { x = 0.0, y = 0.0, z = -0.7071068, w = 0.7071068 },
     },
 }
 
@@ -287,6 +299,16 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
         direction = { x = 0.0, y = 0.0, z = 1.0 },
         reachBehind = 0.5,
     },
+    -- Horse brush: the brush node (`brush`, the game's sway node: it moves a few centimetres while the brush cleans) along its -Y,
+    -- toward the bristles. UNCERTAIN until checked in the headset: the axis from the i3d, and whether the sway makes the target
+    -- change mid-brushing (then point from the tool's root, with the same axis). `reachBehind` is the game's 0.5 m minimum for
+    -- animals; `touchReach` (metres) is how far past the bristles an animal still counts as touched (see "The horse brush").
+    horsebrush = {
+        node = function(tool) return tool.spec_horseBrush.brushNode end,
+        direction = { x = 0.0, y = -1.0, z = 0.0 },
+        reachBehind = 0.5,
+        touchReach = 0.25,
+    },
 }
 
 -- The supported kind of a Hand Tool and its entry, or nil for an unsupported one.
@@ -321,6 +343,11 @@ local WRAP_SPECS = {
     -- The draw events of the tools that draw at the centre of the view (see "No screen-centre overlays")
     sprayCanOnDraw = { class = "HandToolSprayCan", fn = "onDraw", parameters = 1, describe = "(tool)" },
     chainsawOnDraw = { class = "HandToolChainsaw", fn = "onDraw", parameters = 1, describe = "(tool)" },
+    horseBrushOnDraw = { class = "HandToolHorseBrush", fn = "onDraw", parameters = 1, describe = "(tool)" },
+    -- The horse brush's animal lookup, which its update calls through the class (see "The horse brush's touch"), and its use handler,
+    -- which the trigger calls (CHECK-ONLY: a game without it gives Hand Tools up, rather than the trigger doing nothing unseen)
+    horseBrushLookup = { class = "HandToolHorseBrush", fn = "getHusbandryAndClusterFromNode", parameters = 2, describe = "(player, node)" },
+    horseBrushOnBrushAction = { class = "HandToolHorseBrush", fn = "onBrushAction", parameters = 3, describe = "(tool, action, inputValue)" },
     -- CHECK-ONLY, never wrapped: the chainsaw's cut plane takes its heading from camera:getRotation, which updateChainsawFromTheTool
     -- answers differently for the length of the chainsaw's own update by shadowing it on the camera instance. The shadow depends
     -- on the camera having that function, so a game without it gives Hand Tools up.
@@ -879,7 +906,7 @@ function VRCompanion:placeHandToolsForRender()
 end
 
 -- ---- No screen-centre overlays ------------------------------------------------------------------------------
--- Two Hand Tools draw feedback at the centre of the view, which is head-locked: the spray can's marker type icon (and a tree icon
+-- Three Hand Tools draw feedback at the centre of the view, which is head-locked: the horse brush's crosshair or brush icon, the spray can's marker type icon (and a tree icon
 -- while a tree is found) and the idle chainsaw's crosshair. With the tool in the hand that reads as "aim where you look", which
 -- is no longer true. While the tool is the local player's, supported and in a tracked Tool Hand (the same test as for the other
 -- wraps), the wrap of its onDraw draws nothing; otherwise it is the game's own function. The game's event dispatch reads onDraw
@@ -902,14 +929,60 @@ end
 
 WRAP_SPECS.sprayCanOnDraw.make = makeDrawWrap
 WRAP_SPECS.chainsawOnDraw.make = makeDrawWrap
+WRAP_SPECS.horseBrushOnDraw.make = makeDrawWrap
+
+-- ---- The horse brush's touch ----------------------------------------------------------------------------------------
+-- The brush's look ray starts `reachBehind` (the game's 0.5 m minimum for animals) behind its bristles, so that the game's targeter
+-- finds an animal the bristles touch; the game's reach for animals is 3 m, so a brush in the hand would also clean a horse across the
+-- stall. The brush only reaches an animal within `touchReach` (about a quarter metre) of its bristles: past that, the animal counts as
+-- none. The brush's update asks the class's animal lookup (HandToolHorseBrush.getHusbandryAndClusterFromNode) which animal the targeter's
+-- node is, and everything it does follows that answer: the input help's "Clean <name>", the cleaning flag, the sound, the sway and the
+-- clean events. The wrap of the lookup answers no animal when the targeter's hit for the brush's target type is further than that from
+-- the moved ray's origin; otherwise it is the game's own. Only the local player's brush, in the tracked Tool Hand, is capped.
+
+-- The furthest the targeter's distance (from the moved ray's origin) can be for the animal to count: the way back to the bristles
+-- and the touch past them. nil for a tool that has no touch limit.
+local function touchLimit(kind)
+    local axis = kind ~= nil and VRCompanion.HAND_TOOL_POINTING_AXES[kind] or nil
+    if axis == nil or tonumber(axis.touchReach) == nil then return nil end
+    return (tonumber(axis.reachBehind) or 0) + axis.touchReach
+end
+
+-- The distance the targeter reports for the closest animal it found for the horse brush `player` carries (from the moved ray's
+-- origin), or nil when it found none or `player` has no targeter.
+local function brushTargetDistance(player)
+    local targeter = type(player) == "table" and player.targeter or nil
+    local closest = type(targeter) == "table" and type(targeter.closestTargetsByKey) == "table"
+        and targeter.closestTargetsByKey[engine("HandToolHorseBrush")] or nil
+    return type(closest) == "table" and tonumber(closest.distance) or nil
+end
+
+-- Whether the animal the targeter found for the brush `player` carries is out of touch now.
+local function animalIsOutOfTouch(player)
+    local tool = heldTool()
+    if tool == nil or state.linkedTool ~= tool then return false end
+    local kind = supportedKind(tool)
+    if kind ~= "horsebrush" then return false end
+    if type(player) ~= "table" or tool:getCarryingPlayer() ~= player or toolHandFor(VRCompanion, tool) == nil then return false end
+    local limit, distance = touchLimit(kind), brushTargetDistance(player)
+    return limit ~= nil and distance ~= nil and distance > limit
+end
+
+WRAP_SPECS.horseBrushLookup.make = function(original)
+    return function(player, ...)
+        local ok, outOfTouch = pcall(animalIsOutOfTouch, player)  -- a failure to tell leaves the game's answer
+        if ok and outOfTouch then return nil, nil end
+        return original(player, ...)
+    end
+end
 
 -- The supported kinds whose onDraw is wrapped (the diagnostics' "held back" is about these).
-local DRAW_HELD_BACK_KINDS = { spraycan = true, chainsaw = true }
+local DRAW_HELD_BACK_KINDS = { spraycan = true, chainsaw = true, horsebrush = true }
 
 -- ---- Haptics --------------------------------------------------------------------------------------------------
 -- The Tool Hand buzzes while its tool works, through VRCompanion:pulseHand (VRBridge.pulseHaptic): a light buzz for as long as
 -- the chainsaw's trigger is held (delimbing, without a cut), a stronger one while it cuts, a steady
--- one while the lance sprays, a lighter one while the spray can sprays, and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
+-- one while the lance sprays, a lighter one while the spray can sprays, the lightest while the horse brush cleans an animal, and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
 -- while the tool is in it (toolHandFor: the feature on, Motion Controllers on, the hand tracked), so an untracked or set-down
 -- Tool Hand, `vrHandTools off` and a tool put away all end the buzz. A pulse is one burst, so the buzz is a pulse requested again
 -- every HAND_TOOL_HAPTIC_INTERVAL_MS (and at once when what is felt changes), each lasting a little longer than that so the hand
@@ -922,6 +995,7 @@ VRCompanion.HAND_TOOL_HAPTIC_PULSES = {
     cutting = { ms = 70, strength = 0.6 },   -- the chainsaw cutting
     spraying = { ms = 70, strength = 0.35 }, -- the lance's pressure
     misting = { ms = 70, strength = 0.2 },   -- the spray can's mist, lighter than the lance
+    brushing = { ms = 70, strength = 0.15 }, -- the horse brush on an animal, the lightest of them
 }
 VRCompanion.HAND_TOOL_HAPTIC_INTERVAL_MS = 50
 -- The single short pulse that is not a buzz: the spray can's tick when its nozzle comes onto a tree (see "The spray can's feedback").
@@ -945,6 +1019,13 @@ VRCompanion.HAND_TOOL_HAPTICS = {
     spraycan = function(self, tool)
         local spec = tool.spec_sprayCan
         return (spec ~= nil and spec.isSpraying == true) and "misting" or nil
+    end,
+    -- The horse brush buzzes while it cleans an animal: the game's own state for that, the animal its update targeted while the
+    -- cleaning flag is set (spec.targetedHusbandryId, which the update sets only for both and clears otherwise), so a brush that is
+    -- only held, over air, or over an animal out of touch (the lookup says none) is silent.
+    horsebrush = function(self, tool)
+        local spec = tool.spec_horseBrush
+        return (spec ~= nil and spec.targetedHusbandryId ~= nil) and "brushing" or nil
     end,
 }
 
@@ -1151,6 +1232,18 @@ local function describeLookRay(tool)
     return string.format("look ray starts at (%.2f, %.2f, %.2f), from the %s", x, y, z, fromTheTool and "tool" or "head")
 end
 
+-- Whether the horse brush's update found an animal it may clean now (the lookup's answer, after the touching cap), and how far it is:
+-- from the bristles while the brush is in the Tool Hand (the targeter measures from the ray's origin, `reachBehind` further back),
+-- from the head's ray's origin otherwise.
+local function describeBrushReach(tool, inTheHand)
+    local spec = tool.spec_horseBrush
+    if spec == nil or spec.targetedHusbandry == nil then return "animal in reach: no" end
+    local distance = brushTargetDistance(carryingPlayer(tool))
+    if distance == nil then return "animal in reach: yes" end
+    local axis = VRCompanion.HAND_TOOL_POINTING_AXES.horsebrush
+    return string.format("animal in reach: yes (%.2f m)", math.max(0, distance - (inTheHand and (tonumber(axis.reachBehind) or 0) or 0)))
+end
+
 local function diagnosticFields(self)
     local tool, kind = self:getHeldHandTool()
     local hand, why = toolHandFor(self, tool)
@@ -1176,6 +1269,8 @@ local function diagnosticFields(self)
         beamWrapText,
         wrapStatus("sprayCanOnDraw"),
         wrapStatus("chainsawOnDraw"),
+        wrapStatus("horseBrushOnDraw"),
+        wrapStatus("horseBrushLookup"),
         "centre overlays held back: " .. ((kind ~= nil and DRAW_HELD_BACK_KINDS[kind] and drawIsHeldBack(tool)) and "yes" or "no"),
     }
     -- Haptics
@@ -1185,6 +1280,11 @@ local function diagnosticFields(self)
         table.insert(fields, string.format("chainsaw: %s, cut plane heading from the %s, cut roll from the %s", tostring(self:getChainsawCutState(tool)),
             (hand ~= nil and state.chainsaw.yaw ~= nil) and "bar" or "camera",
             hand ~= nil and "wrist" or "game's roll action"))
+    end
+    -- Horse brush
+    if kind == "horsebrush" then
+        table.insert(fields, describeBrushReach(tool, hand ~= nil))
+        table.insert(fields, "cleaning: " .. ((tool.spec_horseBrush or {}).targetedHusbandryId ~= nil and "yes" or "no"))
     end
     table.insert(fields, wrapStatus("chainsawOnUpdate"))
     table.insert(fields, wrapStatus("chainsawOnRoll"))
@@ -1565,7 +1665,7 @@ local function describeOffset(kind, offset)
         offset.rotation.x, offset.rotation.y, offset.rotation.z, offset.rotation.w)
 end
 
-local TUNING_USAGE = "Usage: vrHandToolOffset <lance|flashlight|chainsaw|spraycan> <nudge dx dy dz | turn rx ry rz | reset> "
+local TUNING_USAGE = "Usage: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush> <nudge dx dy dz | turn rx ry rz | reset> "
     .. "(nudge: metres, turn: degrees about the hand's X, Y, Z axes; this session only)"
 
 -- The held tool is put where the numbers say, at once.
@@ -1627,8 +1727,8 @@ function VRCompanion:registerHandToolsConsoleCommands()
     wrapAll()    -- map load: the class again (resetHandTools lifted the wrap with the last map)
     checkWraps()
     if addConsoleCommand == nil then return end
-    addConsoleCommand("vrHandToolOffset", "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan> <nudge dx dy dz | turn rx ry rz | reset>", "consoleCommandHandToolOffset", self)
-    addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance and spray can held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
+    addConsoleCommand("vrHandToolOffset", "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush> <nudge dx dy dz | turn rx ry rz | reset>", "consoleCommandHandToolOffset", self)
+    addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance, spray can and horse brush held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
     addConsoleCommand("vrToolHand", "Choose the Motion Controller that holds Hand Tools, left or right (saved; right by default): vrToolHand [left|right]", "consoleCommandSetToolHand", self)
     addConsoleCommand("vrHandToolsDiagnostics", "Report the Tool Hand, the held Hand Tool, whether it is in the hand and where the look ray starts: vrHandToolsDiagnostics", "consoleCommandHandToolsDiagnostics", self)
 end

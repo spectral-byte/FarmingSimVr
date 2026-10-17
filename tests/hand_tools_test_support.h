@@ -231,6 +231,19 @@ inline std::string SprayCanStubs(const char* variant = "ok") {
 inline constexpr const char* kHoldSprayCan = "_G.can = StubHandTool.sprayCan(foot.player); StubHandTool.hold(can)";
 inline void HoldSprayCan(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldSprayCan, "=holdSprayCan"), 0); }
 
+// ---- horse brush (ADR-0030) ---------------------------------------------------------------------------------------
+// The horse brush's game-side stub (kStubHandToolHorseBrush) is not part of every test's game: a test that wants it passes
+// HorseBrushStubs() as StartOptions::extraStubs (concatenated after the spray can's, if both). handler is how
+// HandToolHorseBrush.onBrushAction is ("ok", "missing", "reshaped"), lookup how
+// HandToolHorseBrush.getHusbandryAndClusterFromNode is (the same three).
+inline std::string HorseBrushStubs(const char* handler = "ok", const char* lookup = "ok") {
+    return std::string(kStubHandToolHorseBrush) + "\nStubHandTool.installHorseBrush('" + handler + "', '" + lookup + "')\n";
+}
+
+// The player takes the horse brush in hand: _G.brush.
+inline constexpr const char* kHoldHorseBrush = "_G.brush = StubHandTool.horseBrush(foot.player); StubHandTool.hold(brush)";
+inline void HoldHorseBrush(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldHorseBrush, "=holdHorseBrush"), 0); }
+
 }  // namespace hand_tools_test
 
 // A test file whose game frame has more in it defines this to a Lua chunk before including the header.
