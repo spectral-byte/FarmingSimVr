@@ -219,6 +219,17 @@ inline std::string ChainsawStubs(const char* variant = "ok") {
 inline constexpr const char* kHoldChainsaw = "_G.saw = StubHandTool.chainsaw(foot.player); StubHandTool.hold(saw)";
 inline void HoldChainsaw(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldChainsaw, "=holdChainsaw"), 0); }
 
+// ---- spray can (ADR-0030) -----------------------------------------------------------------------------------------
+// The spray can's game-side stub (kStubHandToolSprayCan) is not part of every test's game: a test that wants it passes
+// SprayCanStubs() as StartOptions::extraStubs (after kXmlStubs, if it uses both: concatenate).
+inline std::string SprayCanStubs() {
+    return std::string(kStubHandToolSprayCan) + "\nStubHandTool.installSprayCan()\n";
+}
+
+// The player takes the spray can in hand: _G.can.
+inline constexpr const char* kHoldSprayCan = "_G.can = StubHandTool.sprayCan(foot.player); StubHandTool.hold(can)";
+inline void HoldSprayCan(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldSprayCan, "=holdSprayCan"), 0); }
+
 }  // namespace hand_tools_test
 
 // A test file whose game frame has more in it defines this to a Lua chunk before including the header.
