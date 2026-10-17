@@ -237,6 +237,47 @@ TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, AfterACastTheCommandLog
     EXPECT_NEAR(bobberLogged.z, bobber[2], 0.01) << line;
 }
 
+// The real bobber flies out after the cast and drifts once it is on the water: the command logs where it landed (where it first
+// came to rest), never a point of its flight, nor where it drifted to since.
+TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, TheBobberIsLoggedWhereItLandedNotInFlightNorWhereItDriftedTo) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(20);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    ASSERT_EQ(EvalLua(L, "StubHandTool.rodState(rod)"), "waiting");
+
+    // The flight: 0.3 m a frame (18 m/s), down to the water at (6.5, -0.5, -10).
+    auto bobberAt = [&](double x, double y, double z) {
+        ASSERT_EQ(RunLuauChunk(L, "setTranslation(StubHandTool.rodSpec(rod).bobber, " + std::to_string(x) + ", " + std::to_string(y) + ", " +
+                                      std::to_string(z) + ")", "=bobberAt"), 0);
+    };
+    for (int step = 0; step <= 5; ++step) {
+        bobberAt(5.0 + 0.3 * step, -0.5 + 0.1 * (5 - step), -10.0);
+        FRAMES(1);
+        if (step == 3) {
+            RunCommand();
+            const std::string line = RodLine("last cast: ");
+            EXPECT_FALSE(After(line, "bobber at").found) << "in flight, the bobber has not landed: " << line;
+            EXPECT_NE(line.find("not landed"), std::string::npos) << line;
+        }
+    }
+    FRAMES(2);  // at rest on the water
+
+    // The drift: 1 cm a frame (0.6 m/s), a metre in all.
+    for (int step = 1; step <= 100; ++step) {
+        bobberAt(6.5 + 0.01 * step, -0.5, -10.0);
+        FRAMES(1);
+    }
+    RunCommand();
+    const std::string line = RodLine("last cast: ");
+    const Triple bobber = After(line, "bobber at");
+    ASSERT_TRUE(bobber.found) << line;
+    EXPECT_NEAR(bobber.x, 6.5, 0.01) << "where it landed: " << line;
+    EXPECT_NEAR(bobber.y, -0.5, 0.01) << line;
+    EXPECT_NEAR(bobber.z, -10.0, 0.01) << line;
+}
+
 // ---- The last action ------------------------------------------------------------------------------------------------------------
 
 // What the secondary action does is not known yet (ADR-0031): the command says which action the rod was given last, the trigger's

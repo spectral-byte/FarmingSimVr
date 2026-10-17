@@ -111,7 +111,8 @@ local function newState()
         fishingRod = {       -- what the diagnostics tell of the fishing rod (see "The fishing rod in the diagnostics")
             tool = nil,      -- the rod the local player held at the last update
             state = nil,     -- ... and its state then (getFishingRodState)
-            cast = nil,      -- the last cast: { tool, rod = {dx, dy, dz} | nil, head = {dx, dy, dz} | nil, bobber = {x, y, z} | nil }
+            cast = nil,      -- the last cast: { tool, rod = {dx, dy, dz} | nil, head = {dx, dy, dz} | nil, bobber = {x, y, z} | nil
+                             -- (where it landed), bobberLast = {x, y, z} | nil (where it was at the last update, until it landed) }
             action = nil,    -- the last action a rod was given: { tool, name = "primary" | "secondary", by = text, value }
         },
         problem = nil,      -- why Hand Tools gave up, once it did (the warning is logged then and never again)
@@ -897,8 +898,8 @@ end
 -- ---- The fishing rod in the diagnostics ---------------------------------------------------------------------------------
 -- With the rod in the Tool Hand, vrHandToolsDiagnostics also logs lines about it (ADR-0031), for the headset round: its state
 -- (getFishingRodState); the last cast, seen by watchFishingRod as the state leaving charging, with the rod's ray direction and the
--- head's direction then (does the cast follow the rod or the head?) and where the bobber landed (getBobberPosition, read while
--- the rod waits for a bite, once the line is out); and the last action the rod was given: the trigger's primary use (noted by
+-- head's direction then (does the cast follow the rod or the head?) and where the bobber landed (getBobberPosition, where it
+-- first comes to rest while the rod waits for a bite: not in flight, nor where it drifts to later); and the last action the rod was given: the trigger's primary use (noted by
 -- callUseHandler) or a secondary seen through the game's own action event. For that, while the rod is in the Tool Hand, the
 -- callback of its ACTIVATE_HANDTOOL_SECONDARY event (onActivateSecondaryAction, which the event holds since it was registered,
 -- so a wrap of the class would not be seen) is wrapped where the game keeps it: the wrap notes the call and passes it on unchanged.
@@ -978,9 +979,14 @@ local function fishingRodInTheHand(self)
     return tool
 end
 
--- Once per update, after the trigger (a let-go there throws the cast): notes the local player's rod's cast, and wraps its
--- secondary event while it is in the Tool Hand.
-local function watchFishingRod(self)
+-- A bobber that moves slower than this (metres per second) from one update to the next is at rest: it has landed. A bobber in
+-- flight is many times faster, one floating on the water drifts and bobs slower.
+local BOBBER_AT_REST_SPEED = 1.0
+
+-- Once per update, after the trigger (a let-go there throws the cast): notes the local player's rod's cast and where its bobber
+-- landed (the first update the bobber is at rest while the rod waits for a bite; kept from then on, so its drift is not), and
+-- wraps its secondary event while it is in the Tool Hand.
+local function watchFishingRod(self, dt)
     local inTheHand = fishingRodInTheHand(self)
     if inTheHand ~= nil then pcall(wrapRodSecondaryEvent, inTheHand) end
     local seen = state.fishingRod
@@ -996,8 +1002,16 @@ local function watchFishingRod(self)
         seen.cast = { tool = tool, rod = dx ~= nil and { dx, dy, dz } or nil, head = headDirection(player) }
     end
     local cast = seen.cast
-    if cast ~= nil and cast.tool == tool and rodState == "waiting" then
-        cast.bobber = bobberPosition(tool) or cast.bobber
+    if cast ~= nil and cast.tool == tool and rodState == "waiting" and cast.bobber == nil then
+        local position = bobberPosition(tool)
+        local last, seconds = cast.bobberLast, (tonumber(dt) or 0) / 1000
+        if position ~= nil and last ~= nil and seconds > 0 then
+            local dx, dy, dz = position[1] - last[1], position[2] - last[2], position[3] - last[3]
+            if math.sqrt(dx * dx + dy * dy + dz * dz) <= BOBBER_AT_REST_SPEED * seconds then
+                cast.bobber = position  -- landed: kept as it is from now on
+            end
+        end
+        cast.bobberLast = position
     end
     seen.tool, seen.state = tool, rodState
 end
@@ -1013,7 +1027,8 @@ local function lastCastText(tool)
     return table.concat({
         cast.rod ~= nil and tripleText("rod direction", cast.rod) or "rod direction: none (the rod was not in the Tool Hand)",
         cast.head ~= nil and tripleText("head direction", cast.head) or "head direction: unknown",
-        cast.bobber ~= nil and tripleText("bobber at", cast.bobber) or "bobber: not read (the line was not out waiting for a bite)",
+        cast.bobber ~= nil and tripleText("bobber at", cast.bobber)
+            or "bobber: not landed (not seen at rest while the line was out waiting for a bite)",
     }, ", ")
 end
 
@@ -1556,7 +1571,7 @@ function VRCompanion:updateHandTools(dt)
     updateTrigger(self)
     updateHaptics(self, dt)  -- the trigger use above is what starts a cut or a spray
     updateSprayCanFeedback(self)  -- last: its tick is a single pulse on top of the buzz
-    watchFishingRod(self)  -- for the diagnostics; after the trigger, whose let-go throws the cast
+    watchFishingRod(self, dt)  -- for the diagnostics; after the trigger, whose let-go throws the cast
 end
 
 -- ---- Settings command, diagnostics, console commands, reset ---------------------------------------------------------------
