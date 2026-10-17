@@ -98,6 +98,7 @@ local function newState()
             treeNode = nil,  -- the target tree last ticked for
         },
         problem = nil,       -- why Hand Tools gave up, once it did (the warning is logged then and never again)
+        toolProblems = {},   -- per tool kind: why that tool is left to the game, once it was found reshaped (warned once)
     }
 end
 
@@ -492,6 +493,26 @@ local function checkWraps()
     return nil
 end
 
+-- A TOOL WHOSE CLASS HAS NO GLOBAL NAME (the fishing rod's, a DLC's: SUPPORTED_TOOLS[].useHandlerSpecialization) cannot be checked
+-- at map load: its class is only reachable from a tool. It is checked when the local player's tool would go into the Tool Hand. A
+-- tool found reshaped (its use handler missing or not the shape the trigger calls) is left to the game for the rest of the map,
+-- with ONE warning; the other Hand Tools are unaffected. A game without the DLC never holds one, so nothing is checked or warned.
+local USE_HANDLER_SHAPE = { parameters = 3, describe = "(tool, action, inputValue)" }
+
+-- Why the tool is left to the game, or nil when it is as expected (or is a tool whose functions checkWraps checks).
+local function toolProblem(tool, entry)
+    if entry.useHandlerSpecialization == nil then return nil end
+    local known = state.toolProblems[entry.kind]
+    if known ~= nil then return known end
+    local problem = shapeProblem(USE_HANDLER_SHAPE, useHandlerOf(tool, entry))
+    if problem == nil then return nil end
+    problem = entry.useHandlerSpecialization .. "." .. entry.useHandler .. ": " .. problem
+    state.toolProblems[entry.kind] = problem
+    print("[FS25_VR] [Warning] Hand Tools: the " .. entry.label .. " is left to the game: " .. problem .. ". The " .. entry.label
+        .. " is unchanged.")
+    return problem
+end
+
 -- ---- Placement ----------------------------------------------------------------------------------------------------------
 
 function VRCompanion:getToolHand()
@@ -553,12 +574,15 @@ local function toolHandFor(self, tool)
     if state.problem ~= nil then return nil, "Hand Tools gave up (" .. state.problem .. ")" end
     if state.givingBack then return nil, "the tool is being given back to the game" end
     if tool == nil then return nil, "no Hand Tool is held" end
-    if supportedKind(tool) == nil then return nil, "the Hand Tool is not supported" end
+    local kind, entry = supportedKind(tool)
+    if kind == nil then return nil, "the Hand Tool is not supported" end
     local player = localCarryingPlayer(tool)
     if player == nil then return nil, "the Hand Tool is not the local player's" end
     if player.camera == nil or player.camera.isFirstPerson ~= true then
         return nil, "not in the first person view"
     end
+    local problem = toolProblem(tool, entry)
+    if problem ~= nil then return nil, "the " .. entry.label .. " is left to the game (" .. problem .. ")" end
     local hand = self:getToolHand()
     local pose = self:getHandState(hand)
     if pose.tracked ~= true then return nil, "the Tool Hand is not tracked" end

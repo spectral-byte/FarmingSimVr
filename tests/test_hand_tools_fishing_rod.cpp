@@ -326,3 +326,91 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheGamesOwnBindingsStillFishWhileT
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressSecondaryBinding(rod, 1); StubHandTool.pressSecondaryBinding(rod, 0)", "=secondary"), 0);
     EXPECT_EQ(EvalLua(L, "useCalls('ACTIVATE_HANDTOOL_SECONDARY')"), "1,0") << "the game's own secondary binding still reaches the rod";
 }
+
+// ---- Multiplayer, a game without the DLC, a DLC update that reshapes the rod ---------------------------------------------------
+
+// The game attaches a Hand Tool of every player in the session through the same function. Only the local player's rod is moved.
+TEST_F(VirtualGamepadHandToolsFishingRodTest, AnotherPlayersRodIsNeverTakenIntoTheToolHandNorUsedByTheTrigger) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local pitch = StubScene.newNode("remotePitch", 0, 4, 1.7, 4)
+        _G.remote = setmetatable({ isOwner = false, camera = { isFirstPerson = true, pitchNode = pitch } }, { __index = _G.Player })
+        _G.remoteRod = StubHandTool.fishingRod(remote)
+        remoteRod.isHeld = true
+        remoteRod.carryingPlayer = remote
+        remoteRod:attachTool()
+    )luau", "=holdRemoteRod"), 0);
+    FRAMES(2);
+
+    EXPECT_EQ(EvalLua(L, "tostring(getParent(remoteRod.rootNode) == remote.camera.pitchNode)"), "true") << "where the game put it";
+    EXPECT_EQ(EvalLua(L, "isBelow(remoteRod.rootNode, handHolder('right'))"), "false");
+    EXPECT_EQ(InTheHand("right"), "true") << "the local player's rod stays in the hand";
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    ASSERT_EQ(UseCalls(), "1");
+    EXPECT_EQ(EvalLua(L, "tostring(StubHandTool.useCalls[1].self == rod)"), "true") << "the trigger uses the local player's rod only";
+}
+
+// A game without the Highlands Fishing DLC has no rod class and no rod: nothing changes and nothing warns.
+TEST_F(VirtualGamepadHandToolsFishingRodTest, AGameWithoutTheDlcLogsNoWarningAndItsHandToolsWorkAsBefore) {
+    headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
+    ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge));
+    SetGameTime(10000);
+    ASSERT_NO_FATAL_FAILURE(HoldLance(L));
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    FRAMES(2);
+
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true") << Dump();
+    EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
+    std::string warnings;
+    for (const auto& line : s_capturedLogs) {
+        if (line.find("[Warning]") != std::string::npos) warnings += line + "\n";
+    }
+    EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 0) << warnings;
+}
+
+// The fixture's checks that a rod whose handler a DLC update renamed or reshaped is the game's, with one warning naming the handler.
+#define EXPECT_THE_GAMES_ROD_AND_ONE_WARNING() \
+    do { \
+        ASSERT_NO_FATAL_FAILURE(HoldFishingRod(L)); \
+        PICK_UP(kRight, 0.25f, -0.10f, -0.30f); \
+        AimTheHand(kRight, 0.25f, -0.10f, -0.30f); \
+        FRAMES(2); \
+        EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 1) << "exactly one warning"; \
+        EXPECT_EQ(CountLogLines("onActivateAction"), 1) << "that names the handler"; \
+        EXPECT_EQ(InTheHand("right"), "false") << "the rod is given back to the game"; \
+        EXPECT_EQ(WhereTheGamePutsIt(), "true"); \
+        EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "and aimed by looking"; \
+        headset.SetHandInputs(kRight, Trigger(1.0f)); \
+        FRAMES(5); \
+        EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger is the pad's"; \
+        EXPECT_EQ(UseCalls(), "") << "and uses nothing"; \
+        headset.SetHandInputs(kRight, Trigger(0.0f)); \
+        ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(rod); StubHandTool.hold(rod)", "=again"), 0); \
+        FRAMES(2); \
+        EvalLua(L, "runCommand('vrHandToolsDiagnostics')"); \
+        EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 1) << "and the warning is not repeated"; \
+    } while (0)
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsHandlerMissingTheRodIsTheGamesAndTheLogHasOneWarning) {
+    ASSERT_NO_FATAL_FAILURE(Start("missing"));
+    EXPECT_THE_GAMES_ROD_AND_ONE_WARNING();
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsHandlerReshapedTheRodIsTheGamesAndTheLogHasOneWarning) {
+    ASSERT_NO_FATAL_FAILURE(Start("reshaped"));
+    EXPECT_THE_GAMES_ROD_AND_ONE_WARNING();
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, AReshapedRodLeavesTheOtherHandToolsInTheToolHand) {
+    ASSERT_NO_FATAL_FAILURE(Start("reshaped"));
+    ASSERT_NO_FATAL_FAILURE(HoldFishingRod(L));
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    FRAMES(2);
+    ASSERT_EQ(CountLogLines("[Warning] Hand Tools"), 1);
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(rod)", "=putAway"), 0);
+    ASSERT_NO_FATAL_FAILURE(HoldLance(L));
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "isInTheHand(lance, 'right')"), "true") << "the lance still goes into the hand: " << Dump();
+}
