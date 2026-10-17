@@ -41,7 +41,8 @@
 --   VRCompanion:placeHandToolsForRender()               before every rendered frame, called by placeVirtualHandsForRender
 --   VRCompanion:getHandToolsDiagnostics() -> string     the state of Hand Tools, one line
 --   VRCompanion:registerHandToolsConsoleCommands() / resetHandTools()   map load / unload
---   Console: vrHandTools [on|off], vrToolHand [left|right], vrHandToolsDiagnostics,
+--   Console: vrHandTools [on|off], vrToolHand [left|right], vrHandToolsDiagnostics (also describes an unsupported held tool in
+--     the log, "Hand Tool probe:" lines, ADR-0030; the one-line answer is unchanged),
 --     vrHandToolOffset <tool> <nudge|turn|reset> (tuning HAND_TOOL_HANDLE_OFFSETS live; not saved)
 --
 -- Hooks into the rest of the mod (each a single guarded call):
@@ -66,6 +67,7 @@ local HAND_NAMES = { [0] = "left", [1] = "right" }
 local function newState()
     return {
         tool = nil,          -- the Hand Tool the game last attached to the camera (checked to be held before it is used)
+        cameraPlacedTool = nil,  -- the tool the game last placed through attachToolToCamera (read by the description of an unsupported tool)
         linkedTool = nil,    -- the tool this module has linked into a Virtual Hand
         linkedHand = nil,    -- ... and the hand
         linkedHolder = nil,  -- ... and the Virtual Hand's node
@@ -511,6 +513,7 @@ WRAP_SPECS.attachToolToCamera.make = function(original)
     return function(tool, ...)
         if type(tool) == "table" and not isAnotherPlayersTool(tool) then
             state.tool = tool
+            state.cameraPlacedTool = tool  -- for the description of an unsupported tool (placement path)
             local hand = toolHandFor(VRCompanion, tool)
             if hand ~= nil and linkIntoHand(VRCompanion, tool, hand) then
                 reportPlacement(tool, hand)
@@ -1020,15 +1023,324 @@ local function diagnosticFields(self)
     return fields
 end
 
+-- ---- Describing an unsupported held Hand Tool (ADR-0030) ----------------------------------------------------------------------
+-- While the local player holds a Hand Tool this module does not support (another mod's, a DLC's), vrHandToolsDiagnostics also
+-- writes what the game gives that tool to the log, so that a log from the headset is enough to design the tool's support. It
+-- only reads: no wrap, nothing about the tool, the supported list or the placement changes. Every read is guarded: a failure
+-- becomes a line, never an error. Each line starts with PROBE_TAG after the mod's own tag.
+
+local PROBE_TAG = "Hand Tool probe: "
+
+-- The unsupported Hand Tool the local player holds, or nil (nothing held, a supported tool, another player's tool). The tool
+-- the game last attached to the camera, or else the one the player says it holds (a tool the game put in the hand of the third
+-- person view never went through attachToolToCamera).
+local function unsupportedHeldTool()
+    local tool = heldTool()
+    if tool == nil then
+        local player = localPlayer()
+        if type(player) == "table" and type(player.getHeldHandTool) == "function" then
+            local held = player:getHeldHandTool()
+            tool = type(held) == "table" and held or nil
+        end
+    end
+    if tool == nil or supportedKind(tool) ~= nil or isAnotherPlayersTool(tool) then return nil end
+    return tool
+end
+
+-- The caps. Each cut says how much was left out.
+local PROBE_STRING_LENGTH = 30       -- a longer string is cut
+local PROBE_MAX_LINES = 200          -- lines per run, the line that says how many were left out included
+local PROBE_MAX_SPEC_FIELDS = 30     -- fields shown per spec table
+local PROBE_MAX_FUNCTION_NAMES = 40  -- function names shown per class or type
+local PROBE_MAX_NODES = 40           -- nodes shown in the tree
+local PROBE_NODE_DEPTH = 3           -- levels of nodes below the root that are named
+
+-- The keys of a table in a fixed order (a log from one run reads like the next).
+local function sortedKeys(t)
+    local keys = {}
+    for key in pairs(t) do keys[#keys + 1] = key end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    return keys
+end
+
+-- A short text for a field's value: numbers and booleans as they are, a string cut short, a table by its key count, a number
+-- that is a node (an entity id) with the node's name. Nothing for a function. A node is only guessed from the number (a positive
+-- whole number the engine says is an entity), so a plain number that happens to be an entity id is shown with a node name as
+-- well; in a log read by a person that is harmless.
+local function shortValue(value)
+    local kind = type(value)
+    if kind == "number" then
+        local text = tostring(value)
+        local entityExists, getName = engine("entityExists"), engine("getName")
+        if value > 0 and value == math.floor(value) and type(entityExists) == "function" and type(getName) == "function"
+            and entityExists(value) then
+            text = string.format('%s (node "%s")', text, tostring(getName(value)))
+        end
+        return text
+    elseif kind == "boolean" then
+        return tostring(value)
+    elseif kind == "string" then
+        if #value > PROBE_STRING_LENGTH then return '"' .. string.sub(value, 1, PROBE_STRING_LENGTH) .. '..."' end
+        return '"' .. value .. '"'
+    elseif kind == "table" then
+        local count = 0
+        for _ in pairs(value) do count = count + 1 end
+        return count .. " keys"
+    end
+    return nil
+end
+
+-- Every spec_ table of the tool, one level deep: a line per field with its name, Lua type and short value.
+local function describeSpecTables(tool, add)
+    local specNames = {}
+    for _, key in ipairs(sortedKeys(tool)) do
+        if type(key) == "string" and string.sub(key, 1, 5) == "spec_" and type(tool[key]) == "table" then specNames[#specNames + 1] = key end
+    end
+    for _, specName in ipairs(specNames) do
+        local ok, err = pcall(function()
+            local spec = tool[specName]
+            local keys = sortedKeys(spec)
+            for index, key in ipairs(keys) do
+                if index > PROBE_MAX_SPEC_FIELDS then
+                    add(string.format("%s: %d more fields left out", specName, #keys - PROBE_MAX_SPEC_FIELDS))
+                    break
+                end
+                local fieldOk, text = pcall(function()
+                    local value = spec[key]
+                    local shown = shortValue(value)
+                    return string.format("%s.%s (%s)%s", specName, tostring(key), type(value), shown ~= nil and (" = " .. shown) or "")
+                end)
+                add(fieldOk and text or string.format("%s.%s could not be read (%s)", specName, tostring(key), tostring(text)))
+            end
+        end)
+        if not ok then add(specName .. " could not be read (" .. tostring(err) .. ")") end
+    end
+end
+
+-- The names of the functions in a table, sorted, as one text ("none" for no function); the names past the cap are counted.
+local function functionNames(t)
+    local names = {}
+    for key, value in pairs(t) do
+        if type(value) == "function" then names[#names + 1] = tostring(key) end
+    end
+    table.sort(names)
+    if #names == 0 then return "none" end
+    if #names <= PROBE_MAX_FUNCTION_NAMES then return table.concat(names, ", ") end
+    local shown = {}
+    for index = 1, PROBE_MAX_FUNCTION_NAMES do shown[index] = names[index] end
+    return string.format("%s (and %d more left out)", table.concat(shown, ", "), #names - PROBE_MAX_FUNCTION_NAMES)
+end
+
+-- The name a global table is kept under, or nil.
+local function globalNameOf(value)
+    for name, candidate in pairs(_G) do
+        if candidate == value and type(name) == "string" then return name end
+    end
+    return nil
+end
+
+-- Each specialization of the tool: its class (the game keeps it next to the specialization's name) with the global name it has,
+-- and the functions on it, where handlers kept on the class only (the chainsaw's, the horse brush's) are.
+local function describeSpecializationClasses(tool, add)
+    local names, classes = tool.specializationNames, tool.specializations
+    if type(names) ~= "table" or type(classes) ~= "table" then return end
+    for index, specName in ipairs(names) do
+        local class = classes[index]
+        if type(class) == "table" then
+            local ok, err = pcall(function()
+                add(string.format("specialization %s: class %s, functions: %s", tostring(specName),
+                    globalNameOf(class) or "(no global name)", functionNames(class)))
+            end)
+            if not ok then add(string.format("specialization %s: class could not be read (%s)", tostring(specName), tostring(err))) end
+        end
+    end
+end
+
+-- The functions the tool's type gives it.
+local function describeTypeFunctions(tool, add)
+    local toolType = tool.type
+    if type(toolType) ~= "table" or type(toolType.functions) ~= "table" then return end
+    add(string.format("type %s: functions: %s", tostring(toolType.name or tool.typeName), functionNames(toolType.functions)))
+end
+
+-- What the callback of an action event is called: found by looking it up among the functions of the specialization classes (named
+-- by the global the class is kept under), of the tool's type and of the tool itself.
+local function callbackName(tool, callback)
+    if type(callback) ~= "function" then return nil end
+    if type(tool.specializations) == "table" then
+        for _, class in ipairs(tool.specializations) do
+            if type(class) == "table" then
+                for name, fn in pairs(class) do
+                    if fn == callback then return (globalNameOf(class) or "(class)") .. "." .. tostring(name) end
+                end
+            end
+        end
+    end
+    local toolType = tool.type
+    if type(toolType) == "table" and type(toolType.functions) == "table" then
+        for name, fn in pairs(toolType.functions) do
+            if fn == callback then return "type function " .. tostring(name) end
+        end
+    end
+    for name, fn in pairs(tool) do
+        if fn == callback then return "tool." .. tostring(name) end
+    end
+    return nil
+end
+
+-- The field names of a table, sorted, as one text.
+local function fieldNames(t)
+    local names = {}
+    for _, key in ipairs(sortedKeys(t)) do names[#names + 1] = tostring(key) end
+    return table.concat(names, ", ")
+end
+
+-- The edges an action event fires on, as registerActionEvent takes them: triggerDown (the press), triggerUp (the release) and
+-- triggerAlways (every frame the input is held).
+local function edgesOf(read)
+    local down, up, always = read("triggerDown"), read("triggerUp"), read("triggerAlways")
+    if type(down) ~= "boolean" and type(up) ~= "boolean" and type(always) ~= "boolean" then return nil end
+    local edges = {}
+    if down == true then edges[#edges + 1] = "press" end
+    if up == true then edges[#edges + 1] = "release" end
+    if always == true then edges[#edges + 1] = "every frame" end
+    return #edges > 0 and table.concat(edges, ", ") or "nothing"
+end
+
+-- The tool's registered action events, as the game keeps them: the action's name, the callback's name where it can be found, and
+-- the edges. The game may keep the details with the input binding's event (named by `actionEventId`): read from there too.
+local function describeActionEvents(tool, add)
+    local events = tool.actionEvents
+    if type(events) ~= "table" then return end
+    local inputBinding = engine("g_inputBinding")
+    local lines = {}
+    for key, entry in pairs(events) do
+        local ok, err = pcall(function()
+            if type(entry) ~= "table" then return end
+            local bound = type(inputBinding) == "table" and type(inputBinding.events) == "table"
+                and entry.actionEventId ~= nil and inputBinding.events[entry.actionEventId] or nil
+            local function read(field)
+                local value = entry[field]
+                if value == nil and type(bound) == "table" then value = bound[field] end
+                return value
+            end
+            local actionName = read("actionName") or (type(key) == "string" and key or nil) or "(unnamed)"
+            local callback = read("callback")
+            local name = callbackName(tool, callback)
+            local callbackText = name ~= nil and ("callback " .. name)
+                or (type(callback) == "function" and "callback not found among the class and type functions" or "callback not readable")
+            local edges = edgesOf(read)
+            local edgesText = edges ~= nil and ("fires on: " .. edges) or ("edges not readable (fields: " .. fieldNames(entry) .. ")")
+            lines[#lines + 1] = string.format("action event %s: %s, %s", tostring(actionName), callbackText, edgesText)
+        end)
+        if not ok then lines[#lines + 1] = string.format("action event %s could not be read (%s)", tostring(key), tostring(err)) end
+    end
+    table.sort(lines)
+    for _, line in ipairs(lines) do add(line) end
+end
+
+-- The node tree below the tool's root, by name (the path from the root), to a fixed depth and a fixed number of nodes. A node at
+-- the last level says how many children it has that are not listed; the nodes past the cap are counted.
+local function describeNodes(tool, add)
+    local root = tool.rootNode
+    local getName, getNumOfChildren, getChildAt = engine("getName"), engine("getNumOfChildren"), engine("getChildAt")
+    if root == nil or type(getName) ~= "function" or type(getNumOfChildren) ~= "function" or type(getChildAt) ~= "function" then
+        add("node tree: the tool has no root node to read")
+        return
+    end
+    local shown, leftOut = 0, 0
+    local function walk(node, path, depth)  -- depth: the levels of `node` below the root
+        local count = getNumOfChildren(node)
+        for index = 0, count - 1 do
+            local child = getChildAt(node, index)
+            local childPath = path .. "/" .. tostring(getName(child))
+            local notListed = (depth + 1 == PROBE_NODE_DEPTH) and getNumOfChildren(child) or 0
+            if shown < PROBE_MAX_NODES then
+                shown = shown + 1
+                add("node " .. childPath .. (notListed > 0 and string.format(" (%d child%s not listed)", notListed, notListed == 1 and "" or "ren") or ""))
+            else
+                leftOut = leftOut + 1
+            end
+            if depth + 1 < PROBE_NODE_DEPTH then walk(child, childPath, depth + 1) end
+        end
+    end
+    -- A node that cannot be read ends the walk, not the description: the lines already added stay, and so does the count of the
+    -- nodes left out before the failure (the failure is a line after it).
+    local ok, err = pcall(function() walk(root, tostring(getName(root)), 0) end)
+    if leftOut > 0 then add(string.format("node tree: %d more nodes left out", leftOut)) end
+    if not ok then add("node tree could not be read to the end (" .. tostring(err) .. ")") end
+end
+
+-- Whether the game's last placement of the tool was HandTool:attachToolToCamera (it links the tool to the camera when the player
+-- is in the first person view) or another path (attachToolToHand in the third person view, or whatever else a tool does). This is
+-- only known from the wrap of attachToolToCamera, which noted the tool when the game placed it (state.cameraPlacedTool); without
+-- the wrap (the game's function is missing or reshaped, or Hand Tools gave up) nothing was noted, and the path is said to be
+-- unknown, not another one. The game places a held tool again whenever the view changes, so a tool noted in the first person
+-- view that is now seen from the third person view has been placed by another path since (nothing is wrapped to see that).
+local function describePlacement(tool, add)
+    if wraps.attachToolToCamera == nil then
+        add("placement: unknown (the placement wrap is not installed)")
+        return
+    end
+    local player = carryingPlayer(tool) or localPlayer()
+    local camera = type(player) == "table" and player.camera or nil
+    local inFirstPerson = type(camera) == "table" and camera.isFirstPerson == true
+    if state.cameraPlacedTool == tool and inFirstPerson then
+        add("placement: through attachToolToCamera")
+    else
+        add("placement: not through attachToolToCamera (the game used another path)")
+    end
+end
+
+-- Runs one part of the description; a failure becomes a line, and the other parts go on.
+local function guarded(what, part, tool, add)
+    local ok, err = pcall(part, tool, add)
+    if not ok then add(what .. " could not be read (" .. tostring(err) .. ")") end
+end
+
+-- The lines that describe the tool, without the tags, at most PROBE_MAX_LINES in all: when lines are left out, the last of those
+-- lines is the one that counts them (it takes the place of the last line kept, which is counted too). The parts that are short and
+-- tell most come first; the spec tables, which have no limit of their own, come last and are what a cut takes.
+local function describeUnsupportedTool(tool)
+    local lines, leftOut = {}, 0
+    local function add(line)
+        if #lines < PROBE_MAX_LINES then lines[#lines + 1] = line else leftOut = leftOut + 1 end
+    end
+    guarded("config file", function(t) add("config file: " .. tostring(t.configFileName)) end, tool, add)
+    guarded("placement", describePlacement, tool, add)
+    guarded("specializations", describeSpecializationClasses, tool, add)
+    guarded("type", describeTypeFunctions, tool, add)
+    guarded("action events", describeActionEvents, tool, add)
+    guarded("node tree", describeNodes, tool, add)
+    guarded("spec tables", describeSpecTables, tool, add)
+    if leftOut > 0 then lines[#lines] = string.format("%d more lines left out", leftOut + 1) end
+    return lines
+end
+
+-- The description of the unsupported tool held now, [] when there is none.
+local function probeLines()
+    local ok, result = pcall(function()
+        local tool = unsupportedHeldTool()
+        if tool == nil then return {} end
+        return describeUnsupportedTool(tool)
+    end)
+    if ok then return result end
+    return { "could not be read: " .. tostring(result) }
+end
+
 -- One line (the Pointer diagnostics may carry it too).
 function VRCompanion:getHandToolsDiagnostics()
     return table.concat(diagnosticFields(self), " | ")
 end
 
--- Prints the fields to the game log, one tagged line each, and returns them as one line.
+-- Prints the fields to the game log, one tagged line each, and returns them as one line. A held unsupported Hand Tool is
+-- described after them.
 function VRCompanion:consoleCommandHandToolsDiagnostics()
     for _, field in ipairs(diagnosticFields(self)) do
         print("[FS25_VR] " .. field)
+    end
+    for _, line in ipairs(probeLines()) do
+        print("[FS25_VR] " .. PROBE_TAG .. line)
     end
     return self:getHandToolsDiagnostics()
 end

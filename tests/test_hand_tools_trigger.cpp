@@ -219,7 +219,7 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, PuttingTheLanceAwayWhileSprayingEndsT
     FRAMES(2);
     ASSERT_TRUE(Spraying());
 
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(lance); _G.sprayCan = StubHandTool.sprayCan(foot.player); StubHandTool.hold(sprayCan)", "=switchTool"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(lance); _G.otherTool = StubHandTool.otherModTool(foot.player); StubHandTool.hold(otherTool)", "=switchTool"), 0);
     FRAMES(2);
 
     EXPECT_FALSE(Spraying());
@@ -278,7 +278,7 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, InAMenuEitherHandCanPointEvenWhileThe
 
 TEST_F(VirtualGamepadHandToolsTriggerTest, WithAnUnsupportedHandToolTheTriggerIsThePadsAndThePointerHandRulesAreAsBefore) {
     ASSERT_NO_FATAL_FAILURE(Start());
-    ASSERT_NO_FATAL_FAILURE(HoldSprayCan(L));
+    ASSERT_NO_FATAL_FAILURE(HoldOtherModTool(L));
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     FRAMES(1);
 
@@ -286,7 +286,7 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, WithAnUnsupportedHandToolTheTriggerIs
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger is the pad's";
-    EXPECT_EQ(UseCalls(), 0) << "and the spray can's handler is not called";
+    EXPECT_EQ(UseCalls(), 0) << "and the other mod's use handler is not called";
 }
 
 TEST_F(VirtualGamepadHandToolsTriggerTest, WithVrHandToolsOffTheTriggerIsThePadsAndThePointerHandRulesAreAsBefore) {

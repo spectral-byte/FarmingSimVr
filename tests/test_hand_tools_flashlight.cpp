@@ -457,7 +457,7 @@ TEST_F(VirtualGamepadHandToolsFlashlightTest, WithVrHandToolsOffTheTriggerIsTheP
 TEST_F(VirtualGamepadHandToolsFlashlightTest, WhenThePlayerPutsTheFlashlightAwayForAnUnsupportedHandToolTheTriggerIsThePadsAndSwitchesNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithFlashlightInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(flashlight)", "=putAway"), 0);
-    ASSERT_NO_FATAL_FAILURE(HoldSprayCan(L));  // the player takes the spray can instead
+    ASSERT_NO_FATAL_FAILURE(HoldOtherModTool(L));  // the player takes another mod's tool instead
     FRAMES(2);
 
     headset.SetHandInputs(kRight, Trigger(1.0f));

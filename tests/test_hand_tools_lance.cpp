@@ -145,7 +145,7 @@ TEST_F(CompanionModTest, TheLanceIsWhereTheGamePutsItWhileTheToolHandIsSetDownOr
     EXPECT_EQ(inTheHand(), "true");
 }
 
-// The spray can is a Hand Tool the Companion Mod does not support (ADR-0029): the game places it exactly as it does without
+// Another mod's tool is a Hand Tool the Companion Mod does not support (ADR-0029): the game places it exactly as it does without
 // VR, and the Virtual Hand next to it is an empty one.
 TEST_F(CompanionModTest, AnUnsupportedHandToolIsPlacedExactlyAsTheGamePlacesItAndTheVirtualHandIsEmpty) {
     FakeTrackedHeadset headset;
@@ -154,12 +154,12 @@ TEST_F(CompanionModTest, AnUnsupportedHandToolIsPlacedExactlyAsTheGamePlacesItAn
     ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge));
     ASSERT_EQ(RunLuauChunk(L, kPlacementHelpers, "=placementHelpers"), 0);
     SetGameTime(10000);
-    ASSERT_NO_FATAL_FAILURE(HoldSprayCan(L));
+    ASSERT_NO_FATAL_FAILURE(HoldOtherModTool(L));
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     FRAMES(2);
 
-    EXPECT_EQ(EvalLua(L, "isWhereTheGamePutsIt(sprayCan)"), "true") << "the spray can is in front of the view";
-    EXPECT_EQ(EvalLua(L, "isInTheHand(sprayCan, 'right')"), "false");
+    EXPECT_EQ(EvalLua(L, "isWhereTheGamePutsIt(otherTool)"), "true") << "the other mod's tool is in front of the view";
+    EXPECT_EQ(EvalLua(L, "isInTheHand(otherTool, 'right')"), "false");
     EXPECT_EQ(EvalLua(L, "shown('right')"), "true") << "the Virtual Hand is there as ever";
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "false");
 
@@ -173,16 +173,16 @@ TEST_F(CompanionModTest, AnUnsupportedHandToolIsPlacedExactlyAsTheGamePlacesItAn
     EXPECT_GT(Number(L, "fingerCurl('right', 'middle')[1]"), 0.3) << "and follows the grip as in an empty hand";
 }
 
-// Switching tools the game's way: the lance put away and the spray can taken, and back.
+// Switching tools the game's way: the lance put away and another mod's tool taken, and back.
 TEST_F(CompanionModTest, SwitchingFromTheLanceToAnUnsupportedToolAndBackMovesTheLanceOutOfTheHandAndIntoItAgain) {
     LANCE_IN_THE_RIGHT_HAND();
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(lance); _G.sprayCan = StubHandTool.sprayCan(foot.player); StubHandTool.hold(sprayCan)", "=switchToSprayCan"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(lance); _G.otherTool = StubHandTool.otherModTool(foot.player); StubHandTool.hold(otherTool)", "=switchToOtherModTool"), 0);
     FRAMES(2);
-    EXPECT_EQ(EvalLua(L, "isWhereTheGamePutsIt(sprayCan)"), "true");
+    EXPECT_EQ(EvalLua(L, "isWhereTheGamePutsIt(otherTool)"), "true");
     EXPECT_EQ(EvalLua(L, "isInTheHand(lance, 'right')"), "false") << "the lance put away is not in the hand";
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "false");
 
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(sprayCan); StubHandTool.hold(lance)", "=switchBack"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(otherTool); StubHandTool.hold(lance)", "=switchBack"), 0);
     FRAMES(1);
     EXPECT_EQ(EvalLua(L, "isInTheHand(lance, 'right')"), "true") << "the lance taken again goes into the hand";
     EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true");
@@ -418,7 +418,7 @@ TEST_F(CompanionModTest, VrHandToolsDiagnosticsLogsTheToolHandTheHeldHandToolWhe
     const std::string setDown = EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
     EXPECT_NE(setDown.find("in the Tool Hand: no (the Tool Hand is not in use)"), std::string::npos) << setDown;
 
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(lance); _G.sprayCan = StubHandTool.sprayCan(foot.player); StubHandTool.hold(sprayCan)", "=sprayCan"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(lance); _G.otherTool = StubHandTool.otherModTool(foot.player); StubHandTool.hold(otherTool)", "=otherTool"), 0);
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     const std::string unsupported = EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
     EXPECT_NE(unsupported.find("held Hand Tool: unsupported"), std::string::npos) << unsupported;

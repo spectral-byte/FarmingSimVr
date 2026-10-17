@@ -1241,6 +1241,13 @@ inline constexpr const char* kStubInputBinding = R"luau(
 //   StubHandTool.nozzleRay(tool) -> x, y, z, dirX, dirY, dirZ   where the lance washes from and along, in the world
 // StubHandTool.sprayCan(player, options) -> tool   an unsupported Hand Tool (spec_sprayCan): the game places it like any
 //   other, in front of the camera; it has an activateAction too
+// StubHandTool.otherModTool(player, options) -> tool   another mod's Hand Tool (spec_otherModTool), which the Companion Mod
+//   does not support: placed like any other by the game. Its use handler is OtherModHandTool.onUseAction(tool, _, inputValue),
+//   on the specialization class only (recorded in StubHandTool.useCalls as tool = "otherMod"), and tool.actionEvents lists
+//   its registered events { actionName, target, callback, triggerUp, triggerDown, triggerAlways, isActive }: ACTIVATE_HANDTOOL
+//   (up and down, not always) first; tool.activateAction, the game's binding, calls it on those edges. The tool also carries
+//   what a Hand Tool of the game has to be read from outside (config file, type, specializations, nodes): see the comment
+//   above the function; options shape it (extra fields, nodes, a spec that cannot be read)
 // StubHandTool.hold(tool) / StubHandTool.drop(tool)   the player takes the tool in hand (the game's startHolding: isHeld,
 //   the carrying player, attachTool) and puts it away (detachTool, not held)
 // StubHandTool.pressUseBinding(tool, inputValue)   the game's own binding (X on a pad, the mouse, the keyboard) calling the
@@ -1327,6 +1334,8 @@ inline constexpr const char* kStubHandTool = R"luau(
             local dx, dy, dz = StubScene.worldDirection(self.camera.firstPersonCamera, 0, 0, -1)
             return x, y, z, dx, dy, dz
         end
+        -- the game's own: the tool the player holds now (Player.currentHandTool, set by Player:setCurrentHandTool)
+        function Player.getHeldHandTool(self) return self.currentHandTool end
         StubHandTool.originalGetLookRay = nil
         if options.getLookRay == "missing" then
             Player.lookRay = lookRay
@@ -1405,6 +1414,7 @@ inline constexpr const char* kStubHandTool = R"luau(
     function StubHandTool.hold(tool)
         tool.isHeld = true
         tool.carryingPlayer = tool.player
+        tool.player.currentHandTool = tool
         StubHandTool.heldTool = tool
         tool:attachTool()
     end
@@ -1413,7 +1423,9 @@ inline constexpr const char* kStubHandTool = R"luau(
         tool:detachTool()
         tool.isHeld = false
         tool.carryingPlayer = nil
+        if tool.player.currentHandTool == tool then tool.player.currentHandTool = nil end
         if StubHandTool.heldTool == tool then StubHandTool.heldTool = nil end
+        StubHandTool.restoreNameReading(tool)  -- a node name the tool made unreadable (otherModTool) reads again
     end
 
     function StubHandTool.pressUseBinding(tool, inputValue)
@@ -1447,6 +1459,136 @@ inline constexpr const char* kStubHandTool = R"luau(
         local tool = StubHandTool.makeTool(player, "sprayCan", "spec_sprayCan", options)
         local record = useHandler(tool, "sprayCan")
         tool.activateAction = function(self, a, inputValue) record(self, a, inputValue) end
+        return tool
+    end
+
+    -- A node whose name cannot be read (a node that is gone while a tool is being read): getName raises for it. The engine's
+    -- getName is replaced only while a tool has such a node, kept in StubHandTool.engineGetName, and put back by drop(tool).
+    local unreadableNames = {}  -- node -> the tool it belongs to
+    function StubHandTool.makeNameUnreadable(tool, node)
+        if StubHandTool.engineGetName == nil then
+            local plainGetName = _G.getName
+            StubHandTool.engineGetName = plainGetName
+            _G.getName = function(id)
+                if unreadableNames[id] ~= nil then error("the node " .. tostring(id) .. " is gone") end
+                return plainGetName(id)
+            end
+        end
+        unreadableNames[node] = tool
+    end
+
+    function StubHandTool.restoreNameReading(tool)
+        for node, owner in pairs(unreadableNames) do
+            if owner == tool then unreadableNames[node] = nil end
+        end
+        if StubHandTool.engineGetName ~= nil and next(unreadableNames) == nil then
+            _G.getName = StubHandTool.engineGetName
+            StubHandTool.engineGetName = nil
+        end
+    end
+
+    -- ---- another mod's tool ---------------------------------------------------------------------------------------
+    -- A Hand Tool the Companion Mod has never heard of, shaped like the tools mods add to the game: its own specialization
+    -- (spec_otherModTool, which no SUPPORTED_TOOLS entry names), a use handler on its specialization class only
+    -- (OtherModHandTool.onUseAction, called with the tool as `self`, like HandToolChainsaw.onCutAction) and an
+    -- ACTIVATE_HANDTOOL action event registered for it (tool.actionEvents), as the game's registerActionEvent keeps one:
+    -- called for trigger down (inputValue 1) and trigger up (0), not on every update the input is held.
+    --
+    -- It is also what the game gives any Hand Tool to be read from outside (HandTool.lua, SpecializationUtil.lua):
+    --   tool.configFileName ("mods/FS25_OtherMod/handTools/otherModTool.xml"), tool.typeName
+    --   tool.specializations / tool.specializationNames   the specialization classes and their names, in step (OtherModHandTool
+    --     "otherModTool"); the specialization tables are tool.spec_<name>. A third table, spec_otherModLine, has no class.
+    --   tool.type = { name, functions }   the tool's type and the functions it gives the instance (copied onto it)
+    --   tool.actionEvents   three registered events: ACTIVATE_HANDTOOL (up and down, callback on the class), AXIS_ROTATE_HANDTOOL
+    --     (every frame, callback on the class) and AXIS_OTHERMOD_NUDGE (up only, a callback that is on no class)
+    --   the nodes: root -> FirstPerson, Rod -> Guide -> Tip -> Float (four levels below the root)
+    -- options (all optional): extraSpecFields = N more fields in spec_otherModTool; extraSpecTables = N more specializations of
+    -- 20 fields each; extraNodes = N more children of the root; extraClassFunctions = N more functions on OtherModHandTool (the
+    -- first tool made in a game decides); brokenSpec = true adds spec_otherModBroken, which has a field
+    -- naming a node whose getName raises (a node that is gone while the tool is being read); brokenNode = true adds a last child of
+    -- the root whose name cannot be read the same way; both are the tool's, and StubHandTool.drop(tool) makes the names readable
+    -- again (see makeNameUnreadable); configFileName replaces the name.
+    function StubHandTool.otherModTool(player, options)
+        options = options or {}
+        local class = _G.OtherModHandTool
+        if class == nil then
+            class = {}
+            _G.OtherModHandTool = class
+            function class.onUseAction(self, _, inputValue)
+                table.insert(StubHandTool.useCalls, { tool = "otherMod", value = inputValue, self = self })
+            end
+            function class.onRollAction(self, _, inputDelta) end
+            for i = 1, options.extraClassFunctions or 0 do class["extraFunction" .. i] = function() end end
+        end
+        local tool = StubHandTool.makeTool(player, "otherMod", "spec_otherModTool", options)
+        tool.configFileName = options.configFileName or "mods/FS25_OtherMod/handTools/otherModTool.xml"
+        tool.typeName = "otherModTool"
+        local spec = tool.spec_otherModTool
+        spec.charge = 5
+        spec.isReeling = false
+        spec.label = "A rather long label that is cut short when it is written to the log file"
+        spec.bobberNode = StubScene.newNode("otherModBobber", 0)
+        spec.lines = { 1, 2, 3 }
+        spec.onBite = function() end
+        for i = 1, options.extraSpecFields or 0 do spec["extra" .. i] = i end
+        tool.spec_otherModLine = { length = 12.5 }
+        tool.specializationNames = { "otherModTool" }
+        tool.specializations = { class }
+        for i = 1, options.extraSpecTables or 0 do
+            local name = "otherModExtra" .. i
+            local extra = {}
+            for j = 1, 20 do extra["field" .. j] = j end
+            tool["spec_" .. name] = extra
+            table.insert(tool.specializationNames, name)
+            table.insert(tool.specializations, {})
+        end
+        if options.brokenSpec then
+            local brokenNode = StubScene.newNode("otherModBroken", 0)
+            tool.spec_otherModBroken = { first = 1, gone = brokenNode, last = 2 }
+            StubHandTool.makeNameUnreadable(tool, brokenNode)
+            table.insert(tool.specializationNames, "otherModBroken")
+            table.insert(tool.specializations, {})
+        end
+        -- the type's functions, which the game copies onto the instance
+        local typeFunctions = {
+            getFloatDepth = function(self) return self.spec_otherModTool.charge end,
+            isOtherModReeling = function(self) return self.spec_otherModTool.isReeling end,
+        }
+        tool.type = { name = "otherModTool", functions = typeFunctions }
+        for name, fn in pairs(typeFunctions) do tool[name] = fn end
+        -- the nodes below the root
+        local rod = StubScene.newNode("otherModRod", tool.rootNode, 0, 0, 0.2)
+        local guide = StubScene.newNode("otherModGuide", rod, 0, 0, 0.3)
+        local tip = StubScene.newNode("otherModTip", guide, 0, 0, 0.3)
+        StubScene.newNode("otherModFloat", tip, 0, 0, 0.1)
+        for i = 1, options.extraNodes or 0 do StubScene.newNode("otherModExtra" .. i, tool.rootNode, 0, 0, 0) end
+        if options.brokenNode then  -- the last child of the root: its name cannot be read
+            StubHandTool.makeNameUnreadable(tool, StubScene.newNode("otherModGone", tool.rootNode, 0, 0, 0))
+        end
+        -- the registered action events
+        local event = { actionName = "ACTIVATE_HANDTOOL", target = tool, triggerUp = true, triggerDown = true,
+                        triggerAlways = false, isActive = true, isDown = false }
+        event.callback = class.onUseAction  -- the function itself, as the game's registerActionEvent keeps it
+        tool.actionEvents = {
+            event,
+            { actionName = "AXIS_ROTATE_HANDTOOL", target = tool, callback = class.onRollAction, triggerUp = false, triggerDown = false,
+              triggerAlways = true, isActive = true },
+            { actionName = "AXIS_OTHERMOD_NUDGE", target = tool, callback = function() end, triggerUp = true, triggerDown = false,
+              triggerAlways = false, isActive = true },
+        }
+        -- the game's input binding: the registered event is called on the edges it was registered for
+        tool.activateAction = function(self, _, inputValue)
+            if not event.isActive then return end
+            local down = inputValue > 0
+            if down and not event.isDown and event.triggerDown then
+                event.callback(event.target, event.actionName, inputValue)
+            elseif down and event.isDown and event.triggerAlways then
+                event.callback(event.target, event.actionName, inputValue)
+            elseif not down and event.isDown and event.triggerUp then
+                event.callback(event.target, event.actionName, inputValue)
+            end
+            event.isDown = down
+        end
         return tool
     end
 
