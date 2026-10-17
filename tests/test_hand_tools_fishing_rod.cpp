@@ -360,6 +360,25 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsStateIsReadFromItsKeysIdleC
     EXPECT_EQ(read(), "caught false 0.00") << "landed: the line is in";
 }
 
+// The dump never named the reeling state's keys: reeling is told by the line out and the rod bent (rodBendFactor). With the line
+// out, a state with none of the known keys and the rod straight is not taken for reeling: it is unknown, silent and keeping
+// nothing in use, until the fish bends the rod.
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheLineOutAStateWithNoneOfTheKnownKeysIsReelingOnlyWhileTheRodBends) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    auto read = [&]() {
+        return EvalLua(L, "(function() local s, l, b = VRCompanion:getFishingRodState(); return string.format('%s %s %.2f', tostring(s), tostring(l), b) end)()");
+    };
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'waiting'); StubHandTool.setRodState(rod, 'reeling')", "=hooked"), 0);
+    ASSERT_EQ(Number(L, "StubHandTool.rodSpec(rod).rodBendFactor"), 0.0) << "hooked, before the fish pulls";
+    EXPECT_EQ(read(), "unknown false 0.00") << "the line out and the rod straight is no evidence of reeling";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.rodSpec(rod).state = StubHandTool.rodSpec(rod).states[7]", "=unseenState"), 0);
+    EXPECT_EQ(read(), "unknown false 0.00") << "a state the dump never showed, with the line out";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'reeling'); StubHandTool.rodSpec(rod).rodBendFactor = 0.4", "=pulling"), 0);
+    EXPECT_EQ(read(), "reeling true 0.40") << "the fish bends the rod";
+}
+
 TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsStateIsNilForAnyOtherToolAndForNoTool) {
     ASSERT_NO_FATAL_FAILURE(Start());
     EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:getFishingRodState())"), "nil") << "nothing held";

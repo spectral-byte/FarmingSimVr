@@ -42,7 +42,8 @@
 --   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   nil when the tool (default: the one held) is no chainsaw
 --   VRCompanion:getFishingRodState([tool]) -> state, lineOut, bend   the fishing rod's state ("idle" | "charging" | "waiting" |
 --                                                       "bite" | "reeling" | "caught" | "unknown"), whether its line is out and its
---                                                       rodBendFactor; "unknown", false, 0 when its spec cannot be read; nil when the
+--                                                       rodBendFactor; "unknown", false, 0 when its spec cannot be read or
+--                                                       tells no state (reeling needs the rod bent); nil when the
 --                                                       tool (default: the one held) is no fishing rod. The only reader of the rod's spec
 --   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the wrist's roll about the bar while the chainsaw is in the tracked Tool Hand
 --                                                       (nil: leave the roll to the game's roll action)
@@ -813,8 +814,11 @@ end
 -- The DLC's scripts cannot be read (ADR-0031): the rod's state machine is known from the #125 dump only. spec.state is one of
 -- spec.states, tables with no name, so a state is told by its keys: charging has angleScale, waiting for a bite biteTime, the bite
 -- (the hook window) catchTime, caught bendResetRate, and idle nothing but its fishingRod back reference. The dump never named the
--- reeling state's keys, so reeling is what is left while the line is out. fishingLine.isInitialized says whether the line is out
--- (from the cast until it is in again), rodBendFactor how far a fish bends the rod (0 unless reeling, up to about 0.93).
+-- reeling state's keys (it only counted 48), so reeling is told by its other evidence: the line out, none of those keys, and the
+-- rod bent (spec.rodBendFactor above 0). fishingLine.isInitialized says whether the line is out (from the cast until it is in
+-- again), rodBendFactor how far a fish bends the rod (up to about 0.93 while reeling; in the dump also a hundredth while waiting
+-- and about half just after the catch, both told apart by their keys first). With the line out, a state with none of the keys
+-- and the rod straight (the moment of the hook, before the fish pulls, or a state the dump never showed) is "unknown".
 -- This is the ONE place that reads the rod's spec: everything else asks getFishingRodState. A rod whose fields a DLC update renamed
 -- or reshaped never comes into the hand (toolProblem checks them, SUPPORTED_TOOLS[].fields, and gives the rod back with one
 -- warning). Every read is guarded all the same: a field that does not read as expected later, or a read that raises, makes the
@@ -840,7 +844,10 @@ local function readFishingRod(tool, specName)
     for _, known in ipairs(FISHING_ROD_STATE_KEYS) do
         if current[known.key] ~= nil then return known.state, lineOut, bend end
     end
-    if lineOut then return "reeling", lineOut, bend end
+    if lineOut then
+        if bend > 0 then return "reeling", lineOut, bend end
+        return nil  -- line out with the rod straight: no evidence of reeling
+    end
     for key in pairs(current) do
         if key ~= "fishingRod" then return nil end  -- line in, with keys none of the dump's states had
     end
@@ -848,7 +855,7 @@ local function readFishingRod(tool, specName)
 end
 
 -- The fishing rod's state: "idle" | "charging" | "waiting" (the line out, no bite yet) | "bite" (the hook window) | "reeling" |
--- "caught" | "unknown" (the rod's spec cannot be read), then whether its line is out (false when unknown) and its bend factor (0
+-- "caught" | "unknown" (the rod's spec cannot be read, or tells no state), then whether its line is out (false when unknown) and its bend factor (0
 -- when unknown). nil when the tool (default: the Hand Tool the local player holds) is no fishing rod.
 function VRCompanion:getFishingRodState(tool)
     if tool == nil then tool = heldTool() end
