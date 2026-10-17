@@ -302,6 +302,7 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, AnEmptyCanAndATreeThePlayerMayNotMar
     ASSERT_EQ(InTheHand("right"), "true");
     ASSERT_EQ(RunLuauChunk(L, kPlantATrunkAtTheNozzle, "=trunk"), 0);
     FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.warnings = {}", "=forgetTheMarkerTypeMessage"), 0);  // taking the can in hand names its marker type
 
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(3);
@@ -312,8 +313,9 @@ TEST_F(VirtualGamepadHandToolsSprayCanTest, AnEmptyCanAndATreeThePlayerMayNotMar
     // A can with markers, a tree that is not the player's.
     headset.SetHandInputs(kRight, Trigger(0.0f));
     FRAMES(2);
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(can); _G.can = StubHandTool.sprayCan(foot.player); StubHandTool.hold(can); StubHandTool.forbid(trunk); StubHandTool.warnings = {}", "=fullCanForbiddenTree"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(can); _G.can = StubHandTool.sprayCan(foot.player); StubHandTool.hold(can); StubHandTool.forbid(trunk)", "=fullCanForbiddenTree"), 0);
     FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.warnings = {}", "=forgetTheMarkerTypeMessage"), 0);
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(3);
     EXPECT_EQ(markers(), 0) << "a tree the player may not mark gets no marker";

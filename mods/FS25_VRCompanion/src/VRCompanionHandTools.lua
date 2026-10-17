@@ -11,7 +11,7 @@
 -- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
 -- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The look ray |
 -- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The flashlight's beam | No screen-centre overlays (the
--- spray can's and the chainsaw's onDraw) | Haptics | Update |
+-- spray can's and the chainsaw's onDraw) | Haptics | The spray can's feedback (target tick, marker type message) | Update |
 -- Diagnostics, console commands, reset.
 --
 -- THE WRAPS (ADR-0026, ADR-0027): a wrap passes through to the game's own function whenever the feature is off, Motion
@@ -91,6 +91,11 @@ local function newState()
             level = nil,     -- what is being felt now: a key of HAND_TOOL_HAPTIC_PULSES, nil for nothing
             hand = nil,      -- ... on which hand
             sinceMs = 0,     -- game milliseconds since the last pulse was requested
+        },
+        sprayCan = {         -- what the spray can's feedback has told the player (see "The spray can's feedback")
+            tool = nil,      -- the can in the tracked Tool Hand
+            typeIndex = nil, -- the marker type index last named
+            treeNode = nil,  -- the target tree last ticked for
         },
         problem = nil,       -- why Hand Tools gave up, once it did (the warning is logged then and never again)
     }
@@ -899,7 +904,7 @@ local DRAW_HELD_BACK_KINDS = { spraycan = true, chainsaw = true }
 -- ---- Haptics --------------------------------------------------------------------------------------------------
 -- The Tool Hand buzzes while its tool works, through VRCompanion:pulseHand (VRBridge.pulseHaptic): a light buzz for as long as
 -- the chainsaw's trigger is held (delimbing, without a cut), a stronger one while it cuts, a steady
--- one while the lance sprays, and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
+-- one while the lance sprays, a lighter one while the spray can sprays, and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
 -- while the tool is in it (toolHandFor: the feature on, Motion Controllers on, the hand tracked), so an untracked or set-down
 -- Tool Hand, `vrHandTools off` and a tool put away all end the buzz. A pulse is one burst, so the buzz is a pulse requested again
 -- every HAND_TOOL_HAPTIC_INTERVAL_MS (and at once when what is felt changes), each lasting a little longer than that so the hand
@@ -911,8 +916,11 @@ VRCompanion.HAND_TOOL_HAPTIC_PULSES = {
     running = { ms = 70, strength = 0.2 },   -- the chainsaw's motor revved with the trigger held, no cut yet
     cutting = { ms = 70, strength = 0.6 },   -- the chainsaw cutting
     spraying = { ms = 70, strength = 0.35 }, -- the lance's pressure
+    misting = { ms = 70, strength = 0.2 },   -- the spray can's mist, lighter than the lance
 }
 VRCompanion.HAND_TOOL_HAPTIC_INTERVAL_MS = 50
+-- The single short pulse that is not a buzz: the spray can's tick when its nozzle comes onto a tree (see "The spray can's feedback").
+VRCompanion.HAND_TOOL_TICK_PULSE = { ms = 30, strength = 0.4 }
 
 -- What each supported tool makes felt now: function(self, tool) -> a key of HAND_TOOL_HAPTIC_PULSES, or nil. A kind with no entry
 -- (the flashlight) is silent. The lance sprays while its own flag is set (HandToolHPWLance's spec.isActivated).
@@ -926,6 +934,12 @@ VRCompanion.HAND_TOOL_HAPTICS = {
     lance = function(self, tool)
         local spec = tool.spec_highPressureWasherLance
         return (spec ~= nil and spec.isActivated == true) and "spraying" or nil
+    end,
+    -- The spray can mists while its own flag is set (spec.isSpraying: set when a marker is made, cleared by the can's timer), so
+    -- an empty can or a forbidden tree, which make no marker, are silent, and so is a can that is only held.
+    spraycan = function(self, tool)
+        local spec = tool.spec_sprayCan
+        return (spec ~= nil and spec.isSpraying == true) and "misting" or nil
     end,
 }
 
@@ -950,6 +964,56 @@ local function updateHaptics(self, dt)
         haptics.level, haptics.hand, haptics.sinceMs = level, hand, 0
         self:pulseHand(hand, pulse.ms, pulse.strength)
     end
+end
+
+-- ---- The spray can's feedback ---------------------------------------------------------------------------------------------
+-- With the spray can's icons not drawn at the centre of the view (above), the can tells the player what they showed another way:
+--   * a tick, one short light pulse on the Tool Hand, when the can's found target tree (spec.foundTargetTree, from the game's
+--     targeter, which casts the nozzle's ray) changes from none to a tree or to another tree; none while it stays on the same one;
+--   * a short blinking message naming the marker type when the can comes into a tracked Tool Hand and each time the type changes
+--     while it is there (a type changed out of the hand is named when it comes back).
+-- Untracked, set down, Hand Tools off and any other tool: nothing (the game's icons are drawn then). The buzz while the can
+-- sprays is the per-kind haptics above.
+
+-- A short blinking message on screen, when the mission can show one (a console command's confirmation, a marker type's name).
+local function showBlinkingWarning(text)
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function() mission:showBlinkingWarning(text, 2500) end)
+    end
+end
+
+-- The marker type's name as the game keeps it on the type (treeMarkerType.name), or its index when it has none.
+local function markerTypeText(spec)
+    local markerType = spec.treeMarkerType
+    local name = type(markerType) == "table" and markerType.name or nil
+    if type(name) == "string" and name ~= "" then return name end
+    return tostring(spec.treeMarkerTypeIndex)
+end
+
+local function updateSprayCanFeedback(self)
+    local feedback = state.sprayCan
+    local tool = heldTool()
+    local hand = tool ~= nil and toolHandFor(self, tool) or nil
+    local spec = (hand ~= nil and supportedKind(tool) == "spraycan") and tool.spec_sprayCan or nil
+    if spec == nil then
+        feedback.tool, feedback.typeIndex, feedback.treeNode = nil, nil, nil  -- out of the hand: named and ticked afresh on return
+        return
+    end
+    if feedback.tool ~= tool then feedback.tool, feedback.typeIndex, feedback.treeNode = tool, nil, nil end
+
+    if feedback.typeIndex ~= spec.treeMarkerTypeIndex then
+        feedback.typeIndex = spec.treeMarkerTypeIndex
+        showBlinkingWarning("Marker type: " .. markerTypeText(spec))
+    end
+
+    local found = spec.foundTargetTree
+    local node = type(found) == "table" and found.node or nil
+    if node ~= nil and node ~= feedback.treeNode then
+        local tick = self.HAND_TOOL_TICK_PULSE
+        self:pulseHand(hand, tick.ms, tick.strength)
+    end
+    feedback.treeNode = node
 end
 
 -- ---- Update -------------------------------------------------------------------------------------------------------------
@@ -977,18 +1041,11 @@ end
 function VRCompanion:updateHandTools(dt)
     syncPlacement(self)
     updateTrigger(self)
-    updateHaptics(self, dt)  -- last: the trigger use above is what starts a cut or a spray
+    updateHaptics(self, dt)  -- the trigger use above is what starts a cut or a spray
+    updateSprayCanFeedback(self)  -- last: its tick is a single pulse on top of the buzz
 end
 
 -- ---- Settings command, diagnostics, console commands, reset ---------------------------------------------------------------
-
--- The on-screen confirmation of a console command, when the mission can show one.
-local function showBlinkingWarning(text)
-    local mission = g_currentMission or _G.g_currentMission
-    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
-        pcall(function() mission:showBlinkingWarning(text, 2500) end)
-    end
-end
 
 function VRCompanion:setHandToolsEnabled(enabled, save)
     self.handToolsEnabled = (enabled ~= false)
