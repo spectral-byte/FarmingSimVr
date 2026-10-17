@@ -3,7 +3,8 @@
 --
 -- Puts the player's Hand Tools into the Tool Hand (ADR-0029). In first person on foot the game links a held Hand Tool to the
 -- player camera's pitch node (HandTool:attachToolToCamera), so it moves with the head. While the Tool Hand is tracked, this
--- module links a SUPPORTED Hand Tool (recognised by its spec_ table: the pressure washer lance, the flashlight, the chainsaw, the spray can, the horse brush)
+-- module links a SUPPORTED Hand Tool (recognised by its spec_ table: the pressure washer lance, the flashlight, the chainsaw, the spray can, the horse brush,
+-- the Highlands Fishing DLC's fishing rod, ADR-0031)
 -- into the Tool Hand's Virtual Hand instead; when the Tool Hand is set down or loses tracking, or the feature is off, the tool
 -- is where the game puts it again. Every other Hand Tool (other mods' tools) and every other player's tool in
 -- a multiplayer session is left exactly as the game has it. Terms (Hand Tool, Tool Hand): CONTEXT.md.
@@ -985,7 +986,8 @@ end
 -- wraps), the wrap of its onDraw draws nothing; otherwise it is the game's own function. The game's event dispatch reads onDraw
 -- off the specialization class at every call, so the wrap is on the class (as the chainsaw's update). The overlay is back as the
 -- game draws it when the hand is set down or loses tracking, or the feature is off. Another tool and another player's tool are
--- never in the hand, so they are drawn by the game.
+-- never in the hand, so they are drawn by the game. The fishing rod's onDraw is NOT wrapped (ADR-0031): its charge meter, waiting
+-- hint and "Hook fish" prompt are its only display of the charge and the hook window, and they are no aim crosshair.
 
 -- Whether the tool's centre overlays are held back now: it is in the Tool Hand this module put it in.
 local function drawIsHeldBack(tool)
@@ -1738,7 +1740,7 @@ local function describeOffset(kind, offset)
         offset.rotation.x, offset.rotation.y, offset.rotation.z, offset.rotation.w)
 end
 
-local TUNING_USAGE = "Usage: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush> <nudge dx dy dz | turn rx ry rz | reset> "
+local TUNING_USAGE = "Usage: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush|fishingrod> <nudge dx dy dz | turn rx ry rz | reset> "
     .. "(nudge: metres, turn: degrees about the hand's X, Y, Z axes; this session only)"
 
 -- The held tool is put where the numbers say, at once.
@@ -1800,8 +1802,8 @@ function VRCompanion:registerHandToolsConsoleCommands()
     wrapAll()    -- map load: the class again (resetHandTools lifted the wrap with the last map)
     checkWraps()
     if addConsoleCommand == nil then return end
-    addConsoleCommand("vrHandToolOffset", "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush> <nudge dx dy dz | turn rx ry rz | reset>", "consoleCommandHandToolOffset", self)
-    addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance, spray can and horse brush held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
+    addConsoleCommand("vrHandToolOffset", "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush|fishingrod> <nudge dx dy dz | turn rx ry rz | reset>", "consoleCommandHandToolOffset", self)
+    addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance, spray can, horse brush and fishing rod held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
     addConsoleCommand("vrToolHand", "Choose the Motion Controller that holds Hand Tools, left or right (saved; right by default): vrToolHand [left|right]", "consoleCommandSetToolHand", self)
     addConsoleCommand("vrHandToolsDiagnostics", "Report the Tool Hand, the held Hand Tool, whether it is in the hand and where the look ray starts: vrHandToolsDiagnostics", "consoleCommandHandToolsDiagnostics", self)
 end

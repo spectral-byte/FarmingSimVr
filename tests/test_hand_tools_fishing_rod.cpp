@@ -327,6 +327,77 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheGamesOwnBindingsStillFishWhileT
     EXPECT_EQ(EvalLua(L, "useCalls('ACTIVATE_HANDTOOL_SECONDARY')"), "1,0") << "the game's own secondary binding still reaches the rod";
 }
 
+// ---- The rod keeps its overlays ------------------------------------------------------------------------------------------------
+
+// The rod is the one supported Hand Tool whose screen-centre overlays stay: its charge meter, waiting hint and "Hook fish" prompt.
+TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsChargeMeterWaitingHintAndHookPromptAreStillDrawnWhileItIsInTheToolHand) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    auto draws = [&]() {
+        EXPECT_EQ(RunLuauChunk(L, "StubHandTool.draw()", "=draw"), 0);
+        return EvalLua(L, "StubHandTool.rendering(rod)");
+    };
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(5);
+    EXPECT_EQ(draws(), "castingChargeOverlay") << "charging in the hand: the charge meter";
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    ASSERT_EQ(InTheHand("right"), "true");
+    EXPECT_EQ(draws(), "waitForBiteOverlay") << "waiting: the hint";
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.biteRod(rod)", "=bite"), 0);
+    FRAMES(1);
+    EXPECT_EQ(draws(), "hookFishOverlay") << "a bite: the \"Hook fish\" prompt";
+    EXPECT_NE(Dump().find("centre overlays held back: no"), std::string::npos) << Dump();
+}
+
+// ---- Tuning and diagnostics -------------------------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, VrHandToolOffsetFishingRodMovesAndTurnsTheRodInTheHandAndResetPutsItBack) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, "_G.before = { offsetInHolder(rod.rootNode, 'right') }; _G.tipBefore = { offsetInHolder(StubHandTool.rodSpec(rod).tipLine, 'right') }", "=before"), 0);
+
+    EXPECT_NE(EvalLua(L, "runCommand('vrHandToolOffset', 'fishingrod', 'nudge', 0.02, 0, 0)").find("fishingrod: position"), std::string::npos);
+    EXPECT_EQ(RunLuauChunk(L, R"luau(
+        local x, y, z = offsetInHolder(rod.rootNode, 'right')
+        assert(math.abs(x - before[1] - 0.02) < 1e-4 and math.abs(y - before[2]) < 1e-4 and math.abs(z - before[3]) < 1e-4,
+            "the rod moved 2 cm along the hand's x: " .. (x - before[1]))
+    )luau", "=nudged"), 0);
+
+    EvalLua(L, "runCommand('vrHandToolOffset', 'fishingrod', 'turn', 0, 30, 0)");
+    EXPECT_EQ(RunLuauChunk(L, R"luau(
+        local x, y, z = offsetInHolder(StubHandTool.rodSpec(rod).tipLine, 'right')
+        local moved = math.sqrt((x - tipBefore[1]) ^ 2 + (y - tipBefore[2]) ^ 2 + (z - tipBefore[3]) ^ 2)
+        assert(moved > 0.5, "turned, the rod's tip swung round in the hand: " .. moved)
+    )luau", "=turned"), 0);
+
+    EvalLua(L, "runCommand('vrHandToolOffset', 'fishingrod', 'reset')");
+    EXPECT_EQ(RunLuauChunk(L, R"luau(
+        local x, y, z = offsetInHolder(rod.rootNode, 'right')
+        assert(math.abs(x - before[1]) < 1e-4 and math.abs(y - before[2]) < 1e-4 and math.abs(z - before[3]) < 1e-4, "back where it was")
+        local tx, ty, tz = offsetInHolder(StubHandTool.rodSpec(rod).tipLine, 'right')
+        assert(math.abs(tx - tipBefore[1]) < 1e-4 and math.abs(ty - tipBefore[2]) < 1e-4 and math.abs(tz - tipBefore[3]) < 1e-4, "and turned back")
+    )luau", "=reset"), 0);
+    EXPECT_NE(EvalLua(L, "runCommand('vrHandToolOffset')").find("fishingrod"), std::string::npos) << "the list of tools names it";
+    EXPECT_NE(EvalLua(L, "runCommand('vrHandToolOffset', 'fishingrod', 'wiggle')").find("fishingrod"), std::string::npos) << "and so does the usage";
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, TheDiagnosticsShowTheRodAsASupportedKindAndNoLongerDescribeItInHandToolProbeLines) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    s_capturedLogs.clear();
+    const std::string answer = EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
+
+    EXPECT_NE(answer.find("held Hand Tool: fishingrod (supported)"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("in the Tool Hand: yes"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("from the tool"), std::string::npos) << answer;
+    EXPECT_EQ(CountLogLines("Hand Tool probe:"), 0) << "the rod is supported: no probe dump";
+
+    AdvanceGameTime(3100);  // set down: the rod is the game's, but still a supported tool
+    FRAMES(1);
+    s_capturedLogs.clear();
+    EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
+    EXPECT_EQ(CountLogLines("Hand Tool probe:"), 0) << "not even out of the hand";
+}
+
 // ---- Multiplayer, a game without the DLC, a DLC update that reshapes the rod ---------------------------------------------------
 
 // The game attaches a Hand Tool of every player in the session through the same function. Only the local player's rod is moved.
