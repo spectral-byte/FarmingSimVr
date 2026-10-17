@@ -10,7 +10,8 @@
 --
 -- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
 -- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The look ray |
--- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The flashlight's beam | Haptics | Update |
+-- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The flashlight's beam | No screen-centre overlays (the
+-- spray can's and the chainsaw's onDraw) | Haptics | Update |
 -- Diagnostics, console commands, reset.
 --
 -- THE WRAPS (ADR-0026, ADR-0027): a wrap passes through to the game's own function whenever the feature is off, Motion
@@ -312,6 +313,9 @@ local WRAP_SPECS = {
     -- The flashlight's update, which places the light node (the instance's updateTransform is a copy made when the tool was
     -- made, which a wrap of the class would not reach)
     flashlightBeam = { class = "HandToolFlashlight", fn = "onUpdate", parameters = 2, describe = "(flashlight, dt)" },
+    -- The draw events of the tools that draw at the centre of the view (see "No screen-centre overlays")
+    sprayCanOnDraw = { class = "HandToolSprayCan", fn = "onDraw", parameters = 1, describe = "(tool)" },
+    chainsawOnDraw = { class = "HandToolChainsaw", fn = "onDraw", parameters = 1, describe = "(tool)" },
     -- CHECK-ONLY, never wrapped: the chainsaw's cut plane takes its heading from camera:getRotation, which updateChainsawFromTheTool
     -- answers differently for the length of the chainsaw's own update by shadowing it on the camera instance. The shadow depends
     -- on the camera having that function, so a game without it gives Hand Tools up.
@@ -864,6 +868,34 @@ function VRCompanion:placeHandToolsForRender()
     if tool ~= nil and tool.spec_flashlight ~= nil then pcall(placeFlashlightBeam, tool) end
 end
 
+-- ---- No screen-centre overlays ------------------------------------------------------------------------------
+-- Two Hand Tools draw feedback at the centre of the view, which is head-locked: the spray can's marker type icon (and a tree icon
+-- while a tree is found) and the idle chainsaw's crosshair. With the tool in the hand that reads as "aim where you look", which
+-- is no longer true. While the tool is the local player's, supported and in a tracked Tool Hand (the same test as for the other
+-- wraps), the wrap of its onDraw draws nothing; otherwise it is the game's own function. The game's event dispatch reads onDraw
+-- off the specialization class at every call, so the wrap is on the class (as the chainsaw's update). The overlay is back as the
+-- game draws it when the hand is set down or loses tracking, or the feature is off. Another tool and another player's tool are
+-- never in the hand, so they are drawn by the game.
+
+-- Whether the tool's centre overlays are held back now: it is in the Tool Hand this module put it in.
+local function drawIsHeldBack(tool)
+    if type(tool) ~= "table" or state.linkedTool ~= tool then return false end
+    return toolHandFor(VRCompanion, tool) ~= nil
+end
+
+local function makeDrawWrap(original)
+    return function(tool, ...)
+        if drawIsHeldBack(tool) then return end
+        return original(tool, ...)
+    end
+end
+
+WRAP_SPECS.sprayCanOnDraw.make = makeDrawWrap
+WRAP_SPECS.chainsawOnDraw.make = makeDrawWrap
+
+-- The supported kinds whose onDraw is wrapped (the diagnostics' "held back" is about these).
+local DRAW_HELD_BACK_KINDS = { spraycan = true, chainsaw = true }
+
 -- ---- Haptics --------------------------------------------------------------------------------------------------
 -- The Tool Hand buzzes while its tool works, through VRCompanion:pulseHand (VRBridge.pulseHaptic): a light buzz for as long as
 -- the chainsaw's trigger is held (delimbing, without a cut), a stronger one while it cuts, a steady
@@ -1044,6 +1076,9 @@ local function diagnosticFields(self)
         wrapText,
         lookRayWrapText,
         beamWrapText,
+        wrapStatus("sprayCanOnDraw"),
+        wrapStatus("chainsawOnDraw"),
+        "centre overlays held back: " .. ((kind ~= nil and DRAW_HELD_BACK_KINDS[kind] and drawIsHeldBack(tool)) and "yes" or "no"),
     }
     -- Haptics
     table.insert(fields, "haptics: " .. tostring(state.haptics.level or "none"))
