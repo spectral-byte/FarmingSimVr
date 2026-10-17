@@ -645,8 +645,8 @@ end
 
 -- ---- The look ray -----------------------------------------------------------------------------------------
 
--- Where the tool points now: the world position of its pointing node and the world direction of its pointing axis, or nil
--- when the tool has no pointing axis (HAND_TOOL_POINTING_AXES) or the node is not there.
+-- Where the tool points now: the world position of its pointing node and the world direction of its pointing axis, then the
+-- HAND_TOOL_POINTING_AXES entry they came from; nil when the tool has no pointing axis or the node is not there.
 local function toolPointingRay(self, tool)
     local kind = supportedKind(tool)
     local axis = kind ~= nil and self.HAND_TOOL_POINTING_AXES[kind] or nil
@@ -663,30 +663,35 @@ local function toolPointingRay(self, tool)
     end
     local dx, dy, dz = engine("localDirectionToWorld")(node, direction.x, direction.y, direction.z)
     if type(x) ~= "number" or type(dx) ~= "number" then return nil end
-    return x, y, z, dx, dy, dz
+    return x, y, z, dx, dy, dz, axis
+end
+
+-- The pointing ray of the tool in the Tool Hand and the HAND_TOOL_POINTING_AXES entry it comes from (the six numbers, then the
+-- entry), or nil: the one place that decides whether there is a ray for `player` (getHandToolRay, getHandToolLookRay).
+local function heldToolPointingRay(self, player)
+    local tool = heldTool()
+    if tool == nil or state.linkedTool ~= tool then return nil end
+    if player ~= nil and tool:getCarryingPlayer() ~= player then return nil end
+    if toolHandFor(self, tool) == nil then return nil end
+    local ok, x, y, z, dx, dy, dz, axis = pcall(toolPointingRay, self, tool)
+    if not ok then return nil end
+    return x, y, z, dx, dy, dz, axis
 end
 
 -- The ray the player aims with while a supported Hand Tool is in the Tool Hand: x, y, z, dirX, dirY, dirZ in the world, or
 -- nil (the head's ray is the game's). `player` limits it to the player who holds the tool (nil: whoever holds it). The tool
 -- must be where this module put it, so that the ray starts where the tool is drawn. Read live by the Player:getLookRay wrap.
 function VRCompanion:getHandToolRay(player)
-    local tool = heldTool()
-    if tool == nil or state.linkedTool ~= tool then return nil end
-    if player ~= nil and tool:getCarryingPlayer() ~= player then return nil end
-    if toolHandFor(self, tool) == nil then return nil end
-    local ok, x, y, z, dx, dy, dz = pcall(toolPointingRay, self, tool)
-    if not ok then return nil end
+    local x, y, z, dx, dy, dz = heldToolPointingRay(self, player)
     return x, y, z, dx, dy, dz
 end
 
 -- The ray the game's targeter casts for the tool in the Tool Hand: the tool's pointing ray (getHandToolRay) with its origin moved
 -- back along the axis by the entry's `reachBehind` (HAND_TOOL_POINTING_AXES), or nil like getHandToolRay.
 function VRCompanion:getHandToolLookRay(player)
-    local x, y, z, dx, dy, dz = self:getHandToolRay(player)
+    local x, y, z, dx, dy, dz, axis = heldToolPointingRay(self, player)
     if x == nil then return nil end
-    local kind = supportedKind(heldTool())
-    local axis = kind ~= nil and self.HAND_TOOL_POINTING_AXES[kind] or nil
-    local behind = axis ~= nil and tonumber(axis.reachBehind) or 0
+    local behind = tonumber(axis.reachBehind) or 0
     return x - dx * behind, y - dy * behind, z - dz * behind, dx, dy, dz
 end
 
@@ -983,12 +988,48 @@ local function showBlinkingWarning(text)
     end
 end
 
--- The marker type's name as the game keeps it on the type (treeMarkerType.name), or its index when it has none.
-local function markerTypeText(spec)
+-- The text of an l10n key (the game's or this mod's modDesc.xml l10n), nil when there is none or the game has no i18n.
+local function l10nText(key)
+    local i18n = engine("g_i18n")
+    if type(key) ~= "string" or key == "" or type(i18n) ~= "table" then return nil end
+    local ok, text = pcall(function()
+        if i18n:hasText(key) then return i18n:getText(key) end
+        return nil
+    end)
+    if ok and type(text) == "string" and text ~= "" then return text end
+    return nil
+end
+
+-- What the player reads for a marker type. The game defines the types in data/maps/maps_treeMarkerTypes.xml, each with a name
+-- (CROSS) and a title that is an l10n key ("$l10n_treeMarker_cross"). What of that the native type keeps, and in what form, is
+-- not in the readable Lua (only iconFilename is), so this takes it in the order the XML gives it: the title's text (the title
+-- as it is when it is not a key), else the text under the name's key (treeMarker_<name>), else the name, else the type's
+-- index. A "$l10n_" key is never shown as it is.
+local function markerTypeName(spec)
     local markerType = spec.treeMarkerType
-    local name = type(markerType) == "table" and markerType.name or nil
-    if type(name) == "string" and name ~= "" then return name end
+    if type(markerType) == "table" then
+        local title = markerType.title
+        if type(title) == "string" and title ~= "" then
+            local key = string.match(title, "^%$l10n_(.+)$")
+            local text = l10nText(key or title)
+            if text ~= nil then return text end
+            if key == nil then return title end
+        end
+        local name = markerType.name
+        if type(name) == "string" and name ~= "" then
+            return l10nText("treeMarker_" .. string.lower(name)) or name
+        end
+    end
     return tostring(spec.treeMarkerTypeIndex)
+end
+
+-- The message that names the type: this mod's text (MARKER_TYPE_TEXT_KEY, "%s" for the name), English when it has none.
+local MARKER_TYPE_TEXT_KEY = "vrHandTools_markerType"
+local function markerTypeMessage(spec)
+    local name = markerTypeName(spec)
+    local ok, message = pcall(string.format, l10nText(MARKER_TYPE_TEXT_KEY) or "Marker type: %s", name)
+    if ok then return message end
+    return "Marker type: " .. name
 end
 
 local function updateSprayCanFeedback(self)
@@ -1004,7 +1045,7 @@ local function updateSprayCanFeedback(self)
 
     if feedback.typeIndex ~= spec.treeMarkerTypeIndex then
         feedback.typeIndex = spec.treeMarkerTypeIndex
-        showBlinkingWarning("Marker type: " .. markerTypeText(spec))
+        showBlinkingWarning(markerTypeMessage(spec))
     end
 
     local found = spec.foundTargetTree

@@ -2271,10 +2271,10 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
 //   markers it holds (default 50). tool.rootNode, and in tool.spec_sprayCan: canNode (sprayCan_vis, the game's shake node: the
 //   can's visual node, whose +Z axis is the way it sprays), remainingNumMarkers, activatePressed, wasActivatePressed, isSpraying,
 //   sprayStopTime, sprayDuration, sprayDetectionDistance, foundTargetTree ({ node, x, y, z, distance } or nil), treeMarkerTypeIndex,
-//   treeMarkerType ({ name, iconFilename }).
+//   treeMarkerType ({ name, title, iconFilename }, see the marker types below).
 //   tool.activateAction is activateSpraying: the game's binding. g_currentMission also gets showBlinkingWarning (recorded in
-//   StubHandTool.warnings as { text, ms }, text being the i18n key the game asked for) and a treeMarkerSystem with three marker types
-//   when it has none.
+//   StubHandTool.warnings as { text, ms }, text being what the game was asked to show) and a treeMarkerSystem with three marker types (CROSS, ARROW, CIRCLE)
+//   when it has none, and a g_i18n (StubHandTool.texts) when there is none.
 // StubHandTool.canRay(tool) -> x, y, z, dirX, dirY, dirZ   where the can sprays from and along, in the world: the origin of canNode
 //   and its +Z axis
 // StubHandTool.treeAt(ray, distance, radius) -> tree   a tall trunk the ray (x, y, z, dirX, dirY, dirZ in a table) meets at
@@ -2380,10 +2380,13 @@ inline constexpr const char* kStubHandToolSprayCan = R"luau(
         end
 
         -- ---- the marker system and the player's rights
+        -- The game's data/maps/maps_treeMarkerTypes.xml gives each type a name (an identifier) and a title (an l10n key written
+        -- "$l10n_treeMarker_cross"), an icon and a texture; the icon's filename is the one field the readable Lua reads off the
+        -- type (iconFilename). That the native type keeps the title as `title`, and unresolved, is a guess (headset-only).
         local markerTypes = {
-            { name = "markerFell", iconFilename = "data/shared/treeMarker/markerFell_icon.png" },
-            { name = "markerKeep", iconFilename = "data/shared/treeMarker/markerKeep_icon.png" },
-            { name = "markerThin", iconFilename = "data/shared/treeMarker/markerThin_icon.png" },
+            { name = "CROSS", title = "$l10n_treeMarker_cross", iconFilename = "data/shared/treeMarker/markerTreeCross_icon.png" },
+            { name = "ARROW", title = "$l10n_treeMarker_arrow", iconFilename = "data/shared/treeMarker/markerTreeArrow_icon.png" },
+            { name = "CIRCLE", title = "$l10n_treeMarker_circle", iconFilename = "data/shared/treeMarker/markerTreeCircle_icon.png" },
         }
         StubHandTool.markerTypes = markerTypes
         local treeMarkerSystem = {
@@ -2566,6 +2569,20 @@ inline constexpr const char* kStubHandToolSprayCan = R"luau(
         end
         spec.treeMarkerTypeIndex = 1
         spec.treeMarkerType = mission.treeMarkerSystem:getTreeMarkerTypeByIndex(1)
+
+        -- the game's texts: the marker types' titles (the game's l10n) and the Companion Mod's own (its modDesc.xml l10n). Added
+        -- when the test has no i18n of its own; hasText/getText as the game's I18N has them (a missing text reads "Missing ...").
+        if _G.g_i18n == nil then
+            local texts = {
+                treeMarker_cross = "Cross", treeMarker_arrow = "Arrow", treeMarker_circle = "Circle",
+                vrHandTools_markerType = "Marker type: %s",
+            }
+            StubHandTool.texts = texts
+            _G.g_i18n = {
+                hasText = function(self, name) return texts[name] ~= nil end,
+                getText = function(self, name) return texts[name] or ("Missing '" .. tostring(name) .. "' in l10n") end,
+            }
+        end
 
         for name, fn in pairs(StubHandTool.sprayCanFunctions) do tool[name] = fn end
         tool.activateAction = tool.activateSpraying

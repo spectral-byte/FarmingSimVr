@@ -54,6 +54,10 @@ CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigg
             <en>Toggle VR View Mode</en>
             <de>VR-Ansichtsmodus umschalten</de>
         </text>
+        <text name="vrHandTools_markerType">
+            <en>Marker type: %s</en>
+            <de>Markierungstyp: %s</de>
+        </text>
         <text name="setting_vrHudConvergenceDepth">
             <en>VR HUD Convergence Depth (Meters)</en>
             <de>VR-HUD Konvergenztiefe (Meter)</de>
