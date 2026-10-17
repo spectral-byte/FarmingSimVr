@@ -3,9 +3,9 @@
 --
 -- Puts the player's Hand Tools into the Tool Hand (ADR-0029). In first person on foot the game links a held Hand Tool to the
 -- player camera's pitch node (HandTool:attachToolToCamera), so it moves with the head. While the Tool Hand is tracked, this
--- module links a SUPPORTED Hand Tool (recognised by its spec_ table: the pressure washer lance, the flashlight, the chainsaw)
+-- module links a SUPPORTED Hand Tool (recognised by its spec_ table: the pressure washer lance, the flashlight, the chainsaw, the spray can)
 -- into the Tool Hand's Virtual Hand instead; when the Tool Hand is set down or loses tracking, or the feature is off, the tool
--- is where the game puts it again. Every other Hand Tool (the spray can, other mods' tools) and every other player's tool in
+-- is where the game puts it again. Every other Hand Tool (other mods' tools) and every other player's tool in
 -- a multiplayer session is left exactly as the game has it. Terms (Hand Tool, Tool Hand): CONTEXT.md.
 --
 -- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
@@ -30,8 +30,10 @@
 --   VRCompanion:getHeldHandTool() -> tool, kind         the Hand Tool the player holds and its supported kind (nil kind: unsupported)
 --   VRCompanion:isHandToolTriggerDown(hand) -> boolean  the hand's trigger is using its Hand Tool now (Motion Controllers keep that hand in use)
 --   VRCompanion:getHandToolRay([player]) -> x, y, z, dirX, dirY, dirZ   the tool's pointing ray in the world while a supported
---                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's);
---                                                       this is what Player:getLookRay answers then, so what the targeter casts
+--                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's)
+--   VRCompanion:getHandToolLookRay([player]) -> x, y, z, dirX, dirY, dirZ   that ray with its origin moved back along the axis by the
+--                                                       tool's reachBehind field (the spray can's 0.5 m); this is what Player:getLookRay
+--                                                       answers then, so what the targeter casts
 --   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   nil when the tool (default: the one held) is no chainsaw
 --   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the wrist's roll about the bar while the chainsaw is in the tracked Tool Hand
 --                                                       (nil: leave the roll to the game's roll action)
@@ -177,6 +179,9 @@ local SUPPORTED_TOOLS = {
     { kind = "flashlight", label = "flashlight", spec = "spec_flashlight", toggle = toggleFlashlight },
     -- Chainsaw
     { kind = "chainsaw", label = "chainsaw", spec = "spec_chainsaw", useHandler = "onCutAction", useHandlerClass = "HandToolChainsaw", useOnce = true },
+    -- The spray can (ADR-0030). The kind is the name `vrHandToolOffset` takes. activateSpraying only sets a flag (the can's
+    -- own update acts on its rising edge and clears it), so, as the lance's, it is called every update the trigger is held.
+    { kind = "spraycan", label = "spray can", spec = "spec_sprayCan", useHandler = "activateSpraying" },
 }
 
 -- WHERE EACH TOOL SITS IN THE HAND: the pose of the tool's ROOT node in the Virtual Hand's grip frame (the frame of the
@@ -209,6 +214,13 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
     chainsaw = {
         position = { x = 0.056, y = -0.276, z = -0.232 },
         rotation = { x = 0.0, y = 0.9238795, z = -0.3826834, w = 0.0 },
+    },
+    -- The spray can stands upright in its i3d with the nozzle along its +Z: held like the lance, the tool's +Z along the fingers
+    -- and its +Y (up, the can's body) toward the thumb, the hand 10 cm up the can from the root (grip at tool y = 0.10). UNCERTAIN
+    -- until the headset (the can's size is not in the readable source): tune with vrHandToolOffset spraycan.
+    spraycan = {
+        position = { x = 0.0, y = 0.0, z = 0.10 },
+        rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
     },
 }
 
@@ -256,6 +268,18 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
     chainsaw = {
         node = function(tool) return tool.rootNode end,
         direction = { x = 0.0, y = 0.0, z = 1.0 },
+    },
+    -- Spray can: the can's visual node (sprayCan_vis, the game's shake node, which the game moves a few centimetres while the can
+    -- sprays) along its +Z, the nozzle. UNCERTAIN until checked in the headset: the axis from the i3d, and whether the shake makes
+    -- the target change mid-spray (then point from a steadier node, the tool's root, with the same axis).
+    -- `reachBehind` (optional, metres): the look ray starts this far BEHIND the point the tool points from, along its axis. The
+    -- game's targeter measures a tree's distance from the ray's origin and finds none nearer than HandToolSprayCan's 0.5 m, so the
+    -- origin is moved back by exactly that: the can finds a trunk from right against the nozzle (0 m) to 1 m past it (the game's
+    -- 1.5 m reach). A tool without the field (the lance, the flashlight, the chainsaw) has its ray unchanged.
+    spraycan = {
+        node = function(tool) return tool.spec_sprayCan.canNode end,
+        direction = { x = 0.0, y = 0.0, z = 1.0 },
+        reachBehind = 0.5,
     },
 }
 
@@ -646,12 +670,23 @@ function VRCompanion:getHandToolRay(player)
     return x, y, z, dx, dy, dz
 end
 
+-- The ray the game's targeter casts for the tool in the Tool Hand: the tool's pointing ray (getHandToolRay) with its origin moved
+-- back along the axis by the entry's `reachBehind` (HAND_TOOL_POINTING_AXES), or nil like getHandToolRay.
+function VRCompanion:getHandToolLookRay(player)
+    local x, y, z, dx, dy, dz = self:getHandToolRay(player)
+    if x == nil then return nil end
+    local kind = supportedKind(heldTool())
+    local axis = kind ~= nil and self.HAND_TOOL_POINTING_AXES[kind] or nil
+    local behind = axis ~= nil and tonumber(axis.reachBehind) or 0
+    return x - dx * behind, y - dy * behind, z - dz * behind, dx, dy, dz
+end
+
 -- The wrap of Player:getLookRay, the single source PlayerTargeter:update reads (and everything that highlights by look): the
 -- tool's ray while a supported Hand Tool is in a tracked Tool Hand, the game's own (the head's) otherwise.
 WRAP_SPECS.getLookRay.make = function(original)
     return function(player, ...)
         if type(player) == "table" then
-            local x, y, z, dx, dy, dz = VRCompanion:getHandToolRay(player)
+            local x, y, z, dx, dy, dz = VRCompanion:getHandToolLookRay(player)
             if x ~= nil then return x, y, z, dx, dy, dz end
         end
         return original(player, ...)
@@ -1397,7 +1432,7 @@ local function describeOffset(kind, offset)
         offset.rotation.x, offset.rotation.y, offset.rotation.z, offset.rotation.w)
 end
 
-local TUNING_USAGE = "Usage: vrHandToolOffset <lance|flashlight|chainsaw> <nudge dx dy dz | turn rx ry rz | reset> "
+local TUNING_USAGE = "Usage: vrHandToolOffset <lance|flashlight|chainsaw|spraycan> <nudge dx dy dz | turn rx ry rz | reset> "
     .. "(nudge: metres, turn: degrees about the hand's X, Y, Z axes; this session only)"
 
 -- The held tool is put where the numbers say, at once.
@@ -1459,8 +1494,8 @@ function VRCompanion:registerHandToolsConsoleCommands()
     wrapAll()    -- map load: the class again (resetHandTools lifted the wrap with the last map)
     checkWraps()
     if addConsoleCommand == nil then return end
-    addConsoleCommand("vrHandToolOffset", "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw> <nudge dx dy dz | turn rx ry rz | reset>", "consoleCommandHandToolOffset", self)
-    addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw and pressure washer lance held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
+    addConsoleCommand("vrHandToolOffset", "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan> <nudge dx dy dz | turn rx ry rz | reset>", "consoleCommandHandToolOffset", self)
+    addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance and spray can held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
     addConsoleCommand("vrToolHand", "Choose the Motion Controller that holds Hand Tools, left or right (saved; right by default): vrToolHand [left|right]", "consoleCommandSetToolHand", self)
     addConsoleCommand("vrHandToolsDiagnostics", "Report the Tool Hand, the held Hand Tool, whether it is in the hand and where the look ray starts: vrHandToolsDiagnostics", "consoleCommandHandToolsDiagnostics", self)
 end

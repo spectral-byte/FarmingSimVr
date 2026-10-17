@@ -239,6 +239,7 @@ add_executable(fs25_vr_tests
     tests/test_hand_tools_wrist_roll.cpp
     tests/test_hand_tools_offset_tuning.cpp
     tests/test_hand_tools_describe_unsupported.cpp
+    tests/test_hand_tools_spray_can.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
