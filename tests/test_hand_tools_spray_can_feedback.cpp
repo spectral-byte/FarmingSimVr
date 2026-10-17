@@ -3,7 +3,7 @@
 // game's HandToolSprayCan, trees to mark, the mission's blinking warning). With the screen-centre icons not drawn, the can tells the
 // player three things another way, and a test asserts only what the player would feel or read: which haptic pulses reached the fake
 // Motion Controllers (a tick when the nozzle comes onto a tree, a light steady buzz while the can sprays) and which blinking
-// messages the game was asked to show (the marker type, when the can is taken in hand and each time it is changed).
+// messages the game was asked to show (the marker type, when the can is taken in hand and each time it is changed). The marker types\n// are the game's (CROSS, ARROW, CIRCLE: a name and a title, an l10n key) and the texts those of a stub g_i18n.
 // Prior art: test_hand_tools_spray_can.cpp (the can in the hand, its reach and its trigger), test_hand_tools_haptics.cpp (pulses on
 // the fake Motion Controllers).
 
@@ -202,51 +202,94 @@ TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, NoTickWhileTheToolHandIsUntr
 
 TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMarkerTypeIsNamedInABlinkingMessageWhenTheCanIsTakenInHandAndEachTimeItIsChangedAndNotWhenNothingChanged) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
-    EXPECT_EQ(MessagesNaming("markerFell"), 1) << "taken in hand: the first marker type is named, " << Messages();
+    EXPECT_EQ(MessagesNaming("Cross"), 1) << "taken in hand: the first marker type is named, " << Messages();
     FRAMES(30);
-    EXPECT_EQ(MessagesNaming("markerFell"), 1) << "once, not every frame";
+    EXPECT_EQ(MessagesNaming("Cross"), 1) << "once, not every frame";
 
     ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
     FRAMES(2);
-    EXPECT_EQ(MessagesNaming("markerKeep"), 1) << "changed: the new one is named, " << Messages();
+    EXPECT_EQ(MessagesNaming("Arrow"), 1) << "changed: the new one is named, " << Messages();
     ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
     FRAMES(2);
-    EXPECT_EQ(MessagesNaming("markerThin"), 1);
+    EXPECT_EQ(MessagesNaming("Circle"), 1);
     ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());  // round to the first again
     FRAMES(2);
-    EXPECT_EQ(MessagesNaming("markerFell"), 2) << "round to the first: named again";
+    EXPECT_EQ(MessagesNaming("Cross"), 2) << "round to the first: named again";
     FRAMES(30);
-    EXPECT_EQ(MessagesNaming("markerKeep") + MessagesNaming("markerThin") + MessagesNaming("markerFell"), 4);
+    EXPECT_EQ(MessagesNaming("Arrow") + MessagesNaming("Circle") + MessagesNaming("Cross"), 4);
 }
 
-TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, AMarkerTypeWithoutANameIsNamedByItsIndex) {
+TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, AMarkerTypeWithoutANameOrATitleIsNamedByItsIndex) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.markerTypes[2].name = nil", "=nameless"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.markerTypes[2].name = nil; StubHandTool.markerTypes[2].title = nil", "=nameless"), 0);
     ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
     FRAMES(2);
-    EXPECT_EQ(MessagesNaming("2"), 1) << Messages();
+    EXPECT_EQ(MessagesNaming("Marker type: 2"), 1) << Messages();
+}
+
+// The title is an l10n key in the game's data ("$l10n_treeMarker_cross"): the player reads the game's text for it, not the key,
+// and the sentence is the Companion Mod's own text (modDesc.xml l10n), so that a translation reaches it.
+TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMessageIsTheCompanionModsTextAndTheTypeIsNamedByTheGamesTextForItsTitle) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
+    EXPECT_EQ(MessagesNaming("Marker type: Cross"), 1) << "the title's text, not \"$l10n_treeMarker_cross\" or \"CROSS\", " << Messages();
+    EXPECT_EQ(MessagesNaming("l10n"), 0) << Messages();
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.texts.vrHandTools_markerType = 'Markierungstyp: %s'; StubHandTool.texts.treeMarker_arrow = 'Pfeil'", "=german"), 0);
+    ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
+    FRAMES(2);
+    EXPECT_EQ(MessagesNaming("Markierungstyp: Pfeil"), 1) << "the sentence and the name are the game's current language, " << Messages();
+}
+
+TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, ATitleThatIsAlreadyTextOrWithoutAnL10nTextIsStillNamedAndNeverAsAKey) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
+    // already the text (the game resolved it): shown as it is
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.markerTypes[2].title = 'Pfeil'", "=resolvedTitle"), 0);
+    ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
+    FRAMES(2);
+    EXPECT_EQ(MessagesNaming("Marker type: Pfeil"), 1) << Messages();
+
+    // a key with no text, a name that has one under the game's naming (treeMarker_<name>): that text
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.markerTypes[3].title = '$l10n_treeMarker_unknown'", "=unknownTitle"), 0);
+    ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
+    FRAMES(2);
+    EXPECT_EQ(MessagesNaming("Marker type: Circle"), 1) << Messages();
+
+    // a key with no text and a name with none: the name, never the key
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.markerTypes[1].title = '$l10n_treeMarker_unknown'; StubHandTool.markerTypes[1].name = 'SPIRAL'", "=unknownEverything"), 0);
+    ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
+    FRAMES(2);
+    EXPECT_EQ(MessagesNaming("Marker type: SPIRAL"), 1) << Messages();
+    EXPECT_EQ(MessagesNaming("l10n"), 0) << Messages();
+}
+
+TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, WithoutTheGamesTextsTheTypeIsStillNamedInEnglishByItsName) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
+    ASSERT_EQ(RunLuauChunk(L, "_G.g_i18n = nil", "=noI18n"), 0);
+    ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
+    FRAMES(2);
+    EXPECT_EQ(MessagesNaming("Marker type: ARROW"), 1) << Messages();
 }
 
 TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, TheMarkerTypeIsNamedAgainWhenTheCanIsTakenInHandAgainAfterBeingSetDown) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheCanIn(kRight));
-    ASSERT_EQ(MessagesNaming("markerFell"), 1);
+    ASSERT_EQ(MessagesNaming("Cross"), 1);
 
     AdvanceGameTime(3100);  // set down
     FRAMES(2);
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     FRAMES(2);
     ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true");
-    EXPECT_EQ(MessagesNaming("markerFell"), 2) << "taken into the tracked Tool Hand again: named again";
+    EXPECT_EQ(MessagesNaming("Cross"), 2) << "taken into the tracked Tool Hand again: named again";
 
     // A type changed while the can is out of the Tool Hand is named when it comes back in, once.
     headset.SetHandTracked(kRight, false);
     FRAMES(2);
     ASSERT_NO_FATAL_FAILURE(ChangeTheMarkerType());
     FRAMES(5);
-    EXPECT_EQ(MessagesNaming("markerKeep"), 0) << "untracked: the game's icon shows it, no message";
+    EXPECT_EQ(MessagesNaming("Arrow"), 0) << "untracked: the game's icon shows it, no message";
     headset.SetHandTracked(kRight, true);
     FRAMES(3);
-    EXPECT_EQ(MessagesNaming("markerKeep"), 1) << "and back in the hand it is named";
+    EXPECT_EQ(MessagesNaming("Arrow"), 1) << "and back in the hand it is named";
 }
 
 TEST_F(VirtualGamepadHandToolsSprayCanFeedbackTest, NoMarkerTypeMessageWithHandToolsOffAndNoneForAnotherModsTool) {
