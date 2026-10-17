@@ -105,7 +105,13 @@ local function newState()
             typeIndex = nil, -- the marker type index last named
             treeNode = nil,  -- the target tree last ticked for
         },
-        problem = nil,       -- why Hand Tools gave up, once it did (the warning is logged then and never again)
+        fishingRod = {       -- what the diagnostics tell of the fishing rod (see "The fishing rod in the diagnostics")
+            tool = nil,      -- the rod the local player held at the last update
+            state = nil,     -- ... and its state then (getFishingRodState)
+            cast = nil,      -- the last cast: { tool, rod = {dx, dy, dz} | nil, head = {dx, dy, dz} | nil, bobber = {x, y, z} | nil }
+            action = nil,    -- the last action a rod was given: { tool, name = "primary" | "secondary", by = text, value }
+        },
+        problem = nil,      -- why Hand Tools gave up, once it did (the warning is logged then and never again)
         toolProblems = {},   -- per tool kind: why that tool is left to the game, once it was found reshaped (warned once)
     }
 end
@@ -821,6 +827,93 @@ function VRCompanion:isHandKeptInUseByHandTool(hand)
     return isTriggerUsing(hand) or isLineOutInHand(self, hand)
 end
 
+-- ---- The fishing rod in the diagnostics ---------------------------------------------------------------------------------
+-- With the rod in the Tool Hand, vrHandToolsDiagnostics also logs lines about it (ADR-0031), for the headset round: its state
+-- (getFishingRodState); the last cast, seen by watchFishingRod as the state leaving charging, with the rod's ray direction and the
+-- head's direction then (does the cast follow the rod or the head?) and where the bobber landed (getBobberPosition, read while
+-- the rod waits for a bite, once the line is out). Only the local player's rod is watched and described. The one-line answer
+-- (getHandToolsDiagnostics) does not carry these lines.
+
+-- The state as the developer reads it: "waiting" is the line out with no bite yet.
+local FISHING_ROD_STATE_TEXT = { waiting = "line out" }
+
+-- The way the head looks: the game's own Player:getLookRay (the wrap's original: the wrap answers the tool's ray). nil when unknown.
+local function headDirection(player)
+    local wrap = wraps.getLookRay
+    local read = wrap ~= nil and wrap.original or player.getLookRay
+    if type(read) ~= "function" then return nil end
+    local ok, _, _, _, dx, dy, dz = pcall(read, player)
+    if not ok or type(dx) ~= "number" or type(dy) ~= "number" or type(dz) ~= "number" then return nil end
+    return { dx, dy, dz }
+end
+
+-- Where the rod's bobber is, or nil when that cannot be read.
+local function bobberPosition(tool)
+    if type(tool.getBobberPosition) ~= "function" then return nil end
+    local ok, x, y, z = pcall(tool.getBobberPosition, tool)
+    if not ok or type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then return nil end
+    return { x, y, z }
+end
+
+-- Once per update, after the trigger (a let-go there throws the cast): notes the local player's rod's cast.
+local function watchFishingRod(self)
+    local seen = state.fishingRod
+    local tool = heldTool()
+    local player = tool ~= nil and localCarryingPlayer(tool) or nil
+    if player == nil or supportedKind(tool) ~= FISHING_ROD_KIND then
+        seen.tool, seen.state = nil, nil
+        return
+    end
+    local rodState = self:getFishingRodState(tool)
+    if seen.tool == tool and seen.state == "charging" and rodState ~= "charging" then
+        local _, _, _, dx, dy, dz = self:getHandToolRay(player)
+        seen.cast = { tool = tool, rod = dx ~= nil and { dx, dy, dz } or nil, head = headDirection(player) }
+    end
+    local cast = seen.cast
+    if cast ~= nil and cast.tool == tool and rodState == "waiting" then
+        cast.bobber = bobberPosition(tool) or cast.bobber
+    end
+    seen.tool, seen.state = tool, rodState
+end
+
+local function tripleText(label, t)
+    return string.format("%s (%.2f, %.2f, %.2f)", label, t[1], t[2], t[3])
+end
+
+-- The last cast of the rod, as one text.
+local function lastCastText(tool)
+    local cast = state.fishingRod.cast
+    if cast == nil or cast.tool ~= tool then return "none yet" end
+    return table.concat({
+        cast.rod ~= nil and tripleText("rod direction", cast.rod) or "rod direction: none (the rod was not in the Tool Hand)",
+        cast.head ~= nil and tripleText("head direction", cast.head) or "head direction: unknown",
+        cast.bobber ~= nil and tripleText("bobber at", cast.bobber) or "bobber: not read (the line was not out waiting for a bite)",
+    }, ", ")
+end
+
+-- The rod the local player holds in the Tool Hand now, or nil.
+local function fishingRodInTheHand(self)
+    local tool = heldTool()
+    if tool == nil or supportedKind(tool) ~= FISHING_ROD_KIND then return nil end
+    if toolHandFor(self, tool) == nil then return nil end
+    return tool
+end
+
+-- The lines about the rod in the Tool Hand, each starting "fishing rod "; none when it is not in the hand. Never raises.
+local function fishingRodLines(self)
+    local ok, result = pcall(function()
+        local tool = fishingRodInTheHand(self)
+        if tool == nil then return {} end
+        local rodState = self:getFishingRodState(tool)
+        return {
+            "fishing rod state: " .. (FISHING_ROD_STATE_TEXT[rodState] or tostring(rodState)),
+            "fishing rod last cast: " .. lastCastText(tool),
+        }
+    end)
+    if ok then return result end
+    return { "fishing rod: could not be described (" .. tostring(result) .. ")" }
+end
+
 -- ---- The look ray -----------------------------------------------------------------------------------------
 
 -- Where the tool points now: the world position of its pointing node and the world direction of its pointing axis, then the
@@ -1317,6 +1410,7 @@ function VRCompanion:updateHandTools(dt)
     updateTrigger(self)
     updateHaptics(self, dt)  -- the trigger use above is what starts a cut or a spray
     updateSprayCanFeedback(self)  -- last: its tick is a single pulse on top of the buzz
+    watchFishingRod(self)  -- for the diagnostics; after the trigger, whose let-go throws the cast
 end
 
 -- ---- Settings command, diagnostics, console commands, reset ---------------------------------------------------------------
@@ -1776,11 +1870,14 @@ function VRCompanion:getHandToolsDiagnostics()
     return table.concat(diagnosticFields(self), " | ")
 end
 
--- Prints the fields to the game log, one tagged line each, and returns them as one line. A held unsupported Hand Tool is
--- described after them.
+-- Prints the fields to the game log, one tagged line each, and returns them as one line. The fishing rod in the Tool Hand, and a
+-- held unsupported Hand Tool, are described after them (in the log only).
 function VRCompanion:consoleCommandHandToolsDiagnostics()
     for _, field in ipairs(diagnosticFields(self)) do
         print("[FS25_VR] " .. field)
+    end
+    for _, line in ipairs(fishingRodLines(self)) do
+        print("[FS25_VR] " .. line)
     end
     for _, line in ipairs(probeLines()) do
         print("[FS25_VR] " .. PROBE_TAG .. line)

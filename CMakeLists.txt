@@ -244,6 +244,7 @@ add_executable(fs25_vr_tests
     tests/test_hand_tools_draw.cpp
     tests/test_hand_tools_horse_brush.cpp
     tests/test_hand_tools_fishing_rod.cpp
+    tests/test_hand_tools_fishing_rod_diagnostics.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
