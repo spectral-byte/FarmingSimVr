@@ -134,3 +134,78 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodHeldOnFootHangsBelowTheRight
     )luau", "=follows"), 0);
     EXPECT_NE(Dump().find("held Hand Tool: fishingrod (supported)"), std::string::npos) << Dump();
 }
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodIsWhereTheGamePutsItSetDownUntrackedOutOfFirstPersonOrWithHandToolsOffAndBackInTheHandAfterwards) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+
+    AdvanceGameTime(3100);  // set down: the Motion Controller lies still for longer than the in-use timeout
+    FRAMES(1);
+    EXPECT_EQ(WhereTheGamePutsIt(), "true") << "set down: the game's own attachToolToCamera put the rod in front of the view";
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    EXPECT_EQ(InTheHand("right"), "true") << "picked up again";
+
+    headset.SetHandTracked(kRight, false);
+    FRAMES(1);
+    EXPECT_EQ(WhereTheGamePutsIt(), "true") << "untracked";
+    headset.SetHandTracked(kRight, true);
+    FRAMES(1);
+    EXPECT_EQ(InTheHand("right"), "true") << "tracked again";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.thirdPerson(foot.player, true)", "=thirdPerson"), 0);
+    FRAMES(1);
+    EXPECT_EQ(InTheHand("right"), "false") << "third person: the game's own hold";
+    EXPECT_EQ(EvalLua(L, "tostring(getParent(rod.rootNode) == foot.player.handNode)"), "true");
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.thirdPerson(foot.player, false)", "=firstPerson"), 0);
+    FRAMES(1);
+    EXPECT_EQ(InTheHand("right"), "true") << "first person again";
+
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off')", "=off"), 0);
+    FRAMES(1);
+    EXPECT_EQ(WhereTheGamePutsIt(), "true") << "vrHandTools off";
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'on')", "=on"), 0);
+    FRAMES(1);
+    EXPECT_EQ(InTheHand("right"), "true") << "vrHandTools on";
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheLeftHandChosenAsTheToolHandTheRodGoesIntoTheLeftVirtualHandWithTheSameOffset) {
+    ASSERT_NO_FATAL_FAILURE(Start());
+    ASSERT_NO_FATAL_FAILURE(HoldFishingRod(L));
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrToolHand', 'left')", "=toolHandLeft"), 0);
+    PICK_UP(kLeft, -0.25f, -0.10f, -0.30f);
+    FRAMES(1);
+
+    EXPECT_EQ(InTheHand("left"), "true") << Dump();
+    EXPECT_EQ(RunLuauChunk(L, R"luau(
+        local offset = VRCompanion.HAND_TOOL_HANDLE_OFFSETS.fishingrod
+        local x, y, z = getTranslation(rod.rootNode)
+        assert(getParent(rod.rootNode) == handHolder('left'), "linked straight below the left Virtual Hand's holder")
+        assert(math.abs(x - offset.position.x) < 1e-6 and math.abs(y - offset.position.y) < 1e-6 and math.abs(z - offset.position.z) < 1e-6,
+            "at the same handle offset")
+    )luau", "=offset"), 0);
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    EXPECT_EQ(InTheHand("left"), "true") << "the other hand being picked up does not take it";
+    EXPECT_EQ(InTheHand("right"), "false");
+}
+
+// ---- The look ray ---------------------------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodInTheToolHandTheTargetersRayRunsFromItsRootTowardItsTipAndIsTheHeadsOtherwise) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), rodRay())"), "true")
+        << "from the rod's root along the rod, with nothing behind it: " << EvalLua(L, "rayText(targeterRay())") << " against " << EvalLua(L, "rayText(rodRay())");
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "false");
+
+    AimTheHand(kRight, 0.45f, 0.10f, -0.50f);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), rodRay())"), "true") << "it follows the hand";
+
+    headset.SetHandTracked(kRight, false);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "untracked: the head's ray, " << EvalLua(L, "rayText(targeterRay())");
+    headset.SetHandTracked(kRight, true);
+    FRAMES(2);
+    AdvanceGameTime(3100);  // set down
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "set down: the head's ray";
+}

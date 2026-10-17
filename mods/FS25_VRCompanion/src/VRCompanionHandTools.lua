@@ -319,6 +319,13 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
         reachBehind = 0.5,
         touchReach = 0.25,
     },
+    -- Fishing rod: from the rod's root along its +Z, toward the tip, with no `reachBehind` (ADR-0031). The cast should land the way
+    -- the rod points. UNCERTAIN until checked in the headset: the axis is a first guess (the game's tools point along +Z; the DLC's
+    -- i3d is packed), and whether the DLC aims its cast with the look ray at all.
+    fishingrod = {
+        node = function(tool) return tool.rootNode end,
+        direction = { x = 0.0, y = 0.0, z = 1.0 },
+    },
 }
 
 -- The supported kind of a Hand Tool and its entry, or nil for an unsupported one.
