@@ -240,6 +240,7 @@ add_executable(fs25_vr_tests
     tests/test_hand_tools_offset_tuning.cpp
     tests/test_hand_tools_describe_unsupported.cpp
     tests/test_hand_tools_spray_can.cpp
+    tests/test_hand_tools_spray_can_feedback.cpp
     tests/test_hand_tools_draw.cpp
 )
 
