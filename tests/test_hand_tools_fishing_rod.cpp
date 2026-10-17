@@ -327,6 +327,80 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheGamesOwnBindingsStillFishWhileT
     EXPECT_EQ(EvalLua(L, "useCalls('ACTIVATE_HANDTOOL_SECONDARY')"), "1,0") << "the game's own secondary binding still reaches the rod";
 }
 
+// ---- The rod's state ------------------------------------------------------------------------------------------------------------
+
+// What the Companion Mod reads of the rod (its state from the keys of spec.state, its line, its bend), for the haptics and the
+// diagnostics: one value per line, "state lineOut bend".
+TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsStateIsReadFromItsKeysIdleChargingWaitingBiteReelingAndCaughtWithItsLineAndBend) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, "function _G.readRod() return table.concat({ tostring(select(1, VRCompanion:getFishingRodState())), "
+                              "tostring(select(2, VRCompanion:getFishingRodState())), "
+                              "string.format('%.2f', select(3, VRCompanion:getFishingRodState())) }, ' ') end", "=readRod"), 0);
+    auto read = [&]() { return EvalLua(L, "readRod()"); };
+
+    EXPECT_EQ(read(), "idle false 0.00");
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(5);
+    EXPECT_EQ(read(), "charging false 0.00");
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    EXPECT_EQ(read(), "waiting true 0.00") << "the cast: the line is out";
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.biteRod(rod)", "=bite"), 0);
+    FRAMES(1);
+    EXPECT_EQ(read(), "bite true 0.00");
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setFishPull(rod, 0.9)", "=pull"), 0);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    EXPECT_EQ(read(), "reeling true 0.90") << "hooked and reeled: the rod bends with the fish's pull";
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+    EXPECT_EQ(read(), "reeling true 0.30") << "the reel let go: the rod bends less";
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(200);
+    EXPECT_EQ(read(), "caught false 0.00") << "landed: the line is in";
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsStateIsNilForAnyOtherToolAndForNoTool) {
+    ASSERT_NO_FATAL_FAILURE(Start());
+    EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:getFishingRodState())"), "nil") << "nothing held";
+    ASSERT_NO_FATAL_FAILURE(HoldLance(L));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:getFishingRodState())"), "nil") << "the lance held";
+}
+
+// A DLC update could rename or reshape any of what the state is read from: the answer is then "unknown", with the line in and no
+// bend, never an error.
+TEST_F(VirtualGamepadHandToolsFishingRodTest, ARodSpecThatCannotBeReadIsUnknownWithoutAnError) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.spec = StubHandTool.rodSpec(rod)
+        _G.kept = { state = spec.state, fishingLine = spec.fishingLine, rodBendFactor = spec.rodBendFactor }
+        function _G.readAfter(change)
+            StubHandTool.setRodState(rod, 'waiting')
+            change()
+            local ok, state, lineOut, bend = pcall(function() return VRCompanion:getFishingRodState() end)
+            for key, value in pairs(kept) do spec[key] = value end
+            setmetatable(spec, nil)
+            if not ok then return "error: " .. tostring(state) end
+            return string.format("%s %s %s", tostring(state), tostring(lineOut), tostring(bend))
+        end
+    )luau", "=readAfter"), 0);
+    const char* changes[] = {
+        "function() spec.state = nil end",
+        "function() spec.state = 'waiting' end",
+        "function() spec.fishingLine = nil end",
+        "function() spec.fishingLine = { isInitialized = 'yes' } end",
+        "function() spec.rodBendFactor = nil end",
+        "function() spec.state = nil; setmetatable(spec, { __index = function(_, key) error('reshaped: ' .. key) end }) end",
+        "function() rod['spec_pdlc_highlandsFishingPack.fishingRod'] = setmetatable({}, { __index = function() error('reshaped') end }) end",
+    };
+    for (const char* change : changes) {
+        EXPECT_EQ(EvalLua(L, std::string("readAfter(") + change + ")"), "unknown false 0") << change;
+        ASSERT_EQ(RunLuauChunk(L, "rod['spec_pdlc_highlandsFishingPack.fishingRod'] = spec", "=restore"), 0);
+    }
+    EXPECT_EQ(EvalLua(L, "readAfter(function() end)"), "waiting true 0") << "readable again";
+}
+
 // ---- The rod keeps its overlays ------------------------------------------------------------------------------------------------
 
 // The rod is the one supported Hand Tool whose screen-centre overlays stay: its charge meter, waiting hint and "Hook fish" prompt.

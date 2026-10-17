@@ -10,8 +10,8 @@
 -- a multiplayer session is left exactly as the game has it. Terms (Hand Tool, Tool Hand): CONTEXT.md.
 --
 -- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
--- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | Keeping the Tool
--- Hand in use | The look ray |
+-- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The fishing rod's
+-- state | Keeping the Tool Hand in use | The look ray |
 -- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The flashlight's beam | No screen-centre overlays (the
 -- spray can's, the horse brush's and the chainsaw's onDraw) | The horse brush's touch (the touching cap) | Haptics | The spray can's feedback (target tick, marker type message) | Update |
 -- Diagnostics, console commands, reset.
@@ -39,6 +39,10 @@
 --                                                       tool's reachBehind field (the spray can's and the horse brush's 0.5 m); this is what Player:getLookRay
 --                                                       answers then, so what the targeter casts
 --   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   nil when the tool (default: the one held) is no chainsaw
+--   VRCompanion:getFishingRodState([tool]) -> state, lineOut, bend   the fishing rod's state ("idle" | "charging" | "waiting" |
+--                                                       "bite" | "reeling" | "caught" | "unknown"), whether its line is out and its
+--                                                       rodBendFactor; "unknown", false, 0 when its spec cannot be read; nil when the
+--                                                       tool (default: the one held) is no fishing rod. The only reader of the rod's spec
 --   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the wrist's roll about the bar while the chainsaw is in the tracked Tool Hand
 --                                                       (nil: leave the roll to the game's roll action)
 --   VRCompanion.HAND_TOOL_HAPTICS / HAND_TOOL_HAPTIC_PULSES / _INTERVAL_MS   per tool kind: what the Tool Hand feels now, the pulses
@@ -736,6 +740,56 @@ local function updateTrigger(self)
         callUseHandler(tool, entry, 0)
         use.active = false
     end
+end
+
+-- ---- The fishing rod's state --------------------------------------------------------------------------------------------
+-- The DLC's scripts cannot be read (ADR-0031): the rod's state machine is known from the #125 dump only. spec.state is one of
+-- spec.states, tables with no name, so a state is told by its keys: charging has angleScale, waiting for a bite biteTime, the bite
+-- (the hook window) catchTime, caught bendResetRate, and idle nothing but its fishingRod back reference. The dump never named the
+-- reeling state's keys, so reeling is what is left while the line is out. fishingLine.isInitialized says whether the line is out
+-- (from the cast until it is in again), rodBendFactor how far a fish bends the rod (0 unless reeling, up to about 0.93).
+-- This is the ONE place that reads the rod's spec: everything else asks getFishingRodState. Every read is guarded: a field a DLC
+-- update renamed or reshaped, or a read that raises, makes the state "unknown", which keeps nothing in use and buzzes nothing.
+
+local FISHING_ROD_KIND = "fishingrod"
+
+-- The key each recognisable state carries, tried in this order: the first one spec.state has names the state.
+local FISHING_ROD_STATE_KEYS = {
+    { key = "angleScale", state = "charging" },
+    { key = "biteTime", state = "waiting" },
+    { key = "catchTime", state = "bite" },
+    { key = "bendResetRate", state = "caught" },
+}
+
+-- The rod's state, whether its line is out and its bend, read off its spec table; nil when they cannot be read. May raise (a
+-- reshaped table can): getFishingRodState calls it guarded.
+local function readFishingRod(tool, specName)
+    local spec = tool[specName]
+    if type(spec) ~= "table" then return nil end
+    local current, line, bend = spec.state, spec.fishingLine, spec.rodBendFactor
+    if type(current) ~= "table" or type(line) ~= "table" or type(bend) ~= "number" then return nil end
+    local lineOut = line.isInitialized
+    if type(lineOut) ~= "boolean" then return nil end
+    for _, known in ipairs(FISHING_ROD_STATE_KEYS) do
+        if current[known.key] ~= nil then return known.state, lineOut, bend end
+    end
+    if lineOut then return "reeling", lineOut, bend end
+    for key in pairs(current) do
+        if key ~= "fishingRod" then return nil end  -- line in, with keys none of the dump's states had
+    end
+    return "idle", lineOut, bend
+end
+
+-- The fishing rod's state: "idle" | "charging" | "waiting" (the line out, no bite yet) | "bite" (the hook window) | "reeling" |
+-- "caught" | "unknown" (the rod's spec cannot be read), then whether its line is out (false when unknown) and its bend factor (0
+-- when unknown). nil when the tool (default: the Hand Tool the local player holds) is no fishing rod.
+function VRCompanion:getFishingRodState(tool)
+    if tool == nil then tool = heldTool() end
+    local kind, entry = supportedKind(tool)
+    if kind ~= FISHING_ROD_KIND then return nil end
+    local ok, rodState, lineOut, bend = pcall(readFishingRod, tool, entry.spec)
+    if not ok or rodState == nil then return "unknown", false, 0 end
+    return rodState, lineOut, bend
 end
 
 -- ---- Keeping the Tool Hand in use ---------------------------------------------------------------------------------------
