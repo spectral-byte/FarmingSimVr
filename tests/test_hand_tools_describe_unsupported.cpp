@@ -409,6 +409,7 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ARunIsCappedInLinesTheMos
     EXPECT_GT(leftOut, 0) << "the cut is said";
     const int shown = static_cast<int>(lines.size()) - 1;  // the last line is the left-out line itself
     EXPECT_EQ(lines.back(), leftOutLine) << "and it is the last line";
+    EXPECT_EQ(lines.size(), 200u) << "the cap is on the run, the left-out line included";
     EXPECT_LT(shown, 300);
     EXPECT_GE(shown + leftOut, 300) << "what is shown and what is left out are at least the fields of the 15 tables";
     EXPECT_FALSE(LineWith(lines, { "config file" }).empty()) << "the first lines survive";
@@ -417,7 +418,6 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ARunIsCappedInLinesTheMos
     EXPECT_FALSE(LineWith(lines, { "placement:" }).empty());
 }
 
-// ---- the probe only reads -----------------------------------------------------------------------------------------
 // The stub's unreadable node names (brokenSpec, brokenNode) are the tool's: putting the tool away restores the engine's getName,
 // so one test's broken tool cannot make a later read fail (each test also has a Lua state of its own).
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheStubsUnreadableNodeNameIsRestoredWhenTheToolIsPutAway) {
@@ -432,6 +432,7 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheStubsUnreadableNodeNam
     EXPECT_EQ(EvalLua(L, "tostring(getName == engineGetName)"), "true") << "the engine's own function is back, not a wrapper of it";
 }
 
+// ---- the probe only reads -----------------------------------------------------------------------------------------
 
 namespace {
 

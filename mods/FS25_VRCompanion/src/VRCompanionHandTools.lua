@@ -1049,7 +1049,7 @@ end
 
 -- The caps. Each cut says how much was left out.
 local PROBE_STRING_LENGTH = 30       -- a longer string is cut
-local PROBE_MAX_LINES = 200          -- lines per run (the line that says how many were left out is one more)
+local PROBE_MAX_LINES = 200          -- lines per run, the line that says how many were left out included
 local PROBE_MAX_SPEC_FIELDS = 30     -- fields shown per spec table
 local PROBE_MAX_FUNCTION_NAMES = 40  -- function names shown per class or type
 local PROBE_MAX_NODES = 40           -- nodes shown in the tree
@@ -1277,13 +1277,13 @@ end
 -- unknown, not another one. The game places a held tool again whenever the view changes, so a tool noted in the first person
 -- view that is now seen from the third person view has been placed by another path since (nothing is wrapped to see that).
 local function describePlacement(tool, add)
-    local player = carryingPlayer(tool) or localPlayer()
-    local camera = type(player) == "table" and player.camera or nil
-    local inFirstPerson = type(camera) == "table" and camera.isFirstPerson == true
     if wraps.attachToolToCamera == nil then
         add("placement: unknown (the placement wrap is not installed)")
         return
     end
+    local player = carryingPlayer(tool) or localPlayer()
+    local camera = type(player) == "table" and player.camera or nil
+    local inFirstPerson = type(camera) == "table" and camera.isFirstPerson == true
     if state.cameraPlacedTool == tool and inFirstPerson then
         add("placement: through attachToolToCamera")
     else
@@ -1297,8 +1297,9 @@ local function guarded(what, part, tool, add)
     if not ok then add(what .. " could not be read (" .. tostring(err) .. ")") end
 end
 
--- The lines that describe the tool, without the tags, at most PROBE_MAX_LINES and a last line that counts the rest. The parts that
--- are short and tell most come first; the spec tables, which have no limit of their own, come last and are what a cut takes.
+-- The lines that describe the tool, without the tags, at most PROBE_MAX_LINES in all: when lines are left out, the last of those
+-- lines is the one that counts them (it takes the place of the last line kept, which is counted too). The parts that are short and
+-- tell most come first; the spec tables, which have no limit of their own, come last and are what a cut takes.
 local function describeUnsupportedTool(tool)
     local lines, leftOut = {}, 0
     local function add(line)
@@ -1311,7 +1312,7 @@ local function describeUnsupportedTool(tool)
     guarded("action events", describeActionEvents, tool, add)
     guarded("node tree", describeNodes, tool, add)
     guarded("spec tables", describeSpecTables, tool, add)
-    if leftOut > 0 then lines[#lines + 1] = string.format("%d more lines left out", leftOut) end
+    if leftOut > 0 then lines[#lines] = string.format("%d more lines left out", leftOut + 1) end
     return lines
 end
 
