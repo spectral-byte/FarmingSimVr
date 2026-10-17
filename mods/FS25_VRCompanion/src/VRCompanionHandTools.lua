@@ -1034,7 +1034,7 @@ local PROBE_TAG = "Hand Tool probe: "
 -- The unsupported Hand Tool the local player holds, or nil (nothing held, a supported tool, another player's tool). The tool
 -- the game last attached to the camera, or else the one the player says it holds (a tool the game put in the hand of the third
 -- person view never went through attachToolToCamera).
-local function unsupportedHeldTool(self)
+local function unsupportedHeldTool()
     local tool = heldTool()
     if tool == nil then
         local player = localPlayer()
@@ -1064,7 +1064,9 @@ local function sortedKeys(t)
 end
 
 -- A short text for a field's value: numbers and booleans as they are, a string cut short, a table by its key count, a number
--- that is a node (an entity id) with the node's name. Nothing for a function.
+-- that is a node (an entity id) with the node's name. Nothing for a function. A node is only guessed from the number (a positive
+-- whole number the engine says is an entity), so a plain number that happens to be an entity id is shown with a node name as
+-- well; in a log read by a person that is harmless.
 local function shortValue(value)
     local kind = type(value)
     if kind == "number" then
@@ -1091,10 +1093,9 @@ end
 -- Every spec_ table of the tool, one level deep: a line per field with its name, Lua type and short value.
 local function describeSpecTables(tool, add)
     local specNames = {}
-    for key, value in pairs(tool) do
-        if type(key) == "string" and string.sub(key, 1, 5) == "spec_" and type(value) == "table" then specNames[#specNames + 1] = key end
+    for _, key in ipairs(sortedKeys(tool)) do
+        if type(key) == "string" and string.sub(key, 1, 5) == "spec_" and type(tool[key]) == "table" then specNames[#specNames + 1] = key end
     end
-    table.sort(specNames)
     for _, specName in ipairs(specNames) do
         local ok, err = pcall(function()
             local spec = tool[specName]
@@ -1317,9 +1318,9 @@ local function describeUnsupportedTool(tool)
 end
 
 -- The description of the unsupported tool held now, [] when there is none.
-local function probeLines(self)
+local function probeLines()
     local ok, result = pcall(function()
-        local tool = unsupportedHeldTool(self)
+        local tool = unsupportedHeldTool()
         if tool == nil then return {} end
         return describeUnsupportedTool(tool)
     end)
@@ -1338,7 +1339,7 @@ function VRCompanion:consoleCommandHandToolsDiagnostics()
     for _, field in ipairs(diagnosticFields(self)) do
         print("[FS25_VR] " .. field)
     end
-    for _, line in ipairs(probeLines(self)) do
+    for _, line in ipairs(probeLines()) do
         print("[FS25_VR] " .. PROBE_TAG .. line)
     end
     return self:getHandToolsDiagnostics()
