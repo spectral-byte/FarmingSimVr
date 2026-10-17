@@ -184,6 +184,24 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AToolTheGameNeverPlacedTh
     EXPECT_FALSE(LineWith(lines, { "placement: not through attachToolToCamera" }).empty()) << Joined(lines);
 }
 
+// A game in which the Companion Mod could not wrap attachToolToCamera (a game update renamed it): the mod never sees the
+// placement, so it does not claim a path it cannot know.
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, WithoutThePlacementWrapThePlacementPathIsSaidToBeUnknownNotToBeAnotherPath) {
+    headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
+    StartOptions options;
+    options.variant = "missing";
+    ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge, options));
+    ASSERT_EQ(RunLuauChunk(L, "_G.otherTool = StubHandTool.otherModTool(foot.player); StubHandTool.hold(otherTool)", "=hold"), 0);
+    ASSERT_EQ(EvalLua(L, "tostring(StubHandTool.cameraAttaches)"), "1") << "the game did place the tool in front of the camera";
+
+    RunCommand();
+
+    const auto lines = Probe();
+    EXPECT_FALSE(LineWith(lines, { "config file: mods/FS25_OtherMod" }).empty()) << "the tool is described all the same: " << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "placement: unknown (the placement wrap is not installed)" }).empty()) << Joined(lines);
+    EXPECT_TRUE(LineWith(lines, { "not through attachToolToCamera" }).empty()) << Joined(lines);
+}
+
 // ---- nothing to describe, and the answer ---------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheOneLineAnswerStaysTheSameAndOnlySaysTheToolIsUnsupported) {

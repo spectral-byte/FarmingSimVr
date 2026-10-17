@@ -1268,12 +1268,19 @@ local function describeNodes(tool, add)
 end
 
 -- Whether the game's last placement of the tool was HandTool:attachToolToCamera (it links the tool to the camera when the player
--- is in the first person view) or another path (attachToolToHand in the third person view, or whatever else a tool does). The
--- wrap of attachToolToCamera noted the tools it saw; a tool that went to the hand of the third person view since is another path.
+-- is in the first person view) or another path (attachToolToHand in the third person view, or whatever else a tool does). This is
+-- only known from the wrap of attachToolToCamera, which noted the tool when the game placed it (state.cameraPlacedTool); without
+-- the wrap (the game's function is missing or reshaped, or Hand Tools gave up) nothing was noted, and the path is said to be
+-- unknown, not another one. The game places a held tool again whenever the view changes, so a tool noted in the first person
+-- view that is now seen from the third person view has been placed by another path since (nothing is wrapped to see that).
 local function describePlacement(tool, add)
     local player = carryingPlayer(tool) or localPlayer()
     local camera = type(player) == "table" and player.camera or nil
     local inFirstPerson = type(camera) == "table" and camera.isFirstPerson == true
+    if wraps.attachToolToCamera == nil then
+        add("placement: unknown (the placement wrap is not installed)")
+        return
+    end
     if state.cameraPlacedTool == tool and inFirstPerson then
         add("placement: through attachToolToCamera")
     else
