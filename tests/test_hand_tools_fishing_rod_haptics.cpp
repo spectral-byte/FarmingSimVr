@@ -196,3 +196,143 @@ TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, ReelingBuzzesTheToolHandMor
     EXPECT_LT(StrongestTo(kRight), hard) << "less, as the rod bends less";
     EXPECT_EQ(PulsesTo(kLeft), 0u) << "the other hand feels nothing";
 }
+
+TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, LandingTheFishEndsTheBuzz) {
+    ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kRight));
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.biteRod(rod)", "=bite"), 0);
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    ASSERT_EQ(RodState(), "reeling");
+    ForgetPulses();
+    FRAMES(5);
+    ASSERT_GE(PulsesTo(kRight), 1u) << "buzzing while it reels";
+    for (int frame = 0; frame < 300 && RodState() == "reeling"; ++frame) FRAMES(1);
+    ASSERT_EQ(RodState(), "caught") << "the held reel brought the fish in";
+    FRAMES(1);
+    ForgetPulses();
+    FRAMES(10);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "caught, the line in: silent";
+}
+
+// ---- Silence -------------------------------------------------------------------------------------------------------------------
+// A buzz always means a fish: the rod that is only held, charged or waiting is silent.
+
+TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, TheRodIsSilentWhileIdleChargingAndWaiting) {
+    ASSERT_NO_FATAL_FAILURE(HoldTheRodIn(kRight));
+    ForgetPulses();
+    FRAMES(10);
+    ASSERT_EQ(RodState(), "idle");
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "idle";
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(30);
+    ASSERT_EQ(RodState(), "charging");
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "charging a cast with the trigger held";
+
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    ASSERT_EQ(RodState(), "waiting");
+    for (int second = 0; second < 5; ++second) {
+        AdvanceGameTime(1000);
+        FRAMES(10);
+    }
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true") << "the rod still in the still hand: " << Dump();
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "waiting for a bite";
+    EXPECT_EQ(PulsesTo(kLeft), 0u);
+}
+
+// A DLC update that hides the rod's state must not buzz the hand: unknown is silent, whatever the rod is really doing.
+TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, AnUnreadableStateBuzzesNothingEvenInABiteOrWhileReeling) {
+    ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kRight));
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.biteRod(rod); StubHandTool.rodSpec(rod).rodBendFactor = 'bent'", "=unreadableBite"), 0);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:getFishingRodState()"), "unknown");
+    ForgetPulses();
+    FRAMES(10);
+    ASSERT_EQ(RodState(), "bite");
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "a bite the mod cannot read";
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubHandTool.setRodState(rod, 'reeling')
+        StubHandTool.rodSpec(rod).fishingLine = { isInitialized = 'yes' }
+    )luau", "=unreadableReeling"), 0);
+    FRAMES(1);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:getFishingRodState()"), "unknown");
+    ForgetPulses();
+    FRAMES(10);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "reeling the mod cannot read";
+    EXPECT_EQ(PulsesTo(kLeft), 0u);
+}
+
+// ---- Only the Tool Hand, only while the rod is in it, only the local player's rod -----------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, TheLeftToolHandIsTheOneThatFeelsTheBiteAndTheReelingNotTheRightOne) {
+    ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kLeft));
+    ForgetPulses();
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.biteRod(rod)", "=bite"), 0);
+    FRAMES(20);
+    EXPECT_GE(PulsesTo(kLeft), 2u) << "the bite";
+    EXPECT_EQ(PulsesTo(kRight), 0u);
+
+    headset.SetHandInputs(kLeft, Trigger(1.0f));
+    FRAMES(2);
+    ASSERT_EQ(RodState(), "reeling");
+    ForgetPulses();
+    FRAMES(10);
+    EXPECT_GE(PulsesTo(kLeft), 3u) << "the reeling";
+    EXPECT_EQ(PulsesTo(kRight), 0u);
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, TheRodOutOfTheToolHandBuzzesNothing) {
+    ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kRight));
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.biteRod(rod)", "=bite"), 0);
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    ASSERT_EQ(RodState(), "reeling");
+
+    headset.SetHandTracked(kRight, false);
+    FRAMES(3);  // a pulse already requested finishes by itself
+    ForgetPulses();
+    FRAMES(10);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "untracked: the rod is the game's again";
+    EXPECT_EQ(PulsesTo(kLeft), 0u);
+
+    headset.SetHandTracked(kRight, true);
+    FRAMES(3);
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off')", "=handToolsOff"), 0);
+    FRAMES(3);
+    ForgetPulses();
+    FRAMES(10);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "Hand Tools off";
+    EXPECT_EQ(PulsesTo(kLeft), 0u);
+}
+
+// The game attaches a Hand Tool of every player in the session through the same function: another player's rod biting or
+// reeling is theirs to feel.
+TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, AnotherPlayersRodBuzzesNothing) {
+    ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kRight));
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local pitch = StubScene.newNode("remotePitch", 0, 4, 1.7, 4)
+        _G.remote = setmetatable({ isOwner = false, camera = { isFirstPerson = true, pitchNode = pitch } }, { __index = _G.Player })
+        _G.remoteRod = StubHandTool.fishingRod(remote)
+        remoteRod.isHeld = true
+        remoteRod.carryingPlayer = remote
+        remoteRod:attachTool()
+        StubHandTool.setRodState(remoteRod, 'bite')
+    )luau", "=remoteBite"), 0);
+    ForgetPulses();
+    FRAMES(10);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "another player's bite";
+    EXPECT_EQ(PulsesTo(kLeft), 0u);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubHandTool.setRodState(remoteRod, 'reeling')
+        StubHandTool.rodSpec(remoteRod).rodBendFactor = 0.9
+    )luau", "=remoteReeling"), 0);
+    ForgetPulses();
+    FRAMES(10);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "another player's reeling";
+    EXPECT_EQ(PulsesTo(kLeft), 0u);
+    EXPECT_EQ(RodState(), "waiting") << "the local player's rod still waits";
+}
