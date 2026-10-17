@@ -345,6 +345,69 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASpecTableWithManyFieldsI
     EXPECT_EQ(CountLinesStartingWith(lines, "spec_otherModLine."), 1) << "another spec table has its own cap";
 }
 
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASpecTableOfAFewDozenFieldsIsShownWholeSoTheFieldsThatSortLastAreThere) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraSpecFields = 80 }"));  // 6 fields of its own and 80 more: 86 fields
+
+    RunCommand();
+
+    const auto lines = Probe();
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.extra80 (number) = 80" }).empty()) << Joined(lines);
+    EXPECT_TRUE(LineWith(lines, { "spec_otherModTool: ", "more fields left out" }).empty()) << "nothing was cut: " << Joined(lines);
+}
+
+// ---- the contents of a small table, one level further -----------------------------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ASmallTableFieldIsOpenedOneLevelWithEachEntrysNameTypeAndShortValue) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ nestedTables = true }"));
+
+    RunCommand();
+
+    const auto lines = Probe();
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.nested (table) = 3 keys" }).empty()) << "the table's own line stays: " << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.nested.speed (number) = 2.5" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.nested.name (string) = \"reel\"" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.nested.inner (table) = 1 keys" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.lines.1 (number) = 1" }).empty()) << "a list too: " << Joined(lines);
+    EXPECT_TRUE(LineWith(lines, { "nested.inner.deep" }).empty()) << "but only one level: " << Joined(lines);
+    EXPECT_TRUE(LineWith(lines, { "spec_otherModTool.emptyTable." }).empty()) << Joined(lines);
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ABigTableIsOnlyCountedNotOpened) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ bigTable = 100 }"));
+
+    RunCommand();
+
+    const auto lines = Probe();
+    EXPECT_FALSE(LineWith(lines, { "spec_otherModTool.bigTable (table) = 100 keys" }).empty()) << Joined(lines);
+    EXPECT_EQ(CountLinesStartingWith(lines, "spec_otherModTool.bigTable."), 0) << "a table past the cap is not opened";
+}
+
+// ---- what is called a node --------------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AnEntityNamedLikeAFileIsNotCalledANode) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ pathNamedNode = true }"));
+
+    RunCommand();
+
+    const auto lines = Probe();
+    const std::string image = LineWith(lines, { "spec_otherModTool.guiImage (number)" });
+    ASSERT_FALSE(image.empty()) << Joined(lines);
+    EXPECT_EQ(image.find("(node"), std::string::npos) << "a number that is an id of an image or a sound is a number: " << image;
+    EXPECT_NE(LineWith(lines, { "spec_otherModTool.bobberNode (number)" }).find("(node \"otherModBobber\")"), std::string::npos)
+        << "a node is still named";
+}
+
+TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, TheEnginesRootNodeIdAsAPlainNumberIsNotCalledANode) {
+    ASSERT_NO_FATAL_FAILURE(StartHolding());
+    ASSERT_EQ(RunLuauChunk(L, "StubScene.nodes[1] = { name = 'RootNode', parent = 0 }; otherTool.spec_otherModTool.direction = 1", "=root"), 0);
+
+    RunCommand();
+
+    const auto lines = Probe();
+    const std::string direction = LineWith(lines, { "spec_otherModTool.direction (number)" });
+    EXPECT_EQ(direction, "spec_otherModTool.direction (number) = 1") << "an id of 1 is far more often a count or a direction";
+}
+
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, AClassWithManyFunctionsIsCutAndTheLeftOutCountIsLogged) {
     ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraClassFunctions = 100 }"));  // onUseAction, onRollAction and 100 more
 
@@ -398,8 +461,8 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ANodeThatCannotBeReadMidw
 }
 
 TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ARunIsCappedInLinesTheMostUsefulLinesSurviveAndTheLeftOutCountIsLogged) {
-    // 15 more specializations of 20 fields each (under the cap of a table): 300 field lines on top of the rest.
-    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraSpecTables = 15 }"));
+    // 25 more specializations of 20 fields each (under the cap of a table): 500 field lines on top of the rest.
+    ASSERT_NO_FATAL_FAILURE(StartHolding("{ extraSpecTables = 25 }"));
 
     RunCommand();
 
@@ -409,9 +472,9 @@ TEST_F(VirtualGamepadHandToolsDescribeUnsupportedTest, ARunIsCappedInLinesTheMos
     EXPECT_GT(leftOut, 0) << "the cut is said";
     const int shown = static_cast<int>(lines.size()) - 1;  // the last line is the left-out line itself
     EXPECT_EQ(lines.back(), leftOutLine) << "and it is the last line";
-    EXPECT_EQ(lines.size(), 200u) << "the cap is on the run, the left-out line included";
-    EXPECT_LT(shown, 300);
-    EXPECT_GE(shown + leftOut, 300) << "what is shown and what is left out are at least the fields of the 15 tables";
+    EXPECT_EQ(lines.size(), 400u) << "the cap is on the run, the left-out line included";
+    EXPECT_LT(shown, 500);
+    EXPECT_GE(shown + leftOut, 500) << "what is shown and what is left out are at least the fields of the 25 tables";
     EXPECT_FALSE(LineWith(lines, { "config file" }).empty()) << "the first lines survive";
     EXPECT_FALSE(LineWith(lines, { "class OtherModHandTool" }).empty());
     EXPECT_FALSE(LineWith(lines, { "action event ACTIVATE_HANDTOOL" }).empty());
