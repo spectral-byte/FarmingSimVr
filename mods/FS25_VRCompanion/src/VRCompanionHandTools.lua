@@ -10,7 +10,8 @@
 -- a multiplayer session is left exactly as the game has it. Terms (Hand Tool, Tool Hand): CONTEXT.md.
 --
 -- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
--- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The look ray |
+-- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | Keeping the Tool
+-- Hand in use | The look ray |
 -- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The flashlight's beam | No screen-centre overlays (the
 -- spray can's, the horse brush's and the chainsaw's onDraw) | The horse brush's touch (the touching cap) | Haptics | The spray can's feedback (target tick, marker type message) | Update |
 -- Diagnostics, console commands, reset.
@@ -30,7 +31,8 @@
 --   VRCompanion.HAND_TOOL_POINTING_AXES                 per tool kind: the node a tool aims from and the axis it aims along
 --   VRCompanion:isHandHoldingHandTool(hand) -> boolean  the hand is the Tool Hand and a supported Hand Tool is in it now
 --   VRCompanion:getHeldHandTool() -> tool, kind         the Hand Tool the player holds and its supported kind (nil kind: unsupported)
---   VRCompanion:isHandToolTriggerDown(hand) -> boolean  the hand's trigger is using its Hand Tool now (Motion Controllers keep that hand in use)
+--   VRCompanion:isHandKeptInUseByHandTool(hand) -> boolean  the hand's Hand Tool keeps it in use however still it is held (its
+--                                                       trigger is using the tool now); Motion Controllers keep that hand in use
 --   VRCompanion:getHandToolRay([player]) -> x, y, z, dirX, dirY, dirZ   the tool's pointing ray in the world while a supported
 --                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's)
 --   VRCompanion:getHandToolLookRay([player]) -> x, y, z, dirX, dirY, dirZ   that ray with its origin moved back along the axis by the
@@ -54,7 +56,7 @@
 --                      Injector offers no hand states, so a tool goes back to the camera); the saved setting, the console
 --                      commands and the reset chain through the Motion Controller functions of the same names. Pointer Hand
 --                      selection never picks a hand that isHandHoldingHandTool in the world (a menu is not the world: either hand
---                      can point), and a hand whose isHandToolTriggerDown stays in use however still it is held
+--                      can point), and a hand that isHandKeptInUseByHandTool stays in use however still it is held
 --   VirtualGamepad     updateHandTools asks takeVirtualGamepadInput(toolHand, "trigger") every update the Tool Hand holds a
 --                      supported tool (the use is made here, so VirtualGamepad needs no hook); false is the held-input handover
 --   VirtualHands       getVirtualHandHolder(hand) is the node a tool is linked below; a hand that isHandHoldingHandTool is
@@ -736,12 +738,21 @@ local function updateTrigger(self)
     end
 end
 
--- Whether the hand's trigger is using its Hand Tool right now. The Tool Hand does not stay "in use" just by holding a tool (it
--- is set down after the in-use timeout like any hand), so Motion Controllers keeps it in use while this is so: a cut or a
--- spray held with a still hand must not drop the tool.
-function VRCompanion:isHandToolTriggerDown(hand)
+-- ---- Keeping the Tool Hand in use ---------------------------------------------------------------------------------------
+-- The Tool Hand does not stay "in use" just by holding a tool (it is set down after the in-use timeout like any hand), so
+-- Motion Controllers asks this module whether the hand's Hand Tool keeps it in use, however still it is held: while the
+-- hand's trigger is using the tool (a cut or a spray held with a still hand must not drop the tool). An untracked hand is
+-- never kept.
+
+-- The hand's trigger is using its Hand Tool right now.
+local function isTriggerUsing(hand)
     local use = state.trigger
-    return use.active and use.hand == hand and self:getHandState(hand).tracked == true
+    return use.active and use.hand == hand
+end
+
+function VRCompanion:isHandKeptInUseByHandTool(hand)
+    if self:getHandState(hand).tracked ~= true then return false end
+    return isTriggerUsing(hand)
 end
 
 -- ---- The look ray -----------------------------------------------------------------------------------------
