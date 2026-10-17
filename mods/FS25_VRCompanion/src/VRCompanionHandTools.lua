@@ -192,6 +192,8 @@ local SUPPORTED_TOOLS = {
     -- like the chainsaw's cut handler; it is called every update the trigger is held, then once with 0 when it is let go or the brush
     -- leaves the hand, because the brush's cleaning flag changes only when the handler is called.
     { kind = "horsebrush", label = "horse brush", spec = "spec_horseBrush", useHandler = "onBrushAction", useHandlerClass = "HandToolHorseBrush" },
+    -- The fishing rod (ADR-0031), from the Highlands Fishing DLC. A game without the DLC never holds one.
+    { kind = "fishingrod", label = "fishing rod", spec = "spec_pdlc_highlandsFishingPack.fishingRod" },
 }
 
 -- WHERE EACH TOOL SITS IN THE HAND: the pose of the tool's ROOT node in the Virtual Hand's grip frame (the frame of the
@@ -239,6 +241,14 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
     horsebrush = {
         position = { x = 0.03, y = 0.009, z = -0.033 },
         rotation = { x = 0.0, y = 0.0, z = -0.7071068, w = 0.7071068 },
+    },
+    -- The fishing rod runs along the tool's +Z from its root to its tip (UNCERTAIN, see HAND_TOOL_POINTING_AXES). Held like the
+    -- flashlight, through the fist with the tip out between the index finger and the thumb, the reel below. A FIRST GUESS: the
+    -- DLC's i3d is packed and the probe dump (#125) names the rod's `handNode` (the third person hold) without its position, so the
+    -- hand is put on the root itself until the headset round fits it (vrHandToolOffset fishingrod).
+    fishingrod = {
+        position = { x = 0.0, y = 0.0, z = 0.0 },
+        rotation = { x = 0.0, y = 0.9238795, z = -0.3826834, w = 0.0 },
     },
 }
 
