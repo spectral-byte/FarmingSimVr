@@ -948,16 +948,23 @@ local function touchLimit(kind)
     return (tonumber(axis.reachBehind) or 0) + axis.touchReach
 end
 
+-- The distance the targeter reports for the closest animal it found for the horse brush `player` carries (from the moved ray's
+-- origin), or nil when it found none or `player` has no targeter.
+local function brushTargetDistance(player)
+    local targeter = type(player) == "table" and player.targeter or nil
+    local closest = type(targeter) == "table" and type(targeter.closestTargetsByKey) == "table"
+        and targeter.closestTargetsByKey[engine("HandToolHorseBrush")] or nil
+    return type(closest) == "table" and tonumber(closest.distance) or nil
+end
+
 -- Whether the animal the targeter found for the brush `player` carries is out of touch now.
 local function animalIsOutOfTouch(player)
     local tool = heldTool()
-    if tool == nil or tool.spec_horseBrush == nil or state.linkedTool ~= tool then return false end
+    if tool == nil or state.linkedTool ~= tool then return false end
+    local kind = supportedKind(tool)
+    if kind ~= "horsebrush" then return false end
     if type(player) ~= "table" or tool:getCarryingPlayer() ~= player or toolHandFor(VRCompanion, tool) == nil then return false end
-    local limit = touchLimit(supportedKind(tool))
-    local targeter = player.targeter
-    local class = engine("HandToolHorseBrush")
-    local closest = type(targeter) == "table" and type(targeter.closestTargetsByKey) == "table" and targeter.closestTargetsByKey[class] or nil
-    local distance = type(closest) == "table" and tonumber(closest.distance) or nil
+    local limit, distance = touchLimit(kind), brushTargetDistance(player)
     return limit ~= nil and distance ~= nil and distance > limit
 end
 
@@ -1231,11 +1238,7 @@ end
 local function describeBrushReach(tool, inTheHand)
     local spec = tool.spec_horseBrush
     if spec == nil or spec.targetedHusbandry == nil then return "animal in reach: no" end
-    local player = carryingPlayer(tool)
-    local targeter = player ~= nil and player.targeter or nil
-    local closest = type(targeter) == "table" and type(targeter.closestTargetsByKey) == "table"
-        and targeter.closestTargetsByKey[engine("HandToolHorseBrush")] or nil
-    local distance = type(closest) == "table" and tonumber(closest.distance) or nil
+    local distance = brushTargetDistance(carryingPlayer(tool))
     if distance == nil then return "animal in reach: yes" end
     local axis = VRCompanion.HAND_TOOL_POINTING_AXES.horsebrush
     return string.format("animal in reach: yes (%.2f m)", math.max(0, distance - (inTheHand and (tonumber(axis.reachBehind) or 0) or 0)))

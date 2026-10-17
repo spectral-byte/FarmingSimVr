@@ -243,6 +243,7 @@ inline std::string HorseBrushStubs(const char* handler = "ok", const char* looku
 // The player takes the horse brush in hand: _G.brush.
 inline constexpr const char* kHoldHorseBrush = "_G.brush = StubHandTool.horseBrush(foot.player); StubHandTool.hold(brush)";
 inline void HoldHorseBrush(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldHorseBrush, "=holdHorseBrush"), 0); }
+
 }  // namespace hand_tools_test
 
 // A test file whose game frame has more in it defines this to a Lua chunk before including the header.
