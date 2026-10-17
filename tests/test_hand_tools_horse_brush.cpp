@@ -62,6 +62,9 @@ constexpr const char* kHorseBrushHelpers = R"luau(
 constexpr float kAimPitch = 1.4f;
 constexpr float kAimYaw = 1.2f;
 
+// Pulses stronger than this are not "light" (the lance's pressure is 0.35, the chainsaw's cut 0.6).
+constexpr float kLight = 0.5f;
+
 // The suite name is one the filter for the Companion Mod tests (VirtualGamepad*) already covers.
 class VirtualGamepadHandToolsHorseBrushTest : public CompanionModTest {
 protected:
@@ -101,6 +104,38 @@ protected:
     std::string InTheHand(const char* which) { return EvalLua(L, std::string("isInTheHand(brush, '") + which + "')"); }
     std::string WhereTheGamePutsIt() { return EvalLua(L, "isWhereTheGamePutsIt(brush)"); }
     std::string Dump() { return EvalLua(L, "VRCompanion:getHandToolsDiagnostics()"); }
+
+    // The pulses so far to a hand and the strongest of them. ForgetPulses starts counting afresh.
+    size_t PulsesTo(int hand) const {
+        size_t count = 0;
+        for (const auto& pulse : headset.HapticPulses()) {
+            if (pulse.hand == hand) ++count;
+        }
+        return count;
+    }
+    float StrongestTo(int hand) const {
+        float strongest = 0.0f;
+        for (const auto& pulse : headset.HapticPulses()) {
+            if (pulse.hand == hand) strongest = std::max(strongest, pulse.amplitude);
+        }
+        return strongest;
+    }
+    void ForgetPulses() { headset.runtime->controllers.hapticPulses.clear(); }
+
+    // The longest run of frames over the next `frames` frames in which the hand was not pulsed: a buzz that goes on has short ones.
+    int LongestSilenceTo(int hand, int frames) {
+        int longest = 0, current = 0;
+        for (int i = 0; i < frames; ++i) {
+            const size_t before = PulsesTo(hand);
+            FRAMES(1);
+            if (PulsesTo(hand) > before) {
+                current = 0;
+            } else {
+                longest = std::max(longest, ++current);
+            }
+        }
+        return longest;
+    }
 };
 
 }  // namespace
@@ -470,4 +505,316 @@ TEST_F(VirtualGamepadHandToolsHorseBrushTest, InTheWorldTheToolHandHoldingTheBru
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     EXPECT_EQ(pointerHand(), "1") << "in a menu a pull on the right hand points with it, as ever";
+}
+
+// ---- Haptics ---------------------------------------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheToolHandBuzzesLightlyAndSteadilyWhileTheBrushCleansAnAnimalAndOnlyThen) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, "plantAnimal(bristleRay(), 0.1)", "=animal"), 0);
+    FRAMES(5);
+    ForgetPulses();
+    FRAMES(kASecond);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "the brush on the animal with the trigger released: only held, silent";
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(3);
+    EXPECT_GT(PulsesTo(kRight), 0u) << "cleaning: the hand buzzes";
+    EXPECT_GT(StrongestTo(kRight), 0.0f);
+    EXPECT_LE(StrongestTo(kRight), kLight) << "lightly";
+    EXPECT_LE(LongestSilenceTo(kRight, kASecond), 5) << "and steadily: the pulses overlap";
+    EXPECT_EQ(PulsesTo(kLeft), 0u) << "only the Tool Hand feels it";
+
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(3);
+    ForgetPulses();
+    FRAMES(kASecond);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "released: quiet again";
+}
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheToolHandIsSilentWhileTheBrushOnlyTouchesAirOrAnAnimalOutOfTouchEvenWithTheTriggerHeld) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(5);
+    ForgetPulses();
+    FRAMES(kASecond);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "the trigger held over nothing";
+
+    ASSERT_EQ(RunLuauChunk(L, "plantAnimal(bristleRay(), 0.4)", "=animal"), 0);
+    FRAMES(5);
+    ForgetPulses();
+    FRAMES(kASecond);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "an animal 40 cm from the bristles is out of touch: nothing is cleaned and nothing is felt";
+}
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheBuzzEndsWhenTheHandLosesTrackingAndNothingIsFeltWithHandToolsOffOrWhenUntracked) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, "plantAnimal(bristleRay(), 0.1)", "=animal"), 0);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(5);
+    ASSERT_GT(PulsesTo(kRight), 0u);
+
+    headset.SetHandTracked(kRight, false);
+    FRAMES(3);
+    ForgetPulses();
+    FRAMES(kASecond);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "the hand lost tracking while the brush cleans: no more buzz";
+
+    headset.SetHandTracked(kRight, true);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(3);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(3);
+    ASSERT_GT(PulsesTo(kRight), 0u) << "tracked again and pulled afresh: cleaning, buzzing";
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off')", "=off"), 0);
+    FRAMES(3);
+    ForgetPulses();
+    FRAMES(kASecond);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "Hand Tools off: nothing is added to the game";
+}
+
+// ---- Nothing is drawn at the centre of the view ------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, NothingIsDrawnInTheTrackedToolHandAndTheGamesCrosshairsComeBackUntrackedSetDownOrWithHandToolsOrMotionControllersOff) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
+    auto draws = [&]() {
+        EXPECT_EQ(RunLuauChunk(L, "StubHandTool.draw()", "=draw"), 0);
+        return EvalLua(L, "StubHandTool.rendering(brush)");
+    };
+    EXPECT_EQ(draws(), "") << "in the tracked Tool Hand nothing is drawn at the centre of the view";
+
+    headset.SetHandTracked(kRight, false);
+    FRAMES(2);
+    EXPECT_EQ(draws(), "defaultCrosshair") << "untracked: as the game draws it";
+    ASSERT_EQ(RunLuauChunk(L, "plantAnimal(headRay(), 1.0)", "=animalByLooking"), 0);
+    FRAMES(2);
+    EXPECT_EQ(draws(), "brushCrosshair") << "and the brush icon while an animal is looked at";
+    headset.SetHandTracked(kRight, true);
+    FRAMES(2);
+    ASSERT_EQ(InTheHand("right"), "true");
+    EXPECT_EQ(draws(), "") << "tracked again: nothing";
+
+    AdvanceGameTime(3100);
+    FRAMES(2);
+    EXPECT_NE(draws(), "") << "set down: as the game draws it";
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    AimTheHand(kRight, 0.25f, -0.10f, -0.30f);
+    FRAMES(2);
+    ASSERT_EQ(InTheHand("right"), "true");
+    EXPECT_EQ(draws(), "") << "picked up again: nothing";
+
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off')", "=off"), 0);
+    FRAMES(2);
+    EXPECT_NE(draws(), "") << "vrHandTools off: as the game draws it";
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'on')", "=on"), 0);
+    FRAMES(2);
+    EXPECT_EQ(draws(), "") << "vrHandTools on: nothing again";
+
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrMotionControllers', 'off')", "=mcOff"), 0);
+    FRAMES(2);
+    EXPECT_NE(draws(), "") << "Motion Controllers off: as the game draws it";
+}
+
+// ---- Nothing changes when the brush is not in a tracked Tool Hand ---------------------------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, WithVrHandToolsOffTheBrushTheRayTheReachAndTheTriggerAreTheGamesAgain) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
+    HORSE_BRUSH_HELPERS();
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off')", "=off"), 0);
+    FRAMES(2);
+
+    EXPECT_EQ(WhereTheGamePutsIt(), "true");
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "the head's ray: " << EvalLua(L, "rayText(targeterRay())");
+    ASSERT_EQ(RunLuauChunk(L, "plantAnimal(headRay(), 2.5)", "=farAnimal"), 0);
+    FRAMES(2);
+    EXPECT_EQ(help(), "Clean Silver") << "the game's reach from the head, which a hand's touch cap does not shorten";
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(kASecond);
+    EXPECT_EQ(pad().bRightTrigger, 255) << "the trigger is the pad's";
+    EXPECT_EQ(events(), 0) << "and cleans nothing";
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressUseBinding(brush, 1)", "=binding"), 0);
+    FRAMES(kASecond);
+    EXPECT_GE(events(), 1) << "the game's binding cleans the animal looked at, as in the game";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressUseBinding(brush, 0)", "=bindingUp"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'on')", "=on"), 0);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+    EXPECT_EQ(InTheHand("right"), "true") << "and on again the brush is back in the hand";
+}
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, AnotherModsToolIsPlacedAndAimedByTheGameAndItsTriggerIsThePadsWhileTheHorseBrushClassIsInTheGame) {
+    ASSERT_NO_FATAL_FAILURE(Start());
+    HORSE_BRUSH_HELPERS();
+    ASSERT_NO_FATAL_FAILURE(HoldOtherModTool(L));
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    AimTheHand(kRight, 0.25f, -0.10f, -0.30f);
+    FRAMES(2);
+
+    EXPECT_EQ(EvalLua(L, "isWhereTheGamePutsIt(otherTool)"), "true");
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "the head's ray, not pulled back";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "false");
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    EXPECT_EQ(pad().bRightTrigger, 255);
+    EXPECT_EQ(Number(L, "#StubHandTool.useCalls"), 0.0);
+}
+
+// Multiplayer: the game attaches a Hand Tool of every player in the session through the same function, and asks the same animal
+// lookup for every brush. Only the local player's brush goes into the Tool Hand and is capped.
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, AnotherPlayersBrushIsNeverTakenIntoTheToolHandAndItsAnimalLookupIsNotCapped) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
+    HORSE_BRUSH_HELPERS();
+    ASSERT_EQ(RunLuauChunk(L, "plantAnimal(bristleRay(), 0.4)", "=outOfTouch"), 0);  // the local player's brush: found by the targeter, out of touch
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local pitch = StubScene.newNode("remotePitch", 0, 4, 1.7, 4)
+        _G.remote = setmetatable({ isOwner = false, farmId = 1, camera = { isFirstPerson = true, pitchNode = pitch } }, { __index = _G.Player })
+        _G.remoteBrush = StubHandTool.horseBrush(remote)
+        remoteBrush.isHeld = true
+        remoteBrush.carryingPlayer = remote
+        remoteBrush:attachTool()
+    )luau", "=holdRemoteBrush"), 0);
+    FRAMES(2);
+
+    EXPECT_EQ(EvalLua(L, "tostring(getParent(remoteBrush.rootNode) == remote.camera.pitchNode)"), "true") << "where the game put it";
+    EXPECT_EQ(EvalLua(L, "isBelow(remoteBrush.rootNode, handHolder('right'))"), "false");
+    EXPECT_EQ(InTheHand("right"), "true") << "the local player's brush stays in the hand";
+    EXPECT_EQ(help(), "") << "the local player's brush is capped...";
+    EXPECT_EQ(EvalLua(L, "tostring(HandToolHorseBrush.getHusbandryAndClusterFromNode(foot.player, animal.node))"), "nil");
+    EXPECT_EQ(EvalLua(L, "tostring(HandToolHorseBrush.getHusbandryAndClusterFromNode(remote, animal.node) == animal.husbandry)"), "true")
+        << "...the other player's lookup is the game's, whatever the local targeter found";
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    ASSERT_GE(Number(L, "#StubHandTool.useCalls"), 1.0);
+    EXPECT_EQ(RunLuauChunk(L, R"luau(
+        for _, call in ipairs(StubHandTool.useCalls) do assert(call.self == brush, "the trigger used another player's brush") end
+    )luau", "=onlyTheLocalBrush"), 0) << "the trigger uses the local player's brush only";
+}
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, WithTheLanceInHandTheGamesAnimalLookupIsNotCapped) {
+    ASSERT_NO_FATAL_FAILURE(Start());
+    ASSERT_NO_FATAL_FAILURE(HoldLance(L));
+    ASSERT_EQ(RunLuauChunk(L, "_G.brush = StubHandTool.horseBrush(foot.player); plantAnimal({ 0, 1.7, 0, 0, 0, -1 }, 2.0)", "=animalAndABrushOnTheGround"), 0);
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    AimTheHand(kRight, 0.25f, -0.10f, -0.30f);
+    FRAMES(2);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true") << Dump();
+
+    EXPECT_EQ(EvalLua(L, "tostring(HandToolHorseBrush.getHusbandryAndClusterFromNode(foot.player, animal.node) == animal.husbandry)"), "true");
+}
+
+// ---- A game update that renames or reshapes what the brush relies on --------------------------------------------------------------
+
+#define EXPECT_THE_GAMES_BEHAVIOUR_AND_ONE_WARNING_NAMING(functionName) \
+    do { \
+        ASSERT_NO_FATAL_FAILURE(HoldHorseBrush(L)); \
+        PICK_UP(kRight, 0.25f, -0.10f, -0.30f); \
+        AimTheHand(kRight, 0.25f, -0.10f, -0.30f); \
+        FRAMES(2); \
+        EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 1) << "exactly one warning"; \
+        EXPECT_EQ(CountLogLines(functionName), 1) << "that names the function"; \
+        EXPECT_EQ(InTheHand("right"), "false") << "Hand Tools gave up: the brush is where the game puts it"; \
+        EXPECT_EQ(WhereTheGamePutsIt(), "true"); \
+        EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "and aimed by looking"; \
+        headset.SetHandInputs(kRight, Trigger(1.0f)); \
+        FRAMES(kASecond); \
+        EXPECT_EQ(pad().bRightTrigger, 255) << "the trigger is the pad's"; \
+        EXPECT_EQ(Number(L, "#StubHandTool.useCalls"), 0.0) << "and uses nothing"; \
+        EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 1) << "and the warning is not repeated"; \
+    } while (0)
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, WithTheUseHandlerMissingTheBrushIsTheGamesAndTheLogHasOneWarning) {
+    ASSERT_NO_FATAL_FAILURE(Start("missing", "ok"));
+    HORSE_BRUSH_HELPERS();
+    EXPECT_THE_GAMES_BEHAVIOUR_AND_ONE_WARNING_NAMING("HandToolHorseBrush.onBrushAction");
+}
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, WithTheUseHandlerReshapedTheBrushIsTheGamesAndTheLogHasOneWarning) {
+    ASSERT_NO_FATAL_FAILURE(Start("reshaped", "ok"));
+    HORSE_BRUSH_HELPERS();
+    EXPECT_THE_GAMES_BEHAVIOUR_AND_ONE_WARNING_NAMING("HandToolHorseBrush.onBrushAction");
+}
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, WithTheAnimalLookupMissingTheBrushIsTheGamesAndTheLogHasOneWarning) {
+    ASSERT_NO_FATAL_FAILURE(Start("ok", "missing"));
+    HORSE_BRUSH_HELPERS();
+    EXPECT_THE_GAMES_BEHAVIOUR_AND_ONE_WARNING_NAMING("HandToolHorseBrush.getHusbandryAndClusterFromNode");
+}
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, WithTheAnimalLookupReshapedTheBrushIsTheGamesAndTheLogHasOneWarning) {
+    ASSERT_NO_FATAL_FAILURE(Start("ok", "reshaped"));
+    HORSE_BRUSH_HELPERS();
+    EXPECT_THE_GAMES_BEHAVIOUR_AND_ONE_WARNING_NAMING("HandToolHorseBrush.getHusbandryAndClusterFromNode");
+}
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, AGameUpdateThatReshapesTheLookupLiftsEveryWrapNotOnlyTheLookupsOwn) {
+    ASSERT_NO_FATAL_FAILURE(Start("ok", "reshaped"));
+    ASSERT_NO_FATAL_FAILURE(HoldHorseBrush(L));
+
+    EXPECT_EQ(EvalLua(L, "tostring(HandTool.attachToolToCamera == StubHandTool.originalAttachToolToCamera)"), "true") << "the placement wrap is lifted too";
+    EXPECT_EQ(EvalLua(L, "tostring(Player.getLookRay == StubHandTool.originalGetLookRay)"), "true") << "and the look ray wrap";
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.draw()", "=draw"), 0);
+    EXPECT_EQ(EvalLua(L, "StubHandTool.rendering(brush)"), "defaultCrosshair") << "and the draw is the game's";
+}
+
+// ---- Tuning and diagnostics -------------------------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, VrHandToolOffsetHorseBrushMovesTheBrushInTheHandAndResetPutsItBack) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, "_G.before = { offsetInHolder(brush.rootNode, 'right') }", "=before"), 0);
+
+    EXPECT_NE(EvalLua(L, "runCommand('vrHandToolOffset', 'horsebrush', 'nudge', 0.02, 0, 0)").find("horsebrush: position"), std::string::npos);
+    EXPECT_EQ(RunLuauChunk(L, R"luau(
+        local x, y, z = offsetInHolder(brush.rootNode, 'right')
+        assert(math.abs(x - before[1] - 0.02) < 1e-4 and math.abs(y - before[2]) < 1e-4 and math.abs(z - before[3]) < 1e-4,
+            "the brush moved 2 cm along the hand's x: " .. (x - before[1]))
+    )luau", "=nudged"), 0);
+
+    EvalLua(L, "runCommand('vrHandToolOffset', 'horsebrush', 'reset')");
+    EXPECT_EQ(RunLuauChunk(L, R"luau(
+        local x, y, z = offsetInHolder(brush.rootNode, 'right')
+        assert(math.abs(x - before[1]) < 1e-4 and math.abs(y - before[2]) < 1e-4 and math.abs(z - before[3]) < 1e-4, "back where it was")
+    )luau", "=reset"), 0);
+    EXPECT_NE(EvalLua(L, "runCommand('vrHandToolOffset')").find("horsebrush"), std::string::npos) << "the list of tools names it";
+}
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheDiagnosticsShowTheBrushAsASupportedKindWhetherAnAnimalIsInReachWithItsDistanceWhetherItCleansAndTheWrapsStatus) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheBrushInTheRightHand());
+    EXPECT_NE(Dump().find("held Hand Tool: horsebrush (supported)"), std::string::npos) << Dump();
+    EXPECT_NE(Dump().find("in the Tool Hand: yes"), std::string::npos) << Dump();
+    EXPECT_NE(Dump().find("from the tool"), std::string::npos) << Dump();
+    EXPECT_NE(Dump().find("horseBrushLookup wrap: installed"), std::string::npos) << Dump();
+    EXPECT_NE(Dump().find("horseBrushOnDraw wrap: installed"), std::string::npos) << Dump();
+    EXPECT_NE(Dump().find("centre overlays held back: yes"), std::string::npos) << Dump();
+    EXPECT_NE(Dump().find("animal in reach: no"), std::string::npos) << Dump();
+    EXPECT_NE(Dump().find("cleaning: no"), std::string::npos) << Dump();
+
+    ASSERT_EQ(RunLuauChunk(L, "plantAnimal(bristleRay(), 0.1)", "=animal"), 0);
+    FRAMES(2);
+    EXPECT_NE(Dump().find("animal in reach: yes (0.10 m)"), std::string::npos) << Dump();
+    EXPECT_NE(Dump().find("cleaning: no"), std::string::npos) << Dump();
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(3);
+    EXPECT_NE(Dump().find("cleaning: yes"), std::string::npos) << Dump();
+    EXPECT_NE(EvalLua(L, "runCommand('vrHandToolsDiagnostics')").find("animal in reach: yes (0.10 m)"), std::string::npos);
+
+    ASSERT_EQ(RunLuauChunk(L, "plantAnimal(bristleRay(), 0.4)", "=animalOutOfTouch"), 0);
+    FRAMES(2);
+    EXPECT_NE(Dump().find("animal in reach: no"), std::string::npos) << "out of touch: " << Dump();
+    EXPECT_NE(Dump().find("cleaning: no"), std::string::npos) << Dump();
+
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    EXPECT_NE(Dump().find("in the Tool Hand: no"), std::string::npos) << Dump();
+    EXPECT_NE(Dump().find("from the head"), std::string::npos) << Dump();
+    EXPECT_NE(Dump().find("centre overlays held back: no"), std::string::npos) << Dump();
+}
+
+TEST_F(VirtualGamepadHandToolsHorseBrushTest, TheDiagnosticsSayTheLookupWrapGaveUpWhenTheLookupIsReshaped) {
+    ASSERT_NO_FATAL_FAILURE(Start("ok", "reshaped"));
+    ASSERT_NO_FATAL_FAILURE(HoldHorseBrush(L));
+    EXPECT_NE(Dump().find("horseBrushLookup wrap: gave up"), std::string::npos) << Dump();
+    EXPECT_NE(Dump().find("horseBrushOnDraw wrap: gave up"), std::string::npos) << Dump();
 }
