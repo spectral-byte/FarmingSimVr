@@ -1134,26 +1134,33 @@ local DRAW_HELD_BACK_KINDS = { spraycan = true, chainsaw = true, horsebrush = tr
 -- ---- Haptics --------------------------------------------------------------------------------------------------
 -- The Tool Hand buzzes while its tool works, through VRCompanion:pulseHand (VRBridge.pulseHaptic): a light buzz for as long as
 -- the chainsaw's trigger is held (delimbing, without a cut), a stronger one while it cuts, a steady
--- one while the lance sprays, a lighter one while the spray can sprays, the lightest while the horse brush cleans an animal, and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
+-- one while the lance sprays, a lighter one while the spray can sprays, the lightest while the horse brush cleans an animal, a
+-- sharp pulse repeated through the fishing rod's hook window when a fish bites and a buzz that grows with the rod's bend while it
+-- reels (ADR-0031), and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
 -- while the tool is in it (toolHandFor: the feature on, Motion Controllers on, the hand tracked), so an untracked or set-down
 -- Tool Hand, `vrHandTools off` and a tool put away all end the buzz. A pulse is one burst, so the buzz is a pulse requested again
 -- every HAND_TOOL_HAPTIC_INTERVAL_MS (and at once when what is felt changes), each lasting a little longer than that so the hand
--- never goes quiet in between. The Companion Mod's pulses win on a hand over the game's rumble (ADR-0028): that rule is the
+-- never goes quiet in between; a pulse with its own intervalMs (the bite) is repeated that much apart instead, with silence in
+-- between. The Companion Mod's pulses win on a hand over the game's rumble (ADR-0028): that rule is the
 -- Injector's and applies to these pulses like to every other.
 
--- What is felt: milliseconds a pulse lasts and its strength (0..1).
+-- What is felt: milliseconds a pulse lasts, its strength (0..1) and, for a pulse that is not a buzz, how far apart it is repeated
+-- (intervalMs; default HAND_TOOL_HAPTIC_INTERVAL_MS). A level function may answer its own strength instead (the reeling's).
 VRCompanion.HAND_TOOL_HAPTIC_PULSES = {
     running = { ms = 70, strength = 0.2 },   -- the chainsaw's motor revved with the trigger held, no cut yet
     cutting = { ms = 70, strength = 0.6 },   -- the chainsaw cutting
     spraying = { ms = 70, strength = 0.35 }, -- the lance's pressure
     misting = { ms = 70, strength = 0.2 },   -- the spray can's mist, lighter than the lance
     brushing = { ms = 70, strength = 0.15 }, -- the horse brush on an animal, the lightest of them
+    biting = { ms = 40, strength = 0.9, intervalMs = 150 },  -- a fish on the rod's hook: sharp, apart, through the hook window
+    reeling = { ms = 70, strength = 0.8 },   -- the fish pulling while the rod reels: this strength at full bend, less as it bends less
 }
 VRCompanion.HAND_TOOL_HAPTIC_INTERVAL_MS = 50
 -- The single short pulse that is not a buzz: the spray can's tick when its nozzle comes onto a tree (see "The spray can's feedback").
 VRCompanion.HAND_TOOL_TICK_PULSE = { ms = 30, strength = 0.4 }
 
--- What each supported tool makes felt now: function(self, tool) -> a key of HAND_TOOL_HAPTIC_PULSES, or nil. A kind with no entry
+-- What each supported tool makes felt now: function(self, tool) -> a key of HAND_TOOL_HAPTIC_PULSES, or nil; optionally also a
+-- strength (0..1) for this pulse in place of the level's own (0 or less: nothing is felt). A kind with no entry
 -- (the flashlight) is silent. The lance sprays while its own flag is set (HandToolHPWLance's spec.isActivated).
 VRCompanion.HAND_TOOL_HAPTICS = {
     chainsaw = function(self, tool)
@@ -1179,6 +1186,17 @@ VRCompanion.HAND_TOOL_HAPTICS = {
         local spec = tool.spec_horseBrush
         return (spec ~= nil and spec.targetedHusbandryId ~= nil) and "brushing" or nil
     end,
+    -- The fishing rod, from its state reader (the only reader of its spec): the bite's pulse through the hook window, and while
+    -- it reels a buzz as strong as the rod is bent. Idle, charging, waiting, caught and an unknown state are silent.
+    fishingrod = function(self, tool)
+        local rodState, _, bend = self:getFishingRodState(tool)
+        if rodState == "bite" then return "biting" end
+        if rodState == "reeling" then
+            local full = self.HAND_TOOL_HAPTIC_PULSES.reeling.strength
+            return "reeling", full * math.max(0, math.min(1, tonumber(bend) or 0))
+        end
+        return nil
+    end,
 }
 
 local function updateHaptics(self, dt)
@@ -1187,20 +1205,22 @@ local function updateHaptics(self, dt)
     local hand = tool ~= nil and toolHandFor(self, tool) or nil
     local kind = hand ~= nil and supportedKind(tool) or nil
     local felt = kind ~= nil and self.HAND_TOOL_HAPTICS[kind] or nil
-    local level = nil
+    local level, strength = nil, nil
     if felt ~= nil then
-        local ok, answer = pcall(felt, self, tool)
-        if ok then level = answer end
+        local ok, answer, answeredStrength = pcall(felt, self, tool)
+        if ok then level, strength = answer, tonumber(answeredStrength) end
     end
     local pulse = level ~= nil and self.HAND_TOOL_HAPTIC_PULSES[level] or nil
-    if pulse == nil then
+    strength = math.min(1, strength or (pulse ~= nil and pulse.strength) or 0)
+    if pulse == nil or strength <= 0 then
         haptics.level, haptics.hand, haptics.sinceMs = nil, nil, 0
         return
     end
     haptics.sinceMs = haptics.sinceMs + (tonumber(dt) or 0)
-    if haptics.level ~= level or haptics.hand ~= hand or haptics.sinceMs >= self.HAND_TOOL_HAPTIC_INTERVAL_MS then
+    local interval = tonumber(pulse.intervalMs) or self.HAND_TOOL_HAPTIC_INTERVAL_MS
+    if haptics.level ~= level or haptics.hand ~= hand or haptics.sinceMs >= interval then
         haptics.level, haptics.hand, haptics.sinceMs = level, hand, 0
-        self:pulseHand(hand, pulse.ms, pulse.strength)
+        self:pulseHand(hand, pulse.ms, strength)
     end
 end
 
