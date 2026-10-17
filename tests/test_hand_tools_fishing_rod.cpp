@@ -401,6 +401,124 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, ARodSpecThatCannotBeReadIsUnknownW
     EXPECT_EQ(EvalLua(L, "readAfter(function() end)"), "waiting true 0") << "readable again";
 }
 
+// ---- Staying in use while the line is out ---------------------------------------------------------------------------------------
+// A Tool Hand lying still for 3 s is set down, and a bite comes 10 to 25 s after the cast while the player holds the rod still: with
+// the line out the Tool Hand stays in use however still it is held (ADR-0031).
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheLineOutAStillToolHandStaysInUsePastTheTimeoutAndTheRodStaysInItsVirtualHand) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(5);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    ASSERT_EQ(RodState(), "waiting");
+
+    for (int second = 0; second < 25; ++second) {
+        AdvanceGameTime(1000);
+        FRAMES(1);
+    }
+    EXPECT_EQ(InTheHand("right"), "true") << "25 still seconds waiting for a bite: " << Dump();
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.biteRod(rod)", "=bite"), 0);
+    FRAMES(1);
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    EXPECT_EQ(InTheHand("right"), "true") << "the bite, with the hand still";
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    ASSERT_EQ(RodState(), "reeling");
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    EXPECT_EQ(InTheHand("right"), "true") << "reeling with the reel let go, the hand still";
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheLineInAStillToolHandIsSetDownAfterTheTimeoutAsBefore) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'waiting')", "=lineOut"), 0);
+    FRAMES(1);
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    ASSERT_EQ(InTheHand("right"), "true");
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'caught')", "=landed"), 0);  // the line is in
+    FRAMES(1);
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    EXPECT_EQ(WhereTheGamePutsIt(), "true") << "caught, the line in: set down after three still seconds";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "false");
+
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    ASSERT_EQ(InTheHand("right"), "true");
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'charging')", "=charging"), 0);
+    FRAMES(1);
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    EXPECT_EQ(WhereTheGamePutsIt(), "true") << "charging with the game's own binding, the line in: set down as before";
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, LosingTrackingWithTheLineOutSetsTheToolHandDownAndGivesTheRodBack) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'waiting')", "=lineOut"), 0);
+    FRAMES(1);
+
+    headset.SetHandTracked(kRight, false);
+    FRAMES(1);
+    EXPECT_EQ(WhereTheGamePutsIt(), "true") << "untracked with the line out";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "false");
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    EXPECT_EQ(WhereTheGamePutsIt(), "true") << "and it stays the game's";
+
+    headset.SetHandTracked(kRight, true);
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    EXPECT_EQ(InTheHand("right"), "true") << "tracked and picked up again";
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    EXPECT_EQ(InTheHand("right"), "true") << "the line still out: kept in use again";
+}
+
+// An unknown state keeps nothing in use: a DLC update that hides the state must not keep a Motion Controller in use forever.
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsStateUnreadableAStillToolHandIsSetDownAfterTheTimeoutEvenWithTheLineOut) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'waiting'); StubHandTool.rodSpec(rod).rodBendFactor = 'bent'", "=unreadable"), 0);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:getFishingRodState()"), "unknown");
+    FRAMES(1);
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    EXPECT_EQ(WhereTheGamePutsIt(), "true") << "the line out but the state unknown: set down as before";
+}
+
+// The other hand, holding no rod, is set down as ever while the Tool Hand waits for a bite.
+TEST_F(VirtualGamepadHandToolsFishingRodTest, TheLineOutKeepsOnlyTheToolHandInUse) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    PICK_UP(kLeft, -0.25f, -0.10f, -0.30f);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isHandInUse(0)"), "true");
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'waiting')", "=lineOut"), 0);
+    FRAMES(1);
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(0)"), "false") << "the left hand lies still";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "true") << "the right hand holds the rod with its line out";
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheLeftHandChosenAsTheToolHandTheLineOutKeepsTheLeftHandInUse) {
+    ASSERT_NO_FATAL_FAILURE(Start());
+    ASSERT_NO_FATAL_FAILURE(HoldFishingRod(L));
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrToolHand', 'left')", "=toolHandLeft"), 0);
+    PICK_UP(kLeft, -0.25f, -0.10f, -0.30f);
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    ASSERT_EQ(InTheHand("left"), "true") << Dump();
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'waiting')", "=lineOut"), 0);
+    FRAMES(1);
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    EXPECT_EQ(InTheHand("left"), "true") << "the left Tool Hand waits for a bite, still";
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandInUse(1)"), "false") << "the right hand lies still";
+}
+
 // ---- The rod keeps its overlays ------------------------------------------------------------------------------------------------
 
 // The rod is the one supported Hand Tool whose screen-centre overlays stay: its charge meter, waiting hint and "Hook fish" prompt.

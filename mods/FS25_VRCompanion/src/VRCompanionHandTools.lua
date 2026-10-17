@@ -32,7 +32,8 @@
 --   VRCompanion:isHandHoldingHandTool(hand) -> boolean  the hand is the Tool Hand and a supported Hand Tool is in it now
 --   VRCompanion:getHeldHandTool() -> tool, kind         the Hand Tool the player holds and its supported kind (nil kind: unsupported)
 --   VRCompanion:isHandKeptInUseByHandTool(hand) -> boolean  the hand's Hand Tool keeps it in use however still it is held (its
---                                                       trigger is using the tool now); Motion Controllers keep that hand in use
+--                                                       trigger is using the tool now, or the fishing rod in it has its line out);
+--                                                       Motion Controllers keep that hand in use
 --   VRCompanion:getHandToolRay([player]) -> x, y, z, dirX, dirY, dirZ   the tool's pointing ray in the world while a supported
 --                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's)
 --   VRCompanion:getHandToolLookRay([player]) -> x, y, z, dirX, dirY, dirZ   that ray with its origin moved back along the axis by the
@@ -795,8 +796,11 @@ end
 -- ---- Keeping the Tool Hand in use ---------------------------------------------------------------------------------------
 -- The Tool Hand does not stay "in use" just by holding a tool (it is set down after the in-use timeout like any hand), so
 -- Motion Controllers asks this module whether the hand's Hand Tool keeps it in use, however still it is held: while the
--- hand's trigger is using the tool (a cut or a spray held with a still hand must not drop the tool). An untracked hand is
--- never kept.
+-- hand's trigger is using the tool (a cut or a spray held with a still hand must not drop the tool), and while the fishing rod
+-- in it has its line out (a bite comes 10 to 25 s after the cast, ADR-0031; an unknown state keeps nothing). An untracked hand
+-- is never kept, so losing tracking still gives the tool back.
+-- Answered from where the tool was last linked, not from toolHandFor: that asks whether the hand is in use, which is what this
+-- decides (and a hand once set down has given the tool back, so it would never be kept again).
 
 -- The hand's trigger is using its Hand Tool right now.
 local function isTriggerUsing(hand)
@@ -804,9 +808,17 @@ local function isTriggerUsing(hand)
     return use.active and use.hand == hand
 end
 
+-- The fishing rod in the hand's Virtual Hand has its line out.
+local function isLineOutInHand(self, hand)
+    local tool = heldTool()
+    if tool == nil or state.linkedTool ~= tool or state.linkedHand ~= hand then return false end
+    local _, lineOut = self:getFishingRodState(tool)
+    return lineOut == true
+end
+
 function VRCompanion:isHandKeptInUseByHandTool(hand)
     if self:getHandState(hand).tracked ~= true then return false end
-    return isTriggerUsing(hand)
+    return isTriggerUsing(hand) or isLineOutInHand(self, hand)
 end
 
 -- ---- The look ray -----------------------------------------------------------------------------------------
