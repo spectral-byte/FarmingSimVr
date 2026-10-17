@@ -127,11 +127,15 @@ TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, WithTheRodInTheHandTheC
     }
 }
 
-// A DLC update could reshape what the state is read from: the line says "unknown", and nothing errs.
-TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, ARodSpecThatCannotBeReadGivesAnUnknownLineNeverAnError) {
+// A read of the rod's spec that fails while the rod is in the hand (a rod reshaped from the start is the game's with a warning,
+// test_hand_tools_fishing_rod.cpp): the line says "unknown", nothing errs, and the rod stays in the hand.
+TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, ARodSpecThatCannotBeReadInTheHandGivesAnUnknownLineNeverAnError) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'waiting'); StubHandTool.rodSpec(rod).state = nil", "=reshaped"), 0);
+    s_capturedLogs.clear();
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'waiting'); StubHandTool.rodSpec(rod).state = nil", "=unreadable"), 0);
     FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true") << "a failed read is no reshaped rod";
+    EXPECT_EQ(CountLogLines("[Warning]"), 0) << Log();
 
     RunCommand();
 

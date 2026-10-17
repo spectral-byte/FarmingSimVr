@@ -242,7 +242,7 @@ TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, TheRodIsSilentWhileIdleChar
     EXPECT_EQ(PulsesTo(kLeft), 0u);
 }
 
-// A DLC update that hides the rod's state must not buzz the hand: unknown is silent, whatever the rod is really doing.
+// A state that cannot be read while the rod is in the hand must not buzz it: unknown is silent, whatever the rod is really doing.
 TEST_F(VirtualGamepadHandToolsFishingRodHapticsTest, AnUnreadableStateBuzzesNothingEvenInABiteOrWhileReeling) {
     ASSERT_NO_FATAL_FAILURE(WaitForABiteIn(kRight));
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.biteRod(rod); StubHandTool.rodSpec(rod).rodBendFactor = 'bent'", "=unreadableBite"), 0);

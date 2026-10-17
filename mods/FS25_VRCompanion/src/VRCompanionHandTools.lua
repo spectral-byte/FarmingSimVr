@@ -115,6 +115,7 @@ local function newState()
         },
         problem = nil,      -- why Hand Tools gave up, once it did (the warning is logged then and never again)
         toolProblems = {},   -- per tool kind: why that tool is left to the game, once it was found reshaped (warned once)
+        checkedTools = setmetatable({}, { __mode = "k" }),  -- the tools toolProblem found as expected (not checked again)
     }
 end
 
@@ -186,6 +187,11 @@ end
 -- `useOnce` (optional) marks a tool whose handler is called once per press and once per release, as the game's action event does
 -- for it (the chainsaw's, registered for trigger up and down), not on every update the input is held (the lance's).
 -- `toggle` (instead of a useHandler) makes the trigger a PRESS: each pull of the trigger calls toggle(tool) once.
+-- `fields` (optional) are what this module reads of a tool whose class it cannot check at map load (a DLC's): each { name, type },
+-- a path in the tool's spec table ("fishingLine.isInitialized") or, with `onTool`, a field of the tool itself. They are checked with
+-- the handler, once per tool (see toolProblem).
+
+local FISHING_ROD_KIND = "fishingrod"
 
 -- The flashlight: a press of the trigger switches it on or off through the flashlight's own switch,
 -- HandToolFlashlight:setFlashlightIsActive (the same call the game's network event makes; no `noEventSend`, so other players see
@@ -215,9 +221,17 @@ local SUPPORTED_TOOLS = {
     -- The fishing rod (ADR-0031), from the Highlands Fishing DLC. A game without the DLC never holds one. Its ACTIVATE_HANDTOOL handler
     -- fires on press and release only (#125): held, it charges a cast, let go it throws it, and it hooks and reels the same way, so
     -- it is `useOnce` like the chainsaw's. The handler is on the DLC's specialization class, which has no global name: it is looked
-    -- up among the rod's own specializations by the specialization's name (`useHandlerSpecialization`).
-    { kind = "fishingrod", label = "fishing rod", spec = "spec_pdlc_highlandsFishingPack.fishingRod", useHandler = "onActivateAction",
-      useHandlerSpecialization = "pdlc_highlandsFishingPack.fishingRod", useOnce = true },
+    -- up among the rod's own specializations by the specialization's name (`useHandlerSpecialization`). Its fields are what the rod's
+    -- state reader and its diagnostics read (#125; see "The fishing rod's state").
+    { kind = FISHING_ROD_KIND, label = "fishing rod", spec = "spec_pdlc_highlandsFishingPack.fishingRod", useHandler = "onActivateAction",
+      useHandlerSpecialization = "pdlc_highlandsFishingPack.fishingRod", useOnce = true,
+      fields = {
+          { name = "state", type = "table" },
+          { name = "fishingLine", type = "table" },
+          { name = "fishingLine.isInitialized", type = "boolean" },
+          { name = "rodBendFactor", type = "number" },
+          { name = "getBobberPosition", type = "function", onTool = true },
+      } },
 }
 
 -- WHERE EACH TOOL SITS IN THE HAND: the pose of the tool's ROOT node in the Virtual Hand's grip frame (the frame of the
@@ -510,19 +524,60 @@ local function checkWraps()
 end
 
 -- A TOOL WHOSE CLASS HAS NO GLOBAL NAME (the fishing rod's, a DLC's: SUPPORTED_TOOLS[].useHandlerSpecialization) cannot be checked
--- at map load: its class is only reachable from a tool. It is checked when the local player's tool would go into the Tool Hand. A
--- tool found reshaped (its use handler missing or not the shape the trigger calls) is left to the game for the rest of the map,
--- with ONE warning; the other Hand Tools are unaffected. A game without the DLC never holds one, so nothing is checked or warned.
+-- at map load: its class is only reachable from a tool. It is checked when the local player's tool would go into the Tool Hand,
+-- once per tool: its use handler, and the fields this module reads of it (SUPPORTED_TOOLS[].fields). A tool found reshaped (its use
+-- handler missing or not the shape the trigger calls, a field missing or of another type) is left to the game for the rest of the
+-- map, with ONE warning; the other Hand Tools are unaffected. A tool found as expected is not checked again: a read of it that fails
+-- later is the reader's to answer (the rod's state is then "unknown"). A game without the DLC never holds one, so nothing is
+-- checked or warned.
 local USE_HANDLER_SHAPE = { parameters = 3, describe = "(tool, action, inputValue)" }
+
+-- The value at a dotted path ("fishingLine.isInitialized") below a table, or nil where the path breaks off. May raise (a reshaped
+-- table can): toolFieldsProblem reads guarded.
+local function valueAt(t, path)
+    for key in string.gmatch(path, "[^%.]+") do
+        if type(t) ~= "table" then return nil end
+        t = t[key]
+    end
+    return t
+end
+
+-- Why one of the tool's fields is not as this module reads it, or nil.
+local function toolFieldsProblem(tool, entry)
+    if entry.fields == nil then return nil end
+    local spec = tool[entry.spec]
+    for _, field in ipairs(entry.fields) do
+        local where = field.onTool and (entry.useHandlerSpecialization or entry.kind) or entry.spec
+        local ok, value = pcall(valueAt, field.onTool and tool or spec, field.name)
+        local problem = nil
+        if not ok then
+            problem = "reading it raised (" .. tostring(value) .. ")"
+        elseif value == nil then
+            problem = "it is missing"
+        elseif type(value) ~= field.type then
+            problem = "it is a " .. type(value) .. ", not a " .. field.type
+        end
+        if problem ~= nil then return where .. "." .. field.name .. ": " .. problem end
+    end
+    return nil
+end
 
 -- Why the tool is left to the game, or nil when it is as expected (or is a tool whose functions checkWraps checks).
 local function toolProblem(tool, entry)
-    if entry.useHandlerSpecialization == nil then return nil end
+    if entry.useHandlerSpecialization == nil and entry.fields == nil then return nil end
     local known = state.toolProblems[entry.kind]
     if known ~= nil then return known end
-    local problem = shapeProblem(USE_HANDLER_SHAPE, useHandlerOf(tool, entry))
-    if problem == nil then return nil end
-    problem = entry.useHandlerSpecialization .. "." .. entry.useHandler .. ": " .. problem
+    if state.checkedTools[tool] then return nil end
+    local problem = nil
+    if entry.useHandlerSpecialization ~= nil then
+        problem = shapeProblem(USE_HANDLER_SHAPE, useHandlerOf(tool, entry))
+        if problem ~= nil then problem = entry.useHandlerSpecialization .. "." .. entry.useHandler .. ": " .. problem end
+    end
+    problem = problem or toolFieldsProblem(tool, entry)
+    if problem == nil then
+        state.checkedTools[tool] = true
+        return nil
+    end
     state.toolProblems[entry.kind] = problem
     print("[FS25_VR] [Warning] Hand Tools: the " .. entry.label .. " is left to the game: " .. problem .. ". The " .. entry.label
         .. " is unchanged.")
@@ -699,7 +754,7 @@ end
 local function callUseHandler(tool, entry, value)
     local handler = useHandlerOf(tool, entry)
     if type(handler) ~= "function" then return end
-    if entry.kind == "fishingrod" then  -- for the diagnostics (see "The fishing rod in the diagnostics")
+    if entry.kind == FISHING_ROD_KIND then  -- for the diagnostics (see "The fishing rod in the diagnostics")
         state.fishingRod.action = { tool = tool, name = "primary", by = "the Tool Hand's trigger", value = value }
     end
     callGuarded(entry, "use handler", handler, tool, "ACTIVATE_HANDTOOL", value)
@@ -760,10 +815,10 @@ end
 -- (the hook window) catchTime, caught bendResetRate, and idle nothing but its fishingRod back reference. The dump never named the
 -- reeling state's keys, so reeling is what is left while the line is out. fishingLine.isInitialized says whether the line is out
 -- (from the cast until it is in again), rodBendFactor how far a fish bends the rod (0 unless reeling, up to about 0.93).
--- This is the ONE place that reads the rod's spec: everything else asks getFishingRodState. Every read is guarded: a field a DLC
--- update renamed or reshaped, or a read that raises, makes the state "unknown", which keeps nothing in use and buzzes nothing.
-
-local FISHING_ROD_KIND = "fishingrod"
+-- This is the ONE place that reads the rod's spec: everything else asks getFishingRodState. A rod whose fields a DLC update renamed
+-- or reshaped never comes into the hand (toolProblem checks them, SUPPORTED_TOOLS[].fields, and gives the rod back with one
+-- warning). Every read is guarded all the same: a field that does not read as expected later, or a read that raises, makes the
+-- state "unknown", which keeps nothing in use and buzzes nothing.
 
 -- The key each recognisable state carries, tried in this order: the first one spec.state has names the state.
 local FISHING_ROD_STATE_KEYS = {

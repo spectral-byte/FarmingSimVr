@@ -368,8 +368,8 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsStateIsNilForAnyOtherToolAn
     EXPECT_EQ(EvalLua(L, "tostring(VRCompanion:getFishingRodState())"), "nil") << "the lance held";
 }
 
-// A DLC update could rename or reshape any of what the state is read from: the answer is then "unknown", with the line in and no
-// bend, never an error.
+// A read of what the state comes from that fails while the rod is in the hand (a rod reshaped from the start is the game's, see
+// the end of this file): the answer is then "unknown", with the line in and no bend, never an error.
 TEST_F(VirtualGamepadHandToolsFishingRodTest, ARodSpecThatCannotBeReadIsUnknownWithoutAnError) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, R"luau(
@@ -480,7 +480,7 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, LosingTrackingWithTheLineOutSetsTh
     EXPECT_EQ(InTheHand("right"), "true") << "the line still out: kept in use again";
 }
 
-// An unknown state keeps nothing in use: a DLC update that hides the state must not keep a Motion Controller in use forever.
+// An unknown state keeps nothing in use: a state that cannot be read must not keep a Motion Controller in use forever.
 TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsStateUnreadableAStillToolHandIsSetDownAfterTheTimeoutEvenWithTheLineOut) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'waiting'); StubHandTool.rodSpec(rod).rodBendFactor = 'bent'", "=unreadable"), 0);
@@ -663,6 +663,53 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsHandlerMissingTheRodIsT
 TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsHandlerReshapedTheRodIsTheGamesAndTheLogHasOneWarning) {
     ASSERT_NO_FATAL_FAILURE(Start("reshaped"));
     EXPECT_THE_GAMES_ROD_AND_ONE_WARNING();
+}
+
+// A DLC update could as well rename or reshape what the rod's state is read from (#125: the spec's state, fishingLine with its
+// isInitialized, rodBendFactor, and the rod's getBobberPosition): such a rod is the game's from the start, with one warning that
+// names the field, as for a reshaped handler. `reshape` runs on the new rod (`rod`, its spec `spec`) before it is taken in hand.
+#define EXPECT_A_RESHAPED_ROD_IS_THE_GAMES_WITH_ONE_WARNING(reshape, named) \
+    do { \
+        ASSERT_NO_FATAL_FAILURE(Start()); \
+        ASSERT_EQ(RunLuauChunk(L, "_G.rod = StubHandTool.fishingRod(foot.player); local spec = StubHandTool.rodSpec(rod); " reshape \
+                                  "; StubHandTool.hold(rod)", "=reshapedRod"), 0); \
+        PICK_UP(kRight, 0.25f, -0.10f, -0.30f); \
+        AimTheHand(kRight, 0.25f, -0.10f, -0.30f); \
+        FRAMES(2); \
+        EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 1) << "exactly one warning"; \
+        EXPECT_EQ(CountLogLines(named), 1) << "that names " << named; \
+        EXPECT_EQ(InTheHand("right"), "false") << "the rod is given back to the game"; \
+        EXPECT_EQ(WhereTheGamePutsIt(), "true"); \
+        headset.SetHandInputs(kRight, Trigger(1.0f)); \
+        FRAMES(5); \
+        EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger is the pad's"; \
+        EXPECT_EQ(UseCalls(), "") << "and uses nothing"; \
+        headset.SetHandInputs(kRight, Trigger(0.0f)); \
+        ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(rod); StubHandTool.hold(rod)", "=again"), 0); \
+        FRAMES(2); \
+        EvalLua(L, "runCommand('vrHandToolsDiagnostics')"); \
+        EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 1) << "and the warning is not repeated"; \
+        EXPECT_EQ(InTheHand("right"), "false"); \
+    } while (0)
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsStateReshapedTheRodIsTheGamesAndTheLogHasOneWarningNamingIt) {
+    EXPECT_A_RESHAPED_ROD_IS_THE_GAMES_WITH_ONE_WARNING("spec.state = 'idle'", "fishingRod.state:");
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsFishingLineRenamedTheRodIsTheGamesAndTheLogHasOneWarningNamingIt) {
+    EXPECT_A_RESHAPED_ROD_IS_THE_GAMES_WITH_ONE_WARNING("spec.line = spec.fishingLine; spec.fishingLine = nil", "fishingRod.fishingLine:");
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsLineFlagReshapedTheRodIsTheGamesAndTheLogHasOneWarningNamingIt) {
+    EXPECT_A_RESHAPED_ROD_IS_THE_GAMES_WITH_ONE_WARNING("spec.fishingLine.isInitialized = 'no'", "fishingRod.fishingLine.isInitialized:");
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsBendRenamedTheRodIsTheGamesAndTheLogHasOneWarningNamingIt) {
+    EXPECT_A_RESHAPED_ROD_IS_THE_GAMES_WITH_ONE_WARNING("spec.bendFactor = spec.rodBendFactor; spec.rodBendFactor = nil", "fishingRod.rodBendFactor:");
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsBobberPositionMissingTheRodIsTheGamesAndTheLogHasOneWarningNamingIt) {
+    EXPECT_A_RESHAPED_ROD_IS_THE_GAMES_WITH_ONE_WARNING("rod.getBobberPosition = 42", "getBobberPosition:");
 }
 
 TEST_F(VirtualGamepadHandToolsFishingRodTest, AReshapedRodLeavesTheOtherHandToolsInTheToolHand) {
