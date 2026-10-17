@@ -16,10 +16,19 @@ The fishing rod comes from the Highlands Fishing DLC, whose source cannot be rea
 - While a supported Hand Tool is in a tracked Tool Hand, the wrap of its specialization's `onDraw` draws nothing. This holds for the chainsaw too, where the game's ring marker on the trunk already shows the cut. The spray can makes up for its overlays in two ways. It gives a light haptic tick when its target tree changes from none to one. It also names its marker type as a short message when it is taken in hand and when the type changes.
 - Haptics: the spray can buzzes lightly while the game says it is spraying (`spec.isSpraying`), so an empty can or a forbidden tree is silent. The brush buzzes lightly while it cleans an animal.
 - `addTreeMarkerCameraBased` is given the moved ray's origin. If it also reads the camera, the marker may face the head rather than the can. That is accepted unless it looks wrong in the headset.
-- `vrHandToolsDiagnostics` also dumps an unsupported held Hand Tool to the log: its `spec_*` tables, the functions on its type and its registered action events. A player can hold the fishing rod once and send the log, and the rod gets its own design.
+- `vrHandToolsDiagnostics` also dumps an unsupported held Hand Tool to the log: its `spec_*` tables, the functions on its type and its registered action events. A player can hold the fishing rod once and send the log, and the rod gets its own design. **Built** (#120, `VRCompanionHandTools.lua`, "Describing an unsupported held Hand Tool"). The probe only reads: it adds no wrap and changes nothing about the tool, the supported list or the placement, and the command's one-line answer is unchanged. For the unsupported tool the local player holds it writes, one log line each, `[FS25_VR] Hand Tool probe: <line>`:
+  - the tool's `configFileName`;
+  - the placement path: `through attachToolToCamera` when ADR-0029's wrap of `attachToolToCamera` saw the game place the tool and the player is still in the first person view, `not through attachToolToCamera (the game used another path)` otherwise, and `unknown (the placement wrap is not installed)` when that wrap is not there (nothing was seen, so no path is claimed);
+  - each specialization: its name, the global name of its class and the names of the functions on the class (where handlers kept on the class only are, as the chainsaw's);
+  - the functions on the tool's type;
+  - each registered action event: the action name, the callback's name where it is found among the class, type and tool functions, and the edges it fires on (press, release, every frame);
+  - the node tree below the tool's root by path, to depth 3, with the number of children not listed at the last level;
+  - every `spec_*` table one level deep: each field's name, Lua type and a short value (a long string cut, a table by its key count, a number that is an entity id with the node's name).
+
+  Every read is guarded: a failure is a line, not an error, and the other parts go on; a node that cannot be read ends the node tree, not the description. The caps, each cut saying how much was left out: 200 lines per run (the line that counts the lines left out is one of the 200; the spec tables come last, so they are what a cut takes), 30 fields per spec table, 40 function names per class or type, 40 nodes. The tool is the one the game last attached to the camera, or else the one the player says it holds (`getHeldHandTool()`), since a tool the game put in the hand of the third person view never went through `attachToolToCamera`; another player's tool is never described.
 
 ## Status
-Proposed.
+Proposed. The diagnostic dump of an unsupported held Hand Tool (last bullet above) is built and covered by Luau-stub tests; the rest of this decision is not built yet.
 
 ## Considered Options
 - **Move the ray's origin back by the minimum distance** (selected: the game's targeter, filters and distances stay in charge, with one number per tool).
@@ -36,4 +45,5 @@ Proposed.
 - While the spray can or the brush is in the Tool Hand, anything else the game highlights by look ray is also found from 0.5 m behind the tool.
 - With the chainsaw, spray can or brush in a tracked Tool Hand, nothing is drawn at the centre of the view. The game's in-world feedback (the chainsaw's ring), the input help and the Companion Mod's ticks and messages remain.
 - A game update that renames or reshapes `HandToolSprayCan.activateSpraying`, `HandToolHorseBrush.onBrushAction`, `HandToolHorseBrush.getHusbandryAndClusterFromNode` (wrapped for the touching cap), the specializations' `onDraw`, or the targeter's `closestTargetsByKey` / `getClosestTargetedNodeFromType` turns the feature off with a warning, as in ADR-0029.
+- `vrHandToolsDiagnostics` with an unsupported tool in hand writes up to 200 more lines to the log (one run, tagged `Hand Tool probe:`); with nothing, or a supported tool, held it logs what it logged before. Not yet confirmed in game: what the fishing rod's dump reads like, as the stub tools are shaped after readable game code.
 - Not yet confirmed in game: the spray and bristle axes, each tool's handle offset, whether the marker faces the can, and whether the brush's 0.25 m reach feels like touching.
