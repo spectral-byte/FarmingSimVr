@@ -222,10 +222,10 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
         rotation = { x = 0.0, y = 0.9238795, z = -0.3826834, w = 0.0 },
     },
     -- The spray can stands upright in its i3d with the nozzle along its +Z: held like the lance, the tool's +Z along the fingers
-    -- and its +Y (up, the can's body) toward the thumb, the hand 10 cm up the can from the root (grip at tool y = 0.10). UNCERTAIN
-    -- until the headset (the can's size is not in the readable source): tune with vrHandToolOffset spraycan.
+    -- and its +Y (up, the can's body) toward the thumb, the hand 5 cm up the can from the root (grip at tool y = 0.05) and 1 cm to
+    -- the tool's -X side. Tuned in the headset with vrHandToolOffset spraycan (from a first guess of 10 cm up and centred).
     spraycan = {
-        position = { x = 0.0, y = 0.0, z = 0.10 },
+        position = { x = -0.01, y = 0.0, z = 0.05 },
         rotation = { x = 0.0, y = 0.7071068, z = -0.7071068, w = 0.0 },
     },
 }
