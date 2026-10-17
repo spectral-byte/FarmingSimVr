@@ -210,7 +210,7 @@ inline void HoldOtherModTool(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldOthe
 
 // ---- chainsaw -----------------------------------------------------------------------------------------------
 // The chainsaw's game-side stub (kStubHandToolChainsaw) is not part of every test's game: a test that wants it passes
-// ChainsawStubs(variant) as StartOptions::extraStubs. variant is how HandToolChainsaw.onUpdate is: "ok", "missing", "reshaped".
+// ChainsawStubs(variant) as StartOptions::extraStubs. variant is how HandToolChainsaw is: "ok", "missing", "reshaped" (onUpdate), "drawMissing", "drawReshaped" (onDraw), ...
 inline std::string ChainsawStubs(const char* variant = "ok") {
     return std::string(kStubHandToolChainsaw) + "\nStubHandTool.installChainsaw('" + variant + "')\n";
 }
@@ -218,6 +218,18 @@ inline std::string ChainsawStubs(const char* variant = "ok") {
 // The player takes the chainsaw in hand: _G.saw.
 inline constexpr const char* kHoldChainsaw = "_G.saw = StubHandTool.chainsaw(foot.player); StubHandTool.hold(saw)";
 inline void HoldChainsaw(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldChainsaw, "=holdChainsaw"), 0); }
+
+// ---- spray can (ADR-0030) -----------------------------------------------------------------------------------------
+// The spray can's game-side stub (kStubHandToolSprayCan) is not part of every test's game: a test that wants it passes
+// SprayCanStubs() as StartOptions::extraStubs (after kXmlStubs, if it uses both: concatenate).
+// variant is how HandToolSprayCan.onDraw is: "ok", "missing", "reshaped".
+inline std::string SprayCanStubs(const char* variant = "ok") {
+    return std::string(kStubHandToolSprayCan) + "\nStubHandTool.installSprayCan('" + variant + "')\n";
+}
+
+// The player takes the spray can in hand: _G.can.
+inline constexpr const char* kHoldSprayCan = "_G.can = StubHandTool.sprayCan(foot.player); StubHandTool.hold(can)";
+inline void HoldSprayCan(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldSprayCan, "=holdSprayCan"), 0); }
 
 }  // namespace hand_tools_test
 
