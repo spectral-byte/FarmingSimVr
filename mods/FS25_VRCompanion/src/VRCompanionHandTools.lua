@@ -235,10 +235,10 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
     -- The horse brush's bristles (the `fibers` shape, 4 cm below the brush node) face the tool's -Y; held with the bristles along the
     -- fingers, the tool's axes the hand's (no turn), so the hand lies on the back of the brush. The hand sits where the game's own
     -- third person hold does (the tool's `handNode` at (0, -0.009, -0.117) of the root), which puts the root at the opposite of that in
-    -- the grip frame. A first guess from the i3d: UNCERTAIN until the headset (vrHandToolOffset horsebrush); only this entry changes.
+    -- the grip frame. That was the first guess from the i3d; these numbers were fitted in the headset (vrHandToolOffset horsebrush).
     horsebrush = {
-        position = { x = 0.0, y = 0.009, z = 0.117 },
-        rotation = { x = 0.0, y = 0.0, z = 0.0, w = 1.0 },
+        position = { x = 0.03, y = 0.009, z = -0.033 },
+        rotation = { x = 0.0, y = 0.0, z = -0.7071068, w = 0.7071068 },
     },
 }
 
