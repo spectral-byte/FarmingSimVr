@@ -118,6 +118,7 @@ local function newState()
         problem = nil,      -- why Hand Tools gave up, once it did (the warning is logged then and never again)
         toolProblems = {},   -- per tool kind: why that tool is left to the game, once it was found reshaped (warned once)
         checkedTools = setmetatable({}, { __mode = "k" }),  -- the tools toolProblem found as expected (not checked again)
+        fieldsPending = nil, -- { tool, sinceMs }: the held tool whose fields were not yet as expected, since when (game clock)
     }
 end
 
@@ -564,8 +565,14 @@ local function toolFieldsProblem(tool, entry)
     return nil
 end
 
--- Why the tool is left to the game, or nil when it is as expected (or is a tool whose functions checkWraps checks).
-local function toolProblem(tool, entry)
+-- How long, held, a tool's fields may be missing or of another type before the tool is found reshaped. The game attaches the real
+-- rod before it has a state (spec.state is nil until its first update while held; the headset, 2026-10-18), so a field found
+-- wrong at the attach is not yet a reshape; the tool is in the hand meanwhile and its reader answers "unknown".
+local TOOL_FIELDS_GRACE_MS = 5000
+
+-- Why the tool is left to the game, or nil when it is as expected (or is a tool whose functions checkWraps checks). nowMs is the
+-- game clock, for the fields' grace.
+local function toolProblem(tool, entry, nowMs)
     if entry.useHandlerSpecialization == nil and entry.fields == nil then return nil end
     local known = state.toolProblems[entry.kind]
     if known ~= nil then return known end
@@ -575,7 +582,17 @@ local function toolProblem(tool, entry)
         problem = shapeProblem(USE_HANDLER_SHAPE, useHandlerOf(tool, entry))
         if problem ~= nil then problem = entry.useHandlerSpecialization .. "." .. entry.useHandler .. ": " .. problem end
     end
-    problem = problem or toolFieldsProblem(tool, entry)
+    if problem == nil then
+        problem = toolFieldsProblem(tool, entry)
+        local pending = state.fieldsPending
+        if problem ~= nil and (pending == nil or pending.tool ~= tool) then
+            state.fieldsPending = { tool = tool, sinceMs = nowMs }
+            return nil
+        elseif problem ~= nil and nowMs - pending.sinceMs < TOOL_FIELDS_GRACE_MS then
+            return nil
+        end
+        state.fieldsPending = nil
+    end
     if problem == nil then
         state.checkedTools[tool] = true
         return nil
@@ -598,6 +615,7 @@ local function heldTool()
     if tool == nil then return nil end
     if type(tool.getIsHeld) ~= "function" or tool.rootNode == nil or not tool:getIsHeld() then
         state.tool = nil
+        state.fieldsPending = nil  -- the grace starts over when a tool is next held
         return nil
     end
     return tool
@@ -654,7 +672,7 @@ local function toolHandFor(self, tool)
     if player.camera == nil or player.camera.isFirstPerson ~= true then
         return nil, "not in the first person view"
     end
-    local problem = toolProblem(tool, entry)
+    local problem = toolProblem(tool, entry, self:getCurrentTimeMs())
     if problem ~= nil then return nil, "the " .. entry.label .. " is left to the game (" .. problem .. ")" end
     local hand = self:getToolHand()
     local pose = self:getHandState(hand)

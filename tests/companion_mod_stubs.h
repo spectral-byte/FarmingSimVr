@@ -2966,8 +2966,10 @@ inline constexpr const char* kStubHandToolHorseBrush = R"luau(
 //
 // StubHandTool.fishingRod(player, options) -> tool   a rod, not yet held. Its spec table is tool["spec_pdlc_highlandsFishingPack.fishingRod"]
 //   (also StubHandTool.rodSpec(tool)); tool.spec_storable is the storable specialization's. In the spec, as in the dump:
-//     state          the current state: ONE OF spec.states (11 tables), recognised only by its keys (each has `fishingRod`, the rod):
-//       idle         { fishingRod }                                   (1 key)
+//     state          the current state: ONE OF spec.states (11 tables), recognised only by its keys (each has `fishingRod`, the rod).
+//                    nil when the game attaches the rod: the rod's first update while held sets it to idle (the headset showed
+//                    the real rod's state missing at the attach, 2026-10-18):
+//       idle        { fishingRod }                                   (1 key)
 //       charging     angleScale (0 to 1 while held), angleScaleIncreasePerMs (0.0007), inputValue, castingChargeOverlay, ... (10 keys)
 //       waiting      biteTime, biteTimeMin (10000), biteTimeMax (25000), biteHintTimeThreshold, waitForBiteOverlay, ... (10 keys)
 //       bite         catchTime, duration (880, the hook window), minCatchTimeThreshold (700), glyphButtonText ("Hook fish"),
@@ -3192,6 +3194,7 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
         -- the update: the charge grows, a missed hook window lets the fish go, a held reel takes the line in
         function Class.onUpdate(self, dt)
             local spec = self[SPEC]
+            if spec.state == nil then spec.state = self.rodStates.idle end
             local name = stateNames[spec.state]
             if name == "charging" then
                 spec.state.angleScale = math.min(spec.state.maxAngleScale, spec.state.angleScale + spec.state.angleScaleIncreasePerMs * dt)
@@ -3283,7 +3286,7 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
         local states, list = makeStates(tool)
         tool.rodStates = states
         spec.states = list
-        spec.state = states.idle
+        spec.state = nil  -- until the rod's first update while held
 
         -- the type's functions, copied onto the rod as the game does (not the handlers, the update or the draw)
         local typeFunctions = {}

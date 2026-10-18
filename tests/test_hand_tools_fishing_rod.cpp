@@ -94,6 +94,14 @@ protected:
         headset.SetHandGripPose(hand, HandAt(x, y, z, kAimPitch, kAimYaw));
     }
 
+    // The game clock moved on by `seconds`, one second a frame, with the right hand moved a little each second (kept in use).
+    void HoldOnFor(int seconds) {
+        for (int second = 0; second < seconds; ++second) {
+            AdvanceGameTime(1000);
+            MOVE_HAND(kRight, 0.25f + 0.02f * static_cast<float>(second % 2), -0.10f, -0.30f);
+        }
+    }
+
     std::string InTheHand(const char* which) { return EvalLua(L, std::string("isInTheHand(rod, '") + which + "')"); }
     std::string WhereTheGamePutsIt() { return EvalLua(L, "isWhereTheGamePutsIt(rod)"); }
     std::string Dump() { return EvalLua(L, "VRCompanion:getHandToolsDiagnostics()"); }
@@ -133,6 +141,21 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodHeldOnFootHangsBelowTheRight
             "the rod stayed where it was in the hand")
     )luau", "=follows"), 0);
     EXPECT_NE(Dump().find("held Hand Tool: fishingrod (supported)"), std::string::npos) << Dump();
+}
+
+// The real rod has no state yet when the game attaches it, and gets one on its first update while held (the headset, 2026-10-18,
+// where the rod was given back for it): it goes into the hand all the same, and stays there, with no warning.
+TEST_F(VirtualGamepadHandToolsFishingRodTest, ARodWithNoStateYetWhenTheGameAttachesItGoesIntoTheHandAndStaysWithoutAWarning) {
+    ASSERT_NO_FATAL_FAILURE(Start());
+    ASSERT_NO_FATAL_FAILURE(HoldFishingRod(L));
+    ASSERT_EQ(EvalLua(L, "StubHandTool.rodSpec(rod).state == nil"), "true") << "no state at the attach";
+    PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
+    FRAMES(1);
+    EXPECT_EQ(InTheHand("right"), "true") << Dump();
+    HoldOnFor(10);
+    EXPECT_EQ(InTheHand("right"), "true") << Dump();
+    EXPECT_EQ(RodState(), "idle");
+    EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 0);
 }
 
 TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodIsWhereTheGamePutsItSetDownUntrackedOutOfFirstPersonOrWithHandToolsOffAndBackInTheHandAfterwards) {
@@ -686,13 +709,21 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodsHandlerReshapedTheRodIs
 
 // A DLC update could as well rename or reshape what the rod's state is read from (#125: the spec's state, fishingLine with its
 // isInitialized, rodBendFactor, and the rod's getBobberPosition): such a rod is the game's from the start, with one warning that
-// names the field, as for a reshaped handler. `reshape` runs on the new rod (`rod`, its spec `spec`) before it is taken in hand.
+// names the field, as for a reshaped handler. The real rod fills its fields in after the game attaches it (its state on its first
+// update), so a field is found reshaped only once it has stayed so for 5 s of holding; until then the rod is in the hand. `reshape`
+// runs on the new rod (`rod`, its spec `spec`) before it is taken in hand.
 #define EXPECT_A_RESHAPED_ROD_IS_THE_GAMES_WITH_ONE_WARNING(reshape, named) \
     do { \
         ASSERT_NO_FATAL_FAILURE(Start()); \
         ASSERT_EQ(RunLuauChunk(L, "_G.rod = StubHandTool.fishingRod(foot.player); local spec = StubHandTool.rodSpec(rod); " reshape \
                                   "; StubHandTool.hold(rod)", "=reshapedRod"), 0); \
         PICK_UP(kRight, 0.25f, -0.10f, -0.30f); \
+        FRAMES(2); \
+        EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 0) << "not yet"; \
+        EXPECT_EQ(InTheHand("right"), "true") << "in the hand meanwhile: " << Dump(); \
+        HoldOnFor(4); \
+        EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 0) << "not after 4 s"; \
+        HoldOnFor(2); \
         AimTheHand(kRight, 0.25f, -0.10f, -0.30f); \
         FRAMES(2); \
         EXPECT_EQ(CountLogLines("[Warning] Hand Tools"), 1) << "exactly one warning"; \
