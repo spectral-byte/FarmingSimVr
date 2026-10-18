@@ -2974,8 +2974,10 @@ inline constexpr const char* kStubHandToolHorseBrush = R"luau(
 //       waiting      biteTime, biteTimeMin (10000), biteTimeMax (25000), biteHintTimeThreshold, waitForBiteOverlay, ... (10 keys)
 //       bite         catchTime, duration (880, the hook window), minCatchTimeThreshold (700), glyphButtonText ("Hook fish"),
 //                    hookFishOverlay, ... (12 keys)
-//       reeling      48 keys, none of them named by the dump (it only counted them): here reelingValue01..47, which a reader
-//                    must not rely on. The reeling shows in rodBendFactor and fishingLine instead.
+//       reeling      the minigame's layout (48 keys; the #140 headset dump named them): posX, posY, width, height, fishYMin,
+//                    fishYMax, cursorPos, targetLineXStart/End, hookLineX, hookStatusLineXStart/End, progressBarOverlay,
+//                    fishTargetBarOverlay, fishOverlay, hookOverlay, ... None of them tells the state by itself; the reeling
+//                    shows in rodBendFactor and fishingLine instead.
 //       caught       { fishingRod, angleScaleDecreasePerMs, bendResetRate }  (3 keys)
 //       (and five more states the dump never showed the rod in)
 //     states         the 11 state tables
@@ -3043,9 +3045,13 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
             if not self.visible then return end
             table.insert(StubHandTool.screen, { what = self.filename, x = self.x + self.offsetX, y = self.y + self.offsetY, width = self.width })
         end
+        function Overlay:setPosition(x, y) self.x, self.y = x or self.x, y or self.y end
         _G.Overlay = Overlay
-    end    -- The game's text native: the engine resolves natives at load, so a mod cannot wrap it (a local here, not a global).
+    end
+    -- The game's natives for text and filled rectangles: the engine resolves natives at load, so a mod cannot wrap them (locals
+    -- here, not globals). Each notes what reached the screen, a rectangle by the name the stub gives it.
     local function renderTextNative(x, y, size, text) table.insert(StubHandTool.screen, { what = tostring(text), x = x, y = y, width = 0 }) end
+    local function drawRectNative(name, x, y, width, height) table.insert(StubHandTool.screen, { what = name, x = x, y = y, width = width }) end
     local reelHeld = {}    -- a rod -> its reel is held (pressed and not yet released)
 
     function StubHandTool.rodSpec(tool) return tool[SPEC] end
@@ -3074,13 +3080,21 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
                      hookFishOverlay = Overlay.new("hookFish.dds", 0.47, 0.45, 0.06, 0.04),
                      hookFishOverlayFadeInDuration = 200, hookFishOverlayWidthMax = 0.4, hookFishOverlayWidthMin = 0.3,
                      minCatchTimeThreshold = 700 },
-            reeling = { fishingRod = tool },
+            -- the minigame's layout, by the keys the #140 headset dump showed (its numbers rounded, and some of its keys left out)
+            reeling = { fishingRod = tool, posX = 0.65, posY = 0.40, width = 0.10, height = 0.32,
+                        fishYMin = 0.41, fishYMax = 0.69, cursorPos = 0.5, cursorSpeed = 0, cursorInTargetRange = true,
+                        targetPosPercentage = 0.5, threshold = 0.2, targetLineXStart = 0.69, targetLineXEnd = 0.73,
+                        targetLineWidth = 0.0026, hookLineX = 0.76, hookLineOffsetY = 0.0213, hookLineWidth = 0.0026,
+                        hookStatusLineXStart = 0.746, hookStatusLineXEnd = 0.7474, hookStatusLineWidth = 0.0056, progress = 0.1,
+                        reelingStartTime = 0, lastInputValue = 0, glyphButtonHeight = 0.03, glyphButtonOverlay = overlay(),
+                        progressBarOverlay = Overlay.new("progressBar.png", 0.655, 0.41, 0.02, 0.30),
+                        fishTargetBarOverlay = Overlay.new("fishTargetBar.png", 0.685, 0.41, 0.05, 0.30),
+                        fishOverlay = Overlay.new("fish.png", 0.69, 0.41, 0.05, 0.04),
+                        hookOverlay = Overlay.new("hook.png", 0.755, 0.37, 0.015, 0.026),
+                        caughtOverlay = Overlay.new("caught.png", 0.657, 0.672, 0.02, 0.04),
+                        lostOverlay = Overlay.new("lost.png", 0.658, 0.419, 0.019, 0.022) },
             caught = { fishingRod = tool, angleScaleDecreasePerMs = 0.006, bendResetRate = 0.001 },
         }
-        for i = 1, 47 do states.reeling[string.format("reelingValue%02d", i)] = 0 end
-        -- the minigame's bars, as the stub's draw renders them (the real keys are unknown)
-        states.reeling.reelingValue01 = Overlay.new("reelTension.dds", 0.80, 0.30, 0.04, 0.40)
-        states.reeling.reelingValue02 = Overlay.new("reelTensionFill.dds", 0.78, 0.35, 0.02, 0.20)
         local list = { states.idle, states.charging, states.waiting, states.bite, states.reeling, states.caught }
         for i = 1, 5 do table.insert(list, { fishingRod = tool, unseenValue = i }) end
         for name, stateTable in pairs(states) do stateNames[stateTable] = name end
@@ -3260,10 +3274,19 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
                 StubHandTool.render(self, "hookFishOverlay")
                 current.hookFishOverlay:render()
             elseif name == "reeling" then
-                local bar = current.reelingValue01
-                bar:render()
-                current.reelingValue02:render()
-                renderTextNative(bar.x - 0.02, bar.y - 0.05, 0.015, "Reel in")
+                -- as the real minigame (#140 dump): the panel and the lines with the natives at the layout's numbers, the bars
+                -- from the state's Overlays, and the fish and the hook placed again at every draw from where they are
+                local s = current
+                local function fishY(share) return s.fishYMin + share * (s.fishYMax - s.fishYMin) end
+                drawRectNative("panel", s.posX, s.posY, s.width, s.height)
+                s.progressBarOverlay:render()
+                s.fishTargetBarOverlay:render()
+                s.fishOverlay:setPosition(s.fishOverlay.x, fishY(s.cursorPos))
+                s.fishOverlay:render()
+                drawRectNative("targetLine", s.targetLineXStart, fishY(s.targetPosPercentage), s.targetLineXEnd - s.targetLineXStart, 0.002)
+                s.hookOverlay:setPosition(s.hookOverlay.x, s.hookOverlay.y)
+                s.hookOverlay:render()
+                drawRectNative("hookLine", s.hookLineX, s.posY, s.hookLineWidth, s.height)
             end
         end
         StubHandTool.fishingRodOriginalOnDraw = Class.onDraw

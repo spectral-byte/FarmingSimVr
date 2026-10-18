@@ -983,34 +983,31 @@ end
 
 -- ---- The fishing rod's screen overlays -----------------------------------------------------------------------------------
 -- The rod draws its overlays itself (its onDraw, which the DLC keeps unreadable) at screen positions made for a flat screen: in the
--- headset the reeling minigame after a hook sat so far right, and a little high, that it was hard to see (2026-10-18). Three tries
--- in the headset (2026-10-18) found how it draws: the engine resolves its 2D natives (renderOverlay, renderText) when it loads, so
--- a mod cannot wrap them; the minigame's bars and icons are Overlays, rendered through the game's Lua Overlay.render during the rod's
--- draw, but its panel, the lines that follow the fish and its markers are drawn with the natives, so moving each Overlay as it is
--- rendered tore the minigame in two (and the Overlays rendered elsewhere in the frame near it were the HUD's, not the minigame's).
--- So while the rod is the local player's and Hand Tools are on, the onDraw on its specialization class (which the game's event
--- dispatch reads at every call) is wrapped and, outside the 2D view, moves the Overlays the rod keeps (in its spec, and in its
--- current state one table deep) for the whole of its draw, and puts them back afterwards: what the rod draws with the natives at
--- places it takes from those Overlays moves with them. All move by one amount, which takes the middle of what the rod rendered in
--- its last draw in the same state to FISHING_ROD_OVERLAY_PULL of its distance from the centre of the screen (what sits at the centre
--- stays there), and down by FISHING_ROD_OVERLAY_DROP. Overlay.render is wrapped alongside, only to note what the draw rendered.
--- Both wraps come off with the rod (put away, another player's, `vrHandTools off`, the map unloaded). For the headset round the
--- diagnostics log, per state, what the rod's last draw rendered, how many of its Overlays were moved and how many it rendered
--- unmoved; and while it reels, the fields of its state and the numbers of its spec, so that what the natives are placed from can be
--- found if they do not follow.
+-- headset the reeling minigame after a hook sat so far right, and a little high, that it was hard to see (2026-10-18). Four tries
+-- in the headset (2026-10-18) found how it draws. The engine resolves its 2D natives (renderOverlay, renderText) when it loads, so
+-- a mod cannot wrap them. The minigame's state lays it out in plain numbers, read at every draw: its panel at posX, posY, width,
+-- height, the lines that follow the fish at targetLineXStart..End, the hook's line at hookLineX, its status line at
+-- hookStatusLineXStart..End, the fish between fishYMin and fishYMax; its bars and icons are Overlays the state keeps (and the fish
+-- and the hook are placed again at every draw from where they are). So while the rod is the local player's and Hand Tools are on,
+-- the onDraw on its specialization class (which the game's event dispatch reads at every call) is wrapped and, outside the 2D view
+-- and only in a state that has that layout (the minigame: the charge meter and the prompts are centred and stay as they are),
+-- moves the layout's numbers and the Overlays the rod keeps (in its spec, and in its state one table deep) for the whole of its
+-- draw, all by one amount, and takes exactly that amount off again afterwards (also off what the draw placed anew from moved
+-- values, which would otherwise drift a little further every frame). The amount takes the middle of the panel to
+-- FISHING_ROD_OVERLAY_PULL of its distance from the centre of the screen, and down by FISHING_ROD_OVERLAY_DROP. Overlay.render is
+-- wrapped alongside, only to note what the draw rendered. Both wraps come off with the rod (put away, another player's,
+-- `vrHandTools off`, the map unloaded). For the headset round the diagnostics log, per state, what the rod's last draw rendered
+-- and what was moved by how much; and while it reels, the fields of its state and the numbers of its spec.
 VRCompanion.FISHING_ROD_OVERLAY_PULL = 0.5
 VRCompanion.FISHING_ROD_OVERLAY_DROP = 0.05
+
+-- The minigame's layout numbers in the rod's state: which are screen x positions and which y (the #140 headset dump).
+local FISHING_ROD_LAYOUT_X = { "posX", "targetLineXStart", "targetLineXEnd", "hookLineX", "hookStatusLineXStart", "hookStatusLineXEnd" }
+local FISHING_ROD_LAYOUT_Y = { "posY", "fishYMin", "fishYMax" }
 
 local rodDrawWrap = nil        -- { class, original, wrapper }: the rod class's onDraw, while this module has it wrapped
 local overlayRenderWrap = nil  -- { class, original, wrapper }: Overlay.render, likewise
 local rodDrawNotes = nil       -- while the local rod's draw runs: what it rendered (see drawPulledIn)
-
--- How far to move what spans from..to across the screen, so that its middle keeps FISHING_ROD_OVERLAY_PULL of its distance from the
--- centre.
-local function shiftFor(from, to)
-    local middle = (from + to) / 2
-    return 0.5 + (middle - 0.5) * VRCompanion.FISHING_ROD_OVERLAY_PULL - middle
-end
 
 -- Whether a value is one of the game's Overlays: a table with a numeric place and an overlay id or a file.
 local function isOverlay(value)
@@ -1040,6 +1037,14 @@ local function rodOverlays(tool, spec)
     return found
 end
 
+-- How far the minigame laid out in `layout` (the rod's state) moves: dx, dy; nil for a state without that layout.
+local function layoutShift(layout)
+    local x, y, width = layout.posX, layout.posY, layout.width
+    if type(x) ~= "number" or type(y) ~= "number" or type(width) ~= "number" then return nil end
+    local middle = x + width / 2
+    return 0.5 + (middle - 0.5) * VRCompanion.FISHING_ROD_OVERLAY_PULL - middle, -VRCompanion.FISHING_ROD_OVERLAY_DROP
+end
+
 -- Overlay.render's wrap: notes what the local rod's draw renders (its area as the rod placed it, and whether it was one of the
 -- Overlays moved for the draw); renders every Overlay as the game does.
 local function renderOverlayNoted(original, overlay, ...)
@@ -1057,35 +1062,57 @@ local function renderOverlayNoted(original, overlay, ...)
     return original(overlay, ...)
 end
 
--- Runs the rod's own onDraw with the Overlays it keeps moved, all by the amount its last draw in the same state calls for, then puts
--- each back where it was (unless the draw itself placed it), and notes what it drew: { calls, unmoved, from, to, bottom, top (the
--- area rendered, as the rod placed it), kept (its Overlays moved), dx, dy (the amount), next (the amount for the next draw) }.
+-- Moves t[key] by `by` and notes how to take it off again, when it is a number.
+local function moveNumber(moved, t, key, by)
+    local value = t[key]
+    if type(value) ~= "number" then return end
+    t[key] = value + by
+    moved[#moved + 1] = { t = t, key = key, was = value, by = by }
+end
+
+-- Takes each move off again: back to what it was when the draw left it as moved, else (the draw placed it anew from moved values)
+-- the move taken off what the draw put there.
+local function takeMovesOff(moved)
+    for _, move in ipairs(moved) do
+        local value = move.t[move.key]
+        if value == move.was + move.by then
+            move.t[move.key] = move.was
+        elseif type(value) == "number" then
+            move.t[move.key] = value - move.by
+        end
+    end
+end
+
+-- Runs the rod's own onDraw with its minigame moved (see above) and notes what it drew: { calls, unmoved, from, to, bottom, top
+-- (the area rendered, as the rod placed it), overlays, numbers (how many were moved), dx, dy (by how much) }.
 local function drawPulledIn(original, tool, ...)
-    local rodState = VRCompanion:getFishingRodState(tool) or "unknown"
     local _, entry = fishingRodOf(tool)
     local spec = tool[entry.spec]
-    local last = state.fishingRod.draws[rodState]
-    local notes = { calls = 0, unmoved = 0, kept = 0, moving = {}, dx = last ~= nil and last.next or 0,
-                    dy = -VRCompanion.FISHING_ROD_OVERLAY_DROP }
+    local notes = { calls = 0, unmoved = 0, overlays = 0, numbers = 0, moving = {}, dx = 0, dy = 0 }
     local moved = {}
-    local ok, overlays = pcall(rodOverlays, tool, spec)
-    for _, overlay in ipairs(ok and overlays or {}) do
-        moved[#moved + 1] = { overlay = overlay, x = overlay.x, y = overlay.y }
-        overlay.x, overlay.y = overlay.x + notes.dx, overlay.y + notes.dy
-        notes.moving[overlay] = true
+    local layout = type(spec) == "table" and spec.state or nil
+    local dx, dy = nil, nil
+    if type(layout) == "table" then dx, dy = layoutShift(layout) end
+    if dx ~= nil then
+        notes.dx, notes.dy = dx, dy
+        for _, key in ipairs(FISHING_ROD_LAYOUT_X) do moveNumber(moved, layout, key, dx) end
+        for _, key in ipairs(FISHING_ROD_LAYOUT_Y) do moveNumber(moved, layout, key, dy) end
+        notes.numbers = #moved
+        local ok, overlays = pcall(rodOverlays, tool, spec)
+        for _, overlay in ipairs(ok and overlays or {}) do
+            moveNumber(moved, overlay, "x", dx)
+            moveNumber(moved, overlay, "y", dy)
+            notes.moving[overlay] = true
+            notes.overlays = notes.overlays + 1
+        end
     end
-    notes.kept = #moved
     local outer = rodDrawNotes
     rodDrawNotes = notes
     local results = table.pack(pcall(original, tool, ...))
     rodDrawNotes = outer
-    for _, was in ipairs(moved) do
-        local overlay = was.overlay
-        if overlay.x == was.x + notes.dx and overlay.y == was.y + notes.dy then overlay.x, overlay.y = was.x, was.y end
-    end
+    takeMovesOff(moved)
     notes.moving = nil
-    if notes.calls > 0 then notes.next = shiftFor(notes.from, notes.to) end
-    state.fishingRod.draws[rodState] = notes
+    state.fishingRod.draws[VRCompanion:getFishingRodState(tool) or "unknown"] = notes
     if not results[1] then error(results[2], 0) end
     return table.unpack(results, 2, results.n)
 end
@@ -1140,11 +1167,13 @@ local function rodDrawsText()
         local notes = state.fishingRod.draws[name]
         if notes ~= nil then
             local label = FISHING_ROD_STATE_TEXT[name] or name
+            local moved = notes.numbers == 0 and notes.overlays == 0 and "nothing moved"
+                or string.format("%d layout numbers and %d Overlays moved by %.3f, %.3f", notes.numbers, notes.overlays, notes.dx, notes.dy)
             if notes.calls == 0 then
-                parts[#parts + 1] = string.format("%s: nothing rendered, %d kept moved", label, notes.kept)
+                parts[#parts + 1] = string.format("%s: nothing rendered, %s", label, moved)
             else
-                parts[#parts + 1] = string.format("%s: %d rendered (%d unmoved), x %.3f to %.3f, y %.3f to %.3f, %d kept moved by %.3f, %.3f",
-                    label, notes.calls, notes.unmoved, notes.from, notes.to, notes.bottom, notes.top, notes.kept, notes.dx, notes.dy)
+                parts[#parts + 1] = string.format("%s: %d rendered (%d unmoved), x %.3f to %.3f, y %.3f to %.3f, %s", label, notes.calls,
+                    notes.unmoved, notes.from, notes.to, notes.bottom, notes.top, moved)
             end
         end
     end

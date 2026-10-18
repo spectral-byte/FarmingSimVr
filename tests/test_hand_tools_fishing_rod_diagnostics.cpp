@@ -127,16 +127,17 @@ TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, WithTheRodInTheHandTheC
     }
 }
 
-// What the rod's last draw in each state rendered (its area as the rod placed it), how many of its Overlays were moved for the draw
-// and by how much (test_hand_tools_fishing_rod.cpp), so the headset round can see how far in the reeling minigame comes.
+// What the rod's last draw in each state rendered (its area as the rod placed it), how many of its layout numbers and Overlays were
+// moved for the draw and by how much (test_hand_tools_fishing_rod.cpp), so the headset round can see how far in the minigame comes.
 TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, TheCommandLogsWhatTheRodsLastDrawInEachStateRenderedAndHowItWasMoved) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     RunCommand();
     EXPECT_EQ(RodLine("screen draw: "), "none yet") << Log();
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.draw(); StubHandTool.setRodState(rod, 'reeling'); rod:setRodBendFactor(0.5); StubHandTool.draw()", "=draws"), 0);
     RunCommand();
-    EXPECT_EQ(RodLine("screen draw: "), "idle: nothing rendered, 0 kept moved; "
-                                        "reeling: 2 rendered (0 unmoved), x 0.780 to 0.840, y 0.300 to 0.700, 2 kept moved by 0.000, -0.050")
+    EXPECT_EQ(RodLine("screen draw: "), "idle: nothing rendered, nothing moved; "
+                                        "reeling: 4 rendered (0 unmoved), x 0.655 to 0.770, y 0.370 to 0.710, "
+                                        "9 layout numbers and 6 Overlays moved by -0.100, -0.050")
         << Log();
 }
 
@@ -151,8 +152,9 @@ TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, WhileTheRodReelsTheComm
     FRAMES(1);
     RunCommand();
     const std::string fields = RodLine("reeling state: ");
-    EXPECT_NE(fields.find("reelingValue01 = Overlay reelTension.dds (0.8000, 0.3000, 0.0400, 0.4000), "), std::string::npos) << fields;
-    EXPECT_NE(fields.find("reelingValue03 = 0.0000"), std::string::npos) << fields;
+    EXPECT_NE(fields.find("fishTargetBarOverlay = Overlay fishTargetBar.png (0.6850, 0.4100, 0.0500, 0.3000), "), std::string::npos)
+        << fields;
+    EXPECT_NE(fields.find("posX = 0.6500, posY = 0.4000, "), std::string::npos) << fields;
     EXPECT_EQ(fields.find("fishingRod"), std::string::npos) << "not the back reference to the rod: " << fields;
     const std::string numbers = RodLine("spec numbers: ");
     EXPECT_NE(numbers.find("angleMax = 2.2689"), std::string::npos) << numbers;
