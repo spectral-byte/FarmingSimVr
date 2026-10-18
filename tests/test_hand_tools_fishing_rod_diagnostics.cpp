@@ -127,38 +127,36 @@ TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, WithTheRodInTheHandTheC
     }
 }
 
-// Where the rod's last draw in each state put things, as it drew them and as they reached the screen pulled in toward the centre
-// (test_hand_tools_fishing_rod.cpp), so the headset round can see how far in the reeling minigame comes.
-TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, TheCommandLogsWhereTheRodsLastDrawInEachStatePutThingsBeforeAndAfterThePull) {
+// What the rod's last draw in each state rendered (its area as the rod placed it), how many of its Overlays were moved for the draw
+// and by how much (test_hand_tools_fishing_rod.cpp), so the headset round can see how far in the reeling minigame comes.
+TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, TheCommandLogsWhatTheRodsLastDrawInEachStateRenderedAndHowItWasMoved) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     RunCommand();
     EXPECT_EQ(RodLine("screen draw: "), "none yet") << Log();
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.draw(); StubHandTool.setRodState(rod, 'reeling'); rod:setRodBendFactor(0.5); StubHandTool.draw()", "=draws"), 0);
     RunCommand();
-    EXPECT_EQ(RodLine("screen draw: "), "idle: nothing drawn; reeling: 2 drawn, x 0.780 to 0.840, y 0.300 to 0.700, moved by -0.160, -0.050")
+    EXPECT_EQ(RodLine("screen draw: "), "idle: nothing rendered, 0 kept moved; "
+                                        "reeling: 2 rendered (0 unmoved), x 0.780 to 0.840, y 0.300 to 0.700, 2 kept moved by 0.000, -0.050")
         << Log();
 }
 
-// Should the minigame be drawn by something other than the rod's own draw, the Overlays rendered on the right half of the screen
-// while the rod reels are logged by their file, so the headset round can tell what draws it. Those on the left half are not.
-TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, TheCommandLogsTheOverlaysRenderedElsewhereOnTheRightHalfWhileTheRodReels) {
+// While the rod reels, the fields of its state and the numbers and Overlays of its spec, so that the headset round can find what the
+// minigame's natives are placed from, should they not follow its Overlays. Not while it does anything else.
+TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, WhileTheRodReelsTheCommandLogsItsStateFieldsAndItsSpecNumbers) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
-    ASSERT_EQ(RunLuauChunk(L, "Overlay.new('beforeReeling.dds', 0.80, 0.30, 0.10, 0.20):render()", "=before"), 0);
     RunCommand();
-    EXPECT_EQ(RodLine("overlays elsewhere while reeling (right half): "), "none seen") << Log();
+    EXPECT_EQ(RodLine("reeling state: "), "") << "idle: " << Log();
 
-    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'reeling'); rod:setRodBendFactor(0.5)", "=reel"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'reeling')", "=reel"), 0);
     FRAMES(1);
-    ASSERT_EQ(RunLuauChunk(L, R"luau(
-        Overlay.new('fishingMinigame.dds', 0.85, 0.30, 0.10, 0.20):render()
-        Overlay.new('map.dds', 0.05, 0.05, 0.20, 0.20):render()
-        StubHandTool.draw()
-        Overlay.new('reelLine.dds', 0.77, 0.32, 0.003, 0.30):render()
-    )luau", "=elsewhere"), 0);
     RunCommand();
-    EXPECT_EQ(RodLine("overlays elsewhere while reeling (right half): "),
-              "fishingMinigame.dds x 0.850 to 0.950, y 0.300 to 0.500; "
-              "reelLine.dds x 0.770 to 0.773, y 0.320 to 0.620 (moved with the rod's)") << Log();
+    const std::string fields = RodLine("reeling state: ");
+    EXPECT_NE(fields.find("reelingValue01 = Overlay reelTension.dds (0.8000, 0.3000, 0.0400, 0.4000), "), std::string::npos) << fields;
+    EXPECT_NE(fields.find("reelingValue03 = 0.0000"), std::string::npos) << fields;
+    EXPECT_EQ(fields.find("fishingRod"), std::string::npos) << "not the back reference to the rod: " << fields;
+    const std::string numbers = RodLine("spec numbers: ");
+    EXPECT_NE(numbers.find("angleMax = 2.2689"), std::string::npos) << numbers;
+    EXPECT_NE(numbers.find("rodBendFactor = "), std::string::npos) << numbers;
 }
 
 // A read of the rod's spec that fails while the rod is in the hand (a rod reshaped from the start is the game's with a warning,

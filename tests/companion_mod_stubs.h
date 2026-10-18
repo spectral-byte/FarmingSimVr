@@ -3059,23 +3059,28 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
 
     -- the 11 state tables of a rod, by the stub's names; each has the keys the dump showed for it
     local function makeStates(tool)
-        local overlay = function() return { width = 0.08, height = 0.08, visible = true } end
+        local overlay = function() return { width = 0.08, height = 0.08, visible = true } end  -- one the stub's draw does not render
         local states = {
             idle = { fishingRod = tool },
             charging = { fishingRod = tool, angleScale = 0, angleScaleDecreasePerMs = 0.006, angleScaleIncreasePerMs = 0.0007,
-                         castingAngle = 0, castingChargeOverlay = overlay(), inputValue = 0, maxAngleScale = 1,
+                         castingAngle = 0, castingChargeOverlay = Overlay.new("castingCharge.dds", 0.45, 0.45, 0.10, 0.02),
+                         inputValue = 0, maxAngleScale = 1,
                          rotBackSpeed = 0.0014, rotForwardSpeed = 0.0084 },
             waiting = { fishingRod = tool, biteHintTimeThreshold = 3500, biteTime = 0, biteTimeMax = 25000, biteTimeMin = 10000,
                         multiplier = 1.584, overlayDefaultWidth = 0.078125, overlayWidthVariation = 0.0015625, playedSample = false,
                         waitForBiteOverlay = overlay() },
             bite = { fishingRod = tool, bobberDepthBit = 0.08, catchTime = 0, duration = 880, glyphButtonHeight = 0.05,
-                     glyphButtonOverlay = overlay(), glyphButtonText = "Hook fish", hookFishOverlay = overlay(),
+                     glyphButtonOverlay = overlay(), glyphButtonText = "Hook fish",
+                     hookFishOverlay = Overlay.new("hookFish.dds", 0.47, 0.45, 0.06, 0.04),
                      hookFishOverlayFadeInDuration = 200, hookFishOverlayWidthMax = 0.4, hookFishOverlayWidthMin = 0.3,
                      minCatchTimeThreshold = 700 },
             reeling = { fishingRod = tool },
             caught = { fishingRod = tool, angleScaleDecreasePerMs = 0.006, bendResetRate = 0.001 },
         }
         for i = 1, 47 do states.reeling[string.format("reelingValue%02d", i)] = 0 end
+        -- the minigame's bars, as the stub's draw renders them (the real keys are unknown)
+        states.reeling.reelingValue01 = Overlay.new("reelTension.dds", 0.80, 0.30, 0.04, 0.40)
+        states.reeling.reelingValue02 = Overlay.new("reelTensionFill.dds", 0.78, 0.35, 0.02, 0.20)
         local list = { states.idle, states.charging, states.waiting, states.bite, states.reeling, states.caught }
         for i = 1, 5 do table.insert(list, { fishingRod = tool, unseenValue = i }) end
         for name, stateTable in pairs(states) do stateNames[stateTable] = name end
@@ -3239,23 +3244,26 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
         end
 
         -- the draw: the charge meter, the waiting hint and the "Hook fish" prompt, at the centre of the view, each also put on the
-        -- screen (StubHandTool.screen) as Overlays or text; and while reeling a minigame far to the right (the headset showed one
-        -- there; its shape here is made up: a tension bar, its fill and a hint)
+        -- screen (StubHandTool.screen) from the state's Overlays or as text; and while reeling a minigame far to the right (the
+        -- headset showed one there; its shape here is made up: a tension bar and its fill, Overlays, and a hint the native puts
+        -- below the bar, at a place taken from the bar's Overlay, as the real minigame's panel and lines are)
         function Class.onDraw(self)
-            local name, overlays = stateNames[self[SPEC].state], self.rodOverlays
+            local current = self[SPEC].state
+            local name = stateNames[current]
             if name == "charging" then
                 StubHandTool.render(self, "castingChargeOverlay")
-                overlays.charge:render()
+                current.castingChargeOverlay:render()
             elseif name == "waiting" then
                 StubHandTool.render(self, "waitForBiteOverlay")
                 renderTextNative(0.5, 0.40, 0.02, "Wait for a bite")
             elseif name == "bite" then
                 StubHandTool.render(self, "hookFishOverlay")
-                overlays.hookFish:render()
+                current.hookFishOverlay:render()
             elseif name == "reeling" then
-                overlays.tension:render()
-                overlays.tensionFill:render()
-                renderTextNative(0.78, 0.25, 0.015, "Reel in")
+                local bar = current.reelingValue01
+                bar:render()
+                current.reelingValue02:render()
+                renderTextNative(bar.x - 0.02, bar.y - 0.05, 0.015, "Reel in")
             end
         end
         StubHandTool.fishingRodOriginalOnDraw = Class.onDraw
@@ -3319,12 +3327,6 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
         spec.item = nil
         local states, list = makeStates(tool)
         tool.rodStates = states
-        tool.rodOverlays = {  -- the stub's own: where the rod's draw puts its overlays
-            charge = Overlay.new("castingCharge.dds", 0.45, 0.45, 0.10, 0.02),
-            hookFish = Overlay.new("hookFish.dds", 0.47, 0.45, 0.06, 0.04),
-            tension = Overlay.new("reelTension.dds", 0.80, 0.30, 0.04, 0.40),
-            tensionFill = Overlay.new("reelTensionFill.dds", 0.78, 0.35, 0.02, 0.20),
-        }
         spec.states = list
         spec.state = nil  -- until the rod's first update while held
 
