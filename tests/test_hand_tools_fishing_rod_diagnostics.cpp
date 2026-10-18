@@ -127,6 +127,17 @@ TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, WithTheRodInTheHandTheC
     }
 }
 
+// Where the rod's last draw in each state put things, as it drew them and as they reached the screen pulled in toward the centre
+// (test_hand_tools_fishing_rod.cpp), so the headset round can see how far in the reeling minigame comes.
+TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, TheCommandLogsWhereTheRodsLastDrawInEachStatePutThingsBeforeAndAfterThePull) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    RunCommand();
+    EXPECT_EQ(RodLine("screen draw: "), "none yet") << Log();
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.draw(); StubHandTool.setRodState(rod, 'reeling'); rod:setRodBendFactor(0.5); StubHandTool.draw()", "=draws"), 0);
+    RunCommand();
+    EXPECT_EQ(RodLine("screen draw: "), "idle: nothing drawn; reeling: 3 drawn, x 0.780 to 0.840, on screen 0.640 to 0.680") << Log();
+}
+
 // A read of the rod's spec that fails while the rod is in the hand (a rod reshaped from the start is the game's with a warning,
 // test_hand_tools_fishing_rod.cpp): the line says "unknown", nothing errs, and the rod stays in the hand.
 TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, ARodSpecThatCannotBeReadInTheHandGivesAnUnknownLineNeverAnError) {

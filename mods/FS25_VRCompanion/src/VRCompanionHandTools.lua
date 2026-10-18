@@ -11,7 +11,7 @@
 --
 -- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
 -- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The fishing rod's
--- state | Keeping the Tool Hand in use | The fishing rod in the diagnostics | The look ray |
+-- state | Keeping the Tool Hand in use | The fishing rod in the diagnostics | The fishing rod's screen overlays | The look ray |
 -- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The flashlight's beam | No screen-centre overlays (the
 -- spray can's, the horse brush's and the chainsaw's onDraw) | The horse brush's touch (the touching cap) | Haptics | The spray can's feedback (target tick, marker type message) | Update |
 -- Diagnostics, console commands, reset.
@@ -114,6 +114,7 @@ local function newState()
             cast = nil,      -- the last cast: { tool, rod = {dx, dy, dz} | nil, head = {dx, dy, dz} | nil, bobber = {x, y, z} | nil
                              -- (where it landed), bobberLast = {x, y, z} | nil (where it was at the last update, until it landed) }
             action = nil,    -- the last action a rod was given: { tool, name = "primary" | "secondary", by = text, value }
+            draws = {},      -- per rod state: its last draw, { calls, from, to, drawnFrom, drawnTo } (see "The fishing rod's screen overlays")
         },
         problem = nil,      -- why Hand Tools gave up, once it did (the warning is logged then and never again)
         toolProblems = {},   -- per tool kind: why that tool is left to the game, once it was found reshaped (warned once)
@@ -980,6 +981,116 @@ local function liftRodEventWraps()
     rodEventWraps = setmetatable({}, { __mode = "k" })
 end
 
+-- ---- The fishing rod's screen overlays -----------------------------------------------------------------------------------
+-- The rod draws its overlays itself (its onDraw, which the DLC keeps unreadable) at screen positions made for a flat screen: in the
+-- headset the reeling minigame after a hook sat so far right that it was hard to see (2026-10-18). While the rod is the local
+-- player's and Hand Tools are on, the onDraw on its specialization class (which the game's event dispatch reads at every call) is
+-- wrapped: outside the 2D view, everything it draws with the game's 2D natives (renderOverlay, drawFilledRect, renderText; an
+-- Overlay renders through renderOverlay) is pulled in toward the centre of the screen. An element's middle keeps
+-- FISHING_ROD_OVERLAY_PULL of its distance from the centre, its size and height unchanged, so what sits at the centre (the charge
+-- meter, the "Hook fish" prompt) stays where it is. The natives are the game's own again as soon as the draw returns, and the wrap
+-- comes off with the rod (put away, another player's, `vrHandTools off`, the map unloaded). The diagnostics log where the last draw
+-- in each of the rod's states put things, before and after, for the headset round.
+VRCompanion.FISHING_ROD_OVERLAY_PULL = 0.5
+
+-- The natives pulled in: which of their arguments is the element's left edge, and which its width (none for text: its x is where
+-- the game anchors it).
+local PULLED_NATIVES = {
+    renderOverlay = { x = 2, width = 4 },
+    drawFilledRect = { x = 1, width = 3 },
+    renderText = { x = 1 },
+}
+
+local rodDrawWrap = nil  -- { class, original, wrapper }: the rod class's onDraw, while this module has it wrapped
+
+-- Where an element whose left edge is at x (screen 0..1) and `width` wide goes, pulled in toward the centre.
+local function pulledIn(x, width)
+    local half = (type(width) == "number" and width or 0) / 2
+    return 0.5 + (x + half - 0.5) * VRCompanion.FISHING_ROD_OVERLAY_PULL - half
+end
+
+-- Notes one element drawn: its span as the rod drew it and as it reached the screen.
+local function noteDrawn(notes, x, pulled, width)
+    local w = type(width) == "number" and width or 0
+    notes.calls = notes.calls + 1
+    notes.from, notes.to = math.min(notes.from or x, x), math.max(notes.to or (x + w), x + w)
+    notes.drawnFrom, notes.drawnTo = math.min(notes.drawnFrom or pulled, pulled), math.max(notes.drawnTo or (pulled + w), pulled + w)
+end
+
+-- Runs the rod's own onDraw with the natives pulling in what it draws, then gives the game its natives back.
+local function drawPulledIn(original, tool, ...)
+    local notes = { calls = 0 }
+    local natives = {}
+    for name, args in pairs(PULLED_NATIVES) do
+        local native = engine(name)
+        if type(native) == "function" then
+            natives[name] = native
+            _G[name] = function(...)
+                local values = table.pack(...)
+                local x = values[args.x]
+                if type(x) == "number" then
+                    local width = args.width ~= nil and values[args.width] or nil
+                    local pulled = pulledIn(x, width)
+                    noteDrawn(notes, x, pulled, width)
+                    values[args.x] = pulled
+                end
+                return native(table.unpack(values, 1, values.n))
+            end
+        end
+    end
+    local results = table.pack(pcall(original, tool, ...))
+    for name, native in pairs(natives) do _G[name] = native end
+    state.fishingRod.draws[VRCompanion:getFishingRodState(tool) or "unknown"] = notes
+    if not results[1] then error(results[2], 0) end
+    return table.unpack(results, 2, results.n)
+end
+
+-- Whether the rod's overlays are pulled in now: the local player's rod, Hand Tools on, outside the 2D view.
+local function pullsRodOverlaysIn(tool)
+    return VRCompanion.handToolsEnabled ~= false and VRCompanion.is2DViewActive ~= true and fishingRodOf(tool) ~= nil
+        and localCarryingPlayer(tool) ~= nil
+end
+
+-- Wraps the onDraw of the rod's specialization class. A class already wrapped is left as it is.
+local function wrapRodDraw(tool)
+    local _, entry = fishingRodOf(tool)
+    local class = entry ~= nil and specializationClass(tool, entry.useHandlerSpecialization) or nil
+    if class == nil or type(class.onDraw) ~= "function" then return end
+    if rodDrawWrap ~= nil and rodDrawWrap.class == class and class.onDraw == rodDrawWrap.wrapper then return end
+    local original = class.onDraw
+    local wrapper = function(drawn, ...)
+        if pullsRodOverlaysIn(drawn) then return drawPulledIn(original, drawn, ...) end
+        return original(drawn, ...)
+    end
+    rodDrawWrap = { class = class, original = original, wrapper = wrapper }
+    class.onDraw = wrapper
+end
+
+-- Takes the onDraw wrap off again, where it is still the function this module put there.
+local function liftRodDrawWrap()
+    if rodDrawWrap == nil then return end
+    if rodDrawWrap.class.onDraw == rodDrawWrap.wrapper then rodDrawWrap.class.onDraw = rodDrawWrap.original end
+    rodDrawWrap = nil
+end
+
+-- The last draw in each of the rod's states, as one text: where the rod drew and where that reached the screen.
+local function rodDrawsText()
+    local parts = {}
+    for _, name in ipairs({ "idle", "charging", "waiting", "bite", "reeling", "caught", "unknown" }) do
+        local notes = state.fishingRod.draws[name]
+        if notes ~= nil then
+            local label = FISHING_ROD_STATE_TEXT[name] or name
+            if notes.calls == 0 then
+                parts[#parts + 1] = label .. ": nothing drawn"
+            else
+                parts[#parts + 1] = string.format("%s: %d drawn, x %.3f to %.3f, on screen %.3f to %.3f", label, notes.calls,
+                    notes.from, notes.to, notes.drawnFrom, notes.drawnTo)
+            end
+        end
+    end
+    return #parts > 0 and table.concat(parts, "; ") or "none yet"
+end
+
 -- Three of the values fn(...) answers, from the `first` on, as { a, b, c }; nil when fn is no function, the call raises or they
 -- are not all numbers.
 local function threeNumbersFrom(first, fn, ...)
@@ -1022,6 +1133,7 @@ local function watchFishingRod(self, dt)
     local rodNotes = state.fishingRod
     local tool = fishingRodOf()
     local player = tool ~= nil and localCarryingPlayer(tool) or nil
+    if player ~= nil and self.handToolsEnabled ~= false then pcall(wrapRodDraw, tool) else liftRodDrawWrap() end
     if player == nil then
         rodNotes.tool, rodNotes.state = nil, nil
         return
@@ -1080,6 +1192,7 @@ local function fishingRodLines(self)
             "fishing rod state: " .. (FISHING_ROD_STATE_TEXT[rodState] or tostring(rodState)),
             "fishing rod last cast: " .. lastCastText(tool),
             "fishing rod last action: " .. lastActionText(tool),
+            "fishing rod screen draw: " .. rodDrawsText(),
         }
     end)
     if ok then return result end
@@ -1328,8 +1441,9 @@ end
 -- wraps), the wrap of its onDraw draws nothing; otherwise it is the game's own function. The game's event dispatch reads onDraw
 -- off the specialization class at every call, so the wrap is on the class (as the chainsaw's update). The overlay is back as the
 -- game draws it when the hand is set down or loses tracking, or the feature is off. Another tool and another player's tool are
--- never in the hand, so they are drawn by the game. The fishing rod's onDraw is NOT wrapped (ADR-0031): its charge meter, waiting
--- hint and "Hook fish" prompt are its only display of the charge and the hook window, and they are no aim crosshair.
+-- never in the hand, so they are drawn by the game. The fishing rod's overlays are NOT held back (ADR-0031): its charge meter, waiting
+-- hint and "Hook fish" prompt are its only display of the charge and the hook window, and they are no aim crosshair. Its onDraw is
+-- only pulled in toward the centre (see "The fishing rod's screen overlays").
 
 -- Whether the tool's centre overlays are held back now: it is in the Tool Hand this module put it in.
 local function drawIsHeldBack(tool)
@@ -1613,6 +1727,7 @@ function VRCompanion:setHandToolsEnabled(enabled, save)
     if not self.handToolsEnabled then
         endTriggerUse()  -- and a spray in progress ends
         liftRodEventWraps()  -- and the rod's secondary event is the game's own
+        liftRodDrawWrap()    -- and so is its draw
     end
     if save and type(self.saveConfiguration) == "function" then
         self:saveConfiguration()
@@ -2193,6 +2308,7 @@ function VRCompanion:resetHandTools()
     endTriggerUse()
     liftWraps()
     liftRodEventWraps()
+    liftRodDrawWrap()
     if tool ~= nil and heldTool() == tool then pcall(returnToTheGame, tool) end
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrHandTools")

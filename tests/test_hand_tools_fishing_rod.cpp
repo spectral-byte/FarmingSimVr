@@ -584,6 +584,88 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsChargeMeterWaitingHintAndHo
     EXPECT_NE(Dump().find("centre overlays held back: no"), std::string::npos) << Dump();
 }
 
+// In the headset the reeling minigame sat so far right that it was hard to see (2026-10-18): what the rod draws is pulled in toward
+// the centre of the screen, an element's middle at half its distance from the centre, its width unchanged. Each element as it reached
+// the screen: "what@x".
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WhatTheRodDrawsIsPulledInTowardTheCentreSoTheReelingMinigameIsInViewAndTheCentredOverlaysStay) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.gameNatives = { renderOverlay, drawFilledRect, renderText }
+        function _G.drawnScreen()
+            StubHandTool.draw()
+            local parts = {}
+            for _, e in ipairs(StubHandTool.screen) do table.insert(parts, string.format("%s@%.3f", e.what, e.x)) end
+            return table.concat(parts, " ")
+        end
+        function _G.nativesAreTheGames()
+            return renderOverlay == gameNatives[1] and drawFilledRect == gameNatives[2] and renderText == gameNatives[3]
+        end
+    )luau", "=screen"), 0);
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(5);
+    EXPECT_EQ(EvalLua(L, "drawnScreen()"), "castingChargeOverlay@0.450") << "the charge meter, centred, stays";
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "drawnScreen()"), "Wait for a bite@0.500") << "the hint at the centre stays";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'reeling')", "=reel"), 0);
+    EXPECT_EQ(EvalLua(L, "drawnScreen()"), "reelingTensionBar@0.640 rect@0.645 Reel in@0.640")
+        << "the minigame, drawn at 0.78 to 0.84, is pulled in";
+    EXPECT_EQ(EvalLua(L, "nativesAreTheGames()"), "true") << "the game has its natives back after the rod's draw";
+}
+
+TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsOverlaysAreWhereTheRodDrawsThemWithHandToolsOffInThe2DViewAndForAnotherPlayersRod) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubHandTool.setRodState(rod, 'reeling')
+        function _G.barAt()
+            StubHandTool.draw()
+            return string.format("%.3f", StubHandTool.screen[1].x)
+        end
+    )luau", "=reel"), 0);
+    EXPECT_EQ(EvalLua(L, "barAt()"), "0.640");
+
+    headset.SetHandTracked(kRight, false);
+    FRAMES(1);
+    ASSERT_EQ(WhereTheGamePutsIt(), "true");
+    EXPECT_EQ(EvalLua(L, "barAt()"), "0.640") << "the rod out of the hand: still pulled in, the minigame is on the screen all the same";
+    headset.SetHandTracked(kRight, true);
+    FRAMES(1);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.is2DViewActive = true", "=2d"), 0);
+    EXPECT_EQ(EvalLua(L, "barAt()"), "0.800") << "the 2D view";
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.is2DViewActive = false", "=vr"), 0);
+    EXPECT_EQ(EvalLua(L, "barAt()"), "0.640");
+
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off')", "=off"), 0);
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "barAt()"), "0.800") << "Hand Tools off";
+    EXPECT_EQ(EvalLua(L, "StubHandTool.fishingRodClass.onDraw == StubHandTool.fishingRodOriginalOnDraw"), "true")
+        << "and the rod's draw is the game's own again";
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'on')", "=on"), 0);
+    FRAMES(1);
+
+    EXPECT_EQ(EvalLua(L, "barAt()"), "0.640") << "on again";
+
+    // another player's rod, drawn by the same class while the local player's rod is in the hand
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local pitch = StubScene.newNode("remotePitch", 0, 4, 1.7, 4)
+        _G.remote = setmetatable({ isOwner = false, camera = { isFirstPerson = true, pitchNode = pitch } }, { __index = _G.Player })
+        _G.remoteRod = StubHandTool.fishingRod(remote)
+        remoteRod.isHeld = true
+        remoteRod.carryingPlayer = remote
+        remoteRod:attachTool()
+        StubHandTool.setRodState(remoteRod, 'reeling')
+    )luau", "=holdRemoteRod"), 0);
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, R"luau((function()
+        StubHandTool.screen = {}
+        StubHandTool.fishingRodClass.onDraw(remoteRod)
+        return string.format("%.3f", StubHandTool.screen[1].x)
+    end)())luau"), "0.800") << "another player's rod";
+}
+
 // ---- Tuning and diagnostics -------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsFishingRodTest, VrHandToolOffsetFishingRodMovesAndTurnsTheRodInTheHandAndResetPutsItBack) {

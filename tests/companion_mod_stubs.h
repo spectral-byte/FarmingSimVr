@@ -1406,7 +1406,7 @@ inline constexpr const char* kStubHandTool = R"luau(
     -- game's event dispatch). A tool's onDraw records what it rendered with StubHandTool.render(tool, overlay).
     function StubHandTool.render(tool, overlay) table.insert(StubHandTool.rendered, { tool = tool, overlay = overlay }) end
     function StubHandTool.draw()
-        StubHandTool.rendered = {}
+        StubHandTool.rendered, StubHandTool.screen = {}, {}
         for _, tool in ipairs(StubHandTool.tools) do
             if tool.isHeld and tool.carryingPlayer ~= nil then
                 for _, drawer in ipairs(StubHandTool.drawers) do drawer(tool) end
@@ -3025,7 +3025,16 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
     local SPEC_NAME = "pdlc_highlandsFishingPack.fishingRod"
     local SPEC = "spec_" .. SPEC_NAME
     StubHandTool.fishingRods, StubHandTool.casts = {}, {}
-    local stateNames = {}  -- a state table -> its name (the stub's own knowledge; the tables carry no name)
+    local stateNames = {}
+
+    -- The game's 2D natives, looked up as globals at every call (as the DLC's scripts and Overlay:render call them). Each notes
+    -- what reached the screen in StubHandTool.screen: { what (the overlay, "rect" or the text), x, width (0 for text) }.
+    StubHandTool.screen = {}
+    function _G.renderOverlay(id, x, y, width, height)
+        table.insert(StubHandTool.screen, { what = tostring(id), x = x, width = width })
+    end
+    function _G.drawFilledRect(x, y, width, height, ...) table.insert(StubHandTool.screen, { what = "rect", x = x, width = width }) end
+    function _G.renderText(x, y, size, text) table.insert(StubHandTool.screen, { what = tostring(text), x = x, width = 0 }) end  -- a state table -> its name (the stub's own knowledge; the tables carry no name)
     local reelHeld = {}    -- a rod -> its reel is held (pressed and not yet released)
 
     function StubHandTool.rodSpec(tool) return tool[SPEC] end
@@ -3218,13 +3227,27 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
             end
         end
 
-        -- the draw: the charge meter, the waiting hint and the "Hook fish" prompt, at the centre of the view
+        -- the draw: the charge meter, the waiting hint and the "Hook fish" prompt, at the centre of the view, each also put on the
+        -- screen with the game's 2D natives (StubHandTool.screen); and while reeling a minigame far to the right (the headset showed
+        -- one there; its shape here is made up: a tension bar, its fill and a hint)
         function Class.onDraw(self)
             local name = stateNames[self[SPEC].state]
-            if name == "charging" then StubHandTool.render(self, "castingChargeOverlay")
-            elseif name == "waiting" then StubHandTool.render(self, "waitForBiteOverlay")
-            elseif name == "bite" then StubHandTool.render(self, "hookFishOverlay") end
+            if name == "charging" then
+                StubHandTool.render(self, "castingChargeOverlay")
+                renderOverlay("castingChargeOverlay", 0.45, 0.45, 0.10, 0.02)
+            elseif name == "waiting" then
+                StubHandTool.render(self, "waitForBiteOverlay")
+                renderText(0.5, 0.40, 0.02, "Wait for a bite")
+            elseif name == "bite" then
+                StubHandTool.render(self, "hookFishOverlay")
+                renderOverlay("hookFishOverlay", 0.47, 0.45, 0.06, 0.04)
+            elseif name == "reeling" then
+                renderOverlay("reelingTensionBar", 0.80, 0.30, 0.04, 0.40)
+                drawFilledRect(0.805, 0.35, 0.03, 0.20, 1, 0, 0, 1)
+                renderText(0.78, 0.25, 0.015, "Reel in")
+            end
         end
+        StubHandTool.fishingRodOriginalOnDraw = Class.onDraw
 
         if not StubHandTool.fishingRodUpdaterAdded then
             StubHandTool.fishingRodUpdaterAdded = true
