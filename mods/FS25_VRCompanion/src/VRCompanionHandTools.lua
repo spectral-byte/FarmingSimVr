@@ -284,7 +284,7 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
         position = { x = 0.03, y = 0.009, z = -0.033 },
         rotation = { x = 0.0, y = 0.0, z = -0.7071068, w = 0.7071068 },
     },
-    -- The fishing rod runs along the tool's +Z from its root to its tip (UNCERTAIN, see HAND_TOOL_POINTING_AXES). Held like the
+    -- The fishing rod runs along the tool's +X from its root to its tip (see HAND_TOOL_POINTING_AXES). Held like the
     -- flashlight, through the fist with the tip out between the index finger and the thumb, the reel below. The first guess put the
     -- hand on the root itself (the DLC's i3d is packed and the probe dump, #125, names the rod's `handNode` without its position);
     -- these numbers were fitted in the headset (vrHandToolOffset fishingrod).
@@ -361,12 +361,12 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
         reachBehind = 0.5,
         touchReach = 0.25,
     },
-    -- Fishing rod: from the rod's root along its +Z, toward the tip, with no `reachBehind` (ADR-0031). The cast should land the way
-    -- the rod points. UNCERTAIN until checked in the headset: the axis is a first guess (the game's tools point along +Z; the DLC's
-    -- i3d is packed), and whether the DLC aims its cast with the look ray at all.
+    -- Fishing rod: from the rod's root along its +X, toward the tip, with no `reachBehind` (ADR-0031); the DLC aims its cast with
+    -- the look ray. The first guess was +Z, as the game's tools: in the headset (#140) the cast then landed 90 degrees to the right of
+    -- where the rod pointed, and the handle offset fitted there turns the rod's +X onto the way the closed fingers' thumb points.
     fishingrod = {
         node = function(tool) return tool.rootNode end,
-        direction = { x = 0.0, y = 0.0, z = 1.0 },
+        direction = { x = 1.0, y = 0.0, z = 0.0 },
     },
 }
 

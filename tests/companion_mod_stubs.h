@@ -3315,18 +3315,18 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
         tool.specializationNames = { "storable", SPEC_NAME }
         tool.specializations = { StubHandTool.storableClass, Class }
 
-        -- the nodes
+        -- the nodes: the rod lies along its +X, root to tip (the headset, #140: the cast followed a +Z ray 90 degrees off the rod)
         local root = tool.rootNode
         local model = StubScene.newNode("fishingRod", root, 0, 0, 0)
         local bones = StubScene.newNode("bodyBoneJoint", model, 0, 0, 0)
-        local handle = StubScene.newNode("handleJoint", bones, 0.05, -0.06, 0.25)
-        local yoke = StubScene.newNode("yokeJoint", bones, 0, -0.05, 0.25)
+        local handle = StubScene.newNode("handleJoint", bones, 0.25, -0.06, 0.05)
+        local yoke = StubScene.newNode("yokeJoint", bones, 0.25, -0.05, 0)
         local bail = StubScene.newNode("bailJoint", yoke, 0, -0.02, 0)
-        local spool = StubScene.newNode("spoolJoint", bones, 0, -0.06, 0.27)
-        local segment = StubScene.newNode("segment01Joint", bones, 0, 0, 0.6)
-        local tip = StubScene.newNode("tipLine", segment, 0, 0, 1.3)
+        local spool = StubScene.newNode("spoolJoint", bones, 0.27, -0.06, 0)
+        local segment = StubScene.newNode("segment01Joint", bones, 0.6, 0, 0)
+        local tip = StubScene.newNode("tipLine", segment, 1.3, 0, 0)
         StubScene.newNode("body", model, 0, 0, 0)
-        tool.handNode = StubScene.newNode("handNode", model, 0, -0.01, 0.12)
+        tool.handNode = StubScene.newNode("handNode", model, 0.12, -0.01, 0)
         delete(tool.firstPersonNode)  -- the common tool's; the rod's is below its model
         tool.firstPersonNode = StubScene.newNode("firstPersonNode", model, 0, 0, 0)
         local ropeFrame = StubScene.newNode("ropeReferenceFrame", root, 0, 0, 0)
