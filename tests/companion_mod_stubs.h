@@ -2989,7 +2989,7 @@ inline constexpr const char* kStubHandToolHorseBrush = R"luau(
 //     tipLinePhysicsHelper, handle (handleJoint), rotor (yokeJoint), spool (spoolJoint), bail (bailJoint), mesh,
 //     activateActionId / activateActionSecondaryId
 //   The nodes: fishingRodRoot -> fishingRod -> bodyBoneJoint -> handleJoint, yokeJoint -> bailJoint, spoolJoint, segment01Joint
-//   -> tipLine (the rod's tip, 1.9 m along the root's +Z); fishingRod -> body, handNode (the game's third person hold, a little up
+//   -> tipLine (the rod's tip, 1.9 m along the root's +X; the reel below, at -Y); fishingRod -> body, handNode (the game's third person hold, a little up
 //   the handle from the root), firstPersonNode; fishingRodRoot -> ropeReferenceFrame -> rope_10_100 ...; the bobber is linked to
 //   the world. tool.handNode is the handNode (the stub's own guess: the i3d is in the packed DLC).
 //   tool.actionEvents: ACTIVATE_HANDTOOL -> onActivateAction and ACTIVATE_HANDTOOL_SECONDARY -> onActivateSecondaryAction, both
@@ -3020,7 +3020,8 @@ inline constexpr const char* kStubHandToolHorseBrush = R"luau(
 // StubHandTool.setRodState(tool, name)   puts the rod straight into a state, with the line and the bend that go with it
 // StubHandTool.biteRod(tool)   a fish bites (waiting -> bite)
 // StubHandTool.setFishPull(tool, pull)   how hard the fish pulls while reeling (0..1)
-// StubHandTool.rodRay(tool) -> x, y, z, dirX, dirY, dirZ   the rod's root and the way to its tip, in the world
+// StubHandTool.rodFaceRay(tool) -> x, y, z, dirX, dirY, dirZ   the rod's root and the way its face points, in the world: square
+//   to the rod, toward the side its reel hangs on (the way the tip swings in a cast)
 // StubHandTool.pressSecondaryBinding(tool, inputValue)   the game's own ACTIVATE_HANDTOOL_SECONDARY binding
 // StubHandTool.fishingRods   every rod made; StubHandTool.casts   every cast
 inline constexpr const char* kStubHandToolFishingRod = R"luau(
@@ -3315,7 +3316,7 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
         tool.specializationNames = { "storable", SPEC_NAME }
         tool.specializations = { StubHandTool.storableClass, Class }
 
-        -- the nodes: the rod lies along its +X, root to tip (the headset, #140: the cast followed a +Z ray 90 degrees off the rod)
+        -- the nodes: the rod lies along its +X, root to tip, the reel below it at -Y (the headset, #140: the rod's +Z is its side)
         local root = tool.rootNode
         local model = StubScene.newNode("fishingRod", root, 0, 0, 0)
         local bones = StubScene.newNode("bodyBoneJoint", model, 0, 0, 0)
@@ -3387,10 +3388,14 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
 
     function StubHandTool.pressSecondaryBinding(tool, inputValue) tool:activateSecondaryAction(nil, inputValue) end
 
-    function StubHandTool.rodRay(tool)
+    function StubHandTool.rodFaceRay(tool)
         local x, y, z = getWorldTranslation(tool.rootNode)
         local tx, ty, tz = getWorldTranslation(tool[SPEC].tipLine)
-        local dx, dy, dz = normalize(tx - x, ty - y, tz - z)
+        local ax, ay, az = normalize(tx - x, ty - y, tz - z)
+        local sx, sy, sz = getWorldTranslation(tool[SPEC].spool)
+        local vx, vy, vz = sx - x, sy - y, sz - z
+        local along = vx * ax + vy * ay + vz * az
+        local dx, dy, dz = normalize(vx - along * ax, vy - along * ay, vz - along * az)
         return x, y, z, dx, dy, dz
     end
 )luau";

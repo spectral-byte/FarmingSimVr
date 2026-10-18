@@ -361,12 +361,14 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
         reachBehind = 0.5,
         touchReach = 0.25,
     },
-    -- Fishing rod: from the rod's root along its +X, toward the tip, with no `reachBehind` (ADR-0031); the DLC aims its cast with
-    -- the look ray. The first guess was +Z, as the game's tools: in the headset (#140) the cast then landed 90 degrees to the right of
-    -- where the rod pointed, and the handle offset fitted there turns the rod's +X onto the way the closed fingers' thumb points.
+    -- Fishing rod: from the rod's root the way its face points, its -Y, square to the rod and toward the reel, with no `reachBehind`
+    -- (ADR-0031). The DLC throws its cast along the look ray, so this is the way a real cast goes: the tip swings toward the face,
+    -- and a rod held upright casts straight ahead. The handle offset fitted in the headset lays the rod's +X (root to tip) along the
+    -- fist toward the thumb and its +Y onto the back of the hand. Found in the headset (#140): +Z, the game's tools' axis, is the
+    -- rod's side (the cast went 90 degrees to the right); +X, the rod's length, threw an upright rod's cast into the ground.
     fishingrod = {
         node = function(tool) return tool.rootNode end,
-        direction = { x = 1.0, y = 0.0, z = 0.0 },
+        direction = { x = 0.0, y = -1.0, z = 0.0 },
     },
 }
 

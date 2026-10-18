@@ -22,7 +22,7 @@ using namespace hand_tools_test;
 // the world.
 //   isWhereTheGamePutsIt(tool)   the tool is below the camera's pitch node at the game's placement
 //   isInTheHand(tool, which)     the tool hangs below the Virtual Hand
-//   rodRay()                     the rod's root and the way to its tip
+//   rodFaceRay()                 the rod's root and the way its face points (square to the rod, the reel's side)
 //   headRay()                    the first person camera: the ray the game casts without a Hand Tool
 //   targeterRay()                what the targeter cast in the last game frame
 //   sameRay(a, b)                the two rays are the same
@@ -35,7 +35,7 @@ constexpr const char* kFishingRodHelpers = R"luau(
         return math.abs(x - p.x) < 1e-6 and math.abs(y - p.y) < 1e-6 and math.abs(z - p.z) < 1e-6
     end
     function _G.isInTheHand(tool, which) return isBelow(tool.rootNode, handHolder(which)) end
-    function _G.rodRay() return { StubHandTool.rodRay(rod) } end
+    function _G.rodFaceRay() return { StubHandTool.rodFaceRay(rod) } end
     function _G.headRay() return { StubHandTool.originalGetLookRay(foot.player) } end
     function _G.targeterRay() return { StubHandTool.lastRay() } end
     function _G.sameRay(a, b)
@@ -213,16 +213,17 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheLeftHandChosenAsTheToolHand
 
 // ---- The look ray ---------------------------------------------------------------------------------------------------------
 
-TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodInTheToolHandTheTargetersRayRunsFromItsRootTowardItsTipAndIsTheHeadsOtherwise) {
+TEST_F(VirtualGamepadHandToolsFishingRodTest, WithTheRodInTheToolHandTheTargetersRayRunsFromItsRootTheWayItsFacePointsAndIsTheHeadsOtherwise) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     FRAMES(2);
-    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), rodRay())"), "true")
-        << "from the rod's root along the rod, with nothing behind it: " << EvalLua(L, "rayText(targeterRay())") << " against " << EvalLua(L, "rayText(rodRay())");
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), rodFaceRay())"), "true")
+        << "from the rod's root the way its face points, with nothing behind it: " << EvalLua(L, "rayText(targeterRay())") << " against "
+        << EvalLua(L, "rayText(rodFaceRay())");
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "false");
 
     AimTheHand(kRight, 0.45f, 0.10f, -0.50f);
     FRAMES(2);
-    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), rodRay())"), "true") << "it follows the hand";
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), rodFaceRay())"), "true") << "it follows the hand";
 
     headset.SetHandTracked(kRight, false);
     FRAMES(2);
@@ -253,14 +254,14 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, APullCallsTheRodsHandlerOnceWith1H
     EXPECT_GT(Number(L, "StubHandTool.rodSpec(rod).state.angleScale"), 0.5) << "the cast charges while the trigger is held";
     EXPECT_EQ(Pad().bRightTrigger, 0);
 
-    ASSERT_EQ(RunLuauChunk(L, "_G.rayAtTheCast = rodRay()", "=rayAtTheCast"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "_G.rayAtTheCast = rodFaceRay()", "=rayAtTheCast"), 0);
     headset.SetHandInputs(kRight, Trigger(0.0f));
     FRAMES(1);
     EXPECT_EQ(UseCalls(), "1,0") << "the let-go: once, as the game's release";
     EXPECT_EQ(RodState(), "waiting") << "the cast is thrown";
     EXPECT_EQ(Number(L, "#StubHandTool.casts"), 1.0);
     EXPECT_EQ(EvalLua(L, "sameRay(StubHandTool.casts[1].ray, rayAtTheCast)"), "true")
-        << "thrown along the rod: " << EvalLua(L, "rayText(StubHandTool.casts[1].ray)");
+        << "thrown the way the rod's face points: " << EvalLua(L, "rayText(StubHandTool.casts[1].ray)");
     FRAMES(10);
     EXPECT_EQ(UseCalls(), "1,0") << "and nothing while the trigger stays let go";
 }
