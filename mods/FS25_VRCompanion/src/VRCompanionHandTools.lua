@@ -284,12 +284,12 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
         rotation = { x = 0.0, y = 0.0, z = -0.7071068, w = 0.7071068 },
     },
     -- The fishing rod runs along the tool's +Z from its root to its tip (UNCERTAIN, see HAND_TOOL_POINTING_AXES). Held like the
-    -- flashlight, through the fist with the tip out between the index finger and the thumb, the reel below. A FIRST GUESS: the
-    -- DLC's i3d is packed and the probe dump (#125) names the rod's `handNode` (the third person hold) without its position, so the
-    -- hand is put on the root itself until the headset round fits it (vrHandToolOffset fishingrod).
+    -- flashlight, through the fist with the tip out between the index finger and the thumb, the reel below. The first guess put the
+    -- hand on the root itself (the DLC's i3d is packed and the probe dump, #125, names the rod's `handNode` without its position);
+    -- these numbers were fitted in the headset (vrHandToolOffset fishingrod).
     fishingrod = {
-        position = { x = 0.0, y = 0.0, z = 0.0 },
-        rotation = { x = 0.0, y = 0.9238795, z = -0.3826834, w = 0.0 },
+        position = { x = 0.0, y = 0.0, z = -0.1 },
+        rotation = { x = 0.0, y = 0.7071068, z = 0.0, w = 0.7071068 },
     },
 }
 
