@@ -297,6 +297,26 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, WithTheTriggerPulledAndNoTreeUnderTh
     EXPECT_EQ(State(), "idle");
 }
 
+// The Tool Hand does not stay "in use" holding a tool (a hand lying still for 3 s is set down); a held-still pull must not drop the
+// chainsaw.
+TEST_F(VirtualGamepadHandToolsChainsawTest, AHeldStillTriggerDoesNotDropTheChainsawAndAfterLettingGoTheHandIsSetDownAsAlways) {
+    StartWithChainsawInTheRightHand();
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    for (int second = 0; second < 6; ++second) {
+        AdvanceGameTime(1000);
+        FRAMES(1);
+    }
+    EXPECT_TRUE(True("VRCompanion:isHandHoldingHandTool(1)")) << "six seconds of holding the trigger with a still hand";
+
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    AdvanceGameTime(3100);
+    FRAMES(1);
+    EXPECT_FALSE(True("VRCompanion:isHandHoldingHandTool(1)")) << "set down after three still seconds without the trigger";
+    EXPECT_TRUE(True("isBelow(saw.rootNode, foot.cam.pitchNode)")) << "and the chainsaw is where the game puts it";
+}
+
 // The three ways a Hand Tool is not in a tracked Tool Hand, and the chainsaw is the game's: the head's tree is targeted, the model
 // and the plane face the camera, and the game's own binding cuts.
 class VirtualGamepadHandToolsChainsawAsInTheGameTest : public VirtualGamepadHandToolsChainsawTest {

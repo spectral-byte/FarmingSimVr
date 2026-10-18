@@ -3,13 +3,15 @@
 --
 -- Puts the player's Hand Tools into the Tool Hand (ADR-0029). In first person on foot the game links a held Hand Tool to the
 -- player camera's pitch node (HandTool:attachToolToCamera), so it moves with the head. While the Tool Hand is tracked, this
--- module links a SUPPORTED Hand Tool (recognised by its spec_ table: the pressure washer lance, the flashlight, the chainsaw, the spray can, the horse brush)
+-- module links a SUPPORTED Hand Tool (recognised by its spec_ table: the pressure washer lance, the flashlight, the chainsaw, the spray can, the horse brush,
+-- the Highlands Fishing DLC's fishing rod, ADR-0031)
 -- into the Tool Hand's Virtual Hand instead; when the Tool Hand is set down or loses tracking, or the feature is off, the tool
 -- is where the game puts it again. Every other Hand Tool (other mods' tools) and every other player's tool in
 -- a multiplayer session is left exactly as the game has it. Terms (Hand Tool, Tool Hand): CONTEXT.md.
 --
 -- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
--- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The look ray |
+-- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The fishing rod's
+-- state | Keeping the Tool Hand in use | The fishing rod in the diagnostics | The fishing rod's screen overlays | The look ray |
 -- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The flashlight's beam | No screen-centre overlays (the
 -- spray can's, the horse brush's and the chainsaw's onDraw) | The horse brush's touch (the touching cap) | Haptics | The spray can's feedback (target tick, marker type message) | Update |
 -- Diagnostics, console commands, reset.
@@ -29,23 +31,32 @@
 --   VRCompanion.HAND_TOOL_POINTING_AXES                 per tool kind: the node a tool aims from and the axis it aims along
 --   VRCompanion:isHandHoldingHandTool(hand) -> boolean  the hand is the Tool Hand and a supported Hand Tool is in it now
 --   VRCompanion:getHeldHandTool() -> tool, kind         the Hand Tool the player holds and its supported kind (nil kind: unsupported)
---   VRCompanion:isHandToolTriggerDown(hand) -> boolean  the hand's trigger is using its Hand Tool now (Motion Controllers keep that hand in use)
+--   VRCompanion:isHandKeptInUseByHandTool(hand) -> boolean  the hand's Hand Tool keeps it in use however still it is held (its
+--                                                       trigger is using the tool now, or the fishing rod in it has its line out);
+--                                                       Motion Controllers keep that hand in use
 --   VRCompanion:getHandToolRay([player]) -> x, y, z, dirX, dirY, dirZ   the tool's pointing ray in the world while a supported
 --                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's)
 --   VRCompanion:getHandToolLookRay([player]) -> x, y, z, dirX, dirY, dirZ   that ray with its origin moved back along the axis by the
 --                                                       tool's reachBehind field (the spray can's and the horse brush's 0.5 m); this is what Player:getLookRay
 --                                                       answers then, so what the targeter casts
 --   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   nil when the tool (default: the one held) is no chainsaw
+--   VRCompanion:getFishingRodState([tool]) -> state, lineOut, bend   the fishing rod's state ("idle" | "charging" | "waiting" |
+--                                                       "bite" | "reeling" | "caught" | "unknown"), whether its line is out and its
+--                                                       rodBendFactor; "unknown", false, 0 when its spec cannot be read or
+--                                                       tells no state (reeling needs the rod bent); nil when the
+--                                                       tool (default: the one held) is no fishing rod. The only reader of the rod's spec
 --   VRCompanion:getChainsawCutRoll(tool) -> radians|nil the wrist's roll about the bar while the chainsaw is in the tracked Tool Hand
 --                                                       (nil: leave the roll to the game's roll action)
---   VRCompanion.HAND_TOOL_HAPTICS / HAND_TOOL_HAPTIC_PULSES / _INTERVAL_MS   per tool kind: what the Tool Hand feels now, the pulses
---                                                       (ms, strength) and how often they are requested again; no entry: silent
+--   VRCompanion.HAND_TOOL_HAPTICS / HAND_TOOL_HAPTIC_PULSES / _INTERVAL_MS   per tool kind: what the Tool Hand feels now (a level,
+--                                                       and optionally its strength), the pulses (ms, strength, optional intervalMs)
+--                                                       and how often they are requested again; no entry: silent
 --   VRCompanion:updateHandTools(dt)                     once per update, called by updateMotionControllers on every path
 --   VRCompanion:placeHandToolsForRender()               before every rendered frame, called by placeVirtualHandsForRender
 --   VRCompanion:getHandToolsDiagnostics() -> string     the state of Hand Tools, one line
 --   VRCompanion:registerHandToolsConsoleCommands() / resetHandTools()   map load / unload
---   Console: vrHandTools [on|off], vrToolHand [left|right], vrHandToolsDiagnostics (also describes an unsupported held tool in
---     the log, "Hand Tool probe:" lines, ADR-0030; the one-line answer is unchanged),
+--   Console: vrHandTools [on|off], vrToolHand [left|right], vrHandToolsDiagnostics (also describes the fishing rod in the Tool
+--     Hand in the log, "fishing rod" lines: its state, last cast and last action, ADR-0031; and an unsupported held tool,
+--     "Hand Tool probe:" lines, ADR-0030; the one-line answer is unchanged),
 --     vrHandToolOffset <tool> <nudge|turn|reset> (tuning HAND_TOOL_HANDLE_OFFSETS live; not saved)
 --
 -- Hooks into the rest of the mod (each a single guarded call):
@@ -53,7 +64,7 @@
 --                      Injector offers no hand states, so a tool goes back to the camera); the saved setting, the console
 --                      commands and the reset chain through the Motion Controller functions of the same names. Pointer Hand
 --                      selection never picks a hand that isHandHoldingHandTool in the world (a menu is not the world: either hand
---                      can point), and a hand whose isHandToolTriggerDown stays in use however still it is held
+--                      can point), and a hand that isHandKeptInUseByHandTool stays in use however still it is held
 --   VirtualGamepad     updateHandTools asks takeVirtualGamepadInput(toolHand, "trigger") every update the Tool Hand holds a
 --                      supported tool (the use is made here, so VirtualGamepad needs no hook); false is the held-input handover
 --   VirtualHands       getVirtualHandHolder(hand) is the node a tool is linked below; a hand that isHandHoldingHandTool is
@@ -97,7 +108,18 @@ local function newState()
             typeIndex = nil, -- the marker type index last named
             treeNode = nil,  -- the target tree last ticked for
         },
-        problem = nil,       -- why Hand Tools gave up, once it did (the warning is logged then and never again)
+        fishingRod = {       -- what the diagnostics tell of the fishing rod (see "The fishing rod in the diagnostics")
+            tool = nil,      -- the rod the local player held at the last update
+            state = nil,     -- ... and its state then (getFishingRodState)
+            cast = nil,      -- the last cast: { tool, rod = {dx, dy, dz} | nil, head = {dx, dy, dz} | nil, bobber = {x, y, z} | nil
+                             -- (where it landed), bobberLast = {x, y, z} | nil (where it was at the last update, until it landed) }
+            action = nil,    -- the last action a rod was given: { tool, name = "primary" | "secondary", by = text, value }
+            draws = {},      -- per rod state: its last draw (see drawPulledIn)
+        },
+        problem = nil,      -- why Hand Tools gave up, once it did (the warning is logged then and never again)
+        toolProblems = {},   -- per tool kind: why that tool is left to the game, once it was found reshaped (warned once)
+        checkedTools = setmetatable({}, { __mode = "k" }),  -- the tools toolProblem found as expected (not checked again)
+        fieldsPending = nil, -- { tool, sinceMs }: the held tool whose fields were not yet as expected, since when (game clock)
     }
 end
 
@@ -163,9 +185,17 @@ end
 -- `useHandlerClass` (optional) names the global specialization class to look the handler up on when the tool does not carry it
 -- itself: the game registers some handlers as functions of the tool (the lance's onWashAction) and leaves others on the
 -- specialization class only, called with the tool as `self` by the action event (HandToolChainsaw.onCutAction).
+-- `useHandlerSpecialization` (optional) names the specialization whose class to look the handler up on when that class has no global
+-- name (a DLC's: its scripts run in their own environment): the class is the tool's own, in tool.specializations next to its name
+-- in tool.specializationNames.
 -- `useOnce` (optional) marks a tool whose handler is called once per press and once per release, as the game's action event does
 -- for it (the chainsaw's, registered for trigger up and down), not on every update the input is held (the lance's).
 -- `toggle` (instead of a useHandler) makes the trigger a PRESS: each pull of the trigger calls toggle(tool) once.
+-- `fields` (optional) are what this module reads of a tool whose class it cannot check at map load (a DLC's): each { name, type },
+-- a path in the tool's spec table ("fishingLine.isInitialized") or, with `onTool`, a field of the tool itself. They are checked with
+-- the handler, once per tool (see toolProblem).
+
+local FISHING_ROD_KIND = "fishingrod"
 
 -- The flashlight: a press of the trigger switches it on or off through the flashlight's own switch,
 -- HandToolFlashlight:setFlashlightIsActive (the same call the game's network event makes; no `noEventSend`, so other players see
@@ -192,6 +222,20 @@ local SUPPORTED_TOOLS = {
     -- like the chainsaw's cut handler; it is called every update the trigger is held, then once with 0 when it is let go or the brush
     -- leaves the hand, because the brush's cleaning flag changes only when the handler is called.
     { kind = "horsebrush", label = "horse brush", spec = "spec_horseBrush", useHandler = "onBrushAction", useHandlerClass = "HandToolHorseBrush" },
+    -- The fishing rod (ADR-0031), from the Highlands Fishing DLC. A game without the DLC never holds one. Its ACTIVATE_HANDTOOL handler
+    -- fires on press and release only (#125): held, it charges a cast, let go it throws it, and it hooks and reels the same way, so
+    -- it is `useOnce` like the chainsaw's. The handler is on the DLC's specialization class, which has no global name: it is looked
+    -- up among the rod's own specializations by the specialization's name (`useHandlerSpecialization`). Its fields are what the rod's
+    -- state reader and its diagnostics read (#125; see "The fishing rod's state").
+    { kind = FISHING_ROD_KIND, label = "fishing rod", spec = "spec_pdlc_highlandsFishingPack.fishingRod", useHandler = "onActivateAction",
+      useHandlerSpecialization = "pdlc_highlandsFishingPack.fishingRod", useOnce = true,
+      fields = {
+          { name = "state", type = "table" },
+          { name = "fishingLine", type = "table" },
+          { name = "fishingLine.isInitialized", type = "boolean" },
+          { name = "rodBendFactor", type = "number" },
+          { name = "getBobberPosition", type = "function", onTool = true },
+      } },
 }
 
 -- WHERE EACH TOOL SITS IN THE HAND: the pose of the tool's ROOT node in the Virtual Hand's grip frame (the frame of the
@@ -239,6 +283,14 @@ VRCompanion.HAND_TOOL_HANDLE_OFFSETS = {
     horsebrush = {
         position = { x = 0.03, y = 0.009, z = -0.033 },
         rotation = { x = 0.0, y = 0.0, z = -0.7071068, w = 0.7071068 },
+    },
+    -- The fishing rod runs along the tool's +X from its root to its tip (see HAND_TOOL_POINTING_AXES). Held like the
+    -- flashlight, through the fist with the tip out between the index finger and the thumb, the reel below. The first guess put the
+    -- hand on the root itself (the DLC's i3d is packed and the probe dump, #125, names the rod's `handNode` without its position);
+    -- these numbers were fitted in the headset (vrHandToolOffset fishingrod).
+    fishingrod = {
+        position = { x = 0.0, y = 0.0, z = -0.1 },
+        rotation = { x = 0.0, y = 0.7071068, z = 0.0, w = 0.7071068 },
     },
 }
 
@@ -309,6 +361,15 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
         reachBehind = 0.5,
         touchReach = 0.25,
     },
+    -- Fishing rod: from the rod's root the way its face points, its -Y, square to the rod and toward the reel, with no `reachBehind`
+    -- (ADR-0031). The DLC throws its cast along the look ray, so this is the way a real cast goes: the tip swings toward the face,
+    -- and a rod held upright casts straight ahead. The handle offset fitted in the headset lays the rod's +X (root to tip) along the
+    -- fist toward the thumb and its +Y onto the back of the hand. Found in the headset (#140): +Z, the game's tools' axis, is the
+    -- rod's side (the cast went 90 degrees to the right); +X, the rod's length, threw an upright rod's cast into the ground.
+    fishingrod = {
+        node = function(tool) return tool.rootNode end,
+        direction = { x = 0.0, y = -1.0, z = 0.0 },
+    },
 }
 
 -- The supported kind of a Hand Tool and its entry, or nil for an unsupported one.
@@ -318,6 +379,35 @@ local function supportedKind(tool)
         if tool[entry.spec] ~= nil then return entry.kind, entry end
     end
     return nil
+end
+
+-- The class of the tool's specialization called `name` (the game keeps the classes in tool.specializations, in step with their
+-- names in tool.specializationNames), or nil.
+local function specializationClass(tool, name)
+    local names, classes = tool.specializationNames, tool.specializations
+    if type(names) ~= "table" or type(classes) ~= "table" then return nil end
+    for index, specName in ipairs(names) do
+        if specName == name then
+            local class = classes[index]
+            return type(class) == "table" and class or nil
+        end
+    end
+    return nil
+end
+
+-- The function the game's ACTIVATE_HANDTOOL binding calls for the tool (SUPPORTED_TOOLS[].useHandler): the tool's own, else the one
+-- on its specialization class (by global name, or among the tool's specializations). Whatever is there, function or not; nil for none.
+local function useHandlerOf(tool, entry)
+    local handler = tool[entry.useHandler]
+    if type(handler) ~= "function" and entry.useHandlerClass ~= nil then
+        local class = engine(entry.useHandlerClass)  -- a handler the game keeps on the specialization class only
+        handler = type(class) == "table" and class[entry.useHandler] or nil
+    end
+    if type(handler) ~= "function" and entry.useHandlerSpecialization ~= nil then
+        local class = specializationClass(tool, entry.useHandlerSpecialization)  -- a class with no global name
+        handler = class ~= nil and class[entry.useHandler] or nil
+    end
+    return handler
 end
 
 -- ---- Wraps --------------------------------------------------------------------------------------------------------------
@@ -439,6 +529,83 @@ local function checkWraps()
     return nil
 end
 
+-- A TOOL WHOSE CLASS HAS NO GLOBAL NAME (the fishing rod's, a DLC's: SUPPORTED_TOOLS[].useHandlerSpecialization) cannot be checked
+-- at map load: its class is only reachable from a tool. It is checked when the local player's tool would go into the Tool Hand,
+-- once per tool: its use handler, and the fields this module reads of it (SUPPORTED_TOOLS[].fields). A tool found reshaped (its use
+-- handler missing or not the shape the trigger calls, a field missing or of another type) is left to the game for the rest of the
+-- map, with ONE warning; the other Hand Tools are unaffected. A tool found as expected is not checked again: a read of it that fails
+-- later is the reader's to answer (the rod's state is then "unknown"). A game without the DLC never holds one, so nothing is
+-- checked or warned.
+local USE_HANDLER_SHAPE = { parameters = 3, describe = "(tool, action, inputValue)" }
+
+-- The value at a dotted path ("fishingLine.isInitialized") below a table, or nil where the path breaks off. May raise (a reshaped
+-- table can): toolFieldsProblem reads guarded.
+local function valueAt(t, path)
+    for key in string.gmatch(path, "[^%.]+") do
+        if type(t) ~= "table" then return nil end
+        t = t[key]
+    end
+    return t
+end
+
+-- Why one of the tool's fields is not as this module reads it, or nil.
+local function toolFieldsProblem(tool, entry)
+    if entry.fields == nil then return nil end
+    local spec = tool[entry.spec]
+    for _, field in ipairs(entry.fields) do
+        local where = field.onTool and (entry.useHandlerSpecialization or entry.kind) or entry.spec
+        local ok, value = pcall(valueAt, field.onTool and tool or spec, field.name)
+        local problem = nil
+        if not ok then
+            problem = "reading it raised (" .. tostring(value) .. ")"
+        elseif value == nil then
+            problem = "it is missing"
+        elseif type(value) ~= field.type then
+            problem = "it is a " .. type(value) .. ", not a " .. field.type
+        end
+        if problem ~= nil then return where .. "." .. field.name .. ": " .. problem end
+    end
+    return nil
+end
+
+-- How long, held, a tool's fields may be missing or of another type before the tool is found reshaped. The game attaches the real
+-- rod before it has a state (spec.state is nil until its first update while held; the headset, 2026-10-18), so a field found
+-- wrong at the attach is not yet a reshape; the tool is in the hand meanwhile and its reader answers "unknown".
+local TOOL_FIELDS_GRACE_MS = 5000
+
+-- Why the tool is left to the game, or nil when it is as expected (or is a tool whose functions checkWraps checks). nowMs is the
+-- game clock, for the fields' grace.
+local function toolProblem(tool, entry, nowMs)
+    if entry.useHandlerSpecialization == nil and entry.fields == nil then return nil end
+    local known = state.toolProblems[entry.kind]
+    if known ~= nil then return known end
+    if state.checkedTools[tool] then return nil end
+    local problem = nil
+    if entry.useHandlerSpecialization ~= nil then
+        problem = shapeProblem(USE_HANDLER_SHAPE, useHandlerOf(tool, entry))
+        if problem ~= nil then problem = entry.useHandlerSpecialization .. "." .. entry.useHandler .. ": " .. problem end
+    end
+    if problem == nil then
+        problem = toolFieldsProblem(tool, entry)
+        local pending = state.fieldsPending
+        if problem ~= nil and (pending == nil or pending.tool ~= tool) then
+            state.fieldsPending = { tool = tool, sinceMs = nowMs }
+            return nil
+        elseif problem ~= nil and nowMs - pending.sinceMs < TOOL_FIELDS_GRACE_MS then
+            return nil
+        end
+        state.fieldsPending = nil
+    end
+    if problem == nil then
+        state.checkedTools[tool] = true
+        return nil
+    end
+    state.toolProblems[entry.kind] = problem
+    print("[FS25_VR] [Warning] Hand Tools: the " .. entry.label .. " is left to the game: " .. problem .. ". The " .. entry.label
+        .. " is unchanged.")
+    return problem
+end
+
 -- ---- Placement ----------------------------------------------------------------------------------------------------------
 
 function VRCompanion:getToolHand()
@@ -451,6 +618,7 @@ local function heldTool()
     if tool == nil then return nil end
     if type(tool.getIsHeld) ~= "function" or tool.rootNode == nil or not tool:getIsHeld() then
         state.tool = nil
+        state.fieldsPending = nil  -- the grace starts over when a tool is next held
         return nil
     end
     return tool
@@ -500,12 +668,15 @@ local function toolHandFor(self, tool)
     if state.problem ~= nil then return nil, "Hand Tools gave up (" .. state.problem .. ")" end
     if state.givingBack then return nil, "the tool is being given back to the game" end
     if tool == nil then return nil, "no Hand Tool is held" end
-    if supportedKind(tool) == nil then return nil, "the Hand Tool is not supported" end
+    local kind, entry = supportedKind(tool)
+    if kind == nil then return nil, "the Hand Tool is not supported" end
     local player = localCarryingPlayer(tool)
     if player == nil then return nil, "the Hand Tool is not the local player's" end
     if player.camera == nil or player.camera.isFirstPerson ~= true then
         return nil, "not in the first person view"
     end
+    local problem = toolProblem(tool, entry, self:getCurrentTimeMs())
+    if problem ~= nil then return nil, "the " .. entry.label .. " is left to the game (" .. problem .. ")" end
     local hand = self:getToolHand()
     local pose = self:getHandState(hand)
     if pose.tracked ~= true then return nil, "the Tool Hand is not tracked" end
@@ -604,12 +775,11 @@ end
 
 -- Calls the tool's use handler as the game's action event does: callback(self, actionName, inputValue).
 local function callUseHandler(tool, entry, value)
-    local handler = tool[entry.useHandler]
-    if type(handler) ~= "function" and entry.useHandlerClass ~= nil then
-        local class = engine(entry.useHandlerClass)  -- a handler the game keeps on the specialization class only
-        handler = type(class) == "table" and class[entry.useHandler] or nil
-    end
+    local handler = useHandlerOf(tool, entry)
     if type(handler) ~= "function" then return end
+    if entry.kind == FISHING_ROD_KIND then  -- for the diagnostics (see "The fishing rod in the diagnostics")
+        state.fishingRod.action = { tool = tool, name = "primary", by = "the Tool Hand's trigger", value = value }
+    end
     callGuarded(entry, "use handler", handler, tool, "ACTIVATE_HANDTOOL", value)
 end
 
@@ -662,12 +832,505 @@ local function updateTrigger(self)
     end
 end
 
--- Whether the hand's trigger is using its Hand Tool right now. The Tool Hand does not stay "in use" just by holding a tool (it
--- is set down after the in-use timeout like any hand), so Motion Controllers keeps it in use while this is so: a cut or a
--- spray held with a still hand must not drop the tool.
-function VRCompanion:isHandToolTriggerDown(hand)
+-- ---- The fishing rod's state --------------------------------------------------------------------------------------------
+-- The DLC's scripts cannot be read (ADR-0031): the rod's state machine is known from the #125 dump only. spec.state is one of
+-- spec.states, tables with no name, so a state is told by its keys: charging has angleScale, waiting for a bite biteTime, the bite
+-- (the hook window) catchTime, caught bendResetRate, and idle nothing but its fishingRod back reference. The dump never named the
+-- reeling state's keys (it only counted 48), so reeling is told by its other evidence: the line out, none of those keys, and the
+-- rod bent (spec.rodBendFactor above 0). fishingLine.isInitialized says whether the line is out (from the cast until it is in
+-- again), rodBendFactor how far a fish bends the rod (up to about 0.93 while reeling; in the dump also a hundredth while waiting
+-- and about half just after the catch, both told apart by their keys first). With the line out, a state with none of the keys
+-- and the rod straight (the moment of the hook, before the fish pulls, or a state the dump never showed) is "unknown".
+-- This is the ONE place that reads the rod's spec: everything else asks getFishingRodState. A rod whose fields a DLC update renamed
+-- or reshaped never comes into the hand (toolProblem checks them, SUPPORTED_TOOLS[].fields, and gives the rod back with one
+-- warning). Every read is guarded all the same: a field that does not read as expected later, or a read that raises, makes the
+-- state "unknown", which keeps nothing in use and buzzes nothing.
+
+-- The tool (default: the Hand Tool held now) and its SUPPORTED_TOOLS entry when it is a fishing rod; nil otherwise.
+local function fishingRodOf(tool)
+    if tool == nil then tool = heldTool() end
+    local kind, entry = supportedKind(tool)
+    if kind ~= FISHING_ROD_KIND then return nil end
+    return tool, entry
+end
+
+-- The key each recognisable state carries, tried in this order: the first one spec.state has names the state.
+local FISHING_ROD_STATE_KEYS = {
+    { key = "angleScale", state = "charging" },
+    { key = "biteTime", state = "waiting" },
+    { key = "catchTime", state = "bite" },
+    { key = "bendResetRate", state = "caught" },
+}
+
+-- The rod's state, whether its line is out and its bend, read off its spec table; nil when they cannot be read. May raise (a
+-- reshaped table can): getFishingRodState calls it guarded.
+local function readFishingRod(tool, specName)
+    local spec = tool[specName]
+    if type(spec) ~= "table" then return nil end
+    local current, line, bend = spec.state, spec.fishingLine, spec.rodBendFactor
+    if type(current) ~= "table" or type(line) ~= "table" or type(bend) ~= "number" then return nil end
+    local lineOut = line.isInitialized
+    if type(lineOut) ~= "boolean" then return nil end
+    for _, known in ipairs(FISHING_ROD_STATE_KEYS) do
+        if current[known.key] ~= nil then return known.state, lineOut, bend end
+    end
+    if lineOut then
+        if bend > 0 then return "reeling", lineOut, bend end
+        return nil  -- line out with the rod straight: no evidence of reeling
+    end
+    for key in pairs(current) do
+        if key ~= "fishingRod" then return nil end  -- line in, with keys none of the dump's states had
+    end
+    return "idle", lineOut, bend
+end
+
+-- The fishing rod's state: "idle" | "charging" | "waiting" (the line out, no bite yet) | "bite" (the hook window) | "reeling" |
+-- "caught" | "unknown" (the rod's spec cannot be read, or tells no state), then whether its line is out (false when unknown) and its bend factor (0
+-- when unknown). nil when the tool (default: the Hand Tool the local player holds) is no fishing rod.
+function VRCompanion:getFishingRodState(tool)
+    local rod, entry = fishingRodOf(tool)
+    if rod == nil then return nil end
+    local ok, rodState, lineOut, bend = pcall(readFishingRod, rod, entry.spec)
+    if not ok or rodState == nil then return "unknown", false, 0 end
+    return rodState, lineOut, bend
+end
+
+-- ---- Keeping the Tool Hand in use ---------------------------------------------------------------------------------------
+-- The Tool Hand does not stay "in use" just by holding a tool (it is set down after the in-use timeout like any hand), so
+-- Motion Controllers asks this module whether the hand's Hand Tool keeps it in use, however still it is held: while the
+-- hand's trigger is using the tool (a cut or a spray held with a still hand must not drop the tool), and while the fishing rod
+-- in it has its line out (a bite comes 10 to 25 s after the cast, ADR-0031; an unknown state keeps nothing). An untracked hand
+-- is never kept, so losing tracking still gives the tool back.
+-- Answered from where the tool was last linked, not from toolHandFor: that asks whether the hand is in use, which is what this
+-- decides (and a hand once set down has given the tool back, so it would never be kept again).
+
+-- The hand's trigger is using its Hand Tool right now.
+local function isTriggerUsing(hand)
     local use = state.trigger
-    return use.active and use.hand == hand and self:getHandState(hand).tracked == true
+    return use.active and use.hand == hand
+end
+
+-- The fishing rod in the hand's Virtual Hand has its line out.
+local function isLineOutInHand(self, hand)
+    local tool = heldTool()
+    if tool == nil or state.linkedTool ~= tool or state.linkedHand ~= hand then return false end
+    local _, lineOut = self:getFishingRodState(tool)
+    return lineOut == true
+end
+
+function VRCompanion:isHandKeptInUseByHandTool(hand)
+    if self:getHandState(hand).tracked ~= true then return false end
+    return isTriggerUsing(hand) or isLineOutInHand(self, hand)
+end
+
+-- ---- The fishing rod in the diagnostics ---------------------------------------------------------------------------------
+-- With the rod in the Tool Hand, vrHandToolsDiagnostics also logs lines about it (ADR-0031), for the headset round: its state
+-- (getFishingRodState); the last cast, seen by watchFishingRod as the state leaving charging, with the rod's ray direction and the
+-- head's direction then (does the cast follow the rod or the head?) and where the bobber landed (getBobberPosition, where it
+-- first comes to rest while the rod waits for a bite: not in flight, nor where it drifts to later); and the last action the rod was given: the trigger's primary use (noted by
+-- callUseHandler) or a secondary seen through the game's own action event. For that, while the rod is in the Tool Hand, the
+-- callback of its ACTIVATE_HANDTOOL_SECONDARY event (onActivateSecondaryAction, which the event holds since it was registered,
+-- so a wrap of the class would not be seen) is wrapped where the game keeps it: the wrap notes the call and passes it on unchanged.
+-- The wrap comes off again (the event's callback is the game's own) as soon as the rod is not in the Tool Hand: set down,
+-- untracked, put away, `vrHandTools off` (at once, ADR-0029) or the map unloaded. Only the local player's rod is watched and described. The one-line answer (getHandToolsDiagnostics) does not carry these lines.
+
+-- The state as the developer reads it: "waiting" is the line out with no bite yet.
+local FISHING_ROD_STATE_TEXT = { waiting = "line out" }
+
+local FISHING_ROD_SECONDARY_ACTION = "ACTIVATE_HANDTOOL_SECONDARY"
+
+-- The secondary event wraps: the table that holds the callback -> { original, wrapper } (weak: an event the game let go of goes).
+local rodEventWraps = setmetatable({}, { __mode = "k" })
+
+-- Wraps the callback of the rod's secondary action event, where the game keeps it: on the tool's event entry, or on the input
+-- binding's event the entry names (as the probe reads them). An event already wrapped is left as it is.
+local function wrapRodSecondaryEvent(tool)
+    local events = tool.actionEvents
+    if type(events) ~= "table" then return end
+    local inputBinding = engine("g_inputBinding")
+    for key, entry in pairs(events) do
+        if type(entry) == "table" then
+            local bound = type(inputBinding) == "table" and type(inputBinding.events) == "table"
+                and entry.actionEventId ~= nil and inputBinding.events[entry.actionEventId] or nil
+            if type(bound) ~= "table" then bound = nil end
+            local actionName = entry.actionName or (bound ~= nil and bound.actionName) or (type(key) == "string" and key or nil)
+            if actionName == FISHING_ROD_SECONDARY_ACTION then
+                local holders = { entry }
+                if bound ~= nil then holders[2] = bound end
+                for _, holder in ipairs(holders) do
+                    local original = holder.callback
+                    local wrapped = rodEventWraps[holder]
+                    if type(original) == "function" and (wrapped == nil or wrapped.wrapper ~= original) then
+                        local wrapper = function(target, name, inputValue, ...)
+                            state.fishingRod.action = { tool = tool, name = "secondary", by = "the game's binding", value = inputValue }
+                            return original(target, name, inputValue, ...)
+                        end
+                        rodEventWraps[holder] = { original = original, wrapper = wrapper }
+                        holder.callback = wrapper
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Takes the secondary event wraps off again, where each is still the callback this module put there.
+local function liftRodEventWraps()
+    if next(rodEventWraps) == nil then return end
+    for holder, wrapped in pairs(rodEventWraps) do
+        if holder.callback == wrapped.wrapper then holder.callback = wrapped.original end
+    end
+    rodEventWraps = setmetatable({}, { __mode = "k" })
+end
+
+-- ---- The fishing rod's screen overlays -----------------------------------------------------------------------------------
+-- The rod draws its overlays itself (its onDraw, which the DLC keeps unreadable) at screen positions made for a flat screen: in the
+-- headset the reeling minigame after a hook sat so far right, and a little high, that it was hard to see (2026-10-18). Four tries
+-- in the headset (2026-10-18) found how it draws. The engine resolves its 2D natives (renderOverlay, renderText) when it loads, so
+-- a mod cannot wrap them. The minigame's state lays it out in plain numbers, read at every draw: its panel at posX, posY, width,
+-- height, the lines that follow the fish at targetLineXStart..End, the hook's line at hookLineX, its status line at
+-- hookStatusLineXStart..End, the fish between fishYMin and fishYMax; its bars and icons are Overlays the state keeps (and the fish
+-- and the hook are placed again at every draw from where they are). So while the rod is the local player's and Hand Tools are on,
+-- the onDraw on its specialization class (which the game's event dispatch reads at every call) is wrapped and, outside the 2D view
+-- and only in a state that has that layout (the minigame: the charge meter and the prompts are centred and stay as they are),
+-- moves the layout's numbers and the Overlays the rod keeps (in its spec, and in its state one table deep) for the whole of its
+-- draw, all by one amount, and takes exactly that amount off again afterwards (also off what the draw placed anew from moved
+-- values, which would otherwise drift a little further every frame). The amount takes the middle of the panel to
+-- FISHING_ROD_OVERLAY_PULL of its distance from the centre of the screen, and down by FISHING_ROD_OVERLAY_DROP. Overlay.render is
+-- wrapped alongside, only to note what the draw rendered. Both wraps come off with the rod (put away, another player's,
+-- `vrHandTools off`, the map unloaded). For the headset round the diagnostics log, per state, what the rod's last draw rendered
+-- and what was moved by how much; and while it reels, the fields of its state and the numbers of its spec.
+VRCompanion.FISHING_ROD_OVERLAY_PULL = 0.5
+VRCompanion.FISHING_ROD_OVERLAY_DROP = 0.05
+
+-- The minigame's layout numbers in the rod's state: which are screen x positions and which y (the #140 headset dump).
+local FISHING_ROD_LAYOUT_X = { "posX", "targetLineXStart", "targetLineXEnd", "hookLineX", "hookStatusLineXStart", "hookStatusLineXEnd" }
+local FISHING_ROD_LAYOUT_Y = { "posY", "fishYMin", "fishYMax" }
+
+local rodDrawWrap = nil        -- { class, original, wrapper }: the rod class's onDraw, while this module has it wrapped
+local overlayRenderWrap = nil  -- { class, original, wrapper }: Overlay.render, likewise
+local rodDrawNotes = nil       -- while the local rod's draw runs: what it rendered (see drawPulledIn)
+
+-- Whether a value is one of the game's Overlays: a table with a numeric place and an overlay id or a file.
+local function isOverlay(value)
+    return type(value) == "table" and type(value.x) == "number" and type(value.y) == "number"
+        and (value.overlayId ~= nil or value.filename ~= nil)
+end
+
+-- The Overlays the rod keeps: in its spec, and in its current state and the tables in it. Never the rod itself (the state's back
+-- reference) nor the other states.
+local function rodOverlays(tool, spec)
+    local found, seen = {}, { [tool] = true }
+    if type(spec.states) == "table" then seen[spec.states] = true end
+    local function look(t, depth)
+        for _, value in pairs(t) do
+            if type(value) == "table" and not seen[value] then
+                seen[value] = true
+                if isOverlay(value) then
+                    found[#found + 1] = value
+                elseif depth > 0 then
+                    look(value, depth - 1)
+                end
+            end
+        end
+    end
+    look(spec, 0)
+    if type(spec.state) == "table" then look(spec.state, 1) end
+    return found
+end
+
+-- How far the minigame laid out in `layout` (the rod's state) moves: dx, dy; nil for a state without that layout.
+local function layoutShift(layout)
+    local x, y, width = layout.posX, layout.posY, layout.width
+    if type(x) ~= "number" or type(y) ~= "number" or type(width) ~= "number" then return nil end
+    local middle = x + width / 2
+    return 0.5 + (middle - 0.5) * VRCompanion.FISHING_ROD_OVERLAY_PULL - middle, -VRCompanion.FISHING_ROD_OVERLAY_DROP
+end
+
+-- Overlay.render's wrap: notes what the local rod's draw renders (its area as the rod placed it, and whether it was one of the
+-- Overlays moved for the draw); renders every Overlay as the game does.
+local function renderOverlayNoted(original, overlay, ...)
+    local notes = rodDrawNotes
+    if notes ~= nil and type(overlay) == "table" and type(overlay.x) == "number" and type(overlay.y) == "number" then
+        local moved = notes.moving[overlay] == true
+        local x = overlay.x + (tonumber(overlay.offsetX) or 0) - (moved and notes.dx or 0)
+        local y = overlay.y + (tonumber(overlay.offsetY) or 0) - (moved and notes.dy or 0)
+        local width, height = tonumber(overlay.width) or 0, tonumber(overlay.height) or 0
+        notes.calls = notes.calls + 1
+        if not moved then notes.unmoved = notes.unmoved + 1 end
+        notes.from, notes.to = math.min(notes.from or x, x), math.max(notes.to or (x + width), x + width)
+        notes.bottom, notes.top = math.min(notes.bottom or y, y), math.max(notes.top or (y + height), y + height)
+    end
+    return original(overlay, ...)
+end
+
+-- Moves t[key] by `by` and notes how to take it off again, when it is a number.
+local function moveNumber(moved, t, key, by)
+    local value = t[key]
+    if type(value) ~= "number" then return end
+    t[key] = value + by
+    moved[#moved + 1] = { t = t, key = key, was = value, by = by }
+end
+
+-- Takes each move off again: back to what it was when the draw left it as moved, else (the draw placed it anew from moved values)
+-- the move taken off what the draw put there.
+local function takeMovesOff(moved)
+    for _, move in ipairs(moved) do
+        local value = move.t[move.key]
+        if value == move.was + move.by then
+            move.t[move.key] = move.was
+        elseif type(value) == "number" then
+            move.t[move.key] = value - move.by
+        end
+    end
+end
+
+-- Runs the rod's own onDraw with its minigame moved (see above) and notes what it drew: { calls, unmoved, from, to, bottom, top
+-- (the area rendered, as the rod placed it), overlays, numbers (how many were moved), dx, dy (by how much) }.
+local function drawPulledIn(original, tool, ...)
+    local _, entry = fishingRodOf(tool)
+    local spec = tool[entry.spec]
+    local notes = { calls = 0, unmoved = 0, overlays = 0, numbers = 0, moving = {}, dx = 0, dy = 0 }
+    local moved = {}
+    local layout = type(spec) == "table" and spec.state or nil
+    local dx, dy = nil, nil
+    if type(layout) == "table" then dx, dy = layoutShift(layout) end
+    if dx ~= nil then
+        notes.dx, notes.dy = dx, dy
+        for _, key in ipairs(FISHING_ROD_LAYOUT_X) do moveNumber(moved, layout, key, dx) end
+        for _, key in ipairs(FISHING_ROD_LAYOUT_Y) do moveNumber(moved, layout, key, dy) end
+        notes.numbers = #moved
+        local ok, overlays = pcall(rodOverlays, tool, spec)
+        for _, overlay in ipairs(ok and overlays or {}) do
+            moveNumber(moved, overlay, "x", dx)
+            moveNumber(moved, overlay, "y", dy)
+            notes.moving[overlay] = true
+            notes.overlays = notes.overlays + 1
+        end
+    end
+    local outer = rodDrawNotes
+    rodDrawNotes = notes
+    local results = table.pack(pcall(original, tool, ...))
+    rodDrawNotes = outer
+    takeMovesOff(moved)
+    notes.moving = nil
+    state.fishingRod.draws[VRCompanion:getFishingRodState(tool) or "unknown"] = notes
+    if not results[1] then error(results[2], 0) end
+    return table.unpack(results, 2, results.n)
+end
+
+-- Whether the rod's overlays are moved now: the local player's rod, Hand Tools on, outside the 2D view.
+local function pullsRodOverlaysIn(tool)
+    return VRCompanion.handToolsEnabled ~= false and VRCompanion.is2DViewActive ~= true and fishingRodOf(tool) ~= nil
+        and localCarryingPlayer(tool) ~= nil
+end
+
+-- Wraps class[name] with make(original) unless `held` (a { class, original, wrapper }) already holds it there; answers the hold.
+local function wrapFunctionOn(held, class, name, make)
+    if type(class) ~= "table" or type(class[name]) ~= "function" then return held end
+    if held ~= nil and held.class == class and class[name] == held.wrapper then return held end
+    local original = class[name]
+    local wrapper = make(original)
+    class[name] = wrapper
+    return { class = class, original = original, wrapper = wrapper }
+end
+
+-- Wraps the onDraw of the rod's specialization class and Overlay.render. What is already wrapped is left as it is.
+local function wrapRodDraw(tool)
+    local _, entry = fishingRodOf(tool)
+    local class = entry ~= nil and specializationClass(tool, entry.useHandlerSpecialization) or nil
+    rodDrawWrap = wrapFunctionOn(rodDrawWrap, class, "onDraw", function(original)
+        return function(drawn, ...)
+            if pullsRodOverlaysIn(drawn) then return drawPulledIn(original, drawn, ...) end
+            return original(drawn, ...)
+        end
+    end)
+    overlayRenderWrap = wrapFunctionOn(overlayRenderWrap, engine("Overlay"), "render", function(original)
+        return function(...) return renderOverlayNoted(original, ...) end
+    end)
+end
+
+-- Puts class[name] back to what it was, where it is still the wrapper `held` put there.
+local function liftWrapOn(held, name)
+    if held ~= nil and held.class[name] == held.wrapper then held.class[name] = held.original end
+end
+
+-- Takes the onDraw and Overlay.render wraps off again.
+local function liftRodDrawWrap()
+    liftWrapOn(rodDrawWrap, "onDraw")
+    liftWrapOn(overlayRenderWrap, "render")
+    rodDrawWrap, overlayRenderWrap, rodDrawNotes = nil, nil, nil
+end
+
+-- The last draw in each of the rod's states, as one text.
+local function rodDrawsText()
+    local parts = {}
+    for _, name in ipairs({ "idle", "charging", "waiting", "bite", "reeling", "caught", "unknown" }) do
+        local notes = state.fishingRod.draws[name]
+        if notes ~= nil then
+            local label = FISHING_ROD_STATE_TEXT[name] or name
+            local moved = notes.numbers == 0 and notes.overlays == 0 and "nothing moved"
+                or string.format("%d layout numbers and %d Overlays moved by %.3f, %.3f", notes.numbers, notes.overlays, notes.dx, notes.dy)
+            if notes.calls == 0 then
+                parts[#parts + 1] = string.format("%s: nothing rendered, %s", label, moved)
+            else
+                parts[#parts + 1] = string.format("%s: %d rendered (%d unmoved), x %.3f to %.3f, y %.3f to %.3f, %s", label, notes.calls,
+                    notes.unmoved, notes.from, notes.to, notes.bottom, notes.top, moved)
+            end
+        end
+    end
+    return #parts > 0 and table.concat(parts, "; ") or "none yet"
+end
+
+-- A value of the rod's spec or state, as the log reads it.
+local function rodValueText(value)
+    if type(value) == "number" then return string.format("%.4f", value) end
+    if isOverlay(value) then
+        return string.format("Overlay %s (%.4f, %.4f, %.4f, %.4f)", tostring(value.filename), value.x, value.y, tonumber(value.width) or 0,
+            tonumber(value.height) or 0)
+    end
+    if type(value) == "table" then
+        local count = 0
+        for _ in pairs(value) do count = count + 1 end
+        return "table (" .. count .. " keys)"
+    end
+    if type(value) == "string" then return string.format("%q", string.sub(value, 1, 40)) end
+    return tostring(value)
+end
+
+-- The fields of the rod's current state (all but its back reference) and the numbers and Overlays of its spec, sorted by name, as
+-- lines; none when they cannot be read. Never raises.
+local function rodLayoutLines(tool)
+    local ok, lines = pcall(function()
+        local _, entry = fishingRodOf(tool)
+        local spec = tool[entry.spec]
+        local function fields(t, keep)
+            local keys = {}
+            for key, value in pairs(t) do
+                if type(key) == "string" and keep(value) then keys[#keys + 1] = key end
+            end
+            table.sort(keys)
+            for i, key in ipairs(keys) do keys[i] = key .. " = " .. rodValueText(t[key]) end
+            return table.concat(keys, ", ")
+        end
+        return {
+            "fishing rod reeling state: " .. fields(spec.state, function(value) return value ~= tool end),
+            "fishing rod spec numbers: " .. fields(spec, function(value) return type(value) == "number" or isOverlay(value) end),
+        }
+    end)
+    return ok and lines or {}
+end
+
+-- Three of the values fn(...) answers, from the `first` on, as { a, b, c }; nil when fn is no function, the call raises or they
+-- are not all numbers.
+local function threeNumbersFrom(first, fn, ...)
+    if type(fn) ~= "function" then return nil end
+    local answer = { pcall(fn, ...) }
+    if not answer[1] then return nil end
+    local a, b, c = answer[first + 1], answer[first + 2], answer[first + 3]
+    if type(a) ~= "number" or type(b) ~= "number" or type(c) ~= "number" then return nil end
+    return { a, b, c }
+end
+
+-- The way the head looks: the game's own Player:getLookRay (the wrap's original: the wrap answers the tool's ray). nil when unknown.
+local function headDirection(player)
+    local wrap = wraps.getLookRay
+    return threeNumbersFrom(4, wrap ~= nil and wrap.original or player.getLookRay, player)
+end
+
+-- Where the rod's bobber is, or nil when that cannot be read.
+local function bobberPosition(tool)
+    return threeNumbersFrom(1, tool.getBobberPosition, tool)
+end
+
+-- The rod the local player holds in the Tool Hand now, or nil.
+local function fishingRodInTheHand(self)
+    local tool = fishingRodOf()
+    if tool == nil or toolHandFor(self, tool) == nil then return nil end
+    return tool
+end
+
+-- A bobber that moves slower than this (metres per second) from one update to the next is at rest: it has landed. A bobber in
+-- flight is many times faster, one floating on the water drifts and bobs slower.
+local BOBBER_AT_REST_SPEED = 1.0
+
+-- Once per update, after the trigger (a let-go there throws the cast): notes the local player's rod's cast and where its bobber
+-- landed (the first update the bobber is at rest while the rod waits for a bite; kept from then on, so its drift is not), and
+-- wraps its secondary event while it is in the Tool Hand (and takes the wrap off when it is not).
+local function watchFishingRod(self, dt)
+    local inTheHand = fishingRodInTheHand(self)
+    if inTheHand ~= nil then pcall(wrapRodSecondaryEvent, inTheHand) else liftRodEventWraps() end
+    local rodNotes = state.fishingRod
+    local tool = fishingRodOf()
+    local player = tool ~= nil and localCarryingPlayer(tool) or nil
+    if player ~= nil and self.handToolsEnabled ~= false then pcall(wrapRodDraw, tool) else liftRodDrawWrap() end
+    if player == nil then
+        rodNotes.tool, rodNotes.state = nil, nil
+        return
+    end
+    local rodState = self:getFishingRodState(tool)
+    if rodNotes.tool == tool and rodNotes.state == "charging" and rodState ~= "charging" then
+        local _, _, _, dx, dy, dz = self:getHandToolRay(player)
+        rodNotes.cast = { tool = tool, rod = dx ~= nil and { dx, dy, dz } or nil, head = headDirection(player) }
+    end
+    local cast = rodNotes.cast
+    if cast ~= nil and cast.tool == tool and rodState == "waiting" and cast.bobber == nil then
+        local position = bobberPosition(tool)
+        local last, seconds = cast.bobberLast, (tonumber(dt) or 0) / 1000
+        if position ~= nil and last ~= nil and seconds > 0 then
+            local dx, dy, dz = position[1] - last[1], position[2] - last[2], position[3] - last[3]
+            if math.sqrt(dx * dx + dy * dy + dz * dz) <= BOBBER_AT_REST_SPEED * seconds then
+                cast.bobber = position  -- landed: kept as it is from now on
+            end
+        end
+        cast.bobberLast = position
+    end
+    rodNotes.tool, rodNotes.state = tool, rodState
+end
+
+-- A direction or a position with its label, as the log reads it: "label (x, y, z)".
+local function vectorText(label, vector)
+    return string.format("%s (%.2f, %.2f, %.2f)", label, vector[1], vector[2], vector[3])
+end
+
+-- The last cast of the rod, as one text.
+local function lastCastText(tool)
+    local cast = state.fishingRod.cast
+    if cast == nil or cast.tool ~= tool then return "none yet" end
+    return table.concat({
+        cast.rod ~= nil and vectorText("rod direction", cast.rod) or "rod direction: none (the rod was not in the Tool Hand)",
+        cast.head ~= nil and vectorText("head direction", cast.head) or "head direction: unknown",
+        cast.bobber ~= nil and vectorText("bobber at", cast.bobber)
+            or "bobber: not landed (not seen at rest while the line was out waiting for a bite)",
+    }, ", ")
+end
+
+-- The last action the rod was given, as one text.
+local function lastActionText(tool)
+    local action = state.fishingRod.action
+    if action == nil or action.tool ~= tool then return "none yet" end
+    return string.format("%s, by %s (input %s)", action.name, action.by, tostring(action.value))
+end
+
+-- The lines about the rod in the Tool Hand, each starting "fishing rod "; none when it is not in the hand. Never raises.
+local function fishingRodLines(self)
+    local ok, result = pcall(function()
+        local tool = fishingRodInTheHand(self)
+        if tool == nil then return {} end
+        local rodState, lineOut = self:getFishingRodState(tool)
+        local lines = {
+            "fishing rod state: " .. (FISHING_ROD_STATE_TEXT[rodState] or tostring(rodState)),
+            "fishing rod last cast: " .. lastCastText(tool),
+            "fishing rod last action: " .. lastActionText(tool),
+            "fishing rod screen draw: " .. rodDrawsText(),
+        }
+        if rodState == "reeling" or (rodState == "unknown" and lineOut) then
+            for _, line in ipairs(rodLayoutLines(tool)) do lines[#lines + 1] = line end
+        end
+        return lines
+    end)
+    if ok then return result end
+    return { "fishing rod: could not be described (" .. tostring(result) .. ")" }
 end
 
 -- ---- The look ray -----------------------------------------------------------------------------------------
@@ -912,7 +1575,9 @@ end
 -- wraps), the wrap of its onDraw draws nothing; otherwise it is the game's own function. The game's event dispatch reads onDraw
 -- off the specialization class at every call, so the wrap is on the class (as the chainsaw's update). The overlay is back as the
 -- game draws it when the hand is set down or loses tracking, or the feature is off. Another tool and another player's tool are
--- never in the hand, so they are drawn by the game.
+-- never in the hand, so they are drawn by the game. The fishing rod's overlays are NOT held back (ADR-0031): its charge meter, waiting
+-- hint and "Hook fish" prompt are its only display of the charge and the hook window, and they are no aim crosshair. Its onDraw is
+-- only pulled in toward the centre (see "The fishing rod's screen overlays").
 
 -- Whether the tool's centre overlays are held back now: it is in the Tool Hand this module put it in.
 local function drawIsHeldBack(tool)
@@ -982,26 +1647,33 @@ local DRAW_HELD_BACK_KINDS = { spraycan = true, chainsaw = true, horsebrush = tr
 -- ---- Haptics --------------------------------------------------------------------------------------------------
 -- The Tool Hand buzzes while its tool works, through VRCompanion:pulseHand (VRBridge.pulseHaptic): a light buzz for as long as
 -- the chainsaw's trigger is held (delimbing, without a cut), a stronger one while it cuts, a steady
--- one while the lance sprays, a lighter one while the spray can sprays, the lightest while the horse brush cleans an animal, and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
+-- one while the lance sprays, a lighter one while the spray can sprays, the lightest while the horse brush cleans an animal, a
+-- sharp pulse repeated through the fishing rod's hook window when a fish bites and a buzz that grows with the rod's bend while it
+-- reels (ADR-0031), and nothing for the flashlight (a tool with no entry in HAND_TOOL_HAPTICS). Only the Tool Hand is pulsed, and only
 -- while the tool is in it (toolHandFor: the feature on, Motion Controllers on, the hand tracked), so an untracked or set-down
 -- Tool Hand, `vrHandTools off` and a tool put away all end the buzz. A pulse is one burst, so the buzz is a pulse requested again
 -- every HAND_TOOL_HAPTIC_INTERVAL_MS (and at once when what is felt changes), each lasting a little longer than that so the hand
--- never goes quiet in between. The Companion Mod's pulses win on a hand over the game's rumble (ADR-0028): that rule is the
+-- never goes quiet in between; a pulse with its own intervalMs (the bite) is repeated that much apart instead, with silence in
+-- between. The Companion Mod's pulses win on a hand over the game's rumble (ADR-0028): that rule is the
 -- Injector's and applies to these pulses like to every other.
 
--- What is felt: milliseconds a pulse lasts and its strength (0..1).
+-- What is felt: milliseconds a pulse lasts, its strength (0..1) and, for a pulse that is not a buzz, how far apart it is repeated
+-- (intervalMs; default HAND_TOOL_HAPTIC_INTERVAL_MS). A level function may answer its own strength instead (the reeling's).
 VRCompanion.HAND_TOOL_HAPTIC_PULSES = {
     running = { ms = 70, strength = 0.2 },   -- the chainsaw's motor revved with the trigger held, no cut yet
     cutting = { ms = 70, strength = 0.6 },   -- the chainsaw cutting
     spraying = { ms = 70, strength = 0.35 }, -- the lance's pressure
     misting = { ms = 70, strength = 0.2 },   -- the spray can's mist, lighter than the lance
     brushing = { ms = 70, strength = 0.15 }, -- the horse brush on an animal, the lightest of them
+    biting = { ms = 40, strength = 0.9, intervalMs = 150 },  -- a fish on the rod's hook: sharp, apart, through the hook window
+    reeling = { ms = 70, strength = 0.8 },   -- the fish pulling while the rod reels: this strength at full bend, less as it bends less
 }
 VRCompanion.HAND_TOOL_HAPTIC_INTERVAL_MS = 50
 -- The single short pulse that is not a buzz: the spray can's tick when its nozzle comes onto a tree (see "The spray can's feedback").
 VRCompanion.HAND_TOOL_TICK_PULSE = { ms = 30, strength = 0.4 }
 
--- What each supported tool makes felt now: function(self, tool) -> a key of HAND_TOOL_HAPTIC_PULSES, or nil. A kind with no entry
+-- What each supported tool makes felt now: function(self, tool) -> a key of HAND_TOOL_HAPTIC_PULSES, or nil; optionally also a
+-- strength (0..1) for this pulse in place of the level's own (0 or less: nothing is felt). A kind with no entry
 -- (the flashlight) is silent. The lance sprays while its own flag is set (HandToolHPWLance's spec.isActivated).
 VRCompanion.HAND_TOOL_HAPTICS = {
     chainsaw = function(self, tool)
@@ -1027,6 +1699,17 @@ VRCompanion.HAND_TOOL_HAPTICS = {
         local spec = tool.spec_horseBrush
         return (spec ~= nil and spec.targetedHusbandryId ~= nil) and "brushing" or nil
     end,
+    -- The fishing rod, from its state reader (the only reader of its spec): the bite's pulse through the hook window, and while
+    -- it reels a buzz as strong as the rod is bent. Idle, charging, waiting, caught and an unknown state are silent.
+    fishingrod = function(self, tool)
+        local rodState, _, bend = self:getFishingRodState(tool)
+        if rodState == "bite" then return "biting" end
+        if rodState == "reeling" then
+            local full = self.HAND_TOOL_HAPTIC_PULSES.reeling.strength
+            return "reeling", full * math.max(0, math.min(1, tonumber(bend) or 0))
+        end
+        return nil
+    end,
 }
 
 local function updateHaptics(self, dt)
@@ -1034,21 +1717,23 @@ local function updateHaptics(self, dt)
     local tool = heldTool()
     local hand = tool ~= nil and toolHandFor(self, tool) or nil
     local kind = hand ~= nil and supportedKind(tool) or nil
-    local felt = kind ~= nil and self.HAND_TOOL_HAPTICS[kind] or nil
-    local level = nil
-    if felt ~= nil then
-        local ok, answer = pcall(felt, self, tool)
-        if ok then level = answer end
+    local levelOf = kind ~= nil and self.HAND_TOOL_HAPTICS[kind] or nil  -- what the tool makes felt now
+    local level, strength = nil, nil
+    if levelOf ~= nil then
+        local ok, answer, answeredStrength = pcall(levelOf, self, tool)
+        if ok then level, strength = answer, tonumber(answeredStrength) end
     end
     local pulse = level ~= nil and self.HAND_TOOL_HAPTIC_PULSES[level] or nil
-    if pulse == nil then
+    strength = math.min(1, strength or (pulse ~= nil and pulse.strength) or 0)
+    if pulse == nil or strength <= 0 then
         haptics.level, haptics.hand, haptics.sinceMs = nil, nil, 0
         return
     end
     haptics.sinceMs = haptics.sinceMs + (tonumber(dt) or 0)
-    if haptics.level ~= level or haptics.hand ~= hand or haptics.sinceMs >= self.HAND_TOOL_HAPTIC_INTERVAL_MS then
+    local interval = tonumber(pulse.intervalMs) or self.HAND_TOOL_HAPTIC_INTERVAL_MS
+    if haptics.level ~= level or haptics.hand ~= hand or haptics.sinceMs >= interval then
         haptics.level, haptics.hand, haptics.sinceMs = level, hand, 0
-        self:pulseHand(hand, pulse.ms, pulse.strength)
+        self:pulseHand(hand, pulse.ms, strength)
     end
 end
 
@@ -1165,6 +1850,7 @@ function VRCompanion:updateHandTools(dt)
     updateTrigger(self)
     updateHaptics(self, dt)  -- the trigger use above is what starts a cut or a spray
     updateSprayCanFeedback(self)  -- last: its tick is a single pulse on top of the buzz
+    watchFishingRod(self, dt)  -- for the diagnostics; after the trigger, whose let-go throws the cast
 end
 
 -- ---- Settings command, diagnostics, console commands, reset ---------------------------------------------------------------
@@ -1172,7 +1858,11 @@ end
 function VRCompanion:setHandToolsEnabled(enabled, save)
     self.handToolsEnabled = (enabled ~= false)
     syncPlacement(self)  -- at once: the tool moves between the hand and the camera without waiting for the next update
-    if not self.handToolsEnabled then endTriggerUse() end  -- and a spray in progress ends
+    if not self.handToolsEnabled then
+        endTriggerUse()  -- and a spray in progress ends
+        liftRodEventWraps()  -- and the rod's secondary event is the game's own
+        liftRodDrawWrap()    -- and so is its draw
+    end
     if save and type(self.saveConfiguration) == "function" then
         self:saveConfiguration()
     end
@@ -1624,11 +2314,14 @@ function VRCompanion:getHandToolsDiagnostics()
     return table.concat(diagnosticFields(self), " | ")
 end
 
--- Prints the fields to the game log, one tagged line each, and returns them as one line. A held unsupported Hand Tool is
--- described after them.
+-- Prints the fields to the game log, one tagged line each, and returns them as one line. The fishing rod in the Tool Hand, and a
+-- held unsupported Hand Tool, are described after them (in the log only).
 function VRCompanion:consoleCommandHandToolsDiagnostics()
     for _, field in ipairs(diagnosticFields(self)) do
         print("[FS25_VR] " .. field)
+    end
+    for _, line in ipairs(fishingRodLines(self)) do
+        print("[FS25_VR] " .. line)
     end
     for _, line in ipairs(probeLines()) do
         print("[FS25_VR] " .. PROBE_TAG .. line)
@@ -1665,7 +2358,7 @@ local function describeOffset(kind, offset)
         offset.rotation.x, offset.rotation.y, offset.rotation.z, offset.rotation.w)
 end
 
-local TUNING_USAGE = "Usage: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush> <nudge dx dy dz | turn rx ry rz | reset> "
+local TUNING_USAGE = "Usage: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush|fishingrod> <nudge dx dy dz | turn rx ry rz | reset> "
     .. "(nudge: metres, turn: degrees about the hand's X, Y, Z axes; this session only)"
 
 -- The held tool is put where the numbers say, at once.
@@ -1727,8 +2420,8 @@ function VRCompanion:registerHandToolsConsoleCommands()
     wrapAll()    -- map load: the class again (resetHandTools lifted the wrap with the last map)
     checkWraps()
     if addConsoleCommand == nil then return end
-    addConsoleCommand("vrHandToolOffset", "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush> <nudge dx dy dz | turn rx ry rz | reset>", "consoleCommandHandToolOffset", self)
-    addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance, spray can and horse brush held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
+    addConsoleCommand("vrHandToolOffset", "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush|fishingrod> <nudge dx dy dz | turn rx ry rz | reset>", "consoleCommandHandToolOffset", self)
+    addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance, spray can, horse brush and fishing rod held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
     addConsoleCommand("vrToolHand", "Choose the Motion Controller that holds Hand Tools, left or right (saved; right by default): vrToolHand [left|right]", "consoleCommandSetToolHand", self)
     addConsoleCommand("vrHandToolsDiagnostics", "Report the Tool Hand, the held Hand Tool, whether it is in the hand and where the look ray starts: vrHandToolsDiagnostics", "consoleCommandHandToolsDiagnostics", self)
 end
@@ -1748,6 +2441,8 @@ function VRCompanion:resetHandTools()
     local tool = state.linkedTool
     endTriggerUse()
     liftWraps()
+    liftRodEventWraps()
+    liftRodDrawWrap()
     if tool ~= nil and heldTool() == tool then pcall(returnToTheGame, tool) end
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrHandTools")
