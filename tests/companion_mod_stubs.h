@@ -3025,16 +3025,27 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
     local SPEC_NAME = "pdlc_highlandsFishingPack.fishingRod"
     local SPEC = "spec_" .. SPEC_NAME
     StubHandTool.fishingRods, StubHandTool.casts = {}, {}
-    local stateNames = {}
+    local stateNames = {}  -- a state table -> its name (the stub's own knowledge; the tables carry no name)
 
-    -- The game's 2D natives, looked up as globals at every call (as the DLC's scripts and Overlay:render call them). Each notes
-    -- what reached the screen in StubHandTool.screen: { what (the overlay, "rect" or the text), x, width (0 for text) }.
+    -- What reached the screen in a draw: { what (the overlay's file, or the text), x, y, width (0 for text) }.
     StubHandTool.screen = {}
-    function _G.renderOverlay(id, x, y, width, height)
-        table.insert(StubHandTool.screen, { what = tostring(id), x = x, width = width })
-    end
-    function _G.drawFilledRect(x, y, width, height, ...) table.insert(StubHandTool.screen, { what = "rect", x = x, width = width }) end
-    function _G.renderText(x, y, size, text) table.insert(StubHandTool.screen, { what = tostring(text), x = x, width = 0 }) end  -- a state table -> its name (the stub's own knowledge; the tables carry no name)
+    -- The game's Overlay (dataS/scripts/gui/base/Overlay.lua), as far as the rod's draw uses it: Overlay.new(filename, x, y, width,
+    -- height), and overlay:render(), looked up on the class at every call, which puts it on the screen at x + offsetX, y + offsetY.
+    -- Defined here unless another stub has.
+    if _G.Overlay == nil then
+        local Overlay = {}
+        local Overlay_mt = { __index = Overlay }
+        function Overlay.new(filename, x, y, width, height)
+            return setmetatable({ filename = filename, x = x, y = y, width = width, height = height, offsetX = 0, offsetY = 0,
+                                  visible = true }, Overlay_mt)
+        end
+        function Overlay:render()
+            if not self.visible then return end
+            table.insert(StubHandTool.screen, { what = self.filename, x = self.x + self.offsetX, y = self.y + self.offsetY, width = self.width })
+        end
+        _G.Overlay = Overlay
+    end    -- The game's text native: the engine resolves natives at load, so a mod cannot wrap it (a local here, not a global).
+    local function renderTextNative(x, y, size, text) table.insert(StubHandTool.screen, { what = tostring(text), x = x, y = y, width = 0 }) end
     local reelHeld = {}    -- a rod -> its reel is held (pressed and not yet released)
 
     function StubHandTool.rodSpec(tool) return tool[SPEC] end
@@ -3228,23 +3239,23 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
         end
 
         -- the draw: the charge meter, the waiting hint and the "Hook fish" prompt, at the centre of the view, each also put on the
-        -- screen with the game's 2D natives (StubHandTool.screen); and while reeling a minigame far to the right (the headset showed
-        -- one there; its shape here is made up: a tension bar, its fill and a hint)
+        -- screen (StubHandTool.screen) as Overlays or text; and while reeling a minigame far to the right (the headset showed one
+        -- there; its shape here is made up: a tension bar, its fill and a hint)
         function Class.onDraw(self)
-            local name = stateNames[self[SPEC].state]
+            local name, overlays = stateNames[self[SPEC].state], self.rodOverlays
             if name == "charging" then
                 StubHandTool.render(self, "castingChargeOverlay")
-                renderOverlay("castingChargeOverlay", 0.45, 0.45, 0.10, 0.02)
+                overlays.charge:render()
             elseif name == "waiting" then
                 StubHandTool.render(self, "waitForBiteOverlay")
-                renderText(0.5, 0.40, 0.02, "Wait for a bite")
+                renderTextNative(0.5, 0.40, 0.02, "Wait for a bite")
             elseif name == "bite" then
                 StubHandTool.render(self, "hookFishOverlay")
-                renderOverlay("hookFishOverlay", 0.47, 0.45, 0.06, 0.04)
+                overlays.hookFish:render()
             elseif name == "reeling" then
-                renderOverlay("reelingTensionBar", 0.80, 0.30, 0.04, 0.40)
-                drawFilledRect(0.805, 0.35, 0.03, 0.20, 1, 0, 0, 1)
-                renderText(0.78, 0.25, 0.015, "Reel in")
+                overlays.tension:render()
+                overlays.tensionFill:render()
+                renderTextNative(0.78, 0.25, 0.015, "Reel in")
             end
         end
         StubHandTool.fishingRodOriginalOnDraw = Class.onDraw
@@ -3308,6 +3319,12 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
         spec.item = nil
         local states, list = makeStates(tool)
         tool.rodStates = states
+        tool.rodOverlays = {  -- the stub's own: where the rod's draw puts its overlays
+            charge = Overlay.new("castingCharge.dds", 0.45, 0.45, 0.10, 0.02),
+            hookFish = Overlay.new("hookFish.dds", 0.47, 0.45, 0.06, 0.04),
+            tension = Overlay.new("reelTension.dds", 0.80, 0.30, 0.04, 0.40),
+            tensionFill = Overlay.new("reelTensionFill.dds", 0.805, 0.35, 0.03, 0.20),
+        }
         spec.states = list
         spec.state = nil  -- until the rod's first update while held
 

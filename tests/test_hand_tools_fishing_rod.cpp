@@ -75,6 +75,7 @@ protected:
         ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge, options));
         ASSERT_EQ(RunLuauChunk(L, kFishingRodHelpers, "=fishingRodHelpers"), 0);
         ASSERT_EQ(RunLuauChunk(L, "runCommand('vrVirtualGamepad', 'on')", "=padOn"), 0);
+        ASSERT_EQ(RunLuauChunk(L, "_G.overlayRenderBeforeTheRod = Overlay.render", "=overlayRender"), 0);  // the mod's HUD may wrap it
         SetGameTime(10000);
     }
 
@@ -584,35 +585,37 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsChargeMeterWaitingHintAndHo
     EXPECT_NE(Dump().find("centre overlays held back: no"), std::string::npos) << Dump();
 }
 
-// In the headset the reeling minigame sat so far right that it was hard to see (2026-10-18): what the rod draws is pulled in toward
-// the centre of the screen, an element's middle at half its distance from the centre, its width unchanged. Each element as it reached
-// the screen: "what@x".
-TEST_F(VirtualGamepadHandToolsFishingRodTest, WhatTheRodDrawsIsPulledInTowardTheCentreSoTheReelingMinigameIsInViewAndTheCentredOverlaysStay) {
+// In the headset the reeling minigame sat so far right, and a little high, that it was hard to see (2026-10-18): the Overlays the
+// rod draws are pulled in toward the centre of the screen, an Overlay's middle at half its distance from the centre, its size
+// unchanged, and moved down by 0.05. Text the rod renders with the game's native cannot be moved. Each thing as it reached the
+// screen: "what@x,y".
+TEST_F(VirtualGamepadHandToolsFishingRodTest, TheOverlaysTheRodDrawsArePulledInTowardTheCentreAndDownSoTheReelingMinigameIsInView) {
     ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        _G.gameNatives = { renderOverlay, drawFilledRect, renderText }
         function _G.drawnScreen()
             StubHandTool.draw()
             local parts = {}
-            for _, e in ipairs(StubHandTool.screen) do table.insert(parts, string.format("%s@%.3f", e.what, e.x)) end
+            for _, e in ipairs(StubHandTool.screen) do table.insert(parts, string.format("%s@%.3f,%.3f", e.what, e.x, e.y)) end
             return table.concat(parts, " ")
-        end
-        function _G.nativesAreTheGames()
-            return renderOverlay == gameNatives[1] and drawFilledRect == gameNatives[2] and renderText == gameNatives[3]
         end
     )luau", "=screen"), 0);
 
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(5);
-    EXPECT_EQ(EvalLua(L, "drawnScreen()"), "castingChargeOverlay@0.450") << "the charge meter, centred, stays";
+    EXPECT_EQ(EvalLua(L, "drawnScreen()"), "castingCharge.dds@0.450,0.400") << "the charge meter, centred, only moves down";
     headset.SetHandInputs(kRight, Trigger(0.0f));
     FRAMES(1);
-    EXPECT_EQ(EvalLua(L, "drawnScreen()"), "Wait for a bite@0.500") << "the hint at the centre stays";
+    EXPECT_EQ(EvalLua(L, "drawnScreen()"), "Wait for a bite@0.500,0.400") << "text stays where the rod puts it";
 
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'reeling')", "=reel"), 0);
-    EXPECT_EQ(EvalLua(L, "drawnScreen()"), "reelingTensionBar@0.640 rect@0.645 Reel in@0.640")
-        << "the minigame, drawn at 0.78 to 0.84, is pulled in";
-    EXPECT_EQ(EvalLua(L, "nativesAreTheGames()"), "true") << "the game has its natives back after the rod's draw";
+    EXPECT_EQ(EvalLua(L, "drawnScreen()"), "reelTension.dds@0.640,0.250 reelTensionFill.dds@0.645,0.300 Reel in@0.780,0.250")
+        << "the minigame's bars, drawn at 0.80 to 0.84, are pulled in and down";
+    EXPECT_EQ(EvalLua(L, "string.format('%.3f,%.3f', rod.rodOverlays.tension.x, rod.rodOverlays.tension.y)"), "0.800,0.300")
+        << "the Overlay itself is left where the rod keeps it";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.screen = {}; Overlay.new('speedometer.dds', 0.80, 0.10, 0.10, 0.10):render()", "=hud"), 0);
+    EXPECT_EQ(EvalLua(L, "string.format('%.3f,%.3f', StubHandTool.screen[1].x, StubHandTool.screen[1].y)"), "0.800,0.100")
+        << "an Overlay rendered outside the rod's draw is as the game renders it";
 }
 
 TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsOverlaysAreWhereTheRodDrawsThemWithHandToolsOffInThe2DViewAndForAnotherPlayersRod) {
@@ -643,6 +646,7 @@ TEST_F(VirtualGamepadHandToolsFishingRodTest, TheRodsOverlaysAreWhereTheRodDraws
     EXPECT_EQ(EvalLua(L, "barAt()"), "0.800") << "Hand Tools off";
     EXPECT_EQ(EvalLua(L, "StubHandTool.fishingRodClass.onDraw == StubHandTool.fishingRodOriginalOnDraw"), "true")
         << "and the rod's draw is the game's own again";
+    EXPECT_EQ(EvalLua(L, "Overlay.render == overlayRenderBeforeTheRod"), "true") << "and Overlay.render is as it was before the rod";
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'on')", "=on"), 0);
     FRAMES(1);
 

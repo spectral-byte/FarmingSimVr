@@ -135,7 +135,25 @@ TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, TheCommandLogsWhereTheR
     EXPECT_EQ(RodLine("screen draw: "), "none yet") << Log();
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.draw(); StubHandTool.setRodState(rod, 'reeling'); rod:setRodBendFactor(0.5); StubHandTool.draw()", "=draws"), 0);
     RunCommand();
-    EXPECT_EQ(RodLine("screen draw: "), "idle: nothing drawn; reeling: 3 drawn, x 0.780 to 0.840, on screen 0.640 to 0.680") << Log();
+    EXPECT_EQ(RodLine("screen draw: "), "idle: nothing drawn; reeling: 2 drawn, x 0.800 to 0.840, on screen 0.640 to 0.680") << Log();
+}
+
+// Should the minigame be drawn by something other than the rod's own draw, the Overlays rendered on the right half of the screen
+// while the rod reels are logged by their file, so the headset round can tell what draws it. Those on the left half are not.
+TEST_F(VirtualGamepadHandToolsFishingRodDiagnosticsTest, TheCommandLogsTheOverlaysRenderedElsewhereOnTheRightHalfWhileTheRodReels) {
+    ASSERT_NO_FATAL_FAILURE(StartWithTheRodInTheRightHand());
+    ASSERT_EQ(RunLuauChunk(L, "Overlay.new('beforeReeling.dds', 0.80, 0.30, 0.10, 0.20):render()", "=before"), 0);
+    RunCommand();
+    EXPECT_EQ(RodLine("overlays elsewhere while reeling (right half): "), "none seen") << Log();
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.setRodState(rod, 'reeling'); rod:setRodBendFactor(0.5)", "=reel"), 0);
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        Overlay.new('fishingMinigame.dds', 0.85, 0.30, 0.10, 0.20):render()
+        Overlay.new('map.dds', 0.05, 0.05, 0.20, 0.20):render()
+    )luau", "=elsewhere"), 0);
+    RunCommand();
+    EXPECT_EQ(RodLine("overlays elsewhere while reeling (right half): "), "fishingMinigame.dds x 0.850 to 0.950") << Log();
 }
 
 // A read of the rod's spec that fails while the rod is in the hand (a rod reshaped from the start is the game's with a warning,
