@@ -3323,7 +3323,7 @@ inline constexpr const char* kStubHandToolFishingRod = R"luau(
             charge = Overlay.new("castingCharge.dds", 0.45, 0.45, 0.10, 0.02),
             hookFish = Overlay.new("hookFish.dds", 0.47, 0.45, 0.06, 0.04),
             tension = Overlay.new("reelTension.dds", 0.80, 0.30, 0.04, 0.40),
-            tensionFill = Overlay.new("reelTensionFill.dds", 0.805, 0.35, 0.03, 0.20),
+            tensionFill = Overlay.new("reelTensionFill.dds", 0.78, 0.35, 0.02, 0.20),
         }
         spec.states = list
         spec.state = nil  -- until the rod's first update while held
