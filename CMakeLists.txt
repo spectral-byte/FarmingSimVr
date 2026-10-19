@@ -247,6 +247,7 @@ add_executable(fs25_vr_tests
     tests/test_hand_tools_fishing_rod_haptics.cpp
     tests/test_hand_tools_fishing_rod_diagnostics.cpp
     tests/test_dialog_diagnostics.cpp
+    tests/test_stereo_dialogs.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
