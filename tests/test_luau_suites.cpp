@@ -121,6 +121,10 @@ TEST_F(LuauTestSuiteTest, TestSnapTurn) {
     RunSuite("tests/test_snap_turn.luau");
 }
 
+TEST_F(LuauTestSuiteTest, TestStereoDialogDepth) {
+    RunSuite("tests/test_stereo_dialog_depth.luau");
+}
+
 TEST_F(LuauTestSuiteTest, TestVehicleCameraYaw) {
     RunSuite("tests/test_vehicle_camera_yaw.luau");
 }
