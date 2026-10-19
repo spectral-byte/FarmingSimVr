@@ -2462,4 +2462,10 @@ VRCompanion.HandTools.consoleCommandSetToolHand = function(self, ...) return VRC
 VRCompanion.HandTools.consoleCommandSetHandTools = function(self, ...) return VRCompanion.consoleCommandSetHandTools(VRCompanion, ...) end
 VRCompanion.HandTools.consoleCommandHandToolsDiagnostics = function(self, ...) return VRCompanion.consoleCommandHandToolsDiagnostics(VRCompanion, ...) end
 
+-- The probe's readers of an unknown table (the dialog probe, VRCompanionDialogProbe.lua, dumps with them): a short text for a value,
+-- the sorted keys, the function names of a table and the global name a table is kept under.
+VRCompanion.HandTools.probeReaders = {
+    shortValue = shortValue, sortedKeys = sortedKeys, functionNames = functionNames, globalNameOf = globalNameOf,
+}
+
 return VRCompanion.HandTools

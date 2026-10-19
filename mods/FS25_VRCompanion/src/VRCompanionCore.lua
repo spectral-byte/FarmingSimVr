@@ -192,6 +192,7 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrHudGroupShow","Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", "consoleCommandHudGroupShow", self)
     end
     if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
+    if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
 
     if self.showHudLoadNotification == true then
         local mission = g_currentMission or _G.g_currentMission
@@ -1054,6 +1055,7 @@ function VRCompanion:deleteMap()
         removeConsoleCommand("vrHudGroupShow")
     end
 
+    if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
     if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end
 
