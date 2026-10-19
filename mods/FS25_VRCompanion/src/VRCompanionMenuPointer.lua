@@ -260,7 +260,8 @@ local function updateMenuButtons(self)
         end
     end
 
-    if not self:doesMenuTakeInput() then
+    -- A Stereo Dialog is answered with the gamepad's own menu buttons, which the Virtual Gamepad passes on: the back and the scroll here would answer it a second time
+    if not self:doesMenuTakeInput() or self:isStereoDialogShowing() then
         scroll.dir, scroll.nextMs = 0, nil
         return
     end

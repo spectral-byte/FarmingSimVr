@@ -104,6 +104,33 @@ bool HandIsShown(lua_State* L, const char* which) {
 
 int SteeringCalls(lua_State* L) { return static_cast<int>(Number(L, "#StubSteer.calls")); }
 
+// Every control of a hand at once.
+FakeOpenXrControllers::Inputs Everything() {
+    FakeOpenXrControllers::Inputs inputs;
+    inputs.trigger = 1.0f;
+    inputs.grip = 1.0f;
+    inputs.thumbX = 1.0f;
+    inputs.thumbY = 1.0f;
+    inputs.buttonLower = true;
+    inputs.buttonUpper = true;
+    inputs.menu = true;
+    return inputs;
+}
+
+// What the game reads from XInput slot 3, the highest free slot of a machine without real pads.
+XINPUT_GAMEPAD Pad(fs25vr::VRBridge& bridge) {
+    XINPUT_STATE state{};
+    EXPECT_EQ(bridge.GetVirtualGamepad().GetState(3, &state), static_cast<DWORD>(ERROR_SUCCESS));
+    return state.Gamepad;
+}
+
+bool IsNeutral(const XINPUT_GAMEPAD& pad) {
+    return pad.wButtons == 0 && pad.bLeftTrigger == 0 && pad.bRightTrigger == 0 && pad.sThumbLX == 0 && pad.sThumbLY == 0 &&
+           pad.sThumbRX == 0 && pad.sThumbRY == 0;
+}
+
+int Backs(lua_State* L) { return std::stoi(EvalLua(L, "#backs")); }
+
 }  // namespace
 
 // ---- What the player sees: the stereoscopic view holds ----
@@ -227,4 +254,56 @@ TEST_F(CompanionModTest, WhileTheFishDialogShowsSnapTurnAndWheelGrabAreRefusedAn
     TRY_TO_STEER(kRight);
     EXPECT_GT(SteeringCalls(L), callsBefore) << "Wheel Grab works again";
     EXPECT_EQ(SnapTurnRight(L, 40000), "turned") << "and so does Snap Turn";
+}
+
+// The dialog is answered with its own gamepad buttons (MENU_ACCEPT, MENU_BACK) through the Virtual Gamepad: whatever the Motion
+// Controllers' bindings are, the game reads them from the pad as it does outside menus. The Companion Mod's own menu inputs,
+// which would answer the dialog a second time (the grip as back), are not engaged.
+TEST_F(CompanionModTest, WhileTheFishDialogShowsTheVirtualGamepadSendsTheMotionControllersToTheDialogAndTheModsOwnMenuBackStaysOut) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    START_STEREO_DIALOG_SCENE();
+    ASSERT_FALSE(HasFatalFailure());
+
+    ASSERT_EQ(RunLuauChunk(L, "showDialog('FishDialog')", "=openFishDialog"), 0);
+    FRAMES(3);
+    headset.SetHandInputs(kLeft, Everything());
+    headset.SetHandInputs(kRight, Everything());
+    FRAMES(2);
+    const XINPUT_GAMEPAD pad = Pad(bridge);
+    EXPECT_NE(pad.wButtons & XINPUT_GAMEPAD_A, 0) << "the lower face button is the pad's A, which the dialog reads as MENU_ACCEPT";
+    EXPECT_NE(pad.wButtons & XINPUT_GAMEPAD_B, 0) << "the upper face button is the pad's B, which the dialog reads as MENU_BACK";
+    EXPECT_FALSE(IsNeutral(pad)) << "the pad carries the Motion Controllers";
+    EXPECT_EQ(Backs(L), 0) << "and the mod's own back (the grip, the lower face button) does not answer the dialog a second time";
+    EXPECT_EQ(EvalLua(L, "_G.clicks"), "0");
+}
+
+TEST_F(CompanionModTest, AMenuThatGetsTheQuadStillTakesEveryInputOffThePadAndGoesBackOnTheGrip) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    START_STEREO_DIALOG_SCENE();
+    ASSERT_FALSE(HasFatalFailure());
+
+    struct Case { const char* name; const char* open; const char* close; };
+    const Case cases[] = {
+        { "a dialog the mod does not know", "showDialog('YesNoDialog')", "closeDialog()" },
+        { "the pause menu", "showScreen('InGameMenu')", "closeScreen()" },
+        { "the fish dialog in 2D Floating Window Mode", "VRCompanion:set2DViewActive(true); showDialog('FishDialog')",
+          "closeDialog(); VRCompanion:set2DViewActive(false)" },
+    };
+    for (const Case& c : cases) {
+        SCOPED_TRACE(c.name);
+        ASSERT_EQ(RunLuauChunk(L, c.open, "=open"), 0);
+        FRAMES(3);
+        headset.SetHandInputs(kLeft, Everything());
+        headset.SetHandInputs(kRight, Everything());
+        FRAMES(2);
+        EXPECT_TRUE(IsNeutral(Pad(bridge))) << "the menu is using every input: none reaches the pad";
+        EXPECT_GE(Backs(L), 1) << "and the grip goes back";
+        headset.SetHandInputs(kLeft, FakeOpenXrControllers::Inputs{});
+        headset.SetHandInputs(kRight, FakeOpenXrControllers::Inputs{});
+        FRAMES(2);
+        ASSERT_EQ(RunLuauChunk(L, std::string(c.close) + "; _G.backs = {}", "=close"), 0);
+        FRAMES(3);
+    }
 }

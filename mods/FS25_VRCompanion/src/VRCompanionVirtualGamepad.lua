@@ -49,6 +49,10 @@
 -- on those inputs. If g_gui, g_inGameMenu or the page is missing, the menu counts as any other menu. The held-input rule
 -- holds on the way into and out of the Settings page: what the menu took stays off the pad until it is let go, and what was
 -- held on the Settings page keeps its binding when another page's menu use begins.
+-- THE STEREO DIALOG EXCEPTION (ADR-0032): a Stereo Dialog (VRCompanion.STEREO_DIALOGS, the fish catch dialog) is a menu that takes the
+-- input but is answered with the gamepad's own menu buttons (MENU_ACCEPT, MENU_BACK), so while one shows in the stereoscopic view the menu
+-- does NOT take the pad's inputs either: the Motion Controllers' bindings reach the game as outside a menu and the dialog's button hints
+-- answer it. Nothing takes the input, so there is no held-input rule to apply. In 2D Floating Window Mode it is any other menu.
 -- THE HELD-INPUT RULE: an input already held (as the pad reads it) when a use begins keeps its binding until it is let go,
 -- and the use does not act on it meanwhile. The same holds the other way round: an input a use took stays off the pad
 -- until it is let go, even if the use ends first (a grip that closed a menu does not fire its binding as the menu goes).
@@ -288,7 +292,7 @@ end
 -- Last of the Companion Mod's update: the uses made here, then which inputs are off the pad this update, told to the Injector.
 function VRCompanion:updateVirtualGamepadUse(dt)
     if self.motionControllersEnabled ~= false then
-        if self:doesMenuTakeInput() and not isSettingsPageShowing() then
+        if self:doesMenuTakeInput() and not self:isStereoDialogShowing() and not isSettingsPageShowing() then
             -- Every input of both hands: the Pointer Ray menus act on the raw hand state themselves.
             for _, hand in ipairs(HANDS) do
                 for _, input in ipairs(INPUTS) do
