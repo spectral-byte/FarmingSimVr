@@ -36,9 +36,27 @@ local SETTING_KEY_ANSWER = "vrSettings.fishCatchAnswer"
 local ANSWERS = { ask = true, sell = true, release = true }
 local NOTIFICATION_MS = 2500
 
--- The dialog that was answered, until it is gone
+-- An answer the dialog ignores is asked again: a dialog ignores answers for a short time after it opens (FrameElement
+-- inputDisableTime), and the first headset test found the dialog still up after a single call on the first tick. Every RETRY_TICKS
+-- updates, at most MAX_ATTEMPTS times, and not at all while the dialog says its input is disabled.
+local RETRY_TICKS = 20
+local MAX_ATTEMPTS = 5
+
+-- The dialog being answered, until it is gone, and how the answer is going
 local answeredDialog = nil
+local attempts = 0
+local lastAttemptTick = nil
+local pendingNotice = nil       -- announced once the dialog is gone after an attempt, not before: the call may have done nothing
+local loggedWaiting = false
 local warnedNoMethod = false
+
+local function forgetDialog()
+    answeredDialog = nil
+    attempts = 0
+    lastAttemptTick = nil
+    pendingNotice = nil
+    loggedWaiting = false
+end
 
 local function showNotification(text)
     local mission = g_currentMission or (_G and _G.g_currentMission)
@@ -68,15 +86,30 @@ function VRCompanion:updateFishCatch()
     local choice = self.fishCatchAnswer
     local dialog = self:findStereoDialog()
     if dialog == nil then
-        answeredDialog = nil
+        if pendingNotice ~= nil then showNotification(pendingNotice) end  -- gone after an attempt: it took
+        forgetDialog()
         return
     end
-    if (choice ~= "sell" and choice ~= "release") or dialog == answeredDialog then return end
+    if choice ~= "sell" and choice ~= "release" then return end
+    if dialog ~= answeredDialog then
+        forgetDialog()
+        answeredDialog = dialog
+    end
+
+    local tick = self.frameTicks or 0
+    if lastAttemptTick ~= nil and tick - lastAttemptTick < RETRY_TICKS then return end
+    if attempts >= MAX_ATTEMPTS then
+        if pendingNotice ~= nil then
+            pendingNotice = nil  -- whoever closes it now, it was not the mod
+            print(string.format("[FS25_VR] vrFishCatch %s: the dialog is still open after %d attempts; it is left for the player.", choice, attempts))
+        end
+        return
+    end
 
     local dialogTarget = dialog.target
     local methodName = choice == "sell" and "onYes" or "onNo"
     if type(dialogTarget) ~= "table" or type(dialogTarget[methodName]) ~= "function" then
-        answeredDialog = dialog  -- not tried again for this opening
+        attempts = MAX_ATTEMPTS  -- not tried again for this opening
         if not warnedNoMethod then
             warnedNoMethod = true
             print(string.format("[FS25_VR] vrFishCatch %s: the fish dialog has no %s to call; it is left open for the player.", choice, methodName))
@@ -84,14 +117,34 @@ function VRCompanion:updateFishCatch()
         return
     end
 
-    answeredDialog = dialog
-    local species, price = readCatch(dialogTarget)
+    -- Not while the dialog says it takes no input yet: it would ignore the call
+    if type(dialogTarget.isInputDisabled) == "function" then
+        local okDisabled, disabled = pcall(dialogTarget.isInputDisabled, dialogTarget)
+        if okDisabled and disabled then
+            if not loggedWaiting then
+                loggedWaiting = true
+                print(string.format("[FS25_VR] vrFishCatch %s: waiting for the fish dialog to take input.", choice))
+            end
+            return
+        end
+    end
+
+    attempts = attempts + 1
+    lastAttemptTick = tick
+    if pendingNotice == nil then
+        local species, price = readCatch(dialogTarget)
+        pendingNotice = notificationText(choice, species, price)
+    end
+    print(string.format("[FS25_VR] vrFishCatch %s: calling the dialog's %s (attempt %d).", choice, methodName, attempts))
     local ok, err = pcall(dialogTarget[methodName], dialogTarget)
     if not ok then
         print(string.format("[FS25_VR] vrFishCatch %s: calling the dialog's %s failed: %s", choice, methodName, tostring(err)))
         return
     end
-    showNotification(notificationText(choice, species, price))
+    if self:findStereoDialog() ~= dialog then
+        showNotification(pendingNotice)  -- it closed at once
+        pendingNotice = nil
+    end
 end
 
 function VRCompanion:setFishCatchAnswer(answer, save)
@@ -137,7 +190,7 @@ end
 
 -- Map unload: the dialog that was answered is forgotten. The saved setting stays as it is.
 function VRCompanion:resetFishCatch()
-    answeredDialog = nil
+    forgetDialog()
     warnedNoMethod = false
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrFishCatch")

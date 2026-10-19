@@ -23,6 +23,8 @@ using namespace wheel_grab_test;
 //   text         the text the dialog shows (the probe's, by default)
 //   stayOpen     an answer does not close the dialog
 //   noMethods    the dialog has no onYes / onNo
+//   inputDisabled  isInputDisabled() is true, and an answer is ignored, while `fishInputDisabled` is true
+//   ignoreFirst  the first N calls to onYes / onNo do nothing
 // `showDialog(name)` opens another dialog.
 constexpr const char* kFishStubs = R"luau(
     _G.Input = { MOUSE_BUTTON_NONE = 0, MOUSE_BUTTON_LEFT = 1, isMouseButtonPressed = function() return false end }
@@ -35,7 +37,7 @@ constexpr const char* kFishStubs = R"luau(
         mouseEvent = function() end,
         onMenuInput = function() end,
     }
-    _G.answers, _G.notices = {}, {}
+    _G.answers, _G.notices, _G.calls = {}, {}, 0
     _G.g_currentMission = _G.g_currentMission or {}
     _G.g_currentMission.showBlinkingWarning = function(self, text, ms) table.insert(_G.notices, text) end
 
@@ -59,10 +61,17 @@ constexpr const char* kFishStubs = R"luau(
             dialogTextElement = { text = options.text or
                 "You've caught a trout!\n\nDo you want to release the fish to the water or sell it for 100 $?" },
         }
+        -- The game's dialog ignores an answer while its input is disabled (a short time after it opens), and ours can be made to
+        -- ignore its first calls; `calls` counts every call it was given.
+        local ignored = options.ignoreFirst or 0
         local function answer(choice)
+            _G.calls = _G.calls + 1
+            if options.inputDisabled and _G.fishInputDisabled then return end
+            if _G.calls <= ignored then return end
             table.insert(_G.answers, choice)
             if not options.stayOpen then closeDialog() end
         end
+        if options.inputDisabled then target.isInputDisabled = function(self) return _G.fishInputDisabled == true end end
         if not options.noMethods then
             target.onYes = function(self) answer("sell") end
             target.onNo = function(self) answer("release") end
@@ -215,9 +224,50 @@ TEST_F(CompanionModTest, WithVrFishCatchSellADialogThatIsNotTheFishDialogIsLeftA
     EXPECT_EQ(NoticeCount(L), 0);
 }
 
-// ---- Once per opening ----
+// ---- A dialog that does not close at once (the headset: the dialog stayed up with `sell` set) ----
 
-TEST_F(CompanionModTest, ADialogThatStaysOpenAfterTheAnswerIsAnsweredOnlyOnceAndTheNextCatchIsAnsweredAgain) {
+TEST_F(CompanionModTest, ADialogWhoseInputIsDisabledIsAnsweredOnceItsInputIsBackAndOnlyThenNotified) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    START_FISH_SCENE();
+    ASSERT_FALSE(HasFatalFailure());
+
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrFishCatch', 'sell'); fishInputDisabled = true", "=sell"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "showFishDialog({ inputDisabled = true })", "=openFishDialog"), 0);
+    FRAMES(10);
+    EXPECT_EQ(Answers(L), "") << "not answered while the dialog ignores answers";
+    EXPECT_EQ(EvalLua(L, "calls"), "0") << "and not even asked";
+    EXPECT_TRUE(DialogIsOpen(L));
+    EXPECT_EQ(NoticeCount(L), 0) << "nothing was sold, so nothing is announced";
+
+    ASSERT_EQ(RunLuauChunk(L, "fishInputDisabled = false", "=inputBack"), 0);
+    FRAMES(2);
+    EXPECT_EQ(Answers(L), "sell");
+    EXPECT_FALSE(DialogIsOpen(L));
+    EXPECT_EQ(NoticeCount(L), 1);
+}
+
+TEST_F(CompanionModTest, ADialogThatIgnoresTheFirstCallsIsAskedAgainUntilItClosesAndIsNotifiedOnce) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    START_FISH_SCENE();
+    ASSERT_FALSE(HasFatalFailure());
+
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrFishCatch', 'release')", "=release"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "showFishDialog({ ignoreFirst = 2 })", "=openFishDialog"), 0);
+    FRAMES(1);
+    EXPECT_TRUE(DialogIsOpen(L)) << "the first call did nothing";
+    EXPECT_EQ(NoticeCount(L), 0) << "so there is nothing to announce yet";
+    FRAMES(100);
+    EXPECT_EQ(Answers(L), "release");
+    EXPECT_FALSE(DialogIsOpen(L));
+    EXPECT_EQ(EvalLua(L, "calls"), "3") << "asked again until it took";
+    EXPECT_EQ(NoticeCount(L), 1);
+}
+
+// ---- Bounded, and once per opening ----
+
+TEST_F(CompanionModTest, ADialogThatNeverClosesIsAskedAFewTimesThenLeftAndTheNextCatchIsAnsweredAgain) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     START_FISH_SCENE();
@@ -225,16 +275,20 @@ TEST_F(CompanionModTest, ADialogThatStaysOpenAfterTheAnswerIsAnsweredOnlyOnceAnd
 
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrFishCatch', 'sell')", "=sell"), 0);
     ASSERT_EQ(RunLuauChunk(L, "showFishDialog({ stayOpen = true })", "=openFishDialog"), 0);
-    FRAMES(10);
-    EXPECT_EQ(Answers(L), "sell") << "answered once while it stays open";
-    EXPECT_EQ(NoticeCount(L), 1);
+    FRAMES(300);
+    const int calls = std::stoi(EvalLua(L, "calls"));
+    EXPECT_GE(calls, 2) << "asked again";
+    EXPECT_LE(calls, 6) << "but not for ever";
+    EXPECT_EQ(NoticeCount(L), 0) << "it never closed, so nothing is announced";
+    EXPECT_TRUE(DialogIsOpen(L)) << "and it is left for the player";
 
-    ASSERT_EQ(RunLuauChunk(L, "closeDialog()", "=close"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "closeDialog(); calls = 0", "=close"), 0);
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, "showFishDialog()", "=openAgain"), 0);
     FRAMES(2);
-    EXPECT_EQ(Answers(L), "sell,sell") << "the next catch is a new opening";
-    EXPECT_EQ(NoticeCount(L), 2);
+    EXPECT_EQ(Answers(L).substr(Answers(L).size() - 4), "sell") << "the next catch is a new opening";
+    EXPECT_FALSE(DialogIsOpen(L));
+    EXPECT_EQ(NoticeCount(L), 1) << "only the next catch: the player closed the first one, nothing was sold by the mod";
 }
 
 // ---- The notification ----
