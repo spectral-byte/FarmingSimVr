@@ -21,6 +21,8 @@ VRCompanion.lastControlledVehicle = VRCompanion.lastControlledVehicle or nil
 VRCompanion.isMenuVisible = (VRCompanion.isMenuVisible ~= nil) and VRCompanion.isMenuVisible or false
 -- A menu takes the input; see VRCompanion:doesMenuTakeInput
 VRCompanion.menuTakesInput = (VRCompanion.menuTakesInput ~= nil) and VRCompanion.menuTakesInput or false
+-- A Stereo Dialog is what is showing instead of the menu quad (ADR-0032); see VRCompanion:isStereoDialogShowing
+VRCompanion.stereoDialogShowing = (VRCompanion.stereoDialogShowing ~= nil) and VRCompanion.stereoDialogShowing or false
 VRCompanion.guiVisibilityInitialized = (VRCompanion.guiVisibilityInitialized ~= nil) and VRCompanion.guiVisibilityInitialized or false
 VRCompanion.vehicleCameraHooked = (VRCompanion.vehicleCameraHooked ~= nil) and VRCompanion.vehicleCameraHooked or false
 VRCompanion.playerCameraHooked = (VRCompanion.playerCameraHooked ~= nil) and VRCompanion.playerCameraHooked or false
@@ -146,6 +148,7 @@ function VRCompanion:loadMap(name)
     -- 6. Synchronize initial GUI menu visibility state
     self.isMenuVisible = false
     self.menuTakesInput = false
+    self.stereoDialogShowing = false
     self.guiVisibilityInitialized = false
     self:pollGuiVisibility()
 
@@ -214,8 +217,10 @@ function VRCompanion:pollGuiVisibility()
         end
     end
 
-    -- Today any visible GUI both shows the menu quad and takes the input, so the two states are set together
-    local menuQuadShown = isGuiVisible
+    -- A visible GUI takes the input. It also shows the menu quad, unless it is a Stereo Dialog, which stays in the
+    -- stereoscopic view. In 2D Floating Window Mode the presentation is already the quad, so a Stereo Dialog is any other menu.
+    self.stereoDialogShowing = isGuiVisible and not self.is2DViewActive and self:findStereoDialog(gui) ~= nil
+    local menuQuadShown = isGuiVisible and not self.stereoDialogShowing
     self.menuTakesInput = isGuiVisible
 
     if self.isMenuVisible ~= menuQuadShown or not self.guiVisibilityInitialized then
@@ -255,6 +260,33 @@ function VRCompanion:pollGuiVisibility()
     return isGuiVisible
 end
 
+-- The Stereo Dialogs (ADR-0032): the game dialogs that stay in the stereoscopic view instead of getting the menu quad, by the
+-- name the game gives the dialog in g_gui.currentDialogName. A dialog joins this list only after it is tested in the headset;
+-- one that is not on it gets the quad. Measured in the game (ticket #143): the fish catch dialog (Highlands Fishing DLC) is
+-- "FishDialog", a yes/no dialog whose buttons are answered by the gamepad's MENU_ACCEPT (SELL) and MENU_BACK (RELEASE).
+VRCompanion.STEREO_DIALOGS = {
+    FishDialog = true,
+}
+
+-- The Stereo Dialog that is the only thing the game shows, as the dialog's root element (g_gui.dialogs[1], whose `target` is
+-- its controller object and whose buttons and position later tickets work on), or nil. A dialog opened over a screen (the pause
+-- menu sets g_gui.currentGuiName; a dialog does not) or over another dialog is not alone, and anything that cannot be read as
+-- a lone listed dialog counts as a menu, so that the player is never left in stereo with a GUI they cannot use.
+function VRCompanion:findStereoDialog(gui)
+    gui = gui or g_gui or _G.g_gui
+    if type(gui) ~= "table" then return nil end
+    local ok, root = pcall(function()
+        local screen = gui.currentGuiName
+        if screen ~= nil and screen ~= "" then return nil end
+        local dialogs = gui.dialogs
+        if type(dialogs) ~= "table" or #dialogs ~= 1 then return nil end
+        local name = gui.currentDialogName
+        if type(name) ~= "string" or self.STEREO_DIALOGS[name] ~= true then return nil end
+        return dialogs[1]
+    end)
+    return ok and root or nil
+end
+
 -- A visible game GUI means two different things, and every reader asks for the one it needs:
 --   isMenuQuadShown()  - the presentation: the menu quad is what the player sees (VRBridge is told so, the
 --                        stereo pipeline and HUD convergence stand down, the menu background camera runs, the
@@ -269,6 +301,13 @@ end
 
 function VRCompanion:doesMenuTakeInput()
     return self.menuTakesInput == true or self.isMenuVisible == true
+end
+
+-- A Stereo Dialog is showing in the stereoscopic view: a menu takes the input but the quad is not shown. The dialog is answered
+-- with the gamepad's own menu buttons through the Virtual Gamepad, so the Companion Mod's quad menu (the Pointer Ray, the grip
+-- and lower face button as back, the thumbstick scroll) and the Virtual Gamepad's taking of every input are not engaged.
+function VRCompanion:isStereoDialogShowing()
+    return self.stereoDialogShowing == true
 end
 
 function VRCompanion:getPlayerCamera()
@@ -946,6 +985,7 @@ function VRCompanion:deleteMap()
     self.vehicleRotationStates = {}
     self.isMenuVisible = false
     self.menuTakesInput = false
+    self.stereoDialogShowing = false
     self.guiVisibilityInitialized = false
 
     local deleteFn = delete or (_G and _G.delete)
