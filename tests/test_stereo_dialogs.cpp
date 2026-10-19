@@ -313,6 +313,38 @@ TEST_F(CompanionModTest, AButtonHeldWhenTheFishDialogOpensDoesNotAnswerItButAFre
     FRAMES(2);
     EXPECT_NE(Pad(bridge).wButtons & XINPUT_GAMEPAD_A, 0) << "pressed again in the dialog, it is the dialog's";
 }
+// The game log says what happened: the dialog stays in the stereoscopic view with the menu taking the input; only a menu that
+// gets the quad is "switched to the 6DOF Quad layer".
+TEST_F(CompanionModTest, TheLogSaysTheFishDialogKeptTheStereoscopicViewAndOnlyAMenuThatGetsTheQuadSwitchedToIt) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    START_STEREO_DIALOG_SCENE();
+    ASSERT_FALSE(HasFatalFailure());
+
+    auto logged = [](const char* text) {
+        for (const auto& line : s_capturedLogs) {
+            if (line.find(text) != std::string::npos) return true;
+        }
+        return false;
+    };
+    s_capturedLogs.clear();
+    ASSERT_EQ(RunLuauChunk(L, "showDialog('FishDialog')", "=openFishDialog"), 0);
+    FRAMES(3);
+    EXPECT_TRUE(logged("Stereo Dialog opened")) << "the dialog's opening is in the log";
+    EXPECT_TRUE(logged("stereoscopic view")) << "and says the view stayed stereoscopic";
+    EXPECT_FALSE(logged("Quad layer")) << "not that it switched to the quad";
+
+    ASSERT_EQ(RunLuauChunk(L, "closeDialog()", "=closeFishDialog"), 0);
+    FRAMES(3);
+    EXPECT_TRUE(logged("Stereo Dialog closed"));
+
+    s_capturedLogs.clear();
+    ASSERT_EQ(RunLuauChunk(L, "showDialog('YesNoDialog')", "=openOtherDialog"), 0);
+    FRAMES(3);
+    EXPECT_TRUE(logged("switched presentation to 6DOF Quad layer")) << "a menu that gets the quad says so";
+    EXPECT_FALSE(logged("Stereo Dialog opened"));
+}
+
 TEST_F(CompanionModTest, AMenuThatGetsTheQuadStillTakesEveryInputOffThePadAndGoesBackOnTheGrip) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
