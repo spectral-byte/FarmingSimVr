@@ -196,6 +196,7 @@ function VRCompanion:loadMap(name)
     end
     if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
     if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
+    if type(self.registerFishCatchConsoleCommands) == "function" then self:registerFishCatchConsoleCommands() end
 
     if self.showHudLoadNotification == true then
         local mission = g_currentMission or _G.g_currentMission
@@ -849,6 +850,9 @@ function VRCompanion:runUpdate(dt)
         end
     end
 
+    -- Answer the fish catch dialog if `vrFishCatch` says so: before the poll, so that the dialog is gone when the poll looks
+    if type(self.updateFishCatch) == "function" then self:updateFishCatch() end
+
     -- Poll in-game GUI visibility and synchronize with native VRBridge
     self:pollGuiVisibility()
 
@@ -1102,6 +1106,7 @@ function VRCompanion:deleteMap()
     end
 
     if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
+    if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
     if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end
 

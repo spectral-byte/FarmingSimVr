@@ -248,6 +248,7 @@ add_executable(fs25_vr_tests
     tests/test_hand_tools_fishing_rod_diagnostics.cpp
     tests/test_dialog_diagnostics.cpp
     tests/test_stereo_dialogs.cpp
+    tests/test_fish_catch_auto_answer.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
