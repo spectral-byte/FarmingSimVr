@@ -875,6 +875,9 @@ function VRCompanion:runUpdate(dt)
     if not self.missionUpdateHooked then
         self:hookMissionUpdate()
     end
+    if self.guiDrawHook == nil and type(self.hookGuiDraw) == "function" then
+        self:hookGuiDraw()
+    end
     -- Install dt=0 guards once, then only retry (to catch a late Ferry class or newly
     -- spawned vehicles) on a slow cadence or on a vehicle transition, never every frame.
     local speedHookRetryDue = self.vehicleSpeedHooked
@@ -964,6 +967,9 @@ function VRCompanion:deleteMap()
     -- Unhook HUD display hooks cleanly
     if type(self.unhookHud) == "function" then
         self:unhookHud()
+    end
+    if type(self.unhookGuiDraw) == "function" then
+        self:unhookGuiDraw()
     end
 
     -- Unhook mission update loop cleanly
