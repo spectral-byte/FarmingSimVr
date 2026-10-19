@@ -220,6 +220,7 @@ function VRCompanion:pollGuiVisibility()
 
     -- A visible GUI takes the input. It also shows the menu quad, unless it is a Stereo Dialog, which stays in the
     -- stereoscopic view. In 2D Floating Window Mode the presentation is already the quad, so a Stereo Dialog is any other menu.
+    local wasStereoDialogShowing = self.stereoDialogShowing == true
     self.stereoDialogShowing = isGuiVisible and not self.is2DViewActive and self:findStereoDialog(gui) ~= nil
     local menuQuadShown = isGuiVisible and not self.stereoDialogShowing
     self.menuTakesInput = isGuiVisible
@@ -248,7 +249,7 @@ function VRCompanion:pollGuiVisibility()
         if VRBridge ~= nil and type(VRBridge.resetTemporalHistory) == "function" then
             VRBridge.resetTemporalHistory()
         end
-        if isGuiVisible then
+        if isGuiVisible and not self.stereoDialogShowing then
             print("[FS25_VR] In-game GUI menu opened; switched presentation to 6DOF Quad layer.")
         elseif self.frameTicks > 0 then
             if self.is2DViewActive then
@@ -257,6 +258,12 @@ function VRCompanion:pollGuiVisibility()
                 print("[FS25_VR] In-game GUI menu closed; restored stereoscopic 3D projection rendering.")
             end
         end
+    end
+    -- A Stereo Dialog does not switch the presentation, so it is told apart from the menu quad in the log.
+    if self.stereoDialogShowing and not wasStereoDialogShowing then
+        print("[FS25_VR] In-game GUI Stereo Dialog opened; kept the stereoscopic view, the menu takes the input.")
+    elseif wasStereoDialogShowing and not self.stereoDialogShowing then
+        print("[FS25_VR] In-game GUI Stereo Dialog closed.")
     end
     return isGuiVisible
 end

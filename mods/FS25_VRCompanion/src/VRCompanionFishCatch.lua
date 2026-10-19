@@ -146,3 +146,5 @@ end
 
 VRCompanion.FishCatch.updateFishCatch = function(self, ...) return VRCompanion.updateFishCatch(VRCompanion, ...) end
 VRCompanion.FishCatch.consoleCommandSetFishCatch = function(self, ...) return VRCompanion.consoleCommandSetFishCatch(VRCompanion, ...) end
+
+return VRCompanion.FishCatch

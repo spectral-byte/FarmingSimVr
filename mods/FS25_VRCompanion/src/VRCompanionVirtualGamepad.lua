@@ -151,8 +151,9 @@ local function newUses()
         uses[hand] = {}
         for _, input in ipairs(INPUTS) do
             -- calledAt: the last update a use asked for it. down: held, as of the last look. yielding: held when the use
-            -- began, so it keeps its binding. suppressed: reads as released on the pad.
-            uses[hand][input] = { calledAt = -1, down = false, yielding = false, suppressed = false }
+            -- began, so it keeps its binding. suppressed: reads as released on the pad. heldAtDialog: held when a Stereo
+            -- Dialog opened, so it is not the dialog's and reads released until it is let go.
+            uses[hand][input] = { calledAt = -1, down = false, yielding = false, suppressed = false, heldAtDialog = false }
         end
     end
     return uses
@@ -164,6 +165,7 @@ local function newState()
         sentLive = nil,
         seenKey = nil,       -- the last (present, slot, reason) the game log was told about
         update = 0,          -- counts the Companion Mod's updates
+        dialogShowing = false,  -- whether a Stereo Dialog showed at the last update
         uses = newUses(),
         sentUse = { [0] = 0, [1] = 0 },  -- the sets of inputs the Injector was last told the Companion Mod is using
     }
@@ -291,6 +293,13 @@ end
 
 -- Last of the Companion Mod's update: the uses made here, then which inputs are off the pad this update, told to the Injector.
 function VRCompanion:updateVirtualGamepadUse(dt)
+    -- A Stereo Dialog is answered with the pad's own buttons, so a fresh press reaches it. Its answer buttons act on release,
+    -- though: an input already held when it opened is not the dialog's, and reads released until it is let go (the held-input
+    -- rule of any menu, for the dialog).
+    local dialogShowing = self:doesMenuTakeInput() and self:isStereoDialogShowing()
+    local dialogOpening = dialogShowing and not state.dialogShowing
+    state.dialogShowing = dialogShowing
+
     if self.motionControllersEnabled ~= false then
         if self:doesMenuTakeInput() and not self:isStereoDialogShowing() and not isSettingsPageShowing() then
             -- Every input of both hands: the Pointer Ray menus act on the raw hand state themselves.
@@ -317,11 +326,18 @@ function VRCompanion:updateVirtualGamepadUse(dt)
             local record = state.uses[hand][input]
             if record.calledAt == state.update then
                 record.suppressed = not record.yielding
+                record.heldAtDialog = false
             else
                 record.down = isHeld(self, hand, input, record.down)
+                if dialogOpening then record.heldAtDialog = record.down end
                 -- No use wants it any more, but what a use took stays off the pad until it is let go.
                 record.suppressed = record.suppressed and record.down
                 record.yielding = false
+                if record.heldAtDialog then
+                    -- Held across the dialog's opening: off the pad until let go, even if the dialog closes first.
+                    record.heldAtDialog = record.down
+                    if record.down then record.suppressed = true end
+                end
             end
             if record.suppressed then mask = mask + INPUT_BITS[input] end
         end

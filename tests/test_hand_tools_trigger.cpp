@@ -274,6 +274,35 @@ TEST_F(VirtualGamepadHandToolsTriggerTest, InAMenuEitherHandCanPointEvenWhileThe
     EXPECT_EQ(PointerHand(), "0") << "back in the world the Tool Hand holds the lance again and the other hand points";
 }
 
+// A Stereo Dialog (spec #142, story 10) is answered with the pad's buttons: the Tool Hand's trigger uses nothing while it
+// shows, so a button press for the dialog is not also a Hand Tool action.
+TEST_F(VirtualGamepadHandToolsTriggerTest, WhileAStereoDialogShowsTheToolHandsTriggerDoesNotUseTheLanceAndReachesThePad) {
+    StartWithLanceInTheRightHand();
+    ForgetUseCalls();
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        g_gui.visible = true
+        g_gui.currentDialogName = "FishDialog"
+        g_gui.dialogs = { { name = "FishDialog", target = {} } }
+    )luau", "=openFishDialog"), 0);
+    FRAMES(3);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isStereoDialogShowing()"), "true");
+    EXPECT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true") << "the lance stays in the hand";
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(3);
+    EXPECT_EQ(UseCalls(), 0) << "the pull does not use the lance";
+    EXPECT_FALSE(Spraying());
+    EXPECT_EQ(Pad().bRightTrigger, 255) << "it reaches the dialog through the pad";
+
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false; g_gui.currentDialogName = ''; g_gui.dialogs = {}", "=closeFishDialog"), 0);
+    FRAMES(3);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    EXPECT_TRUE(Spraying()) << "and the trigger uses the lance again once the dialog has closed";
+}
 // ---- Nothing changes when the tool is not in a tracked Tool Hand ------------------------------------------------------
 
 TEST_F(VirtualGamepadHandToolsTriggerTest, WithAnUnsupportedHandToolTheTriggerIsThePadsAndThePointerHandRulesAreAsBefore) {

@@ -798,6 +798,13 @@ end
 
 local function updateTrigger(self)
     local use = state.trigger
+    -- A Stereo Dialog takes the input and is answered with the pad's buttons: the trigger uses nothing while it shows (a use in
+    -- progress ends as it does when the tool leaves the hand), so a press for the dialog is not also a Hand Tool action. The
+    -- tool stays in the hand, and a trigger held when the dialog closes keeps its binding until let go (the held-input rule).
+    if self:doesMenuTakeInput() and self:isStereoDialogShowing() then
+        endTriggerUse()
+        return
+    end
     local tool = heldTool()
     local kind, entry = nil, nil
     if tool ~= nil then kind, entry = supportedKind(tool) end

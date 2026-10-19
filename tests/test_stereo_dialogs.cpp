@@ -278,6 +278,73 @@ TEST_F(CompanionModTest, WhileTheFishDialogShowsTheVirtualGamepadSendsTheMotionC
     EXPECT_EQ(EvalLua(L, "_G.clicks"), "0");
 }
 
+// The held-input rule of any menu, for a dialog the pad answers: an input already held when the dialog opens (the lower face
+// button that cast the rod is still down) is not the dialog's, so letting it go cannot answer it (the answer buttons act on
+// release). It reads released on the pad until it is let go; a button pressed afterwards is the dialog's.
+TEST_F(CompanionModTest, AButtonHeldWhenTheFishDialogOpensDoesNotAnswerItButAFreshPressDoes) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    START_STEREO_DIALOG_SCENE();
+    ASSERT_FALSE(HasFatalFailure());
+
+    FakeOpenXrControllers::Inputs held;
+    held.buttonLower = true;
+    headset.SetHandInputs(kRight, held);
+    FRAMES(2);
+    EXPECT_NE(Pad(bridge).wButtons & XINPUT_GAMEPAD_A, 0) << "outside the dialog it is the pad's A as always";
+
+    ASSERT_EQ(RunLuauChunk(L, "showDialog('FishDialog')", "=openFishDialog"), 0);
+    FRAMES(3);
+    EXPECT_EQ(Pad(bridge).wButtons & XINPUT_GAMEPAD_A, 0) << "held across the open, it is not the dialog's";
+
+    // Something else pressed while the held one is still down is a fresh press and reaches the dialog.
+    FakeOpenXrControllers::Inputs both = held;
+    both.buttonUpper = true;
+    headset.SetHandInputs(kRight, both);
+    FRAMES(2);
+    EXPECT_NE(Pad(bridge).wButtons & XINPUT_GAMEPAD_B, 0) << "a fresh press reaches the dialog";
+    EXPECT_EQ(Pad(bridge).wButtons & XINPUT_GAMEPAD_A, 0) << "while the held one still is not";
+
+    headset.SetHandInputs(kRight, FakeOpenXrControllers::Inputs{});
+    FRAMES(2);
+    EXPECT_TRUE(IsNeutral(Pad(bridge))) << "letting go sends nothing to the dialog";
+
+    headset.SetHandInputs(kRight, held);
+    FRAMES(2);
+    EXPECT_NE(Pad(bridge).wButtons & XINPUT_GAMEPAD_A, 0) << "pressed again in the dialog, it is the dialog's";
+}
+// The game log says what happened: the dialog stays in the stereoscopic view with the menu taking the input; only a menu that
+// gets the quad is "switched to the 6DOF Quad layer".
+TEST_F(CompanionModTest, TheLogSaysTheFishDialogKeptTheStereoscopicViewAndOnlyAMenuThatGetsTheQuadSwitchedToIt) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    START_STEREO_DIALOG_SCENE();
+    ASSERT_FALSE(HasFatalFailure());
+
+    auto logged = [](const char* text) {
+        for (const auto& line : s_capturedLogs) {
+            if (line.find(text) != std::string::npos) return true;
+        }
+        return false;
+    };
+    s_capturedLogs.clear();
+    ASSERT_EQ(RunLuauChunk(L, "showDialog('FishDialog')", "=openFishDialog"), 0);
+    FRAMES(3);
+    EXPECT_TRUE(logged("Stereo Dialog opened")) << "the dialog's opening is in the log";
+    EXPECT_TRUE(logged("stereoscopic view")) << "and says the view stayed stereoscopic";
+    EXPECT_FALSE(logged("Quad layer")) << "not that it switched to the quad";
+
+    ASSERT_EQ(RunLuauChunk(L, "closeDialog()", "=closeFishDialog"), 0);
+    FRAMES(3);
+    EXPECT_TRUE(logged("Stereo Dialog closed"));
+
+    s_capturedLogs.clear();
+    ASSERT_EQ(RunLuauChunk(L, "showDialog('YesNoDialog')", "=openOtherDialog"), 0);
+    FRAMES(3);
+    EXPECT_TRUE(logged("switched presentation to 6DOF Quad layer")) << "a menu that gets the quad says so";
+    EXPECT_FALSE(logged("Stereo Dialog opened"));
+}
+
 TEST_F(CompanionModTest, AMenuThatGetsTheQuadStillTakesEveryInputOffThePadAndGoesBackOnTheGrip) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
