@@ -267,3 +267,35 @@ TEST_F(CompanionModTest, ADialogWithManyElementFieldsStillLogsItsPlainValuesBefo
     EXPECT_FALSE(LineWith(lines, { "target.price (number)", "120" }).empty()) << Joined(lines);
     EXPECT_FALSE(LineWith(lines, { "more", "left out" }).empty()) << "says what it left out: " << Joined(lines);
 }
+
+
+// The headset's first run (a generic yes/no dialog: SELL and RELEASE buttons, the catch only in a long text the log cut short):
+// the full text, and the answer buttons' own fields (their input action, their click handler) are what the next step needs.
+TEST_F(CompanionModTest, TheCommandLogsTheFullTextsAndTheAnswerButtonsOwnFields) {
+    ASSERT_NO_FATAL_FAILURE(Start(L));
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local root = showFishDialog()
+        local target = root.target
+        target.defaultText = "Do you want to release the fish? Species: Pike, weight: 3.25 kg, price: 120"
+        local function button(inputAction)
+            local b = { inputActionName = inputAction, onClickCallback = function() end, text = "A button label that is long, too" }
+            b.inputActions = { "MENU_ACCEPT", "MENU_ACTIVATE" }
+            for i = 1, 100 do b["padding" .. i] = i end
+            return b
+        end
+        target.yesButton = button("MENU_ACCEPT")
+        target.noButton = button("MENU_BACK")
+        target.dialogTextElement = { text = "The text the player reads: Pike, 3.25 kg, sells for 120", absPosition = { 0, 0 } }
+    )luau", "=buttons"), 0);
+
+    RunCommand(L);
+
+    const auto lines = Lines();
+    EXPECT_FALSE(LineWith(lines, { "target.defaultText", "full", "Species: Pike, weight: 3.25 kg, price: 120" }).empty())
+        << "a long text in full: " << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "target.dialogTextElement.text", "full", "sells for 120" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "target.yesButton.inputActionName (string)", "MENU_ACCEPT" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "target.noButton.inputActionName (string)", "MENU_BACK" }).empty()) << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "target.yesButton.inputActions.1", "MENU_ACCEPT" }).empty()) << "a button's table one level further: " << Joined(lines);
+    EXPECT_FALSE(LineWith(lines, { "target.yesButton functions", "onClickCallback" }).empty()) << Joined(lines);
+}

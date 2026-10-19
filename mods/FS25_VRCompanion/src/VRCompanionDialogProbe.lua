@@ -17,7 +17,8 @@
 --   Console: vrDialogDiagnostics   logs, tagged "[FS25_VR] dialog probe: " in the game log (Documents\My Games\FarmingSimulator2025\log.txt):
 --     g_gui.currentGuiName and currentDialogName, the open dialogs' names, the newest dialog's name and class, its class chain
 --     (each class's method names), its root element's fields and its target's own fields (one level deep, functions by name), and
---     every position, size, margin or offset field of the root and of the target's elements
+--     every position, size, margin or offset field of the root and of the target's elements, the yes and no buttons and the text
+--     element dumped whole (their input action and click handler), and every long string in full (the dialog's text holds the catch)
 --
 -- The dump's readers are the Hand Tool probe's (VRCompanionHandTools.lua: VRCompanion.HandTools.probeReaders).
 -- ====================================================================
@@ -38,6 +39,11 @@ local MAX_NESTED_KEYS = 40      -- a table field with more keys than this is onl
 local MAX_CLASS_LEVELS = 8      -- levels of the class chain
 local MAX_POSITION_ELEMENTS = 20  -- elements of the target whose position is shown
 local MAX_COMPACT_ENTRIES = 8   -- entries of a position table shown on one line
+local SHORT_TEXT = 30           -- a string longer than this is cut by the short values, so it is also logged in full
+local MAX_FULL_TEXT = 1000      -- characters of one full text
+
+-- The target's elements dumped whole: the answer buttons (their input action, click handler) and the text the player reads.
+local DUMPED_ELEMENTS = { "yesButton", "noButton", "dialogTextElement" }
 
 local POSITION_WORDS = { "pos", "size", "margin", "offset", "anchor", "pivot", "scale", "align", "width", "height" }
 
@@ -149,6 +155,17 @@ local function dumpTable(label, tbl, add)
     end
 end
 
+-- The strings of a table that dumpTable's short values cut (a dialog's text holds the catch: species, weight, price), whole, one
+-- line each, capped at MAX_FULL_TEXT characters.
+local function fullTexts(label, tbl, add)
+    for _, key in ipairs(sortedKeys(tbl)) do
+        local value = rawget(tbl, key)
+        if type(value) == "string" and #value > SHORT_TEXT then
+            add(string.format('%s.%s (full) = "%s"', label, tostring(key), string.sub(value, 1, MAX_FULL_TEXT)))
+        end
+    end
+end
+
 -- The position-related fields of a table (position, absPosition, size, margin, offsets, anchors...), one line.
 local function positionLine(label, tbl)
     local parts = {}
@@ -241,6 +258,16 @@ local function describeDialogs()
         end
     end, add)
     guarded("target", function() if type(target) == "table" then dumpTable("target", target, add) end end, add)
+    for _, name in ipairs(DUMPED_ELEMENTS) do
+        guarded("target." .. name, function()
+            local element = readField(target, name)
+            if type(element) == "table" then
+                dumpTable("target." .. name, element, add)
+                fullTexts("target." .. name, element, add)
+            end
+        end, add)
+    end
+    guarded("target texts", function() if type(target) == "table" then fullTexts("target", target, add) end end, add)
     guarded("root", function() dumpTable("root", root, add) end, add)
 
     if leftOut > 0 then lines[#lines] = string.format("%d more lines left out", leftOut + 1) end
