@@ -244,6 +244,7 @@ function VRCompanion:saveConfiguration(xmlPath)
         end
         if type(self.saveMotionControllerSettings) == "function" then self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn }) end
         if type(self.saveFishCatchSetting) == "function" then self:saveFishCatchSetting(xmlFile, { setString = setXmlStringFn }) end
+        if type(self.saveStereoDialogDepthSetting) == "function" then self:saveStereoDialogDepthSetting(xmlFile, { setFloat = setXmlFloatFn }) end
         if type(setXmlStringFn) == "function" then
             -- Persist the mode last requested, not VRBridge's: while the compositor is active the bridge
             -- only queues a change until the next frame boundary, so it still reports the old mode here.
@@ -354,6 +355,7 @@ function VRCompanion:loadConfiguration(xmlPath)
 
                 if type(self.loadMotionControllerSettings) == "function" then self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn }) end
                 if type(self.loadFishCatchSetting) == "function" then self:loadFishCatchSetting(xmlFile, { getString = getXmlStringFn }) end
+                if type(self.loadStereoDialogDepthSetting) == "function" then self:loadStereoDialogDepthSetting(xmlFile, { getFloat = getXmlFloatFn }) end
 
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.snapTurnAngle")

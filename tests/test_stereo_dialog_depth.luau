@@ -131,20 +131,56 @@ end
 
 local function near(a, b) return math.abs(a - b) < 0.0001 end
 
-test("AStereoDialogIsDrawnShiftedByTheHudConvergenceOffsetAlternatingWithFrameParity", function()
+-- The disparity of a point at the given depth: ipd / depth * the HUD's parallax factor (0.064 m ipd in the stub)
+local function disparityAt(depth) return 0.064 / depth * VRCompanion.CONVERGENCE_PARALLAX_FACTOR end
+
+test("AStereoDialogIsDrawnShiftedAlternatingWithFrameParityToItsOwnDepthBehindTheHud", function()
+    assert(VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH == 2.5, "the dialog sits at 2.5 m by default, further back than the HUD's 1.8 m")
     local root = showDialog("FishDialog")
     settle()
+    local want = disparityAt(2.5)
     local left = renderFrame(0)
     assert(left ~= nil, "the dialog is drawn")
-    assert(near(left.root, 0.012), string.format("left eye frame: root at +0.012, got %f", left.root))
-    assert(near(left.box, DRAW_DIALOG_X + 0.012), string.format("the visible box moves with the root, got %f", left.box))
+    assert(near(left.root, want), string.format("left eye frame: root at +%f, got %f", want, left.root))
+    assert(near(left.box, DRAW_DIALOG_X + want), string.format("the visible box moves with the root, got %f", left.box))
     local right = renderFrame(1)
-    assert(near(right.root, -0.012), string.format("right eye frame: root at -0.012, got %f", right.root))
-    assert(near(right.box, DRAW_DIALOG_X - 0.012), string.format("the visible box moves with the root, got %f", right.box))
-    -- It is the same displacement the HUD Groups get
+    assert(near(right.root, -want), string.format("right eye frame: root at -%f, got %f", want, right.root))
+    assert(near(right.box, DRAW_DIALOG_X - want), string.format("the visible box moves with the root, got %f", right.box))
+    -- Less disparity than the HUD Groups get: the dialog reads further away than the HUD
     parity = 0
     VRCompanion:update(16.6)
-    assert(near(left.root, VRCompanion.currentConvergenceOffset), "same offset as the HUD")
+    assert(math.abs(left.root) < math.abs(VRCompanion.currentConvergenceOffset), "further back than the HUD")
+end)
+
+test("VrDialogDepthSetsHowFarBackTheDialogReadsAndReportsAndRefusesBadValues", function()
+    local root = showDialog("FishDialog")
+    settle()
+    local report = VRCompanion:consoleCommandSetStereoDialogDepth(nil)
+    assert(string.find(report, "2.5", 1, true), "no argument reports the depth: " .. report)
+    local set = VRCompanion:consoleCommandSetStereoDialogDepth("3.2")
+    assert(string.find(set, "3.2", 1, true), "reports the new depth: " .. set)
+    assert(near(renderFrame(0).root, disparityAt(3.2)), "the dialog is drawn at the new depth")
+    for _, bad in ipairs({ "far", "0", "-1", "99", "0.1" }) do
+        local refused = VRCompanion:consoleCommandSetStereoDialogDepth(bad)
+        assert(string.find(refused, "Usage", 1, true), "refused with the usage: " .. bad)
+    end
+    assert(near(renderFrame(0).root, disparityAt(3.2)), "a refused value leaves the depth alone")
+    VRCompanion:consoleCommandSetStereoDialogDepth("2.5")
+end)
+
+test("TheDialogDepthSurvivesASaveAndLoad", function()
+    local store = {}
+    VRCompanion:setStereoDialogDepth(3.0)
+    VRCompanion:saveStereoDialogDepthSetting("file", { setFloat = function(_, key, value) store[key] = value end })
+    assert(store["vrSettings.stereoDialogDepth"] == 3.0, "the depth is saved")
+    VRCompanion:setStereoDialogDepth(VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH)
+    VRCompanion:loadStereoDialogDepthSetting("file", { getFloat = function(_, key) return store[key] end })
+    assert(VRCompanion.stereoDialogDepth == 3.0, "the depth is loaded")
+    VRCompanion:loadStereoDialogDepthSetting("file", { getFloat = function() return nil end })
+    assert(VRCompanion.stereoDialogDepth == 3.0, "a missing key keeps the value")
+    VRCompanion:loadStereoDialogDepthSetting("file", { getFloat = function() return 40.0 end })
+    assert(VRCompanion.stereoDialogDepth == 3.0, "a value out of range keeps the value")
+    VRCompanion:setStereoDialogDepth(VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH)
 end)
 
 test("ADialogIsPutBackAfterEachDrawAndDoesNotDriftOverManyFrames", function()

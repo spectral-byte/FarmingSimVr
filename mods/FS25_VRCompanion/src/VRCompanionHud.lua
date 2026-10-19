@@ -1257,15 +1257,64 @@ end
 -- the eye is the one being rendered, and what was moved is moved back by the same amount afterwards, from wherever the draw
 -- left it, so that nothing the game places from the dialog's own values drifts (the lesson of the rod minigame, #140). A dialog
 -- whose root cannot be moved this way is drawn where the game placed it: zero disparity.
+-- The dialog has a depth of its own, `vrDialogDepth` (default 2.5 m, saved), set further back than the HUD's 1.8 m: it fills more of
+-- the view than a HUD group and read too close at the HUD's depth in the headset. Its disparity is that of the depth, with the sign
+-- of the eye being rendered; like the HUD's it is nil (no shift) while the HUD's convergence is off (pass-through, no tracking).
+VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH = 2.5
+VRCompanion.stereoDialogDepth = VRCompanion.stereoDialogDepth or VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH
+
+local STEREO_DIALOG_DEPTH_KEY = "vrSettings.stereoDialogDepth"
+
 function VRCompanion:getStereoDialogDrawShift(gui)
     if self.is2DViewActive or not self:isStereoDialogShowing() then return nil end
+    if (self.currentConvergenceDisparity or 0.0) == 0.0 then return nil end
     local root = self:findStereoDialog(gui)
     if type(root) ~= "table" or type(root.setAbsolutePosition) ~= "function" or type(root.absPosition) ~= "table" then
         return nil
     end
-    local offset = self:getConvergenceOffset()
+    local disparity = self:computeConvergenceDisparity(self:getIpd(), self.stereoDialogDepth or self.DEFAULT_STEREO_DIALOG_DEPTH)
+    local offset = self:getConvergenceOffset(nil, disparity)
     if type(offset) ~= "number" or offset == 0.0 then return nil end
     return root, offset
+end
+
+function VRCompanion:setStereoDialogDepth(depth, save)
+    if type(depth) ~= "number" or depth < self.MIN_CONVERGENCE_DEPTH or depth > self.MAX_CONVERGENCE_DEPTH then return false end
+    self.stereoDialogDepth = depth
+    if save and type(self.saveConfiguration) == "function" then self:saveConfiguration() end
+    return true
+end
+
+function VRCompanion:saveStereoDialogDepthSetting(xmlFile, xml)
+    if type(xml.setFloat) == "function" then
+        xml.setFloat(xmlFile, STEREO_DIALOG_DEPTH_KEY, self.stereoDialogDepth or self.DEFAULT_STEREO_DIALOG_DEPTH)
+    end
+end
+
+-- A key that is missing, or a depth out of range, keeps the current value.
+function VRCompanion:loadStereoDialogDepthSetting(xmlFile, xml)
+    if type(xml.getFloat) ~= "function" then return end
+    self:setStereoDialogDepth(xml.getFloat(xmlFile, STEREO_DIALOG_DEPTH_KEY))
+end
+
+function VRCompanion:consoleCommandSetStereoDialogDepth(arg)
+    local usage = string.format("Usage: vrDialogDepth [%.1f-%.1f] (metres, saved)", self.MIN_CONVERGENCE_DEPTH, self.MAX_CONVERGENCE_DEPTH)
+    if arg == nil or arg == "" then
+        return string.format("Dialog depth: %.1f m. %s", self.stereoDialogDepth or self.DEFAULT_STEREO_DIALOG_DEPTH, usage)
+    end
+    local depth = tonumber(arg)
+    if not self:setStereoDialogDepth(depth, true) then return usage end
+    print(string.format("[FS25_VR] Dialog depth set to: %.1f m", depth))
+    return string.format("Dialog depth set to: %.1f m (Saved)", depth)
+end
+
+function VRCompanion:registerStereoDialogDepthConsoleCommands()
+    if addConsoleCommand == nil then return end
+    addConsoleCommand("vrDialogDepth", "How far back a Stereo Dialog (the fish catch dialog) reads in the headset, in metres (saved; 2.5 by default; the HUD is at 1.8): vrDialogDepth [0.5-5.0]", "consoleCommandSetStereoDialogDepth", self)
+end
+
+function VRCompanion:unregisterStereoDialogDepthConsoleCommands()
+    if removeConsoleCommand ~= nil then removeConsoleCommand("vrDialogDepth") end
 end
 
 function VRCompanion:drawGuiAtHudDepth(original, gui, ...)
