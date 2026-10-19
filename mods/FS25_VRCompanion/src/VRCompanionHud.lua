@@ -450,7 +450,7 @@ function VRCompanion:updateHudConvergence(dt)
     local isTrackingActive = self:isHeadTrackingActive()
 
     local targetDisparity = 0.0
-    if not isPassThrough and isTrackingActive and not self.isMenuVisible and not self.is2DViewActive then
+    if not isPassThrough and isTrackingActive and not self:isMenuQuadShown() and not self.is2DViewActive then
         local rawIpd = self:getIpd()
         targetDisparity = self:computeConvergenceDisparity(rawIpd, self.hudConvergenceDepth)
     end
@@ -717,8 +717,8 @@ function VRCompanion:rememberControlsExpanded(isExpanded)
     if type(isExpanded) ~= "boolean" or not self:isDisplayVisible("InputHelpDisplay") then
         return
     end
-    -- Asked of the GUI directly: a menu opens the input help as it opens, before isMenuVisible is next polled
-    local menuOpen = self.isMenuVisible == true
+    -- Asked of the GUI directly: a menu opens the input help as it opens, before the menu state is next polled
+    local menuOpen = self:doesMenuTakeInput()
     local gui = g_gui or _G.g_gui
     if gui ~= nil and type(gui.getIsGuiVisible) == "function" then
         local ok, visible = pcall(gui.getIsGuiVisible, gui)

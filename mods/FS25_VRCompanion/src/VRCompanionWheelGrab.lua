@@ -388,7 +388,7 @@ local function findSteeringWheel(self)
     if self.wheelGrabEnabled == false then return nil, nil, nil, "Wheel Grab is off" end
     if self.motionControllersEnabled == false then return nil, nil, nil, "Motion Controllers are off" end
     -- A menu or 2D Floating Window Mode takes the player out of the cab: the hands cannot be located in it either.
-    if self.isMenuVisible == true then return nil, nil, nil, "a menu is open" end
+    if self:doesMenuTakeInput() then return nil, nil, nil, "a menu is open" end
     if self.is2DViewActive == true then return nil, nil, nil, "2D Floating Window Mode is on" end
     local vehicle = self:getControlledVehicle()
     if vehicle == nil then return nil, nil, nil, "not driving a vehicle" end

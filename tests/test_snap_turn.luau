@@ -495,6 +495,50 @@ test("GuiMenuGuardSuppressesSnapTurnsWhileMenuVisible", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
+-- The menu quad showing and a menu taking the input are two states. Polling the GUI sets both together; the
+-- input one alone (no quad shown) must still refuse the turn.
+test("SnapTurnIsRefusedWhileAMenuTakesTheInputEvenWithoutTheMenuQuad", function()
+    VRCompanion:resetSnapTurnDebounce()
+
+    local mockCam = { isInside = true, cameraNode = 902, origRotY = 0.0, rotY = 0.0 }
+    _G.g_currentMission = {
+        controlledVehicle = { getActiveCamera = function() return mockCam end }
+    }
+
+    VRCompanion.isMenuVisible = false
+    VRCompanion.menuTakesInput = true
+    local ok, err = VRCompanion:snapTurnRight(nil, 1000)
+    assert(ok == false, "Snap turn must be rejected while a menu takes the input")
+    assert(err == "menu_visible", "Error reason must be menu_visible, got " .. tostring(err))
+    assert(math.abs(mockCam.rotY - 0.0) < 0.0001, "Camera rotY must not change while a menu takes the input")
+
+    VRCompanion.menuTakesInput = false
+    VRCompanion:resetSnapTurnDebounce()
+end)
+
+test("PollingAnOpenGuiRefusesSnapTurnUntilItCloses", function()
+    VRCompanion:resetSnapTurnDebounce()
+
+    local mockCam = { isInside = true, cameraNode = 903, origRotY = 0.0, rotY = 0.0 }
+    _G.g_currentMission = {
+        controlledVehicle = { getActiveCamera = function() return mockCam end }
+    }
+    local guiVisible = true
+    _G.g_gui = { getIsGuiVisible = function() return guiVisible end }
+
+    VRCompanion:pollGuiVisibility()
+    local okOpen = VRCompanion:snapTurnRight(nil, 1000)
+    assert(okOpen == false, "Snap turn must be rejected once polling sees the GUI open")
+
+    guiVisible = false
+    VRCompanion:pollGuiVisibility()
+    local okClosed = VRCompanion:snapTurnRight(nil, 1300)
+    assert(okClosed == true, "Snap turn must work again once polling sees the GUI closed")
+
+    _G.g_gui = nil
+    VRCompanion:resetSnapTurnDebounce()
+end)
+
 -- Slice 11: On-Foot Snap Turn Adjusts Player Character yawNode
 test("OnFootSnapTurnAdjustsPlayerCharacterYawNode", function()
     VRCompanion:resetSnapTurnDebounce()

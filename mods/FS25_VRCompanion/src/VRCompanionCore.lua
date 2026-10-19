@@ -17,7 +17,10 @@ VRCompanion.VEHICLE_SPEED_HOOK_RETRY_TICKS = 180
 VRCompanion.handshakeComplete = (VRCompanion.handshakeComplete ~= nil) and VRCompanion.handshakeComplete or false
 VRCompanion.frameTicks = VRCompanion.frameTicks or 0
 VRCompanion.lastControlledVehicle = VRCompanion.lastControlledVehicle or nil
+-- The menu quad is shown (presentation); see VRCompanion:isMenuQuadShown
 VRCompanion.isMenuVisible = (VRCompanion.isMenuVisible ~= nil) and VRCompanion.isMenuVisible or false
+-- A menu takes the input; see VRCompanion:doesMenuTakeInput
+VRCompanion.menuTakesInput = (VRCompanion.menuTakesInput ~= nil) and VRCompanion.menuTakesInput or false
 VRCompanion.guiVisibilityInitialized = (VRCompanion.guiVisibilityInitialized ~= nil) and VRCompanion.guiVisibilityInitialized or false
 VRCompanion.vehicleCameraHooked = (VRCompanion.vehicleCameraHooked ~= nil) and VRCompanion.vehicleCameraHooked or false
 VRCompanion.playerCameraHooked = (VRCompanion.playerCameraHooked ~= nil) and VRCompanion.playerCameraHooked or false
@@ -142,6 +145,7 @@ function VRCompanion:loadMap(name)
 
     -- 6. Synchronize initial GUI menu visibility state
     self.isMenuVisible = false
+    self.menuTakesInput = false
     self.guiVisibilityInitialized = false
     self:pollGuiVisibility()
 
@@ -209,11 +213,15 @@ function VRCompanion:pollGuiVisibility()
         end
     end
 
-    if self.isMenuVisible ~= isGuiVisible or not self.guiVisibilityInitialized then
-        local wasMenuVisible = self.isMenuVisible
-        self.isMenuVisible = isGuiVisible
+    -- Today any visible GUI both shows the menu quad and takes the input, so the two states are set together
+    local menuQuadShown = isGuiVisible
+    self.menuTakesInput = isGuiVisible
+
+    if self.isMenuVisible ~= menuQuadShown or not self.guiVisibilityInitialized then
+        local wasMenuQuadShown = self.isMenuVisible
+        self.isMenuVisible = menuQuadShown
         self.guiVisibilityInitialized = true
-        if wasMenuVisible and not isGuiVisible then
+        if wasMenuQuadShown and not menuQuadShown then
             if type(self.restoreMenuBackgroundCamera) == "function" then
                 self:restoreMenuBackgroundCamera()
             end
@@ -228,7 +236,7 @@ function VRCompanion:pollGuiVisibility()
             end
         end
         if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
-            VRBridge.setMenuVisible(isGuiVisible)
+            VRBridge.setMenuVisible(menuQuadShown)
         end
         if VRBridge ~= nil and type(VRBridge.resetTemporalHistory) == "function" then
             VRBridge.resetTemporalHistory()
@@ -244,6 +252,22 @@ function VRCompanion:pollGuiVisibility()
         end
     end
     return isGuiVisible
+end
+
+-- A visible game GUI means two different things, and every reader asks for the one it needs:
+--   isMenuQuadShown()  - the presentation: the menu quad is what the player sees (VRBridge is told so, the
+--                        stereo pipeline and HUD convergence stand down, the menu background camera runs, the
+--                        head is not placed in the world, the Virtual Hands are off)
+--   doesMenuTakeInput() - the input: a menu has the controls (locomotion, Snap Turn and Wheel Grab are refused,
+--                        the menu buttons and the Virtual Gamepad go to the menu)
+-- pollGuiVisibility sets both together. The quad is the field isMenuVisible (the name VRBridge uses for it); a
+-- shown quad always takes the input, so doesMenuTakeInput also holds while it is shown.
+function VRCompanion:isMenuQuadShown()
+    return self.isMenuVisible == true
+end
+
+function VRCompanion:doesMenuTakeInput()
+    return self.menuTakesInput == true or self.isMenuVisible == true
 end
 
 function VRCompanion:getPlayerCamera()
@@ -562,7 +586,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
     local isSequentialDualPass = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS)
         and not self.is2DViewActive
-        and not self.isMenuVisible
+        and not self:isMenuQuadShown()
         and not self:isPassThroughMode()
 
     if not isSequentialDualPass then
@@ -788,7 +812,7 @@ function VRCompanion:runUpdate(dt)
     -- Poll in-game GUI visibility and synchronize with native VRBridge
     self:pollGuiVisibility()
 
-    if self.isMenuVisible and type(self.updateMenuBackgroundCamera) == "function" then
+    if self:isMenuQuadShown() and type(self.updateMenuBackgroundCamera) == "function" then
         self:updateMenuBackgroundCamera(dt)
     end
 
@@ -920,6 +944,7 @@ function VRCompanion:deleteMap()
     self.appliedDlssNearClip = nil
     self.vehicleRotationStates = {}
     self.isMenuVisible = false
+    self.menuTakesInput = false
     self.guiVisibilityInitialized = false
 
     local deleteFn = delete or (_G and _G.delete)

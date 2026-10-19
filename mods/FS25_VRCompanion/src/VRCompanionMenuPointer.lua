@@ -260,7 +260,7 @@ local function updateMenuButtons(self)
         end
     end
 
-    if self.isMenuVisible ~= true then
+    if not self:doesMenuTakeInput() then
         scroll.dir, scroll.nextMs = 0, nil
         return
     end
@@ -293,7 +293,7 @@ end
 
 function VRCompanion:updateMenuPointer(dt)
     updateMenuButtons(self)
-    local panelShowing = self.isMenuVisible == true or self.is2DViewActive == true
+    local panelShowing = self:isMenuQuadShown() or self.is2DViewActive == true
     local getPanelHit = bridgeFunction("getPanelHit")
     local hand = self:getPointerHand()
     if not (panelShowing and hand ~= nil and getPanelHit ~= nil and self:isPointerRayInControl()) then

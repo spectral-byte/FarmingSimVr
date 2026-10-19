@@ -288,7 +288,7 @@ end
 -- Last of the Companion Mod's update: the uses made here, then which inputs are off the pad this update, told to the Injector.
 function VRCompanion:updateVirtualGamepadUse(dt)
     if self.motionControllersEnabled ~= false then
-        if self.isMenuVisible == true and not isSettingsPageShowing() then
+        if self:doesMenuTakeInput() and not isSettingsPageShowing() then
             -- Every input of both hands: the Pointer Ray menus act on the raw hand state themselves.
             for _, hand in ipairs(HANDS) do
                 for _, input in ipairs(INPUTS) do
