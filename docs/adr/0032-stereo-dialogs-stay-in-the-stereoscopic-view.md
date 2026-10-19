@@ -11,7 +11,8 @@ ADR-0007 moves the presentation to the floating menu quad whenever `g_gui:getIsG
 - "A menu is open" splits into two meanings. While a Stereo Dialog shows, input stays a menu: locomotion, Snap Turn and Wheel Grab are refused, and the Virtual Gamepad sends buttons to the dialog. Presentation stays stereo: the Companion Mod does not tell VRBridge a menu is visible, so the Injector keeps the projection layer, and head placement, the Virtual Hands and the Tool Hand keep running. Since the presentation does not change, there is no Discontinuity Flush.
 - The dialog is answered with its own gamepad buttons through the Virtual Gamepad. The Pointer Ray does not reach it, because it only hits the quad panel.
 - The dialog is drawn at HUD depth: its root position is shifted by the HUD Convergence Offset on alternating AFR eye frames, like the HUD Groups, and moved back after each draw. If a dialog has no root position that moves it cleanly, it is drawn without a shift (zero disparity).
-- A saved console command, `vrFishCatch [ask|sell|release]` (default `ask`), can answer the fish catch dialog as it opens and show a short notification of the catch instead.
+- A Stereo Dialog stays in stereo whatever the input device; without the Virtual Gamepad the player answers it with their own gamepad or keyboard. In 2D Floating Window Mode it behaves like any menu, since the presentation is already the quad.
+- A saved console command, `vrFishCatch [ask|sell|release]` (default `ask`), can answer the fish catch dialog as it opens, in the stereoscopic view and 2D Floating Window Mode alike, and show a short notification of the catch instead. It answers through the dialog's own answer path, or, if it has none the mod can call, by sending the dialog's button through the Virtual Gamepad.
 
 ## Status
 Accepted
