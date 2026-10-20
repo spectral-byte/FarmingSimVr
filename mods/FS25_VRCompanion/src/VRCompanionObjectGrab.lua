@@ -770,6 +770,14 @@ local function carryHasEnded(self, carry)
     return emptyHands(localPlayer()) ~= carry.hands or not holdsItem(carry.hands)
 end
 
+-- Whether Object Grab itself ended the carry while the game's hands still hold the item: it was switched off, the Motion Controllers
+-- were, or it gave up. The game would go on carrying it along the head's look ray, with the grip back on the pad, so the hands let go
+-- (the game's dropHeldItem). A carry the game ended itself (the hands put away, the item gone, a snap) has nothing left to drop.
+local function mustDropOnEnd(self, carry)
+    if self.objectGrabEnabled ~= false and self.motionControllersEnabled ~= false and state.problem == nil then return false end
+    return emptyHands(localPlayer()) == carry.hands and holdsItem(carry.hands)
+end
+
 -- Whether the carrying hand let go of its grip. A hand that is not tracked has not (nothing is known of it until it is tracked again).
 local function gripWasLetGo(self, carry)
     local pose = self:getHandState(carry.hand)
@@ -783,6 +791,7 @@ local function updateCarry(self)
         -- The grip goes back to the pad once it is let go (the Virtual Gamepad keeps what a use took off it), and a grip still held does
         -- not grab again: a grab needs the grip to go down. A snap is felt; a drop by the game is not.
         state.carry = nil
+        if mustDropOnEnd(self, carry) and type(carry.hands.dropHeldItem) == "function" then pcall(carry.hands.dropHeldItem, carry.hands) end
         if carry.snapped then
             state.lastSnapMs = self:getCurrentTimeMs()  -- for the diagnostics
             self:pulseHand(carry.hand, self.OBJECT_GRAB_SNAP_PULSE_MS, self.OBJECT_GRAB_SNAP_PULSE_STRENGTH)

@@ -192,6 +192,46 @@ TEST_F(VirtualGamepadObjectGrabCarryTest, TheGamesOwnDropEndsTheCarryCleanlyAndT
     EXPECT_EQ(PickUps(), 1);
 }
 
+// ---- A carry that Object Grab itself ends ----------------------------------------------------------------------------------------
+// The game keeps carrying along its own look ray if nobody lets go: the object would jump to the head's ray with the grip still on the
+// pad. So when Object Grab ends the carry (it is switched off, the Motion Controllers are, or it gave up) the hands drop what they hold.
+
+TEST_F(VirtualGamepadObjectGrabCarryTest, SwitchingObjectGrabOffWhileCarryingDropsTheObjectThroughTheGameOnce) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrObjectGrab', 'off')", "=off"), 0);
+    FRAMES(1);
+    EXPECT_EQ(Drops(), 1) << "dropHeldItem";
+    EXPECT_EQ(EvalLua(L, "tostring(hands.spec_hands.heldItemNode)"), "nil") << "not left to the game's own carry along the head's ray";
+    FRAMES(5);
+    EXPECT_EQ(Drops(), 1);
+}
+
+TEST_F(VirtualGamepadObjectGrabCarryTest, TurningTheMotionControllersOffWhileCarryingDropsTheObjectThroughTheGame) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.motionControllersEnabled = false", "=motionControllersOff"), 0);
+    FRAMES(1);
+    EXPECT_EQ(Drops(), 1);
+    EXPECT_EQ(EvalLua(L, "tostring(hands.spec_hands.heldItemNode)"), "nil");
+}
+
+TEST_F(VirtualGamepadObjectGrabCarryTest, ObjectGrabGivingUpWhileCarryingDropsTheObjectThroughTheGame) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    // A game function the wraps expect turns out reshaped at the next map load check: Object Grab gives up.
+    ASSERT_EQ(RunLuauChunk(L, "HandToolHands.getCanPickUpNode = function() return false end; VRCompanion:registerObjectGrabConsoleCommands()", "=giveUp"), 0);
+    ASSERT_EQ(CountLogLines("[Warning] Object Grab disabled"), 1);
+    FRAMES(1);
+    EXPECT_EQ(Drops(), 1);
+    EXPECT_EQ(EvalLua(L, "tostring(hands.spec_hands.heldItemNode)"), "nil");
+}
+
+TEST_F(VirtualGamepadObjectGrabCarryTest, ACarryTheGameEndedItselfIsNotDroppedAgainWhenObjectGrabIsSwitchedOffAfterwards) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(hands); hands.spec_hands.heldItemNode = nil", "=gameEndsItWithTheHandsPutAway"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrObjectGrab', 'off')", "=off"), 0);
+    FRAMES(3);
+    EXPECT_EQ(Drops(), 0) << "the hands are not held and hold nothing: there is nothing to drop";
+}
+
 TEST_F(VirtualGamepadObjectGrabCarryTest, NoPulsesWhileCarryingOrLettingGo) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     const int pulses = PulsesTo(kRight);
