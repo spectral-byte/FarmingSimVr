@@ -26,6 +26,11 @@
 //   class does not reach this tool; its events go through the class at every call). tool.spec_hands: hasSuperStrength (false),
 //   currentMaximumMass (StubHandTool.HANDS.MAXIMUM_MASS), pickupDistance (StubHandTool.HANDS.PICKUP_DISTANCE), heldItemNode,
 //   heldItemJointId (nil: the stub makes no joint), currentHoldDistance, kinematicNode, kinematicRotationNode (a child of it).
+//   spec_hands.dirtyFlag (1) with tool:raiseDirtyFlags(flag) recorded in StubHandTool.dirtyRaised ({ tool, flag }); tool.isServer
+//   (true, a single player game); tool:getIsAwaitingJointCreation() (spec_hands.awaitingJoint, false: the game's server makes the joint
+//   a few physics frames after the pick-up, and until then the rotation node is not at the object); the engine's setJointFrame
+//   (jointId, frame, node) recorded in StubHandTool.jointFrames ({ jointId, frame, node }). The stub makes no joint: a test sets
+//   spec_hands.heldItemJointId itself.
 //   Holding it (StubHandTool.hold) adds its target type to the player's targeter (0.5 m to pickupDistance), putting it away
 //   (StubHandTool.drop) removes it.
 // StubHandTool.superStrength(tool, on)   the game's gsPlayerSuperStrengthToggle: the mass limit rises to
@@ -62,6 +67,7 @@
 inline constexpr const char* kStubHandToolHands = R"luau(
     StubHandTool.looseObjects, StubHandTool.looseObjectList = {}, {}
     StubHandTool.pickUps, StubHandTool.drops, StubHandTool.throws, StubHandTool.breaks = {}, {}, {}, {}
+    StubHandTool.dirtyRaised, StubHandTool.jointFrames = {}, {}
     StubHandTool.HANDS = { MAXIMUM_MASS = 0.1, PICKUP_DISTANCE = 3, SUPER_STRENGTH_MASS = 1000, SUPER_STRENGTH_DISTANCE = 10 }
 
     function StubHandTool.looseObject(x, y, z, mass, options)
@@ -100,8 +106,11 @@ inline constexpr const char* kStubHandToolHands = R"luau(
     function StubHandTool.installHands(variant)
         variant = variant or "ok"
         StubHandTool.pickUps, StubHandTool.drops, StubHandTool.throws, StubHandTool.breaks = {}, {}, {}, {}
+        StubHandTool.dirtyRaised, StubHandTool.jointFrames = {}, {}
         local Class = { TARGET_MASK = 1 }
         _G.HandToolHands = Class
+        -- the engine's setJointFrame(jointId, frameIndex, node): the joint's frame goes to the node's world pose
+        _G.setJointFrame = function(jointId, frame, node) table.insert(StubHandTool.jointFrames, { jointId = jointId, frame = frame, node = node }) end
         local H = StubHandTool.HANDS
 
         -- ---- the targeter: target types with a minimum and a maximum distance, the last look ray
@@ -165,10 +174,13 @@ inline constexpr const char* kStubHandToolHands = R"luau(
             registered.getCanPickUpNode = canPickUpNode
             Class.getCanPickUpNode = canPickUpNode
         end
+        function registered.getIsAwaitingJointCreation(self) return self.spec_hands.awaitingJoint == true end
         function registered.orientRotationNodeToItem(self, node)
             local spec = self.spec_hands
             local x, y, z = getWorldTranslation(node)
             setWorldTranslation(spec.kinematicRotationNode, x, y, z)
+            local qx, qy, qz, qw = getWorldQuaternion(node)
+            setWorldQuaternion(spec.kinematicRotationNode, qx, qy, qz, qw)
         end
         function registered.updateKinematicNode(self)
             local spec = self.spec_hands
@@ -176,6 +188,7 @@ inline constexpr const char* kStubHandToolHands = R"luau(
             if spec.kinematicNode == nil or not self:getIsHoldingItem() or player == nil or not player.isOwner then return end
             local x, y, z, dx, dy, dz = player.targeter:getLastLookRay()
             if x == nil then return end
+            self:raiseDirtyFlags(spec.dirtyFlag)
             setWorldTranslation(spec.kinematicNode, x + dx * spec.currentHoldDistance, y + dy * spec.currentHoldDistance,
                 z + dz * spec.currentHoldDistance)
             local yaw = math.atan2(dx, dz)
@@ -271,6 +284,9 @@ inline constexpr const char* kStubHandToolHands = R"luau(
         spec.kinematicNode = StubScene.newNode("handsKinematic", 0)
         spec.kinematicRotationNode = StubScene.newNode("handsKinematicRotation", spec.kinematicNode)
         for name, fn in pairs(StubHandTool.handsRegistered) do tool[name] = fn end  -- copied onto the tool, as the game does
+        spec.dirtyFlag, spec.awaitingJoint = 1, false
+        tool.isServer = true  -- a single player game is the server: it applies the rotation node to the joint itself
+        tool.raiseDirtyFlags = function(self, flag) table.insert(StubHandTool.dirtyRaised, { tool = self, flag = flag }) end
         StubHandTool.hands_ = tool
         return tool
     end

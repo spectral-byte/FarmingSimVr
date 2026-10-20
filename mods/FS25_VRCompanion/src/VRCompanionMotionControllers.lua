@@ -107,6 +107,9 @@
 --                 Steering Wheel is not; in a menu either hand can. While its Hand Tool keeps it in use
 --                 (isHandKeptInUseByHandTool) the Tool Hand stays in use however still it is held, so a held-still cut or spray
 --                 does not drop the tool.
+--     ObjectGrab  updateMotionControllers -> updateObjectGrab(dt) on every path (the grip edges and the carry), updatePointerRay ->
+--                 getObjectGrabRayTarget() (VRCompanionObjectGrab.lua, ADR-0033). A hand carrying a Held Object
+--                 (isHandCarryingHeldObject) stays in use however still it is held and is never a Pointer Hand candidate.
 --     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
 --                 setting rides on save/loadMotionControllerSettings, the status command ends with the pad's state and
 --                 the console command registers next to the others (VRCompanionVirtualGamepad.lua, ADR-0028)
