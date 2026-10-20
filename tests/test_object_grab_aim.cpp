@@ -52,6 +52,37 @@ TEST_F(CompanionModTest, WithEmptyHandsAndThePointerHandInUseTheTargeterCastsThe
         << "the targeter cast " << EvalLua(L, "rayText(targeterRay())") << ", the Pointer Ray is " << EvalLua(L, "rayText(pointerRay())");
 }
 
+// The game's empty hands are Player.hands, held while no Hand Tool is: Player:getHeldHandTool() is nil then (the game's holders and
+// winches read it that way), and answers the Hand Tool once one is held.
+TEST_F(CompanionModTest, OnFootWithEmptyHandsTheGameHoldsNoHandToolAndTheHandAimsThem) {
+    OBJECT_GRAB_START();
+    EXPECT_EQ(EvalLua(L, "tostring(foot.player:getHeldHandTool())"), "nil") << "the game: no Hand Tool is held";
+    EXPECT_EQ(EvalLua(L, "tostring(foot.player.hands == hands and hands:getIsHeld())"), "true") << "the hands are Player.hands, and held";
+
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "false") << "the hand aims: " << EvalLua(L, "VRCompanion:getObjectGrabDiagnostics()");
+    EXPECT_NE(EvalLua(L, "VRCompanion:getObjectGrabDiagnostics()").find("Object Grab: on (aiming)"), std::string::npos);
+}
+
+TEST_F(CompanionModTest, AHandToolInHandPutsTheEmptyHandsAwayAndObjectGrabStopsAimingUntilItIsPutAway) {
+    OBJECT_GRAB_START();
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    ASSERT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "false") << "empty hands: the hand aims";
+
+    ASSERT_NO_FATAL_FAILURE(HoldOtherModTool(L));
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "tostring(foot.player:getHeldHandTool() == otherTool)"), "true") << "the game: the Hand Tool is the held one";
+    EXPECT_EQ(EvalLua(L, "tostring(hands:getIsHeld())"), "false") << "and the hands are put away";
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "the head's ray: " << EvalLua(L, "rayText(targeterRay())");
+    EXPECT_NE(EvalLua(L, "VRCompanion:getObjectGrabDiagnostics()").find("Object Grab: off (a Hand Tool is in hand"), std::string::npos)
+        << EvalLua(L, "VRCompanion:getObjectGrabDiagnostics()");
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(otherTool)", "=putTheToolAway"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "tostring(foot.player:getHeldHandTool())"), "nil");
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "false") << "the hands are back: the hand aims again";
+}
+
 TEST_F(CompanionModTest, TheOtherHandAimsWhenItIsTheOnlyOneInUse) {
     OBJECT_GRAB_START();
     POINT_HAND(kLeft, -kHandX, kHandY, kHandZ);

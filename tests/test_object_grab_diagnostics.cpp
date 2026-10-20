@@ -165,7 +165,7 @@ TEST_F(VirtualGamepadObjectGrabDiagnosticsTest, InAVehicleItSaysObjectGrabIsOff)
 TEST_F(VirtualGamepadObjectGrabDiagnosticsTest, WithAHandToolInHandItSaysSo) {
     ASSERT_NO_FATAL_FAILURE(StartWithMass());
     ASSERT_NO_FATAL_FAILURE(Aim());
-    ASSERT_EQ(RunLuauChunk(L, "foot.player.currentHandTool = { spec_sprayCan = {} }", "=handTool"), 0);
+    ASSERT_NO_FATAL_FAILURE(HoldLance(L));  // the game puts the hands away for it
     const std::string log = Run();
     EXPECT_TRUE(Has(log, "[FS25_VR] Object Grab: off (a Hand Tool is in hand")) << log;
 }

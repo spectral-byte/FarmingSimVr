@@ -7,7 +7,8 @@
 -- the Pointer Hand AIMS the empty hands (#158) and the grip grabs and carries (#159).
 --
 -- TERMS (CONTEXT.md): the Pointer Hand is the Motion Controller that points, the Pointer Ray runs from its index fingertip along the
--- finger, empty hands are the game's hands tool held, which the game counts as a hand tool and the Hand Tools do not.
+-- finger, empty hands are the game's hands tool (Player.hands) held, which it is whenever the player holds no Hand Tool
+-- (Player:getHeldHandTool() is nil then: the hands are not a Hand Tool the player holds).
 --
 -- AIMING: while Object Grab is on, the local player is on foot in the first person view with empty hands, no menu takes the input, and
 -- the Pointer Hand is tracked and in use (it has a Pointer Ray), Player:getLookRay answers the Pointer Ray's ray with its origin moved
@@ -319,19 +320,27 @@ local function localPlayer()
     return player
 end
 
--- The game's hands tool when it is the hand tool the player holds (empty hands), or nil.
-local function emptyHands(player)
-    if type(player) ~= "table" or type(player.getHeldHandTool) ~= "function" then return nil end
-    local ok, held = pcall(player.getHeldHandTool, player)
-    if ok and type(held) == "table" and held.spec_hands ~= nil then return held end
-    return nil
-end
-
--- Whether the player holds a hand tool that is not the game's hands (for the diagnostics: why the hands are not empty).
+-- Whether the player holds a Hand Tool (the game's Player:getHeldHandTool). The game's hands are NOT one: with empty hands it answers
+-- nil, and the hands are Player.hands (the game's holders and winches read it that way).
 local function handToolInHand(player)
     if type(player) ~= "table" or type(player.getHeldHandTool) ~= "function" then return false end
     local ok, held = pcall(player.getHeldHandTool, player)
-    return ok and type(held) == "table" and held.spec_hands == nil
+    return ok and held ~= nil
+end
+
+-- The game's hands tool (Player.hands, with spec_hands) while the player holds no Hand Tool and the hands are held (the game holds
+-- them whenever no tool is), or nil.
+local function emptyHands(player)
+    if type(player) ~= "table" or type(player.getHeldHandTool) ~= "function" then return nil end
+    local ok, held = pcall(player.getHeldHandTool, player)
+    if not ok or held ~= nil then return nil end
+    local hands = player.hands
+    if type(hands) ~= "table" or type(hands.spec_hands) ~= "table" then return nil end
+    if type(hands.getIsHeld) == "function" then
+        local gotHeld, isHeld = pcall(hands.getIsHeld, hands)
+        if not gotHeld or isHeld ~= true then return nil end
+    end
+    return hands
 end
 
 -- The look ray the Pointer Hand gives `player` now (x, y, z, dirX, dirY, dirZ), or nil and why the hand does not aim. Read live,
@@ -344,7 +353,7 @@ local function whyNotAiming(self, player)
     if player.camera == nil or player.camera.isFirstPerson ~= true then return "not in the first person view" end
     if self:getControlledVehicle() ~= nil then return "in a vehicle" end
     if self:doesMenuTakeInput() then return "a menu takes the input" end
-    if emptyHands(player) == nil then return handToolInHand(player) and "a Hand Tool is in hand" or "the hands are not empty" end
+    if emptyHands(player) == nil then return handToolInHand(player) and "a Hand Tool is in hand" or "the hands are not held" end
     return nil
 end
 
@@ -1000,7 +1009,7 @@ end
 -- The game's limits for the hands, read from the hands tool now.
 local function limitsField(hands)
     local spec = hands ~= nil and hands.spec_hands or nil
-    if type(spec) ~= "table" then return "limits: unknown (the hands are not in hand)" end
+    if type(spec) ~= "table" then return "limits: unknown (the hands are not held)" end
     return string.format("limits: maximum mass %.3f t, pickup distance %.2f m, super strength %s",
         tonumber(spec.currentMaximumMass) or 0, tonumber(spec.pickupDistance) or 0, spec.hasSuperStrength == true and "on" or "off")
 end

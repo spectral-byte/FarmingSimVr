@@ -6,8 +6,8 @@
 //
 // The stubs are a chunk of their own (kStubHandToolHands), like the Hand Tools' tool chunks, so that the later Object Grab tickets
 // extend it without touching the Hand Tools' stubs. A test passes HandsStubs(variant) as StartOptions::extraStubs (concatenated
-// after kXmlStubs, if it uses both), and the player's hands are taken by HoldHands (the game's empty hands are a hand tool the
-// player holds).
+// after kXmlStubs, if it uses both), and the player's hands are taken by HoldHands (the game's empty hands are Player.hands, held while
+// the player holds no Hand Tool: Player:getHeldHandTool() is nil then, and answers the Hand Tool once one is held).
 //
 // StubHandTool.installHands(variant)   defines the global HandToolHands (the class the game's hands are made of; TARGET_MASK,
 //   and the events onDraw / onUpdate / onHeldStart as the game's event dispatch reads them off the class at every call), and makes
@@ -20,7 +20,7 @@
 //   which the draw calls instead), "drawReshaped" (onDraw takes no parameters), "canPickUpMissing" (getCanPickUpNode is gone;
 //   the hands tool has getCanPickUpTarget instead), "canPickUpReshaped" (it takes no node).
 //
-// StubHandTool.hands(player, options) -> tool   the hands tool (spec_hands), not yet held. Like the game's registered functions,
+// StubHandTool.hands(player, options) -> tool   the hands tool (spec_hands), player.hands, not yet held. Like the game's registered functions,
 //   updateKinematicNode, getKinematicNode, getIsHoldingItem, getCanPickUpNode, orientRotationNodeToItem, pickUpTarget,
 //   dropHeldItem, throwHeldItemWithForceVector and onHeldItemJointBroken are COPIED onto the tool when it is made (a wrap of the
 //   class does not reach this tool; its events go through the class at every call). tool.spec_hands: hasSuperStrength (false),
@@ -32,7 +32,8 @@
 //   (jointId, frame, node) recorded in StubHandTool.jointFrames ({ jointId, frame, node }). The stub makes no joint: a test sets
 //   spec_hands.heldItemJointId itself.
 //   Holding it (StubHandTool.hold) adds its target type to the player's targeter (0.5 m to pickupDistance), putting it away
-//   (StubHandTool.drop) removes it.
+//   (StubHandTool.drop) removes it. It is NOT Player.currentHandTool: getHeldHandTool() stays nil. Holding another tool puts the held
+//   hands away, putting that tool away takes them again.
 // StubHandTool.superStrength(tool, on)   the game's gsPlayerSuperStrengthToggle: the mass limit rises to
 //   StubHandTool.HANDS.SUPER_STRENGTH_MASS, the pickup distance to SUPER_STRENGTH_DISTANCE (10 m), and the target type is added
 //   again. The object's own getCanBePickedUp is not asked under super strength.
@@ -258,20 +259,50 @@ inline constexpr const char* kStubHandToolHands = R"luau(
             end
         end)
 
-        -- ---- the hands taken in hand target loose objects, put away stop (the game's onHeldStart / onHeldEnd)
+        -- ---- the hands are held when no Hand Tool is (the game: Player.hands is held and Player:getHeldHandTool() is nil; taking a
+        -- Hand Tool puts the hands away, putting it away takes them again). Held hands target loose objects, put away they stop
+        -- (the game's onHeldStart / onHeldEnd). Player.currentHandTool is never the hands.
         local baseHold, baseDrop = StubHandTool.hold, StubHandTool.drop
-        function StubHandTool.hold(tool)
-            baseHold(tool)
-            local spec = tool.spec_hands
-            if spec ~= nil and tool.carryingPlayer.isOwner then
-                tool.carryingPlayer.targeter:addTargetType(Class, Class.TARGET_MASK, 0.5, spec.pickupDistance)
+        local function startHands(hands)
+            hands.isHeld, hands.carryingPlayer = true, hands.player
+            StubHandTool.heldTool = hands
+            hands:attachTool()
+            if hands.player.isOwner then
+                hands.player.targeter:addTargetType(Class, Class.TARGET_MASK, 0.5, hands.spec_hands.pickupDistance)
             end
         end
+        local function stopHands(hands)
+            if hands.carryingPlayer ~= nil and hands.carryingPlayer.targeter ~= nil then
+                hands.carryingPlayer.targeter:removeTargetType(Class)
+            end
+            hands:detachTool()
+            hands.isHeld, hands.carryingPlayer = false, nil
+            if StubHandTool.heldTool == hands then StubHandTool.heldTool = nil end
+        end
+        function StubHandTool.hold(tool)
+            if tool.spec_hands ~= nil then
+                startHands(tool)
+                return
+            end
+            local hands = tool.player.hands
+            if hands ~= nil and hands.isHeld then
+                stopHands(hands)
+                hands.putAwayByTool = true
+            end
+            baseHold(tool)
+        end
         function StubHandTool.drop(tool)
-            if tool.spec_hands ~= nil and tool.carryingPlayer ~= nil and tool.carryingPlayer.targeter ~= nil then
-                tool.carryingPlayer.targeter:removeTargetType(Class)
+            if tool.spec_hands ~= nil then
+                stopHands(tool)
+                tool.putAwayByTool = false
+                return
             end
             baseDrop(tool)
+            local hands = tool.player.hands
+            if hands ~= nil and hands.putAwayByTool and tool.player.currentHandTool == nil then
+                hands.putAwayByTool = false
+                startHands(hands)
+            end
         end
     end
 
@@ -288,6 +319,7 @@ inline constexpr const char* kStubHandToolHands = R"luau(
         tool.isServer = true  -- a single player game is the server: it applies the rotation node to the joint itself
         tool.raiseDirtyFlags = function(self, flag) table.insert(StubHandTool.dirtyRaised, { tool = self, flag = flag }) end
         StubHandTool.hands_ = tool
+        player.hands = tool  -- the game: Player.hands
         return tool
     end
 
@@ -318,7 +350,7 @@ inline std::string HandsStubs(const char* variant = "ok") {
     return std::string(kStubHandToolHands) + "\nStubHandTool.installHands('" + variant + "')\n";
 }
 
-// The player's hands are empty: the game's hands tool is the hand tool they hold, as _G.hands.
+// The player's hands are empty: the game's hands tool (Player.hands) is held, as _G.hands.
 inline constexpr const char* kHoldHands = "_G.hands = StubHandTool.hands(foot.player); StubHandTool.hold(hands)";
 inline void HoldHands(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldHands, "=holdHands"), 0); }
 

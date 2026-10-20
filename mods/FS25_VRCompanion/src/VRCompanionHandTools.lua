@@ -755,7 +755,8 @@ end
 -- everything while the hand does not) is the game's own.
 WRAP_SPECS.attachToolToCamera.make = function(original)
     return function(tool, ...)
-        if type(tool) == "table" and not isAnotherPlayersTool(tool) then
+        -- The game's hands (Player.hands, spec_hands) are held when no Hand Tool is, and are no Hand Tool here (Object Grab's).
+        if type(tool) == "table" and tool.spec_hands == nil and not isAnotherPlayersTool(tool) then
             state.tool = tool
             state.cameraPlacedTool = tool  -- for the description of an unsupported tool (placement path)
             local hand = toolHandFor(VRCompanion, tool)
@@ -1958,7 +1959,6 @@ local function diagnosticFields(self)
     local toolText = "held Hand Tool: none"
     if tool ~= nil then
         toolText = kind ~= nil and ("held Hand Tool: " .. kind .. " (supported)") or "held Hand Tool: unsupported"
-        if kind == nil and tool.spec_hands ~= nil then toolText = "held Hand Tool: none (empty hands)" end  -- the game's hands tool, see Object Grab
     end
     local function wrapStatus(name)
         if state.problem ~= nil then return name .. " wrap: gave up (" .. state.problem .. ")" end
@@ -2021,7 +2021,6 @@ local function unsupportedHeldTool()
         end
     end
     if tool == nil or supportedKind(tool) ~= nil or isAnotherPlayersTool(tool) then return nil end
-    if tool.spec_hands ~= nil then return nil end  -- the game's empty hands are no Hand Tool here (Object Grab)
     return tool
 end
 
