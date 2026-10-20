@@ -508,12 +508,22 @@ local function placeFromHand(self, tool, carry)
     end
 end
 
+-- The guards of the game's updateKinematicNode that placing from the hand keeps: the hands are held, and their carrying player is the
+-- owner (the game's own function does nothing otherwise).
+local function mayPlaceNodes(tool)
+    if type(tool.getIsHeld) ~= "function" or type(tool.getCarryingPlayer) ~= "function" then return false end
+    local ok, held = pcall(tool.getIsHeld, tool)
+    if not ok or held ~= true then return false end
+    local gotPlayer, player = pcall(tool.getCarryingPlayer, tool)
+    return gotPlayer and type(player) == "table" and player.isOwner == true
+end
+
 -- The wrap of the game's updateKinematicNode: the carry places the nodes from the hand once the offset is recorded, and the game
--- places them otherwise (another player's hands, a pick-up by the game's own button, a grab not settled yet).
+-- places them otherwise (another player's hands, a pick-up by the game's own button, a grab not settled yet, hands not held).
 WRAP_SPECS.handsUpdateKinematicNode.make = function(original)
     return function(tool, ...)
         local carry = state.carry
-        if carry ~= nil and carry.hands == tool and carry.offset ~= nil then
+        if carry ~= nil and carry.hands == tool and carry.offset ~= nil and mayPlaceNodes(tool) then
             return placeFromHand(VRCompanion, tool, carry)
         end
         return original(tool, ...)

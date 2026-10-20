@@ -232,6 +232,22 @@ TEST_F(VirtualGamepadObjectGrabCarryTest, ACarryTheGameEndedItselfIsNotDroppedAg
     EXPECT_EQ(Drops(), 0) << "the hands are not held and hold nothing: there is nothing to drop";
 }
 
+// ---- The game's guards stay -------------------------------------------------------------------------------------------------------
+// The game's updateKinematicNode does nothing for hands that are not held, or whose player is not the owner. Taking over the placement
+// must not place the nodes then either (a frame can run between the hands being put away and the carry being seen to end).
+
+TEST_F(VirtualGamepadObjectGrabCarryTest, TheCarrysPlacementLeavesTheNodesAloneForHandsThatAreNotHeldAsTheGamesOwnDoes) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    ASSERT_EQ(RunLuauChunk(L, "setWorldTranslation(kinematicNode(), 5, 5, 5); hands.isHeld = false; hands:updateKinematicNode()", "=notHeld"), 0);
+    EXPECT_EQ(EvalLua(L, "string.format('%.1f %.1f %.1f', getWorldTranslation(kinematicNode()))"), "5.0 5.0 5.0");
+}
+
+TEST_F(VirtualGamepadObjectGrabCarryTest, TheCarrysPlacementLeavesTheNodesAloneWhenThePlayerIsNotTheOwnerAsTheGamesOwnDoes) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    ASSERT_EQ(RunLuauChunk(L, "setWorldTranslation(kinematicNode(), 5, 5, 5); foot.player.isOwner = false; hands:updateKinematicNode()", "=notOwner"), 0);
+    EXPECT_EQ(EvalLua(L, "string.format('%.1f %.1f %.1f', getWorldTranslation(kinematicNode()))"), "5.0 5.0 5.0");
+}
+
 TEST_F(VirtualGamepadObjectGrabCarryTest, NoPulsesWhileCarryingOrLettingGo) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     const int pulses = PulsesTo(kRight);

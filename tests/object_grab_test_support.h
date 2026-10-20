@@ -50,7 +50,7 @@
 //     dirY, dirZ, force }); lets go
 //   onHeldItemJointBroken(jointIndex, impulse, noEventSend)   what the game's joint break report calls: recorded in
 //     StubHandTool.breaks ({ tool, jointIndex }); lets go. dropHeldItem is the game's own letting go: it passes jointIndex nil.
-//   updateKinematicNode()   the game's: while holding, the kinematic node goes to the look ray's origin plus its direction times
+//   updateKinematicNode()   the game's (nothing unless the hands are held and the player is the owner): while holding, the kinematic node goes to the look ray's origin plus its direction times
 //     currentHoldDistance, turned to the ray's heading (level); run each tick after the targeter for a held hands tool
 // StubHandTool.pressPickUp(tool)   the game's pick-up button: pickUpTarget with the targeter's closest target for the hands, when
 //   getCanPickUpNode accepts it. StubHandTool.breakJoint(tool): the held item's joint breaks (onHeldItemJointBroken(1, 500)).
@@ -185,7 +185,7 @@ inline constexpr const char* kStubHandToolHands = R"luau(
         function registered.updateKinematicNode(self)
             local spec = self.spec_hands
             local player = self:getCarryingPlayer()
-            if spec.kinematicNode == nil or not self:getIsHoldingItem() or player == nil or not player.isOwner then return end
+            if spec.kinematicNode == nil or not self:getIsHeld() or not self:getIsHoldingItem() or player == nil or not player.isOwner then return end
             local x, y, z, dx, dy, dz = player.targeter:getLastLookRay()
             if x == nil then return end
             self:raiseDirtyFlags(spec.dirtyFlag)
