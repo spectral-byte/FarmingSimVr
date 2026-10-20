@@ -256,6 +256,7 @@ add_executable(fs25_vr_tests
     tests/test_object_grab_grip.cpp
     tests/test_object_grab_off_hand.cpp
     tests/test_object_grab_snap.cpp
+    tests/test_object_grab_throw.cpp
     tests/test_object_grab_wraps.cpp
 )
 

@@ -40,11 +40,17 @@
 -- and the game's pickUpTarget picks up what the targeter finds. A trigger pull still moves the Pointer Hand, as before.
 --
 -- THE CARRY: the hand that grabbed carries the Held Object until the grip is let go (releaseHeldObject: a drop through the game's
--- dropHeldItem) or the game itself ends the carry (getting into a vehicle, taking a Hand Tool): the carry ends cleanly, and the grip
+-- dropHeldItem, or a throw, see THE THROW) or the game itself ends the carry (getting into a vehicle, taking a Hand Tool): the carry ends cleanly, and the grip
 -- goes back to the pad once it is let go. While it lasts the hand is in use however still it is held, is never the Pointer Hand (the
 -- other hand can point), and the kinematic node and the rotation node of the game's carry are placed from the hand (see "Placing the
 -- Held Object"), keeping the object's place and angle in the hand as it was at the grab. A hand that is not tracked leaves them where
 -- they were, and has not let go; they follow it again when it is tracked. Nothing is felt while it carries.
+--
+-- THE THROW (#160): letting go of the grip while the hand moves faster than OBJECT_GRAB_THROW_MIN_SPEED throws the Held Object through the
+-- game's throwHeldItemWithForceVector(dirX, dirY, dirZ, forceScalar, noEventSend), along the hand's travel, with the force scalar the
+-- hand's speed over OBJECT_GRAB_THROW_FULL_SPEED clamped to 0..1 (never harder than the game's full throw). Slower is the drop above.
+-- The hand's velocity is sampled in the world from its grip pose each update (see "THE HAND'S SPEED"); a Snap Turn or a Recenter does
+-- not count as a swing. After either release the grip is up, so grabbing again needs a fresh squeeze.
 --
 -- ROTATE AND LEVEL (#162): the game's rotate actions and its level action (pallets and square bales) keep working as bound while the grip
 -- carries. They turn the rotation node, and the turn goes into the offset the hand holds the object with (see "Placing the Held
@@ -76,6 +82,9 @@
 --                                      something grabbable: it becomes the Pointer Hand (asked by choosePointerHand)
 --   VRCompanion.OBJECT_GRAB_ANSWER_WAIT_MS   how long such a squeeze waits for the targeter's answer to the new ray
 --   VRCompanion.OBJECT_GRAB_GRAB_PULSE_MS / _STRENGTH   the pulse on the hand that grabs
+--   VRCompanion.OBJECT_GRAB_THROW_MIN_SPEED / _FULL_SPEED (m/s) / _WINDOW_MS   when a release throws, the speed of a full throw, the
+--                                      span the hand's speed is measured over
+--   VRCompanion:getObjectGrabLastRelease() -> kind ("throw"|"drop"), speed, dirX, dirY, dirZ, force | nil   the last release
 --   VRCompanion.OBJECT_GRAB_SNAP_PULSE_MS / _STRENGTH   the sharp pulse on the hand whose hold snaps
 --   VRCompanion:setObjectGrabEnabled(enabled, save)
 --   VRCompanion:saveObjectGrabSetting(xmlFile, xml) / loadObjectGrabSetting(xmlFile, xml)   settings chain
@@ -117,6 +126,14 @@ VRCompanion.OBJECT_GRAB_ANSWER_WAIT_MS = 250
 VRCompanion.OBJECT_GRAB_GRAB_PULSE_MS = 40
 VRCompanion.OBJECT_GRAB_GRAB_PULSE_STRENGTH = 0.6
 
+-- THE THROW (#160), speeds in m/s of the hand in the world: letting go of the grip while the hand moves faster than
+-- OBJECT_GRAB_THROW_MIN_SPEED throws the Held Object, below it the release is a drop. The throw's force scalar is the hand's speed over
+-- OBJECT_GRAB_THROW_FULL_SPEED, clamped to 0..1, so a hand at or above that speed throws as hard as the game's own full throw. The hand's
+-- speed is measured over the last OBJECT_GRAB_THROW_WINDOW_MS. Tune in the headset (#164).
+VRCompanion.OBJECT_GRAB_THROW_MIN_SPEED = 1.0
+VRCompanion.OBJECT_GRAB_THROW_FULL_SPEED = 4.0
+VRCompanion.OBJECT_GRAB_THROW_WINDOW_MS = 100
+
 -- One sharp pulse on the hand whose hold snaps (the game's joint broke). Sharper and longer than the grab. Tune in the headset (#164).
 VRCompanion.OBJECT_GRAB_SNAP_PULSE_MS = 120
 VRCompanion.OBJECT_GRAB_SNAP_PULSE_STRENGTH = 1.0
@@ -131,6 +148,7 @@ local function newState()
         offHandSqueezed = nil,  -- the hand (not the Pointer Hand) whose grip was squeezed this update while it points at something grabbable
         pendingGrab = nil,   -- the off-hand squeeze waiting for the targeter's answer to the new ray: { hand, untilMs }
         dt = 0,              -- the dt of this update
+        swing = { samples = {}, rig = nil, last = nil },  -- the carrying hand's recent places in the world, and the last release
     }
 end
 
@@ -651,11 +669,82 @@ end
 
 -- ---- The release ------------------------------------------------------------------------------------------------------------
 
--- The grip of the carrying hand was let go: what happens to the Held Object. The decision is this one function. (A drop through the
--- game's dropHeldItem; a swing will throw.)
+-- THE HAND'S SPEED: the hand state carries no velocity, so the grip pose of the carrying hand is sampled in the world at each update
+-- (sampleSwing) and the speed is its travel over the last OBJECT_GRAB_THROW_WINDOW_MS. It is measured in the world, so the hand
+-- moving with the player (walking) counts, and the world moving round the hand does not: a Snap Turn turns the player's view and a
+-- Recenter moves the tracking space, and the hand's place in the world jumps with either though it did not move. The tracking space's
+-- own place in the world (where its origin and axes are) shows the jump: when it changes by more than SWING_RIG_JUMP_DISTANCE or
+-- SWING_RIG_JUMP_ANGLE between two updates, the samples before it are forgotten (the hand is not known to be moving until it has
+-- been seen moving since).
+local SWING_RIG_JUMP_DISTANCE = 0.25  -- m; walking is a few cm per update
+local SWING_RIG_JUMP_ANGLE = 0.02     -- rad; turning the head does not turn the tracking space
+local rigPose = {}                    -- scratch: the tracking space's pose in the world
+
+local function sampleSwing(self)
+    local swing = state.swing
+    local carry = state.carry
+    if carry == nil then
+        if swing.rig ~= nil or #swing.samples > 0 then swing.samples, swing.rig = {}, nil end
+        return
+    end
+    local hand = handGripInWorld(self, carry.hand)
+    if hand == nil or self:headRelativePoseToWorld(0, 0, 0, 0, 0, 0, 1, rigPose) ~= true then return end
+    local rig = swing.rig
+    if rig ~= nil then
+        local dx, dy, dz = rigPose.x - rig.x, rigPose.y - rig.y, rigPose.z - rig.z
+        local dot = math.min(1, math.abs(rigPose.qx * rig.qx + rigPose.qy * rig.qy + rigPose.qz * rig.qz + rigPose.qw * rig.qw))
+        if dx * dx + dy * dy + dz * dz > SWING_RIG_JUMP_DISTANCE ^ 2 or 2 * math.acos(dot) > SWING_RIG_JUMP_ANGLE then
+            swing.samples = {}
+        end
+    else
+        rig = {}
+        swing.rig = rig
+    end
+    rig.x, rig.y, rig.z, rig.qx, rig.qy, rig.qz, rig.qw = rigPose.x, rigPose.y, rigPose.z, rigPose.qx, rigPose.qy, rigPose.qz, rigPose.qw
+    local samples = swing.samples
+    local now = self:getCurrentTimeMs()
+    samples[#samples + 1] = { t = now, x = hand.x, y = hand.y, z = hand.z }
+    while #samples > 1 and now - samples[1].t > self.OBJECT_GRAB_THROW_WINDOW_MS do table.remove(samples, 1) end
+end
+
+-- The hand's velocity in the world (m/s) from its oldest to its newest sample in the window: vx, vy, vz, speed; nil when the hand has
+-- not been seen moving over two samples.
+local function handVelocity(self)
+    local samples = state.swing.samples
+    local first, last = samples[1], samples[#samples]
+    if first == nil or last == first or last.t <= first.t then return nil end
+    local seconds = (last.t - first.t) / 1000
+    local vx, vy, vz = (last.x - first.x) / seconds, (last.y - first.y) / seconds, (last.z - first.z) / seconds
+    return vx, vy, vz, math.sqrt(vx * vx + vy * vy + vz * vz)
+end
+
+-- ---- The release ------------------------------------------------------------------------------------------------------------
+
+-- The grip of the carrying hand was let go: what happens to the Held Object. The decision is this one function. A hand moving faster
+-- than OBJECT_GRAB_THROW_MIN_SPEED throws it, through the game's throwHeldItemWithForceVector along the hand's travel with the force
+-- scalar the speed over OBJECT_GRAB_THROW_FULL_SPEED (0..1, never harder than the game's full throw); otherwise it is dropped, through
+-- the game's dropHeldItem. What was done is kept for the diagnostics (getObjectGrabLastRelease).
 local function releaseHeldObject(self, carry)
     local hands = carry.hands
+    local vx, vy, vz, speed = handVelocity(self)
+    if speed ~= nil and speed > self.OBJECT_GRAB_THROW_MIN_SPEED and type(hands.throwHeldItemWithForceVector) == "function" then
+        local dx, dy, dz = vx / speed, vy / speed, vz / speed
+        local force = math.max(0, math.min(1, speed / self.OBJECT_GRAB_THROW_FULL_SPEED))
+        if pcall(hands.throwHeldItemWithForceVector, hands, dx, dy, dz, force) then
+            state.swing.last = { kind = "throw", speed = speed, dirX = dx, dirY = dy, dirZ = dz, force = force }
+            return
+        end
+    end
+    state.swing.last = { kind = "drop", speed = speed or 0, dirX = 0, dirY = 0, dirZ = 0, force = 0 }
     if type(hands.dropHeldItem) == "function" then pcall(hands.dropHeldItem, hands) end
+end
+
+-- What the last release did, for the diagnostics: kind ("throw" or "drop"), the hand's speed in m/s, the direction it travelled (a
+-- unit vector; zero for a drop) and the force scalar (0 for a drop). Nil before the first release of the session.
+function VRCompanion:getObjectGrabLastRelease()
+    local last = state.swing.last
+    if last == nil then return nil end
+    return last.kind, last.speed, last.dirX, last.dirY, last.dirZ, last.force
 end
 
 -- ---- The carry --------------------------------------------------------------------------------------------------------------
@@ -707,6 +796,7 @@ function VRCompanion:updateObjectGrab(dt)
         local hands = emptyHands(localPlayer())
         if hands ~= nil then wrapInstance(hands) end
     end
+    sampleSwing(self)
     updateCarry(self)
     updateOffHand(self)
 end
