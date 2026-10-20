@@ -251,6 +251,7 @@ add_executable(fs25_vr_tests
     tests/test_fish_catch_auto_answer.cpp
     tests/test_object_grab_aim.cpp
     tests/test_object_grab_feedback.cpp
+    tests/test_object_grab_grip.cpp
     tests/test_object_grab_wraps.cpp
 )
 

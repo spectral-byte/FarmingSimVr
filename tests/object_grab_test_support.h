@@ -56,6 +56,7 @@
 #pragma once
 
 #include "hand_tools_test_support.h"
+#include "input/virtual_gamepad.h"
 #include <string>
 
 inline constexpr const char* kStubHandToolHands = R"luau(
@@ -354,6 +355,43 @@ inline void StartObjectGrabMod(lua_State* L, fs25vr::VRBridge& bridge, const Sta
     ASSERT_EQ(RunLuauChunk(L, kObjectGrabHelpers, "=objectGrabHelpers"), 0);
     if (hold) ASSERT_NO_FATAL_FAILURE(HoldHands(L));
 }
+
+// A test of Object Grab that reads what the game reads from the Virtual Gamepad: the mod started on a player on foot with the game's
+// hands, the Virtual Gamepad on and the game clock set (the in-use timeout is measured on it). The suite name is one the filter for the
+// Companion Mod tests (VirtualGamepad*) covers.
+class VirtualGamepadObjectGrabTest : public CompanionModTest {
+protected:
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge{ headset.manager, nullptr };
+
+    void Start(const StartOptions& startOptions = StartOptions()) {
+        headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
+        ASSERT_NO_FATAL_FAILURE(StartObjectGrabMod(L, bridge, startOptions));
+        ASSERT_EQ(RunLuauChunk(L, "runCommand('vrVirtualGamepad', 'on')", "=padOn"), 0);
+        SetGameTime(10000);
+    }
+
+    // What the game reads from XInput slot 3, the highest free slot of a machine without real pads.
+    XINPUT_GAMEPAD Pad() {
+        XINPUT_STATE state{};
+        EXPECT_EQ(bridge.GetVirtualGamepad().GetState(3, &state), static_cast<DWORD>(ERROR_SUCCESS));
+        return state.Gamepad;
+    }
+    bool PadGrip(uint32_t hand) { return (Pad().wButtons & (hand == kLeft ? XINPUT_GAMEPAD_LEFT_SHOULDER : XINPUT_GAMEPAD_RIGHT_SHOULDER)) != 0; }
+
+    // How many haptic pulses reached a hand (the fake controllers keep them all).
+    int PulsesTo(uint32_t hand) const {
+        int count = 0;
+        for (const auto& pulse : headset.HapticPulses()) {
+            if (pulse.hand == static_cast<int>(hand)) ++count;
+        }
+        return count;
+    }
+
+    void Squeeze(uint32_t hand, float grip) { headset.SetHandInputs(hand, hand_tools_test::Squeeze(0.0f, grip)); }
+    int PickUps() { return static_cast<int>(Number(L, "#StubHandTool.pickUps")); }
+    int Drops() { return static_cast<int>(Number(L, "#StubHandTool.drops")); }
+};
 
 }  // namespace object_grab_test
 

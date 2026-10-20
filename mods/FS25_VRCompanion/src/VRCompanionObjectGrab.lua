@@ -70,10 +70,17 @@ VRCompanion.OBJECT_GRAB_REACH_BEHIND = 0.6
 VRCompanion.OBJECT_GRAB_LAND_PULSE_MS = 25
 VRCompanion.OBJECT_GRAB_LAND_PULSE_STRENGTH = 0.25
 
+-- One firmer pulse on the hand that grabs. Nothing is felt while it carries. Tune in the headset (#164).
+VRCompanion.OBJECT_GRAB_GRAB_PULSE_MS = 40
+VRCompanion.OBJECT_GRAB_GRAB_PULSE_STRENGTH = 0.6
+
 local function newState()
     return {
         problem = nil,       -- why Object Grab gave up, once it did (the warning is logged then and never again)
         landedNode = nil,    -- the node the Pointer Ray is on and has pulsed for
+        gripDown = { [0] = false, [1] = false },     -- per hand: the grip was held on the pad at the end of the last update
+        gripPressed = { [0] = false, [1] = false },  -- per hand: the grip went down in this update
+        carry = nil,         -- the hand carrying a Held Object it grabbed: { hand, hands }
     }
 end
 
@@ -243,6 +250,96 @@ VRCompanion:registerLookRayAimer("objectGrab", function(player)
     return aimedRay(VRCompanion, player)
 end)
 
+-- ---- The grip ---------------------------------------------------------------------------------------------------------
+-- The grip is the Virtual Gamepad's LB / RB (ADR-0028), and what counts as squeezed is what the pad reads: the Injector owns the
+-- threshold and its hysteresis, and an untracked hand's grip is not held. Object Grab takes a hand's grip from the pad while that hand
+-- points at something the hands can pick up and while it carries, and acts on a squeeze only when the pad let it have the grip (a grip
+-- already held when the use would begin keeps its binding, and does not grab, until it is let go).
+
+-- Whether the hand's grip is held as the pad reads it.
+local function padGripHeld(hand)
+    local bridge = engine("VRBridge")
+    if type(bridge) ~= "table" or type(bridge.getVirtualGamepad) ~= "function" then return false end
+    local ok, _, _, _, leftHeld, rightHeld = pcall(bridge.getVirtualGamepad)
+    if not ok then return false end
+    if hand == VRCompanion.MOTION_HAND_LEFT then return leftHeld == true end
+    return rightHeld == true
+end
+
+-- Once per update: which grips went down this update (state.gripPressed), whatever the hand points at.
+local function trackGrips()
+    for _, hand in ipairs({ VRCompanion.MOTION_HAND_LEFT, VRCompanion.MOTION_HAND_RIGHT }) do
+        local down = padGripHeld(hand)
+        state.gripPressed[hand] = down and not state.gripDown[hand]
+        state.gripDown[hand] = down
+    end
+end
+
+-- Asks the Virtual Gamepad for the hand's grip (every update the use wants it). False: it was held first, and keeps its binding.
+local function takeGrip(self, hand)
+    if type(self.takeVirtualGamepadInput) ~= "function" then return true end
+    return self:takeVirtualGamepadInput(hand, "grip")
+end
+
+-- ---- The grab ---------------------------------------------------------------------------------------------------------------
+
+-- Whether the hands tool holds something (the game's own getIsHoldingItem).
+local function holdsItem(hands)
+    if type(hands) ~= "table" or type(hands.getIsHoldingItem) ~= "function" then return false end
+    local ok, holding = pcall(hands.getIsHoldingItem, hands)
+    return ok and holding == true
+end
+
+-- The game picks the target up (pickUpTarget, with the targeter's own target: the game decides, and sends the event) and the hand
+-- carries it from now on. One pulse on the hand that grabbed.
+local function startGrab(self, hand, hands, target)
+    if type(hands.pickUpTarget) ~= "function" then return end
+    pcall(hands.pickUpTarget, hands, target)
+    if not holdsItem(hands) then return end
+    state.carry = { hand = hand, hands = hands }
+    self:pulseHand(hand, self.OBJECT_GRAB_GRAB_PULSE_MS, self.OBJECT_GRAB_GRAB_PULSE_STRENGTH)
+end
+
+-- The Pointer Hand is on an object the hands can pick up (`target`, the targeter's): a squeeze of its grip that the pad let the hand
+-- have grabs it.
+local function tryGrab(self, player, target)
+    local hand = self.pointerHand
+    if hand == nil or state.carry ~= nil then return end
+    if not takeGrip(self, hand) or not state.gripPressed[hand] then return end
+    local hands = emptyHands(player)
+    if hands ~= nil then startGrab(self, hand, hands, target) end
+end
+
+-- ---- The carry --------------------------------------------------------------------------------------------------------------
+
+-- Whether the hand is carrying a Held Object it grabbed.
+function VRCompanion:isHandCarryingHeldObject(hand)
+    return state.carry ~= nil and state.carry.hand == hand
+end
+
+-- Whether the carry has ended without the grip being let go: the game dropped the object itself (getting into a vehicle, taking a Hand
+-- Tool, the object gone), or Object Grab or the Motion Controllers were switched off, or the hands are not the hands any more.
+local function carryHasEnded(self, carry)
+    if self.objectGrabEnabled == false or self.motionControllersEnabled == false or state.problem ~= nil then return true end
+    return emptyHands(localPlayer()) ~= carry.hands or not holdsItem(carry.hands)
+end
+
+local function updateCarry(self)
+    local carry = state.carry
+    if carry == nil then return end
+    if carryHasEnded(self, carry) then
+        state.carry = nil  -- the grip goes back to the pad once it is let go (the Virtual Gamepad keeps what a use took off it)
+        return
+    end
+    takeGrip(self, carry.hand)
+end
+
+-- Once per Motion Controller update, after the hands are polled and before the Pointer Hand is chosen.
+function VRCompanion:updateObjectGrab(dt)
+    trackGrips()
+    updateCarry(self)
+end
+
 -- ---- The Pointer Ray on an object -------------------------------------------------------------------------------------
 
 -- The targeter's closest target for the hands when the hands can pick it up (the game decides): node, x, y, z. The target table is the
@@ -258,18 +355,18 @@ local function grabbableTarget(player)
     if type(target) ~= "table" or target.node == nil or type(hands.getCanPickUpNode) ~= "function" then return nil end
     local ok, can = pcall(hands.getCanPickUpNode, hands, target.node)
     if not ok or can ~= true then return nil end
-    return target.node, target.x, target.y, target.z
+    return target.node, target.x, target.y, target.z, target
 end
 
 -- Called by updatePointerRay, once per update after the Pointer Ray is placed: whether the ray is on an object the hands can pick up,
--- and where. The Pointer Hand gets one light pulse as it lands.
+-- and where. The Pointer Hand gets one light pulse as it lands, and squeezing its grip there grabs the object (see "The grab").
 function VRCompanion:getObjectGrabRayTarget()
     local player = localPlayer()
     if player == nil or aimedRay(self, player) == nil then
         state.landedNode = nil
         return false
     end
-    local node, x, y, z = grabbableTarget(player)
+    local node, x, y, z, target = grabbableTarget(player)
     if node == nil then
         state.landedNode = nil
         return false
@@ -278,6 +375,7 @@ function VRCompanion:getObjectGrabRayTarget()
         state.landedNode = node
         self:pulsePointerHand(self.OBJECT_GRAB_LAND_PULSE_MS, self.OBJECT_GRAB_LAND_PULSE_STRENGTH)
     end
+    tryGrab(self, player, target)
     return true, x, y, z
 end
 

@@ -262,8 +262,14 @@ local function isHoldingHandTool(self, hand)
     return not self:isMenuQuadShown() and type(self.isHandHoldingHandTool) == "function" and self:isHandHoldingHandTool(hand) == true
 end
 
+-- The hand carrying a Held Object (Object Grab, ADR-0033) is never a candidate either: no ray sticks out of the object it holds.
+local function isCarryingHeldObject(self, hand)
+    return type(self.isHandCarryingHeldObject) == "function" and self:isHandCarryingHeldObject(hand) == true
+end
+
 local function isPointerCandidate(self, hand)
     return state.inUse[hand] and not isHoldingSteeringWheel(self, hand) and not isHoldingHandTool(self, hand)
+        and not isCarryingHeldObject(self, hand)
 end
 
 local function choosePointerHand(self)
@@ -401,6 +407,7 @@ function VRCompanion:updateMotionControllers(dt)
         end
         if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end  -- lets go of the Steering Wheel
         if type(self.updateHandTools) == "function" then self:updateHandTools(dt) end  -- the Hand Tool goes back to the game's placement
+        if type(self.updateObjectGrab) == "function" then self:updateObjectGrab(dt) end  -- the Held Object goes back to the game's carry
         settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return
@@ -419,6 +426,7 @@ function VRCompanion:updateMotionControllers(dt)
         end
         if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end
         if type(self.updateHandTools) == "function" then self:updateHandTools(dt) end
+        if type(self.updateObjectGrab) == "function" then self:updateObjectGrab(dt) end
         settleInteractiveControl(self, dt)
         updatePointerUsers(self, dt)
         return
@@ -467,10 +475,13 @@ function VRCompanion:updateMotionControllers(dt)
     end
     -- Wheel Grab decides which hands hold the Steering Wheel from the hands just polled (VRCompanionWheelGrab.lua).
     if type(self.updateWheelGrab) == "function" then self:updateWheelGrab(dt) end
+    -- Object Grab lets go of a Held Object whose grip is let go, from the hands just polled (VRCompanionObjectGrab.lua).
+    if type(self.updateObjectGrab) == "function" then self:updateObjectGrab(dt) end
     -- A hand holding the Steering Wheel stays in use (it keeps its Virtual Hand), however still it is held. So does the Tool
     -- Hand while its Hand Tool keeps it in use (Hand Tools says when): a cut or a spray held with a still hand must not drop the tool.
+    -- And the hand carrying a Held Object (Object Grab), which is however still it is held.
     for _, hand in ipairs(HANDS) do
-        if isHoldingSteeringWheel(self, hand)
+        if isHoldingSteeringWheel(self, hand) or isCarryingHeldObject(self, hand)
             or (type(self.isHandKeptInUseByHandTool) == "function" and self:isHandKeptInUseByHandTool(hand) == true) then
             state.inUse[hand] = true
             if now ~= nil then state.motion[hand].lastMovedMs = now end
