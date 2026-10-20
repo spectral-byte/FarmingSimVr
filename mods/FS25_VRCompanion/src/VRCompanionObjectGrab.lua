@@ -35,6 +35,10 @@
 -- squeeze the pad let the hand have calls the game's pickUpTarget with the targeter's target, with one pulse on the hand. A grip held
 -- before the ray landed keeps its binding and grabs nothing until it is let go and squeezed again. A squeeze at nothing grabbable is LB/RB.
 --
+-- THE OFF-HAND (#161): either hand grabs in one squeeze, even with both in use. See "The off-hand": a physics ray cast along the other
+-- hand's finger only tells whether its grip may be taken; the squeeze makes it the Pointer Hand, the targeter runs again with its ray,
+-- and the game's pickUpTarget picks up what the targeter finds. A trigger pull still moves the Pointer Hand, as before.
+--
 -- THE CARRY: the hand that grabbed carries the Held Object until the grip is let go (releaseHeldObject: a drop through the game's
 -- dropHeldItem) or the game itself ends the carry (getting into a vehicle, taking a Hand Tool): the carry ends cleanly, and the grip
 -- goes back to the pad once it is let go. While it lasts the hand is in use however still it is held, is never the Pointer Hand (the
@@ -58,6 +62,9 @@
 --   VRCompanion:updateObjectGrab(dt)    once per Motion Controller update, after the hands are polled and before the Pointer Hand is
 --                                      chosen: the grip edges, and the carry (records the offset, lets go, ends)
 --   VRCompanion:isHandCarryingHeldObject(hand) -> boolean   the hand carries a Held Object it grabbed (stays in use, never points)
+--   VRCompanion:isObjectGrabSqueeze(hand) -> boolean   the hand, not the Pointer Hand, was squeezed this update while pointing at
+--                                      something grabbable: it becomes the Pointer Hand (asked by choosePointerHand)
+--   VRCompanion.OBJECT_GRAB_ANSWER_WAIT_MS   how long such a squeeze waits for the targeter's answer to the new ray
 --   VRCompanion.OBJECT_GRAB_GRAB_PULSE_MS / _STRENGTH   the pulse on the hand that grabs
 --   VRCompanion:setObjectGrabEnabled(enabled, save)
 --   VRCompanion:saveObjectGrabSetting(xmlFile, xml) / loadObjectGrabSetting(xmlFile, xml)   settings chain
@@ -92,6 +99,9 @@ VRCompanion.OBJECT_GRAB_REACH_BEHIND = 0.6
 VRCompanion.OBJECT_GRAB_LAND_PULSE_MS = 25
 VRCompanion.OBJECT_GRAB_LAND_PULSE_STRENGTH = 0.25
 
+-- How long (ms) an off-hand's squeeze waits for the targeter's answer to the new ray (the game's ray cast is asynchronous).
+VRCompanion.OBJECT_GRAB_ANSWER_WAIT_MS = 250
+
 -- One firmer pulse on the hand that grabs. Nothing is felt while it carries. Tune in the headset (#164).
 VRCompanion.OBJECT_GRAB_GRAB_PULSE_MS = 40
 VRCompanion.OBJECT_GRAB_GRAB_PULSE_STRENGTH = 0.6
@@ -103,6 +113,9 @@ local function newState()
         gripDown = { [0] = false, [1] = false },     -- per hand: the grip was held on the pad at the end of the last update
         gripPressed = { [0] = false, [1] = false },  -- per hand: the grip went down in this update
         carry = nil,         -- the hand carrying a Held Object it grabbed: { hand, hands }
+        offHandSqueezed = nil,  -- the hand (not the Pointer Hand) whose grip was squeezed this update while it points at something grabbable
+        pendingGrab = nil,   -- the off-hand squeeze waiting for the targeter's answer to the new ray: { hand, untilMs }
+        dt = 0,              -- the dt of this update
     }
 end
 
@@ -263,15 +276,21 @@ end
 
 -- The look ray the Pointer Hand gives `player` now (x, y, z, dirX, dirY, dirZ), or nil and why the hand does not aim. Read live,
 -- never cached, by the look ray wrap, the draw wrap and the update.
+local function whyNotAiming(self, player)
+    if self.objectGrabEnabled == false then return "Object Grab is off" end
+    if self.motionControllersEnabled == false then return "Motion Controllers are off" end
+    if state.problem ~= nil then return "Object Grab gave up (" .. state.problem .. ")" end
+    if type(player) ~= "table" or player ~= localPlayer() then return "not the local player" end
+    if player.camera == nil or player.camera.isFirstPerson ~= true then return "not in the first person view" end
+    if self:getControlledVehicle() ~= nil then return "in a vehicle" end
+    if self:doesMenuTakeInput() then return "a menu takes the input" end
+    if emptyHands(player) == nil then return "the hands are not empty" end
+    return nil
+end
+
 local function aimedRay(self, player)
-    if self.objectGrabEnabled == false then return nil, "Object Grab is off" end
-    if self.motionControllersEnabled == false then return nil, "Motion Controllers are off" end
-    if state.problem ~= nil then return nil, "Object Grab gave up (" .. state.problem .. ")" end
-    if type(player) ~= "table" or player ~= localPlayer() then return nil, "not the local player" end
-    if player.camera == nil or player.camera.isFirstPerson ~= true then return nil, "not in the first person view" end
-    if self:getControlledVehicle() ~= nil then return nil, "in a vehicle" end
-    if self:doesMenuTakeInput() then return nil, "a menu takes the input" end
-    if emptyHands(player) == nil then return nil, "the hands are not empty" end
+    local why = whyNotAiming(self, player)
+    if why ~= nil then return nil, why end
     if self.pointerHand == nil then return nil, "there is no Pointer Hand" end
     local ray = self:getPointerRay()
     if ray == nil then return nil, "the Pointer Ray is not placed" end
@@ -466,13 +485,107 @@ local function startGrab(self, hand, hands, target)
 end
 
 -- The Pointer Hand is on an object the hands can pick up (`target`, the targeter's): a squeeze of its grip that the pad let the hand
--- have grabs it.
-local function tryGrab(self, player, target)
+-- have grabs it. `waiting`: the squeeze was an off-hand's, made a few updates ago (see "The off-hand").
+local function tryGrab(self, player, target, waiting)
     local hand = self.pointerHand
     if hand == nil or state.carry ~= nil then return end
-    if not takeGrip(self, hand) or not state.gripPressed[hand] then return end
+    if not takeGrip(self, hand) or not (state.gripPressed[hand] or waiting) then return end
+    state.pendingGrab = nil
     local hands = emptyHands(player)
     if hands ~= nil then startGrab(self, hand, hands, target) end
+end
+
+-- ---- The off-hand -----------------------------------------------------------------------------------------------------------
+-- While both hands are in use with empty hands, the hand that does not point is checked with a physics ray cast along its finger (the
+-- Pointer Ray's ray, from the same place behind the fingertip as the look ray), ONLY to learn whether it points at something the
+-- game's getCanPickUpNode accepts. While it does, its grip is taken from the pad, so that squeezing it does not reach the game first
+-- (the held-input rule would hand that squeeze to the binding). The squeeze makes that hand the Pointer Hand (see
+-- choosePointerHand), the targeter is run again with its ray, and the game's pickUpTarget picks up what the TARGETER finds. The check
+-- never decides what is picked up: when the targeter finds nothing the game can pick up, nothing is.
+-- The targeter's ray cast is asynchronous in the game, so its answer to the new ray may come a few updates later: the squeeze waits for
+-- it (OBJECT_GRAB_ANSWER_WAIT_MS) for as long as the grip stays down.
+
+local OFF_HAND_MINIMUM_DISTANCE = 0.5  -- the hands' target type finds nothing nearer to the ray's origin (HandToolHands:onHeldStart)
+
+local checkPose = {}   -- scratch: the off-hand's finger in the world
+local checkHit = {}    -- scratch: what the check's ray cast hit
+
+-- The callback of the physics ray cast: the closest hit.
+local function onCheckHit(self, node, x, y, z, distance)
+    self.node, self.distance = node, distance
+    return true
+end
+checkHit.onHit = onCheckHit
+
+-- Whether the hand's finger points at a node the hands can pick up (the game's getCanPickUpNode says).
+local function pointsAtGrabbable(self, hands, hand)
+    local rayCast, key = engine("raycastClosest"), engine("HandToolHands")
+    local spec = hands.spec_hands
+    if type(rayCast) ~= "function" or type(key) ~= "table" or type(hands.getCanPickUpNode) ~= "function" or type(spec) ~= "table" then
+        return false
+    end
+    local tx, ty, tz, tdx, tdy, tdz = self:getPointerRayInTrackingSpace(hand)
+    if tx == nil then return false end
+    -- tracking space to the world: a pose with no rotation of its own comes out as the rotation of the tracking space
+    if self:headRelativePoseToWorld(tx, ty, tz, 0, 0, 0, 1, checkPose) ~= true then return false end
+    local dx, dy, dz = qrotate(checkPose.qx, checkPose.qy, checkPose.qz, checkPose.qw, tdx, tdy, tdz)
+    local behind = self.OBJECT_GRAB_REACH_BEHIND
+    checkHit.node, checkHit.distance = nil, nil
+    local ok = pcall(rayCast, checkPose.x - dx * behind, checkPose.y - dy * behind, checkPose.z - dz * behind, dx, dy, dz,
+        spec.pickupDistance or 0, "onHit", checkHit, key.TARGET_MASK)
+    if not ok or checkHit.node == nil or (checkHit.distance or 0) < OFF_HAND_MINIMUM_DISTANCE then return false end
+    local can, canPickUp = pcall(hands.getCanPickUpNode, hands, checkHit.node)
+    return can and canPickUp == true
+end
+
+-- Once per update, after the grips are tracked and the carry is settled: takes the grip of the off-hand that points at something
+-- grabbable, and notes the one whose squeeze the pad let it have.
+local function updateOffHand(self)
+    state.offHandSqueezed = nil
+    if state.carry ~= nil then return end
+    local player = localPlayer()
+    if whyNotAiming(self, player) ~= nil then return end
+    local hands = emptyHands(player)
+    for _, hand in ipairs({ VRCompanion.MOTION_HAND_LEFT, VRCompanion.MOTION_HAND_RIGHT }) do
+        if hand ~= self.pointerHand and self:isHandInUse(hand) and pointsAtGrabbable(self, hands, hand) then
+            if takeGrip(self, hand) and state.gripPressed[hand] then state.offHandSqueezed = hand end
+        end
+    end
+end
+
+-- Asked by the Pointer Hand's choice: the hand's grip was squeezed this update as it points at something the hands can pick up, and
+-- the pad let it have the grip. The hand becomes the Pointer Hand, and grabs there.
+function VRCompanion:isObjectGrabSqueeze(hand)
+    return state.offHandSqueezed == hand
+end
+
+-- Runs the targeter again, now that the Pointer Ray is the new Pointer Hand's. What it found for the hands before (with the ray of the
+-- hand that pointed) is forgotten first, so that the squeeze can only pick up what the new ray finds.
+local function runTargeterAgain(player)
+    local targeter, key = player.targeter, engine("HandToolHands")
+    if type(targeter) ~= "table" or type(targeter.update) ~= "function" then return end
+    if type(key) == "table" and type(targeter.closestTargetsByKey) == "table" then targeter.closestTargetsByKey[key] = nil end
+    pcall(targeter.update, targeter, state.dt)
+end
+
+-- The squeeze of `hand` that made it the Pointer Hand, called from the first look at the Pointer Ray after it.
+local function startWaitingForTheTargeter(self, player, hand)
+    local now = self:getCurrentTimeMs()
+    state.pendingGrab = now ~= nil and { hand = hand, untilMs = now + self.OBJECT_GRAB_ANSWER_WAIT_MS } or nil
+    runTargeterAgain(player)
+end
+
+-- Whether the hand's squeeze is still waiting for the targeter's answer: the hand is still the Pointer Hand, the grip is still down
+-- and the wait is not over.
+local function isWaitingForTheTargeter(self, hand)
+    local pending = state.pendingGrab
+    if pending == nil then return false end
+    local now = self:getCurrentTimeMs()
+    if pending.hand ~= hand or not state.gripDown[hand] or now == nil or now > pending.untilMs then
+        state.pendingGrab = nil
+        return false
+    end
+    return true
 end
 
 -- ---- The release ------------------------------------------------------------------------------------------------------------
@@ -522,12 +635,14 @@ end
 
 -- Once per Motion Controller update, after the hands are polled and before the Pointer Hand is chosen.
 function VRCompanion:updateObjectGrab(dt)
+    state.dt = dt or 0
     trackGrips()
     if state.problem == nil then
         local hands = emptyHands(localPlayer())
         if hands ~= nil then wrapInstance(hands) end
     end
     updateCarry(self)
+    updateOffHand(self)
 end
 
 -- ---- The Pointer Ray on an object -------------------------------------------------------------------------------------
@@ -556,6 +671,10 @@ function VRCompanion:getObjectGrabRayTarget()
         state.landedNode = nil
         return false
     end
+    local hand = self.pointerHand
+    if state.offHandSqueezed == hand then startWaitingForTheTargeter(self, player, hand) end
+    local waiting = isWaitingForTheTargeter(self, hand)
+    if waiting then takeGrip(self, hand) end
     local node, x, y, z, target = grabbableTarget(player)
     if node == nil then
         state.landedNode = nil
@@ -565,7 +684,7 @@ function VRCompanion:getObjectGrabRayTarget()
         state.landedNode = node
         self:pulsePointerHand(self.OBJECT_GRAB_LAND_PULSE_MS, self.OBJECT_GRAB_LAND_PULSE_STRENGTH)
     end
-    tryGrab(self, player, target)
+    tryGrab(self, player, target, waiting)
     return true, x, y, z
 end
 
