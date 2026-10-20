@@ -97,6 +97,19 @@ TEST_F(VirtualGamepadObjectGrabDiagnosticsTest, IdleItSaysObjectGrabIsOnNothingA
     EXPECT_TRUE(Has(answer, "Object Grab: off (there is no Pointer Hand") && Has(answer, " | last snap: none")) << "the reply is the fields in one line: " << answer;
 }
 
+TEST_F(VirtualGamepadObjectGrabDiagnosticsTest, EveryFunctionObjectGrabWrapsHasAWrapStatusInNameOrderAndOneItOnlyChecksHasNone) {
+    ASSERT_NO_FATAL_FAILURE(StartWithMass());
+    std::string answer;
+    Run(&answer);
+    size_t at = 0;
+    for (const char* name : { "getLookRay", "handsJointBroken", "handsOnDraw", "handsUpdateKinematicNode" }) {
+        const size_t found = answer.find(std::string(name) + " wrap: installed", at);
+        ASSERT_NE(found, std::string::npos) << name << " is reported, after the one before it, as installed: " << answer;
+        at = found;
+    }
+    EXPECT_FALSE(Has(answer, "getCanPickUpNode wrap")) << "it is only checked, never wrapped: " << answer;
+}
+
 TEST_F(VirtualGamepadObjectGrabDiagnosticsTest, TheLimitsAreReadFromTheGameEachTimeSoSuperStrengthShowsAtOnce) {
     ASSERT_NO_FATAL_FAILURE(StartWithMass());
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.superStrength(hands, true)", "=superStrength"), 0);

@@ -292,6 +292,17 @@ local function checkWraps()
     return nil
 end
 
+-- The names of the functions Object Grab wraps (WRAP_SPECS, sorted by name; a check-only entry is not wrapped, so has no status), so
+-- that a wrap added to WRAP_SPECS is reported by the diagnostics without being listed again.
+local function wrapNames()
+    local names = {}
+    for name, spec in pairs(WRAP_SPECS) do
+        if spec.make ~= nil or spec.shared then names[#names + 1] = name end
+    end
+    table.sort(names)
+    return names
+end
+
 local function wrapStatus(name)
     if state.problem ~= nil then return name .. " wrap: gave up (" .. state.problem .. ")" end
     return name .. " wrap: " .. (wraps[name] ~= nil and "installed" or "not installed")
@@ -1084,7 +1095,7 @@ local function diagnosticFields(self)
     for _, field in ipairs(carryFields(self)) do fields[#fields + 1] = field end
     fields[#fields + 1] = releaseField()
     fields[#fields + 1] = snapField(self)
-    for _, name in ipairs({ "getLookRay", "handsOnDraw", "handsUpdateKinematicNode", "handsJointBroken" }) do
+    for _, name in ipairs(wrapNames()) do
         fields[#fields + 1] = wrapStatus(name)
     end
     return fields
