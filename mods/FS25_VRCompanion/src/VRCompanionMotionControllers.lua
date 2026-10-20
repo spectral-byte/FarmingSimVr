@@ -746,6 +746,10 @@ function VRCompanion:updatePointerRay(dt)
     if type(self.updateInteractiveControl) == "function" then
         hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt)
     end
+    -- Object Grab: the ray is on an object the empty hands can pick up (a second target kind, after the Click Points).
+    if not hasTarget and type(self.getObjectGrabRayTarget) == "function" then
+        hasTarget, hitX, hitY, hitZ = self:getObjectGrabRayTarget()
+    end
     if ray.valid and hasTarget then
         ray.visible = true
         if hitX ~= nil then
@@ -856,6 +860,7 @@ function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
     self:savePointerConeSetting(xmlFile, xml)
     if type(self.saveWheelGrabSetting) == "function" then self:saveWheelGrabSetting(xmlFile, xml) end
     if type(self.saveHandToolsSetting) == "function" then self:saveHandToolsSetting(xmlFile, xml) end
+    if type(self.saveObjectGrabSetting) == "function" then self:saveObjectGrabSetting(xmlFile, xml) end
     if type(self.saveVirtualGamepadSetting) == "function" then self:saveVirtualGamepadSetting(xmlFile, xml) end
 end
 
@@ -876,6 +881,7 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
     self:loadPointerConeSetting(xmlFile, xml)
     if type(self.loadWheelGrabSetting) == "function" then self:loadWheelGrabSetting(xmlFile, xml) end
     if type(self.loadHandToolsSetting) == "function" then self:loadHandToolsSetting(xmlFile, xml) end
+    if type(self.loadObjectGrabSetting) == "function" then self:loadObjectGrabSetting(xmlFile, xml) end
     if type(self.loadVirtualGamepadSetting) == "function" then self:loadVirtualGamepadSetting(xmlFile, xml) end
 end
 
@@ -999,6 +1005,9 @@ function VRCompanion:getPointerDiagnostics()
     if type(self.getHandToolsDiagnostics) == "function" then
         virtualHandsText = virtualHandsText .. " | " .. self:getHandToolsDiagnostics()
     end
+    if type(self.getObjectGrabDiagnostics) == "function" then
+        virtualHandsText = virtualHandsText .. " | " .. self:getObjectGrabDiagnostics()
+    end
     local pointer = state.pointerHand
     local trigger = pointer ~= nil and state.hands[pointer].trigger or 0
     return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s | Left hand: %s | Right hand: %s%s",
@@ -1020,6 +1029,7 @@ function VRCompanion:registerMotionControllerConsoleCommands()
     if type(self.registerVirtualHandsConsoleCommands) == "function" then self:registerVirtualHandsConsoleCommands() end
     if type(self.registerWheelGrabConsoleCommands) == "function" then self:registerWheelGrabConsoleCommands() end
     if type(self.registerHandToolsConsoleCommands) == "function" then self:registerHandToolsConsoleCommands() end
+    if type(self.registerObjectGrabConsoleCommands) == "function" then self:registerObjectGrabConsoleCommands() end
     if type(self.registerVirtualGamepadConsoleCommands) == "function" then self:registerVirtualGamepadConsoleCommands() end
 end
 
@@ -1030,6 +1040,9 @@ function VRCompanion:resetMotionControllers()
     end
     if type(self.resetHandTools) == "function" then
         self:resetHandTools()  -- before the Virtual Hands go: a tool hangs below one
+    end
+    if type(self.resetObjectGrab) == "function" then
+        self:resetObjectGrab()
     end
     if type(self.resetVirtualHands) == "function" then
         self:resetVirtualHands()

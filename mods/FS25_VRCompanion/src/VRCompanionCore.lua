@@ -40,10 +40,12 @@ function VRCompanion.getEngineGlobal(name)
 end
 
 -- ---- Who aims the look ray ----------------------------------------------------------------------------------
--- The game's Player:getLookRay is wrapped once (by Hand Tools, which owns the wrap); the wrap asks each subsystem that can aim,
--- in this fixed order, and answers the first ray it gets: the game's own (the head's) when none does. A subsystem registers by
--- name with an aimer, function(player) -> x, y, z, dirX, dirY, dirZ in the world, or nil when it is not aiming for that player
--- (Hand Tools: a supported Hand Tool is in a tracked Tool Hand; Object Grab: the hands are empty and the Pointer Hand points).
+-- The game's Player:getLookRay is wrapped once, by this file, for as long as a subsystem that aims holds the wrap (Hand Tools and
+-- Object Grab each hold it, so that one giving up leaves the other aiming: see holdLookRayWrap). The wrap asks each subsystem
+-- that can aim, in this fixed order, and answers the first ray it gets: the game's own (the head's) when none does. A subsystem
+-- registers by name with an aimer, function(player) -> x, y, z, dirX, dirY, dirZ in the world, or nil when it is not aiming for
+-- that player (Hand Tools: a supported Hand Tool is in a tracked Tool Hand; Object Grab: the hands are empty and the Pointer Hand
+-- points).
 VRCompanion.LOOK_RAY_AIMER_ORDER = { "handTools", "objectGrab" }
 
 local lookRayAimers = {}
@@ -70,6 +72,53 @@ function VRCompanion:getAimedLookRay(player)
         end
     end
     return nil
+end
+
+-- ---- The one wrap of Player:getLookRay ------------------------------------------------------------------------------
+-- The wrap is put on the class once and stays while at least one subsystem holds it (holdLookRayWrap), whoever asked for it
+-- first. Each subsystem checks the shape of Player.getLookRay itself before holding it, and releases its hold when it gives up
+-- (or at map unload), so that a subsystem giving up lifts the wrap only when it was the last one that needed it. The wrapper is
+-- lifted only while it is still the class function, so another mod's later wrap is never undone.
+local lookRayWrap = nil   -- { class = <Player>, original = <the game's function>, wrapper = <what the wrap put there> }
+local lookRayHolders = {}
+
+local function installLookRayWrap()
+    local class = VRCompanion.getEngineGlobal("Player")
+    if type(class) ~= "table" then return false end
+    if lookRayWrap ~= nil and lookRayWrap.class == class then return true end
+    local original = class.getLookRay
+    if type(original) ~= "function" then return false end
+    local wrapper = function(player, ...)
+        if type(player) == "table" then
+            local x, y, z, dx, dy, dz = VRCompanion:getAimedLookRay(player)
+            if x ~= nil then return x, y, z, dx, dy, dz end
+        end
+        return original(player, ...)
+    end
+    lookRayWrap = { class = class, original = original, wrapper = wrapper }
+    class.getLookRay = wrapper
+    return true
+end
+
+-- Holds the wrap for the subsystem `owner` (a name), putting it on the class when it is not there. Returns whether it is there.
+function VRCompanion:holdLookRayWrap(owner)
+    if not installLookRayWrap() then return false end
+    lookRayHolders[owner] = true
+    return true
+end
+
+-- The subsystem lets go of the wrap; the class gets the game's function back when nobody holds it any more.
+function VRCompanion:releaseLookRayWrap(owner)
+    lookRayHolders[owner] = nil
+    if next(lookRayHolders) ~= nil or lookRayWrap == nil then return end
+    local wrap = lookRayWrap
+    lookRayWrap = nil
+    if wrap.class.getLookRay == wrap.wrapper then wrap.class.getLookRay = wrap.original end
+end
+
+-- The game's own Player:getLookRay while the wrap is on the class (the head's ray), or nil.
+function VRCompanion:getLookRayWrapOriginal()
+    return lookRayWrap ~= nil and lookRayWrap.original or nil
 end
 
 function VRCompanion:loadMap(name)
