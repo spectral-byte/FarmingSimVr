@@ -32,7 +32,17 @@ constexpr const char* kThrowHelpers = R"luau(
     function _G.throwDirection() local t = lastThrow(); return { t.dirX, t.dirY, t.dirZ } end
 )luau";
 
-class VirtualGamepadObjectGrabThrowTest : public VirtualGamepadObjectGrabTest {
+// The Cyclopean Audio Listener Node (the head's place in the world) stays where it is from now on: the mod's camera chain may move it
+// with the head pose every frame, and this makes it ignore that.
+constexpr const char* kKeepListenerStill = R"luau(
+    local baseSetTranslation = setTranslation
+    _G.setTranslation = function(node, ...)
+        if node == VRCompanion.cyclopeanAudioListenerNode then return end
+        return baseSetTranslation(node, ...)
+    end
+)luau";
+
+class VirtualGamepadObjectGrabThrowTest: public VirtualGamepadObjectGrabTest {
 protected:
     float x = kHandX, y = kHandY, z = kHandZ;  // where the right hand is, in tracking space
 
@@ -187,6 +197,26 @@ TEST_F(VirtualGamepadObjectGrabThrowTest, AHandTheRecenterMovedInTrackingSpaceIs
     SwingAndLetGo(0.0, 0.0f, 0.0f, 0.0f, 2);
     EXPECT_EQ(Drops(), 1);
     EXPECT_EQ(Throws(), 0);
+}
+
+// The Recenter above only drops the mod's own memory of the hand's movement. The tracking space moving UNDER the player with the head
+// placement (the Cyclopean Audio Listener Node) staying put makes the hand's place in the world jump without the hand moving: the mod
+// sees it in where the tracking space's origin is, and must not take it for a swing.
+TEST_F(VirtualGamepadObjectGrabThrowTest, AJumpOfTheTrackingSpaceInTheWorldJustBeforeTheLetGoIsNotASwing) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    FRAMES(3);
+    // The camera chain follows the head with the listener; this stub keeps the listener where it is, as a Recenter that moves the
+    // tracking space under the player does (the head pose changes, the player does not).
+    ASSERT_EQ(RunLuauChunk(L, kKeepListenerStill, "=keepListenerStill"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "_G.before = handWorld()", "=before"), 0);
+    headset.SetHeadPose(HandAt(1.0f, 0.0f, 0.0f));  // the head is 1 m elsewhere in tracking space; the hand, and the listener, are not
+    FRAMES(1);
+    ASSERT_EQ(RunLuauChunk(L, "_G.after = handWorld()", "=after"), 0);
+    ASSERT_GT(Number(L, "math.sqrt((after[1]-before[1])^2 + (after[3]-before[3])^2)"), 0.5)
+        << "the hand's place in the world jumped (else this test proves nothing)";
+    SwingAndLetGo(0.0, 0.0f, 0.0f, 0.0f, 2);  // the hand is held still in tracking space, and let go of next
+    EXPECT_EQ(Drops(), 1);
+    EXPECT_EQ(Throws(), 0) << "a jump of the rig is not a swing";
 }
 
 // ---- After a throw ------------------------------------------------------------------------------------------------------------

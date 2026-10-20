@@ -200,6 +200,39 @@ TEST_F(VirtualGamepadObjectGrabOffHandTest, AnOffHandsTriggerPullStillMovesThePo
     EXPECT_EQ(PickUps(), 0) << "a pull is no grab";
 }
 
+// ---- A release after an off-hand grab ----------------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadObjectGrabOffHandTest, AnOffHandThatGrabbedAndLetsGoWhileSwingingThrowsAlongItsOwnTravel) {
+    ASSERT_NO_FATAL_FAILURE(StartWithRaycasts());
+    BothInUseLeftAtTheBale();
+    Squeeze(kLeft, 1.0f);
+    FRAMES(3);
+    ASSERT_EQ(PickUps(), 1) << "the left hand grabbed in one squeeze";
+    ASSERT_EQ(RunLuauChunk(L, "_G.before = { getWorldTranslation(handHolder('left')) }", "=before"), 0);
+
+    // The left hand swings up and away at the speed of a full throw, and lets go in the last update.
+    const double fullSpeed = Number(L, "VRCompanion.OBJECT_GRAB_THROW_FULL_SPEED");
+    const float step = static_cast<float>(fullSpeed * 1.05 * 16.667 / 1000.0);
+    float y = kHandY, z = kHandZ;
+    for (int i = 0; i < 6; ++i) {
+        y += 0.6f * step;
+        z -= 0.8f * step;
+        headset.SetHandPointing(kLeft, HandAt(kLeftHandX, y, z));
+        if (i == 5) Squeeze(kLeft, 0.0f);
+        FRAMES(1);
+    }
+    ASSERT_EQ(RunLuauChunk(L, "_G.after = { getWorldTranslation(handHolder('left')) }", "=after"), 0);
+
+    ASSERT_EQ(Number(L, "#StubHandTool.throws"), 1) << "thrown, not dropped";
+    EXPECT_EQ(Drops(), 0);
+    EXPECT_EQ(EvalLua(L, "tostring(StubHandTool.throws[1].node == bale.node)"), "true");
+    EXPECT_EQ(Number(L, "StubHandTool.throws[1].force"), 1.0);
+    const char* cosine = "(function() local t = StubHandTool.throws[1]; local x, y, z = after[1]-before[1], after[2]-before[2], after[3]-before[3]; "
+                         "local n = math.sqrt(x*x + y*y + z*z); return (t.dirX*x + t.dirY*y + t.dirZ*z) / n end)()";
+    EXPECT_GT(Number(L, cosine), 0.99) << "along the way the left hand travelled";
+    EXPECT_FALSE(PadGrip(kLeft));
+}
+
 // ---- The targeter's answer comes later ------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadObjectGrabOffHandTest, WhenTheTargetersAnswerToTheNewRayComesAFrameLaterTheSqueezeStillPicksItUp) {
