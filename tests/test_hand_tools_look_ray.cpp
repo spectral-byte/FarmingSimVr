@@ -294,6 +294,30 @@ TEST_F(CompanionModTest, ASubsystemThatRaisesWhenAskedLeavesTheTargetersRayTheHe
     EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "the targeter cast " << EvalLua(L, "rayText(targeterRay())");
 }
 
+TEST_F(CompanionModTest, ASubsystemThatRaisesWhenAskedIsLoggedOnceByNameWithTheErrorHoweverManyFramesFollow) {
+    NO_HAND_TOOL_START();
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:registerLookRayAimer('objectGrab', function() error('broken aimer') end)", "=register"), 0);
+    FRAMES(30);
+    EXPECT_EQ(CountLogLines("[FS25_VR] [Warning] Look ray aimer 'objectGrab' raised: "), 1) << "once, however many frames";
+    EXPECT_EQ(CountLogLines("broken aimer"), 1) << "with the error";
+    EXPECT_EQ(CountLogLines("Look ray aimer 'handTools'"), 0) << "Hand Tools did not raise";
+}
+
+TEST_F(CompanionModTest, AnAimerThatRaisesIsLoggedOnceForEachNameAndTheNextAimerStillAimsAfterIt) {
+    NO_HAND_TOOL_START();
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:registerLookRayAimer('handTools', function() error('first broke') end); "
+                              "VRCompanion:registerLookRayAimer('objectGrab', aimerAnswers)", "=register"), 0);
+    FRAMES(10);
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), fixedAim)"), "true") << "the raise falls through to the next subsystem: " << EvalLua(L, "rayText(targeterRay())");
+    EXPECT_EQ(CountLogLines("Look ray aimer 'handTools' raised"), 1);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:registerLookRayAimer('objectGrab', function() error('second broke') end)", "=registerAgain"), 0);
+    FRAMES(10);
+    EXPECT_EQ(CountLogLines("Look ray aimer 'handTools' raised"), 1) << "still once";
+    EXPECT_EQ(CountLogLines("Look ray aimer 'objectGrab' raised"), 1) << "the second aimer has its own warning";
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true");
+}
+
 TEST_F(CompanionModTest, ThereIsStillOneWrapOfGetLookRayHoweverManySubsystemsAreRegistered) {
     NO_HAND_TOOL_START();
     ASSERT_EQ(RunLuauChunk(L, "_G.wrapped = Player.getLookRay", "=wrapped"), 0);

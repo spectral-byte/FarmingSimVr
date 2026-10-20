@@ -62,13 +62,20 @@ function VRCompanion:registerLookRayAimer(name, aimer)
     return false
 end
 
--- The ray the first aiming subsystem answers for `player`, or nil (the game's own ray). An aimer that raises is not aiming.
+-- The ray the first aiming subsystem answers for `player`, or nil (the game's own ray). An aimer that raises is not aiming: it is
+-- logged once, by name, with its error, and the next one is asked.
+local aimersLoggedAsRaising = {}
+
 function VRCompanion:getAimedLookRay(player)
     for _, name in ipairs(VRCompanion.LOOK_RAY_AIMER_ORDER) do
         local aimer = lookRayAimers[name]
         if aimer ~= nil then
             local ok, x, y, z, dx, dy, dz = pcall(aimer, player)
             if ok and type(x) == "number" then return x, y, z, dx, dy, dz end
+            if not ok and not aimersLoggedAsRaising[name] then
+                aimersLoggedAsRaising[name] = true
+                print(string.format("[FS25_VR] [Warning] Look ray aimer '%s' raised: %s", name, tostring(x)))
+            end
         end
     end
     return nil
