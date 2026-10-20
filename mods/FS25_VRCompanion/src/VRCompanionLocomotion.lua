@@ -428,8 +428,9 @@ function VRCompanion:updateVehicleCameraTrackingNode(cam)
 end
 
 function VRCompanion:snapTurn(direction, angleOverride, curTime)
-    if self.isMenuVisible or self.is2DViewActive then
-        return false, (self.isMenuVisible and "menu_visible" or "2d_view_active")
+    local menuTakesInput = self:doesMenuTakeInput()
+    if menuTakesInput or self.is2DViewActive then
+        return false, (menuTakesInput and "menu_visible" or "2d_view_active")
     end
 
     local t = curTime or self:getCurrentTimeMs()
@@ -710,7 +711,7 @@ function VRCompanion:onRecenterAction()
             bridge.recenter()
         end
         if type(self.resetMotionControllerMovement) == "function" then self:resetMotionControllerMovement() end
-        if self.isMenuVisible then
+        if self:isMenuQuadShown() then
             print("[FS25_VR] Menu Quad layer realigned directly in front of head pose.")
         end
     else

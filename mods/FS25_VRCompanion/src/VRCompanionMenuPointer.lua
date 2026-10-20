@@ -260,7 +260,8 @@ local function updateMenuButtons(self)
         end
     end
 
-    if self.isMenuVisible ~= true then
+    -- A Stereo Dialog is answered with the gamepad's own menu buttons, which the Virtual Gamepad passes on: the back and the scroll here would answer it a second time
+    if not self:doesMenuTakeInput() or self:isStereoDialogShowing() then
         scroll.dir, scroll.nextMs = 0, nil
         return
     end
@@ -293,7 +294,7 @@ end
 
 function VRCompanion:updateMenuPointer(dt)
     updateMenuButtons(self)
-    local panelShowing = self.isMenuVisible == true or self.is2DViewActive == true
+    local panelShowing = self:isMenuQuadShown() or self.is2DViewActive == true
     local getPanelHit = bridgeFunction("getPanelHit")
     local hand = self:getPointerHand()
     if not (panelShowing and hand ~= nil and getPanelHit ~= nil and self:isPointerRayInControl()) then

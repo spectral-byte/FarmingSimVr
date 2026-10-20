@@ -259,7 +259,7 @@ end
 -- The Tool Hand holding a supported Hand Tool is never a candidate either, as it uses the tool with its trigger (Hand Tools,
 -- ADR-0029). That holds in the world only: in a menu the tool is back where the game puts it and either hand can point.
 local function isHoldingHandTool(self, hand)
-    return self.isMenuVisible ~= true and type(self.isHandHoldingHandTool) == "function" and self:isHandHoldingHandTool(hand) == true
+    return not self:isMenuQuadShown() and type(self.isHandHoldingHandTool) == "function" and self:isHandHoldingHandTool(hand) == true
 end
 
 local function isPointerCandidate(self, hand)
@@ -522,7 +522,7 @@ end
 -- VRCompanion:isHeadTrackingActive, is not a gate: the mod places the head itself whatever it says, and in
 -- the game it reads off while the head is in fact placed.)
 local function headIsPlacedInTheWorld(self)
-    if self.isMenuVisible or self.is2DViewActive or self.trackedCameraShown == false then return false end
+    if self:isMenuQuadShown() or self.is2DViewActive or self.trackedCameraShown == false then return false end
     if type(self.isPassThroughMode) == "function" and self:isPassThroughMode() then return false end
     return true
 end
@@ -556,7 +556,7 @@ end
 -- The state behind isHeadPlacedInTheWorld, for log lines and diagnostics.
 function VRCompanion:describeHeadPlacement()
     return string.format("menu=%s, 2D=%s, trackedCameraShown=%s, passThrough=%s",
-        tostring(self.isMenuVisible), tostring(self.is2DViewActive), tostring(self.trackedCameraShown),
+        tostring(self:isMenuQuadShown()), tostring(self.is2DViewActive), tostring(self.trackedCameraShown),
         tostring(type(self.isPassThroughMode) == "function" and self:isPassThroughMode()))
 end
 

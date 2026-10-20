@@ -860,7 +860,7 @@ function VRCompanion:requiresAfrFallback()
 end
 
 function VRCompanion:computeEyeOffset(pose, eyeIndex, afrFallback)
-    if not afrFallback or self.isMenuVisible then
+    if not afrFallback or self:isMenuQuadShown() then
         return 0, 0, 0
     end
     local ipd = self:getIpd()
@@ -931,7 +931,7 @@ function VRCompanion:getResolvedHeadPose()
 end
 
 function VRCompanion:getActiveEyeIndex(afrFallback)
-    if not self.isMenuVisible and not self.is2DViewActive then
+    if not self:isMenuQuadShown() and not self.is2DViewActive then
         if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then
             return self:getDualPassEye()
         end
@@ -1011,7 +1011,7 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
         end
     end
 
-    local isStereoActive = stereoRequested and not self.isMenuVisible and not self.is2DViewActive
+    local isStereoActive = stereoRequested and not self:isMenuQuadShown() and not self.is2DViewActive
 
     if isStereoActive then
         local isRightEye = (eyeIndex == 1)
@@ -1125,7 +1125,7 @@ end
 function VRCompanion:onOutsideCameraUpdate(cam)
     local camNode = cam.cameraNode
     -- 2D Floating Window Mode and GUI menus show the engine's camera as-is
-    if self.is2DViewActive or self.isMenuVisible then
+    if self.is2DViewActive or self:isMenuQuadShown() then
         self:renderThroughEngineCamera(camNode)
         return
     end
@@ -1604,7 +1604,7 @@ function VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
 end
 
 function VRCompanion:updateMenuBackgroundCamera(dt)
-    if not self.isMenuVisible or self.is2DViewActive then
+    if not self:isMenuQuadShown() or self.is2DViewActive then
         return
     end
 

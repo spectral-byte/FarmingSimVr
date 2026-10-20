@@ -30,6 +30,8 @@ CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigg
         <sourceFile filename="src/VRCompanionWheelGrab.lua"/>
         <sourceFile filename="src/VRCompanionVirtualGamepad.lua"/>
         <sourceFile filename="src/VRCompanionHandTools.lua"/>
+        <sourceFile filename="src/VRCompanionDialogProbe.lua"/>
+        <sourceFile filename="src/VRCompanionFishCatch.lua"/>
         <sourceFile filename="src/VRCompanionInteractiveControl.lua"/>
         <sourceFile filename="src/VRCompanion.lua"/>
     </extraSourceFiles>

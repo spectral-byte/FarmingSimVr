@@ -387,8 +387,10 @@ function VRCompanion:updateInteractiveControl(dt)
     state.updates = state.updates + 1
     updateAutoOn(self)
 
+    -- A Stereo Dialog takes the input and is answered with the pad's buttons: the Pointer Ray hits no Click Point behind it and
+    -- the trigger clicks nothing, so a press for the dialog is not also a click.
     local ray = nil
-    if rayControlsSelection(self) then
+    if rayControlsSelection(self) and not (self:doesMenuTakeInput() and self:isStereoDialogShowing()) then
         ray = self:getPointerRay()
     end
     local live, selected, hx, hy, hz = selectFromRay(self, ray)

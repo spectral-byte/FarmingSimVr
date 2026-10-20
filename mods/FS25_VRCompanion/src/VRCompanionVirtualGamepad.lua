@@ -49,6 +49,10 @@
 -- on those inputs. If g_gui, g_inGameMenu or the page is missing, the menu counts as any other menu. The held-input rule
 -- holds on the way into and out of the Settings page: what the menu took stays off the pad until it is let go, and what was
 -- held on the Settings page keeps its binding when another page's menu use begins.
+-- THE STEREO DIALOG EXCEPTION (ADR-0032): a Stereo Dialog (VRCompanion.STEREO_DIALOGS, the fish catch dialog) is a menu that takes the
+-- input but is answered with the gamepad's own menu buttons (MENU_ACCEPT, MENU_BACK), so while one shows in the stereoscopic view the menu
+-- does NOT take the pad's inputs either: the Motion Controllers' bindings reach the game as outside a menu and the dialog's button hints
+-- answer it. Nothing takes the input, so there is no held-input rule to apply. In 2D Floating Window Mode it is any other menu.
 -- THE HELD-INPUT RULE: an input already held (as the pad reads it) when a use begins keeps its binding until it is let go,
 -- and the use does not act on it meanwhile. The same holds the other way round: an input a use took stays off the pad
 -- until it is let go, even if the use ends first (a grip that closed a menu does not fire its binding as the menu goes).
@@ -147,8 +151,9 @@ local function newUses()
         uses[hand] = {}
         for _, input in ipairs(INPUTS) do
             -- calledAt: the last update a use asked for it. down: held, as of the last look. yielding: held when the use
-            -- began, so it keeps its binding. suppressed: reads as released on the pad.
-            uses[hand][input] = { calledAt = -1, down = false, yielding = false, suppressed = false }
+            -- began, so it keeps its binding. suppressed: reads as released on the pad. heldAtDialog: held when a Stereo
+            -- Dialog opened, so it is not the dialog's and reads released until it is let go.
+            uses[hand][input] = { calledAt = -1, down = false, yielding = false, suppressed = false, heldAtDialog = false }
         end
     end
     return uses
@@ -160,6 +165,7 @@ local function newState()
         sentLive = nil,
         seenKey = nil,       -- the last (present, slot, reason) the game log was told about
         update = 0,          -- counts the Companion Mod's updates
+        dialogShowing = false,  -- whether a Stereo Dialog showed at the last update
         uses = newUses(),
         sentUse = { [0] = 0, [1] = 0 },  -- the sets of inputs the Injector was last told the Companion Mod is using
     }
@@ -287,8 +293,15 @@ end
 
 -- Last of the Companion Mod's update: the uses made here, then which inputs are off the pad this update, told to the Injector.
 function VRCompanion:updateVirtualGamepadUse(dt)
+    -- A Stereo Dialog is answered with the pad's own buttons, so a fresh press reaches it. Its answer buttons act on release,
+    -- though: an input already held when it opened is not the dialog's, and reads released until it is let go (the held-input
+    -- rule of any menu, for the dialog).
+    local dialogShowing = self:doesMenuTakeInput() and self:isStereoDialogShowing()
+    local dialogOpening = dialogShowing and not state.dialogShowing
+    state.dialogShowing = dialogShowing
+
     if self.motionControllersEnabled ~= false then
-        if self.isMenuVisible == true and not isSettingsPageShowing() then
+        if self:doesMenuTakeInput() and not self:isStereoDialogShowing() and not isSettingsPageShowing() then
             -- Every input of both hands: the Pointer Ray menus act on the raw hand state themselves.
             for _, hand in ipairs(HANDS) do
                 for _, input in ipairs(INPUTS) do
@@ -313,11 +326,18 @@ function VRCompanion:updateVirtualGamepadUse(dt)
             local record = state.uses[hand][input]
             if record.calledAt == state.update then
                 record.suppressed = not record.yielding
+                record.heldAtDialog = false
             else
                 record.down = isHeld(self, hand, input, record.down)
+                if dialogOpening then record.heldAtDialog = record.down end
                 -- No use wants it any more, but what a use took stays off the pad until it is let go.
                 record.suppressed = record.suppressed and record.down
                 record.yielding = false
+                if record.heldAtDialog then
+                    -- Held across the dialog's opening: off the pad until let go, even if the dialog closes first.
+                    record.heldAtDialog = record.down
+                    if record.down then record.suppressed = true end
+                end
             end
             if record.suppressed then mask = mask + INPUT_BITS[input] end
         end

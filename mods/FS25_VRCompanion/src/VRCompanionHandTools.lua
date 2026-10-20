@@ -798,6 +798,13 @@ end
 
 local function updateTrigger(self)
     local use = state.trigger
+    -- A Stereo Dialog takes the input and is answered with the pad's buttons: the trigger uses nothing while it shows (a use in
+    -- progress ends as it does when the tool leaves the hand), so a press for the dialog is not also a Hand Tool action. The
+    -- tool stays in the hand, and a trigger held when the dialog closes keeps its binding until let go (the held-input rule).
+    if self:doesMenuTakeInput() and self:isStereoDialogShowing() then
+        endTriggerUse()
+        return
+    end
     local tool = heldTool()
     local kind, entry = nil, nil
     if tool ~= nil then kind, entry = supportedKind(tool) end
@@ -2461,5 +2468,11 @@ VRCompanion.HandTools.getToolHand = function(self, ...) return VRCompanion.getTo
 VRCompanion.HandTools.consoleCommandSetToolHand = function(self, ...) return VRCompanion.consoleCommandSetToolHand(VRCompanion, ...) end
 VRCompanion.HandTools.consoleCommandSetHandTools = function(self, ...) return VRCompanion.consoleCommandSetHandTools(VRCompanion, ...) end
 VRCompanion.HandTools.consoleCommandHandToolsDiagnostics = function(self, ...) return VRCompanion.consoleCommandHandToolsDiagnostics(VRCompanion, ...) end
+
+-- The probe's readers of an unknown table (the dialog probe, VRCompanionDialogProbe.lua, dumps with them): a short text for a value,
+-- the sorted keys, the function names of a table and the global name a table is kept under.
+VRCompanion.HandTools.probeReaders = {
+    shortValue = shortValue, sortedKeys = sortedKeys, functionNames = functionNames, globalNameOf = globalNameOf,
+}
 
 return VRCompanion.HandTools

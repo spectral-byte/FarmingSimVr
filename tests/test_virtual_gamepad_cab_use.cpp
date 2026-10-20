@@ -224,3 +224,35 @@ TEST_F(VirtualGamepadCabUseTest, TheStatusCommandListsTheClickAndTheGripItIsUsin
     const std::string status = EvalLua(L, "runCommand('vrMotionControllerStatus')");
     EXPECT_NE(status.find("left grip"), std::string::npos) << status;
 }
+
+// A Stereo Dialog (spec #142, story 10): the dialog is answered with the pad's buttons, so the Pointer Ray does not select
+// Click Points behind it and a pull of the trigger is not also a click.
+TEST_F(VirtualGamepadCabUseTest, WhileAStereoDialogShowsThePointerRayHitsNoClickPointAndTheTriggerClicksNothing) {
+    StartWithPadOn();
+    ASSERT_FALSE(HasFatalFailure());
+    PointAtOwnClickPoint(kRight);
+    ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "rightPoint");
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        g_gui.visible = true
+        g_gui.currentDialogName = "FishDialog"
+        g_gui.dialogs = { { name = "FishDialog", target = {} } }
+    )luau", "=openFishDialog"), 0);
+    FRAMES(3);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:isStereoDialogShowing()"), "true");
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "nil") << "the ray hits no Click Point behind the dialog";
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    EXPECT_EQ(Executed(), "") << "a pull that is for the dialog is not also a click";
+    EXPECT_EQ(Pad().bRightTrigger, 255) << "it reaches the dialog through the pad";
+
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false; g_gui.currentDialogName = ''; g_gui.dialogs = {}", "=closeFishDialog"), 0);
+    FRAMES(3);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "rightPoint") << "and the ray works again once it closes";
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(Executed(), "rightPoint");
+}
