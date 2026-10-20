@@ -288,6 +288,10 @@ local function choosePointerHand(self)
             state.triggerConsumed[hand] = true  -- until the trigger is let go
             return hand
         end
+        -- So does squeezing the grip of a hand that points at something it can grab (Object Grab): it grabs in that squeeze.
+        if hand ~= previous and type(self.isObjectGrabSqueeze) == "function" and self:isObjectGrabSqueeze(hand) == true then
+            return hand
+        end
     end
     return previous
 end
