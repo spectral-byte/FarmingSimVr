@@ -42,9 +42,14 @@
 -- Held Object"), keeping the object's place and angle in the hand as it was at the grab. A hand that is not tracked leaves them where
 -- they were, and has not let go; they follow it again when it is tracked. Nothing is felt while it carries.
 --
+-- THE SNAP (#162): without super strength, yanking a heavy Held Object breaks the game's joint, the game calls onHeldItemJointBroken with
+-- the joint's index and the hands let go. The carry ends, and the hand gets one sharp pulse (OBJECT_GRAB_SNAP_PULSE_*). A drop by the game
+-- itself passes no joint index and is silent. The grip, if still held, does not grab again until it is let go and squeezed again. With
+-- super strength the game makes the joint unbreakable and nothing here changes.
+--
 -- WRAPS: Player.getLookRay (shared with Hand Tools: Core owns the one wrap and each holds it, so that one giving up does not take the
--- look ray away from the other), HandToolHands.onDraw and HandToolHands.updateKinematicNode (the class AND the local player's hands
--- tool, which may hold a copy of it); getCanPickUpNode is only checked. When one is missing or has another shape
+-- look ray away from the other), HandToolHands.onDraw, HandToolHands.updateKinematicNode and HandToolHands.onHeldItemJointBroken (the
+-- class AND the local player's hands tool, which may hold a copy of the last two); getCanPickUpNode is only checked. When one is missing or has another shape
 -- at map load, Object Grab gives up: ONE warning ("Object Grab disabled: ..."), its wraps are lifted, and picking up is the
 -- game's. Hand Tools are not affected. A game without HandToolHands (no hands to aim) is not a failure: nothing is wrapped.
 --
@@ -59,6 +64,7 @@
 --                                      chosen: the grip edges, and the carry (records the offset, lets go, ends)
 --   VRCompanion:isHandCarryingHeldObject(hand) -> boolean   the hand carries a Held Object it grabbed (stays in use, never points)
 --   VRCompanion.OBJECT_GRAB_GRAB_PULSE_MS / _STRENGTH   the pulse on the hand that grabs
+--   VRCompanion.OBJECT_GRAB_SNAP_PULSE_MS / _STRENGTH   the sharp pulse on the hand whose hold snaps
 --   VRCompanion:setObjectGrabEnabled(enabled, save)
 --   VRCompanion:saveObjectGrabSetting(xmlFile, xml) / loadObjectGrabSetting(xmlFile, xml)   settings chain
 --   VRCompanion:getObjectGrabDiagnostics() -> string          the state of Object Grab, one line
@@ -96,6 +102,10 @@ VRCompanion.OBJECT_GRAB_LAND_PULSE_STRENGTH = 0.25
 VRCompanion.OBJECT_GRAB_GRAB_PULSE_MS = 40
 VRCompanion.OBJECT_GRAB_GRAB_PULSE_STRENGTH = 0.6
 
+-- One sharp pulse on the hand whose hold snaps (the game's joint broke). Sharper and longer than the grab. Tune in the headset (#164).
+VRCompanion.OBJECT_GRAB_SNAP_PULSE_MS = 120
+VRCompanion.OBJECT_GRAB_SNAP_PULSE_STRENGTH = 1.0
+
 local function newState()
     return {
         problem = nil,       -- why Object Grab gave up, once it did (the warning is logged then and never again)
@@ -120,6 +130,7 @@ local WRAP_SPECS = {
     getLookRay = { class = "Player", parameters = 1, describe = "(player)", shared = true },
     handsOnDraw = { class = "HandToolHands", fn = "onDraw", parameters = 1, describe = "(tool)" },
     handsUpdateKinematicNode = { class = "HandToolHands", fn = "updateKinematicNode", parameters = 1, describe = "(tool)" },
+    handsJointBroken = { class = "HandToolHands", fn = "onHeldItemJointBroken", parameters = 2, describe = "(tool, jointIndex)" },
     getCanPickUpNode = { class = "HandToolHands", parameters = 2, describe = "(tool, node)" },
 }
 
@@ -184,17 +195,23 @@ local function wrapAll()
     for name in pairs(WRAP_SPECS) do wrapFunction(name) end
 end
 
--- The hands tool's own copy of a function (see "Placing the Held Object"), wrapped for as long as the hands are the local player's:
--- { tool, original, hadOwn, wrapper }.
+-- The functions of the hands tool that the game registers on its type, and that the tool may hold its own copy of ("Placing the Held
+-- Object"): wrapped on the local player's hands tool itself for as long as it is the hands, unless the class wrap reaches it.
+local INSTANCE_WRAPS = { "handsUpdateKinematicNode", "handsJointBroken" }
+
+-- { tool, entries = { [wrap name] = { original, hadOwn, wrapper } } }
 local instanceWrap = nil
 
--- Gives the hands tool its own copy back, unless something else has replaced the wrapper since.
+-- Gives the hands tool its own copies back, each unless something else has replaced the wrapper since.
 local function unwrapInstance()
     local current = instanceWrap
     instanceWrap = nil
-    local fn = WRAP_SPECS.handsUpdateKinematicNode.fn
-    if current ~= nil and rawget(current.tool, fn) == current.wrapper then
-        current.tool[fn] = current.hadOwn and current.original or nil
+    if current == nil then return end
+    for name, entry in pairs(current.entries) do
+        local fn = WRAP_SPECS[name].fn
+        if rawget(current.tool, fn) == entry.wrapper then
+            current.tool[fn] = entry.hadOwn and entry.original or nil
+        end
     end
 end
 
@@ -429,20 +446,36 @@ WRAP_SPECS.handsUpdateKinematicNode.make = function(original)
     end
 end
 
--- The game registers updateKinematicNode on the hands tool's type, and the type's functions may be copied onto the tool: a wrap of the
--- class does not reach a tool that holds its own copy (the trap of Wheel Grab's steering wrap). So the local player's hands tool is
--- wrapped itself, for as long as it is the hands, unless the class wrap reaches it.
+-- The game registers updateKinematicNode (and onHeldItemJointBroken) on the hands tool's type, and the type's functions may be copied
+-- onto the tool: a wrap of the class does not reach a tool that holds its own copy (the trap of Wheel Grab's steering wrap). So the
+-- local player's hands tool is wrapped itself, for as long as it is the hands, unless the class wrap reaches it.
 local function wrapInstance(tool)
-    local spec = WRAP_SPECS.handsUpdateKinematicNode
-    local current = instanceWrap
-    if current ~= nil and current.tool == tool and rawget(tool, spec.fn) == current.wrapper then return end
-    if current ~= nil then unwrapInstance() end
-    local original = tool[spec.fn]
-    local classWrap = wraps.handsUpdateKinematicNode
-    if shapeProblem(spec, original) ~= nil or (classWrap ~= nil and original == classWrap.wrapper) then return end
-    local wrapper = spec.make(original)
-    instanceWrap = { tool = tool, original = original, hadOwn = rawget(tool, spec.fn) ~= nil, wrapper = wrapper }
-    tool[spec.fn] = wrapper
+    if instanceWrap ~= nil and instanceWrap.tool ~= tool then unwrapInstance() end
+    for _, name in ipairs(INSTANCE_WRAPS) do
+        local spec = WRAP_SPECS[name]
+        local entry = instanceWrap ~= nil and instanceWrap.entries[name] or nil
+        if entry == nil or rawget(tool, spec.fn) ~= entry.wrapper then
+            local original = tool[spec.fn]
+            local classWrap = wraps[name]
+            if shapeProblem(spec, original) == nil and not (classWrap ~= nil and original == classWrap.wrapper) then
+                local wrapper = spec.make(original)
+                instanceWrap = instanceWrap or { tool = tool, entries = {} }
+                instanceWrap.entries[name] = { original = original, hadOwn = rawget(tool, spec.fn) ~= nil, wrapper = wrapper }
+                tool[spec.fn] = wrapper
+            end
+        end
+    end
+end
+
+-- The wrap of the game's onHeldItemJointBroken: the game's joint break report passes the joint's index, whereas its own letting go
+-- (dropHeldItem, which getting into a vehicle or taking a Hand Tool end in) passes none. A break of the hold of the hand that carries
+-- is a snap: updateCarry gives the hand its pulse.
+WRAP_SPECS.handsJointBroken.make = function(original)
+    return function(tool, jointIndex, ...)
+        local carry = state.carry
+        if jointIndex ~= nil and carry ~= nil and carry.hands == tool then carry.snapped = true end
+        return original(tool, jointIndex, ...)
+    end
 end
 
 -- ---- The grab ---------------------------------------------------------------------------------------------------------------
@@ -508,7 +541,12 @@ local function updateCarry(self)
     local carry = state.carry
     if carry == nil then return end
     if carryHasEnded(self, carry) then
-        state.carry = nil  -- the grip goes back to the pad once it is let go (the Virtual Gamepad keeps what a use took off it)
+        -- The grip goes back to the pad once it is let go (the Virtual Gamepad keeps what a use took off it), and a grip still held does
+        -- not grab again: a grab needs the grip to go down. A snap is felt; a drop by the game is not.
+        state.carry = nil
+        if carry.snapped then
+            self:pulseHand(carry.hand, self.OBJECT_GRAB_SNAP_PULSE_MS, self.OBJECT_GRAB_SNAP_PULSE_STRENGTH)
+        end
         return
     end
     if gripWasLetGo(self, carry) then
@@ -648,6 +686,7 @@ local function diagnosticFields(self)
         wrapStatus("getLookRay"),
         wrapStatus("handsOnDraw"),
         wrapStatus("handsUpdateKinematicNode"),
+        wrapStatus("handsJointBroken"),
     }
 end
 
