@@ -712,16 +712,21 @@ local function sampleSwing(self)
     rig.x, rig.y, rig.z, rig.qx, rig.qy, rig.qz, rig.qw = rigPose.x, rigPose.y, rigPose.z, rigPose.qx, rigPose.qy, rigPose.qz, rigPose.qw
     local samples = swing.samples
     local now = self:getCurrentTimeMs()
+    if now == nil then  -- no clock: the hand's speed is not known, and what was sampled before it went is stale
+        swing.samples = {}
+        return
+    end
     samples[#samples + 1] = { t = now, x = hand.x, y = hand.y, z = hand.z }
     while #samples > 1 and now - samples[1].t > self.OBJECT_GRAB_THROW_WINDOW_MS do table.remove(samples, 1) end
 end
 
 -- The hand's velocity in the world (m/s) from its oldest to its newest sample in the window: vx, vy, vz, speed; nil when the hand has
--- not been seen moving over two samples.
+-- not been seen moving over two samples, or when the game clock is not available.
 local function handVelocity(self)
+    if self:getCurrentTimeMs() == nil then return nil end
     local samples = state.swing.samples
     local first, last = samples[1], samples[#samples]
-    if first == nil or last == first or last.t <= first.t then return nil end
+    if first == nil or last == first or first.t == nil or last.t == nil or last.t <= first.t then return nil end
     local seconds = (last.t - first.t) / 1000
     local vx, vy, vz = (last.x - first.x) / seconds, (last.y - first.y) / seconds, (last.z - first.z) / seconds
     return vx, vy, vz, math.sqrt(vx * vx + vy * vy + vz * vz)
@@ -1050,7 +1055,9 @@ end
 
 local function snapField(self)
     if state.lastSnapMs == nil then return "last snap: none" end
-    return string.format("last snap: %.0f s ago", math.max(0, self:getCurrentTimeMs() - state.lastSnapMs) / 1000)
+    local now = self:getCurrentTimeMs()
+    if now == nil then return "last snap: yes (the game clock is not available)" end
+    return string.format("last snap: %.0f s ago", math.max(0, now - state.lastSnapMs) / 1000)
 end
 
 -- The state of Object Grab as a list of fields (one tagged log line each): whether it is on and why not, which hand aims and what the

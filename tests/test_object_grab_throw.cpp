@@ -87,6 +87,14 @@ TEST_F(VirtualGamepadObjectGrabThrowTest, LettingGoWhileSwingingThrowsTheHeldObj
 
 
 
+TEST_F(VirtualGamepadObjectGrabThrowTest, WithoutAGameClockTheHandHasNoSpeedSoTheLetGoIsADropAndNothingRaises) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.getCurrentTimeMs = function() return nil end", "=noClock"), 0);
+    SwingAndLetGo(FullSpeed() * 2, 0.0f, 0.6f, -0.8f);  // NextFrame fails the test if the update raises
+    EXPECT_EQ(Drops(), 1);
+    EXPECT_EQ(Throws(), 0);
+}
+
 TEST_F(VirtualGamepadObjectGrabThrowTest, ALetGoAtOrAboveTheSpeedOfAFullThrowGivesAForceOfExactlyOne) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     SwingAndLetGo(FullSpeed() * 1.05, 0.0f, 0.6f, -0.8f);

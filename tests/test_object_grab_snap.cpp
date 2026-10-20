@@ -53,6 +53,25 @@ protected:
 
 }  // namespace
 
+TEST_F(VirtualGamepadObjectGrabSnapTest, ASnapWhenTheGameClockIsUnavailableStillPulsesAndTheDiagnosticsStillAnswer) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.getCurrentTimeMs = function() return nil end", "=noClock"), 0);
+    const size_t before = PulseCount();
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.breakJoint(hands)", "=snap"), 0);
+    FRAMES(3);
+    EXPECT_EQ(SharpPulsesAfter(before), 1) << "the pulse does not need the clock";
+    EXPECT_EQ(RunLuauChunk(L, "VRCompanion:getObjectGrabDiagnostics()", "=diagnostics"), 0) << "no arithmetic on a missing time";
+}
+
+TEST_F(VirtualGamepadObjectGrabSnapTest, TheDiagnosticsStillAnswerAfterASnapWhenTheGameClockGoesAway) {
+    ASSERT_NO_FATAL_FAILURE(StartCarrying());
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.breakJoint(hands)", "=snap"), 0);
+    FRAMES(3);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion.getCurrentTimeMs = function() return nil end", "=noClock"), 0);
+    EXPECT_EQ(RunLuauChunk(L, "_G.diag = VRCompanion:getObjectGrabDiagnostics()", "=diagnostics"), 0) << "no arithmetic on a missing time";
+    EXPECT_EQ(EvalLua(L, "tostring(diag:find('last snap: none', 1, true))"), "nil") << "the snap happened, only its age is unknown";
+}
+
 TEST_F(VirtualGamepadObjectGrabSnapTest, AJointBreakWhileCarryingGivesTheCarryingHandOneSharpPulse) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     const size_t before = PulseCount();
