@@ -42,6 +42,11 @@
 -- Held Object"), keeping the object's place and angle in the hand as it was at the grab. A hand that is not tracked leaves them where
 -- they were, and has not let go; they follow it again when it is tracked. Nothing is felt while it carries.
 --
+-- ROTATE AND LEVEL (#162): the game's rotate actions and its level action (pallets and square bales) keep working as bound while the grip
+-- carries. They turn the rotation node, and the turn goes into the offset the hand holds the object with (see "Placing the Held
+-- Object"): the Held Object is turned on top of the wrist, and stays turned as the hand moves. A level action squares it and keeps its
+-- heading, which then follows the wrist like any other turn.
+--
 -- THE SNAP (#162): without super strength, yanking a heavy Held Object breaks the game's joint, the game calls onHeldItemJointBroken with
 -- the joint's index and the hands let go. The carry ends, and the hand gets one sharp pulse (OBJECT_GRAB_SNAP_PULSE_*). A drop by the game
 -- itself passes no joint index and is silent. The grip, if still held, does not grab again until it is let go and squeezed again. With
@@ -347,6 +352,8 @@ end
 -- node is placed so that the rotation node's offset (read each update: it is the game's) lands where the hand holds the object. The
 -- server applies the rotation node to the joint with setJointFrame, as the game's rotate action does; a single player game is the
 -- server and has no stream, so it does that itself. The dirty flag is raised, as the game's own update raises it.
+-- THE GAME'S ROTATE AND LEVEL ACTIONS (#162) turn the rotation node, and the game only does that between two of our placements: the turn
+-- is folded into the offset (absorbTurn), on top of how the wrist holds the object, and kept as the hand moves.
 -- THE OFFSET is recorded once the rotation node is at the object. The game moves it there itself (orientRotationNodeToItem): at once
 -- on a client, but on the server only when the joint is made, a few physics frames after the pick-up. Until then the game's own
 -- placement runs.
@@ -400,6 +407,22 @@ local function recordGrabOffset(self, carry)
     local ox, oy, oz = qrotate(ix, iy, iz, iw, x - hand.x, y - hand.y, z - hand.z)
     local rx, ry, rz, rw = self.multiplyQuaternions(ix, iy, iz, iw, qx, qy, qz, qw)
     carry.offset = { x = ox, y = oy, z = oz, qx = rx, qy = ry, qz = rz, qw = rw }
+    carry.placed = { qx = qx, qy = qy, qz = qz, qw = qw, hx = hand.qx, hy = hand.qy, hz = hand.qz, hw = hand.qw }
+end
+
+-- The game's rotate and level actions turn the rotation node between two placements (the game is the only one to touch it). Whatever
+-- turned it is kept: the turn is folded into the offset, so that the Held Object stays turned in the hand as the hand moves. The turn
+-- is measured against the hand as it was at the last placement, so it is not mixed up with the hand's own movement since (and a turn
+-- made while the hand is not tracked is kept for when it is again).
+local TURN_EPSILON = 1e-9  -- 1 - |dot| of two rotations: about 9e-5 rad, far below any turn the game makes in an update
+local function absorbTurn(carry, rotation)
+    local placed, offset = carry.placed, carry.offset
+    local qx, qy, qz, qw = engine("getWorldQuaternion")(rotation)
+    if 1 - math.abs(qx * placed.qx + qy * placed.qy + qz * placed.qz + qw * placed.qw) <= TURN_EPSILON then return end
+    -- the object's rotation in the frame of the hand as it was
+    offset.qx, offset.qy, offset.qz, offset.qw =
+        VRCompanion.multiplyQuaternions(-placed.hx, -placed.hy, -placed.hz, placed.hw, qx, qy, qz, qw)
+    placed.qx, placed.qy, placed.qz, placed.qw = qx, qy, qz, qw
 end
 
 -- Places the kinematic node and the rotation node of the carrying `tool` from the hand: the object at the hand's pose times the
@@ -409,6 +432,7 @@ local function placeFromHand(self, tool, carry)
     if kinematic == nil then return end
     local spec = tool.spec_hands
     if type(tool.raiseDirtyFlags) == "function" and spec ~= nil then pcall(tool.raiseDirtyFlags, tool, spec.dirtyFlag) end
+    absorbTurn(carry, rotation)
     local hand = handGripInWorld(self, carry.hand)
     if hand == nil then return end
     local offset = carry.offset
@@ -428,6 +452,10 @@ local function placeFromHand(self, tool, carry)
     engine("setWorldTranslation")(kinematic, px - rx, py - ry, pz - rz)
     engine("setWorldQuaternion")(kinematic, yawX, yawY, yawZ, yawW)
     engine("setWorldQuaternion")(rotation, qx, qy, qz, qw)
+    -- what the node reads back is what the next placement compares the game's turn against
+    local placed = carry.placed
+    placed.qx, placed.qy, placed.qz, placed.qw = engine("getWorldQuaternion")(rotation)
+    placed.hx, placed.hy, placed.hz, placed.hw = hand.qx, hand.qy, hand.qz, hand.qw
     local jointId = spec ~= nil and spec.heldItemJointId or nil
     if tool.isServer == true and jointId ~= nil and type(engine("setJointFrame")) == "function" then
         pcall(engine("setJointFrame"), jointId, 0, rotation)
