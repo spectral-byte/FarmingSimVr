@@ -38,7 +38,8 @@
 --                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's)
 --   VRCompanion:getHandToolLookRay([player]) -> x, y, z, dirX, dirY, dirZ   that ray with its origin moved back along the axis by the
 --                                                       tool's reachBehind field (the spray can's and the horse brush's 0.5 m); this is what Player:getLookRay
---                                                       answers then, so what the targeter casts
+--                                                       answers then, so what the targeter casts (the wrap asks every aiming subsystem in
+--                                                       turn, Hand Tools first: VRCompanion:registerLookRayAimer in Core)
 --   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   nil when the tool (default: the one held) is no chainsaw
 --   VRCompanion:getFishingRodState([tool]) -> state, lineOut, bend   the fishing rod's state ("idle" | "charging" | "waiting" |
 --                                                       "bite" | "reeling" | "caught" | "unknown"), whether its line is out and its
@@ -1393,16 +1394,22 @@ function VRCompanion:getHandToolLookRay(player)
 end
 
 -- The wrap of Player:getLookRay, the single source PlayerTargeter:update reads (and everything that highlights by look): the
--- tool's ray while a supported Hand Tool is in a tracked Tool Hand, the game's own (the head's) otherwise.
+-- ray of the first subsystem that is aiming (VRCompanion:getAimedLookRay: the Hand Tools are asked first, see "Who aims the look
+-- ray" in Core), the game's own (the head's) otherwise. This module owns the wrap, and gives it up with the rest.
 WRAP_SPECS.getLookRay.make = function(original)
     return function(player, ...)
         if type(player) == "table" then
-            local x, y, z, dx, dy, dz = VRCompanion:getHandToolLookRay(player)
+            local x, y, z, dx, dy, dz = VRCompanion:getAimedLookRay(player)
             if x ~= nil then return x, y, z, dx, dy, dz end
         end
         return original(player, ...)
     end
 end
+
+-- The Hand Tools aim the look ray first: the tool's, while a supported Hand Tool is in a tracked Tool Hand of this player.
+VRCompanion:registerLookRayAimer("handTools", function(player)
+    return VRCompanion:getHandToolLookRay(player)
+end)
 
 -- ---- The chainsaw -------------------------------------------------------------------------------------------
 -- The chainsaw cuts where its bar is. In the Tool Hand it is placed like the other tools (SUPPORTED_TOOLS, the handle offset),

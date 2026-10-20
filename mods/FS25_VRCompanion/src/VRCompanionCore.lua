@@ -39,6 +39,39 @@ function VRCompanion.getEngineGlobal(name)
     return _G and _G[name]
 end
 
+-- ---- Who aims the look ray ----------------------------------------------------------------------------------
+-- The game's Player:getLookRay is wrapped once (by Hand Tools, which owns the wrap); the wrap asks each subsystem that can aim,
+-- in this fixed order, and answers the first ray it gets: the game's own (the head's) when none does. A subsystem registers by
+-- name with an aimer, function(player) -> x, y, z, dirX, dirY, dirZ in the world, or nil when it is not aiming for that player
+-- (Hand Tools: a supported Hand Tool is in a tracked Tool Hand; Object Grab: the hands are empty and the Pointer Hand points).
+VRCompanion.LOOK_RAY_AIMER_ORDER = { "handTools", "objectGrab" }
+
+local lookRayAimers = {}
+
+-- Registers (or replaces) the aimer of a subsystem named in LOOK_RAY_AIMER_ORDER. Returns whether it was taken.
+function VRCompanion:registerLookRayAimer(name, aimer)
+    if type(aimer) ~= "function" then return false end
+    for _, known in ipairs(VRCompanion.LOOK_RAY_AIMER_ORDER) do
+        if known == name then
+            lookRayAimers[name] = aimer
+            return true
+        end
+    end
+    return false
+end
+
+-- The ray the first aiming subsystem answers for `player`, or nil (the game's own ray). An aimer that raises is not aiming.
+function VRCompanion:getAimedLookRay(player)
+    for _, name in ipairs(VRCompanion.LOOK_RAY_AIMER_ORDER) do
+        local aimer = lookRayAimers[name]
+        if aimer ~= nil then
+            local ok, x, y, z, dx, dy, dz = pcall(aimer, player)
+            if ok and type(x) == "number" then return x, y, z, dx, dy, dz end
+        end
+    end
+    return nil
+end
+
 function VRCompanion:loadMap(name)
     print(string.format("[FS25_VR] Initializing Companion Mod on map '%s'...", tostring(name)))
 

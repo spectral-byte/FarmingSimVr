@@ -235,3 +235,71 @@ TEST_F(CompanionModTest, UnloadingTheMapGivesPlayerGetLookRayBackAndAnotherModsL
     )luau", "=anotherModWraps"), 0);
     EXPECT_EQ(EvalLua(L, "Player.getLookRay == theirWrap"), "true") << "the other mod's wrap is still the class function";
 }
+
+// The wrap of Player:getLookRay asks each subsystem that can aim, in a fixed order (Hand Tools first, then Object Grab), and
+// takes the first ray it gets; the game's own (the head's) is the fallback. A subsystem registers with
+// VRCompanion:registerLookRayAimer(name, function(player) -> x, y, z, dirX, dirY, dirZ | nil).
+constexpr const char* kFixedAim = R"luau(
+    _G.fixedAim = { 0.5, 1.25, -2.0, 0, 0, -1 }
+    _G.aimerAsked = 0
+    function _G.aimerAnswers(player)
+        _G.aimerAsked = _G.aimerAsked + 1
+        _G.aimerAskedFor = player
+        return table.unpack(_G.fixedAim)
+    end
+)luau";
+
+#define NO_HAND_TOOL_START() \
+    FakeTrackedHeadset headset; \
+    headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f)); \
+    fs25vr::VRBridge bridge(headset.manager, nullptr); \
+    ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge)); \
+    ASSERT_EQ(RunLuauChunk(L, kRayHelpers, "=rayHelpers"), 0); \
+    ASSERT_EQ(RunLuauChunk(L, kFixedAim, "=fixedAim"), 0); \
+    SetGameTime(10000)
+
+TEST_F(CompanionModTest, ASubsystemThatAimsAnswersTheTargetersRayAndTheHeadsIsTheFallbackWhenItDoesNot) {
+    NO_HAND_TOOL_START();
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "nobody aims: the head's ray";
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:registerLookRayAimer('objectGrab', aimerAnswers)", "=register"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), fixedAim)"), "true") << "it aims: the targeter cast " << EvalLua(L, "rayText(targeterRay())");
+    EXPECT_EQ(EvalLua(L, "aimerAskedFor == foot.player"), "true") << "it is asked for the player whose ray the game wants";
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:registerLookRayAimer('objectGrab', function() return nil end)", "=registerAgain"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "it no longer aims: the head's ray again";
+}
+
+TEST_F(CompanionModTest, TheHandToolsAreAskedFirstSoTheToolsRayWinsOverAnotherSubsystemsAndIsNeverAskedAround) {
+    LANCE_IN_THE_RIGHT_HAND();
+    ASSERT_EQ(RunLuauChunk(L, kFixedAim, "=fixedAim"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:registerLookRayAimer('objectGrab', aimerAnswers)", "=register"), 0);
+    FRAMES(2);
+
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), nozzleRay())"), "true") << "the tool's ray: " << EvalLua(L, "rayText(targeterRay())");
+    EXPECT_EQ(EvalLua(L, "aimerAsked"), "0") << "the first answer ends the asking";
+
+    AdvanceGameTime(3100);  // the lance is set down: the Hand Tools do not aim, so the other subsystem does
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), fixedAim)"), "true") << "the targeter cast " << EvalLua(L, "rayText(targeterRay())");
+}
+
+TEST_F(CompanionModTest, ASubsystemThatRaisesWhenAskedLeavesTheTargetersRayTheHeads) {
+    NO_HAND_TOOL_START();
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:registerLookRayAimer('objectGrab', function() error('broken') end)", "=register"), 0);
+    FRAMES(2);
+    EXPECT_EQ(EvalLua(L, "sameRay(targeterRay(), headRay())"), "true") << "the targeter cast " << EvalLua(L, "rayText(targeterRay())");
+}
+
+TEST_F(CompanionModTest, ThereIsStillOneWrapOfGetLookRayHoweverManySubsystemsAreRegistered) {
+    NO_HAND_TOOL_START();
+    ASSERT_EQ(RunLuauChunk(L, "_G.wrapped = Player.getLookRay", "=wrapped"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:registerLookRayAimer('objectGrab', aimerAnswers); VRCompanion:loadMap('again')", "=register"), 0);
+    EXPECT_EQ(EvalLua(L, "Player.getLookRay == wrapped"), "true") << "registering does not wrap again";
+    EXPECT_EQ(EvalLua(L, "Player.getLookRay == StubHandTool.originalGetLookRay"), "false");
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:deleteMap()", "=deleteMap"), 0);
+    EXPECT_EQ(EvalLua(L, "Player.getLookRay == StubHandTool.originalGetLookRay"), "true") << "and one lift gives the game's function back";
+}
