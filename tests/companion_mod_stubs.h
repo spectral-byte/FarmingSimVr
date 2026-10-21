@@ -1144,6 +1144,8 @@ inline constexpr const char* kStubInputBinding = R"luau(
             for _, name in ipairs({ "VR_RECENTER_VIEW", "VR_HUD_TOGGLE", "VR_SNAP_TURN_LEFT", "VR_SNAP_TURN_RIGHT", "VR_TOGGLE_VIEW" }) do
                 put(name, "KB_MOUSE_DEFAULT", "KEY_numPad5", "+", 1)
             end
+            -- The Seat Set Action: a keyboard default and, as in modDesc.xml, no gamepad default
+            put("VR_SET_SEAT", "KB_MOUSE_DEFAULT", "KEY_rctrl KEY_numPad5", "+", 1)
             for _, deviceId in ipairs(options.devices or { "0_XINPUT_GAMEPAD", "3_XINPUT_GAMEPAD" }) do
                 StubInput.addDevice(deviceId)
             end

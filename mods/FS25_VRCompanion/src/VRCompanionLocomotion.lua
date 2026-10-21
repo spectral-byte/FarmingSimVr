@@ -731,6 +731,12 @@ function VRCompanion:resetOutsideCameraOrbit(cam)
 end
 
 function VRCompanion:onRecenterAction()
+    self:recenterView(false)
+end
+
+-- What the Recenter Action does. alwaysRecenterTracking re-zeroes the tracking space whatever the Recenter mode is (VehicleOnly
+-- leaves it alone otherwise): the Seat Set Action needs the head back at the tracking space's origin to rest where it leaned.
+function VRCompanion:recenterView(alwaysRecenterTracking)
     print("[FS25_VR] Recenter Action triggered.")
     if type(self.signalDiscontinuityFlush) == "function" then
         self:signalDiscontinuityFlush()
@@ -743,7 +749,7 @@ function VRCompanion:onRecenterAction()
         print("[FS25_VR] 2D Floating Window Mode: Realigned 6DOF floating quad in front of head gaze.")
         return
     end
-    local recenterTracking = (self.recenterVrTrackingSpace ~= false)
+    local recenterTracking = alwaysRecenterTracking or (self.recenterVrTrackingSpace ~= false)
     if recenterTracking then
         if bridge ~= nil and type(bridge.recenter) == "function" then
             bridge.recenter()

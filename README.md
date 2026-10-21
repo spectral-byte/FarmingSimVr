@@ -66,6 +66,7 @@ To disable VR, rename or delete `dxgi.dll`.
 | Action | Keyboard | Gamepad |
 | :--- | :--- | :--- |
 | Recenter view | `NumPad 5` | L3 (left stick click) |
+| Set VR seat position | `Right Ctrl + NumPad 5` | none; bind a pad input in the Controls screen |
 | Toggle 3D VR / 2D window | `Right Ctrl + V` | Back (Button 9); on the Virtual Gamepad L3 + Start |
 | Cycle HUD (Full, Streamlined, Hidden) | `Right Ctrl + H` | Button 10 |
 | Snap turn left | `NumPad 4` | LB |

@@ -11,6 +11,7 @@
 --                                                                 camera's parent space (x, y, z), 0 0 0 where `cam` is not an in-cab
 --                                                                 camera of a vehicle; the cab camera path adds it to the head's rest position
 --   VRCompanion:getSeatOffsetTarget(cam)                          model, cameraIndex of an in-cab camera, nil otherwise
+--   VRCompanion:onSeatSetAction()                                 the Seat Set Action: adds the head's lean to the offset, recenters, saves
 --   Console: vrSeatOffset [<forward> <up> <right> | reset]
 --   VRCompanion:registerSeatOffsetConsoleCommands() / unregisterSeatOffsetConsoleCommands()   map load / unload
 --
@@ -21,7 +22,8 @@
 -- vehicles; the head pose's x is to the right). So the offset (forward f, up u, right r) is the translation (-r, u, f). It is not rotated
 -- by look yaw or a Snap Turn. No rotation component.
 --
--- Later tickets add the Seat Set Action and saving to this module.
+-- The Seat Set Action (VR_SET_SEAT, onSeatSetAction): in an in-cab camera, takes the head's lean as the new rest position (ticket #170).
+-- Later tickets add saving to this module.
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -157,6 +159,49 @@ function VRCompanion:consoleCommandSeatOffset(...)
     return text
 end
 
+-- A short blinking message on screen, when the mission can show one
+local function showBlinkingWarning(text)
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function() mission:showBlinkingWarning(text, 2500) end)
+    end
+end
+
+-- How far the head is from where it would rest, in the in-cab camera's parent space (x, y, z): the head pose's position carried
+-- into the cab the way the cab camera path does (through the head tracking node's rotation, look yaw included, else the camera's
+-- own eye point turned by the view's yaw).
+function VRCompanion:getHeadLeanInCab(cam, pose)
+    local getParentFn = getParent or (_G and _G.getParent)
+    local camParent = 0
+    if type(getParentFn) == "function" then camParent = getParentFn(cam.cameraNode) end
+    local lookYaw = (type(self.getVehicleLookYaw) == "function" and self:getVehicleLookYaw(cam)) or 0
+    local headYaw = self:normalizeAngle((cam.origRotY or math.pi) + lookYaw)
+    local rest = self:getCabRestPose(cam, camParent, headYaw, lookYaw)
+    local x, y, z = self:cabPointFromHead(rest, camParent, pose.x or 0, pose.y or 0, pose.z or 0)
+    return x - rest.x, y - rest.y, z - rest.z
+end
+
+-- The Seat Set Action: in an in-cab camera, makes where the head is now the head's rest position (see CONTEXT.md). The lean is added
+-- to the Seat Offset, each axis clamped; the view then recenters as the Recenter Action does, always re-zeroing the tracking space,
+-- so the head rests where it leaned. The settings are saved. Only a clamped axis is shown: a short blinking warning.
+function VRCompanion:onSeatSetAction()
+    -- Only the head-tracked view of an in-cab camera, with no menu shown: anywhere else it is a no-op
+    if self.is2DViewActive or self:doesMenuTakeInput() then return end
+    local cam = self:getActiveVehicleCamera()
+    local model, index = self:getSeatOffsetTarget(cam)
+    if model == nil or not self:isGameShowingCamera(cam.cameraNode) then return end
+    local pose = self:getResolvedHeadPose()
+    if not pose or not pose.isValid then return end
+    local dx, dy, dz = self:getHeadLeanInCab(cam, pose)
+    local forward, up, right = self:getSeatOffset(model, index)
+    local clamped = self:setSeatOffset(model, index, forward + dz, up + dy, right - dx)
+    self:recenterView(true)
+    self:saveConfiguration()
+    if clamped ~= nil then
+        showBlinkingWarning(string.format("VR seat position stopped at the %s m limit: %s", tostring(self.SEAT_OFFSET_LIMIT), table.concat(clamped, ", ")))
+    end
+end
+
 function VRCompanion:registerSeatOffsetConsoleCommands()
     if addConsoleCommand == nil then return end
     addConsoleCommand("vrSeatOffset", "Move the head's rest position in the cab you are in, in metres from the vehicle's own eye point (this session only): vrSeatOffset [<forward> <up> <right> | reset]", "consoleCommandSeatOffset", self)
@@ -169,6 +214,7 @@ function VRCompanion:unregisterSeatOffsetConsoleCommands()
 end
 
 VRCompanion.SeatOffset.getCabSeatOffset = function(self, ...) return VRCompanion.getCabSeatOffset(VRCompanion, ...) end
+VRCompanion.SeatOffset.onSeatSetAction = function(self, ...) return VRCompanion.onSeatSetAction(VRCompanion, ...) end
 VRCompanion.SeatOffset.consoleCommandSeatOffset = function(self, ...) return VRCompanion.consoleCommandSeatOffset(VRCompanion, ...) end
 
 return VRCompanion.SeatOffset

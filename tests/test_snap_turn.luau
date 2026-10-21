@@ -1139,7 +1139,7 @@ test("ActionEventsRegisterIntoTheGameplayContextAndFollowItIntoAndOutOfVehicles"
     }
     _G.g_inputBinding = inputBinding
     _G.g_currentMission = {}
-    for _, field in ipairs({ "hudToggleActionEventId", "recenterActionEventId", "snapLeftActionEventId", "snapRightActionEventId", "toggleViewActionEventId" }) do
+    for _, field in ipairs({ "hudToggleActionEventId", "recenterActionEventId", "snapLeftActionEventId", "snapRightActionEventId", "toggleViewActionEventId", "seatSetActionEventId" }) do
         VRCompanion[field] = nil
     end
     VRCompanion.actionEventsContextName = nil
@@ -1153,7 +1153,7 @@ test("ActionEventsRegisterIntoTheGameplayContextAndFollowItIntoAndOutOfVehicles"
     -- Map load: the menu context is current, the player is on foot
     VRCompanion:registerActionEvents(true)
     assert(eventsIn("MENU") == 0, "no VR action event may land in the loading screen's menu context")
-    assert(eventsIn("PLAYER") == 5, "all five VR action events must be in the on-foot context, got " .. eventsIn("PLAYER"))
+    assert(eventsIn("PLAYER") == 6, "all six VR action events must be in the on-foot context, got " .. eventsIn("PLAYER"))
     assert(inputBinding.registrationContextName == nil, "the registration context must be reset afterwards")
 
     -- The periodic check leaves them alone while nothing changed
@@ -1164,17 +1164,17 @@ test("ActionEventsRegisterIntoTheGameplayContextAndFollowItIntoAndOutOfVehicles"
     -- Into a vehicle: the periodic check moves them, even before the vehicle transition is seen
     _G.g_currentMission.controlledVehicle = {}
     VRCompanion:registerActionEvents(false)
-    assert(eventsIn("PLAYER") == 0 and eventsIn("VEHICLE") == 5, "the events must move to the vehicle context")
+    assert(eventsIn("PLAYER") == 0 and eventsIn("VEHICLE") == 6, "the events must move to the vehicle context")
     assert(contexts.VEHICLE.VR_SNAP_TURN_LEFT.id == VRCompanion.snapLeftActionEventId, "the stored id must be the new event's")
 
     -- A forced registration in the same context replaces them rather than adding a second set
     VRCompanion:registerActionEvents(true)
-    assert(eventsIn("VEHICLE") == 5, "a forced registration must not duplicate events")
+    assert(eventsIn("VEHICLE") == 6, "a forced registration must not duplicate events")
 
     -- Out of the vehicle: back to the on-foot context
     _G.g_currentMission.controlledVehicle = nil
     VRCompanion:registerActionEvents(false)
-    assert(eventsIn("VEHICLE") == 0 and eventsIn("PLAYER") == 5, "the events must move back to the on-foot context")
+    assert(eventsIn("VEHICLE") == 0 and eventsIn("PLAYER") == 6, "the events must move back to the on-foot context")
 
     _G.g_inputBinding = nil
     _G.g_currentMission = nil

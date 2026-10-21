@@ -18,7 +18,7 @@ function VRCompanion:getActionEventsContextName()
     return (PlayerInputComponent ~= nil and PlayerInputComponent.INPUT_CONTEXT_NAME) or "PLAYER"
 end
 
-local ACTION_EVENT_ID_FIELDS = { "hudToggleActionEventId", "recenterActionEventId", "snapLeftActionEventId", "snapRightActionEventId", "toggleViewActionEventId" }
+local ACTION_EVENT_ID_FIELDS = { "hudToggleActionEventId", "recenterActionEventId", "snapLeftActionEventId", "snapRightActionEventId", "toggleViewActionEventId", "seatSetActionEventId" }
 
 function VRCompanion:registerActionEvents(force)
     local inputBinding = g_inputBinding or _G.g_inputBinding
@@ -87,6 +87,7 @@ function VRCompanion:registerActionEventsInContext(inputBinding, force, active)
     local isSnapLeftEventActive = active.snapLeftActionEventId == true
     local isSnapRightEventActive = active.snapRightActionEventId == true
     local isToggleViewEventActive = active.toggleViewActionEventId == true
+    local isSeatSetEventActive = active.seatSetActionEventId == true
 
     if force or not isHudEventActive then
         local actionId = (InputAction and InputAction.VR_HUD_TOGGLE) or (_G.InputAction and _G.InputAction.VR_HUD_TOGGLE) or "VR_HUD_TOGGLE"
@@ -219,6 +220,33 @@ function VRCompanion:registerActionEventsInContext(inputBinding, force, active)
             if not self.toggleViewLoggedOnce then
                 print("[FS25_VR] Registered in-engine VR_TOGGLE_VIEW event.")
                 self.toggleViewLoggedOnce = true
+            end
+        end
+    end
+
+    if force or not isSeatSetEventActive then
+        local actionId = (InputAction and InputAction.VR_SET_SEAT) or (_G.InputAction and _G.InputAction.VR_SET_SEAT) or "VR_SET_SEAT"
+        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onSeatSetAction, false, true, false, true)
+        if success and eventId then
+            self.seatSetActionEventId = eventId
+            if type(inputBinding.setActionEventTextPriority) == "function" then
+                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
+            end
+            if type(inputBinding.setActionEventActive) == "function" then
+                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventTextVisibility) == "function" then
+                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventText) == "function" then
+                pcall(function()
+                    local txt = (g_i18n and g_i18n:getText("input_VR_SET_SEAT")) or "Set VR Seat Position"
+                    inputBinding:setActionEventText(eventId, txt)
+                end)
+            end
+            if not self.seatSetLoggedOnce then
+                print("[FS25_VR] Registered in-engine VR_SET_SEAT event.")
+                self.seatSetLoggedOnce = true
             end
         end
     end
