@@ -557,6 +557,68 @@ test("OnFootIgnoresTheSeatOffset", function()
         before.x, before.y, before.z, after.x, after.y, after.z))
 end)
 
+-- The Virtual Hands and the Pointer Ray are carried from the Cyclopean Audio Listener Node (headRelativePoseToWorld, shared by
+-- both): a Motion Controller's pose is taken relative to the head and put back into the world from the listener. So they follow
+-- the head the Seat Offset moves, with the player's real hands staying where they are relative to it, and need nothing of their own.
+test("VirtualHandsAndPointerRayFollowTheHeadTheSeatOffsetMovesWithNoChangeOfTheirOwn", function()
+    local headPose = poseAt(0.05, 0.02, -0.1)
+    headPose.qx, headPose.qy, headPose.qz, headPose.qw = 0, 0, 0, 1
+    setup(headPose)
+    installWorldReads()
+    local handshakeComplete = VRCompanion.handshakeComplete
+    VRCompanion.handshakeComplete = true  -- the head is placed in the world only once the bridge is in use
+    local cam = trackedCab(0.6)
+    local veh = makeVehicle(freshModel(), { cam })
+    enter(veh)
+    -- The hands' grip poses and the Pointer Ray's aim pose, in the tracking space, which the Seat Offset never touches
+    local hands = {
+        { name = "right hand", x = 0.25, y = -0.1, z = -0.2 },
+        { name = "left hand", x = -0.25, y = -0.1, z = -0.2 },
+        { name = "Pointer Ray origin", x = 0.3, y = -0.2, z = -0.4 },
+    }
+    local function handsInTheWorld()
+        local world = {}
+        for _, hand in ipairs(hands) do
+            local out = {}
+            local ok, why = VRCompanion:headRelativePoseToWorld(hand.x, hand.y, hand.z, 0, 0, 0, 1, out)
+            if not ok then VRCompanion.handshakeComplete = handshakeComplete end
+            assert(ok, hand.name .. " is not placed in the world: " .. tostring(why))
+            world[hand.name] = out
+        end
+        return world
+    end
+
+    local base = viewAfterUpdate(cam)
+    local before = handsInTheWorld()
+    VRCompanion:consoleCommandSeatOffset("0.1", "0.2", "0.3")
+    local view = viewAfterUpdate(cam)
+    local after = handsInTheWorld()
+    VRCompanion.handshakeComplete = handshakeComplete
+    removeWorldReads()
+
+    assertMoved(view, base, -0.3, 0.2, 0.1, "the head")
+    for _, hand in ipairs(hands) do
+        local a, b = after[hand.name], before[hand.name]
+        assert(near(a.x - b.x, -0.3) and near(a.y - b.y, 0.2) and near(a.z - b.z, 0.1), string.format(
+            "the %s moved by (%.3f, %.3f, %.3f) in the world, the head by (-0.3, 0.2, 0.1)", hand.name, a.x - b.x, a.y - b.y, a.z - b.z))
+    end
+end)
+
+-- The rest pose without a neutral yaw: the camera update has always taken 0 for it and the realign to the seat pi, so each asks
+-- for its own and the two are told apart
+test("RestPoseOfACameraWithNoNeutralYawUsesTheDefaultTheCallerAsksFor", function()
+    setup()
+    local cam = fallbackCab()
+    cam.origRotY = nil
+    local rest = VRCompanion:getCabRestPose(cam, 0, 0, 0.5, 0)
+    assert(near(rest.yaw, 0.5), "a default of 0 turns the fallback by the look yaw alone, got " .. tostring(rest.yaw))
+    rest = VRCompanion:getCabRestPose(cam, 0, 0, 0.5, math.pi)
+    assert(near(rest.yaw, VRCompanion:normalizeAngle(math.pi + 0.5)), "a default of pi turns it from there, got " .. tostring(rest.yaw))
+    cam.origRotY = 1.0
+    rest = VRCompanion:getCabRestPose(cam, 0, 0, 0.5, math.pi)
+    assert(near(rest.yaw, 1.5), "the camera's own neutral yaw wins over any default, got " .. tostring(rest.yaw))
+end)
+
 test("ConsoleCommandIsAddedAtMapLoadAndRemovedAtMapUnload", function()
     setup()
     local registered, removed = {}, {}

@@ -402,6 +402,32 @@ test("PressWhileAMenuIsShownDoesNothing", function()
     assertOffsetUnchanged("with the menu gone")
 end)
 
+-- What the cab camera hook stands down for is the menu quad being shown (isMenuQuadShown), so a press does nothing then even
+-- if the menu were not counted as taking the input; and a Stereo Dialog (input taken, no quad) is a menu shown too
+test("PressWhileTheMenuQuadIsShownDoesNothingWhateverTheInputSays", function()
+    leaningInCab()
+    local takesInput = VRCompanion.doesMenuTakeInput
+    VRCompanion.isMenuVisible = true
+    VRCompanion.doesMenuTakeInput = function() return false end
+    local ok, err = pcall(assertPressDoesNothing, "with the menu quad shown and the input not taken")
+    VRCompanion.doesMenuTakeInput = takesInput
+    VRCompanion.isMenuVisible = false
+    assert(ok, err)
+    assertOffsetUnchanged("with the menu gone")
+end)
+
+test("PressWhileAStereoDialogIsShownDoesNothing", function()
+    leaningInCab()
+    VRCompanion.menuTakesInput = true
+    VRCompanion.stereoDialogShowing = true
+    assert(not VRCompanion:isMenuQuadShown(), "a Stereo Dialog has no menu quad")
+    local ok, err = pcall(assertPressDoesNothing, "with a Stereo Dialog shown")
+    VRCompanion.menuTakesInput = false
+    VRCompanion.stereoDialogShowing = false
+    assert(ok, err)
+    assertOffsetUnchanged("with the dialog gone")
+end)
+
 test("PressWhileTheGameShowsACameraOfItsOwnDoesNothing", function()
     leaningInCab()
     _G.g_cameraManager = { getActiveCamera = function() return 424242 end }  -- the shop's camera, say
@@ -458,6 +484,51 @@ test("TheSeatSetActionEventIsRegisteredActiveAndKeptThere", function()
     assert(registered["VR_SET_SEAT"].id > event.id and active[registered["VR_SET_SEAT"].id] == true, "a dropped event is registered again")
 
     _G.g_inputBinding, _G.g_i18n = nil, nil
+end)
+
+-- An input binding that accepts every registration, for the checks of the other VR action events' bookkeeping below
+local function installAcceptingInputBinding()
+    local nextEventId = 400
+    _G.g_inputBinding = {
+        events = {},
+        registerActionEvent = function(self, actionName)
+            nextEventId = nextEventId + 1
+            self.events[nextEventId] = { id = nextEventId, actionName = actionName }
+            return true, nextEventId
+        end,
+        setActionEventTextPriority = function() end,
+        setActionEventActive = function() end,
+        setActionEventTextVisibility = function() end,
+        setActionEventText = function() end,
+    }
+    _G.g_currentMission = nil
+    VRCompanion.actionEventsContextName = nil
+    VRCompanion:registerActionEvents(true)
+end
+
+-- Like the other VR action events, the frame update registers a Seat Set event that has no id (not on a 30th frame, when it
+-- would check anyway)
+test("TheUpdateRegistersTheSeatSetEventWhenItHasNoId", function()
+    installAcceptingInputBinding()
+    assert(VRCompanion.seatSetActionEventId ~= nil, "registered to begin with")
+    VRCompanion.seatSetActionEventId = nil
+    VRCompanion.frameTicks = 1  -- the update makes it frame 2
+    VRCompanion.lastControlledVehicle = nil  -- and no vehicle transition re-registers everything on its way
+    VRCompanion:update(16.6)
+    local registeredAgain = VRCompanion.seatSetActionEventId ~= nil
+    _G.g_inputBinding = nil
+    assert(registeredAgain, "the update registers the Seat Set event again between the periodic checks")
+end)
+
+-- Leaving the map forgets the event and that it was logged, as for the other VR action events, so the next map logs it again
+test("DeleteMapForgetsTheSeatSetEventIdAndThatItWasLogged", function()
+    installAcceptingInputBinding()
+    assert(VRCompanion.seatSetActionEventId ~= nil and VRCompanion.seatSetLoggedOnce == true, "registered and logged to begin with")
+    VRCompanion:deleteMap()
+    local id, logged = VRCompanion.seatSetActionEventId, VRCompanion.seatSetLoggedOnce
+    _G.g_inputBinding = nil
+    assert(id == nil, "the event id is forgotten, got " .. tostring(id))
+    assert(logged == false, "the event is logged again on the next map, got " .. tostring(logged))
 end)
 
 print(string.format("Seat Set Action Tests: %d passed, %d failed", passed, failed))

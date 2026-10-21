@@ -178,8 +178,9 @@ function VRCompanion:getHeadLeanInCab(cam, pose)
     local camParent = 0
     if type(getParentFn) == "function" then camParent = getParentFn(cam.cameraNode) end
     local lookYaw = (type(self.getVehicleLookYaw) == "function" and self:getVehicleLookYaw(cam)) or 0
-    local headYaw = self:normalizeAngle((cam.origRotY or math.pi) + lookYaw)
-    local rest = self:getCabRestPose(cam, camParent, headYaw, lookYaw)
+    -- As the cab camera update (VRCompanionStereo.lua) places the head, so a camera without a neutral yaw yet defaults to 0 here too
+    local headYaw = self:normalizeAngle((cam.origRotY or 0) + lookYaw)
+    local rest = self:getCabRestPose(cam, camParent, headYaw, lookYaw, 0)
     local x, y, z = self:cabPointFromHead(rest, camParent, pose.x or 0, pose.y or 0, pose.z or 0)
     return x - rest.x, y - rest.y, z - rest.z
 end
@@ -188,8 +189,9 @@ end
 -- to the Seat Offset, each axis clamped; the view then recenters as the Recenter Action does, always re-zeroing the tracking space,
 -- so the head rests where it leaned. The settings are saved. Only a clamped axis is shown: a short blinking warning.
 function VRCompanion:onSeatSetAction()
-    -- Only the head-tracked view of an in-cab camera, with no menu shown: anywhere else it is a no-op
-    if self.is2DViewActive or self:doesMenuTakeInput() then return end
+    -- Only the head-tracked view of an in-cab camera, with no menu shown: anywhere else it is a no-op. A menu is shown when its quad
+    -- is (what the cab camera hook stands down for) or when it takes the input (also a Stereo Dialog, which has no quad).
+    if self.is2DViewActive or self:isMenuQuadShown() or self:doesMenuTakeInput() then return end
     local cam = self:getActiveVehicleCamera()
     local model, index = self:getSeatOffsetTarget(cam)
     if model == nil or not self:isGameShowingCamera(cam.cameraNode) then return end

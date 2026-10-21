@@ -527,12 +527,14 @@ end
 -- (x, y, z) and the base rotation (qx, qy, qz, qw) the head pose is composed on. The in-cab
 -- camera update and the Recenter Action's realign to the seat both take it from here, so the
 -- head tracking node path and the fallback without one are worked out in one place.
--- The head tracking node's position and rotation (the rotation read as a quaternion, see
--- getRotationInSpace) when the cab has one, else the camera's own eye point turned by the view's
--- yaw. targetHeadRotY is the node's yaw; lookYaw turns the fallback.
--- Also gives the yaw that turns a head-space vector into the cab and, with a node, the node
--- (see cabPointFromHead). The returned table is reused: read it before asking again.
-function VRCompanion:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw)
+-- With a head tracking node, that is the node's position and rotation (the rotation read as a
+-- quaternion, see getRotationInSpace) and targetHeadRotY is the node's yaw. Without one, it is
+-- the camera's own eye point turned by the camera's neutral yaw (cam.origRotY, or defaultRotY
+-- when the camera has none yet: the camera update has always taken 0 there and the realign pi)
+-- plus lookYaw. The Seat Offset moves the position either way.
+-- Also gives what cabPointFromHead needs to carry a head-space vector into the cab: rest.yaw and,
+-- with a node, rest.node. The returned table is reused: read it before asking again.
+function VRCompanion:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw, defaultRotY)
     local localToLocalFn = localToLocal or (_G and _G.localToLocal)
     local getTranslationFn = getTranslation or (_G and _G.getTranslation)
 
@@ -559,7 +561,7 @@ function VRCompanion:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw)
         rest.x = cam.origTransX or cam.transX or 0
         rest.y = cam.origTransY or cam.transY or 0
         rest.z = cam.origTransZ or cam.transZ or 0
-        rest.yaw = self:normalizeAngle((cam.origRotY or math.pi) + (lookYaw or 0))
+        rest.yaw = self:normalizeAngle((cam.origRotY or defaultRotY or 0) + (lookYaw or 0))
     end
     -- The Seat Offset moves the rest position in the cab, whatever the look yaw (VRCompanionSeatOffset.lua)
     rest.seatX, rest.seatY, rest.seatZ = 0, 0, 0
@@ -642,7 +644,7 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
         end
     end
 
-    local rest = self:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw)
+    local rest = self:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw, math.pi)
     local cabTransX, cabTransY, cabTransZ = rest.x, rest.y, rest.z
     local cabQx, cabQy, cabQz, cabQw = rest.qx, rest.qy, rest.qz, rest.qw
 

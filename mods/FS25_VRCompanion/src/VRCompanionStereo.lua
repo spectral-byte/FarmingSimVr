@@ -1323,7 +1323,7 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     -- camParent's space (the same step the Recenter Action realigns to). Composed as
     -- quaternions: Euler angles read back from the engine lose the head's pitch when it looks a
     -- quarter turn to the side.
-    local rest = self:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw)
+    local rest = self:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw, 0)
     local baseQx, baseQy, baseQz, baseQw = rest.qx, rest.qy, rest.qz, rest.qw
     local cabTransX, cabTransY, cabTransZ = self:cabPointFromHead(rest, camParent, eyeTx, eyeTy, eyeTz)
     local midCabTransX, midCabTransY, midCabTransZ = self:cabPointFromHead(rest, camParent, tx, ty, tz)
