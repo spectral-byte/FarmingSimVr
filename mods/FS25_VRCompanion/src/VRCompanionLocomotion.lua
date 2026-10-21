@@ -561,6 +561,12 @@ function VRCompanion:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw)
         rest.z = cam.origTransZ or cam.transZ or 0
         rest.yaw = self:normalizeAngle((cam.origRotY or math.pi) + (lookYaw or 0))
     end
+    -- The Seat Offset moves the rest position in the cab, whatever the look yaw (VRCompanionSeatOffset.lua)
+    rest.seatX, rest.seatY, rest.seatZ = 0, 0, 0
+    if type(self.getCabSeatOffset) == "function" then
+        rest.seatX, rest.seatY, rest.seatZ = self:getCabSeatOffset(cam)
+    end
+    rest.x, rest.y, rest.z = rest.x + rest.seatX, rest.y + rest.seatY, rest.z + rest.seatZ
     if rest.qw == nil then
         rest.qx, rest.qy, rest.qz, rest.qw = self:yawQuaternion(rest.yaw)
     end
@@ -572,7 +578,9 @@ end
 function VRCompanion:cabPointFromHead(rest, camParent, x, y, z)
     local localToLocalFn = localToLocal or (_G and _G.localToLocal)
     if rest.node ~= nil and type(localToLocalFn) == "function" then
-        return localToLocalFn(rest.node, camParent, x, y, z)
+        -- From the head tracking node, which sits at the vehicle's own eye point: the Seat Offset moves it on
+        local cx, cy, cz = localToLocalFn(rest.node, camParent, x, y, z)
+        return cx + rest.seatX, cy + rest.seatY, cz + rest.seatZ
     end
     local rx, ry, rz = self:rotateVectorByYaw(x, y, z, rest.yaw)
     return rest.x + rx, rest.y + ry, rest.z + rz

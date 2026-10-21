@@ -286,6 +286,7 @@ function VRCompanion:loadMap(name)
     if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
     if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
     if type(self.registerFishCatchConsoleCommands) == "function" then self:registerFishCatchConsoleCommands() end
+    if type(self.registerSeatOffsetConsoleCommands) == "function" then self:registerSeatOffsetConsoleCommands() end
     if type(self.registerStereoDialogDepthConsoleCommands) == "function" then self:registerStereoDialogDepthConsoleCommands() end
 
     if self.showHudLoadNotification == true then
@@ -1204,6 +1205,7 @@ function VRCompanion:deleteMap()
 
     if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
     if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
+    if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
     if type(self.unregisterStereoDialogDepthConsoleCommands) == "function" then self:unregisterStereoDialogDepthConsoleCommands() end
     if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end
