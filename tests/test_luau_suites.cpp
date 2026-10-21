@@ -125,6 +125,10 @@ TEST_F(LuauTestSuiteTest, TestSeatSet) {
     RunSuite("tests/test_seat_set.luau");
 }
 
+TEST_F(LuauTestSuiteTest, TestSeatOffsetSave) {
+    RunSuite("tests/test_seat_offset_save.luau");
+}
+
 TEST_F(LuauTestSuiteTest, TestSnapTurn) {
     RunSuite("tests/test_snap_turn.luau");
 }
