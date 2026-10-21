@@ -21,7 +21,8 @@
 -- vehicles; the head pose's x is to the right). So the offset (forward f, up u, right r) is the translation (-r, u, f). It is not rotated
 -- by look yaw or a Snap Turn. No rotation component.
 --
--- Later tickets add the Seat Set Action and saving to this module.
+-- SAVING: saveConfiguration -> saveSeatOffsetSettings(...), loadConfiguration -> loadSeatOffsetSettings(...); a vrSeatOffset change saves
+-- the settings at once. Later tickets add the Seat Set Action to this module.
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -147,6 +148,9 @@ function VRCompanion:consoleCommandSeatOffset(...)
     end
     -- The next camera update places the head with it; the view jumps, so the upscaler drops its history
     self:signalDiscontinuityFlush()
+    if type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
 
     local text = reset and "Seat offset reset to the vehicle's own eye point."
         or string.format("Seat offset set to %s m.", describeSeatOffset(self:getSeatOffset(model, index)))
@@ -157,9 +161,59 @@ function VRCompanion:consoleCommandSeatOffset(...)
     return text
 end
 
+-- SETTINGS: vrSettings.seatOffsets.seatOffset(i) with #vehicle, #camera, #forward, #up and #right, one per non-zero Seat Offset.
+local SEAT_OFFSETS_KEY = "vrSettings.seatOffsets.seatOffset"
+
+-- Called from saveConfiguration with the open settings file and the engine's setters (any may be nil).
+function VRCompanion:saveSeatOffsetSettings(xmlFile, setters)
+    local setString, setInt, setFloat = setters.setString, setters.setInt, setters.setFloat
+    if type(setString) ~= "function" or type(setInt) ~= "function" or type(setFloat) ~= "function" then return end
+
+    -- In a stable order, so the file doesn't shuffle between saves
+    local models = {}
+    for model in pairs(self.seatOffsets) do models[#models + 1] = model end
+    table.sort(models)
+    local entry = 0
+    for _, model in ipairs(models) do
+        local cameras = {}
+        for index in pairs(self.seatOffsets[model]) do cameras[#cameras + 1] = index end
+        table.sort(cameras)
+        for _, index in ipairs(cameras) do
+            local offset = self.seatOffsets[model][index]
+            local key = string.format("%s(%d)", SEAT_OFFSETS_KEY, entry)
+            setString(xmlFile, key .. "#vehicle", model)
+            setInt(xmlFile, key .. "#camera", index)
+            setFloat(xmlFile, key .. "#forward", offset.forward)
+            setFloat(xmlFile, key .. "#up", offset.up)
+            setFloat(xmlFile, key .. "#right", offset.right)
+            entry = entry + 1
+        end
+    end
+end
+
+-- Called from loadConfiguration with the open settings file and the engine's getters (any may be nil). Replaces the Seat Offsets
+-- with the saved ones, each clamped; an entry that lacks a part, or has no camera index, is skipped.
+function VRCompanion:loadSeatOffsetSettings(xmlFile, getters)
+    local has, getString, getInt, getFloat = getters.has, getters.getString, getters.getInt, getters.getFloat
+    self.seatOffsets = {}
+    if type(has) ~= "function" or type(getString) ~= "function" or type(getInt) ~= "function" or type(getFloat) ~= "function" then return end
+
+    local entry = 0
+    while has(xmlFile, string.format("%s(%d)", SEAT_OFFSETS_KEY, entry)) do
+        local key = string.format("%s(%d)", SEAT_OFFSETS_KEY, entry)
+        local model, camera = getString(xmlFile, key .. "#vehicle"), getInt(xmlFile, key .. "#camera")
+        local forward, up, right = getFloat(xmlFile, key .. "#forward"), getFloat(xmlFile, key .. "#up"), getFloat(xmlFile, key .. "#right")
+        if model ~= nil and model ~= "" and camera ~= nil and camera >= 1
+            and forward ~= nil and up ~= nil and right ~= nil then
+            self:setSeatOffset(model, camera, forward, up, right)
+        end
+        entry = entry + 1
+    end
+end
+
 function VRCompanion:registerSeatOffsetConsoleCommands()
     if addConsoleCommand == nil then return end
-    addConsoleCommand("vrSeatOffset", "Move the head's rest position in the cab you are in, in metres from the vehicle's own eye point (this session only): vrSeatOffset [<forward> <up> <right> | reset]", "consoleCommandSeatOffset", self)
+    addConsoleCommand("vrSeatOffset", "Move the head's rest position in the cab you are in, in metres from the vehicle's own eye point (saved): vrSeatOffset [<forward> <up> <right> | reset]", "consoleCommandSeatOffset", self)
 end
 
 function VRCompanion:unregisterSeatOffsetConsoleCommands()
