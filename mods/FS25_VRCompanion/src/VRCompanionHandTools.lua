@@ -38,7 +38,8 @@
 --                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's)
 --   VRCompanion:getHandToolLookRay([player]) -> x, y, z, dirX, dirY, dirZ   that ray with its origin moved back along the axis by the
 --                                                       tool's reachBehind field (the spray can's and the horse brush's 0.5 m); this is what Player:getLookRay
---                                                       answers then, so what the targeter casts
+--                                                       answers then, so what the targeter casts (the wrap asks every aiming subsystem in
+--                                                       turn, Hand Tools first: VRCompanion:registerLookRayAimer in Core)
 --   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   nil when the tool (default: the one held) is no chainsaw
 --   VRCompanion:getFishingRodState([tool]) -> state, lineOut, bend   the fishing rod's state ("idle" | "charging" | "waiting" |
 --                                                       "bite" | "reeling" | "caught" | "unknown"), whether its line is out and its
@@ -419,10 +420,12 @@ end
 --   make         function(original) -> the wrapper (attached by the section that owns the wrap, which needs locals defined below
 --                this table); an entry without one is CHECK-ONLY: a function the module depends on but does not wrap, which is
 --                only checked at map load (the feature gives up when it is missing or reshaped)
+--   shared       the wrap is held through Core (Player.getLookRay: see VRCompanion:holdLookRayWrap) rather than made here
 -- Every function the module depends on is listed here, so that the give-up check knows all of them.
 local WRAP_SPECS = {
     attachToolToCamera = { class = "HandTool", parameters = 1, describe = "(tool)" },
-    getLookRay = { class = "Player", parameters = 1, describe = "(player)" },
+    -- SHARED: the wrap is Core's (VRCompanion:holdLookRayWrap), which Object Grab holds too; this module holds it while it has not given up
+    getLookRay = { class = "Player", parameters = 1, describe = "(player)", shared = true },
     -- The chainsaw: the specialization's update (the game's event dispatch reads it off the class at every call) and its roll
     -- action's handler
     chainsawOnUpdate = { class = "HandToolChainsaw", fn = "onUpdate", parameters = 2, describe = "(tool, dt)" },
@@ -479,12 +482,18 @@ end
 local function wrapFunction(name)
     local spec = WRAP_SPECS[name]
     local class = engine(spec.class)
-    if type(class) ~= "table" or spec.make == nil then return end
+    if type(class) ~= "table" or (spec.make == nil and not spec.shared) then return end
     local current = wraps[name]
     if current ~= nil and current.class == class then return end
     local fn = spec.fn or name
-    local original = class[fn]
+    local original = spec.shared and VRCompanion:getLookRayWrapOriginal() or class[fn]
     if shapeProblem(spec, original) ~= nil then return end
+    if spec.shared then
+        if VRCompanion:holdLookRayWrap("handTools") then
+            wraps[name] = { class = class, fn = fn, original = VRCompanion:getLookRayWrapOriginal(), shared = true }
+        end
+        return
+    end
     local wrapper = spec.make(original)
     wraps[name] = { class = class, fn = fn, original = original, wrapper = wrapper }
     class[fn] = wrapper
@@ -497,7 +506,11 @@ end
 -- Takes the wraps off again, each only when it is still the wrapper put there.
 local function liftWraps()
     for name, wrap in pairs(wraps) do
-        if wrap.class[wrap.fn] == wrap.wrapper then wrap.class[wrap.fn] = wrap.original end
+        if wrap.shared then
+            VRCompanion:releaseLookRayWrap("handTools")  -- Core lifts it when Object Grab does not hold it either
+        elseif wrap.class[wrap.fn] == wrap.wrapper then
+            wrap.class[wrap.fn] = wrap.original
+        end
     end
     wraps = {}
 end
@@ -742,7 +755,8 @@ end
 -- everything while the hand does not) is the game's own.
 WRAP_SPECS.attachToolToCamera.make = function(original)
     return function(tool, ...)
-        if type(tool) == "table" and not isAnotherPlayersTool(tool) then
+        -- The game's hands (Player.hands, spec_hands) are held when no Hand Tool is, and are no Hand Tool here (Object Grab's).
+        if type(tool) == "table" and tool.spec_hands == nil and not isAnotherPlayersTool(tool) then
             state.tool = tool
             state.cameraPlacedTool = tool  -- for the description of an unsupported tool (placement path)
             local hand = toolHandFor(VRCompanion, tool)
@@ -1392,17 +1406,15 @@ function VRCompanion:getHandToolLookRay(player)
     return x - dx * behind, y - dy * behind, z - dz * behind, dx, dy, dz
 end
 
--- The wrap of Player:getLookRay, the single source PlayerTargeter:update reads (and everything that highlights by look): the
--- tool's ray while a supported Hand Tool is in a tracked Tool Hand, the game's own (the head's) otherwise.
-WRAP_SPECS.getLookRay.make = function(original)
-    return function(player, ...)
-        if type(player) == "table" then
-            local x, y, z, dx, dy, dz = VRCompanion:getHandToolLookRay(player)
-            if x ~= nil then return x, y, z, dx, dy, dz end
-        end
-        return original(player, ...)
-    end
-end
+-- The wrap of Player:getLookRay, the single source PlayerTargeter:update reads (and everything that highlights by look), is Core's:
+-- the ray of the first subsystem that is aiming (VRCompanion:getAimedLookRay: the Hand Tools are asked first, see "Who aims the
+-- look ray" in Core), the game's own (the head's) otherwise. This module holds it (WRAP_SPECS.getLookRay is shared) and lets go of
+-- it with the rest when it gives up; Object Grab holds it too, so the look ray then stays Object Grab's to answer.
+
+-- The Hand Tools aim the look ray first: the tool's, while a supported Hand Tool is in a tracked Tool Hand of this player.
+VRCompanion:registerLookRayAimer("handTools", function(player)
+    return VRCompanion:getHandToolLookRay(player)
+end)
 
 -- ---- The chainsaw -------------------------------------------------------------------------------------------
 -- The chainsaw cuts where its bar is. In the Tool Hand it is placed like the other tools (SUPPORTED_TOOLS, the handle offset),

@@ -249,6 +249,16 @@ add_executable(fs25_vr_tests
     tests/test_dialog_diagnostics.cpp
     tests/test_stereo_dialogs.cpp
     tests/test_fish_catch_auto_answer.cpp
+    tests/test_object_grab_aim.cpp
+    tests/test_object_grab_carry.cpp
+    tests/test_object_grab_diagnostics.cpp
+    tests/test_object_grab_feedback.cpp
+    tests/test_object_grab_game_actions.cpp
+    tests/test_object_grab_grip.cpp
+    tests/test_object_grab_off_hand.cpp
+    tests/test_object_grab_snap.cpp
+    tests/test_object_grab_throw.cpp
+    tests/test_object_grab_wraps.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE

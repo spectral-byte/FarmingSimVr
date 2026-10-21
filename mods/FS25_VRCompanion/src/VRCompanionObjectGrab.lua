@@ -1,0 +1,1150 @@
+-- ====================================================================
+-- FS25 VR Companion Mod: Object Grab
+--
+-- Lets the player pick up, carry and throw loose objects with the Motion Controllers (spec #156, ADR-0033). On foot with empty hands
+-- the game carries one object at a time with its "hands" hand tool (HandToolHands): it targets what the look ray meets
+-- (PlayerTargeter, fed by Player:getLookRay) and the player's pick-up button takes it. This file is built up ticket by ticket; so far
+-- the Pointer Hand AIMS the empty hands (#158) and the grip grabs and carries (#159).
+--
+-- TERMS (CONTEXT.md): the Pointer Hand is the Motion Controller that points, the Pointer Ray runs from its index fingertip along the
+-- finger, empty hands are the game's hands tool (Player.hands) held, which it is whenever the player holds no Hand Tool
+-- (Player:getHeldHandTool() is nil then: the hands are not a Hand Tool the player holds).
+--
+-- AIMING: while Object Grab is on, the local player is on foot in the first person view with empty hands, no menu takes the input, and
+-- the Pointer Hand is tracked and in use (it has a Pointer Ray), Player:getLookRay answers the Pointer Ray's ray with its origin moved
+-- back along the finger by OBJECT_GRAB_REACH_BEHIND. So everything the game targets by looking follows the hand: the hands' pick-up
+-- target, the prompts on animals, vehicles and trees, and the holders Hand Tools are taken from. A supported Hand Tool in a tracked
+-- Tool Hand aims first (Core asks Hand Tools before Object Grab, see "Who aims the look ray"). Otherwise, and before a grab, the ray
+-- is the game's own (the head's). Another player's look ray is never touched.
+-- The origin is moved back because the hands' target type only finds things between 0.5 m and the player's pickup distance of the ray's
+-- origin: a hand that touches an object, or has gone a little into it, would be below the minimum. (The spray can and the horse brush
+-- do the same.) The 10 cm beyond the minimum are for a fingertip that has gone into the object.
+--
+-- THE POINTER RAY ON AN OBJECT: the targeter's closest target for the hands (closestTargetsByKey[HandToolHands]) is a node the hands
+-- can pick up when the game's own getCanPickUpNode says so (so the mass limit, the pickup distance and super strength are the game's).
+-- While the Pointer Hand aims and the target is one, the Pointer Ray is drawn, to the point where the targeter hit it, and the Pointer
+-- Hand gets one light pulse as the ray lands (again only after it left the object, or on another object).
+--
+-- NO CENTRE CROSSHAIR: while the hand aims, the hands tool's onDraw is skipped for the local player (its crosshair and grab icon at the
+-- centre of the view are head-locked, and would point where the hand does not). The game's own function draws them otherwise.
+--
+-- THE GAME'S PICK-UP BUTTON is the game's: it picks up what the targeter found, which is now what the hand points at. The game then
+-- carries it the game's way (along the look ray, so along the hand), and the grip leaves it alone.
+--
+-- THE GRAB (#159): while the Pointer Hand points at an object the hands can pick up, and while a hand carries, Object Grab takes that
+-- hand's grip from the Virtual Gamepad (ADR-0028, takeVirtualGamepadInput(hand, "grip")), so the grip reads released on the pad. A
+-- squeeze the pad let the hand have calls the game's pickUpTarget with the targeter's target, with one pulse on the hand. A grip held
+-- before the ray landed keeps its binding and grabs nothing until it is let go and squeezed again. A squeeze at nothing grabbable is LB/RB.
+--
+-- THE OFF-HAND (#161): either hand grabs in one squeeze, even with both in use. See "The off-hand": a physics ray cast along the other
+-- hand's finger only tells whether its grip may be taken; the squeeze makes it the Pointer Hand, the targeter runs again with its ray,
+-- and the game's pickUpTarget picks up what the targeter finds. A trigger pull still moves the Pointer Hand, as before.
+--
+-- THE CARRY: the hand that grabbed carries the Held Object until the grip is let go (releaseHeldObject: a drop through the game's
+-- dropHeldItem, or a throw, see THE THROW) or the game itself ends the carry (getting into a vehicle, taking a Hand Tool): the carry ends cleanly, and the grip
+-- goes back to the pad once it is let go. While it lasts the hand is in use however still it is held, is never the Pointer Hand (the
+-- other hand can point), and the kinematic node and the rotation node of the game's carry are placed from the hand (see "Placing the
+-- Held Object"), keeping the object's place and angle in the hand as it was at the grab. A hand that is not tracked leaves them where
+-- they were, and has not let go; they follow it again when it is tracked. Nothing is felt while it carries.
+--
+-- THE THROW (#160): letting go of the grip while the hand moves faster than OBJECT_GRAB_THROW_MIN_SPEED throws the Held Object through the
+-- game's throwHeldItemWithForceVector(dirX, dirY, dirZ, forceScalar, noEventSend), along the hand's travel, with the force scalar the
+-- hand's speed over OBJECT_GRAB_THROW_FULL_SPEED clamped to 0..1 (never harder than the game's full throw). Slower is the drop above.
+-- The hand's velocity is sampled in the world from its grip pose each update (see "THE HAND'S SPEED"); a Snap Turn or a Recenter does
+-- not count as a swing. After either release the grip is up, so grabbing again needs a fresh squeeze.
+--
+-- ROTATE AND LEVEL (#162): the game's rotate actions and its level action (pallets and square bales) keep working as bound while the grip
+-- carries. They turn the rotation node, and the turn goes into the offset the hand holds the object with (see "Placing the Held
+-- Object"): the Held Object is turned on top of the wrist, and stays turned as the hand moves. A level action squares it and keeps its
+-- heading, which then follows the wrist like any other turn.
+--
+-- THE SNAP (#162): without super strength, yanking a heavy Held Object breaks the game's joint, the game calls onHeldItemJointBroken with
+-- the joint's index and the hands let go. The carry ends, and the hand gets one sharp pulse (OBJECT_GRAB_SNAP_PULSE_*). A drop by the game
+-- itself passes no joint index and is silent. The grip, if still held, does not grab again until it is let go and squeezed again. With
+-- super strength the game makes the joint unbreakable and nothing here changes.
+--
+-- WRAPS: Player.getLookRay (shared with Hand Tools: Core owns the one wrap and each holds it, so that one giving up does not take the
+-- look ray away from the other), HandToolHands.onDraw, HandToolHands.updateKinematicNode and HandToolHands.onHeldItemJointBroken (the
+-- class AND the local player's hands tool, which may hold a copy of the last two); getCanPickUpNode is only checked. When one is missing or has another shape
+-- at map load, Object Grab gives up: ONE warning ("Object Grab disabled: ..."), its wraps are lifted, and picking up is the
+-- game's. Hand Tools are not affected. A game without HandToolHands (no hands to aim) is not a failure: nothing is wrapped.
+--
+-- PUBLIC SURFACE
+--   VRCompanion.objectGrabEnabled              boolean, default true, saved (`vrObjectGrab on|off`)
+--   VRCompanion.OBJECT_GRAB_REACH_BEHIND       how far (m) the look ray's origin is moved back along the finger
+--   VRCompanion.OBJECT_GRAB_LAND_PULSE_MS / _STRENGTH   the light pulse on the Pointer Hand as the ray lands on something grabbable
+--   VRCompanion:getObjectGrabAimedRay(player) -> x, y, z, dirX, dirY, dirZ | nil, why not   what Player:getLookRay answers
+--   VRCompanion:getObjectGrabRayTarget() -> hasTarget, x, y, z   the Pointer Ray's object target (called by updatePointerRay); a
+--                                      squeeze while the ray is on the target grabs it
+--   VRCompanion:updateObjectGrab(dt)    once per Motion Controller update, after the hands are polled and before the Pointer Hand is
+--                                      chosen: the grip edges, and the carry (records the offset, lets go, ends)
+--   VRCompanion:isHandCarryingHeldObject(hand) -> boolean   the hand carries a Held Object it grabbed (stays in use, never points)
+--   VRCompanion:isObjectGrabSqueeze(hand) -> boolean   the hand, not the Pointer Hand, was squeezed this update while pointing at
+--                                      something grabbable: it becomes the Pointer Hand (asked by choosePointerHand)
+--   VRCompanion.OBJECT_GRAB_ANSWER_WAIT_MS   how long such a squeeze waits for the targeter's answer to the new ray
+--   VRCompanion.OBJECT_GRAB_GRAB_PULSE_MS / _STRENGTH   the pulse on the hand that grabs
+--   VRCompanion.OBJECT_GRAB_THROW_MIN_SPEED / _FULL_SPEED (m/s) / _WINDOW_MS   when a release throws, the speed of a full throw, the
+--                                      span the hand's speed is measured over
+--   VRCompanion:getObjectGrabLastRelease() -> kind ("throw"|"drop"), speed, dirX, dirY, dirZ, force | nil   the last release
+--   VRCompanion.OBJECT_GRAB_SNAP_PULSE_MS / _STRENGTH   the sharp pulse on the hand whose hold snaps
+--   VRCompanion:setObjectGrabEnabled(enabled, save)
+--   VRCompanion:saveObjectGrabSetting(xmlFile, xml) / loadObjectGrabSetting(xmlFile, xml)   settings chain
+--   VRCompanion:getObjectGrabDiagnostics() -> string          the state of Object Grab, one line
+--   VRCompanion:registerObjectGrabConsoleCommands() / resetObjectGrab()   map load / unload
+--   VRCompanion:consoleCommandObjectGrabDiagnostics()   logs the fields one tagged line each, returns them as one line; reads only
+--   Console: vrObjectGrab [on|off], vrObjectGrabDiagnostics
+--
+-- Hooks into the rest of the mod (each a single guarded call):
+--   Core               registerLookRayAimer("objectGrab", ...) and holdLookRayWrap("objectGrab")
+--   MotionControllers  updatePointerRay -> getObjectGrabRayTarget() (after Interactive Control); updateMotionControllers ->
+--                      updateObjectGrab(dt) on every path; isHandCarryingHeldObject(hand) keeps the hand in use and out of the Pointer
+--                      Hand candidates; the saved setting, the console commands, the diagnostics and the reset chain through the
+--                      Motion Controller functions of the same names
+--   VirtualGamepad     takeVirtualGamepadInput(hand, "grip"); VRBridge.getVirtualGamepad() for what the pad reads as squeezed
+-- ====================================================================
+
+VRCompanion = VRCompanion or {}
+VRCompanion.ObjectGrab = VRCompanion.ObjectGrab or {}
+
+local engine = VRCompanion.getEngineGlobal
+
+-- vrObjectGrab on|off: saved, default on. Object Grab also needs Motion Controllers on.
+VRCompanion.DEFAULT_OBJECT_GRAB_ENABLED = true
+VRCompanion.objectGrabEnabled = VRCompanion.DEFAULT_OBJECT_GRAB_ENABLED
+
+-- The look ray starts this far (m) behind the fingertip: the game's 0.5 m minimum distance of the hands' target type, and 10 cm for a
+-- fingertip that has gone into the object. Tune in the headset (#164).
+VRCompanion.OBJECT_GRAB_REACH_BEHIND = 0.6
+
+-- HAPTICS (milliseconds, strength 0..1): one light pulse on the Pointer Hand as the ray lands on something it can grab. For scale, the
+-- Pointer Hand's Click Point selection is 25 ms at 0.25. Tune in the headset (#164).
+VRCompanion.OBJECT_GRAB_LAND_PULSE_MS = 25
+VRCompanion.OBJECT_GRAB_LAND_PULSE_STRENGTH = 0.25
+
+-- How long (ms) an off-hand's squeeze waits for the targeter's answer to the new ray (the game's ray cast is asynchronous).
+VRCompanion.OBJECT_GRAB_ANSWER_WAIT_MS = 250
+
+-- One firmer pulse on the hand that grabs. Nothing is felt while it carries. Tune in the headset (#164).
+VRCompanion.OBJECT_GRAB_GRAB_PULSE_MS = 40
+VRCompanion.OBJECT_GRAB_GRAB_PULSE_STRENGTH = 0.6
+
+-- THE THROW (#160), speeds in m/s of the hand in the world: letting go of the grip while the hand moves faster than
+-- OBJECT_GRAB_THROW_MIN_SPEED throws the Held Object, below it the release is a drop. The throw's force scalar is the hand's speed over
+-- OBJECT_GRAB_THROW_FULL_SPEED, clamped to 0..1, so a hand at or above that speed throws as hard as the game's own full throw. The hand's
+-- speed is measured over the last OBJECT_GRAB_THROW_WINDOW_MS. Tune in the headset (#164).
+VRCompanion.OBJECT_GRAB_THROW_MIN_SPEED = 1.0
+VRCompanion.OBJECT_GRAB_THROW_FULL_SPEED = 4.0
+VRCompanion.OBJECT_GRAB_THROW_WINDOW_MS = 100
+
+-- One sharp pulse on the hand whose hold snaps (the game's joint broke). Sharper and longer than the grab. Tune in the headset (#164).
+VRCompanion.OBJECT_GRAB_SNAP_PULSE_MS = 120
+VRCompanion.OBJECT_GRAB_SNAP_PULSE_STRENGTH = 1.0
+
+local function newState()
+    return {
+        problem = nil,       -- why Object Grab gave up, once it did (the warning is logged then and never again)
+        landedNode = nil,    -- the node the Pointer Ray is on and has pulsed for
+        gripDown = { [0] = false, [1] = false },     -- per hand: the grip was held on the pad at the end of the last update
+        gripPressed = { [0] = false, [1] = false },  -- per hand: the grip went down in this update
+        carry = nil,         -- the hand carrying a Held Object it grabbed: { hand, hands }
+        offHandSqueezed = nil,  -- the hand (not the Pointer Hand) whose grip was squeezed this update while it points at something grabbable
+        pendingGrab = nil,   -- the off-hand squeeze waiting for the targeter's answer to the new ray: { hand, untilMs }
+        dt = 0,              -- the dt of this update
+        swing = { samples = {}, rig = nil, last = nil },  -- the carrying hand's recent places in the world, and the last release
+        lastSnapMs = nil,    -- the game clock when the last hold snapped (for the diagnostics)
+    }
+end
+
+local state = newState()
+
+-- ---- Wraps ------------------------------------------------------------------------------------------------------------
+-- WRAP_SPECS is keyed by the name of the function wrapped. Each entry:
+--   class        the name of the global table the function is on
+--   fn           the function's name on the class, when it is not the key
+--   parameters   how many parameters the function must declare at least (a reshaped function declares fewer)
+--   describe     what the parameters are, for the warning
+--   make         function(original) -> the wrapper; an entry without one is CHECK-ONLY (checked at map load, never wrapped)
+--   shared       the wrap is Core's (VRCompanion:holdLookRayWrap)
+local WRAP_SPECS = {
+    getLookRay = { class = "Player", parameters = 1, describe = "(player)", shared = true },
+    handsOnDraw = { class = "HandToolHands", fn = "onDraw", parameters = 1, describe = "(tool)" },
+    handsUpdateKinematicNode = { class = "HandToolHands", fn = "updateKinematicNode", parameters = 1, describe = "(tool)" },
+    handsJointBroken = { class = "HandToolHands", fn = "onHeldItemJointBroken", parameters = 2, describe = "(tool, jointIndex)" },
+    getCanPickUpNode = { class = "HandToolHands", parameters = 2, describe = "(tool, node)" },
+}
+
+-- wraps[key] = { class = <the table wrapped>, fn = <the function's name on it>, original = <what it was>, wrapper = <what the wrap put there> }
+local wraps = {}
+
+-- How many parameters a Lua function declares, or nil when it takes any number or the runtime cannot tell.
+local function parameterCount(fn)
+    local library = _G and _G.debug
+    if type(library) ~= "table" then return nil end
+    if type(library.info) == "function" then
+        local ok, count, isVararg = pcall(library.info, fn, "a")
+        if ok and type(count) == "number" then return (not isVararg) and count or nil end
+    end
+    if type(library.getinfo) == "function" then
+        local ok, info = pcall(library.getinfo, fn, "u")
+        if ok and type(info) == "table" and type(info.nparams) == "number" then
+            return (not info.isvararg) and info.nparams or nil
+        end
+    end
+    return nil
+end
+
+-- Why a function is not what its wrap expects, or nil when it is.
+local function shapeProblem(spec, fn)
+    if fn == nil then return "it is missing" end
+    if type(fn) ~= "function" then return "it is not a function" end
+    local count = parameterCount(fn)
+    if count ~= nil and count < spec.parameters then
+        return string.format("it takes %d parameters, not %s", count, spec.describe)
+    end
+    return nil
+end
+
+-- Object Grab has hands to aim only in a game that has them.
+local function gameHasHands()
+    return type(engine("HandToolHands")) == "table"
+end
+
+local function wrapFunction(name)
+    local spec = WRAP_SPECS[name]
+    local class = engine(spec.class)
+    if type(class) ~= "table" or (spec.make == nil and not spec.shared) then return end
+    local current = wraps[name]
+    if current ~= nil and current.class == class then return end
+    local fn = spec.fn or name
+    local original = spec.shared and VRCompanion:getLookRayWrapOriginal() or class[fn]
+    if shapeProblem(spec, original) ~= nil then return end
+    if spec.shared then
+        if VRCompanion:holdLookRayWrap("objectGrab") then
+            wraps[name] = { class = class, fn = fn, original = VRCompanion:getLookRayWrapOriginal(), shared = true }
+        end
+        return
+    end
+    local wrapper = spec.make(original)
+    wraps[name] = { class = class, fn = fn, original = original, wrapper = wrapper }
+    class[fn] = wrapper
+end
+
+local function wrapAll()
+    if state.problem ~= nil or not gameHasHands() then return end
+    for name in pairs(WRAP_SPECS) do wrapFunction(name) end
+end
+
+-- The functions of the hands tool that the game registers on its type, and that the tool may hold its own copy of ("Placing the Held
+-- Object"): wrapped on the local player's hands tool itself for as long as it is the hands, unless the class wrap reaches it.
+local INSTANCE_WRAPS = { "handsUpdateKinematicNode", "handsJointBroken" }
+
+-- { tool, entries = { [wrap name] = { original, hadOwn, wrapper } } }
+local instanceWrap = nil
+
+-- Gives the hands tool its own copies back, each unless something else has replaced the wrapper since.
+local function unwrapInstance()
+    local current = instanceWrap
+    instanceWrap = nil
+    if current == nil then return end
+    for name, entry in pairs(current.entries) do
+        local fn = WRAP_SPECS[name].fn
+        if rawget(current.tool, fn) == entry.wrapper then
+            current.tool[fn] = entry.hadOwn and entry.original or nil
+        end
+    end
+end
+
+-- Takes the wraps off again, each only when it is still the wrapper put there.
+local function liftWraps()
+    unwrapInstance()
+    for _, wrap in pairs(wraps) do
+        if wrap.shared then
+            VRCompanion:releaseLookRayWrap("objectGrab")  -- Core lifts it when Hand Tools do not hold it either
+        elseif wrap.class[wrap.fn] == wrap.wrapper then
+            wrap.class[wrap.fn] = wrap.original
+        end
+    end
+    wraps = {}
+end
+
+-- Object Grab cannot rely on the game's functions: ONE warning, every wrap lifted, so that picking up is exactly the game's. Hand
+-- Tools are not touched.
+local function giveUp(problem)
+    state.problem = problem
+    liftWraps()
+    print("[FS25_VR] [Warning] Object Grab disabled: " .. problem .. ". Picking up is unchanged.")
+end
+
+-- At map load: gives up (once) when a function the wraps expect is missing or reshaped.
+local function checkWraps()
+    if state.problem ~= nil or not gameHasHands() then return state.problem end
+    for name, spec in pairs(WRAP_SPECS) do
+        local class = engine(spec.class)
+        if type(class) == "table" then
+            local current = wraps[name]
+            local fn = spec.fn or name
+            local problem = shapeProblem(spec, current ~= nil and current.original or class[fn])
+            if problem ~= nil then
+                giveUp(spec.class .. "." .. fn .. ": " .. problem)
+                return state.problem
+            end
+        end
+    end
+    return nil
+end
+
+-- The names of the functions Object Grab wraps (WRAP_SPECS, sorted by name; a check-only entry is not wrapped, so has no status), so
+-- that a wrap added to WRAP_SPECS is reported by the diagnostics without being listed again.
+local function wrapNames()
+    local names = {}
+    for name, spec in pairs(WRAP_SPECS) do
+        if spec.make ~= nil or spec.shared then names[#names + 1] = name end
+    end
+    table.sort(names)
+    return names
+end
+
+local function wrapStatus(name)
+    if state.problem ~= nil then return name .. " wrap: gave up (" .. state.problem .. ")" end
+    return name .. " wrap: " .. (wraps[name] ~= nil and "installed" or "not installed")
+end
+
+-- ---- Aiming -----------------------------------------------------------------------------------------------------------
+
+local function localPlayer()
+    local player = engine("g_localPlayer")
+    if player == nil then
+        local mission = engine("g_currentMission")
+        player = type(mission) == "table" and mission.player or nil
+    end
+    return player
+end
+
+-- Whether the player holds a Hand Tool (the game's Player:getHeldHandTool). The game's hands are NOT one: with empty hands it answers
+-- nil, and the hands are Player.hands (the game's holders and winches read it that way).
+local function handToolInHand(player)
+    if type(player) ~= "table" or type(player.getHeldHandTool) ~= "function" then return false end
+    local ok, held = pcall(player.getHeldHandTool, player)
+    return ok and held ~= nil
+end
+
+-- The game's hands tool (Player.hands, with spec_hands) while the player holds no Hand Tool and the hands are held (the game holds
+-- them whenever no tool is), or nil.
+local function emptyHands(player)
+    if type(player) ~= "table" or type(player.getHeldHandTool) ~= "function" then return nil end
+    local ok, held = pcall(player.getHeldHandTool, player)
+    if not ok or held ~= nil then return nil end
+    local hands = player.hands
+    if type(hands) ~= "table" or type(hands.spec_hands) ~= "table" then return nil end
+    if type(hands.getIsHeld) == "function" then
+        local gotHeld, isHeld = pcall(hands.getIsHeld, hands)
+        if not gotHeld or isHeld ~= true then return nil end
+    end
+    return hands
+end
+
+-- The look ray the Pointer Hand gives `player` now (x, y, z, dirX, dirY, dirZ), or nil and why the hand does not aim. Read live,
+-- never cached, by the look ray wrap, the draw wrap and the update.
+local function whyNotAiming(self, player)
+    if self.objectGrabEnabled == false then return "Object Grab is off" end
+    if self.motionControllersEnabled == false then return "Motion Controllers are off" end
+    if state.problem ~= nil then return "Object Grab gave up (" .. state.problem .. ")" end
+    if type(player) ~= "table" or player ~= localPlayer() then return "not the local player" end
+    if player.camera == nil or player.camera.isFirstPerson ~= true then return "not in the first person view" end
+    if self:getControlledVehicle() ~= nil then return "in a vehicle" end
+    if self:doesMenuTakeInput() then return "a menu takes the input" end
+    if emptyHands(player) == nil then return handToolInHand(player) and "a Hand Tool is in hand" or "the hands are not held" end
+    return nil
+end
+
+local function aimedRay(self, player)
+    local why = whyNotAiming(self, player)
+    if why ~= nil then return nil, why end
+    if self.pointerHand == nil then return nil, "there is no Pointer Hand" end
+    local ray = self:getPointerRay()
+    if ray == nil then return nil, "the Pointer Ray is not placed" end
+    local behind = self.OBJECT_GRAB_REACH_BEHIND
+    return ray.ox - ray.dx * behind, ray.oy - ray.dy * behind, ray.oz - ray.dz * behind, ray.dx, ray.dy, ray.dz
+end
+
+function VRCompanion:getObjectGrabAimedRay(player)
+    return aimedRay(self, player)
+end
+
+-- Core asks for the ray of this subsystem after Hand Tools'.
+VRCompanion:registerLookRayAimer("objectGrab", function(player)
+    return aimedRay(VRCompanion, player)
+end)
+
+-- ---- The grip ---------------------------------------------------------------------------------------------------------
+-- The grip is the Virtual Gamepad's LB / RB (ADR-0028), and what counts as squeezed is what the pad reads: the Injector owns the
+-- threshold and its hysteresis, and an untracked hand's grip is not held. Object Grab takes a hand's grip from the pad while that hand
+-- points at something the hands can pick up and while it carries, and acts on a squeeze only when the pad let it have the grip (a grip
+-- already held when the use would begin keeps its binding, and does not grab, until it is let go).
+
+-- Whether the hand's grip is held as the pad reads it.
+local function padGripHeld(hand)
+    local bridge = engine("VRBridge")
+    if type(bridge) ~= "table" or type(bridge.getVirtualGamepad) ~= "function" then return false end
+    local ok, _, _, _, leftHeld, rightHeld = pcall(bridge.getVirtualGamepad)
+    if not ok then return false end
+    if hand == VRCompanion.MOTION_HAND_LEFT then return leftHeld == true end
+    return rightHeld == true
+end
+
+-- Once per update: which grips went down this update (state.gripPressed), whatever the hand points at.
+local function trackGrips()
+    for _, hand in ipairs({ VRCompanion.MOTION_HAND_LEFT, VRCompanion.MOTION_HAND_RIGHT }) do
+        local down = padGripHeld(hand)
+        state.gripPressed[hand] = down and not state.gripDown[hand]
+        state.gripDown[hand] = down
+    end
+end
+
+-- Asks the Virtual Gamepad for the hand's grip (every update the use wants it). False: it was held first, and keeps its binding.
+local function takeGrip(self, hand)
+    if type(self.takeVirtualGamepadInput) ~= "function" then return true end
+    return self:takeVirtualGamepadInput(hand, "grip")
+end
+
+-- ---- Placing the Held Object ------------------------------------------------------------------------------------------------
+-- The game carries the object with two nodes: a kinematic node (a physics body the object's joint hangs from) and a rotation node under
+-- it, which the joint's frame follows. The game places the kinematic node along the look ray, level, every update
+-- (HandToolHands:updateKinematicNode). While the hand carries, Object Grab places them from the hand instead, so that the object keeps
+-- the place and angle it had in the hand when it was grabbed (OFFSET), and moves and turns with the wrist.
+-- THE MULTIPLAYER SHAPE (from the game source): the owning client streams to the server only the kinematic node's world position, its
+-- level heading and the rotation node's WORLD rotation. The rotation node's position under the kinematic node is never streamed: the
+-- server sets it at the grab. So the kinematic node stays level, the wrist's tilt goes into the rotation node, and the kinematic
+-- node is placed so that the rotation node's offset (read each update: it is the game's) lands where the hand holds the object. The
+-- server applies the rotation node to the joint with setJointFrame, as the game's rotate action does; a single player game is the
+-- server and has no stream, so it does that itself. The dirty flag is raised, as the game's own update raises it.
+-- THE GAME'S ROTATE AND LEVEL ACTIONS (#162) turn the rotation node, and the game only does that between two of our placements: the turn
+-- is folded into the offset (absorbTurn), on top of how the wrist holds the object, and kept as the hand moves.
+-- THE OFFSET is recorded once the rotation node is at the object. The game moves it there itself (orientRotationNodeToItem): at once
+-- on a client, but on the server only when the joint is made, a few physics frames after the pick-up. Until then the game's own
+-- placement runs.
+
+local function qrotate(qx, qy, qz, qw, x, y, z)
+    local cx, cy, cz = qy * z - qz * y + qw * x, qz * x - qx * z + qw * y, qx * y - qy * x + qw * z
+    return x + 2 * (qy * cz - qz * cy), y + 2 * (qz * cx - qx * cz), z + 2 * (qx * cy - qy * cx)
+end
+
+local handPose = {}  -- scratch: the hand's grip pose in the world
+
+-- The grip pose of the hand in the world (x, y, z, qx, qy, qz, qw in the returned table, valid until the next call), or nil while the
+-- hand is not tracked or the head is not placed in the world.
+local function handGripInWorld(self, hand)
+    local pose = self:getHandState(hand)
+    if type(pose) ~= "table" or pose.tracked ~= true then return nil end
+    local placed
+    if pose.gripPoseTracked == true then
+        placed = self:headRelativePoseToWorld(pose.gripPoseX, pose.gripPoseY, pose.gripPoseZ,
+            pose.gripPoseQx, pose.gripPoseQy, pose.gripPoseQz, pose.gripPoseQw, handPose)
+    else
+        placed = self:headRelativePoseToWorld(pose.x, pose.y, pose.z, pose.qx, pose.qy, pose.qz, pose.qw, handPose)
+    end
+    if placed ~= true then return nil end
+    return handPose
+end
+
+-- The hands tool's kinematic node and rotation node (the game's getKinematicNode), or nil while they are not there.
+local function carryNodes(hands)
+    if type(hands.getKinematicNode) ~= "function" then return nil end
+    local ok, kinematic, rotation = pcall(hands.getKinematicNode, hands)
+    if not ok or kinematic == nil or kinematic == 0 or rotation == nil or rotation == 0 then return nil end
+    return kinematic, rotation
+end
+
+-- Records where the Held Object is in the hand's frame (carry.offset), from the rotation node, which the game puts at the object. Not
+-- yet while the game has the rotation node still to move (the server's joint is made a few physics frames after the pick-up), or the
+-- hand cannot be placed.
+local function recordGrabOffset(self, carry)
+    local hands = carry.hands
+    if type(hands.getIsAwaitingJointCreation) == "function" then
+        local ok, awaiting = pcall(hands.getIsAwaitingJointCreation, hands)
+        if ok and awaiting == true then return end
+    end
+    local _, rotation = carryNodes(hands)
+    local hand = handGripInWorld(self, carry.hand)
+    if rotation == nil or hand == nil then return end
+    local x, y, z = engine("getWorldTranslation")(rotation)
+    local qx, qy, qz, qw = engine("getWorldQuaternion")(rotation)
+    local ix, iy, iz, iw = -hand.qx, -hand.qy, -hand.qz, hand.qw  -- the hand's rotation undone
+    local ox, oy, oz = qrotate(ix, iy, iz, iw, x - hand.x, y - hand.y, z - hand.z)
+    local rx, ry, rz, rw = self.multiplyQuaternions(ix, iy, iz, iw, qx, qy, qz, qw)
+    carry.offset = { x = ox, y = oy, z = oz, qx = rx, qy = ry, qz = rz, qw = rw }
+    carry.placed = { qx = qx, qy = qy, qz = qz, qw = qw, hx = hand.qx, hy = hand.qy, hz = hand.qz, hw = hand.qw }
+end
+
+-- The game's rotate and level actions turn the rotation node between two placements (the game is the only one to touch it). Whatever
+-- turned it is kept: the turn is folded into the offset, so that the Held Object stays turned in the hand as the hand moves. The turn
+-- is measured against the hand as it was at the last placement, so it is not mixed up with the hand's own movement since (and a turn
+-- made while the hand is not tracked is kept for when it is again).
+local TURN_EPSILON = 1e-9  -- 1 - |dot| of two rotations: about 9e-5 rad, far below any turn the game makes in an update
+local function absorbTurn(carry, rotation)
+    local placed, offset = carry.placed, carry.offset
+    local qx, qy, qz, qw = engine("getWorldQuaternion")(rotation)
+    if 1 - math.abs(qx * placed.qx + qy * placed.qy + qz * placed.qz + qw * placed.qw) <= TURN_EPSILON then return end
+    -- the object's rotation in the frame of the hand as it was
+    offset.qx, offset.qy, offset.qz, offset.qw =
+        VRCompanion.multiplyQuaternions(-placed.hx, -placed.hy, -placed.hz, placed.hw, qx, qy, qz, qw)
+    placed.qx, placed.qy, placed.qz, placed.qw = qx, qy, qz, qw
+end
+
+-- Places the kinematic node and the rotation node of the carrying `tool` from the hand: the object at the hand's pose times the
+-- offset. A hand that cannot be placed (tracking lost) leaves the nodes where they were.
+local function placeFromHand(self, tool, carry)
+    local kinematic, rotation = carryNodes(tool)
+    if kinematic == nil then return end
+    local spec = tool.spec_hands
+    if type(tool.raiseDirtyFlags) == "function" and spec ~= nil then pcall(tool.raiseDirtyFlags, tool, spec.dirtyFlag) end
+    absorbTurn(carry, rotation)
+    local hand = handGripInWorld(self, carry.hand)
+    if hand == nil then return end
+    local offset = carry.offset
+    -- the rotation node's world pose: the hand's, times the offset
+    local ox, oy, oz = qrotate(hand.qx, hand.qy, hand.qz, hand.qw, offset.x, offset.y, offset.z)
+    local px, py, pz = hand.x + ox, hand.y + oy, hand.z + oz
+    local qx, qy, qz, qw = self.multiplyQuaternions(hand.qx, hand.qy, hand.qz, hand.qw, offset.qx, offset.qy, offset.qz, offset.qw)
+    -- the kinematic node's level heading: the way the object faces (when it faces straight up or down it has no heading to give, and
+    -- the last one is kept). The rotation node is placed in the world, so the heading does not matter to where the object is.
+    local fx, _, fz = qrotate(qx, qy, qz, qw, 0, 0, 1)
+    if fx * fx + fz * fz > 0.0025 then carry.heading = math.atan2(fx, fz) end
+    local heading = carry.heading or 0
+    local yawX, yawY, yawZ, yawW = 0, math.sin(heading / 2), 0, math.cos(heading / 2)
+    -- the kinematic node goes where the rotation node's offset from it (the game's) lands on the place the hand holds the object
+    local lx, ly, lz = engine("getTranslation")(rotation)
+    local rx, ry, rz = qrotate(yawX, yawY, yawZ, yawW, lx, ly, lz)
+    engine("setWorldTranslation")(kinematic, px - rx, py - ry, pz - rz)
+    engine("setWorldQuaternion")(kinematic, yawX, yawY, yawZ, yawW)
+    engine("setWorldQuaternion")(rotation, qx, qy, qz, qw)
+    -- what the node reads back is what the next placement compares the game's turn against
+    local placed = carry.placed
+    placed.qx, placed.qy, placed.qz, placed.qw = engine("getWorldQuaternion")(rotation)
+    placed.hx, placed.hy, placed.hz, placed.hw = hand.qx, hand.qy, hand.qz, hand.qw
+    local jointId = spec ~= nil and spec.heldItemJointId or nil
+    if tool.isServer == true and jointId ~= nil and type(engine("setJointFrame")) == "function" then
+        pcall(engine("setJointFrame"), jointId, 0, rotation)
+    end
+end
+
+-- The guards of the game's updateKinematicNode that placing from the hand keeps: the hands are held, and their carrying player is the
+-- owner (the game's own function does nothing otherwise).
+local function mayPlaceNodes(tool)
+    if type(tool.getIsHeld) ~= "function" or type(tool.getCarryingPlayer) ~= "function" then return false end
+    local ok, held = pcall(tool.getIsHeld, tool)
+    if not ok or held ~= true then return false end
+    local gotPlayer, player = pcall(tool.getCarryingPlayer, tool)
+    return gotPlayer and type(player) == "table" and player.isOwner == true
+end
+
+-- The wrap of the game's updateKinematicNode: the carry places the nodes from the hand once the offset is recorded, and the game
+-- places them otherwise (another player's hands, a pick-up by the game's own button, a grab not settled yet, hands not held).
+WRAP_SPECS.handsUpdateKinematicNode.make = function(original)
+    return function(tool, ...)
+        local carry = state.carry
+        if carry ~= nil and carry.hands == tool and carry.offset ~= nil and mayPlaceNodes(tool) then
+            return placeFromHand(VRCompanion, tool, carry)
+        end
+        return original(tool, ...)
+    end
+end
+
+-- The game registers updateKinematicNode (and onHeldItemJointBroken) on the hands tool's type, and the type's functions may be copied
+-- onto the tool: a wrap of the class does not reach a tool that holds its own copy (the trap of Wheel Grab's steering wrap). So the
+-- local player's hands tool is wrapped itself, for as long as it is the hands, unless the class wrap reaches it.
+local function wrapInstance(tool)
+    if instanceWrap ~= nil and instanceWrap.tool ~= tool then unwrapInstance() end
+    for _, name in ipairs(INSTANCE_WRAPS) do
+        local spec = WRAP_SPECS[name]
+        local entry = instanceWrap ~= nil and instanceWrap.entries[name] or nil
+        if entry == nil or rawget(tool, spec.fn) ~= entry.wrapper then
+            local original = tool[spec.fn]
+            local classWrap = wraps[name]
+            if shapeProblem(spec, original) == nil and not (classWrap ~= nil and original == classWrap.wrapper) then
+                local wrapper = spec.make(original)
+                instanceWrap = instanceWrap or { tool = tool, entries = {} }
+                instanceWrap.entries[name] = { original = original, hadOwn = rawget(tool, spec.fn) ~= nil, wrapper = wrapper }
+                tool[spec.fn] = wrapper
+            end
+        end
+    end
+end
+
+-- The wrap of the game's onHeldItemJointBroken: the game's joint break report passes the joint's index, whereas its own letting go
+-- (dropHeldItem, which getting into a vehicle or taking a Hand Tool end in) passes none. A break of the hold of the hand that carries
+-- is a snap: updateCarry gives the hand its pulse.
+WRAP_SPECS.handsJointBroken.make = function(original)
+    return function(tool, jointIndex, ...)
+        local carry = state.carry
+        if jointIndex ~= nil and carry ~= nil and carry.hands == tool then carry.snapped = true end
+        return original(tool, jointIndex, ...)
+    end
+end
+
+-- ---- The grab ---------------------------------------------------------------------------------------------------------------
+
+-- Whether the hands tool holds something (the game's own getIsHoldingItem).
+local function holdsItem(hands)
+    if type(hands) ~= "table" or type(hands.getIsHoldingItem) ~= "function" then return false end
+    local ok, holding = pcall(hands.getIsHoldingItem, hands)
+    return ok and holding == true
+end
+
+-- The game picks the target up (pickUpTarget, with the targeter's own target: the game decides, and sends the event) and the hand
+-- carries it from now on. One pulse on the hand that grabbed.
+local function startGrab(self, hand, hands, target)
+    if type(hands.pickUpTarget) ~= "function" then return end
+    pcall(hands.pickUpTarget, hands, target)
+    if not holdsItem(hands) then return end
+    state.carry = { hand = hand, hands = hands, offset = nil, heading = nil }
+    recordGrabOffset(self, state.carry)
+    self:pulseHand(hand, self.OBJECT_GRAB_GRAB_PULSE_MS, self.OBJECT_GRAB_GRAB_PULSE_STRENGTH)
+end
+
+-- The Pointer Hand is on an object the hands can pick up (`target`, the targeter's): a squeeze of its grip that the pad let the hand
+-- have grabs it. `waiting`: the squeeze was an off-hand's, made a few updates ago (see "The off-hand").
+local function tryGrab(self, player, target, waiting)
+    local hand = self.pointerHand
+    if hand == nil or state.carry ~= nil then return end
+    if not takeGrip(self, hand) or not (state.gripPressed[hand] or waiting) then return end
+    state.pendingGrab = nil
+    local hands = emptyHands(player)
+    if hands ~= nil then startGrab(self, hand, hands, target) end
+end
+
+-- ---- The off-hand -----------------------------------------------------------------------------------------------------------
+-- While both hands are in use with empty hands, the hand that does not point is checked with a physics ray cast along its finger (the
+-- Pointer Ray's ray, from the same place behind the fingertip as the look ray), ONLY to learn whether it points at something the
+-- game's getCanPickUpNode accepts. While it does, its grip is taken from the pad, so that squeezing it does not reach the game first
+-- (the held-input rule would hand that squeeze to the binding). The squeeze makes that hand the Pointer Hand (see
+-- choosePointerHand), the targeter is run again with its ray, and the game's pickUpTarget picks up what the TARGETER finds. The check
+-- never decides what is picked up: when the targeter finds nothing the game can pick up, nothing is.
+-- The targeter's ray cast is asynchronous in the game, so its answer to the new ray may come a few updates later: the squeeze waits for
+-- it (OBJECT_GRAB_ANSWER_WAIT_MS) for as long as the grip stays down.
+
+local OFF_HAND_MINIMUM_DISTANCE = 0.5  -- the hands' target type finds nothing nearer to the ray's origin (HandToolHands:onHeldStart)
+
+local checkPose = {}   -- scratch: the off-hand's finger in the world
+local checkHit = {}    -- scratch: what the check's ray cast hit
+
+-- The callback of the physics ray cast: the closest hit.
+local function onCheckHit(self, node, x, y, z, distance)
+    self.node, self.distance = node, distance
+    return true
+end
+checkHit.onHit = onCheckHit
+
+-- Whether the hand's finger points at a node the hands can pick up (the game's getCanPickUpNode says).
+local function pointsAtGrabbable(self, hands, hand)
+    local rayCast, key = engine("raycastClosest"), engine("HandToolHands")
+    local spec = hands.spec_hands
+    if type(rayCast) ~= "function" or type(key) ~= "table" or type(hands.getCanPickUpNode) ~= "function" or type(spec) ~= "table" then
+        return false
+    end
+    local tx, ty, tz, tdx, tdy, tdz = self:getPointerRayInTrackingSpace(hand)
+    if tx == nil then return false end
+    -- tracking space to the world: a pose with no rotation of its own comes out as the rotation of the tracking space
+    if self:headRelativePoseToWorld(tx, ty, tz, 0, 0, 0, 1, checkPose) ~= true then return false end
+    local dx, dy, dz = qrotate(checkPose.qx, checkPose.qy, checkPose.qz, checkPose.qw, tdx, tdy, tdz)
+    local behind = self.OBJECT_GRAB_REACH_BEHIND
+    checkHit.node, checkHit.distance = nil, nil
+    local ok = pcall(rayCast, checkPose.x - dx * behind, checkPose.y - dy * behind, checkPose.z - dz * behind, dx, dy, dz,
+        spec.pickupDistance or 0, "onHit", checkHit, key.TARGET_MASK)
+    if not ok or checkHit.node == nil or (checkHit.distance or 0) < OFF_HAND_MINIMUM_DISTANCE then return false end
+    local can, canPickUp = pcall(hands.getCanPickUpNode, hands, checkHit.node)
+    return can and canPickUp == true
+end
+
+-- Once per update, after the grips are tracked and the carry is settled: takes the grip of the off-hand that points at something
+-- grabbable, and notes the one whose squeeze the pad let it have.
+local function updateOffHand(self)
+    state.offHandSqueezed = nil
+    if state.carry ~= nil then return end
+    local player = localPlayer()
+    if whyNotAiming(self, player) ~= nil then return end
+    local hands = emptyHands(player)
+    for _, hand in ipairs({ VRCompanion.MOTION_HAND_LEFT, VRCompanion.MOTION_HAND_RIGHT }) do
+        if hand ~= self.pointerHand and self:isHandInUse(hand) and pointsAtGrabbable(self, hands, hand) then
+            if takeGrip(self, hand) and state.gripPressed[hand] then state.offHandSqueezed = hand end
+        end
+    end
+end
+
+-- Asked by the Pointer Hand's choice: the hand's grip was squeezed this update as it points at something the hands can pick up, and
+-- the pad let it have the grip. The hand becomes the Pointer Hand, and grabs there.
+function VRCompanion:isObjectGrabSqueeze(hand)
+    return state.offHandSqueezed == hand
+end
+
+-- Runs the targeter again, now that the Pointer Ray is the new Pointer Hand's. What it found for the hands before (with the ray of the
+-- hand that pointed) is forgotten first, so that the squeeze can only pick up what the new ray finds.
+local function runTargeterAgain(player)
+    local targeter, key = player.targeter, engine("HandToolHands")
+    if type(targeter) ~= "table" or type(targeter.update) ~= "function" then return end
+    if type(key) == "table" and type(targeter.closestTargetsByKey) == "table" then targeter.closestTargetsByKey[key] = nil end
+    pcall(targeter.update, targeter, state.dt)
+end
+
+-- The squeeze of `hand` that made it the Pointer Hand, called from the first look at the Pointer Ray after it.
+local function startWaitingForTheTargeter(self, player, hand)
+    local now = self:getCurrentTimeMs()
+    state.pendingGrab = now ~= nil and { hand = hand, untilMs = now + self.OBJECT_GRAB_ANSWER_WAIT_MS } or nil
+    runTargeterAgain(player)
+end
+
+-- Whether the hand's squeeze is still waiting for the targeter's answer: the hand is still the Pointer Hand, the grip is still down
+-- and the wait is not over.
+local function isWaitingForTheTargeter(self, hand)
+    local pending = state.pendingGrab
+    if pending == nil then return false end
+    local now = self:getCurrentTimeMs()
+    if pending.hand ~= hand or not state.gripDown[hand] or now == nil or now > pending.untilMs then
+        state.pendingGrab = nil
+        return false
+    end
+    return true
+end
+
+-- ---- The release ------------------------------------------------------------------------------------------------------------
+
+-- THE HAND'S SPEED: the hand state carries no velocity, so the grip pose of the carrying hand is sampled in the world at each update
+-- (sampleSwing) and the speed is its travel over the last OBJECT_GRAB_THROW_WINDOW_MS. It is measured in the world, so the hand
+-- moving with the player (walking) counts, and the world moving round the hand does not: a Snap Turn turns the player's view and a
+-- Recenter moves the tracking space, and the hand's place in the world jumps with either though it did not move. The tracking space's
+-- own place in the world (where its origin and axes are) shows the jump: when it changes by more than SWING_RIG_JUMP_DISTANCE or
+-- SWING_RIG_JUMP_ANGLE between two updates, the samples before it are forgotten (the hand is not known to be moving until it has
+-- been seen moving since).
+local SWING_RIG_JUMP_DISTANCE = 0.25  -- m; walking is a few cm per update
+local SWING_RIG_JUMP_ANGLE = 0.02     -- rad; turning the head does not turn the tracking space
+local rigPose = {}                    -- scratch: the tracking space's pose in the world
+
+local function sampleSwing(self)
+    local swing = state.swing
+    local carry = state.carry
+    if carry == nil then
+        if swing.rig ~= nil or #swing.samples > 0 then swing.samples, swing.rig = {}, nil end
+        return
+    end
+    local hand = handGripInWorld(self, carry.hand)
+    if hand == nil or self:headRelativePoseToWorld(0, 0, 0, 0, 0, 0, 1, rigPose) ~= true then return end
+    local rig = swing.rig
+    if rig ~= nil then
+        local dx, dy, dz = rigPose.x - rig.x, rigPose.y - rig.y, rigPose.z - rig.z
+        local dot = math.min(1, math.abs(rigPose.qx * rig.qx + rigPose.qy * rig.qy + rigPose.qz * rig.qz + rigPose.qw * rig.qw))
+        if dx * dx + dy * dy + dz * dz > SWING_RIG_JUMP_DISTANCE ^ 2 or 2 * math.acos(dot) > SWING_RIG_JUMP_ANGLE then
+            swing.samples = {}
+        end
+    else
+        rig = {}
+        swing.rig = rig
+    end
+    rig.x, rig.y, rig.z, rig.qx, rig.qy, rig.qz, rig.qw = rigPose.x, rigPose.y, rigPose.z, rigPose.qx, rigPose.qy, rigPose.qz, rigPose.qw
+    local samples = swing.samples
+    local now = self:getCurrentTimeMs()
+    if now == nil then  -- no clock: the hand's speed is not known, and what was sampled before it went is stale
+        swing.samples = {}
+        return
+    end
+    samples[#samples + 1] = { t = now, x = hand.x, y = hand.y, z = hand.z }
+    while #samples > 1 and now - samples[1].t > self.OBJECT_GRAB_THROW_WINDOW_MS do table.remove(samples, 1) end
+end
+
+-- The hand's velocity in the world (m/s) from its oldest to its newest sample in the window: vx, vy, vz, speed; nil when the hand has
+-- not been seen moving over two samples, or when the game clock is not available.
+local function handVelocity(self)
+    if self:getCurrentTimeMs() == nil then return nil end
+    local samples = state.swing.samples
+    local first, last = samples[1], samples[#samples]
+    if first == nil or last == first or first.t == nil or last.t == nil or last.t <= first.t then return nil end
+    local seconds = (last.t - first.t) / 1000
+    local vx, vy, vz = (last.x - first.x) / seconds, (last.y - first.y) / seconds, (last.z - first.z) / seconds
+    return vx, vy, vz, math.sqrt(vx * vx + vy * vy + vz * vz)
+end
+
+-- ---- The release ------------------------------------------------------------------------------------------------------------
+
+-- The grip of the carrying hand was let go: what happens to the Held Object. The decision is this one function. A hand moving faster
+-- than OBJECT_GRAB_THROW_MIN_SPEED throws it, through the game's throwHeldItemWithForceVector along the hand's travel with the force
+-- scalar the speed over OBJECT_GRAB_THROW_FULL_SPEED (0..1, never harder than the game's full throw); otherwise it is dropped, through
+-- the game's dropHeldItem. What was done is kept for the diagnostics (getObjectGrabLastRelease).
+local function releaseHeldObject(self, carry)
+    local hands = carry.hands
+    local vx, vy, vz, speed = handVelocity(self)
+    if speed ~= nil and speed > self.OBJECT_GRAB_THROW_MIN_SPEED and type(hands.throwHeldItemWithForceVector) == "function" then
+        local dx, dy, dz = vx / speed, vy / speed, vz / speed
+        local force = math.max(0, math.min(1, speed / self.OBJECT_GRAB_THROW_FULL_SPEED))
+        if pcall(hands.throwHeldItemWithForceVector, hands, dx, dy, dz, force) then
+            state.swing.last = { kind = "throw", speed = speed, dirX = dx, dirY = dy, dirZ = dz, force = force }
+            return
+        end
+    end
+    state.swing.last = { kind = "drop", speed = speed or 0, dirX = 0, dirY = 0, dirZ = 0, force = 0 }
+    if type(hands.dropHeldItem) == "function" then pcall(hands.dropHeldItem, hands) end
+end
+
+-- What the last release did, for the diagnostics: kind ("throw" or "drop"), the hand's speed in m/s, the direction it travelled (a
+-- unit vector; zero for a drop) and the force scalar (0 for a drop). Nil before the first release of the session.
+function VRCompanion:getObjectGrabLastRelease()
+    local last = state.swing.last
+    if last == nil then return nil end
+    return last.kind, last.speed, last.dirX, last.dirY, last.dirZ, last.force
+end
+
+-- ---- The carry --------------------------------------------------------------------------------------------------------------
+
+-- Whether the hand is carrying a Held Object it grabbed.
+function VRCompanion:isHandCarryingHeldObject(hand)
+    return state.carry ~= nil and state.carry.hand == hand
+end
+
+-- Whether the carry has ended without the grip being let go: the game dropped the object itself (getting into a vehicle, taking a Hand
+-- Tool, the object gone), or Object Grab or the Motion Controllers were switched off, or the hands are not the hands any more.
+local function carryHasEnded(self, carry)
+    if self.objectGrabEnabled == false or self.motionControllersEnabled == false or state.problem ~= nil then return true end
+    return emptyHands(localPlayer()) ~= carry.hands or not holdsItem(carry.hands)
+end
+
+-- Whether Object Grab itself ended the carry while the game's hands still hold the item: it was switched off, the Motion Controllers
+-- were, or it gave up. The game would go on carrying it along the head's look ray, with the grip back on the pad, so the hands let go
+-- (the game's dropHeldItem). A carry the game ended itself (the hands put away, the item gone, a snap) has nothing left to drop.
+local function mustDropOnEnd(self, carry)
+    if self.objectGrabEnabled ~= false and self.motionControllersEnabled ~= false and state.problem == nil then return false end
+    return emptyHands(localPlayer()) == carry.hands and holdsItem(carry.hands)
+end
+
+-- Whether the carrying hand let go of its grip. A hand that is not tracked has not (nothing is known of it until it is tracked again).
+local function gripWasLetGo(self, carry)
+    local pose = self:getHandState(carry.hand)
+    return type(pose) == "table" and pose.tracked == true and not state.gripDown[carry.hand]
+end
+
+local function updateCarry(self)
+    local carry = state.carry
+    if carry == nil then return end
+    if carryHasEnded(self, carry) then
+        -- The grip goes back to the pad once it is let go (the Virtual Gamepad keeps what a use took off it), and a grip still held does
+        -- not grab again: a grab needs the grip to go down. A snap is felt; a drop by the game is not.
+        state.carry = nil
+        if mustDropOnEnd(self, carry) and type(carry.hands.dropHeldItem) == "function" then pcall(carry.hands.dropHeldItem, carry.hands) end
+        if carry.snapped then
+            state.lastSnapMs = self:getCurrentTimeMs()  -- for the diagnostics
+            self:pulseHand(carry.hand, self.OBJECT_GRAB_SNAP_PULSE_MS, self.OBJECT_GRAB_SNAP_PULSE_STRENGTH)
+        end
+        return
+    end
+    if gripWasLetGo(self, carry) then
+        state.carry = nil
+        releaseHeldObject(self, carry)
+        return
+    end
+    if carry.offset == nil then recordGrabOffset(self, carry) end
+    takeGrip(self, carry.hand)
+end
+
+-- Once per Motion Controller update, after the hands are polled and before the Pointer Hand is chosen.
+function VRCompanion:updateObjectGrab(dt)
+    state.dt = dt or 0
+    trackGrips()
+    if state.problem == nil then
+        local hands = emptyHands(localPlayer())
+        if hands ~= nil then wrapInstance(hands) end
+    end
+    sampleSwing(self)
+    updateCarry(self)
+    updateOffHand(self)
+end
+
+-- ---- The Pointer Ray on an object -------------------------------------------------------------------------------------
+
+-- The targeter's closest target for the hands when the hands can pick it up (the game decides): node, x, y, z. The target table is the
+-- targeter's pooled one and is read here, never kept.
+local function grabbableTarget(player)
+    local hands = emptyHands(player)
+    local key = engine("HandToolHands")
+    local targeter = player.targeter
+    if hands == nil or type(key) ~= "table" or type(targeter) ~= "table" or type(targeter.closestTargetsByKey) ~= "table" then
+        return nil
+    end
+    local target = targeter.closestTargetsByKey[key]
+    if type(target) ~= "table" or target.node == nil or type(hands.getCanPickUpNode) ~= "function" then return nil end
+    local ok, can = pcall(hands.getCanPickUpNode, hands, target.node)
+    if not ok or can ~= true then return nil end
+    return target.node, target.x, target.y, target.z, target
+end
+
+-- Called by updatePointerRay, once per update after the Pointer Ray is placed: whether the ray is on an object the hands can pick up,
+-- and where. The Pointer Hand gets one light pulse as it lands, and squeezing its grip there grabs the object (see "The grab").
+function VRCompanion:getObjectGrabRayTarget()
+    local player = localPlayer()
+    if player == nil or aimedRay(self, player) == nil then
+        state.landedNode = nil
+        return false
+    end
+    local hand = self.pointerHand
+    if state.offHandSqueezed == hand then startWaitingForTheTargeter(self, player, hand) end
+    local waiting = isWaitingForTheTargeter(self, hand)
+    if waiting then takeGrip(self, hand) end
+    local node, x, y, z, target = grabbableTarget(player)
+    if node == nil then
+        state.landedNode = nil
+        return false
+    end
+    if node ~= state.landedNode then
+        state.landedNode = node
+        self:pulsePointerHand(self.OBJECT_GRAB_LAND_PULSE_MS, self.OBJECT_GRAB_LAND_PULSE_STRENGTH)
+    end
+    tryGrab(self, player, target, waiting)
+    return true, x, y, z
+end
+
+-- ---- No centre crosshair ----------------------------------------------------------------------------------------------
+-- The hands tool's onDraw is read off the specialization class by the game's event dispatch at every call, so the wrap is on the class.
+
+local function drawIsHeldBack(tool)
+    if type(tool) ~= "table" or type(tool.getCarryingPlayer) ~= "function" then return false end
+    local ok, player = pcall(tool.getCarryingPlayer, tool)
+    if not ok or player == nil or player ~= localPlayer() then return false end
+    return aimedRay(VRCompanion, player) ~= nil
+end
+
+WRAP_SPECS.handsOnDraw.make = function(original)
+    return function(tool, ...)
+        if drawIsHeldBack(tool) then return end
+        return original(tool, ...)
+    end
+end
+
+-- ---- Settings, persistence, console commands --------------------------------------------------------------------------
+
+local SETTING_KEY_ENABLED = "vrSettings.objectGrab"
+
+function VRCompanion:setObjectGrabEnabled(enabled, save)
+    self.objectGrabEnabled = (enabled ~= false)
+    if save and type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
+end
+
+-- Called from the Motion Controller settings with the open settings file and the engine's setters (any may be nil).
+function VRCompanion:saveObjectGrabSetting(xmlFile, xml)
+    if type(xml.setBool) == "function" then
+        xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.objectGrabEnabled ~= false)
+    end
+end
+
+-- Called from the Motion Controller settings with the open settings file and the engine's getters (any may be nil).
+-- A key that is missing keeps the current value.
+function VRCompanion:loadObjectGrabSetting(xmlFile, xml)
+    local loaded = nil
+    if type(xml.getBool) == "function" then
+        loaded = xml.getBool(xmlFile, SETTING_KEY_ENABLED)
+    end
+    if loaded == nil and type(xml.getString) == "function" then
+        local str = xml.getString(xmlFile, SETTING_KEY_ENABLED)
+        if str ~= nil then loaded = VRCompanion.parseOnOffArgument(str) end
+    end
+    if loaded ~= nil then
+        self.objectGrabEnabled = loaded
+    end
+end
+
+function VRCompanion:consoleCommandSetObjectGrab(arg)
+    local enabled = VRCompanion.parseOnOffArgument(arg)
+    if arg == nil or arg == "" or string.lower(tostring(arg)) == "status" then
+        return string.format("Object Grab is %s. Usage: vrObjectGrab <on|off> (saved)", self.objectGrabEnabled ~= false and "on" or "off")
+    end
+    if enabled == nil then
+        return "Usage: vrObjectGrab <on|off>"
+    end
+    self:setObjectGrabEnabled(enabled, true)
+    local mission = g_currentMission or _G.g_currentMission
+    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+        pcall(function()
+            mission:showBlinkingWarning(string.format("VR Object Grab: %s (Saved)", enabled and "on" or "off"), 2500)
+        end)
+    end
+    print(string.format("[FS25_VR] Object Grab set to: %s", enabled and "on" or "off"))
+    return string.format("Object Grab set to: %s (Saved)", enabled and "on" or "off")
+end
+
+-- ---- Diagnostics ------------------------------------------------------------------------------------------------------
+-- vrObjectGrabDiagnostics only READS: no wrap is installed and no state is touched (the targeter's and the game's own getters are asked,
+-- and the hand is placed in a scratch table). The game's limits are read from the hands tool each time, because the constants are
+-- stripped from the game's source and the player can turn super strength on.
+
+local HAND_NAMES = { [0] = "left", [1] = "right" }
+
+local function handName(hand)
+    return HAND_NAMES[hand] or tostring(hand)
+end
+
+-- The game's mass (tonnes) of a node, or nil.
+local function nodeMass(node)
+    local class = engine("HandToolHands")
+    if type(class) ~= "table" or type(class.calculateItemMass) ~= "function" then return nil end
+    local ok, mass = pcall(class.calculateItemMass, node)
+    if ok and type(mass) == "number" then return mass end
+    return nil
+end
+
+-- Whether Object Grab is on, and when it is not working why not: the setting, or the reason the Pointer Hand does not aim (Motion
+-- Controllers off, a wrap that failed, in a vehicle, a Hand Tool in hand, a menu, no Pointer Hand...). Carrying counts as working.
+local function statusField(self)
+    if self.objectGrabEnabled == false then
+        return "Object Grab: off (the setting is off: vrObjectGrab on turns it on)"
+    end
+    if state.carry ~= nil then return "Object Grab: on (carrying)" end
+    local ray, why = aimedRay(self, localPlayer())
+    if ray ~= nil then return "Object Grab: on (aiming)" end
+    return "Object Grab: off (" .. tostring(why) .. ")"
+end
+
+local function aimingField(self)
+    local ray = aimedRay(self, localPlayer())
+    if ray == nil or self.pointerHand == nil then return "aiming: no" end
+    return "aiming: the " .. handName(self.pointerHand) .. " hand (the Pointer Hand)"
+end
+
+-- The game's limits for the hands, read from the hands tool now.
+local function limitsField(hands)
+    local spec = hands ~= nil and hands.spec_hands or nil
+    if type(spec) ~= "table" then return "limits: unknown (the hands are not held)" end
+    return string.format("limits: maximum mass %.3f t, pickup distance %.2f m, super strength %s",
+        tonumber(spec.currentMaximumMass) or 0, tonumber(spec.pickupDistance) or 0, spec.hasSuperStrength == true and "on" or "off")
+end
+
+-- What the Pointer Ray is on: the targeter's closest target for the hands, against the game's limits.
+local function rayTargetField(self, player, hands)
+    if aimedRay(self, player) == nil then return "Pointer Ray on: nothing (not aiming)" end
+    local key = engine("HandToolHands")
+    local targeter = type(player) == "table" and player.targeter or nil
+    local target = nil
+    if type(key) == "table" and type(targeter) == "table" and type(targeter.closestTargetsByKey) == "table" then
+        target = targeter.closestTargetsByKey[key]
+    end
+    if type(target) ~= "table" or target.node == nil then return "Pointer Ray on: nothing" end
+    local spec = hands ~= nil and hands.spec_hands or nil
+    local limit = type(spec) == "table" and tonumber(spec.currentMaximumMass) or nil
+    local distance = tonumber(target.distance) or 0
+    local mass = nodeMass(target.node)
+    local text = string.format("Pointer Ray on: an object %.2f m from the fingertip (%.2f m along the look ray)",
+        distance - self.OBJECT_GRAB_REACH_BEHIND, distance)
+    if mass ~= nil then
+        text = text .. string.format(", mass %.3f t%s", mass, limit ~= nil and string.format(" of %.3f t", limit) or "")
+    end
+    local can = false
+    if hands ~= nil and type(hands.getCanPickUpNode) == "function" then
+        local ok, result = pcall(hands.getCanPickUpNode, hands, target.node)
+        can = ok and result == true
+    end
+    if can then return text .. ", the hands can pick it up" end
+    if mass ~= nil and limit ~= nil and mass > limit then return text .. ", the hands cannot pick it up (too heavy)" end
+    if holdsItem(hands) then return text .. ", the hands cannot pick it up (they hold something)" end
+    return text .. ", the hands cannot pick it up (the game refuses it)"
+end
+
+-- How far the Held Object is from where the hand puts it: the rotation node against the hand's pose times the grab offset.
+local function trailText(self, carry)
+    if carry.offset == nil then return "unknown (the grab offset is not recorded yet)" end
+    local _, rotation = carryNodes(carry.hands)
+    local hand = handGripInWorld(self, carry.hand)
+    if rotation == nil then return "unknown (the game's rotation node is not there)" end
+    if hand == nil then return "unknown (the hand is not tracked)" end
+    local offset = carry.offset
+    local ox, oy, oz = qrotate(hand.qx, hand.qy, hand.qz, hand.qw, offset.x, offset.y, offset.z)
+    local x, y, z = engine("getWorldTranslation")(rotation)
+    local dx, dy, dz = x - (hand.x + ox), y - (hand.y + oy), z - (hand.z + oz)
+    return string.format("%.2f m", math.sqrt(dx * dx + dy * dy + dz * dz))
+end
+
+local function carryFields(self)
+    local carry = state.carry
+    if carry == nil then return { "carrying: no" } end
+    local offsetText = "grab offset not recorded yet"
+    if carry.offset ~= nil then
+        local o = carry.offset
+        offsetText = string.format("grab offset (%.2f, %.2f, %.2f) = %.2f m from the hand", o.x, o.y, o.z,
+            math.sqrt(o.x * o.x + o.y * o.y + o.z * o.z))
+    end
+    return {
+        string.format("carrying: the %s hand, %s", handName(carry.hand), offsetText),
+        "Held Object trails the hand by " .. trailText(self, carry),
+    }
+end
+
+local function releaseField()
+    local last = state.swing.last
+    if last == nil then return "last release: none" end
+    if last.kind == "throw" then
+        return string.format("last release: throw, hand speed %.1f m/s, direction (%.2f, %.2f, %.2f), force %.2f",
+            last.speed, last.dirX, last.dirY, last.dirZ, last.force)
+    end
+    return string.format("last release: %s, hand speed %.1f m/s", tostring(last.kind), last.speed)
+end
+
+local function snapField(self)
+    if state.lastSnapMs == nil then return "last snap: none" end
+    local now = self:getCurrentTimeMs()
+    if now == nil then return "last snap: yes (the game clock is not available)" end
+    return string.format("last snap: %.0f s ago", math.max(0, now - state.lastSnapMs) / 1000)
+end
+
+-- The state of Object Grab as a list of fields (one tagged log line each): whether it is on and why not, which hand aims and what the
+-- Pointer Ray is on against the game's limits, the carry, the last release and the last snap, and the wraps.
+local function diagnosticFields(self)
+    local player = localPlayer()
+    local hands = emptyHands(player)
+    local fields = {
+        statusField(self),
+        aimingField(self),
+        rayTargetField(self, player, hands),
+        limitsField(hands),
+    }
+    for _, field in ipairs(carryFields(self)) do fields[#fields + 1] = field end
+    fields[#fields + 1] = releaseField()
+    fields[#fields + 1] = snapField(self)
+    for _, name in ipairs(wrapNames()) do
+        fields[#fields + 1] = wrapStatus(name)
+    end
+    return fields
+end
+
+-- One line (used by the Pointer diagnostics).
+function VRCompanion:getObjectGrabDiagnostics()
+    return table.concat(diagnosticFields(self), " | ")
+end
+
+-- Prints the fields to the game log, one tagged line each, and returns them as one line. Reads only.
+function VRCompanion:consoleCommandObjectGrabDiagnostics()
+    for _, field in ipairs(diagnosticFields(self)) do
+        print("[FS25_VR] " .. field)
+    end
+    return self:getObjectGrabDiagnostics()
+end
+
+function VRCompanion:registerObjectGrabConsoleCommands()
+    wrapAll()    -- map load: the classes again (resetObjectGrab lifted the wraps with the last map)
+    checkWraps()
+    if addConsoleCommand == nil then return end
+    addConsoleCommand("vrObjectGrab", "Turn Object Grab, picking up objects aimed by a Motion Controller, on or off (saved): vrObjectGrab [on|off]", "consoleCommandSetObjectGrab", self)
+    addConsoleCommand("vrObjectGrabDiagnostics", "Report whether Object Grab is on and why not, the aim, the target against the game's limits, the carry and the last release: vrObjectGrabDiagnostics", "consoleCommandObjectGrabDiagnostics", self)
+end
+
+-- Map unload: the wraps come off and everything seen this session is forgotten. The saved setting stays as it is.
+function VRCompanion:resetObjectGrab()
+    liftWraps()
+    if removeConsoleCommand ~= nil then
+        removeConsoleCommand("vrObjectGrab")
+        removeConsoleCommand("vrObjectGrabDiagnostics")
+    end
+    state = newState()
+end
+
+wrapAll()  -- the game's classes are there as the files load
+
+VRCompanion.ObjectGrab.getObjectGrabRayTarget = function(self, ...) return VRCompanion.getObjectGrabRayTarget(VRCompanion, ...) end
+VRCompanion.ObjectGrab.consoleCommandSetObjectGrab = function(self, ...) return VRCompanion.consoleCommandSetObjectGrab(VRCompanion, ...) end
+VRCompanion.ObjectGrab.consoleCommandObjectGrabDiagnostics = function(self, ...) return VRCompanion.consoleCommandObjectGrabDiagnostics(VRCompanion, ...) end
+
+return VRCompanion.ObjectGrab
