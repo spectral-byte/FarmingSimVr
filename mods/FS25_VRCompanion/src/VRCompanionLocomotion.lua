@@ -523,6 +523,61 @@ function VRCompanion:snapTurnRight(angleOverride, curTime)
     return self:snapTurn(1, angleOverride, curTime)
 end
 
+-- Where the head rests in a cab, in the in-cab camera's parent space (camParent): the position
+-- (x, y, z) and the base rotation (qx, qy, qz, qw) the head pose is composed on. The in-cab
+-- camera update and the Recenter Action's realign to the seat both take it from here, so the
+-- head tracking node path and the fallback without one are worked out in one place.
+-- The head tracking node's position and rotation (the rotation read as a quaternion, see
+-- getRotationInSpace) when the cab has one, else the camera's own eye point turned by the view's
+-- yaw. targetHeadRotY is the node's yaw; lookYaw turns the fallback.
+-- Also gives the yaw that turns a head-space vector into the cab and, with a node, the node
+-- (see cabPointFromHead). The returned table is reused: read it before asking again.
+function VRCompanion:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw)
+    local localToLocalFn = localToLocal or (_G and _G.localToLocal)
+    local getTranslationFn = getTranslation or (_G and _G.getTranslation)
+
+    local rest = self.cabRestPose
+    if rest == nil then
+        rest = {}
+        self.cabRestPose = rest
+    end
+    rest.node = nil
+    rest.yaw = targetHeadRotY
+    rest.qx, rest.qy, rest.qz, rest.qw = nil, nil, nil, nil
+
+    if cam.headTrackingNode ~= nil and camParent ~= 0 then
+        rest.node = cam.headTrackingNode
+        rest.x, rest.y, rest.z = 0, 0, 0
+        if type(localToLocalFn) == "function" then
+            rest.x, rest.y, rest.z = localToLocalFn(cam.headTrackingNode, camParent, 0, 0, 0)
+        elseif type(getTranslationFn) == "function" then
+            local ok, gx, gy, gz = pcall(getTranslationFn, cam.headTrackingNode)
+            if ok and gx ~= nil then rest.x, rest.y, rest.z = gx, gy, gz end
+        end
+        rest.qx, rest.qy, rest.qz, rest.qw = self:getRotationInSpace(cam.headTrackingNode, camParent)
+    else
+        rest.x = cam.origTransX or cam.transX or 0
+        rest.y = cam.origTransY or cam.transY or 0
+        rest.z = cam.origTransZ or cam.transZ or 0
+        rest.yaw = self:normalizeAngle((cam.origRotY or math.pi) + (lookYaw or 0))
+    end
+    if rest.qw == nil then
+        rest.qx, rest.qy, rest.qz, rest.qw = self:yawQuaternion(rest.yaw)
+    end
+    return rest
+end
+
+-- A point of the head's space (the head pose's lean and eye offsets) in camParent's space, given
+-- the cab rest pose from getCabRestPose
+function VRCompanion:cabPointFromHead(rest, camParent, x, y, z)
+    local localToLocalFn = localToLocal or (_G and _G.localToLocal)
+    if rest.node ~= nil and type(localToLocalFn) == "function" then
+        return localToLocalFn(rest.node, camParent, x, y, z)
+    end
+    local rx, ry, rz = self:rotateVectorByYaw(x, y, z, rest.yaw)
+    return rest.x + rx, rest.y + ry, rest.z + rz
+end
+
 function VRCompanion:realignVehicleCameraToSeat(cam)
     if not cam or not cam.cameraNode then
         return
@@ -549,8 +604,6 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
     local setRotationFn = setRotation or (_G and _G.setRotation)
     local getRotationFn = getRotation or (_G and _G.getRotation)
     local setTranslationFn = setTranslation or (_G and _G.setTranslation)
-    local getTranslationFn = getTranslation or (_G and _G.getTranslation)
-    local localToLocalFn = localToLocal or (_G and _G.localToLocal)
 
     local camParent = 0
     if type(getParentFn) == "function" then
@@ -581,32 +634,9 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
         end
     end
 
-    local cabTransX, cabTransY, cabTransZ = 0, 0, 0
-    -- The head tracking node's rotation in camParent's space, read as a quaternion (see
-    -- getRotationInSpace), else the turned view's yaw
-    local baseYaw = targetHeadRotY
-    local cabQx, cabQy, cabQz, cabQw = nil, nil, nil, nil
-
-    if cam.headTrackingNode ~= nil and camParent ~= 0 then
-        if type(localToLocalFn) == "function" then
-            cabTransX, cabTransY, cabTransZ = localToLocalFn(cam.headTrackingNode, camParent, 0, 0, 0)
-        else
-            if type(getTranslationFn) == "function" then
-                local ok, gx, gy, gz = pcall(getTranslationFn, cam.headTrackingNode)
-                if ok and gx ~= nil then cabTransX, cabTransY, cabTransZ = gx, gy, gz end
-            end
-        end
-        cabQx, cabQy, cabQz, cabQw = self:getRotationInSpace(cam.headTrackingNode, camParent)
-    else
-        cabTransX = cam.origTransX or cam.transX or 0
-        cabTransY = cam.origTransY or cam.transY or 0
-        cabTransZ = cam.origTransZ or cam.transZ or 0
-
-        baseYaw = self:normalizeAngle((cam.origRotY or math.pi) + lookYaw)
-    end
-    if cabQw == nil then
-        cabQx, cabQy, cabQz, cabQw = self:yawQuaternion(baseYaw)
-    end
+    local rest = self:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw)
+    local cabTransX, cabTransY, cabTransZ = rest.x, rest.y, rest.z
+    local cabQx, cabQy, cabQz, cabQw = rest.qx, rest.qy, rest.qz, rest.qw
 
     if type(setTranslationFn) == "function" then
         setTranslationFn(cam.cameraNode, cabTransX, cabTransY, cabTransZ)

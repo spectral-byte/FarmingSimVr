@@ -775,6 +775,89 @@ test("StartingInCabViewAndRecenterFacesForwardOutWindshieldCollinearWithVehicleZ
         recLookZ, recenterRot.ry, math.deg(recenterRot.ry)))
 end)
 
+-- The cab rest position: the camera update at a zero head pose and the Recenter Action's realign
+-- put the head in the same place (translation and rotation), whichever way the cab is set up
+local function runRestPositionAgreement(withHeadTrackingNode)
+    local nodeRotations = {}
+    local nodeTranslations = {}
+
+    _G.setRotation = function(node, rx, ry, rz) nodeRotations[node] = { rx = rx, ry = ry, rz = rz } end
+    _G.getRotation = function(node)
+        local r = nodeRotations[node]
+        if r then return r.rx, r.ry, r.rz end
+        return 0, 0, 0
+    end
+    _G.setTranslation = function(node, x, y, z) nodeTranslations[node] = { x = x, y = y, z = z } end
+    _G.getTranslation = function(node)
+        local t = nodeTranslations[node]
+        if t then return t.x, t.y, t.z end
+        return 0, 0, 0
+    end
+    _G.getParent = function(node) return withHeadTrackingNode and 888 or 0 end
+    _G.createTransformGroup = nil
+    _G.localToLocal = function(fromNode, toNode, x, y, z)
+        local fromR = nodeRotations[fromNode] or { rx = 0, ry = 0, rz = 0 }
+        local fromT = nodeTranslations[fromNode] or { x = 0, y = 0, z = 0 }
+        local rx, ry, rz = VRCompanion:rotateVectorByYaw(x, y, z, fromR.ry)
+        return fromT.x + rx, fromT.y + ry, fromT.z + rz
+    end
+
+    local simPose = { x = 0, y = 0, z = 0, pitch = 0, yaw = 0, roll = 0, isValid = true }
+    _G.VRBridge = {
+        isReady = function() return true end,
+        getFrameParity = function() return 0 end,
+        getRequiresAfrFallback = function() return false end,
+        getHeadPose = function() return simPose end,
+        recenter = function() return { success = true } end,
+        resetTemporalHistory = function() end
+    }
+
+    local cam = {
+        isInside = true,
+        cameraNode = 1201,
+        origRotY = 0.6, rotY = 0.6,
+        origRotX = 0, rotX = 0,
+        origTransX = 0.3, origTransY = 1.4, origTransZ = -0.2
+    }
+    if withHeadTrackingNode then
+        cam.headTrackingNode = 1202
+        nodeTranslations[1202] = { x = 0.3, y = 1.4, z = -0.2 }
+        nodeRotations[1202] = { rx = 0, ry = 0.6, rz = 0 }
+        cam.origHeadTrackingRotX = 0
+        cam.origHeadTrackingRotY = 0.6
+        cam.origHeadTrackingRotZ = 0
+    end
+    _G.g_currentMission = { controlledVehicle = { getActiveCamera = function() return cam end } }
+
+    VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+    local updateTrans = nodeTranslations[1201]
+    local updateRot = nodeRotations[1201]
+    assert(updateTrans ~= nil and updateRot ~= nil, "The camera update must place the camera")
+
+    nodeTranslations[1201] = nil
+    nodeRotations[1201] = nil
+    VRCompanion:onRecenterAction()
+    local recenterTrans = nodeTranslations[1201]
+    local recenterRot = nodeRotations[1201]
+    assert(recenterTrans ~= nil and recenterRot ~= nil, "The Recenter Action must place the camera")
+
+    assert(math.abs(updateTrans.x - 0.3) < 0.001 and math.abs(updateTrans.y - 1.4) < 0.001
+        and math.abs(updateTrans.z - (-0.2)) < 0.001, "A zero head pose must rest at the cab's eye point")
+    assert(math.abs(updateTrans.x - recenterTrans.x) < 0.001 and math.abs(updateTrans.y - recenterTrans.y) < 0.001
+        and math.abs(updateTrans.z - recenterTrans.z) < 0.001, "Update and Recenter must rest at the same position")
+    assert(math.abs(updateRot.ry - recenterRot.ry) < 0.001 and math.abs(updateRot.rx - recenterRot.rx) < 0.001
+        and math.abs(updateRot.rz - recenterRot.rz) < 0.001, "Update and Recenter must rest at the same rotation")
+    assert(math.abs(recenterRot.ry - 0.6) < 0.001, "The rest rotation must face the cab's forward")
+end
+
+test("CameraUpdateAndRecenterRestAtTheSameCabPositionWithHeadTrackingNode", function()
+    runRestPositionAgreement(true)
+end)
+
+test("CameraUpdateAndRecenterRestAtTheSameCabPositionWithoutHeadTrackingNode", function()
+    runRestPositionAgreement(false)
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed in test_vehicle_camera_yaw.luau", failed))
 
