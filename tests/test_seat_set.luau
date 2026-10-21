@@ -335,13 +335,13 @@ test("PressPastTheLimitOnSeveralAxesNamesThemAll", function()
 end)
 
 -- Slice 6: outside an in-cab camera in the head-tracked view with no menu shown, a press does nothing
-local function assertPressDoesNothing(label, flushesBefore)
-    local flushes = state.flushes
+local function assertPressDoesNothing(label)
+    local flushes, savesBefore = state.flushes, saves
     VRCompanion:onSeatSetAction()
     assert(state.recenters == 0, label .. ": the tracking space is not re-zeroed")
     assert(motionControllerResets == 0, label .. ": the Motion Controller references are left alone")
     assert(state.flushes == flushes, label .. ": no Discontinuity Flush")
-    assert(saves == 0, label .. ": nothing saved")
+    assert(saves == savesBefore, label .. ": nothing saved")
     assert(#warnings == 0, label .. ": nothing shown, got: " .. tostring(warnings[1]))
 end
 
