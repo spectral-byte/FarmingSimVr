@@ -41,8 +41,16 @@ The inert operational state where the Injector forwards all DXGI calls to the sy
 _Avoid_: Bypass mode, fallback state
 
 **Recenter Action**:
-The bindable in-engine input action that zeroes the player's 6DOF offset and resets the OpenXR reference space origin relative to the active vehicle camera (in-cab or Outside Camera) or player camera.
+The bindable in-engine input action that makes where the player's head is now the head's rest position, facing forward, relative to the active vehicle camera (in-cab or Outside Camera) or player camera. In a cab, that rest position is the vehicle's own in-cab eye point moved by the Seat Offset.
 _Avoid_: Reset view, camera zeroing
+
+**Seat Offset**:
+How far the player's head rest position in a cab is moved from the vehicle's own in-cab eye point, forward or back, up or down and left or right, measured in the cab, so it stays put through a Snap Turn. Each in-cab camera of each vehicle model keeps its own, across sessions, so a passenger seat has one apart from the driver's; there is none for an Outside Camera or on foot. The Recenter Action never changes it. The player sets it with the Seat Set Action or by typing it in metres, up to half a metre each way. It is part of the head-tracked view only: 2D Floating Window Mode, menus and lost head tracking show the game's own camera as before. The Virtual Hands move with the head, so they stay where the player's real hands are.
+_Avoid_: Cab offset, head offset, eye offset, seat position
+
+**Seat Set Action**:
+The bindable in-engine input action that, in a cab, makes where the player's head is now the head's rest position: the Seat Offset takes up how far the head is from where it would rest, and the view is recentered as the Recenter Action does, in either Recenter mode. The player leans to where they want their eyes and presses it; the jump of the view is the only confirmation. Leaned further than the Seat Offset allows, the offset stops at its limit, the head rests as near as it can, and a short notification names the axis that stopped. It does nothing outside an in-cab camera, in 2D Floating Window Mode or while a menu is shown.
+_Avoid_: Lean and set, set seat, seat adjust
 
 **Outside Camera**:
 Any camera of the controlled vehicle other than its in-cab camera, whether the rotatable orbit camera around the vehicle or a fixed mount such as a hitch or header camera. It receives the same 6DOF head tracking and stereoscopic presentation as the in-cab camera.
