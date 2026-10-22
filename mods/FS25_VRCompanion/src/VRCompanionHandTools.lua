@@ -1,4 +1,5 @@
--- =============================================================-- FS25 VR Companion Mod: Hand Tools
+-- ====================================================================
+-- FS25 VR Companion Mod: Hand Tools
 --
 -- Puts the player's Hand Tools into the Tool Hand (ADR-0029). In first person on foot the game links a held Hand Tool to the
 -- player camera's pitch node (HandTool:attachToolToCamera), so it moves with the head. While the Tool Hand is tracked, this
@@ -69,7 +70,8 @@
 --                      supported tool (the use is made here, so VirtualGamepad needs no hook); false is the held-input handover
 --   VirtualHands       getVirtualHandHolder(hand) is the node a tool is linked below; a hand that isHandHoldingHandTool is
 --                      drawn closed around the handle, its index finger still following the trigger
--- =============================================================
+-- ====================================================================
+
 VRCompanion = VRCompanion or {}
 VRCompanion.HandTools = VRCompanion.HandTools or {}
 
