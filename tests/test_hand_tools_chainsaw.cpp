@@ -25,6 +25,8 @@ using namespace hand_tools_test;
 //   horizontal(d)     a direction flattened to the ground and made a unit vector
 //   hitHeight(ray, distance)   the height a ray reaches at `distance` metres along the ground
 //   cutNodeY()        the height of the node the cut plane hangs from
+//   cutDistanceFromTheBarsBase()          how far the cut is from where the bar starts
+//   distanceOfTheGamesLookRayFromTheCut() how far the targeter's ray start (what the game's own stop measures) is from the cut
 //   planeNormal()     the normal of the plane the game would cut along now
 //   planeOrigin()     a point on it
 //   state()           the chainsaw's cut state: "idle", "cutting" or "delimbing"
@@ -44,6 +46,16 @@ constexpr const char* kChainsawHelpers = R"luau(
     function _G.cutNodeY()
         local _, y = getWorldTranslation(saw.spec_chainsaw.cameraRotationNode)
         return y
+    end
+    function _G.cutDistanceFromTheBarsBase()
+        local cx, cy, cz = getWorldTranslation(saw.spec_chainsaw.cameraRotationNode)
+        local bx, by, bz = table.unpack(barRay())
+        return math.sqrt((cx - bx) ^ 2 + (cy - by) ^ 2 + (cz - bz) ^ 2)
+    end
+    function _G.distanceOfTheGamesLookRayFromTheCut()
+        local t = foot.player.targeter
+        local cx, cy, cz = getWorldTranslation(saw.spec_chainsaw.cameraRotationNode)
+        return math.sqrt((t.lastRayX - cx) ^ 2 + (t.lastRayY - cy) ^ 2 + (t.lastRayZ - cz) ^ 2)
     end
     function _G.planeNormal()
         local _, _, _, nx, ny, nz = saw:calculateCutPlane()
@@ -147,6 +159,22 @@ protected:
     std::string State() { return EvalLua(L, "state()"); }
     int UseCalls() { return static_cast<int>(Number(L, "#StubHandTool.useCalls")); }
     int Cuts() { return static_cast<int>(Number(L, "#StubHandTool.cuts")); }
+    // The haptic pulses so far to a hand and the strongest of them; ForgetPulses starts counting afresh.
+    size_t PulsesTo(int hand) const {
+        size_t count = 0;
+        for (const auto& pulse : headset.HapticPulses()) {
+            if (pulse.hand == hand) ++count;
+        }
+        return count;
+    }
+    float StrongestPulseTo(int hand) const {
+        float strongest = 0.0f;
+        for (const auto& pulse : headset.HapticPulses()) {
+            if (pulse.hand == hand) strongest = std::max(strongest, pulse.amplitude);
+        }
+        return strongest;
+    }
+    void ForgetPulses() { headset.runtime->controllers.hapticPulses.clear(); }
     void ForgetUseCalls() { ASSERT_EQ(RunLuauChunk(L, "StubHandTool.useCalls = {}", "=forgetUseCalls"), 0); }
 };
 
@@ -473,6 +501,85 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, TakingTheBarOffTheTrunkStopsTheCutWi
     FRAMES(3);
     EXPECT_EQ(State(), "idle");
     EXPECT_EQ(UseCalls(), 1) << "the cut handler is not called again while the trigger stays held";
+}
+
+// A running cut and the reach (ADR-0029, amended): the game stops a cut when the targeter's ray start, which is the game's minimum
+// cut distance behind the bar's base, is 1.5 m from the cut. The mod stops it when the cut is further from the bar than the bar and
+// a hand's width past its tip (0.55 m from its base), though the game's own check would still let it run.
+TEST_F(VirtualGamepadHandToolsChainsawTest, ACutKeepsRunningWhileTheHandMovesWithTheCutWithinTheBarsReachAndSlicesTheTreeWhenItFinishes) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.3));
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    ASSERT_EQ(State(), "cutting");
+
+    AimHand(kRight, 0.25f + 0.08f * 0.7833269f, -0.35f, -0.30f + 0.08f * 0.62161f, kBarForward, 0.9f);  // the hand 8 cm back
+    FRAMES(4);
+    ASSERT_LT(Number(L, "cutDistanceFromTheBarsBase()"), 0.55) << "the cut is still within the bar and a hand's width past its tip";
+    EXPECT_EQ(State(), "cutting") << "so the cut goes on";
+
+    FRAMES(60);
+    EXPECT_EQ(Cuts(), 1) << "and slices the tree when it finishes";
+    EXPECT_EQ(State(), "idle");
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawTest, PullingTheBarOutOfTheWoodPastTheReachStopsTheCutWithoutASliceAndTheSawIsIdleAgain) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.3));
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    ASSERT_EQ(State(), "cutting");
+
+    AimHand(kRight, 0.25f + 0.35f * 0.7833269f, -0.35f, -0.30f + 0.35f * 0.62161f, kBarForward, 0.9f);  // the hand 35 cm back
+    FRAMES(1);
+    ASSERT_GT(Number(L, "cutDistanceFromTheBarsBase()"), 0.55) << "the cut is further from the bar than the reach";
+    ASSERT_LT(Number(L, "distanceOfTheGamesLookRayFromTheCut()"), 1.5) << "which the game's own check still lets run";
+    FRAMES(1);
+    EXPECT_EQ(State(), "idle") << "the cut is stopped";
+    EXPECT_EQ(Cuts(), 0) << "without slicing the tree";
+    EXPECT_TRUE(True("saw.spec_chainsaw.cuttingTreeNode == nil"));
+    EXPECT_EQ(Number(L, "StubHandTool.inputLocks"), 0.0) << "the player can look and move again";
+
+    FRAMES(60);
+    EXPECT_EQ(State(), "idle") << "and the trigger still held does not start it again";
+    EXPECT_EQ(Cuts(), 0);
+    EXPECT_EQ(UseCalls(), 1);
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawTest, ACutKeepsItsHeightHeadingAndTiltWhileTheBarIsMovedWithinTheReach) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.3));
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    ASSERT_EQ(State(), "cutting");
+    ASSERT_EQ(RunLuauChunk(L, "_G.heightBefore, _G.normalBefore = cutNodeY(), planeNormal()", "=before"), 0);
+
+    AimHand(kRight, 0.25f + 0.06f * 0.7833269f, -0.33f, -0.30f + 0.06f * 0.62161f, kBarForward + 0.1f, 1.1f);
+    FRAMES(4);
+    ASSERT_LT(Number(L, "cutDistanceFromTheBarsBase()"), 0.55);
+    ASSERT_EQ(State(), "cutting");
+    EXPECT_NEAR(Number(L, "cutNodeY() - heightBefore"), 0.0, 1e-4);
+    EXPECT_NEAR(Number(L, "dot(planeNormal(), normalBefore)"), 1.0, 1e-4);
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawTest, TheCutEndingBecauseTheBarWasPulledOutEndsTheToolHandsCuttingBuzz) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.3));
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(6);
+    ASSERT_EQ(State(), "cutting");
+    EXPECT_GT(StrongestPulseTo(kRight), 0.5f) << "the cut buzzes the Tool Hand hard";
+
+    AimHand(kRight, 0.25f + 0.35f * 0.7833269f, -0.35f, -0.30f + 0.35f * 0.62161f, kBarForward, 0.9f);
+    FRAMES(3);
+    ASSERT_EQ(State(), "idle");
+    ForgetPulses();
+    FRAMES(10);
+    EXPECT_EQ(PulsesTo(kRight), 0u) << "the cut over, the buzz is over, as for any other cut ending";
 }
 
 TEST_F(VirtualGamepadHandToolsChainsawTest, WithTheTriggerPulledAndNoTreeUnderTheBarTheChainsawRevsAndLettingGoStopsIt) {

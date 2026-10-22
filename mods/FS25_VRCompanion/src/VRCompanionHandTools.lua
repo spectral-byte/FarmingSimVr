@@ -1601,8 +1601,27 @@ local function chainsawTargetLimit(tool)
     return (ok and tonumber(behind) or 0) + reach
 end
 
+-- A running cut stops when the cut point is further from the bar's base than the reach, measured from the bar, not from the moved
+-- ray's start: the game stops a cut when the targeter's ray start is MAXIMUM_CUT_DISTANCE from the cut point, which with the start
+-- moved back would let a cut run with the bar most of a metre clear of the trunk. The game's own stop (no slice) ends it; its own
+-- check stays in place. The cut point is the cut plane's node (cameraRotationNode), which a cut leaves where the bar met the trunk.
+local function stopCutOutOfReach(tool)
+    local states = engine("ChainsawCutState")
+    local spec = tool.spec_chainsaw
+    if type(states) ~= "table" or spec.currentCutState ~= states.CUTTING then return end
+    local reach = chainsawReachFromTheBase()
+    if reach == nil or spec.cameraRotationNode == nil or type(tool.stopCutting) ~= "function" then return end
+    local ok, x, y, z = pcall(toolPointingRay, VRCompanion, tool)
+    if not ok or x == nil then return end
+    local cutX, cutY, cutZ = engine("getWorldTranslation")(spec.cameraRotationNode)
+    if type(cutX) ~= "number" then return end
+    local dx, dy, dz = cutX - x, cutY - y, cutZ - z
+    if math.sqrt(dx * dx + dy * dy + dz * dz) > reach then tool:stopCutting(false) end
+end
+
 -- The chainsaw's update with the tree out of the targeter's answer when it is past the limit, for the length of that update only.
 local function updateChainsawWithinReach(original, tool, ...)
+    pcall(stopCutOutOfReach, tool)
     local ok, targets, key, hidden = pcall(function()
         local player = tool:getCarryingPlayer()
         local targeter = type(player) == "table" and player.targeter or nil
