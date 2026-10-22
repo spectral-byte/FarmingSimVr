@@ -1781,24 +1781,33 @@ inline constexpr const char* kStubHandToolFlashlight = R"luau(
 // Mod is loaded or before it: HandToolChainsaw is read at map load too), then call StubHandTool.installChainsaw(variant).
 //
 // StubHandTool.installChainsaw(variant)   defines the globals the game defines: ChainsawCutState, HandToolChainsaw,
-//   PlayerCamera and g_cameraManager, and makes the targeter target trees for a held chainsaw.
+//   PlayerCamera and g_cameraManager, and makes the targeter honour target types: PlayerTargeter:addTargetType(key, mask,
+//   minDistance, maxDistance) and :removeTargetType(key) (the spray can's chunk's, when it has added them), and each update fills
+//   closestTargetsByKey[HandToolChainsaw] with the closest trunk the look ray meets, measured from the ray's origin and only between
+//   the type's minimum and maximum distance (the game's tryAddTargetWithMask), as { node, x, y, z, distance }. Holding a chainsaw
+//   adds its target type (trees, from HandToolChainsaw.MINIMUM_CUT_DISTANCE, or 0 when the class has none, to 3 m), as the game's
+//   onHeldStart does; putting it away removes it. The minimum is read at that moment, so a test sets it before the player takes the
+//   saw in hand.
 //   variant   how HandToolChainsaw.onUpdate is in this "game version": nil / "ok", "missing" (a game update renamed it to
 //             onUpdateTick, which the event dispatch calls instead) or "reshaped" (it takes no parameters, and updates the
 //             chainsaw being held), or "rollMissing" / "rollReshaped" (the roll action's handler,
 //             HandToolChainsaw.onRollAction, is gone / takes no parameters; onUpdate is as "ok"), or "drawMissing" /
 //             "drawReshaped" (the draw event, HandToolChainsaw.onDraw, is gone: a game update renamed it to onDrawOverlays,
-//             which the draw calls instead / takes no parameters and draws the chainsaw being held; onUpdate is as "ok")
+//             which the draw calls instead / takes no parameters and draws the chainsaw being held; onUpdate is as "ok"), or
+//             "minimumMissing" (HandToolChainsaw.MINIMUM_CUT_DISTANCE is gone: a game update dropped or renamed it; onUpdate is as "ok")
 // The game keeps the chainsaw's handlers on the specialization class and its event dispatch calls them as
 // Class.handler(tool, ...) (SpecializationUtil.raiseEvent: spec[eventName](object, ...)). So they are here:
 //   HandToolChainsaw.onUpdate(tool, dt)       the chainsaw's update (run each tick by StubHandTool.tick): targets the tree the
 //                                             targeter found, aligns the split plane (updateSplitPlane), turns the model to
-//                                             face the camera, validates the cut, shows the ring marker, advances a cut
+//                                             face the camera, validates the cut, shows the Cut Ring, advances a cut
 //   HandToolChainsaw.onDraw(tool)             the chainsaw's draw (StubHandTool.draw): renders "crosshair", the game's default one at
 //                                             the centre of the view, while the saw is idle
 //   HandToolChainsaw.onCutAction(tool, _, v)  the ACTIVATE_HANDTOOL handler (v > 0 starts a cut on the targeted tree, or
 //                                             delimbing without one; v = 0 stops); recorded in StubHandTool.useCalls
 //   HandToolChainsaw.onRollAction(tool, _, d) the AXIS_ROTATE_HANDTOOL handler (rollInput += d, applied by the next update
 //                                             when not cutting, to spec.currentCutRoll, clamped to +-pi/2)
+//   HandToolChainsaw.MINIMUM_CUT_DISTANCE     the nearest a trunk can be to the targeter's ray start and still be found (0 here, so
+//                                             existing tests find a trunk anywhere along the ray; a test sets the game's own)
 //   HandToolChainsaw.MAXIMUM_CUT_DISTANCE     a cut stops when the targeter's last ray starts this far from the cut node
 // and, as the game's registerFunction does, on the tool itself: updateSplitPlane, calculateCutPlane, updateRingSelector,
 // testIfCutValid, beginCutting, stopCutting, beginDelimbing, stopDelimbing, updateCutting, setCurrentCutState.
@@ -1809,10 +1818,10 @@ inline constexpr const char* kStubHandToolFlashlight = R"luau(
 //   (default 600). tool.rootNode, tool.graphicalNodeParent, tool.graphicalNode (the model), and in tool.spec_chainsaw:
 //   currentCutState (ChainsawCutState.IDLE / CUTTING / DELIMBING), currentCutRoll, cameraRotationNode (the node the cut plane
 //   hangs from: at the targeted tree's hit point while idle), splitPlaneNode, cutGuideNode (the model rides it while cutting),
-//   ringNode (the marker, visible while a tree is targeted), cutNode, targetedTree ({ node, x, y, z }), cuttingTreeNode,
-//   lastDelimbPosX .. lastDelimbNormalZ.
+//   ringNode (the marker, visible while a tree is targeted), cutNode (a child of the model 0.4 m along the bar and 4 cm below its
+//   centre line, as in the game's models), targetedTree ({ node, x, y, z, distance }), cuttingTreeNode, lastDelimbPosX .. lastDelimbNormalZ.
 // StubHandTool.tree(x, z, radius, y0, y1) -> tree   a vertical trunk: node, x, z, radius, y0, y1. A held chainsaw's targeter
-//   hits the closest trunk its look ray meets within 3 m. StubHandTool.trees lists them.
+//   hits the closest trunk its look ray meets between the class's minimum cut distance and 3 m. StubHandTool.trees lists them.
 // StubHandTool.treeAcross(ray, distance, radius) -> tree   a tall trunk whose surface the ray meets, horizontally, at `distance`;
 //   ray = { x, y, z, dirX, dirY, dirZ }
 // StubHandTool.barRay(tool) -> x, y, z, dirX, dirY, dirZ   where the chainsaw's bar points now: the root's origin and +Z
@@ -1896,8 +1905,9 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
         return StubHandTool.tree(x + hx * (distance + radius), z + hz * (distance + radius), radius, y - 10, y + 10)
     end
 
-    -- the closest trunk a ray meets, as the targeter reports a target: { node, x, y, z }
-    local function castAtTrees(x, y, z, dx, dy, dz)
+    -- the closest trunk a ray meets between a minimum and a maximum distance of its origin, as the targeter reports a target:
+    -- { node, x, y, z, distance }
+    local function castAtTrees(x, y, z, dx, dy, dz, minDistance, maxDistance)
         local best = nil
         for _, tree in ipairs(StubHandTool.trees) do
             local ox, oz = x - tree.x, z - tree.z
@@ -1908,8 +1918,8 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
                 if disc >= 0 then
                     local t = (-b - math.sqrt(disc)) / a
                     local hitY = y + dy * t
-                    if t >= 0 and t <= MAX_TARGET_DISTANCE and hitY >= tree.y0 and hitY <= tree.y1 and (best == nil or t < best.t) then
-                        best = { t = t, node = tree.node, x = x + dx * t, y = hitY, z = z + dz * t }
+                    if t >= minDistance and t <= maxDistance and hitY >= tree.y0 and hitY <= tree.y1 and (best == nil or t < best.distance) then
+                        best = { node = tree.node, x = x + dx * t, y = hitY, z = z + dz * t, distance = t }
                     end
                 end
             end
@@ -1937,7 +1947,9 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
         StubHandTool.trees, StubHandTool.cuts, StubHandTool.inputLocks = {}, {}, 0
         local State = { IDLE = 0, CUTTING = 1, DELIMBING = 2 }
         _G.ChainsawCutState = State
-        local Class = { MAXIMUM_CUT_DISTANCE = 1.5 }
+        -- (a minimum of 0 leaves a trunk anywhere along the look ray found; a test sets it to the game's own)
+        local Class = { MINIMUM_CUT_DISTANCE = 0, MAXIMUM_CUT_DISTANCE = 1.5 }
+        if variant == "minimumMissing" then Class.MINIMUM_CUT_DISTANCE = nil end
         _G.HandToolChainsaw = Class
         _G.g_cameraManager = { getActiveCamera = function() return getCamera() end }
 
@@ -1948,25 +1960,44 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
             return -math.atan2(dy, math.sqrt(dx * dx + dz * dz)), math.atan2(dx, dz), 0
         end
 
-        -- the targeter targets the trees a held chainsaw's look ray meets
+        -- the targeter: target types with a minimum and a maximum distance (the spray can's chunk may have added them)
         local PlayerTargeter = _G.PlayerTargeter
+        if PlayerTargeter.addTargetType == nil then
+            function PlayerTargeter:addTargetType(key, mask, minDistance, maxDistance)
+                self.targetedMasks = self.targetedMasks or {}
+                if self.targetedMasks[key] ~= nil then return end
+                self.targetedMasks[key] = { key = key, mask = mask, minDistance = minDistance or 0, maxDistance = maxDistance }
+            end
+            function PlayerTargeter:removeTargetType(key)
+                if self.targetedMasks ~= nil then self.targetedMasks[key] = nil end
+                if self.closestTargetsByKey ~= nil then self.closestTargetsByKey[key] = nil end
+            end
+        end
         local baseUpdate = PlayerTargeter.update
         function PlayerTargeter:update(dt)
             baseUpdate(self, dt)
             self.closestTargetsByKey = self.closestTargetsByKey or {}
-            local held = StubHandTool.heldTool
-            if held ~= nil and held.spec_chainsaw ~= nil and self.lastRayX ~= nil then
+            local targetedMask = (self.targetedMasks or {})[Class]
+            self.closestTargetsByKey[Class] = nil
+            if targetedMask ~= nil and self.lastRayX ~= nil then
                 self.closestTargetsByKey[Class] = castAtTrees(self.lastRayX, self.lastRayY, self.lastRayZ,
-                    self.lastRayDirectionX, self.lastRayDirectionY, self.lastRayDirectionZ)
-            else
-                self.closestTargetsByKey[Class] = nil
+                    self.lastRayDirectionX, self.lastRayDirectionY, self.lastRayDirectionZ, targetedMask.minDistance, targetedMask.maxDistance)
             end
         end
 
-        -- a chainsaw put away stops what it is doing
-        local baseDrop = StubHandTool.drop
+        -- a chainsaw taken in hand targets trees, one put away stops what it is doing and targets none (the game's onHeldStart)
+        local baseHold, baseDrop = StubHandTool.hold, StubHandTool.drop
+        function StubHandTool.hold(tool)
+            baseHold(tool)
+            if tool.spec_chainsaw ~= nil and tool.carryingPlayer.isOwner then
+                tool.carryingPlayer.targeter:addTargetType(Class, 0, Class.MINIMUM_CUT_DISTANCE or 0, MAX_TARGET_DISTANCE)
+            end
+        end
         function StubHandTool.drop(tool)
             if tool.spec_chainsaw ~= nil and tool.spec_chainsaw.currentCutState == State.CUTTING then tool:stopCutting(false) end
+            if tool.spec_chainsaw ~= nil and tool.carryingPlayer ~= nil and tool.carryingPlayer.targeter ~= nil then
+                tool.carryingPlayer.targeter:removeTargetType(Class)
+            end
             baseDrop(tool)
         end
 
@@ -2019,7 +2050,7 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
             return not (maxY - minY >= spec.maximumCutDiameter or maxZ - minZ >= spec.maximumCutDiameter)
         end
 
-        -- the ring marker sits on the targeted trunk at the height of the cut node
+        -- the Cut Ring sits on the targeted trunk at the height of the cut node
         function functions.updateRingSelector(self, targetedTree, isCutPossible)
             local spec = self.spec_chainsaw
             setVisibility(spec.ringNode, targetedTree ~= nil)
@@ -2215,7 +2246,8 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
 
         tool.graphicalNodeParent = StubScene.newNode("chainsawModelParent", tool.rootNode)
         tool.graphicalNode = StubScene.newNode("chainsawModel", tool.graphicalNodeParent)
-        spec.cutNode = StubScene.newNode("chainsawCutNode", tool.graphicalNode, 0, 0, 0.4)
+        -- below the bar's centre line, as in the game's models (at the lower edge of the chain)
+        spec.cutNode = StubScene.newNode("chainsawCutNode", tool.graphicalNode, 0, -0.04, 0.4)
         spec.cutGuideNode = createTransformGroup("chainsawCutGuideNode")
         link(getRootNode(), spec.cutGuideNode)
         spec.cameraRotationNode = createTransformGroup("chainsawCameraRotationNode")
