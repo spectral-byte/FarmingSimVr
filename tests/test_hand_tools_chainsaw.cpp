@@ -122,6 +122,13 @@ protected:
         ASSERT_EQ(RunLuauChunk(L, lua.c_str(), "=plantTrees"), 0);
     }
 
+    // A trunk whose surface the bar meets `alongTheBar` metres from its base, measured along the bar (which points down at an angle,
+    // so that is further than the trunk is horizontally).
+    void PlantTreeAlongTheBar(double alongTheBar) {
+        const double horizontal = alongTheBar * Number(L, "math.sqrt(barRay()[4] ^ 2 + barRay()[6] ^ 2)");
+        ASSERT_NO_FATAL_FAILURE(PlantTreesAtTheBarAndInFrontOfTheHead(horizontal));
+    }
+
     void StartWithChainsawAndTreesInTheRightHand() {
         ASSERT_NO_FATAL_FAILURE(StartWithChainsawInTheRightHand());
         ASSERT_NO_FATAL_FAILURE(PlantTreesAtTheBarAndInFrontOfTheHead());
@@ -208,6 +215,70 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, ATrunkAcrossTheBarNearItsBaseMidBarO
         FRAMES(2);
         ASSERT_EQ(State(), "idle");
     }
+}
+
+// The bar is 0.4 m long and the saw finds a trunk up to 0.15 m past its tip (ADR-0029, amended): 0.55 m along the bar from its base.
+TEST_F(VirtualGamepadHandToolsChainsawTest, ATrunkJustInsideTheMarginPastTheTipIsFoundAndShowsTheRingAndOneBeyondItIsNot) {
+    StartWithChainsawInTheRightHand();
+
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.5));  // 10 cm past the tip
+    FRAMES(2);
+    EXPECT_TRUE(True("saw.spec_chainsaw.targetedTree ~= nil and saw.spec_chainsaw.targetedTree.node == barTree.node")) << "found";
+    EXPECT_TRUE(True("getVisibility(saw.spec_chainsaw.ringNode)")) << "the ring shows";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.trees = {}", "=clearTrees"), 0);
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.6));  // 20 cm past the tip
+    FRAMES(2);
+    EXPECT_TRUE(True("saw.spec_chainsaw.targetedTree == nil")) << "the saw has found no tree";
+    EXPECT_FALSE(True("getVisibility(saw.spec_chainsaw.ringNode)")) << "no Cut Ring";
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawTest, WithTheTrunkBeyondTheMarginTheTriggerRevsIntoDelimbingAndMakesNoCut) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.8));
+    FRAMES(2);
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(60);
+    EXPECT_EQ(State(), "delimbing") << "the motor revs, no cut starts";
+    EXPECT_TRUE(True("saw.spec_chainsaw.cuttingTreeNode == nil"));
+    EXPECT_EQ(Cuts(), 0);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+    EXPECT_EQ(State(), "idle");
+
+    // The bar is brought to the trunk: the same trigger now cuts.
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.trees = {}", "=clearTrees"), 0);
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.3));
+    FRAMES(2);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    EXPECT_EQ(State(), "cutting");
+}
+
+// The tree is out of the game's sight only while the game's update runs: the targeter keeps what it found.
+TEST_F(VirtualGamepadHandToolsChainsawTest, TheTargeterStillHoldsTheTreeBeyondTheMarginOnceTheChainsawsUpdateHasRun) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.8));
+    FRAMES(3);
+
+    EXPECT_TRUE(True("saw.spec_chainsaw.targetedTree == nil")) << "the saw found none";
+    EXPECT_TRUE(True("foot.player.targeter.closestTargetsByKey[HandToolChainsaw] ~= nil and foot.player.targeter.closestTargetsByKey[HandToolChainsaw].node == barTree.node"))
+        << "while the targeter's answer is intact for everything else that reads it";
+}
+
+// Without the minimum the ray is not moved back, so the margin is measured from the bar's base: 0.55 m.
+TEST_F(VirtualGamepadHandToolsChainsawTest, AGameWhoseChainsawLacksTheMinimumCutDistanceLimitsTheReachFromTheBarsBase) {
+    StartWithChainsawInTheRightHand("", "minimumMissing");
+
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.5));
+    FRAMES(2);
+    EXPECT_TRUE(True("saw.spec_chainsaw.targetedTree ~= nil and saw.spec_chainsaw.targetedTree.node == barTree.node"));
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.trees = {}", "=clearTrees"), 0);
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.7));
+    FRAMES(2);
+    EXPECT_TRUE(True("saw.spec_chainsaw.targetedTree == nil"));
 }
 
 // The stub's game: a held chainsaw's trees are a target type of the targeter (minimum and maximum distance), as the game's
@@ -491,6 +562,36 @@ TEST_F(VirtualGamepadHandToolsChainsawAsInTheGameTest, WithTheToolHandSetDownThe
     ExpectTheChainsawIsAsInTheGame("set down");
 }
 
+// The game's own reach (up to the targeter's 3 m from the head) applies where the margin does not: a trunk 2 m away is found.
+TEST_F(VirtualGamepadHandToolsChainsawAsInTheGameTest, WithHandToolsSwitchedOffTheGamesOwnReachApplies) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrHandTools', 'off')", "=off"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "_G.farTree = StubHandTool.treeAcross(headRay(), 2.0, 0.15)", "=plantFar"), 0);
+    FRAMES(2);
+    EXPECT_TRUE(True("saw.spec_chainsaw.targetedTree ~= nil and saw.spec_chainsaw.targetedTree.node == farTree.node"));
+    EXPECT_TRUE(True("getVisibility(saw.spec_chainsaw.ringNode)"));
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawAsInTheGameTest, WithTheToolHandUntrackedTheGamesOwnReachApplies) {
+    StartWithChainsawInTheRightHand();
+    headset.SetHandTracked(kRight, false);
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "_G.farTree = StubHandTool.treeAcross(headRay(), 2.0, 0.15)", "=plantFar"), 0);
+    FRAMES(2);
+    EXPECT_TRUE(True("saw.spec_chainsaw.targetedTree ~= nil and saw.spec_chainsaw.targetedTree.node == farTree.node"));
+    EXPECT_TRUE(True("getVisibility(saw.spec_chainsaw.ringNode)"));
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawAsInTheGameTest, WithTheToolHandSetDownTheGamesOwnReachApplies) {
+    StartWithChainsawInTheRightHand();
+    AdvanceGameTime(3100);
+    FRAMES(2);
+    ASSERT_EQ(RunLuauChunk(L, "_G.farTree = StubHandTool.treeAcross(headRay(), 2.0, 0.15)", "=plantFar"), 0);
+    FRAMES(2);
+    EXPECT_TRUE(True("saw.spec_chainsaw.targetedTree ~= nil and saw.spec_chainsaw.targetedTree.node == farTree.node"));
+    EXPECT_TRUE(True("getVisibility(saw.spec_chainsaw.ringNode)"));
+}
+
 TEST_F(VirtualGamepadHandToolsChainsawTest, TheToolHandLosingTrackingDuringACutStopsTheCut) {
     StartWithChainsawInTheRightHand();
     ASSERT_NO_FATAL_FAILURE(PlantTreesAtTheBarAndInFrontOfTheHead());
@@ -554,6 +655,13 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, TheDiagnosticsNameTheGamesMinimumCut
     FRAMES(2);
     const std::string diagnostics = EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
     EXPECT_NE(diagnostics.find("minimum cut distance: 0.65 m"), std::string::npos) << diagnostics;
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawTest, TheDiagnosticsNameTheReachPastTheTip) {
+    StartWithChainsawInTheRightHand();
+    FRAMES(2);
+    const std::string diagnostics = EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
+    EXPECT_NE(diagnostics.find("reach past the tip: 0.15 m"), std::string::npos) << diagnostics;
 }
 
 TEST_F(VirtualGamepadHandToolsChainsawTest, TheDiagnosticsSayWhenTheGamesMinimumCutDistanceCouldNotBeRead) {

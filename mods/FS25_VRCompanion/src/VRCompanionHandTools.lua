@@ -12,7 +12,7 @@
 -- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
 -- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The fishing rod's
 -- state | Keeping the Tool Hand in use | The fishing rod in the diagnostics | The fishing rod's screen overlays | The look ray |
--- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The flashlight's beam | No screen-centre overlays (the
+-- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The chainsaw's reach (past the tip) | The flashlight's beam | No screen-centre overlays (the
 -- spray can's, the horse brush's and the chainsaw's onDraw) | The horse brush's touch (the touching cap) | Haptics | The spray can's feedback (target tick, marker type message) | Update |
 -- Diagnostics, console commands, reset.
 --
@@ -361,10 +361,14 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
     -- meets the trunk. UNCERTAIN until checked in the headset.
     -- `reachBehind` is the game's minimum cut distance, read at runtime (chainsawReachBehind): the targeter finds no trunk nearer to
     -- the ray's start than that, so the ray starts that far behind the bar's base and a trunk the bar is against or in is found.
+    -- `barLength` (metres, from the root along +Z to the tip; 0.4 fits the game's models) and `tipReach` (how far past the tip a trunk
+    -- is still found; a hand's width) make up the reach (see "The chainsaw's reach"). Both UNCERTAIN until checked in the headset.
     chainsaw = {
         node = function(tool) return tool.rootNode end,
         direction = { x = 0.0, y = 0.0, z = 1.0 },
         reachBehind = chainsawReachBehind,
+        barLength = 0.4,
+        tipReach = 0.15,
     },
     -- Spray can: the can's visual node (sprayCan_vis, the game's shake node, which the game moves a few centimetres while the can
     -- sprays) along its +Z, the nozzle. UNCERTAIN until checked in the headset: the axis from the i3d, and whether the shake makes
@@ -1572,9 +1576,56 @@ local function updateChainsawFromTheTool(original, tool, dt, ...)
     end
 end
 
+-- ---- The chainsaw's reach --------------------------------------------------------------------------------------
+-- The game's targeter finds a trunk up to 3 m from the ray's start; with the start moved back (reachBehind) that would be most of a
+-- metre past the tip, and the Cut Ring would show there. The chainsaw finds a trunk only up to `tipReach` past the tip of its bar:
+-- the way back to the bar's base, the bar's length and the reach past the tip (HAND_TOOL_POINTING_AXES.chainsaw), measured from the
+-- moved ray's start as the targeter measures its distance. A trunk further away counts as none: the wrap of the update below takes
+-- it out of the targeter's answer for the length of the game's update, so the game shows no Cut Ring, starts no cut and revs into
+-- delimbing on the trigger, all by its own logic.
+
+-- How far from the bar's base a trunk is still found: the bar and the reach past its tip. nil when the entry has no numbers.
+local function chainsawReachFromTheBase()
+    local axis = VRCompanion.HAND_TOOL_POINTING_AXES.chainsaw
+    local length, past = tonumber(axis.barLength), tonumber(axis.tipReach)
+    if length == nil or past == nil then return nil end
+    return length + past
+end
+
+-- The furthest the targeter's distance (from the moved ray's start) can be for a trunk to count: the way back to the bar's base,
+-- then the reach from there. nil when there is no limit.
+local function chainsawTargetLimit(tool)
+    local reach = chainsawReachFromTheBase()
+    if reach == nil then return nil end
+    local ok, behind = pcall(resolveForTool, tool, VRCompanion.HAND_TOOL_POINTING_AXES.chainsaw.reachBehind)
+    return (ok and tonumber(behind) or 0) + reach
+end
+
+-- The chainsaw's update with the tree out of the targeter's answer when it is past the limit, for the length of that update only.
+local function updateChainsawWithinReach(original, tool, ...)
+    local ok, targets, key, hidden = pcall(function()
+        local player = tool:getCarryingPlayer()
+        local targeter = type(player) == "table" and player.targeter or nil
+        local byKey = type(targeter) == "table" and targeter.closestTargetsByKey or nil
+        local class = engine("HandToolChainsaw")
+        local found = type(byKey) == "table" and class ~= nil and byKey[class] or nil
+        local limit = chainsawTargetLimit(tool)
+        local states = engine("ChainsawCutState")
+        if type(states) == "table" and tool.spec_chainsaw.currentCutState == states.CUTTING then return nil end  -- a running cut is the game's
+        if type(found) ~= "table" or limit == nil or (tonumber(found.distance) or 0) <= limit then return nil end
+        byKey[class] = nil
+        return byKey, class, found
+    end)
+    if not ok or targets == nil then return updateChainsawFromTheTool(original, tool, ...) end
+    local done, result = pcall(updateChainsawFromTheTool, original, tool, ...)
+    targets[key] = hidden  -- the targeter's answer stays whole for everything else
+    if not done then error(result, 0) end
+    return result
+end
+
 WRAP_SPECS.chainsawOnUpdate.make = function(original)
     return function(tool, ...)
-        if chainsawInTheHand(tool) then return updateChainsawFromTheTool(original, tool, ...) end
+        if chainsawInTheHand(tool) then return updateChainsawWithinReach(original, tool, ...) end
         return original(tool, ...)
     end
 end
@@ -2024,6 +2075,8 @@ local function diagnosticFields(self)
             hand ~= nil and "wrist" or "game's roll action"))
         local minimum = chainsawMinimumCutDistance()
         table.insert(fields, "minimum cut distance: " .. (minimum ~= nil and string.format("%.2f m", minimum) or "could not be read"))
+        local axis = VRCompanion.HAND_TOOL_POINTING_AXES.chainsaw
+        table.insert(fields, string.format("reach past the tip: %.2f m (bar %.2f m)", tonumber(axis.tipReach) or 0, tonumber(axis.barLength) or 0))
     end
     -- Horse brush
     if kind == "horsebrush" then

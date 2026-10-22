@@ -19,7 +19,7 @@ using namespace hand_tools_test;
 // Lua helpers for the chainsaw: a trunk the bar is against.
 constexpr const char* kHapticsHelpers = R"luau(
     function _G.barRay() return { StubHandTool.barRay(saw) } end
-    function _G.plantTreeAtTheBar() _G.barTree = StubHandTool.treeAcross(barRay(), 0.6, 0.15) end
+    function _G.plantTreeAtTheBar() _G.barTree = StubHandTool.treeAcross(barRay(), 0.3, 0.15) end
     function _G.sawState()
         local s = saw.spec_chainsaw.currentCutState
         if s == ChainsawCutState.CUTTING then return "cutting" end
