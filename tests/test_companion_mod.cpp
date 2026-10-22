@@ -3665,6 +3665,28 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresToggleViewActionAndBindings) 
     EXPECT_NE(modDescContent.find("<text name=\"input_VR_TOGGLE_VIEW\">"), std::string::npos);
 }
 
+TEST_F(CompanionModTest, MetadataDescriptorDeclaresTheSeatSetActionWithAKeyboardDefaultAndNoPadDefault) {
+    std::string modDescContent = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
+    ASSERT_FALSE(modDescContent.empty());
+
+    EXPECT_NE(modDescContent.find("<action name=\"VR_SET_SEAT\" category=\"ONFOOT VEHICLE\"/>"), std::string::npos)
+        << "declared in the same categories as the other VR actions";
+    const size_t bindingStart = modDescContent.find("<actionBinding action=\"VR_SET_SEAT\">");
+    ASSERT_NE(bindingStart, std::string::npos);
+    const size_t bindingEnd = modDescContent.find("</actionBinding>", bindingStart);
+    ASSERT_NE(bindingEnd, std::string::npos);
+    const std::string binding = modDescContent.substr(bindingStart, bindingEnd - bindingStart);
+    EXPECT_NE(binding.find("<binding device=\"KB_MOUSE_DEFAULT\" input=\"KEY_rctrl KEY_numPad5\"/>"), std::string::npos)
+        << "Right Ctrl + NumPad 5 on the keyboard";
+    EXPECT_EQ(binding.find("GAMEPAD_DEFAULT"), std::string::npos) << "no gamepad default";
+
+    const size_t textStart = modDescContent.find("<text name=\"input_VR_SET_SEAT\">");
+    ASSERT_NE(textStart, std::string::npos);
+    const std::string text = modDescContent.substr(textStart, modDescContent.find("</text>", textStart) - textStart);
+    EXPECT_NE(text.find("<en>Set VR Seat Position</en>"), std::string::npos);
+    EXPECT_NE(text.find("<de>"), std::string::npos) << "with a German text alongside";
+}
+
 TEST_F(CompanionModTest, ToggleViewInEngineActionEventsRegistration) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 

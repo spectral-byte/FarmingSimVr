@@ -117,6 +117,18 @@ TEST_F(LuauTestSuiteTest, TestReusableTables) {
     RunSuite("tests/test_reusable_tables.luau");
 }
 
+TEST_F(LuauTestSuiteTest, TestSeatOffset) {
+    RunSuite("tests/test_seat_offset.luau");
+}
+
+TEST_F(LuauTestSuiteTest, TestSeatSet) {
+    RunSuite("tests/test_seat_set.luau");
+}
+
+TEST_F(LuauTestSuiteTest, TestSeatOffsetSave) {
+    RunSuite("tests/test_seat_offset_save.luau");
+}
+
 TEST_F(LuauTestSuiteTest, TestSnapTurn) {
     RunSuite("tests/test_snap_turn.luau");
 }

@@ -145,6 +145,8 @@ TEST_F(VirtualGamepadDefaultBindingsTest, TheFirstSessionRewritesTheVirtualGamep
     EXPECT_EQ(List("VR_TOGGLE_VIEW", kPad), "BUTTON_11 BUTTON_10/+@4") << "the VR View Toggle Action on left stick click + Start";
     EXPECT_EQ(List("VR_HUD_TOGGLE", kPad), "BUTTON_10/+@4") << "the rest of the Companion Mod's pad defaults stay";
     EXPECT_EQ(List("JUMP", kPad), "BUTTON_2/+@4") << "and so do the game's other bindings";
+    EXPECT_EQ(List("VR_SET_SEAT", kPad), "") << "the Seat Set Action gets no pad input from the rewrite: the player binds it in the Controls screen";
+    EXPECT_EQ(Lua("StubInput.get('VR_SET_SEAT', 'KB_MOUSE_DEFAULT').inputString"), "KEY_rctrl KEY_numPad5") << "and keeps its keyboard default";
     EXPECT_EQ(List("AXIS_LOOK_UPDOWN_PLAYER", kPad), "AXIS_4+/+@4 ; AXIS_4-/-@4");
 
     EXPECT_EQ(Lua("StubInput.saves"), "1") << "the bindings were saved, once";

@@ -286,6 +286,7 @@ function VRCompanion:loadMap(name)
     if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
     if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
     if type(self.registerFishCatchConsoleCommands) == "function" then self:registerFishCatchConsoleCommands() end
+    if type(self.registerSeatOffsetConsoleCommands) == "function" then self:registerSeatOffsetConsoleCommands() end
     if type(self.registerStereoDialogDepthConsoleCommands) == "function" then self:registerStereoDialogDepthConsoleCommands() end
 
     if self.showHudLoadNotification == true then
@@ -989,7 +990,7 @@ function VRCompanion:runUpdate(dt)
     end
 
     -- Keep in-engine action events active across context transitions
-    if (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) then
+    if (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) or (self.seatSetActionEventId == nil) then
         if type(self.registerActionEvents) == "function" then
             self:registerActionEvents(false)
         end
@@ -1152,12 +1153,14 @@ function VRCompanion:deleteMap()
     self.snapLeftActionEventId = nil
     self.snapRightActionEventId = nil
     self.toggleViewActionEventId = nil
+    self.seatSetActionEventId = nil
     self.actionEventsContextName = nil
     self.hudToggleLoggedOnce = false
     self.recenterLoggedOnce = false
     self.snapLeftLoggedOnce = false
     self.snapRightLoggedOnce = false
     self.toggleViewLoggedOnce = false
+    self.seatSetLoggedOnce = false
     if type(self.resetToggleViewDebounce) == "function" then
         self:resetToggleViewDebounce()
     end
@@ -1204,6 +1207,7 @@ function VRCompanion:deleteMap()
 
     if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
     if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
+    if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
     if type(self.unregisterStereoDialogDepthConsoleCommands) == "function" then self:unregisterStereoDialogDepthConsoleCommands() end
     if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end

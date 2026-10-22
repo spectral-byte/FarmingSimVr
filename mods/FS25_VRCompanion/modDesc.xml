@@ -22,6 +22,7 @@ CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigg
         <sourceFile filename="src/VRCompanionCore.lua"/>
         <sourceFile filename="src/VRCompanionStereo.lua"/>
         <sourceFile filename="src/VRCompanionLocomotion.lua"/>
+        <sourceFile filename="src/VRCompanionSeatOffset.lua"/>
         <sourceFile filename="src/VRCompanionHud.lua"/>
         <sourceFile filename="src/VRCompanionInput.lua"/>
         <sourceFile filename="src/VRCompanionMotionControllers.lua"/>
@@ -40,6 +41,10 @@ CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigg
         <text name="input_VR_RECENTER_VIEW">
             <en>Recenter VR View</en>
             <de>VR-Ansicht zentrieren</de>
+        </text>
+        <text name="input_VR_SET_SEAT">
+            <en>Set VR Seat Position</en>
+            <de>VR-Sitzposition festlegen</de>
         </text>
         <text name="input_VR_HUD_TOGGLE">
             <en>Toggle VR HUD Mode</en>
@@ -80,6 +85,7 @@ CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigg
     </l10n>
     <actions>
         <action name="VR_RECENTER_VIEW" category="ONFOOT VEHICLE"/>
+        <action name="VR_SET_SEAT" category="ONFOOT VEHICLE"/>
         <action name="VR_HUD_TOGGLE" category="ONFOOT VEHICLE"/>
         <action name="VR_SNAP_TURN_LEFT" category="ONFOOT VEHICLE"/>
         <action name="VR_SNAP_TURN_RIGHT" category="ONFOOT VEHICLE"/>
@@ -89,6 +95,9 @@ CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigg
         <actionBinding action="VR_RECENTER_VIEW">
             <binding device="KB_MOUSE_DEFAULT" input="KEY_numPad5"/>
             <binding device="GAMEPAD_DEFAULT" input="BUTTON_11"/>
+        </actionBinding>
+        <actionBinding action="VR_SET_SEAT">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_rctrl KEY_numPad5"/>
         </actionBinding>
         <actionBinding action="VR_HUD_TOGGLE">
             <binding device="KB_MOUSE_DEFAULT" input="KEY_rctrl KEY_h"/>

@@ -199,6 +199,7 @@ function VRCompanion:saveConfiguration(xmlPath)
     local setXmlFloatFn = setXMLFloat or _G.setXMLFloat
     local setXmlBoolFn = setXMLBool or _G.setXMLBool
     local setXmlStringFn = setXMLString or _G.setXMLString
+    local setXmlIntFn = setXMLInt or _G.setXMLInt
     local saveXmlFn = saveXMLFile or _G.saveXMLFile
     local deleteXmlFn = delete or _G.delete
 
@@ -245,6 +246,7 @@ function VRCompanion:saveConfiguration(xmlPath)
         if type(self.saveMotionControllerSettings) == "function" then self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn }) end
         if type(self.saveFishCatchSetting) == "function" then self:saveFishCatchSetting(xmlFile, { setString = setXmlStringFn }) end
         if type(self.saveStereoDialogDepthSetting) == "function" then self:saveStereoDialogDepthSetting(xmlFile, { setFloat = setXmlFloatFn }) end
+        if type(self.saveSeatOffsetSettings) == "function" then self:saveSeatOffsetSettings(xmlFile, { setString = setXmlStringFn, setInt = setXmlIntFn,setFloat = setXmlFloatFn }) end
         if type(setXmlStringFn) == "function" then
             -- Persist the mode last requested, not VRBridge's: while the compositor is active the bridge
             -- only queues a change until the next frame boundary, so it still reports the old mode here.
@@ -289,6 +291,8 @@ function VRCompanion:loadConfiguration(xmlPath)
     local getXmlFloatFn = getXMLFloat or _G.getXMLFloat
     local getXmlBoolFn = getXMLBool or _G.getXMLBool
     local getXmlStringFn = getXMLString or _G.getXMLString
+    local getXmlIntFn = getXMLInt or _G.getXMLInt
+    local hasXmlPropertyFn = hasXMLProperty or _G.hasXMLProperty
     local deleteXmlFn = delete or _G.delete
 
     local function readSettingsFromXml(filePath)
@@ -356,6 +360,7 @@ function VRCompanion:loadConfiguration(xmlPath)
                 if type(self.loadMotionControllerSettings) == "function" then self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn }) end
                 if type(self.loadFishCatchSetting) == "function" then self:loadFishCatchSetting(xmlFile, { getString = getXmlStringFn }) end
                 if type(self.loadStereoDialogDepthSetting) == "function" then self:loadStereoDialogDepthSetting(xmlFile, { getFloat = getXmlFloatFn }) end
+                if type(self.loadSeatOffsetSettings) == "function" then self:loadSeatOffsetSettings(xmlFile, { has = hasXmlPropertyFn, getString = getXmlStringFn, getInt = getXmlIntFn,getFloat = getXmlFloatFn }) end
 
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.snapTurnAngle")

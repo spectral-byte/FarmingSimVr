@@ -1229,17 +1229,19 @@ test("RegisterActionEventsReArmsOnVehicleTransitionsAndPeriodicUpdate", function
     VRCompanion.snapLeftActionEventId = nil
     VRCompanion.snapRightActionEventId = nil
     VRCompanion.toggleViewActionEventId = nil
+    VRCompanion.seatSetActionEventId = nil
     VRCompanion:registerActionEvents(true)
-    assert(registrations == 5, "Should register HUD_TOGGLE, RECENTER, SNAP_LEFT, SNAP_RIGHT, and TOGGLE_VIEW")
+    assert(registrations == 6, "Should register HUD_TOGGLE, RECENTER, SNAP_LEFT, SNAP_RIGHT, TOGGLE_VIEW, and SET_SEAT")
     assert(VRCompanion.hudToggleActionEventId ~= nil)
     assert(VRCompanion.recenterActionEventId ~= nil)
     assert(VRCompanion.snapLeftActionEventId ~= nil)
     assert(VRCompanion.snapRightActionEventId ~= nil)
     assert(VRCompanion.toggleViewActionEventId ~= nil)
+    assert(VRCompanion.seatSetActionEventId ~= nil)
 
-    -- With all five events still registered, the periodic check registers nothing
+    -- With all six events still registered, the periodic check registers nothing
     VRCompanion:registerActionEvents(false)
-    assert(registrations == 5, "Periodic check must not re-register events that are still registered")
+    assert(registrations == 6, "Periodic check must not re-register events that are still registered")
 
     -- Simulate engine dropping the events upon entering a vehicle
     _G.g_inputBinding.events = {}
@@ -1247,7 +1249,7 @@ test("RegisterActionEventsReArmsOnVehicleTransitionsAndPeriodicUpdate", function
 
     -- Calling registerActionEvents() detects missing events and re-registers
     VRCompanion:registerActionEvents(false)
-    assert(registrations == 10, "Should automatically re-register missing action events")
+    assert(registrations == 12, "Should automatically re-register missing action events")
 
     _G.g_inputBinding = nil
 end)
