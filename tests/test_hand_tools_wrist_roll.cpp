@@ -106,7 +106,7 @@ protected:
 
     // A trunk the chainsaw's bar is against.
     void PlantTreeAtTheBar() {
-        ASSERT_EQ(RunLuauChunk(L, "_G.barTree = StubHandTool.treeAcross(barRay(), 0.6, 0.15)", "=plantTree"), 0);
+        ASSERT_EQ(RunLuauChunk(L, "_G.barTree = StubHandTool.treeAcross(barRay(), 0.3, 0.15)", "=plantTree"), 0);
     }
 
     // The angle in radians between two directions.
