@@ -9,7 +9,7 @@
 -- is where the game puts it again. Every other Hand Tool (other mods' tools) and every other player's tool in
 -- a multiplayer session is left exactly as the game has it. Terms (Hand Tool, Tool Hand): CONTEXT.md.
 --
--- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
+-- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand, vrChainsawReach) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
 -- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The fishing rod's
 -- state | Keeping the Tool Hand in use | The fishing rod in the diagnostics | The fishing rod's screen overlays | The look ray |
 -- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The chainsaw's reach (past the tip) | The flashlight's
@@ -27,7 +27,10 @@
 --   VRCompanion.handToolsEnabled / setHandToolsEnabled(enabled, save)   boolean, default true, saved (`vrHandTools on|off`)
 --   VRCompanion:getToolHand() -> hand / setToolHand(hand, save)   the Motion Controller that holds Hand Tools (0 left, 1 right),
 --                                                       saved (`vrToolHand left|right`); a tool held now moves to the new hand at once
---   VRCompanion:saveHandToolsSetting / loadHandToolsSetting(xmlFile, xml)   settings chain (the Tool Hand rides along)
+--   VRCompanion.chainsawReach / MAX_CHAINSAW_REACH      how far past the tip of its bar the chainsaw finds a trunk: nil (the default,
+--                                                       HAND_TOOL_POINTING_AXES.chainsaw.tipReach), metres, or "game" (the game's own
+--                                                       reach and end of cut); saved (`vrChainsawReach`)
+--   VRCompanion:saveHandToolsSetting / loadHandToolsSetting(xmlFile, xml)   settings chain (the Tool Hand and the chainsaw's reach ride along)
 --   VRCompanion.HAND_TOOL_HANDLE_OFFSETS                per tool kind: where the tool's root node sits in the Virtual Hand's grip frame
 --   VRCompanion.HAND_TOOL_POINTING_AXES                 per tool kind: the node a tool aims from and the axis it aims along
 --   VRCompanion:isHandHoldingHandTool(hand) -> boolean  the hand is the Tool Hand and a supported Hand Tool is in it now
@@ -57,7 +60,7 @@
 --   VRCompanion:placeHandToolsForRender()               before every rendered frame, called by placeVirtualHandsForRender
 --   VRCompanion:getHandToolsDiagnostics() -> string     the state of Hand Tools, one line
 --   VRCompanion:registerHandToolsConsoleCommands() / resetHandTools()   map load / unload
---   Console: vrHandTools [on|off], vrToolHand [left|right], vrHandToolsDiagnostics (also describes the fishing rod in the Tool
+--   Console: vrHandTools [on|off], vrToolHand [left|right], vrChainsawReach [<metres>|default|game], vrHandToolsDiagnostics (also describes the fishing rod in the Tool
 --     Hand in the log, "fishing rod" lines: its state, last cast and last action, ADR-0031; and an unsupported held tool,
 --     "Hand Tool probe:" lines, ADR-0030; the one-line answer is unchanged),
 --     vrHandToolOffset <tool> <nudge|turn|reset> (tuning HAND_TOOL_HANDLE_OFFSETS live; not saved)
@@ -142,6 +145,7 @@ function VRCompanion:saveHandToolsSetting(xmlFile, xml)
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.handToolsEnabled ~= false)
     end
     self:saveToolHandSetting(xmlFile, xml)
+    self:saveChainsawReachSetting(xmlFile, xml)
 end
 
 -- A key that is missing keeps the current value.
@@ -158,6 +162,7 @@ function VRCompanion:loadHandToolsSetting(xmlFile, xml)
         self.handToolsEnabled = loaded
     end
     self:loadToolHandSetting(xmlFile, xml)
+    self:loadChainsawReachSetting(xmlFile, xml)
 end
 
 -- ---- Settings: the Tool Hand ------------------------------------------------------------------------------
@@ -179,6 +184,51 @@ function VRCompanion:loadToolHandSetting(xmlFile, xml)
     local str = xml.getString(xmlFile, SETTING_KEY_TOOL_HAND)
     local hand = type(str) == "string" and TOOL_HAND_BY_NAME[string.lower(str)] or nil
     if hand ~= nil then self.toolHand = hand end
+end
+
+-- ---- Settings: the chainsaw's reach -----------------------------------------------------------------------------------------
+-- vrChainsawReach [<metres> | default | game]: saved. How far past the tip of its bar the chainsaw in the Tool Hand still finds a
+-- trunk (see "The chainsaw's reach"). VRCompanion.chainsawReach is nil (the default: `tipReach` of HAND_TOOL_POINTING_AXES.chainsaw),
+-- a number of metres, or CHAINSAW_REACH_GAME (the mod sets no limit: the game's own reach and end-of-cut rule).
+local SETTING_KEY_CHAINSAW_REACH = "vrSettings.chainsawReach"
+local CHAINSAW_REACH_GAME = "game"
+VRCompanion.MAX_CHAINSAW_REACH = 3  -- metres; the game's targeter does not find a trunk much further from the bar than this anyway
+local CHAINSAW_REACH_USAGE = "Usage: vrChainsawReach [<metres, 0 to 3> | default | game] (saved)"
+
+-- What a text names as the reach: ok, the setting (nil: the default; a number of metres, at most the maximum; or
+-- CHAINSAW_REACH_GAME) and whether the metres were cut down to the maximum. Not ok for anything else: a word, a negative
+-- number, a number that is not finite.
+local function parseChainsawReach(text)
+    local word = string.lower(tostring(text))
+    if word == "default" then return true, nil, false end
+    if word == CHAINSAW_REACH_GAME then return true, CHAINSAW_REACH_GAME, false end
+    local metres = tonumber(word)
+    if metres == nil or metres ~= metres or metres == math.huge or metres < 0 then return false end
+    return true, math.min(metres, VRCompanion.MAX_CHAINSAW_REACH), metres > VRCompanion.MAX_CHAINSAW_REACH
+end
+
+function VRCompanion:saveChainsawReachSetting(xmlFile, xml)
+    if type(xml.setString) ~= "function" then return end
+    local reach = self.chainsawReach
+    xml.setString(xmlFile, SETTING_KEY_CHAINSAW_REACH, type(reach) == "number" and string.format("%g", reach) or (reach or "default"))
+end
+
+-- A key that is missing keeps the current value; one that is not a reach is the default.
+function VRCompanion:loadChainsawReachSetting(xmlFile, xml)
+    if type(xml.getString) ~= "function" then return end
+    local str = xml.getString(xmlFile, SETTING_KEY_CHAINSAW_REACH)
+    if str == nil then return end
+    local ok, reach = parseChainsawReach(str)
+    self.chainsawReach = ok and reach or nil
+end
+
+-- How far past the tip of its bar the chainsaw finds a trunk, in metres: the setting or the entry's `tipReach`. nil when the
+-- setting is the game's own reach (or the entry has no number).
+local function chainsawTipReach()
+    local reach = VRCompanion.chainsawReach
+    if reach == CHAINSAW_REACH_GAME then return nil end
+    if type(reach) == "number" then return reach end
+    return tonumber(VRCompanion.HAND_TOOL_POINTING_AXES.chainsaw.tipReach)
 end
 
 -- ---- Supported tools ----------------------------------------------------------------------------------------------------
@@ -394,8 +444,8 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
     -- `position` lowers the start to the chain's lower edge, the height of the chainsaw's own cut node (chainsawLowerEdge): a
     -- felled log is found as soon as the chain rests on it, and the cut is where the chain meets the bark.
     -- `barLength` (metres, from the root along +Z to the tip; 0.4 fits the game's models) and `tipReach` (how far past the tip a
-    -- trunk is still found; a hand's width) make up the reach (see "The chainsaw's reach"). Both UNCERTAIN until checked in the
-    -- headset.
+    -- trunk is still found; a hand's width, the default of `vrChainsawReach`) make up the reach (see "The chainsaw's reach"). Both
+    -- UNCERTAIN until checked in the headset.
     chainsaw = {
         node = function(tool) return tool.rootNode end,
         position = chainsawLowerEdge,
@@ -1619,20 +1669,23 @@ end
 -- ---- The chainsaw's reach --------------------------------------------------------------------------------------
 -- The game's targeter finds a trunk up to 3 m from the ray's start; with the start moved back (reachBehind) that would be most
 -- of a metre past the tip, and the Cut Ring would show there. The chainsaw finds a trunk only up to `tipReach` past the tip of
--- its bar: the way back to the bar's base, the bar's length and the reach past the tip (HAND_TOOL_POINTING_AXES.chainsaw),
+-- its bar (or the reach `vrChainsawReach` says): the way back to the bar's base, the bar's length and the reach past the tip (HAND_TOOL_POINTING_AXES.chainsaw),
 -- measured from the moved ray's start as the targeter measures its distance. A trunk further away counts as none: the wrap of
 -- the update below takes it out of the targeter's answer for the length of the game's update, so the game shows no Cut Ring,
 -- starts no cut and revs into delimbing on the trigger, all by its own logic.
--- Without the game's minimum cut distance the ray is not moved back and none of this applies (chainsawReachFromTheBase).
+-- Without the game's minimum cut distance the ray is not moved back and none of this applies (chainsawReachFromTheBase). With
+-- `vrChainsawReach game` the ray is moved back as always but no limit and no pull-out stop is applied: the game's own.
 
 -- How far from the bar's base a trunk is still found (the bar and the reach past its tip) and how far behind the base the ray
--- starts, both in metres. nil when the reach does not apply: the entry has no numbers, or the ray is not moved back because the
--- game's minimum cut distance could not be read. The chainsaw then has the game's own reach and end-of-cut rule, and nothing is
--- hidden.
+-- starts, both in metres. The first is nil when the reach does not apply: the setting is `game` (vrChainsawReach), the entry has
+-- no numbers, or the ray is not moved back because the game's minimum cut distance could not be read (then the second is nil
+-- too). The chainsaw then has the game's own reach and end-of-cut rule, and nothing is hidden.
 local function chainsawReachFromTheBase(tool)
     local axis = VRCompanion.HAND_TOOL_POINTING_AXES.chainsaw
-    local length, past, behind = tonumber(axis.barLength), tonumber(axis.tipReach), reachBehindOf(tool, axis)
-    if length == nil or past == nil or behind == nil then return nil end
+    local behind = reachBehindOf(tool, axis)
+    if behind == nil then return nil end
+    local length, past = tonumber(axis.barLength), chainsawTipReach()
+    if length == nil or past == nil then return nil, behind end
     return length + past, behind
 end
 
@@ -2079,6 +2132,32 @@ function VRCompanion:consoleCommandSetToolHand(arg)
     return string.format("Tool Hand set to: %s (Saved)", HAND_NAMES[hand])
 end
 
+-- The chainsaw's reach past the tip of its bar as a phrase: "0.15 m (default)", "1.50 m" or "the game's own". The setting
+-- takes effect at once (the reach is read every update) and is saved.
+local function describeChainsawReach(self)
+    if self.chainsawReach == CHAINSAW_REACH_GAME then return "the game's own (no limit of the mod's)" end
+    return string.format("%.2f m%s", chainsawTipReach() or 0, self.chainsawReach == nil and " (default)" or "")
+end
+
+function VRCompanion:consoleCommandSetChainsawReach(arg)
+    if arg == nil or arg == "" or string.lower(tostring(arg)) == "status" then
+        return string.format("The chainsaw reaches %s past the tip of its bar. %s", describeChainsawReach(self), CHAINSAW_REACH_USAGE)
+    end
+    local ok, reach, clamped = parseChainsawReach(arg)
+    if not ok then
+        return string.format("'%s' is not a reach. %s", tostring(arg), CHAINSAW_REACH_USAGE)
+    end
+    self.chainsawReach = reach
+    if type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
+    local text = describeChainsawReach(self)
+    showBlinkingWarning(string.format("VR Chainsaw reach: %s (Saved)", text))
+    print(string.format("[FS25_VR] Chainsaw reach set to: %s", text))
+    return string.format("Chainsaw reach past the tip set to: %s (Saved)%s", text,
+        clamped and string.format(". %g m is the most.", self.MAX_CHAINSAW_REACH) or "")
+end
+
 -- Where the game's look ray starts now, for the diagnostics: the player's own getLookRay.
 local function describeLookRay(tool)
     local player = tool ~= nil and type(tool.getCarryingPlayer) == "function" and tool:getCarryingPlayer() or nil
@@ -2141,8 +2220,12 @@ local function diagnosticFields(self)
         local minimum = chainsawMinimumCutDistance()
         table.insert(fields, "minimum cut distance: " .. (minimum ~= nil and string.format("%.2f m", minimum) or "could not be read"))
         local axis = VRCompanion.HAND_TOOL_POINTING_AXES.chainsaw
-        if chainsawReachFromTheBase(tool) ~= nil then
-            table.insert(fields, string.format("reach past the tip: %.2f m (bar %.2f m)", tonumber(axis.tipReach) or 0, tonumber(axis.barLength) or 0))
+        local reach, behind = chainsawReachFromTheBase(tool)
+        if reach ~= nil then
+            table.insert(fields, string.format("reach past the tip: %.2f m (bar %.2f m%s)", chainsawTipReach() or 0, tonumber(axis.barLength) or 0,
+                self.chainsawReach == nil and ", default" or ""))
+        elseif behind ~= nil and self.chainsawReach == CHAINSAW_REACH_GAME then
+            table.insert(fields, "reach past the tip: the game's own reach (vrChainsawReach game)")
         else
             table.insert(fields, "reach past the tip: not applied (the game's own reach)")
         end
@@ -2599,6 +2682,7 @@ function VRCompanion:registerHandToolsConsoleCommands()
     addConsoleCommand("vrHandToolOffset", "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush|fishingrod> <nudge dx dy dz | turn rx ry rz | reset>", "consoleCommandHandToolOffset", self)
     addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance, spray can, horse brush and fishing rod held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
     addConsoleCommand("vrToolHand", "Choose the Motion Controller that holds Hand Tools, left or right (saved; right by default): vrToolHand [left|right]", "consoleCommandSetToolHand", self)
+    addConsoleCommand("vrChainsawReach", "How far past the tip of its bar the chainsaw in the Tool Hand still finds a tree: metres (0 to 3), default (0.15 m) or game (the game's own reach and end of cut), saved: vrChainsawReach [<metres> | default | game]", "consoleCommandSetChainsawReach", self)
     addConsoleCommand("vrHandToolsDiagnostics", "Report the Tool Hand, the held Hand Tool, whether it is in the hand and where the look ray starts: vrHandToolsDiagnostics", "consoleCommandHandToolsDiagnostics", self)
 end
 
@@ -2623,6 +2707,7 @@ function VRCompanion:resetHandTools()
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrHandTools")
         removeConsoleCommand("vrToolHand")
+        removeConsoleCommand("vrChainsawReach")
         removeConsoleCommand("vrHandToolOffset")
         removeConsoleCommand("vrHandToolsDiagnostics")
     end
@@ -2635,7 +2720,8 @@ VRCompanion.HandTools.updateHandTools = function(self, ...) return VRCompanion.u
 VRCompanion.HandTools.isHandHoldingHandTool = function(self, ...) return VRCompanion.isHandHoldingHandTool(VRCompanion, ...) end
 VRCompanion.HandTools.getToolHand = function(self, ...) return VRCompanion.getToolHand(VRCompanion, ...) end
 VRCompanion.HandTools.consoleCommandSetToolHand = function(self, ...) return VRCompanion.consoleCommandSetToolHand(VRCompanion, ...) end
-VRCompanion.HandTools.consoleCommandSetHandTools = function(self, ...) return VRCompanion.consoleCommandSetHandTools(VRCompanion, ...) end
+VRCompanion.HandTools.consoleCommandSetChainsawReach = function(self, ...) return VRCompanion.consoleCommandSetChainsawReach(VRCompanion, ...) end
+VRCompanion.HandTools.consoleCommandSetHandTools =function(self, ...) return VRCompanion.consoleCommandSetHandTools(VRCompanion, ...) end
 VRCompanion.HandTools.consoleCommandHandToolsDiagnostics = function(self, ...) return VRCompanion.consoleCommandHandToolsDiagnostics(VRCompanion, ...) end
 
 -- The probe's readers of an unknown table (the dialog probe, VRCompanionDialogProbe.lua, dumps with them): a short text for a value,
