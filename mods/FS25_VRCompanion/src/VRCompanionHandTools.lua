@@ -37,7 +37,7 @@
 --   VRCompanion:getHandToolRay([player]) -> x, y, z, dirX, dirY, dirZ   the tool's pointing ray in the world while a supported
 --                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's)
 --   VRCompanion:getHandToolLookRay([player]) -> x, y, z, dirX, dirY, dirZ   that ray with its origin moved back along the axis by the
---                                                       tool's reachBehind field (the spray can's and the horse brush's 0.5 m); this is what Player:getLookRay
+--                                                       tool's reachBehind field (the spray can's and the horse brush's 0.5 m, the chainsaw's game minimum cut distance); this is what Player:getLookRay
 --                                                       answers then, so what the targeter casts (the wrap asks every aiming subsystem in
 --                                                       turn, Hand Tools first: VRCompanion:registerLookRayAimer in Core)
 --   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   nil when the tool (default: the one held) is no chainsaw
@@ -98,6 +98,7 @@ local function newState()
         chainsaw = {         -- the chainsaw's cut plane (see "The chainsaw")
             tool = nil,      -- the chainsaw it is of
             yaw = nil,       -- the heading of the plane: the bar's, locked while a cut is made
+            minimumWarned = false,  -- the warning that the game's minimum cut distance could not be read was logged (once)
         },
         haptics = {          -- the Tool Hand's buzz (see "Haptics")
             level = nil,     -- what is being felt now: a key of HAND_TOOL_HAPTIC_PULSES, nil for nothing
@@ -308,11 +309,33 @@ for kind, offset in pairs(VRCompanion.HAND_TOOL_HANDLE_OFFSETS) do
     DEFAULT_HANDLE_OFFSETS[kind] = copyOffset(offset)
 end
 
+-- The game's minimum cut distance for the chainsaw (HandToolChainsaw.MINIMUM_CUT_DISTANCE): the nearest a trunk can be to the
+-- targeter's ray start and still be found. The value is stripped from the readable game source, so it is read here and not written
+-- down. nil when the class or the field is missing, or the field is not a number.
+local function chainsawMinimumCutDistance()
+    local class = engine("HandToolChainsaw")
+    local minimum = type(class) == "table" and class.MINIMUM_CUT_DISTANCE or nil
+    if type(minimum) ~= "number" or minimum ~= minimum then return nil end
+    return minimum
+end
+
+-- The chainsaw's `reachBehind` (HAND_TOOL_POINTING_AXES): the game's minimum cut distance, or nil, which leaves the ray where it
+-- is, as before this was moved back. ONE warning is logged the first time it cannot be read.
+local function chainsawReachBehind(tool)
+    local minimum = chainsawMinimumCutDistance()
+    if minimum == nil and not state.chainsaw.minimumWarned then
+        state.chainsaw.minimumWarned = true
+        print("[FS25_VR] [Warning] Hand Tools: the chainsaw's minimum cut distance (HandToolChainsaw.MINIMUM_CUT_DISTANCE) could not be read."
+            .. " The chainsaw's ray is not moved back.")
+    end
+    return minimum
+end
+
 -- WHERE EACH TOOL POINTS (the look ray): the ray the game's targeter casts starts at `node(tool)`'s origin and runs
 -- along `direction`, a unit vector in that node's own axes. One entry per tool kind, the place to adjust how a tool aims.
 -- The lance washes from its raycastNode along that node's +Z axis, the nozzle. UNCERTAIN until checked in the headset:
 -- only this table changes. An entry may also have a `position`, the point of the node the ray starts at (default: the node's
--- origin); `position` and `direction` are tables or functions of the tool that answer one.
+-- origin); `position`, `direction` and `reachBehind` are values or functions of the tool that answer one.
 -- The flashlight's beam leaves its lens the way the game's own placement (HandToolFlashlight:updateTransform) takes it out of the
 -- tool model: from the point `lightNodeOffset` of the node the light node was below (`lightNodeParent`), along `lightNodeForward`
 -- in that node's axes.
@@ -336,9 +359,12 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
     -- model toward the camera each update and moves it along the cut while cutting, while the root stays where the hand put it.
     -- The hit point of this ray on the trunk is where the game puts the cut plane's node, so the cut height is where the bar
     -- meets the trunk. UNCERTAIN until checked in the headset.
+    -- `reachBehind` is the game's minimum cut distance, read at runtime (chainsawReachBehind): the targeter finds no trunk nearer to
+    -- the ray's start than that, so the ray starts that far behind the bar's base and a trunk the bar is against or in is found.
     chainsaw = {
         node = function(tool) return tool.rootNode end,
         direction = { x = 0.0, y = 0.0, z = 1.0 },
+        reachBehind = chainsawReachBehind,
     },
     -- Spray can: the can's visual node (sprayCan_vis, the game's shake node, which the game moves a few centimetres while the can
     -- sprays) along its +Z, the nozzle. UNCERTAIN until checked in the headset: the axis from the i3d, and whether the shake makes
@@ -346,7 +372,7 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
     -- `reachBehind` (optional, metres): the look ray starts this far BEHIND the point the tool points from, along its axis. The
     -- game's targeter measures a tree's distance from the ray's origin and finds none nearer than HandToolSprayCan's 0.5 m, so the
     -- origin is moved back by exactly that: the can finds a trunk from right against the nozzle (0 m) to 1 m past it (the game's
-    -- 1.5 m reach). A tool without the field (the lance, the flashlight, the chainsaw) has its ray unchanged.
+    -- 1.5 m reach). A tool without the field (the lance, the flashlight) has its ray unchanged.
     spraycan = {
         node = function(tool) return tool.spec_sprayCan.canNode end,
         direction = { x = 0.0, y = 0.0, z = 1.0 },
@@ -1356,6 +1382,12 @@ end
 
 -- ---- The look ray -----------------------------------------------------------------------------------------
 
+-- A field of a HAND_TOOL_POINTING_AXES entry for `tool`: the value, or what the function answers.
+local function resolveForTool(tool, value)
+    if type(value) == "function" then return value(tool) end
+    return value
+end
+
 -- Where the tool points now: the world position of its pointing node and the world direction of its pointing axis, then the
 -- HAND_TOOL_POINTING_AXES entry they came from; nil when the tool has no pointing axis or the node is not there.
 local function toolPointingRay(self, tool)
@@ -1364,8 +1396,7 @@ local function toolPointingRay(self, tool)
     if axis == nil then return nil end
     local node = axis.node(tool)
     if node == nil then return nil end
-    local function resolve(value) if type(value) == "function" then return value(tool) end return value end
-    local direction, position = resolve(axis.direction), resolve(axis.position)
+    local direction, position = resolveForTool(tool, axis.direction), resolveForTool(tool, axis.position)
     local x, y, z
     if position ~= nil then
         x, y, z = engine("localToWorld")(node, position.x, position.y, position.z)
@@ -1398,11 +1429,13 @@ function VRCompanion:getHandToolRay(player)
 end
 
 -- The ray the game's targeter casts for the tool in the Tool Hand: the tool's pointing ray (getHandToolRay) with its origin moved
--- back along the axis by the entry's `reachBehind` (HAND_TOOL_POINTING_AXES), or nil like getHandToolRay.
+-- back along the axis by the entry's `reachBehind` (HAND_TOOL_POINTING_AXES; a number or a function of the tool, which may answer
+-- nil for none), or nil like getHandToolRay.
 function VRCompanion:getHandToolLookRay(player)
     local x, y, z, dx, dy, dz, axis = heldToolPointingRay(self, player)
     if x == nil then return nil end
-    local behind = tonumber(axis.reachBehind) or 0
+    local ok, reach = pcall(resolveForTool, heldTool(), axis.reachBehind)
+    local behind = ok and tonumber(reach) or 0
     return x - dx * behind, y - dy * behind, z - dz * behind, dx, dy, dz
 end
 
@@ -1989,6 +2022,8 @@ local function diagnosticFields(self)
         table.insert(fields, string.format("chainsaw: %s, cut plane heading from the %s, cut roll from the %s", tostring(self:getChainsawCutState(tool)),
             (hand ~= nil and state.chainsaw.yaw ~= nil) and "bar" or "camera",
             hand ~= nil and "wrist" or "game's roll action"))
+        local minimum = chainsawMinimumCutDistance()
+        table.insert(fields, "minimum cut distance: " .. (minimum ~= nil and string.format("%.2f m", minimum) or "could not be read"))
     end
     -- Horse brush
     if kind == "horsebrush" then
