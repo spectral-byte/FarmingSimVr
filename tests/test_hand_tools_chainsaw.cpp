@@ -972,6 +972,31 @@ protected:
     bool Found() { return True("saw.spec_chainsaw.targetedTree ~= nil and saw.spec_chainsaw.targetedTree.node == barTree.node"); }
     std::string ReachDiagnostics() { return EvalLua(L, "runCommand('vrHandToolsDiagnostics')"); }
 
+    // A trunk the bar is against: its Cut Ring shows, a cut starts, and when the trigger is let go the tree is found again and the
+    // ring is back within a frame.
+    void ExpectTheCutRingStaysAroundACut() {
+        ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(kBarTreeDistance));
+        FRAMES(2);
+        ASSERT_TRUE(Found());
+        ASSERT_TRUE(True("getVisibility(saw.spec_chainsaw.ringNode)"));
+
+        headset.SetHandInputs(kRight, Trigger(1.0f));
+        FRAMES(3);
+        ASSERT_EQ(State(), "cutting");
+        headset.SetHandInputs(kRight, Trigger(0.0f));
+        for (int frame = 0; frame < 3; ++frame) {
+            FRAMES(1);
+            EXPECT_EQ(State(), "idle");
+            // The game's update shows the ring on the update after the one that ended the cut, as it always has (and the tree it
+            // shows it on was found by the ray of the frame before, the cut's).
+            if (frame > 0) {
+                EXPECT_TRUE(Found()) << "frame " << frame;
+                EXPECT_TRUE(True("getVisibility(saw.spec_chainsaw.ringNode)")) << "the Cut Ring is back, frame " << frame;
+            }
+        }
+        EXPECT_EQ(Cuts(), 0);
+    }
+
     // A fresh game session over the same settings file, the mod loaded with the chainsaw's reach as `saved` says (a Lua value
     // for the setting's key, or "nil" for a file that never had it).
     void StartANewSessionWithSavedReach(const char* saved) {
@@ -1016,8 +1041,7 @@ TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, ATrunkAMetrePastTheTipIs
     EXPECT_NE(Reach().find("1.50 m"), std::string::npos);
 }
 
-// The game's own check ends a cut whose ray start (the game's minimum behind the bar's base) is 1.5 m from the cut, so a trunk the
-// saw may find further out than about 0.8 m from the base is found but not cut: the reach is for finding, the game's rule is its own.
+// A trunk a little past the default reach: found, cut and sliced once the reach is widened.
 TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, ATrunkJustBeyondTheDefaultReachIsFoundAndCutWithAWiderReach) {
     StartWithChainsawInTheRightHand();
     ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.7));  // 30 cm past the tip
@@ -1106,11 +1130,52 @@ TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, WithGameACutRunsWithTheB
     ASSERT_LT(Number(L, "distanceOfTheGamesLookRayFromTheCut()"), 1.5) << "which the game's own check still lets run";
     EXPECT_EQ(State(), "cutting");
 
-    PullTheHandBack(0.7f);
+    PullTheHandBack(0.9f);  // 1.2 m from the base: still within the game's 1.5 m
     FRAMES(3);
+    ASSERT_LT(Number(L, "cutDistanceFromTheBarsBase()"), 1.5);
+    EXPECT_EQ(State(), "cutting") << "the game measures from the bar's base, as before the ray was moved back";
+
+    PullTheHandBack(1.4f);  // 1.7 m from the base
+    FRAMES(3);
+    ASSERT_GE(Number(L, "cutDistanceFromTheBarsBase()"), 1.5);
     ASSERT_GE(Number(L, "distanceOfTheGamesLookRayFromTheCut()"), 1.5);
     EXPECT_EQ(State(), "idle") << "the game's own stop ends it";
     EXPECT_EQ(Cuts(), 0) << "without a slice";
+}
+
+// Cutting from a distance as before the ray was moved back: the game's end-of-cut distance is measured from the bar's base, so a
+// cut on a trunk a metre past the tip runs and slices instead of ending at once.
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, WithGameATrunkAMetrePastTheTipIsFoundCutAndSliced) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', 'game')", "=reach"), 0);
+    ASSERT_NO_FATAL_FAILURE(StartCuttingATreeAlongTheBar(1.4));  // 1 m past the tip
+    FRAMES(4);
+    EXPECT_EQ(State(), "cutting") << "the cut runs";
+    FRAMES(60);
+    EXPECT_EQ(Cuts(), 1) << "and slices the tree";
+    EXPECT_EQ(State(), "idle");
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, WithAWideReachATrunkAMetrePastTheTipIsCutAndSlicedToo) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', '1.5')", "=reach"), 0);
+    ASSERT_NO_FATAL_FAILURE(StartCuttingATreeAlongTheBar(1.4));
+    FRAMES(4);
+    EXPECT_EQ(State(), "cutting");
+    FRAMES(60);
+    EXPECT_EQ(Cuts(), 1);
+}
+
+// The ray is moved back only to find a tree: the Cut Ring does not drop out as a cut ends, whatever the setting.
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, TheCutRingOfATrunkTheBarIsAgainstStaysWhenACutStartsAndWhenItIsLetGoByDefault) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(ExpectTheCutRingStaysAroundACut());
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, TheCutRingOfATrunkTheBarIsAgainstStaysWhenACutStartsAndWhenItIsLetGoWithGame) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', 'game')", "=reach"), 0);
+    ASSERT_NO_FATAL_FAILURE(ExpectTheCutRingStaysAroundACut());
 }
 
 TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, AnInvalidReachIsRefusedWithAMessageAndLeavesTheValue) {

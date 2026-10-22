@@ -42,7 +42,8 @@
 --                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's)
 --   VRCompanion:getHandToolLookRay([player]) -> x, y, z, dirX, dirY, dirZ   that ray with its origin moved back along the axis by the
 --                                                       tool's reachBehind field (the spray can's and the horse brush's 0.5 m,
---                                                       the chainsaw's game minimum cut distance); this is what Player:getLookRay
+--                                                       the chainsaw's game minimum cut distance, but not while it is cutting: a cut's ray
+--                                                       starts at the bar's base); this is what Player:getLookRay
 --                                                       answers then, so what the targeter casts (the wrap asks every aiming subsystem in
 --                                                       turn, Hand Tools first: VRCompanion:registerLookRayAimer in Core)
 --   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   nil when the tool (default: the one held) is no chainsaw
@@ -1525,11 +1526,14 @@ end
 
 -- The ray the game's targeter casts for the tool in the Tool Hand: the tool's pointing ray (getHandToolRay) with its origin moved
 -- back along the axis by the entry's `reachBehind` (HAND_TOOL_POINTING_AXES; a number or a function of the tool that may answer
--- nil for none), or nil like getHandToolRay.
+-- nil for none), or nil like getHandToolRay. A chainsaw cut under way has its ray start where the bar does (not moved back): the
+-- targeter's ray start is what the game measures its end-of-cut distance from, and that is the bar's base, as it was before the
+-- ray was moved back to find a trunk the bar is against. The tree is found before the cut starts, which a cut does not need again.
 function VRCompanion:getHandToolLookRay(player)
     local x, y, z, dx, dy, dz, axis = heldToolPointingRay(self, player)
     if x == nil then return nil end
     local behind = reachBehindOf(heldTool(), axis) or 0
+    if self:getChainsawCutState(heldTool()) == "cutting" then behind = 0 end
     return x - dx * behind, y - dy * behind, z - dz * behind, dx, dy, dz
 end
 
@@ -1698,9 +1702,9 @@ local function chainsawTargetLimit(tool)
 end
 
 -- A running cut stops when the cut point is further from the bar's base than the reach, measured from the bar, not from the
--- moved ray's start: the game stops a cut when the targeter's ray start is MAXIMUM_CUT_DISTANCE from the cut point, which with
--- the start moved back would let a cut run with the bar most of a metre clear of the trunk. The game's own stop (no slice) ends
--- it; its own check stays in place. The cut point is the cut plane's node (cameraRotationNode), which a cut leaves where the bar
+-- moved ray's start: the game stops a cut when the targeter's ray start is MAXIMUM_CUT_DISTANCE from the cut point, which is
+-- the bar's base while a cut runs (getHandToolLookRay) and would let a cut run with the bar well clear of the trunk. The game's
+-- own stop (no slice) ends it; its own check stays in place, and is the only one with `vrChainsawReach game`. The cut point is the cut plane's node (cameraRotationNode), which a cut leaves where the bar
 -- met the trunk.
 local function stopCutOutOfReach(tool)
     local states = engine("ChainsawCutState")
