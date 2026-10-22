@@ -12,7 +12,8 @@
 -- SECTIONS (one per concern): Settings (vrHandTools, vrToolHand) | Supported tools (SUPPORTED_TOOLS, HAND_TOOL_HANDLE_OFFSETS,
 -- HAND_TOOL_POINTING_AXES) | Wraps (WRAP_SPECS) | Placement | Trigger (the tool's use, read off the pad) | The fishing rod's
 -- state | Keeping the Tool Hand in use | The fishing rod in the diagnostics | The fishing rod's screen overlays | The look ray |
--- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The chainsaw's reach (past the tip) | The flashlight's beam | No screen-centre overlays (the
+-- The chainsaw (cut plane from the bar) | The wrist's roll (cut angle) | The chainsaw's reach (past the tip) | The flashlight's
+-- beam | No screen-centre overlays (the
 -- spray can's, the horse brush's and the chainsaw's onDraw) | The horse brush's touch (the touching cap) | Haptics | The spray can's feedback (target tick, marker type message) | Update |
 -- Diagnostics, console commands, reset.
 --
@@ -37,7 +38,8 @@
 --   VRCompanion:getHandToolRay([player]) -> x, y, z, dirX, dirY, dirZ   the tool's pointing ray in the world while a supported
 --                                                       tool is in the Tool Hand (nil otherwise: the head's ray is the game's)
 --   VRCompanion:getHandToolLookRay([player]) -> x, y, z, dirX, dirY, dirZ   that ray with its origin moved back along the axis by the
---                                                       tool's reachBehind field (the spray can's and the horse brush's 0.5 m, the chainsaw's game minimum cut distance); this is what Player:getLookRay
+--                                                       tool's reachBehind field (the spray can's and the horse brush's 0.5 m,
+--                                                       the chainsaw's game minimum cut distance); this is what Player:getLookRay
 --                                                       answers then, so what the targeter casts (the wrap asks every aiming subsystem in
 --                                                       turn, Hand Tools first: VRCompanion:registerLookRayAimer in Core)
 --   VRCompanion:getChainsawCutState([tool]) -> "idle" | "delimbing" | "cutting" | nil   nil when the tool (default: the one held) is no chainsaw
@@ -310,8 +312,8 @@ for kind, offset in pairs(VRCompanion.HAND_TOOL_HANDLE_OFFSETS) do
 end
 
 -- The game's minimum cut distance for the chainsaw (HandToolChainsaw.MINIMUM_CUT_DISTANCE): the nearest a trunk can be to the
--- targeter's ray start and still be found. The value is stripped from the readable game source, so it is read here and not written
--- down. nil when the class or the field is missing, or the field is not a number.
+-- targeter's ray start and still be found. The value is stripped from the readable game source, so it is read here and not
+-- written down. nil when the class or the field is missing, or the field is not a number.
 local function chainsawMinimumCutDistance()
     local class = engine("HandToolChainsaw")
     local minimum = type(class) == "table" and class.MINIMUM_CUT_DISTANCE or nil
@@ -320,22 +322,24 @@ local function chainsawMinimumCutDistance()
 end
 
 -- The chainsaw's `reachBehind` (HAND_TOOL_POINTING_AXES): the game's minimum cut distance, or nil, which leaves the ray where it
--- is, as before this was moved back. ONE warning is logged the first time it cannot be read.
+-- is, as before this was moved back, and the reach below off: the chainsaw then reaches and stops as in the game. ONE warning is
+-- logged the first time it cannot be read.
 local function chainsawReachBehind(tool)
     local minimum = chainsawMinimumCutDistance()
     if minimum == nil and not state.chainsaw.minimumWarned then
         state.chainsaw.minimumWarned = true
-        print("[FS25_VR] [Warning] Hand Tools: the chainsaw's minimum cut distance (HandToolChainsaw.MINIMUM_CUT_DISTANCE) could not be read."
-            .. " The chainsaw's ray is not moved back.")
+        print("[FS25_VR] [Warning] Hand Tools: the chainsaw's minimum cut distance (HandToolChainsaw.MINIMUM_CUT_DISTANCE)"
+            .. " could not be read. The chainsaw's ray is not moved back and its reach is the game's own.")
     end
     return minimum
 end
 
--- Where the chainsaw's ray starts on the root (HAND_TOOL_POINTING_AXES): the bar's axis, at the height of the chainsaw's own cut node
--- (the chain's lower edge), in the root's axes. The height is the model's as the i3d has it, with the model unrotated under the tool
--- (the mod keeps it so): the cut node's position in the model's axes, placed at the model's rest under its parent. Its live position
--- is no use, it rides the cut guide while cutting. nil when the cut node cannot be read (none, the root the game falls back to, one
--- that is no node or not part of the model), which leaves the ray on the bar's centre line, at the root's height.
+-- Where the chainsaw's ray starts on the root (HAND_TOOL_POINTING_AXES): the bar's axis, at the height of the chainsaw's own cut
+-- node (the chain's lower edge), in the root's axes. The height is the model's as the i3d has it, with the model unrotated under
+-- the tool (the mod keeps it so): the cut node's position in the model's axes, placed at the model's rest under its parent. Its
+-- live position is no use, it rides the cut guide while cutting. nil when the cut node cannot be read (none, the root the game
+-- falls back to, one that is no node or not part of the model), which leaves the ray on the bar's centre line, at the root's
+-- height.
 local function chainsawLowerEdge(tool)
     local spec, model, root = tool.spec_chainsaw, tool.graphicalNode, tool.rootNode
     local cutNode = type(spec) == "table" and spec.cutNode or nil
@@ -384,12 +388,14 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
     -- model toward the camera each update and moves it along the cut while cutting, while the root stays where the hand put it.
     -- The hit point of this ray on the trunk is where the game puts the cut plane's node, so the cut height is where the bar
     -- meets the trunk. UNCERTAIN until checked in the headset.
-    -- `reachBehind` is the game's minimum cut distance, read at runtime (chainsawReachBehind): the targeter finds no trunk nearer to
-    -- the ray's start than that, so the ray starts that far behind the bar's base and a trunk the bar is against or in is found.
-    -- `position` lowers the start to the chain's lower edge, the height of the chainsaw's own cut node (chainsawLowerEdge): a felled log
-    -- is found as soon as the chain rests on it, and the cut is where the chain meets the bark.
-    -- `barLength` (metres, from the root along +Z to the tip; 0.4 fits the game's models) and `tipReach` (how far past the tip a trunk
-    -- is still found; a hand's width) make up the reach (see "The chainsaw's reach"). Both UNCERTAIN until checked in the headset.
+    -- `reachBehind` is the game's minimum cut distance, read at runtime (chainsawReachBehind): the targeter finds no trunk nearer
+    -- to the ray's start than that, so the ray starts that far behind the bar's base and a trunk the bar is against or in is
+    -- found. When the minimum cannot be read the ray is not moved back and the reach below is not applied.
+    -- `position` lowers the start to the chain's lower edge, the height of the chainsaw's own cut node (chainsawLowerEdge): a
+    -- felled log is found as soon as the chain rests on it, and the cut is where the chain meets the bark.
+    -- `barLength` (metres, from the root along +Z to the tip; 0.4 fits the game's models) and `tipReach` (how far past the tip a
+    -- trunk is still found; a hand's width) make up the reach (see "The chainsaw's reach"). Both UNCERTAIN until checked in the
+    -- headset.
     chainsaw = {
         node = function(tool) return tool.rootNode end,
         position = chainsawLowerEdge,
@@ -1420,6 +1426,13 @@ local function resolveForTool(tool, value)
     return value
 end
 
+-- The `reachBehind` of a HAND_TOOL_POINTING_AXES entry for `tool`, in metres: nil when the entry has none, its function answers
+-- none or something that is no number, or it raises.
+local function reachBehindOf(tool, axis)
+    local ok, reach = pcall(resolveForTool, tool, axis.reachBehind)
+    return ok and tonumber(reach) or nil
+end
+
 -- Where the tool points now: the world position of its pointing node and the world direction of its pointing axis, then the
 -- HAND_TOOL_POINTING_AXES entry they came from; nil when the tool has no pointing axis or the node is not there.
 local function toolPointingRay(self, tool)
@@ -1461,13 +1474,12 @@ function VRCompanion:getHandToolRay(player)
 end
 
 -- The ray the game's targeter casts for the tool in the Tool Hand: the tool's pointing ray (getHandToolRay) with its origin moved
--- back along the axis by the entry's `reachBehind` (HAND_TOOL_POINTING_AXES; a number or a function of the tool, which may answer
+-- back along the axis by the entry's `reachBehind` (HAND_TOOL_POINTING_AXES; a number or a function of the tool that may answer
 -- nil for none), or nil like getHandToolRay.
 function VRCompanion:getHandToolLookRay(player)
     local x, y, z, dx, dy, dz, axis = heldToolPointingRay(self, player)
     if x == nil then return nil end
-    local ok, reach = pcall(resolveForTool, heldTool(), axis.reachBehind)
-    local behind = ok and tonumber(reach) or 0
+    local behind = reachBehindOf(heldTool(), axis) or 0
     return x - dx * behind, y - dy * behind, z - dz * behind, dx, dy, dz
 end
 
@@ -1485,7 +1497,7 @@ end)
 -- The chainsaw cuts where its bar is. In the Tool Hand it is placed like the other tools (SUPPORTED_TOOLS, the handle offset),
 -- the look ray is its bar (HAND_TOOL_POINTING_AXES), so the game's targeter finds the trunk the bar is against and the game puts
 -- the node the cut plane hangs from (cameraRotationNode) at the hit point: the cut height is where the bar meets the trunk, and
--- the game's ring marker shows it. What the game still takes from the CAMERA, and this section takes from the tool:
+-- the game's Cut Ring shows it. What the game still takes from the CAMERA, and this section takes from the tool:
 --   * the plane's heading: HandToolChainsaw:updateSplitPlane turns cameraRotationNode to the camera's yaw (camera:getRotation).
 --     The wrap of HandToolChainsaw.onUpdate gives it the bar's yaw instead, while the game's own update runs, so that everything
 --     the update works out (the plane the trunk is tested against, whether a cut is valid, the plane a finished cut slices along)
@@ -1605,39 +1617,43 @@ local function updateChainsawFromTheTool(original, tool, dt, ...)
 end
 
 -- ---- The chainsaw's reach --------------------------------------------------------------------------------------
--- The game's targeter finds a trunk up to 3 m from the ray's start; with the start moved back (reachBehind) that would be most of a
--- metre past the tip, and the Cut Ring would show there. The chainsaw finds a trunk only up to `tipReach` past the tip of its bar:
--- the way back to the bar's base, the bar's length and the reach past the tip (HAND_TOOL_POINTING_AXES.chainsaw), measured from the
--- moved ray's start as the targeter measures its distance. A trunk further away counts as none: the wrap of the update below takes
--- it out of the targeter's answer for the length of the game's update, so the game shows no Cut Ring, starts no cut and revs into
--- delimbing on the trigger, all by its own logic.
+-- The game's targeter finds a trunk up to 3 m from the ray's start; with the start moved back (reachBehind) that would be most
+-- of a metre past the tip, and the Cut Ring would show there. The chainsaw finds a trunk only up to `tipReach` past the tip of
+-- its bar: the way back to the bar's base, the bar's length and the reach past the tip (HAND_TOOL_POINTING_AXES.chainsaw),
+-- measured from the moved ray's start as the targeter measures its distance. A trunk further away counts as none: the wrap of
+-- the update below takes it out of the targeter's answer for the length of the game's update, so the game shows no Cut Ring,
+-- starts no cut and revs into delimbing on the trigger, all by its own logic.
+-- Without the game's minimum cut distance the ray is not moved back and none of this applies (chainsawReachFromTheBase).
 
--- How far from the bar's base a trunk is still found: the bar and the reach past its tip. nil when the entry has no numbers.
-local function chainsawReachFromTheBase()
+-- How far from the bar's base a trunk is still found (the bar and the reach past its tip) and how far behind the base the ray
+-- starts, both in metres. nil when the reach does not apply: the entry has no numbers, or the ray is not moved back because the
+-- game's minimum cut distance could not be read. The chainsaw then has the game's own reach and end-of-cut rule, and nothing is
+-- hidden.
+local function chainsawReachFromTheBase(tool)
     local axis = VRCompanion.HAND_TOOL_POINTING_AXES.chainsaw
-    local length, past = tonumber(axis.barLength), tonumber(axis.tipReach)
-    if length == nil or past == nil then return nil end
-    return length + past
+    local length, past, behind = tonumber(axis.barLength), tonumber(axis.tipReach), reachBehindOf(tool, axis)
+    if length == nil or past == nil or behind == nil then return nil end
+    return length + past, behind
 end
 
--- The furthest the targeter's distance (from the moved ray's start) can be for a trunk to count: the way back to the bar's base,
--- then the reach from there. nil when there is no limit.
+-- The furthest the targeter's distance (from the moved ray's start) can be for a trunk to count: the way back to the bar's
+-- base, then the reach from there. nil when there is no limit.
 local function chainsawTargetLimit(tool)
-    local reach = chainsawReachFromTheBase()
+    local reach, behind = chainsawReachFromTheBase(tool)
     if reach == nil then return nil end
-    local ok, behind = pcall(resolveForTool, tool, VRCompanion.HAND_TOOL_POINTING_AXES.chainsaw.reachBehind)
-    return (ok and tonumber(behind) or 0) + reach
+    return behind + reach
 end
 
--- A running cut stops when the cut point is further from the bar's base than the reach, measured from the bar, not from the moved
--- ray's start: the game stops a cut when the targeter's ray start is MAXIMUM_CUT_DISTANCE from the cut point, which with the start
--- moved back would let a cut run with the bar most of a metre clear of the trunk. The game's own stop (no slice) ends it; its own
--- check stays in place. The cut point is the cut plane's node (cameraRotationNode), which a cut leaves where the bar met the trunk.
+-- A running cut stops when the cut point is further from the bar's base than the reach, measured from the bar, not from the
+-- moved ray's start: the game stops a cut when the targeter's ray start is MAXIMUM_CUT_DISTANCE from the cut point, which with
+-- the start moved back would let a cut run with the bar most of a metre clear of the trunk. The game's own stop (no slice) ends
+-- it; its own check stays in place. The cut point is the cut plane's node (cameraRotationNode), which a cut leaves where the bar
+-- met the trunk.
 local function stopCutOutOfReach(tool)
     local states = engine("ChainsawCutState")
     local spec = tool.spec_chainsaw
     if type(states) ~= "table" or spec.currentCutState ~= states.CUTTING then return end
-    local reach = chainsawReachFromTheBase()
+    local reach = chainsawReachFromTheBase(tool)
     if reach == nil or spec.cameraRotationNode == nil or type(tool.stopCutting) ~= "function" then return end
     local ok, x, y, z = pcall(toolPointingRay, VRCompanion, tool)
     if not ok or x == nil then return end
@@ -1647,25 +1663,27 @@ local function stopCutOutOfReach(tool)
     if math.sqrt(dx * dx + dy * dy + dz * dz) > reach then tool:stopCutting(false) end
 end
 
--- The chainsaw's update with the tree out of the targeter's answer when it is past the limit, for the length of that update only.
+-- The chainsaw's update with the tree out of the targeter's answer when it is past the limit, for the length of that update
+-- only.
 local function updateChainsawWithinReach(original, tool, ...)
     pcall(stopCutOutOfReach, tool)
-    local ok, targets, key, hidden = pcall(function()
+    local ok, targeterAnswers, chainsawType, hiddenTree = pcall(function()
         local player = tool:getCarryingPlayer()
         local targeter = type(player) == "table" and player.targeter or nil
-        local byKey = type(targeter) == "table" and targeter.closestTargetsByKey or nil
-        local class = engine("HandToolChainsaw")
-        local found = type(byKey) == "table" and class ~= nil and byKey[class] or nil
+        local closestTargets = type(targeter) == "table" and targeter.closestTargetsByKey or nil
+        local chainsawClass = engine("HandToolChainsaw")
+        local closestTree = type(closestTargets) == "table" and chainsawClass ~= nil and closestTargets[chainsawClass] or nil
         local limit = chainsawTargetLimit(tool)
         local states = engine("ChainsawCutState")
-        if type(states) == "table" and tool.spec_chainsaw.currentCutState == states.CUTTING then return nil end  -- a running cut is the game's
-        if type(found) ~= "table" or limit == nil or (tonumber(found.distance) or 0) <= limit then return nil end
-        byKey[class] = nil
-        return byKey, class, found
+        local cutting = type(states) == "table" and tool.spec_chainsaw.currentCutState == states.CUTTING
+        if cutting then return nil end  -- a running cut is the game's
+        if type(closestTree) ~= "table" or limit == nil or (tonumber(closestTree.distance) or 0) <= limit then return nil end
+        closestTargets[chainsawClass] = nil
+        return closestTargets, chainsawClass, closestTree
     end)
-    if not ok or targets == nil then return updateChainsawFromTheTool(original, tool, ...) end
+    if not ok or targeterAnswers == nil then return updateChainsawFromTheTool(original, tool, ...) end
     local done, result = pcall(updateChainsawFromTheTool, original, tool, ...)
-    targets[key] = hidden  -- the targeter's answer stays whole for everything else
+    targeterAnswers[chainsawType] = hiddenTree  -- the targeter's answer stays whole for everything else
     if not done then error(result, 0) end
     return result
 end
@@ -2123,7 +2141,11 @@ local function diagnosticFields(self)
         local minimum = chainsawMinimumCutDistance()
         table.insert(fields, "minimum cut distance: " .. (minimum ~= nil and string.format("%.2f m", minimum) or "could not be read"))
         local axis = VRCompanion.HAND_TOOL_POINTING_AXES.chainsaw
-        table.insert(fields, string.format("reach past the tip: %.2f m (bar %.2f m)", tonumber(axis.tipReach) or 0, tonumber(axis.barLength) or 0))
+        if chainsawReachFromTheBase(tool) ~= nil then
+            table.insert(fields, string.format("reach past the tip: %.2f m (bar %.2f m)", tonumber(axis.tipReach) or 0, tonumber(axis.barLength) or 0))
+        else
+            table.insert(fields, "reach past the tip: not applied (the game's own reach)")
+        end
     end
     -- Horse brush
     if kind == "horsebrush" then

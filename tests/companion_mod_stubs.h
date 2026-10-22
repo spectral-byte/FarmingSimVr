@@ -1799,7 +1799,7 @@ inline constexpr const char* kStubHandToolFlashlight = R"luau(
 // Class.handler(tool, ...) (SpecializationUtil.raiseEvent: spec[eventName](object, ...)). So they are here:
 //   HandToolChainsaw.onUpdate(tool, dt)       the chainsaw's update (run each tick by StubHandTool.tick): targets the tree the
 //                                             targeter found, aligns the split plane (updateSplitPlane), turns the model to
-//                                             face the camera, validates the cut, shows the ring marker, advances a cut
+//                                             face the camera, validates the cut, shows the Cut Ring, advances a cut
 //   HandToolChainsaw.onDraw(tool)             the chainsaw's draw (StubHandTool.draw): renders "crosshair", the game's default one at
 //                                             the centre of the view, while the saw is idle
 //   HandToolChainsaw.onCutAction(tool, _, v)  the ACTIVATE_HANDTOOL handler (v > 0 starts a cut on the targeted tree, or
@@ -2050,7 +2050,7 @@ inline constexpr const char* kStubHandToolChainsaw = R"luau(
             return not (maxY - minY >= spec.maximumCutDiameter or maxZ - minZ >= spec.maximumCutDiameter)
         end
 
-        -- the ring marker sits on the targeted trunk at the height of the cut node
+        -- the Cut Ring sits on the targeted trunk at the height of the cut node
         function functions.updateRingSelector(self, targetedTree, isCutPossible)
             local spec = self.spec_chainsaw
             setVisibility(spec.ringNode, targetedTree ~= nil)
