@@ -210,7 +210,7 @@ inline void HoldOtherModTool(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldOthe
 
 // ---- chainsaw -----------------------------------------------------------------------------------------------
 // The chainsaw's game-side stub (kStubHandToolChainsaw) is not part of every test's game: a test that wants it passes
-// ChainsawStubs(variant) as StartOptions::extraStubs. variant is how HandToolChainsaw is: "ok", "missing", "reshaped" (onUpdate), "drawMissing", "drawReshaped" (onDraw), ...
+// ChainsawStubs(variant) as StartOptions::extraStubs. variant is how HandToolChainsaw is: "ok", "missing", "reshaped" (onUpdate), "drawMissing", "drawReshaped" (onDraw), "minimumMissing" (MINIMUM_CUT_DISTANCE), ...
 inline std::string ChainsawStubs(const char* variant = "ok") {
     return std::string(kStubHandToolChainsaw) + "\nStubHandTool.installChainsaw('" + variant + "')\n";
 }

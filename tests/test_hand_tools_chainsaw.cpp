@@ -92,8 +92,11 @@ protected:
 
     // The chainsaw in the right Tool Hand, picked up with the trigger let go and turned away from where the head looks, so that
     // what follows the hand and what follows the head are told apart.
-    void StartWithChainsawInTheRightHand() {
-        ASSERT_NO_FATAL_FAILURE(Start());
+    // `gameLua` runs before the player takes the chainsaw in hand: what the game's chainsaw registers with the targeter when
+    // held is read then (a minimum cut distance a test sets), and `variant` is how the game's chainsaw is.
+    void StartWithChainsawInTheRightHand(const char* gameLua = "", const char* variant = "ok") {
+        ASSERT_NO_FATAL_FAILURE(Start(variant));
+        ASSERT_EQ(RunLuauChunk(L, gameLua, "=gameLua"), 0);
         ASSERT_NO_FATAL_FAILURE(HoldChainsaw(L));
         PICK_UP(kRight, 0.25f, -0.35f, -0.30f);
         AimHand(kRight, 0.25f, -0.35f, -0.30f, kBarForward, 0.9f);
@@ -168,6 +171,56 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, TheTreeTheBarIsAgainstIsTheTargetedO
     FRAMES(2);
     EXPECT_TRUE(True("saw.spec_chainsaw.targetedTree == nil")) << "the bar points at no trunk, and the head's does not count";
     EXPECT_FALSE(True("getVisibility(saw.spec_chainsaw.ringNode)"));
+}
+
+// The stub's game: a held chainsaw's trees are a target type of the targeter (minimum and maximum distance), as the game's
+// HandToolChainsaw adds them, so a trunk too close to the look ray's start is missed (ADR-0029, amended).
+TEST_F(VirtualGamepadHandToolsChainsawTest, AHeldChainsawsTreesAreATargetTypeWithAMinimumAndAMaximumDistanceThatPuttingTheSawAwayRemoves) {
+    StartWithChainsawInTheRightHand("HandToolChainsaw.MINIMUM_CUT_DISTANCE = 0.7");
+
+    EXPECT_EQ(Dump("type(HandToolChainsaw.MINIMUM_CUT_DISTANCE)"), "number") << "the class carries the game's minimum, next to the maximum";
+    EXPECT_EQ(Dump("type(HandToolChainsaw.MAXIMUM_CUT_DISTANCE)"), "number");
+    ASSERT_TRUE(True("foot.player.targeter.targetedMasks ~= nil and foot.player.targeter.targetedMasks[HandToolChainsaw] ~= nil"))
+        << "the held saw's trees are a target type";
+    EXPECT_NEAR(Number(L, "foot.player.targeter.targetedMasks[HandToolChainsaw].minDistance"), 0.7, 1e-6) << "from the class's minimum";
+    EXPECT_GT(Number(L, "foot.player.targeter.targetedMasks[HandToolChainsaw].maxDistance"), 0.7) << "to a maximum";
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.drop(saw)", "=putAway"), 0);
+    EXPECT_TRUE(True("foot.player.targeter.targetedMasks[HandToolChainsaw] == nil")) << "put away, the type is gone";
+    EXPECT_TRUE(True("foot.player.targeter.closestTargetsByKey[HandToolChainsaw] == nil"));
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawTest, ATrunkNearerToTheLookRaysStartThanTheMinimumIsNotFoundAndTheFoundTreeReportsItsDistance) {
+    StartWithChainsawInTheRightHand("HandToolChainsaw.MINIMUM_CUT_DISTANCE = 0.8");
+
+    // The trunk is 0.6 m along the bar, nearer than the minimum: the targeter misses it.
+    ASSERT_NO_FATAL_FAILURE(PlantTreesAtTheBarAndInFrontOfTheHead());
+    FRAMES(2);
+    EXPECT_TRUE(True("saw.spec_chainsaw.targetedTree == nil")) << "nothing found nearer than the minimum";
+    EXPECT_FALSE(True("getVisibility(saw.spec_chainsaw.ringNode)"));
+
+    // A trunk beyond the minimum is found, and the target says how far it is along the ray.
+    ASSERT_EQ(RunLuauChunk(L, "_G.farTree = StubHandTool.treeAcross(barRay(), 1.2, 0.15)", "=plantFar"), 0);
+    FRAMES(2);
+    ASSERT_TRUE(True("saw.spec_chainsaw.targetedTree ~= nil and saw.spec_chainsaw.targetedTree.node == farTree.node"));
+    EXPECT_NEAR(Number(L, "saw.spec_chainsaw.targetedTree.distance * math.sqrt(barRay()[4] ^ 2 + barRay()[6] ^ 2)"), 1.2, 1e-3)
+        << "the horizontal distance to the bark";
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawTest, TheStubModelHasItsCutNodeBelowTheBarsCenterLine) {
+    StartWithChainsawInTheRightHand();
+
+    EXPECT_NEAR(Number(L, "({ getTranslation(saw.spec_chainsaw.cutNode) })[2]"), -0.04, 1e-6) << "about 4 cm, as in the game's models";
+    EXPECT_NEAR(Number(L, "({ getTranslation(saw.spec_chainsaw.cutNode) })[3]"), 0.4, 1e-6) << "at the bar's tip";
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawTest, AGameWhoseChainsawLacksTheMinimumCutDistanceStillTargetsTheTreeTheBarIsAgainst) {
+    StartWithChainsawInTheRightHand("", "minimumMissing");
+    ASSERT_NO_FATAL_FAILURE(PlantTreesAtTheBarAndInFrontOfTheHead());
+    FRAMES(2);
+
+    EXPECT_EQ(Dump("tostring(HandToolChainsaw.MINIMUM_CUT_DISTANCE)"), "nil") << "this game version has no minimum";
+    EXPECT_TRUE(True("saw.spec_chainsaw.targetedTree ~= nil and saw.spec_chainsaw.targetedTree.node == barTree.node"));
 }
 
 TEST_F(VirtualGamepadHandToolsChainsawTest, TheCutHeightIsWhereTheBarMeetsTheTrunkAndThePlaneIsAlignedWithTheBarNotTheCamera) {
