@@ -331,6 +331,31 @@ local function chainsawReachBehind(tool)
     return minimum
 end
 
+-- Where the chainsaw's ray starts on the root (HAND_TOOL_POINTING_AXES): the bar's axis, at the height of the chainsaw's own cut node
+-- (the chain's lower edge), in the root's axes. The height is the model's as the i3d has it, with the model unrotated under the tool
+-- (the mod keeps it so): the cut node's position in the model's axes, placed at the model's rest under its parent. Its live position
+-- is no use, it rides the cut guide while cutting. nil when the cut node cannot be read (none, the root the game falls back to, one
+-- that is no node or not part of the model), which leaves the ray on the bar's centre line, at the root's height.
+local function chainsawLowerEdge(tool)
+    local spec, model, root = tool.spec_chainsaw, tool.graphicalNode, tool.rootNode
+    local cutNode = type(spec) == "table" and spec.cutNode or nil
+    if cutNode == nil or model == nil or root == nil or cutNode == root then return nil end
+    local ok, y = pcall(function()
+        local node = cutNode
+        while node ~= model do  -- the cut node is part of the model
+            node = engine("getParent")(node)
+            if node == nil or node == 0 or node == root then return nil end
+        end
+        local x, y, z = engine("getWorldTranslation")(cutNode)
+        x, y, z = engine("worldToLocal")(model, x, y, z)
+        x, y, z = engine("localToWorld")(tool.graphicalNodeParent or root, x, y, z)
+        local _, rootY = engine("worldToLocal")(root, x, y, z)
+        return rootY
+    end)
+    if not ok or type(y) ~= "number" or y ~= y or y == math.huge or y == -math.huge then return nil end
+    return { x = 0.0, y = y, z = 0.0 }
+end
+
 -- WHERE EACH TOOL POINTS (the look ray): the ray the game's targeter casts starts at `node(tool)`'s origin and runs
 -- along `direction`, a unit vector in that node's own axes. One entry per tool kind, the place to adjust how a tool aims.
 -- The lance washes from its raycastNode along that node's +Z axis, the nozzle. UNCERTAIN until checked in the headset:
@@ -361,8 +386,11 @@ VRCompanion.HAND_TOOL_POINTING_AXES = {
     -- meets the trunk. UNCERTAIN until checked in the headset.
     -- `reachBehind` is the game's minimum cut distance, read at runtime (chainsawReachBehind): the targeter finds no trunk nearer to
     -- the ray's start than that, so the ray starts that far behind the bar's base and a trunk the bar is against or in is found.
+    -- `position` lowers the start to the chain's lower edge, the height of the chainsaw's own cut node (chainsawLowerEdge): a felled log
+    -- is found as soon as the chain rests on it, and the cut is where the chain meets the bark.
     chainsaw = {
         node = function(tool) return tool.rootNode end,
+        position = chainsawLowerEdge,
         direction = { x = 0.0, y = 0.0, z = 1.0 },
         reachBehind = chainsawReachBehind,
     },
