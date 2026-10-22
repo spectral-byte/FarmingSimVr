@@ -7,7 +7,7 @@
 -- PUBLIC SURFACE
 --   VRCompanion:getSeatOffset(model, cameraIndex)                 forward, up, right (0, 0, 0 when none is set)
 --   VRCompanion:setSeatOffset(model, cameraIndex, f, u, r)        clamps, stores (0 0 0 is dropped), returns the axes it clamped
---   VRCompanion:getCabSeatOffset(cam)                             the offset of the vehicle and in-cab camera `cam` as a translation in the
+--   VRCompanion:getCabSeatOffset(cam, camParent)                  the offset of the vehicle and in-cab camera `cam` as a translation in the
 --                                                                 camera's parent space (x, y, z), 0 0 0 where `cam` is not an in-cab
 --                                                                 camera of a vehicle; the cab camera path adds it to the head's rest position
 --   VRCompanion:getSeatOffsetTarget(cam)                          model, cameraIndex of an in-cab camera, nil otherwise
@@ -18,9 +18,10 @@
 -- IDENTITY: the vehicle model is the vehicle's configFileName (two vehicles of one model, mod vehicles included, share an offset), the
 -- camera is its index in the vehicle's camera list (vehicle.spec_enterable.cameras). A passenger camera is another index.
 --
--- FRAME: the in-cab camera's parent space, where forward is the vehicle's forward (+Z) and the vehicle's left is +X (the engine's
--- vehicles; the head pose's x is to the right). So the offset (forward f, up u, right r) is the translation (-r, u, f). It is not rotated
--- by look yaw or a Snap Turn. No rotation component.
+-- FRAME: the vehicle's own frame (its root node), where forward is +Z and the vehicle's left is +X (the engine's vehicles; the head
+-- pose's x is to the right). So the offset (forward f, up u, right r) is the vector (-r, u, f) there. The in-cab camera hangs from a
+-- free node in world space, not from the vehicle, so the cab camera path turns that vector into the camera parent's space every update
+-- (getCabSeatOffset): the offset follows the vehicle's heading. It is not rotated by look yaw or a Snap Turn. No rotation component.
 --
 -- The Seat Set Action (VR_SET_SEAT, onSeatSetAction): in an in-cab camera, takes the head's lean as the new rest position (ticket #170).
 -- SAVING: saveConfiguration -> saveSeatOffsetSettings(...), loadConfiguration -> loadSeatOffsetSettings(...); a vrSeatOffset change and a Seat Set press save the settings at once.
@@ -98,11 +99,41 @@ function VRCompanion:setSeatOffset(model, cameraIndex, forward, up, right)
     return clamped
 end
 
-function VRCompanion:getCabSeatOffset(cam)
+-- The node whose frame the Seat Offset is measured in: the vehicle's own root node (forward +Z, left +X), which turns with the
+-- vehicle. The in-cab camera's parent is not it: the game hangs cab cameras from a free node in world space.
+function VRCompanion:getSeatOffsetFrameNode(cam)
+    local veh = cam.vehicle
+    if veh == nil then veh = self:getControlledVehicle() end
+    local root = type(veh) == "table" and veh.rootNode or nil
+    if root == nil or root == 0 then return nil end
+    return root
+end
+
+-- A vector from one node's frame into another's (the difference of two points, so the nodes' own positions drop out). Unchanged
+-- when either node or the engine call is missing.
+local function vectorBetweenFrames(fromNode, toNode, x, y, z)
+    local localToLocalFn = localToLocal or (_G and _G.localToLocal)
+    if fromNode == nil or fromNode == 0 or toNode == nil or toNode == 0 or fromNode == toNode or type(localToLocalFn) ~= "function" then
+        return x, y, z
+    end
+    local ox, oy, oz = localToLocalFn(fromNode, toNode, 0, 0, 0)
+    local px, py, pz = localToLocalFn(fromNode, toNode, x, y, z)
+    return px - ox, py - oy, pz - oz
+end
+
+-- The Seat Offset of the in-cab camera `cam` as a translation in camParent's space (the in-cab camera's parent): forward is the
+-- vehicle's forward, wherever the vehicle points in the world.
+function VRCompanion:getCabSeatOffset(cam, camParent)
     local model, index = self:getSeatOffsetTarget(cam)
     if model == nil then return 0, 0, 0 end
     local forward, up, right = self:getSeatOffset(model, index)
-    return -right, up, forward
+    return vectorBetweenFrames(self:getSeatOffsetFrameNode(cam), camParent, -right, up, forward)
+end
+
+-- A lean (a vector in camParent's space) as the Seat Offset's forward, up and right of the vehicle
+function VRCompanion:getSeatLeanOfVehicle(cam, camParent, x, y, z)
+    local vx, vy, vz = vectorBetweenFrames(camParent, self:getSeatOffsetFrameNode(cam), x, y, z)
+    return vz, vy, -vx
 end
 
 local SEAT_OFFSET_USAGE = "Usage: vrSeatOffset [<forward> <up> <right> | reset] (metres from the vehicle's own eye point, each axis up to 0.5 either way; the in-cab camera you are in)"
@@ -170,9 +201,9 @@ local function showBlinkingWarning(text)
     end
 end
 
--- How far the head is from where it would rest, in the in-cab camera's parent space (x, y, z): the head pose's position carried
--- into the cab the way the cab camera path does (through the head tracking node's rotation, look yaw included, else the camera's
--- own eye point turned by the view's yaw).
+-- How far the head is from where it would rest, as the Seat Offset's forward, up and right of the vehicle: the head pose's position
+-- carried into the cab the way the cab camera path does (through the head tracking node's rotation, look yaw included, else the
+-- camera's own eye point turned by the view's yaw), then turned from the in-cab camera's parent space into the vehicle's frame.
 function VRCompanion:getHeadLeanInCab(cam, pose)
     local getParentFn = getParent or (_G and _G.getParent)
     local camParent = 0
@@ -182,7 +213,7 @@ function VRCompanion:getHeadLeanInCab(cam, pose)
     local headYaw = self:normalizeAngle((cam.origRotY or 0) + lookYaw)
     local rest = self:getCabRestPose(cam, camParent, headYaw, lookYaw, 0)
     local x, y, z = self:cabPointFromHead(rest, camParent, pose.x or 0, pose.y or 0, pose.z or 0)
-    return x - rest.x, y - rest.y, z - rest.z
+    return self:getSeatLeanOfVehicle(cam, camParent, x - rest.x, y - rest.y, z - rest.z)
 end
 
 -- The Seat Set Action: in an in-cab camera, makes where the head is now the head's rest position (see CONTEXT.md). The lean is added
@@ -197,9 +228,9 @@ function VRCompanion:onSeatSetAction()
     if model == nil or not self:isGameShowingCamera(cam.cameraNode) then return end
     local pose = self:getResolvedHeadPose()
     if not pose or not pose.isValid then return end
-    local dx, dy, dz = self:getHeadLeanInCab(cam, pose)
+    local leanForward, leanUp, leanRight = self:getHeadLeanInCab(cam, pose)
     local forward, up, right = self:getSeatOffset(model, index)
-    local clamped = self:setSeatOffset(model, index, forward + dz, up + dy, right - dx)
+    local clamped = self:setSeatOffset(model, index, forward + leanForward, up + leanUp, right + leanRight)
     self:recenterView(true)
     self:saveConfiguration()
     if clamped ~= nil then

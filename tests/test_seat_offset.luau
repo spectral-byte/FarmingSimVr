@@ -64,6 +64,11 @@ local function installScene()
         return nextNode
     end
     _G.localToLocal = function(from, to, x, y, z)
+        if from ~= to and nodeOf(to).parent == from then
+            -- into the frame of a child of `from`: undo the child's translation and yaw
+            local c = nodeOf(to)
+            return VRCompanion:rotateVectorByYaw(x - c.t[1], y - c.t[2], z - c.t[3], -c.yaw)
+        end
         local n = nodeOf(from)
         local rx, ry, rz = VRCompanion:rotateVectorByYaw(x, y, z, n.yaw)
         return n.t[1] + rx, n.t[2] + ry, n.t[3] + rz
@@ -635,6 +640,39 @@ test("ConsoleCommandIsAddedAtMapLoadAndRemovedAtMapUnload", function()
     VRCompanion:deleteMap()
     assert(removed["vrSeatOffset"] == true, "vrSeatOffset is removed at map unload")
     _G.addConsoleCommand, _G.removeConsoleCommand, _G.g_currentMission = nil, nil, nil
+end)
+
+-- The in-cab camera hangs from a free node in world space, not from the vehicle: so forward is the vehicle's forward, wherever it points
+local ROOT = 900
+local function pointVehicle(veh, yaw)
+    veh.rootNode = ROOT
+    nodeOf(ROOT).t = { 50, 0, 80 }
+    nodeOf(ROOT).yaw = yaw
+end
+
+test("SeatOffsetFollowsTheVehiclesHeadingNotTheMapsDirection", function()
+    setup()
+    local cam = trackedCab(0)
+    local veh = makeVehicle(freshModel(), { cam })
+    pointVehicle(veh, 0)
+    enter(veh)
+    local base = viewAfterUpdate(cam)
+
+    -- the vehicle's own frame: forward 0.1 is +Z, up 0.2 is +Y, right 0.3 is -X
+    VRCompanion:consoleCommandSeatOffset("0.1", "0.2", "0.3")
+    assertMoved(viewAfterUpdate(cam), base, -0.3, 0.2, 0.1, "the vehicle pointing along the map's +Z")
+
+    for _, heading in ipairs({ math.pi * 0.5, math.pi, -0.7 }) do
+        pointVehicle(veh, heading)
+        local turnedBase = (function()
+            VRCompanion:consoleCommandSeatOffset("reset")
+            local v = viewAfterUpdate(cam)
+            VRCompanion:consoleCommandSeatOffset("0.1", "0.2", "0.3")
+            return v
+        end)()
+        local wx, wy, wz = VRCompanion:rotateVectorByYaw(-0.3, 0.2, 0.1, heading)
+        assertMoved(viewAfterUpdate(cam), turnedBase, wx, wy, wz, string.format("the vehicle heading %.2f", heading))
+    end
 end)
 
 print(string.format("Seat Offset Tests: %d passed, %d failed", passed, failed))

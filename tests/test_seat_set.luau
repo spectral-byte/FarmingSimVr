@@ -64,6 +64,11 @@ local function installScene()
         return nextNode
     end
     _G.localToLocal = function(from, to, x, y, z)
+        if from ~= to and nodeOf(to).parent == from then
+            -- into the frame of a child of `from`: undo the child's translation and yaw
+            local c = nodeOf(to)
+            return VRCompanion:rotateVectorByYaw(x - c.t[1], y - c.t[2], z - c.t[3], -c.yaw)
+        end
         local n = nodeOf(from)
         local rx, ry, rz = VRCompanion:rotateVectorByYaw(x, y, z, n.yaw)
         return n.t[1] + rx, n.t[2] + ry, n.t[3] + rz
@@ -529,6 +534,28 @@ test("DeleteMapForgetsTheSeatSetEventIdAndThatItWasLogged", function()
     _G.g_inputBinding = nil
     assert(id == nil, "the event id is forgotten, got " .. tostring(id))
     assert(logged == false, "the event is logged again on the next map, got " .. tostring(logged))
+end)
+
+-- The in-cab camera hangs from a free node in world space: a lean is the vehicle's forward, up and right, wherever it points
+test("PressInAVehicleFacingAwayFromTheMapsForwardTakesTheLeanInTheVehiclesFrame", function()
+    setup()
+    local cam = trackedCab(0)
+    local veh = makeVehicle(freshModel(), { cam })
+    veh.rootNode = 900
+    nodeOf(900).t = { 50, 0, 80 }
+    nodeOf(900).yaw = math.pi * 0.5
+    enter(veh)
+    local base = viewAfterUpdate(cam)
+
+    state.pose = poseAt(0.1, 0.05, -0.2)
+    local leaned = viewAfterUpdate(cam)
+    VRCompanion:onSeatSetAction()
+    local seated = viewAfterUpdate(cam)
+
+    -- in the map's frame the lean is (-0.1, 0.05, 0.2); turned into the vehicle's frame (a quarter turn) it is 0.1 back, 0.05 up, 0.2 right
+    assertMoved(leaned, base, -0.1, 0.05, 0.2, "the lean")
+    assertMoved(seated, leaned, 0, 0, 0, "after the press the head rests where it was")
+    assert(string.find(offsetText(), "forward -0.100, up 0.050, right 0.200", 1, true), "got: " .. tostring(offsetText()))
 end)
 
 print(string.format("Seat Set Action Tests: %d passed, %d failed", passed, failed))
