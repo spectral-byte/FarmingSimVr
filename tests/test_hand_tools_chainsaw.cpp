@@ -157,6 +157,12 @@ protected:
         ASSERT_EQ(EvalLua(L, "VRCompanion:isHandHoldingHandTool(1)"), "true") << EvalLua(L, "VRCompanion:getHandToolsDiagnostics()");
     }
 
+    // The chainsaw set to find a trunk only up to a hand's width past the tip of its bar (`vrChainsawReach 0.15`, contact-only
+    // cutting): the opt-in limit. By default the chainsaw has the game's own reach.
+    void LimitTheReach() {
+        ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', '0.15')", "=limitTheReach"), 0);
+    }
+
     // The Tool Hand backed away from where it was held, `metres` along the ground against the bar's heading, the bar pointing the
     // same way: the cut stays where it was and the bar moves off it.
     void PullTheHandBack(float metres) {
@@ -292,9 +298,11 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, ATrunkAcrossTheBarNearItsBaseMidBarO
     }
 }
 
-// The bar is 0.4 m long and the saw finds a trunk up to 0.15 m past its tip (ADR-0029, amended): 0.55 m along the bar from its base.
-TEST_F(VirtualGamepadHandToolsChainsawTest, ATrunkJustInsideTheMarginPastTheTipIsFoundAndShowsTheRingAndOneBeyondItIsNot) {
+// With `vrChainsawReach 0.15` (ADR-0029, amended) the bar is 0.4 m long and the saw finds a trunk up to 0.15 m past its tip: 0.55 m
+// along the bar from its base.
+TEST_F(VirtualGamepadHandToolsChainsawTest, WithALimitedReachATrunkJustInsideTheMarginPastTheTipIsFoundAndShowsTheRingAndOneBeyondItIsNot) {
     StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
 
     ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.5));  // 10 cm past the tip
     FRAMES(2);
@@ -308,8 +316,9 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, ATrunkJustInsideTheMarginPastTheTipI
     EXPECT_FALSE(True("getVisibility(saw.spec_chainsaw.ringNode)")) << "no Cut Ring";
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawTest, WithTheTrunkBeyondTheMarginTheTriggerRevsIntoDelimbingAndMakesNoCut) {
+TEST_F(VirtualGamepadHandToolsChainsawTest, WithALimitedReachAndTheTrunkBeyondTheMarginTheTriggerRevsIntoDelimbingAndMakesNoCut) {
     StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
     ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.8));
     FRAMES(2);
 
@@ -332,8 +341,9 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, WithTheTrunkBeyondTheMarginTheTrigge
 }
 
 // The tree is out of the game's sight only while the game's update runs: the targeter keeps what it found.
-TEST_F(VirtualGamepadHandToolsChainsawTest, TheTargeterStillHoldsTheTreeBeyondTheMarginOnceTheChainsawsUpdateHasRun) {
+TEST_F(VirtualGamepadHandToolsChainsawTest, WithALimitedReachTheTargeterStillHoldsTheTreeBeyondTheMarginOnceTheChainsawsUpdateHasRun) {
     StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
     ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.8));
     FRAMES(3);
 
@@ -636,8 +646,9 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, DuringACutMovingTheHandDoesNotMoveTh
     EXPECT_EQ(State(), "cutting");
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawTest, TakingTheBarOffTheTrunkStopsTheCutWithoutCuttingAndTheTriggerStillHeldDoesNotStartItAgain) {
+TEST_F(VirtualGamepadHandToolsChainsawTest, WithALimitedReachTakingTheBarOffTheTrunkStopsTheCutWithoutCuttingAndTheTriggerStillHeldDoesNotStartItAgain) {
     StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
     ASSERT_NO_FATAL_FAILURE(PlantTreesAtTheBarAndInFrontOfTheHead());
     FRAMES(2);
     headset.SetHandInputs(kRight, Trigger(1.0f));
@@ -654,11 +665,12 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, TakingTheBarOffTheTrunkStopsTheCutWi
     EXPECT_EQ(UseCalls(), 1) << "the cut handler is not called again while the trigger stays held";
 }
 
-// A running cut and the reach (ADR-0029, amended): the game stops a cut when the targeter's ray start, which is the game's minimum
-// cut distance behind the bar's base, is 1.5 m from the cut. The mod stops it when the cut is further from the bar than the bar and
-// a hand's width past its tip (0.55 m from its base), though the game's own check would still let it run.
-TEST_F(VirtualGamepadHandToolsChainsawTest, ACutKeepsRunningWhileTheHandMovesWithTheCutWithinTheBarsReachAndSlicesTheTreeWhenItFinishes) {
+// A running cut and a limited reach (`vrChainsawReach 0.15`, ADR-0029, amended): the game stops a cut when the targeter's ray start,
+// which is the game's minimum cut distance behind the bar's base, is 1.5 m from the cut. The mod stops it when the cut is further
+// from the bar than the bar and a hand's width past its tip (0.55 m from its base), though the game's own check would still let it run.
+TEST_F(VirtualGamepadHandToolsChainsawTest, WithALimitedReachACutKeepsRunningWhileTheHandMovesWithTheCutWithinTheBarsReachAndSlicesTheTreeWhenItFinishes) {
     StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
     ASSERT_NO_FATAL_FAILURE(StartCuttingATreeAlongTheBar(0.3));
 
     PullTheHandBack(0.08f);
@@ -671,8 +683,9 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, ACutKeepsRunningWhileTheHandMovesWit
     EXPECT_EQ(State(), "idle");
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawTest, PullingTheBarOutOfTheWoodPastTheReachStopsTheCutWithoutASliceAndTheSawIsIdleAgain) {
+TEST_F(VirtualGamepadHandToolsChainsawTest, WithALimitedReachPullingTheBarOutOfTheWoodPastTheReachStopsTheCutWithoutASliceAndTheSawIsIdleAgain) {
     StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
     ASSERT_NO_FATAL_FAILURE(StartCuttingATreeAlongTheBar(0.3));
 
     PullTheHandBack(0.35f);
@@ -691,8 +704,9 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, PullingTheBarOutOfTheWoodPastTheReac
     EXPECT_EQ(UseCalls(), 1);
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawTest, ACutKeepsItsHeightHeadingAndTiltWhileTheBarIsMovedWithinTheReach) {
+TEST_F(VirtualGamepadHandToolsChainsawTest, WithALimitedReachACutKeepsItsHeightHeadingAndTiltWhileTheBarIsMovedWithinTheReach) {
     StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
     ASSERT_NO_FATAL_FAILURE(StartCuttingATreeAlongTheBar(0.3));
     ASSERT_EQ(RunLuauChunk(L, "_G.heightBefore, _G.normalBefore = cutNodeY(), planeNormal()", "=before"), 0);
 
@@ -704,8 +718,9 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, ACutKeepsItsHeightHeadingAndTiltWhil
     EXPECT_NEAR(Number(L, "dot(planeNormal(), normalBefore)"), 1.0, 1e-4);
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawTest, TheCutEndingBecauseTheBarWasPulledOutEndsTheToolHandsCuttingBuzz) {
+TEST_F(VirtualGamepadHandToolsChainsawTest, WithALimitedReachTheCutEndingBecauseTheBarWasPulledOutEndsTheToolHandsCuttingBuzz) {
     StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
     ASSERT_NO_FATAL_FAILURE(StartCuttingATreeAlongTheBar(0.3));
     FRAMES(4);
     ASSERT_EQ(State(), "cutting");
@@ -774,7 +789,7 @@ protected:
         EXPECT_EQ(State(), "cutting") << "the game's own binding cuts";
         EXPECT_TRUE(True("saw.spec_chainsaw.cuttingTreeNode == headTree.node"));
         FRAMES(3);
-        // The cut is further from the chainsaw than the Tool Hand's reach would allow, and the pull-out rule leaves it to the game.
+        // The cut is further from the chainsaw than a limited reach of the Tool Hand would allow, and the pull-out rule leaves it to the game.
         ASSERT_GT(Number(L, "cutDistanceFromTheBarsBase()"), 0.55) << "the cut is out of the bar's reach";
         EXPECT_EQ(State(), "cutting") << "and still running: the Tool Hand's stop rule does not apply";
         ASSERT_EQ(RunLuauChunk(L, "StubHandTool.pressUseBinding(saw, 0)", "=bindingUp"), 0);
@@ -839,9 +854,10 @@ TEST_F(VirtualGamepadHandToolsChainsawAsInTheGameTest, WithTheToolHandSetDownThe
 }
 
 // Another player's chainsaw (a multiplayer session): the game runs its update on this machine too, but it is not the Tool Hand's, so
-// the reach limit and the pull-out rule leave it alone (the local saw stays in the hand meanwhile).
+// the reach limit (`vrChainsawReach 0.15`) and the pull-out rule leave it alone (the local saw stays in the hand meanwhile).
 TEST_F(VirtualGamepadHandToolsChainsawTest, AnotherPlayersChainsawIsLeftAloneByTheReachLimitAndThePullOutRule) {
     StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local pitch = StubScene.newNode("remotePitch", 0, 4, 1.7, 4)
         local remote = setmetatable({ isOwner = false, camera = { isFirstPerson = true, pitchNode = pitch } }, { __index = _G.Player })
@@ -937,11 +953,19 @@ TEST_F(VirtualGamepadHandToolsChainsawTest, TheDiagnosticsNameTheGamesMinimumCut
     EXPECT_NE(diagnostics.find("minimum cut distance: 0.65 m"), std::string::npos) << diagnostics;
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawTest, TheDiagnosticsNameTheReachPastTheTip) {
+TEST_F(VirtualGamepadHandToolsChainsawTest, TheDiagnosticsNameTheGamesOwnReachPastTheTipAsTheDefault) {
     StartWithChainsawInTheRightHand();
     FRAMES(2);
     const std::string diagnostics = EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
-    EXPECT_NE(diagnostics.find("reach past the tip: 0.15 m"), std::string::npos) << diagnostics;
+    EXPECT_NE(diagnostics.find("reach past the tip: the game's own reach (default)"), std::string::npos) << diagnostics;
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawTest, WithALimitedReachTheDiagnosticsNameTheReachPastTheTip) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
+    FRAMES(2);
+    const std::string diagnostics = EvalLua(L, "runCommand('vrHandToolsDiagnostics')");
+    EXPECT_NE(diagnostics.find("reach past the tip: 0.15 m (bar 0.40 m)"), std::string::npos) << diagnostics;
 }
 
 TEST_F(VirtualGamepadHandToolsChainsawTest, TheDiagnosticsSayWhenTheGamesMinimumCutDistanceCouldNotBeRead) {
@@ -1017,19 +1041,34 @@ protected:
     }
 };
 
-TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, WithNoArgumentTheCommandSaysWhatTheReachIs) {
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, WithNoArgumentTheCommandSaysTheChainsawReachesTheGamesOwnDistanceByDefaultAndTheUsage) {
     StartWithChainsawInTheRightHand();
     const std::string reach = Reach();
-    EXPECT_NE(reach.find("0.15 m"), std::string::npos) << reach;
-    EXPECT_NE(reach.find("default"), std::string::npos) << reach;
+    EXPECT_NE(reach.find("The chainsaw reaches the game's own distance (default)."), std::string::npos) << reach;
     EXPECT_NE(reach.find("Usage: vrChainsawReach [<metres, 0 to 3> | default | game] (saved)"), std::string::npos) << reach;
+    EXPECT_NE(reach.find("vrChainsawReach 0.15 for contact-only cutting"), std::string::npos) << reach;
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, ATrunkAMetrePastTheTipIsNotFoundByDefaultButIsWithAReachOfOneAndAHalfMetres) {
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, WithALimitedReachTheCommandSaysHowFarPastTheTipTheChainsawReaches) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', '0.15')", "=reach"), 0);
+    const std::string reach = Reach();
+    EXPECT_NE(reach.find("The chainsaw reaches 0.15 m past the tip of its bar."), std::string::npos) << reach;
+    EXPECT_EQ(reach.find("(default)"), std::string::npos) << reach;
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, ATrunkAMetrePastTheTipIsFoundOutOfTheBoxAndNotWithAReachOfTheHandsWidth) {
     StartWithChainsawInTheRightHand();
     ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(1.4));  // 1 m past the tip
     FRAMES(2);
-    EXPECT_FALSE(Found()) << "not by default";
+    EXPECT_TRUE(Found()) << "by default: the game's own reach";
+    EXPECT_TRUE(True("getVisibility(saw.spec_chainsaw.ringNode)")) << "and the Cut Ring shows";
+
+    const std::string limited = Reach("0.15");
+    EXPECT_NE(limited.find("0.15 m"), std::string::npos) << limited;
+    EXPECT_NE(limited.find("Saved"), std::string::npos) << limited;
+    FRAMES(2);
+    EXPECT_FALSE(Found()) << "a limited reach hides it";
     EXPECT_FALSE(True("getVisibility(saw.spec_chainsaw.ringNode)"));
 
     const std::string answer = Reach("1.5");
@@ -1037,13 +1076,35 @@ TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, ATrunkAMetrePastTheTipIs
     EXPECT_NE(answer.find("Saved"), std::string::npos) << answer;
     FRAMES(2);
     EXPECT_TRUE(Found());
-    EXPECT_TRUE(True("getVisibility(saw.spec_chainsaw.ringNode)")) << "and the Cut Ring shows";
     EXPECT_NE(Reach().find("1.50 m"), std::string::npos);
 }
 
-// A trunk a little past the default reach: found, cut and sliced once the reach is widened.
-TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, ATrunkJustBeyondTheDefaultReachIsFoundAndCutWithAWiderReach) {
+// Out of the box, a cut from a distance runs and slices (the game's end-of-cut distance is measured from the bar's base, as before the
+// ray was moved back, so a cut on a trunk a metre past the tip does not end at once), and contact cutting works as before.
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, OutOfTheBoxATrunkAMetrePastTheTipIsCutAndSlicedAndOneTheBarIsAgainstToo) {
     StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(StartCuttingATreeAlongTheBar(1.4));  // 1 m past the tip
+    FRAMES(4);
+    EXPECT_EQ(State(), "cutting");
+    FRAMES(60);
+    EXPECT_EQ(Cuts(), 1);
+    EXPECT_EQ(State(), "idle");
+
+    ASSERT_EQ(RunLuauChunk(L, "StubHandTool.trees = {}", "=clearTrees"), 0);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(2);
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(kBarTreeDistance));  // against the bar
+    FRAMES(2);
+    EXPECT_TRUE(Found());
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(2);
+    EXPECT_EQ(State(), "cutting");
+}
+
+// A trunk a little past a limited reach of 0.15: found, cut and sliced once the reach is widened.
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, ATrunkJustBeyondALimitedReachIsFoundAndCutWithAWiderReach) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
     ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.7));  // 30 cm past the tip
     FRAMES(2);
     ASSERT_FALSE(Found());
@@ -1060,7 +1121,7 @@ TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, ATrunkJustBeyondTheDefau
 TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, AShorterReachAlsoMovesTheEdgeOfTheReach) {
     StartWithChainsawInTheRightHand();
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', '0')", "=reachNone"), 0);
-    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.5));  // 10 cm past the tip: within the default, past a reach of 0
+    ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(0.5));  // 10 cm past the tip: within a reach of 0.15, past a reach of 0
     FRAMES(2);
     EXPECT_FALSE(Found());
     ASSERT_EQ(RunLuauChunk(L, "StubHandTool.trees = {}", "=clearTrees"), 0);
@@ -1069,36 +1130,44 @@ TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, AShorterReachAlsoMovesTh
     EXPECT_TRUE(Found());
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, AWiderReachLetsACutRunWhileTheBarIsPulledFurtherFromTheWoodThanTheDefaultAllows) {
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, AWiderReachLetsACutRunWhileTheBarIsPulledFurtherFromTheWoodThanAReachOfTheHandsWidthAllows) {
     StartWithChainsawInTheRightHand();
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', '1.5')", "=reach"), 0);
     ASSERT_NO_FATAL_FAILURE(StartCuttingATreeAlongTheBar(0.3));
 
     PullTheHandBack(0.35f);
     FRAMES(2);
-    ASSERT_GT(Number(L, "cutDistanceFromTheBarsBase()"), 0.55) << "further from the bar than the default reach";
+    ASSERT_GT(Number(L, "cutDistanceFromTheBarsBase()"), 0.55) << "further from the bar than a reach of 0.15";
     EXPECT_EQ(State(), "cutting") << "within the wider reach the cut goes on";
     FRAMES(60);
     EXPECT_EQ(Cuts(), 1);
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, DefaultPutsTheReachBackToTheTuningPoint) {
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, DefaultPutsTheReachBackToTheGamesOwn) {
     StartWithChainsawInTheRightHand();
-    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', '1.5')", "=reach"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', '0.15')", "=reach"), 0);
     const std::string answer = Reach("default");
-    EXPECT_NE(answer.find("0.15 m"), std::string::npos) << answer;
-    EXPECT_NE(Reach().find("0.15 m"), std::string::npos);
+    EXPECT_NE(answer.find("the game's own distance (default)"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("Saved"), std::string::npos) << answer;
+    EXPECT_NE(Reach().find("The chainsaw reaches the game's own distance (default)."), std::string::npos);
 
     ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(1.4));
     FRAMES(2);
-    EXPECT_FALSE(Found());
-    EXPECT_NE(ReachDiagnostics().find("reach past the tip: 0.15 m"), std::string::npos) << ReachDiagnostics();
+    EXPECT_TRUE(Found());
+    EXPECT_NE(ReachDiagnostics().find("reach past the tip: the game's own reach (default)"), std::string::npos) << ReachDiagnostics();
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, GameFindsATrunkAsFarAsTheGamesTargeterAllowsStillBackedUpSoContactCuttingWorks) {
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, GameIsTheSameAsDefaultTheGamesOwnReach) {
     StartWithChainsawInTheRightHand();
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', '0.15')", "=reach"), 0);
     const std::string answer = Reach("game");
-    EXPECT_NE(answer.find("game"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("the game's own distance (default)"), std::string::npos) << answer;
+    EXPECT_NE(Reach().find("The chainsaw reaches the game's own distance (default)."), std::string::npos);
+    EXPECT_EQ(EvalLua(L, "savedXml['vrSettings.chainsawReach']"), "default");
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, TheGamesOwnReachFindsATrunkAsFarAsTheGamesTargeterAllowsStillBackedUpSoContactCuttingWorks) {
+    StartWithChainsawInTheRightHand();
 
     ASSERT_NO_FATAL_FAILURE(PlantTreeAlongTheBar(2.0));  // 1.6 m past the tip; 2.7 m from the ray's start
     FRAMES(2);
@@ -1119,9 +1188,8 @@ TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, GameFindsATrunkAsFarAsTh
     EXPECT_EQ(State(), "cutting");
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, WithGameACutRunsWithTheBarClearOfTheTrunkUntilTheGamesOwnStopEndsItWithoutASlice) {
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, ByDefaultACutRunsWithTheBarClearOfTheTrunkUntilTheGamesOwnStopEndsItWithoutASlice) {
     StartWithChainsawInTheRightHand();
-    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', 'game')", "=reach"), 0);
     ASSERT_NO_FATAL_FAILURE(StartCuttingATreeAlongTheBar(0.3));
 
     PullTheHandBack(0.35f);
@@ -1143,18 +1211,6 @@ TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, WithGameACutRunsWithTheB
     EXPECT_EQ(Cuts(), 0) << "without a slice";
 }
 
-// Cutting from a distance as before the ray was moved back: the game's end-of-cut distance is measured from the bar's base, so a
-// cut on a trunk a metre past the tip runs and slices instead of ending at once.
-TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, WithGameATrunkAMetrePastTheTipIsFoundCutAndSliced) {
-    StartWithChainsawInTheRightHand();
-    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', 'game')", "=reach"), 0);
-    ASSERT_NO_FATAL_FAILURE(StartCuttingATreeAlongTheBar(1.4));  // 1 m past the tip
-    FRAMES(4);
-    EXPECT_EQ(State(), "cutting") << "the cut runs";
-    FRAMES(60);
-    EXPECT_EQ(Cuts(), 1) << "and slices the tree";
-    EXPECT_EQ(State(), "idle");
-}
 
 TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, WithAWideReachATrunkAMetrePastTheTipIsCutAndSlicedToo) {
     StartWithChainsawInTheRightHand();
@@ -1172,9 +1228,9 @@ TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, TheCutRingOfATrunkTheBar
     ASSERT_NO_FATAL_FAILURE(ExpectTheCutRingStaysAroundACut());
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, TheCutRingOfATrunkTheBarIsAgainstStaysWhenACutStartsAndWhenItIsLetGoWithGame) {
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, TheCutRingOfATrunkTheBarIsAgainstStaysWhenACutStartsAndWhenItIsLetGoWithALimitedReach) {
     StartWithChainsawInTheRightHand();
-    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', 'game')", "=reach"), 0);
+    ASSERT_NO_FATAL_FAILURE(LimitTheReach());
     ASSERT_NO_FATAL_FAILURE(ExpectTheCutRingStaysAroundACut());
 }
 
@@ -1200,10 +1256,11 @@ TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, AReachBeyondTheMaximumIs
 
 TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, TheDiagnosticsShowTheCurrentReachOrThatItIsTheGamesOwn) {
     StartWithChainsawInTheRightHand();
+    EXPECT_NE(ReachDiagnostics().find("reach past the tip: the game's own reach (default)"), std::string::npos) << ReachDiagnostics();
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', '1.5')", "=reach"), 0);
     EXPECT_NE(ReachDiagnostics().find("reach past the tip: 1.50 m"), std::string::npos) << ReachDiagnostics();
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', 'game')", "=game"), 0);
-    EXPECT_NE(ReachDiagnostics().find("reach past the tip: the game's own reach"), std::string::npos) << ReachDiagnostics();
+    EXPECT_NE(ReachDiagnostics().find("reach past the tip: the game's own reach (default)"), std::string::npos) << ReachDiagnostics();
 }
 
 TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, AGameWhoseChainsawLacksTheMinimumCutDistanceStillHasTheGamesOwnReachWhateverIsSet) {
@@ -1225,28 +1282,33 @@ TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, TheReachIsSavedAcrossSes
     ASSERT_NO_FATAL_FAILURE(StartANewSessionWithSavedReach(("'" + saved + "'").c_str()));
     EXPECT_NE(Reach().find("1.50 m"), std::string::npos) << Reach();
 
-    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', 'game')", "=game"), 0);
-    const std::string savedGame = EvalLua(L, "savedXml['vrSettings.chainsawReach']");
-    ASSERT_NO_FATAL_FAILURE(StartANewSessionWithSavedReach(("'" + savedGame + "'").c_str()));
-    EXPECT_NE(Reach().find("game"), std::string::npos) << Reach();
-
     ASSERT_EQ(RunLuauChunk(L, "runCommand('vrChainsawReach', 'default')", "=default"), 0);
     const std::string savedDefault = EvalLua(L, "savedXml['vrSettings.chainsawReach']");
     ASSERT_NO_FATAL_FAILURE(StartANewSessionWithSavedReach(("'" + savedDefault + "'").c_str()));
-    EXPECT_NE(Reach().find("0.15 m"), std::string::npos) << Reach();
+    EXPECT_NE(Reach().find("the game's own distance (default)"), std::string::npos) << Reach();
+}
+
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, AnOldSettingsFileWithANumberKeepsItAndOneWithGameLoadsTheGamesOwnReach) {
+    StartWithChainsawInTheRightHand();
+    ASSERT_NO_FATAL_FAILURE(StartANewSessionWithSavedReach("'0.15'"));
+    EXPECT_NE(Reach().find("The chainsaw reaches 0.15 m past the tip of its bar."), std::string::npos) << Reach();
+    ASSERT_NO_FATAL_FAILURE(StartANewSessionWithSavedReach("'0.4'"));
+    EXPECT_NE(Reach().find("0.40 m"), std::string::npos) << Reach();
+    ASSERT_NO_FATAL_FAILURE(StartANewSessionWithSavedReach("'game'"));
+    EXPECT_NE(Reach().find("the game's own distance (default)"), std::string::npos) << Reach();
 }
 
 TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, AnOldSettingsFileWithoutTheReachLoadsTheDefault) {
     StartWithChainsawInTheRightHand();
     ASSERT_NO_FATAL_FAILURE(StartANewSessionWithSavedReach("nil"));
-    EXPECT_NE(Reach().find("0.15 m"), std::string::npos) << Reach();
+    EXPECT_NE(Reach().find("the game's own distance (default)"), std::string::npos) << Reach();
 }
 
-TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, AnythingElseInTheSettingsFileLoadsTheDefault) {
+TEST_F(VirtualGamepadHandToolsChainsawReachSettingTest, AnythingElseInTheSettingsFileLoadsTheGamesOwnReach) {
     StartWithChainsawInTheRightHand();
     for (const char* garbage : { "'banana'", "'-2'", "'inf'", "'nan'", "'1e999'", "true", "-3", "0/0" }) {
         SCOPED_TRACE(garbage);
         ASSERT_NO_FATAL_FAILURE(StartANewSessionWithSavedReach(garbage));
-        EXPECT_NE(Reach().find("0.15 m"), std::string::npos) << Reach();
+        EXPECT_NE(Reach().find("the game's own distance (default)"), std::string::npos) << Reach();
     }
 }
