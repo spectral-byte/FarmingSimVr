@@ -110,6 +110,12 @@
 --     ObjectGrab  updateMotionControllers -> updateObjectGrab(dt) on every path (the grip edges and the carry), updatePointerRay ->
 --                 getObjectGrabRayTarget() (VRCompanionObjectGrab.lua, ADR-0033). A hand carrying a Held Object
 --                 (isHandCarryingHeldObject) stays in use however still it is held and is never a Pointer Hand candidate.
+--     AnimatedObjects registerMotionControllerConsoleCommands -> loadAnimatedObjectsSupport() at map load (wraps the game's trigger
+--                 callback to follow the zones), updatePointerRay -> updateAnimatedObjects(dt, clickPointWins) after Interactive Control
+--                 and before Object Grab (also, as suppressed, on the paths where input is ignored, so the selection clears),
+--                 getPointerDiagnostics -> getAnimatedObjectsDiagnostics(), resetMotionControllers -> resetAnimatedObjectsSupport()
+--                 (VRCompanionAnimatedObjects.lua, ADR-0034). While the ray is on one, the Pointer Hand's trigger is taken off the
+--                 Virtual Gamepad and a pull runs the game's own toggle.
 --     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
 --                 setting rides on save/loadMotionControllerSettings, the status command ends with the pad's state and
 --                 the console command registers next to the others (VRCompanionVirtualGamepad.lua, ADR-0028)
@@ -312,6 +318,7 @@ local function clearHands()
     end
     state.pointerHand = nil
     state.ray.valid = false
+    state.ray.visible = false  -- the update that draws it does not run now: a ray left drawn would stay on its last target
     VRCompanion.pointerHand = nil
 end
 
@@ -385,6 +392,8 @@ end
 -- Interactive Control still has to see a Pointer Hand go away (its state is put back); a single guarded call.
 local function settleInteractiveControl(self, dt)
     if type(self.updateInteractiveControl) == "function" then self:updateInteractiveControl(dt) end
+    -- No Animated Object stays selected either (suppressed: nothing is selected, the trigger is not taken).
+    if type(self.updateAnimatedObjects) == "function" then self:updateAnimatedObjects(dt, true) end
 end
 
 -- What reads the pointer after the hands were polled (menus); a single guarded call.
@@ -426,6 +435,7 @@ function VRCompanion:updateMotionControllers(dt)
     state.bridgeMissing = (getHandState == nil)
     if getHandState == nil then
         state.ray.valid = false
+        state.ray.visible = false
         if not bridgeWasMissing then
             -- The cached hands are stale from here on: read as untracked, so that a hand holding the Steering Wheel is no
             -- longer located and Wheel Grab lets go (and stops dropping the other devices' steering).
@@ -764,6 +774,15 @@ function VRCompanion:updatePointerRay(dt)
     if type(self.updateInteractiveControl) == "function" then
         hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt)
     end
+    -- Animated Objects: the ray is on a door or gate in whose zone the player stands. A Click Point within the cone wins: Interactive
+    -- Control answers a hit point only when it selected one (it answers hasTarget, with no hit point, merely for "Click Points exist",
+    -- which an Animated Object may replace).
+    if type(self.updateAnimatedObjects) == "function" then
+        local onAnimatedObject, animatedX, animatedY, animatedZ = self:updateAnimatedObjects(dt, hitX ~= nil)
+        if onAnimatedObject then
+            hasTarget, hitX, hitY, hitZ = true, animatedX, animatedY, animatedZ
+        end
+    end
     -- Object Grab: the ray is on an object the empty hands can pick up (a second target kind, after the Click Points).
     if not hasTarget and type(self.getObjectGrabRayTarget) == "function" then
         hasTarget, hitX, hitY, hitZ = self:getObjectGrabRayTarget()
@@ -1026,6 +1045,9 @@ function VRCompanion:getPointerDiagnostics()
     if type(self.getObjectGrabDiagnostics) == "function" then
         virtualHandsText = virtualHandsText .. " | " .. self:getObjectGrabDiagnostics()
     end
+    if type(self.getAnimatedObjectsDiagnostics) == "function" then
+        virtualHandsText = virtualHandsText .. " | " .. self:getAnimatedObjectsDiagnostics()
+    end
     local pointer = state.pointerHand
     local trigger = pointer ~= nil and state.hands[pointer].trigger or 0
     return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s | Left hand: %s | Right hand: %s%s",
@@ -1048,6 +1070,7 @@ function VRCompanion:registerMotionControllerConsoleCommands()
     if type(self.registerWheelGrabConsoleCommands) == "function" then self:registerWheelGrabConsoleCommands() end
     if type(self.registerHandToolsConsoleCommands) == "function" then self:registerHandToolsConsoleCommands() end
     if type(self.registerObjectGrabConsoleCommands) == "function" then self:registerObjectGrabConsoleCommands() end
+    if type(self.loadAnimatedObjectsSupport) == "function" then self:loadAnimatedObjectsSupport() end  -- wraps the game's trigger callback
     if type(self.registerVirtualGamepadConsoleCommands) == "function" then self:registerVirtualGamepadConsoleCommands() end
 end
 
@@ -1078,6 +1101,7 @@ function VRCompanion:resetMotionControllers()
         removeConsoleCommand("vrPointerCone")
     end
     if type(self.resetInteractiveControlSupport) == "function" then self:resetInteractiveControlSupport() end
+    if type(self.resetAnimatedObjectsSupport) == "function" then self:resetAnimatedObjectsSupport() end
     state = newState()
     initHands()
     self.pointerHand = nil
