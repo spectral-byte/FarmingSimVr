@@ -66,11 +66,24 @@ TEST_F(VirtualGamepadAnimatedObjectsNearerTest, TheObjectIsTheTargetFromTheMomen
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), "-0.40 -0.20 1.35");
 
-    ASSERT_EQ(RunLuauChunk(L, "object.mass = 5", "=theObjectGetsTooHeavy"), 0) << "the hands can no longer pick it up";
+    ASSERT_EQ(RunLuauChunk(L, "table.remove(StubHandTool.looseObjectList, 1)", "=takeTheObjectAway"), 0) << "the object is gone from the world";
     FRAMES(3);
     EXPECT_EQ(DrawnEnd(), "-0.40 -0.20 1.95") << "without it the door is the ray's";
     PullTrigger(kRight);
     EXPECT_EQ(Toggles(), 1);
+}
+
+TEST_F(VirtualGamepadAnimatedObjectsNearerTest, TheObjectInFrontStillWinsWhenTheEnginesCastDoesNotSeeIt) {
+    // The engine's ray cast stops at any rigid body, so a pallet hides the door behind it from the cast. Where it did not (a collision
+    // the cast leaves out), the rule is the nearer of the two hits: the object's distance comes from Object Grab's report.
+    ASSERT_NO_FATAL_FAILURE(StartWithDoorAndObject("1.5"));
+    ASSERT_EQ(RunLuauChunk(L, "StubAnimatedObject.castSeesLooseObjects = false", "=castBlind"), 0);
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(2);
+    EXPECT_EQ(DrawnEnd(), "-0.40 -0.20 1.35");
+    PullTrigger(kRight);
+    EXPECT_EQ(Toggles(), 0);
+    EXPECT_EQ(Pad().bRightTrigger, 255);
 }
 
 // ---- A door in front of a loose object ------------------------------------------------------------------------------------------

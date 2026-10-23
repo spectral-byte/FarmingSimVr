@@ -39,6 +39,8 @@
 // StubAnimatedObject.advance(object, fraction)   the animation moves by that part of its duration in its direction, and stops (direction
 //   0, as the game's server sets it) at either end. setDirection decides a stopped door's direction by its time, as the game's does.
 // StubAnimatedObject.originalTriggerCallback   the game's trigger callback as the stub made it (the class has it unless a wrap replaced it).
+// StubAnimatedObject.castSeesLooseObjects   (default true) the raycastClosest also hits the loose objects of the hands stubs
+//   (StubHandTool.looseObjectList, spheres), as the engine reports any rigid body: an object in front of a door hides the door from it.
 // StubAnimatedObject.casts   every raycastClosest call, { x, y, z, dx, dy, dz, maxDistance, mask }.
 // StubAnimatedObject.delete(object)   the object is deleted with no leave event for the zone.
 // StubAnimatedObject.textCalls   the prompt texts set, { eventId }; setting one for an event that is not registered raises, as the game's
@@ -58,6 +60,7 @@ inline constexpr const char* kStubAnimatedObjects = R"luau(
         variant = variant or "ok"
         S.toggles, S.casts, S.textCalls, S.activatables, S.registered, S.boxList, S.boxes = {}, {}, {}, {}, {}, {}, {}
         S.callbackName, S.toggleName, S.canName, S.pending, S.raised = "triggerCallback", "onAnimationInputToggle", "getCanBeTriggered", nil, 0
+        S.castSeesLooseObjects = true
 
         _G.CollisionFlag = { DEFAULT = 1, STATIC_OBJECT = 2, DYNAMIC_OBJECT = 4, PLAYER = 8, TRIGGER = 16, TERRAIN = 32, TERRAIN_DELTA = 64,
             TERRAIN_DISPLACEMENT = 128, FILLABLE = 256, BUILDING = 512 }
@@ -185,6 +188,21 @@ inline constexpr const char* kStubAnimatedObjects = R"luau(
                     end
                     if not miss and tmin <= tmax and tmin >= 0 and tmin <= maxDistance and (best == nil or tmin < best) then
                         best, bestNode = tmin, node
+                    end
+                end
+            end
+            -- the loose objects of the hands stubs are rigid bodies too, and the engine's cast reports them (a pallet in front of a door
+            -- hides the door from it) unless a test turns that off to leave the choice to the nearer-wins rule alone
+            local list = S.castSeesLooseObjects and StubHandTool and StubHandTool.looseObjectList or {}
+            for _, object in ipairs(list) do
+                if entityExists(object.node) then
+                    local cx, cy, cz = getWorldTranslation(object.node)
+                    local ox, oy, oz = cx - x, cy - y, cz - z
+                    local b = ox * dx + oy * dy + oz * dz
+                    local disc = b * b - (ox * ox + oy * oy + oz * oz - object.radius ^ 2)
+                    if disc >= 0 then
+                        local t = b - math.sqrt(disc)
+                        if t >= 0 and t <= maxDistance and (best == nil or t < best) then best, bestNode = t, object.node end
                     end
                 end
             end
