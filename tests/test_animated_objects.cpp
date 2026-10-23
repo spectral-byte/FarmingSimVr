@@ -163,7 +163,7 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, ADoorBeyondTheRaysLengthIsNotSelected)
 
 // ---- What can be worked ------------------------------------------------------------------------------------------------------
 
-TEST_F(VirtualGamepadAnimatedObjectsTest, AnObjectWhoseCanBeTriggeredCheckAnswersFalseIsNotSelectedBeFlippedItIs) {
+TEST_F(VirtualGamepadAnimatedObjectsTest, AnObjectWhoseCanBeTriggeredCheckAnswersFalseIsNotSelectedUntilTheCheckAnswersTrue) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
     ASSERT_EQ(RunLuauChunk(L, "door.canBeTriggered = false", "=shut"), 0);
     EnterZone();
