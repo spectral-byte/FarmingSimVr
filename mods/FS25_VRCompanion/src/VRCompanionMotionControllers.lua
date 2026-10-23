@@ -112,11 +112,11 @@
 --                 at first, settled once the nearer of it and an Animated Object is known). A hand carrying a Held Object
 --                 (isHandCarryingHeldObject) stays in use however still it is held and is never a Pointer Hand candidate.
 --     AnimatedObjects registerMotionControllerConsoleCommands -> loadAnimatedObjectsSupport() at map load (wraps the game's trigger
---                 callback to follow the zones), updatePointerRay -> updateAnimatedObjects(dt, clickPointWins, grabDistance) after
---                 Interactive Control, between Object Grab's peek and settle (the nearer wins; also, as suppressed, on the paths where input is ignored, so the selection clears),
---                 getPointerDiagnostics -> getAnimatedObjectsDiagnostics(), resetMotionControllers -> resetAnimatedObjectsSupport()
---                 (VRCompanionAnimatedObjects.lua, ADR-0034). While the ray is on one, the Pointer Hand's trigger is taken off the
---                 Virtual Gamepad and a pull runs the game's own toggle.
+--                 callback to follow the zones), updatePointerRay -> updateAnimatedObjects(dt, suppressed, rivalDistance) after
+--                 Interactive Control, between Object Grab's peek and settle (the nearer wins; also, as suppressed, on the paths
+--                 where input is ignored, so the selection clears), getPointerDiagnostics -> getAnimatedObjectsDiagnostics(),
+--                 resetMotionControllers -> resetAnimatedObjectsSupport() (VRCompanionAnimatedObjects.lua, ADR-0034). While the
+--                 ray is on one, the Pointer Hand's trigger is taken off the Virtual Gamepad and a pull runs the game's own toggle.
 --     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
 --                 setting rides on save/loadMotionControllerSettings, the status command ends with the pad's state and
 --                 the console command registers next to the others (VRCompanionVirtualGamepad.lua, ADR-0028)
