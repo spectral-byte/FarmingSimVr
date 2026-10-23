@@ -38,6 +38,7 @@
 // StubAnimatedObject.toggles   every run of the toggle handler, { object, direction }, in order; toggleCount(object)
 // StubAnimatedObject.advance(object, fraction)   the animation moves by that part of its duration in its direction, and stops (direction
 //   0, as the game's server sets it) at either end. setDirection decides a stopped door's direction by its time, as the game's does.
+// StubAnimatedObject.originalTriggerCallback   the game's trigger callback as the stub made it (the class has it unless a wrap replaced it).
 // StubAnimatedObject.casts   every raycastClosest call, { x, y, z, dx, dy, dz, maxDistance, mask }.
 // StubAnimatedObject.delete(object)   the object is deleted with no leave event for the zone.
 // StubAnimatedObject.textCalls   the prompt texts set, { eventId }; setting one for an event that is not registered raises, as the game's
@@ -110,6 +111,7 @@ inline constexpr const char* kStubAnimatedObjects = R"luau(
             AnimatedObject.triggerCallback = triggerCallback
         end
         function AnimatedObject:raiseActive() S.raised = S.raised + 1 end
+        S.originalTriggerCallback = AnimatedObject.triggerCallback  -- what the game has, for a test to see that it is handed back as found
 
         -- the game's check (opening hours and the like; its body is stripped from the SDK): a test flips object.canBeTriggered
         local function canBeTriggered(self) return self.canBeTriggered ~= false end
