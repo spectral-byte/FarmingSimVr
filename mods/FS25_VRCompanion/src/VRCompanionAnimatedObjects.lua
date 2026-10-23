@@ -12,6 +12,8 @@
 -- world's collision (the engine's raycastClosest, up to the ray's length) and walks up from the hit node to one of the animation parts
 -- of an object in the zone: that object is the selected one, and the ray ends where it hit. A pull of the trigger runs the same toggle
 -- the prompt's button runs (the activatable's toggle handler), guarded so that an error never reaches the game.
+-- The Pointer Hand feels it as a Click Point (VRCompanion:onClickPointEvent): a light pulse as the ray lands on an object it was not on
+-- (not when it moves to another part of the same one), a firmer one for each pull that toggled. Never the other hand.
 --
 -- What it relies on (release of the game this was written against: the SDK's AnimatedObject.lua, AnimatedObjectActivatable.lua; pinned by
 -- tests/test_animated_objects_wraps.cpp against stand-ins, with the game's functions missing or reshaped):
@@ -80,6 +82,7 @@ local function newState()
         parts = {},        -- scratch: [animation part node] = the object in the zone that can be worked now
         hit = {},          -- scratch: what the ray cast hit
         selected = nil,
+        landedOn = nil,    -- the object the ray is on and has pulsed for
     }
 end
 
@@ -275,13 +278,19 @@ end
 
 -- A pull runs the toggle the prompt's button runs. When the prompt is not the one shown, its action event is not registered, and the
 -- handler's refresh of the prompt's texts would raise for it: the refresh is left out then. Guarded: nothing reaches the game.
+-- Returns whether the handler ran without an error.
 local function toggle(object)
     local activatable = object.activatable
     local target = activatable
     if object.controls.posActionEventId == nil then
         target = setmetatable({ updateActionEventTexts = function() end }, { __index = activatable })
     end
-    pcall(activatable.onAnimationInputToggle, target)
+    return (pcall(activatable.onAnimationInputToggle, target))
+end
+
+-- The pulses of a Click Point, on the Pointer Hand only: "selected" as the ray lands, "clicked" for a pull that toggled.
+local function feel(self, kind, object)
+    if type(self.onClickPointEvent) == "function" then self:onClickPointEvent(kind, object) end
 end
 
 -- Called by the Pointer Ray code once per Companion Mod update, after the ray is placed. Returns whether the ray is on an Animated
@@ -295,13 +304,22 @@ function VRCompanion:updateAnimatedObjects(dt, suppressed)
         return false
     end
     state.selected = nil
-    if suppressed or not rayMayWork(self) then return false end
+    if suppressed or not rayMayWork(self) then
+        state.landedOn = nil
+        return false
+    end
 
     local selected, hx, hy, hz = nil, nil, nil, nil
     if collectParts() > 0 then
         selected, hx, hy, hz = objectUnderTheRay(self, self:getPointerRay())
     end
     state.selected = selected
+    -- The select pulse of a Click Point: one on the Pointer Hand as the ray lands on an Animated Object it was not on, again only after
+    -- it was on none or on another. Moving from one moving part to another of the same object is not landing.
+    if selected ~= state.landedOn then
+        state.landedOn = selected
+        if selected ~= nil then feel(self, "selected", selected) end
+    end
     if selected == nil then return false end
 
     -- While the ray is on an Animated Object the Pointer Hand's trigger is its: it reads released on the Virtual Gamepad, unless it was
@@ -313,7 +331,7 @@ function VRCompanion:updateAnimatedObjects(dt, suppressed)
     end
     if mayUseTrigger then
         local pressed = self:getPointerTrigger()
-        if pressed then toggle(selected) end
+        if pressed and toggle(selected) then feel(self, "clicked", selected) end
     end
     return true, hx, hy, hz
 end
