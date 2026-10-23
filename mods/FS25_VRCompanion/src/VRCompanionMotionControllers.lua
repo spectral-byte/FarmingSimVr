@@ -312,6 +312,7 @@ local function clearHands()
     end
     state.pointerHand = nil
     state.ray.valid = false
+    state.ray.visible = false  -- the update that draws it does not run now: a ray left drawn would stay on its last target
     VRCompanion.pointerHand = nil
 end
 
@@ -428,6 +429,7 @@ function VRCompanion:updateMotionControllers(dt)
     state.bridgeMissing = (getHandState == nil)
     if getHandState == nil then
         state.ray.valid = false
+        state.ray.visible = false
         if not bridgeWasMissing then
             -- The cached hands are stale from here on: read as untracked, so that a hand holding the Steering Wheel is no
             -- longer located and Wheel Grab lets go (and stops dropping the other devices' steering).
