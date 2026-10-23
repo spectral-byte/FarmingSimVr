@@ -156,6 +156,7 @@ local function newState()
         dt = 0,              -- the dt of this update
         swing = { samples = {}, rig = nil, last = nil },  -- the carrying hand's recent places in the world, and the last release
         lastSnapMs = nil,    -- the game clock when the last hold snapped (for the diagnostics)
+        peeked = { player = nil, node = nil, target = nil, waiting = false },  -- what the last peek found, for settleObjectGrabRayTarget
     }
 end
 
@@ -877,13 +878,11 @@ local function grabbableTarget(player)
     return target.node, target.x, target.y, target.z, target
 end
 
--- What the last peek found, for settleObjectGrabRayTarget (scratch).
-local peeked = { player = nil, node = nil, target = nil, waiting = false }
-
 -- Called by updatePointerRay, once per update after the Pointer Ray is placed: whether the ray is on an object the hands can pick up,
 -- where, and how far along the ray from the fingertip (the Animated Objects module compares it with its own hit, ADR-0034). It only
 -- LOOKS: no pulse and no grab. The caller then says, with settleObjectGrabRayTarget, whether the object is what the ray ends on.
 function VRCompanion:peekObjectGrabRayTarget()
+    local peeked = state.peeked
     peeked.target = nil
     local player = localPlayer()
     if player == nil or aimedRay(self, player) == nil then
@@ -908,6 +907,7 @@ end
 -- as it lands, and squeezing its grip there grabs the object (see "The grab"). When it is not (a Click Point or an Animated Object is
 -- nearer), nothing of that happens, and the ray landing on the object again later is felt as a new landing.
 function VRCompanion:settleObjectGrabRayTarget(isTarget)
+    local peeked = state.peeked
     local target = peeked.target
     peeked.target = nil
     if target == nil then return end
@@ -1157,7 +1157,6 @@ end
 
 -- Map unload: the wraps come off and everything seen this session is forgotten. The saved setting stays as it is.
 function VRCompanion:resetObjectGrab()
-    peeked.player, peeked.node, peeked.target = nil, nil, nil
     liftWraps()
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrObjectGrab")
