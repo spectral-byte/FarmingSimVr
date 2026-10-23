@@ -42,7 +42,6 @@
 --       (VRCompanion:takeVirtualGamepadInput(hand, "trigger")).
 --   VRCompanion:getAnimatedObjectsDiagnostics() -> string   one line for vrPointerDiagnostics
 --   VRCompanion:loadAnimatedObjectsSupport() / resetAnimatedObjectsSupport()   map load / unload (hands the class back as found)
---   VRCompanion.ANIMATED_OBJECT_REACH_BEHIND   how far (m) behind the fingertip the cast starts
 --
 -- Hooks into the rest of the mod
 --   MotionControllers   registerMotionControllerConsoleCommands -> loadAnimatedObjectsSupport() at map load; updatePointerRay ->
@@ -56,14 +55,18 @@ VRCompanion.AnimatedObjects = VRCompanion.AnimatedObjects or {}
 
 local engine = VRCompanion.getEngineGlobal
 
--- The cast starts this far (m) behind the fingertip (the game's hands do the same: VRCompanion.OBJECT_GRAB_REACH_BEHIND), and a hit nearer
--- than that minus the margin is behind the finger and does not count. Tune in the headset.
-VRCompanion.ANIMATED_OBJECT_REACH_BEHIND = 0.6
+-- The cast starts as far (m) behind the fingertip as the game's hands' look ray does: Object Grab's VRCompanion.OBJECT_GRAB_REACH_BEHIND,
+-- the one place it is tuned (the nearer-wins comparison with an object Object Grab can pick up measures both from the same point). The
+-- fallback is for a mod that loads without Object Grab. A hit nearer than that minus the margin is behind the finger and does not count.
+local DEFAULT_REACH_BEHIND = 0.6
 local BEHIND_MARGIN = 0.1
 
 -- The game's names the module relies on: class, function, how many parameters the function must declare at least (a reshaped
 -- function declares fewer, self counts) and what they are, for the warning.
-local TRIGGER_CALLBACK = { class = "AnimatedObject", fn = "triggerCallback", parameters = 6, describe = "(object, triggerId, otherId, onEnter, onLeave, onStay)" }
+local TRIGGER_CALLBACK = {
+    class = "AnimatedObject", fn = "triggerCallback", parameters = 6,
+    describe = "(object, triggerId, otherId, onEnter, onLeave, onStay)",
+}
 local CAN_BE_TRIGGERED = { class = "AnimatedObject", fn = "getCanBeTriggered", parameters = 1, describe = "(object)" }
 local TOGGLE_HANDLER = { class = "AnimatedObjectActivatable", fn = "onAnimationInputToggle", parameters = 1, describe = "(activatable)" }
 
@@ -261,7 +264,7 @@ local function objectUnderTheRay(self, ray)
     if type(rayCast) ~= "function" or type(getParent) ~= "function" then return nil end
     local hit = state.hit
     hit.node, hit.onHit = nil, onHit
-    local behind = self.ANIMATED_OBJECT_REACH_BEHIND
+    local behind = tonumber(self.OBJECT_GRAB_REACH_BEHIND) or DEFAULT_REACH_BEHIND
     local ok = pcall(rayCast, ray.ox - ray.dx * behind, ray.oy - ray.dy * behind, ray.oz - ray.dz * behind, ray.dx, ray.dy, ray.dz,
         self.POINTER_RAY_LENGTH + behind, "onHit", hit, castMask())
     if not ok or hit.node == nil or hit.distance < behind - BEHIND_MARGIN then return nil end

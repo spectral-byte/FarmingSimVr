@@ -12,8 +12,6 @@ namespace {
 using namespace hand_tools_test;
 using namespace animated_object_test;
 
-// A door to the left side of the player's ray: a hand pointing at tracking (-0.4, -0.2, -0.3) has its fingertip at world (0.4, -0.2, 0.3).
-constexpr const char* kDoorOnTheLeft = "_G.leftDoor = StubAnimatedObject.door({ name = 'leftDoor', x = 0.4, y = -0.2, z = 2.0 })";
 // A second door beside the first one: the ray of a hand 0.8 m to the side lands on it.
 constexpr const char* kDoorBeside = "_G.besideDoor = StubAnimatedObject.door({ name = 'besideDoor', x = -1.2, y = -0.2, z = 2.0 })";
 // One Animated Object with two moving parts a little apart (a double gate): the ray of the hand at kHandX lands on the first, the ray
@@ -157,7 +155,7 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, ADoorThatCannotBeTriggeredPulsesNothin
     EXPECT_EQ(PulsesTo(kLeft), 0);
 }
 
-TEST_F(VirtualGamepadAnimatedObjectsTest, ADoorThatCanNotBeTriggeredAnyMoreStopsPulsingAndPulsesAgainWhenItCanBe) {
+TEST_F(VirtualGamepadAnimatedObjectsTest, ADoorThatBecomesLockedStopsPulsingAndPulsesAgainWhenItIsUnlocked) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
     EnterZone();
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);

@@ -193,18 +193,10 @@ inline constexpr const char* kStubAnimatedObjects = R"luau(
             end
             -- the loose objects of the hands stubs are rigid bodies too, and the engine's cast reports them (a pallet in front of a door
             -- hides the door from it) unless a test turns that off to leave the choice to the nearer-wins rule alone
-            local list = S.castSeesLooseObjects and StubHandTool and StubHandTool.looseObjectList or {}
-            for _, object in ipairs(list) do
-                if entityExists(object.node) then
-                    local cx, cy, cz = getWorldTranslation(object.node)
-                    local ox, oy, oz = cx - x, cy - y, cz - z
-                    local b = ox * dx + oy * dy + oz * dz
-                    local disc = b * b - (ox * ox + oy * oy + oz * oz - object.radius ^ 2)
-                    if disc >= 0 then
-                        local t = b - math.sqrt(disc)
-                        if t >= 0 and t <= maxDistance and (best == nil or t < best) then best, bestNode = t, object.node end
-                    end
-                end
+            if S.castSeesLooseObjects and StubHandTool and StubHandTool.castAtLooseObjects then
+                S.looseHit = S.looseHit or {}
+                local loose = StubHandTool.castAtLooseObjects(S.looseHit, x, y, z, dx, dy, dz, 0, maxDistance)
+                if loose ~= nil and (best == nil or loose.distance < best) then best, bestNode = loose.distance, loose.node end
             end
             if best == nil then return 0 end
             target[callbackName](target, bestNode, x + dx * best, y + dy * best, z + dz * best, best, 0, 0, 1, 0, 0, true)
@@ -228,6 +220,7 @@ inline constexpr const char* kStubAnimatedObjects = R"luau(
         local name = options.name or ("door" .. doors)
         local class = options.map and S.classes.AnimatedMapObject or S.classes.AnimatedObject
         local object = setmetatable({ saveId = name, isEnabled = true, canBeTriggered = options.canBeTriggered ~= false }, class)
+        if options.noSaveId then object.saveId = nil end  -- a building's door has none, only the nodes of its i3d
         object.controls = { posAction = "ACTIVATE_HANDTOOL", negAction = options.negAction, posActionText = "Open", negActionText = "Close" }
         if options.noAction then object.controls.posAction = nil end
         if options.sameAction then object.controls.negAction = object.controls.posAction end
@@ -316,7 +309,7 @@ constexpr float kHandX = 0.4f, kHandY = -0.2f, kHandZ = -0.3f;
 // Object Grab's check of the off-hand does not make.
 constexpr const char* kAnimatedObjectHelpers = R"luau(
     function _G.animatedCasts()
-        local length = VRCompanion.POINTER_RAY_LENGTH + VRCompanion.ANIMATED_OBJECT_REACH_BEHIND
+        local length = VRCompanion.POINTER_RAY_LENGTH + VRCompanion.OBJECT_GRAB_REACH_BEHIND
         local casts = {}
         for _, cast in ipairs(StubAnimatedObject.casts) do
             if math.abs(cast.maxDistance - length) < 1e-6 then table.insert(casts, cast) end
@@ -325,6 +318,8 @@ constexpr const char* kAnimatedObjectHelpers = R"luau(
     end
 )luau";
 constexpr const char* kDoorAhead = "_G.door = StubAnimatedObject.door({ name = 'door', x = -0.4, y = -0.2, z = 2.0 })";
+// A door to the left side of the player's ray: a hand pointing at tracking (-0.4, -0.2, -0.3) has its fingertip at world (0.4, -0.2, 0.3).
+constexpr const char* kDoorOnTheLeft = "_G.leftDoor = StubAnimatedObject.door({ name = 'leftDoor', x = 0.4, y = -0.2, z = 2.0 })";
 
 // A test of the Pointer Ray working Animated Objects, seen from what the game reads from the Virtual Gamepad: the mod started on a
 // player on foot with the game's empty hands, the Virtual Gamepad on, the game clock set, and the game's Animated Objects in the game.

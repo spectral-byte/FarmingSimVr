@@ -18,9 +18,6 @@ namespace {
 using namespace hand_tools_test;
 using namespace animated_object_test;
 
-// A door to the left side of the player's ray: a hand pointing at tracking (-0.4, -0.2, -0.3) has its fingertip at world (0.4, -0.2, 0.3).
-constexpr const char* kDoorOnTheLeft = "_G.leftDoor = StubAnimatedObject.door({ name = 'leftDoor', x = 0.4, y = -0.2, z = 2.0 })";
-
 }  // namespace
 
 // ---- The Virtual Gamepad -------------------------------------------------------------------------------------------------------
