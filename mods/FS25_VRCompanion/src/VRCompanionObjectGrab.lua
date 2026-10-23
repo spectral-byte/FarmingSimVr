@@ -23,7 +23,8 @@
 -- THE POINTER RAY ON AN OBJECT: the targeter's closest target for the hands (closestTargetsByKey[HandToolHands]) is a node the hands
 -- can pick up when the game's own getCanPickUpNode says so (so the mass limit, the pickup distance and super strength are the game's).
 -- While the Pointer Hand aims and the target is one, the Pointer Ray is drawn, to the point where the targeter hit it, and the Pointer
--- Hand gets one light pulse as the ray lands (again only after it left the object, or on another object).
+-- Hand gets one light pulse as the ray lands (again only after it left the object, or on another object). A Click Point or an Animated
+-- Object (a door) nearer along the ray is the ray's target instead: the object is then neither drawn nor pulsed nor grabbed.
 --
 -- NO CENTRE CROSSHAIR: while the hand aims, the hands tool's onDraw is skipped for the local player (its crosshair and grab icon at the
 -- centre of the view are head-locked, and would point where the hand does not). The game's own function draws them otherwise.
@@ -74,8 +75,10 @@
 --   VRCompanion.OBJECT_GRAB_REACH_BEHIND       how far (m) the look ray's origin is moved back along the finger
 --   VRCompanion.OBJECT_GRAB_LAND_PULSE_MS / _STRENGTH   the light pulse on the Pointer Hand as the ray lands on something grabbable
 --   VRCompanion:getObjectGrabAimedRay(player) -> x, y, z, dirX, dirY, dirZ | nil, why not   what Player:getLookRay answers
---   VRCompanion:getObjectGrabRayTarget() -> hasTarget, x, y, z   the Pointer Ray's object target (called by updatePointerRay); a
---                                      squeeze while the ray is on the target grabs it
+--   VRCompanion:peekObjectGrabRayTarget() -> hasTarget, x, y, z, distance   the Pointer Ray's object target and how far along the ray
+--                                      from the fingertip it is (called by updatePointerRay); only looks: no pulse, no grab
+--   VRCompanion:settleObjectGrabRayTarget(isTarget)   the answer for the last peek: the object is what the ray ends on (the landing
+--                                      pulse, and a squeeze there grabs it) or something nearer is (nothing happens)
 --   VRCompanion:updateObjectGrab(dt)    once per Motion Controller update, after the hands are polled and before the Pointer Hand is
 --                                      chosen: the grip edges, and the carry (records the offset, lets go, ends)
 --   VRCompanion:isHandCarryingHeldObject(hand) -> boolean   the hand carries a Held Object it grabbed (stays in use, never points)
@@ -96,7 +99,8 @@
 --
 -- Hooks into the rest of the mod (each a single guarded call):
 --   Core               registerLookRayAimer("objectGrab", ...) and holdLookRayWrap("objectGrab")
---   MotionControllers  updatePointerRay -> getObjectGrabRayTarget() (after Interactive Control); updateMotionControllers ->
+--   MotionControllers  updatePointerRay -> peekObjectGrabRayTarget() / settleObjectGrabRayTarget() (after Interactive Control, with
+--                      the Animated Objects module in between: the nearer of the two wins); updateMotionControllers ->
 --                      updateObjectGrab(dt) on every path; isHandCarryingHeldObject(hand) keeps the hand in use and out of the Pointer
 --                      Hand candidates; the saved setting, the console commands, the diagnostics and the reset chain through the
 --                      Motion Controller functions of the same names
@@ -873,9 +877,14 @@ local function grabbableTarget(player)
     return target.node, target.x, target.y, target.z, target
 end
 
+-- What the last peek found, for settleObjectGrabRayTarget (scratch).
+local peeked = { player = nil, node = nil, target = nil, waiting = false }
+
 -- Called by updatePointerRay, once per update after the Pointer Ray is placed: whether the ray is on an object the hands can pick up,
--- and where. The Pointer Hand gets one light pulse as it lands, and squeezing its grip there grabs the object (see "The grab").
-function VRCompanion:getObjectGrabRayTarget()
+-- where, and how far along the ray from the fingertip (the Animated Objects module compares it with its own hit, ADR-0034). It only
+-- LOOKS: no pulse and no grab. The caller then says, with settleObjectGrabRayTarget, whether the object is what the ray ends on.
+function VRCompanion:peekObjectGrabRayTarget()
+    peeked.target = nil
     local player = localPlayer()
     if player == nil or aimedRay(self, player) == nil then
         state.landedNode = nil
@@ -890,12 +899,27 @@ function VRCompanion:getObjectGrabRayTarget()
         state.landedNode = nil
         return false
     end
-    if node ~= state.landedNode then
-        state.landedNode = node
+    peeked.player, peeked.node, peeked.target, peeked.waiting = player, node, target, waiting
+    -- The targeter measures from the look ray's origin, which is OBJECT_GRAB_REACH_BEHIND behind the fingertip.
+    return true, x, y, z, (tonumber(target.distance) or 0) - self.OBJECT_GRAB_REACH_BEHIND
+end
+
+-- The caller's answer for what the last peek found: whether the object is the ray's target. Then the Pointer Hand gets one light pulse
+-- as it lands, and squeezing its grip there grabs the object (see "The grab"). When it is not (a Click Point or an Animated Object is
+-- nearer), nothing of that happens, and the ray landing on the object again later is felt as a new landing.
+function VRCompanion:settleObjectGrabRayTarget(isTarget)
+    local target = peeked.target
+    peeked.target = nil
+    if target == nil then return end
+    if not isTarget then
+        state.landedNode = nil
+        return
+    end
+    if peeked.node ~= state.landedNode then
+        state.landedNode = peeked.node
         self:pulsePointerHand(self.OBJECT_GRAB_LAND_PULSE_MS, self.OBJECT_GRAB_LAND_PULSE_STRENGTH)
     end
-    tryGrab(self, player, target, waiting)
-    return true, x, y, z
+    tryGrab(self, peeked.player, target, peeked.waiting)
 end
 
 -- ---- No centre crosshair ----------------------------------------------------------------------------------------------
@@ -1133,6 +1157,7 @@ end
 
 -- Map unload: the wraps come off and everything seen this session is forgotten. The saved setting stays as it is.
 function VRCompanion:resetObjectGrab()
+    peeked.player, peeked.node, peeked.target = nil, nil, nil
     liftWraps()
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrObjectGrab")
@@ -1143,7 +1168,8 @@ end
 
 wrapAll()  -- the game's classes are there as the files load
 
-VRCompanion.ObjectGrab.getObjectGrabRayTarget = function(self, ...) return VRCompanion.getObjectGrabRayTarget(VRCompanion, ...) end
+VRCompanion.ObjectGrab.peekObjectGrabRayTarget = function(self, ...) return VRCompanion.peekObjectGrabRayTarget(VRCompanion, ...) end
+VRCompanion.ObjectGrab.settleObjectGrabRayTarget = function(self, ...) return VRCompanion.settleObjectGrabRayTarget(VRCompanion, ...) end
 VRCompanion.ObjectGrab.consoleCommandSetObjectGrab = function(self, ...) return VRCompanion.consoleCommandSetObjectGrab(VRCompanion, ...) end
 VRCompanion.ObjectGrab.consoleCommandObjectGrabDiagnostics = function(self, ...) return VRCompanion.consoleCommandObjectGrabDiagnostics(VRCompanion, ...) end
 

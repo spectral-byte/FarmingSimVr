@@ -108,11 +108,12 @@
 --                 (isHandKeptInUseByHandTool) the Tool Hand stays in use however still it is held, so a held-still cut or spray
 --                 does not drop the tool.
 --     ObjectGrab  updateMotionControllers -> updateObjectGrab(dt) on every path (the grip edges and the carry), updatePointerRay ->
---                 getObjectGrabRayTarget() (VRCompanionObjectGrab.lua, ADR-0033). A hand carrying a Held Object
+--                 peekObjectGrabRayTarget() and settleObjectGrabRayTarget() (VRCompanionObjectGrab.lua, ADR-0033; the object is looked
+--                 at first, settled once the nearer of it and an Animated Object is known). A hand carrying a Held Object
 --                 (isHandCarryingHeldObject) stays in use however still it is held and is never a Pointer Hand candidate.
 --     AnimatedObjects registerMotionControllerConsoleCommands -> loadAnimatedObjectsSupport() at map load (wraps the game's trigger
---                 callback to follow the zones), updatePointerRay -> updateAnimatedObjects(dt, clickPointWins) after Interactive Control
---                 and before Object Grab (also, as suppressed, on the paths where input is ignored, so the selection clears),
+--                 callback to follow the zones), updatePointerRay -> updateAnimatedObjects(dt, clickPointWins, grabDistance) after
+--                 Interactive Control, between Object Grab's peek and settle (the nearer wins; also, as suppressed, on the paths where input is ignored, so the selection clears),
 --                 getPointerDiagnostics -> getAnimatedObjectsDiagnostics(), resetMotionControllers -> resetAnimatedObjectsSupport()
 --                 (VRCompanionAnimatedObjects.lua, ADR-0034). While the ray is on one, the Pointer Hand's trigger is taken off the
 --                 Virtual Gamepad and a pull runs the game's own toggle.
@@ -774,18 +775,24 @@ function VRCompanion:updatePointerRay(dt)
     if type(self.updateInteractiveControl) == "function" then
         hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt)
     end
-    -- Animated Objects: the ray is on a door or gate in whose zone the player stands. A Click Point within the cone wins: Interactive
-    -- Control answers a hit point only when it selected one (it answers hasTarget, with no hit point, merely for "Click Points exist",
-    -- which an Animated Object may replace).
+    -- A Click Point within the cone wins over everything: Interactive Control answers a hit point only when it selected one (it answers
+    -- hasTarget, with no hit point, merely for "Click Points exist", which an Animated Object may replace).
+    -- Object Grab: the ray is on an object the empty hands can pick up. Only looked at here: it pulses and grabs once it is the target.
+    local grabbable, grabX, grabY, grabZ, grabDistance = false, nil, nil, nil, nil
+    if not hasTarget and type(self.peekObjectGrabRayTarget) == "function" then
+        grabbable, grabX, grabY, grabZ, grabDistance = self:peekObjectGrabRayTarget()
+    end
+    -- Animated Objects: the ray is on a door or gate in whose zone the player stands. Of the two the ray meets first, the nearer wins.
     if type(self.updateAnimatedObjects) == "function" then
-        local onAnimatedObject, animatedX, animatedY, animatedZ = self:updateAnimatedObjects(dt, hitX ~= nil)
+        local onAnimatedObject, animatedX, animatedY, animatedZ = self:updateAnimatedObjects(dt, hitX ~= nil, grabbable and grabDistance or nil)
         if onAnimatedObject then
             hasTarget, hitX, hitY, hitZ = true, animatedX, animatedY, animatedZ
+            grabbable = false
         end
     end
-    -- Object Grab: the ray is on an object the empty hands can pick up (a second target kind, after the Click Points).
-    if not hasTarget and type(self.getObjectGrabRayTarget) == "function" then
-        hasTarget, hitX, hitY, hitZ = self:getObjectGrabRayTarget()
+    if type(self.settleObjectGrabRayTarget) == "function" then self:settleObjectGrabRayTarget(grabbable) end
+    if grabbable then
+        hasTarget, hitX, hitY, hitZ = true, grabX, grabY, grabZ
     end
     if ray.valid and hasTarget then
         ray.visible = true

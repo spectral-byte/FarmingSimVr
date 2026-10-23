@@ -34,8 +34,10 @@
 -- or a Stereo Dialog, in a vehicle, off the first person view, or with Motion Controllers off.
 --
 -- PUBLIC SURFACE
---   VRCompanion:updateAnimatedObjects(dt, suppressed) -> hasTarget, hitX, hitY, hitZ   once per update after the Pointer Ray is
---       placed (VRCompanion:updatePointerRay); suppressed: another target (a Click Point) has the ray, so nothing is selected.
+--   VRCompanion:updateAnimatedObjects(dt, suppressed, rivalDistance) -> hasTarget, hitX, hitY, hitZ   once per update after the Pointer
+--       Ray is placed (VRCompanion:updatePointerRay); suppressed: another target (a Click Point) has the ray, so nothing is selected;
+--       rivalDistance: how far along the ray an object Object Grab can pick up is (nil: none), and the nearer of the two is the ray's
+--       target (ticket #183).
 --       While the ray is on an Animated Object the Pointer Hand's trigger is taken off the Virtual Gamepad
 --       (VRCompanion:takeVirtualGamepadInput(hand, "trigger")).
 --   VRCompanion:getAnimatedObjectsDiagnostics() -> string   one line for vrPointerDiagnostics
@@ -253,7 +255,7 @@ local function onHit(hit, node, x, y, z, distance)
     return true
 end
 
--- The object whose animation part the ray is on, with where it hits, or nil.
+-- The object whose animation part the ray is on, with where it hits and how far along the ray from the fingertip, or nil.
 local function objectUnderTheRay(self, ray)
     local rayCast, getParent = engine("raycastClosest"), engine("getParent")
     if type(rayCast) ~= "function" or type(getParent) ~= "function" then return nil end
@@ -268,7 +270,7 @@ local function objectUnderTheRay(self, ray)
     for _ = 1, MAX_PARENTS do
         if node == nil or node == 0 then return nil end
         local object = state.parts[node]
-        if object ~= nil then return object, hit.x, hit.y, hit.z end
+        if object ~= nil then return object, hit.x, hit.y, hit.z, hit.distance - behind end
         local okParent, parent = pcall(getParent, node)
         if not okParent then return nil end
         node = parent
@@ -294,8 +296,10 @@ local function feel(self, kind, object)
 end
 
 -- Called by the Pointer Ray code once per Companion Mod update, after the ray is placed. Returns whether the ray is on an Animated
--- Object that can be worked and, then, where it hits.
-function VRCompanion:updateAnimatedObjects(dt, suppressed)
+-- Object that can be worked and, then, where it hits. `suppressed`: a Click Point has the ray. `rivalDistance`: how far along the ray
+-- from the fingertip a loose object Object Grab can pick up is; one nearer than the Animated Object is the ray's target instead (a tie
+-- is the Animated Object's), and nothing is selected then.
+function VRCompanion:updateAnimatedObjects(dt, suppressed, rivalDistance)
     if not state.installed then
         -- Found unusable at map load: said once, to a player who uses Motion Controllers.
         if state.problem ~= nil and not state.gaveUp and self.motionControllersEnabled ~= false and anyHandTracked(self) then
@@ -309,10 +313,11 @@ function VRCompanion:updateAnimatedObjects(dt, suppressed)
         return false
     end
 
-    local selected, hx, hy, hz = nil, nil, nil, nil
+    local selected, hx, hy, hz, distance = nil, nil, nil, nil, nil
     if collectParts() > 0 then
-        selected, hx, hy, hz = objectUnderTheRay(self, self:getPointerRay())
+        selected, hx, hy, hz, distance = objectUnderTheRay(self, self:getPointerRay())
     end
+    if selected ~= nil and rivalDistance ~= nil and rivalDistance < distance then selected = nil end
     state.selected = selected
     -- The select pulse of a Click Point: one on the Pointer Hand as the ray lands on an Animated Object it was not on, again only after
     -- it was on none or on another. Moving from one moving part to another of the same object is not landing.

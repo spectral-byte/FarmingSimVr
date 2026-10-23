@@ -261,6 +261,7 @@ add_executable(fs25_vr_tests
     tests/test_object_grab_wraps.cpp
     tests/test_animated_objects.cpp
     tests/test_animated_objects_haptics.cpp
+    tests/test_animated_objects_nearer.cpp
     tests/test_animated_objects_pointer.cpp
     tests/test_animated_objects_wraps.cpp
 )
