@@ -344,6 +344,22 @@ function VRCompanion:updateAnimatedObjects(dt, suppressed, rivalDistance)
     return true, hx, hy, hz
 end
 
+-- What names an object in the diagnostics: its save id (a placed object has one), else the name of its first animation part's node (a
+-- building's door has none, only the nodes of its i3d), else that node's id, else just "yes".
+local function describeObject(object)
+    if object.saveId ~= nil then return tostring(object.saveId) end
+    local animation = object.animation
+    local part = type(animation) == "table" and type(animation.parts) == "table" and animation.parts[1] or nil
+    local node = type(part) == "table" and part.node or nil
+    if node == nil then return "yes" end
+    local getName = engine("getName")
+    if type(getName) == "function" then
+        local ok, name = pcall(getName, node)
+        if ok and type(name) == "string" and name ~= "" then return name end
+    end
+    return "node " .. tostring(node)
+end
+
 -- One line for vrPointerDiagnostics: whether the wrap is installed and what it currently sees.
 function VRCompanion:getAnimatedObjectsDiagnostics()
     if state.gaveUp then return "Animated Objects support: gave up (see the warning in the log)" end
@@ -356,7 +372,7 @@ function VRCompanion:getAnimatedObjectsDiagnostics()
     end
     local selected = state.selected
     return string.format("Animated Objects support: installed | in zone: %d | selected: %s", inZone,
-        selected ~= nil and tostring(selected.saveId or "yes") or "none")
+        selected ~= nil and describeObject(selected) or "none")
 end
 
 VRCompanion.AnimatedObjects.updateAnimatedObjects = function(self, ...) return VRCompanion.updateAnimatedObjects(VRCompanion, ...) end

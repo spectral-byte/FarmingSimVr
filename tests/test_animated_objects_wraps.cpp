@@ -139,6 +139,18 @@ TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, ThePointerDiagnosticsCarryOneLine
     EXPECT_NE(EvalLua(L, "runCommand('vrPointerDiagnostics')").find("in zone: 0 | selected: none"), std::string::npos);
 }
 
+TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, TheDiagnosticsNameTheSelectedObjectByItsPartWhenItHasNoSaveId) {
+    ASSERT_NO_FATAL_FAILURE(StartWithDoor("ok", false));
+    ASSERT_EQ(RunLuauChunk(L, "_G.door = StubAnimatedObject.door({ name = 'barnDoor', x = -0.4, y = -0.2, z = 2.0, noSaveId = true })", "=buildingDoor"), 0);
+    EnterZone();
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    const std::string text = EvalLua(L, "runCommand('vrPointerDiagnostics')");
+    EXPECT_NE(text.find("in zone: 1 | selected: barnDoorPart"), std::string::npos) << text;
+
+    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
+    EXPECT_NE(EvalLua(L, "runCommand('vrPointerDiagnostics')").find("in zone: 1 | selected: none"), std::string::npos);
+}
+
 TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, ThePointerDiagnosticsSayTheSupportGaveUp) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor("toggleMissing"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
