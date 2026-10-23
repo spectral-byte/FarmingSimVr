@@ -259,6 +259,7 @@ add_executable(fs25_vr_tests
     tests/test_object_grab_snap.cpp
     tests/test_object_grab_throw.cpp
     tests/test_object_grab_wraps.cpp
+    tests/test_animated_objects.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
