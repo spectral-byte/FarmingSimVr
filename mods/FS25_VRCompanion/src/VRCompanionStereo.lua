@@ -860,7 +860,7 @@ function VRCompanion:requiresAfrFallback()
 end
 
 function VRCompanion:computeEyeOffset(pose, eyeIndex, afrFallback)
-    if not afrFallback or self.isMenuVisible then
+    if not afrFallback or self:isMenuQuadShown() then
         return 0, 0, 0
     end
     local ipd = self:getIpd()
@@ -931,7 +931,7 @@ function VRCompanion:getResolvedHeadPose()
 end
 
 function VRCompanion:getActiveEyeIndex(afrFallback)
-    if not self.isMenuVisible and not self.is2DViewActive then
+    if not self:isMenuQuadShown() and not self.is2DViewActive then
         if self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then
             return self:getDualPassEye()
         end
@@ -1005,9 +1005,13 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
         if type(setAudioListenerFn) == "function" then
             setAudioListenerFn(self.cyclopeanAudioListenerNode)
         end
+        -- The Virtual Hands follow the head for this rendered frame (a frame may be rendered with no update before it).
+        if type(self.placeVirtualHandsForRender) == "function" then
+            self:placeVirtualHandsForRender()
+        end
     end
 
-    local isStereoActive = stereoRequested and not self.isMenuVisible and not self.is2DViewActive
+    local isStereoActive = stereoRequested and not self:isMenuQuadShown() and not self.is2DViewActive
 
     if isStereoActive then
         local isRightEye = (eyeIndex == 1)
@@ -1121,7 +1125,7 @@ end
 function VRCompanion:onOutsideCameraUpdate(cam)
     local camNode = cam.cameraNode
     -- 2D Floating Window Mode and GUI menus show the engine's camera as-is
-    if self.is2DViewActive or self.isMenuVisible then
+    if self.is2DViewActive or self:isMenuQuadShown() then
         self:renderThroughEngineCamera(camNode)
         return
     end
@@ -1315,71 +1319,14 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
         end
     end
 
-    local cabTransX, cabTransY, cabTransZ = eyeTx, eyeTy, eyeTz
-    local midCabTransX, midCabTransY, midCabTransZ = tx, ty, tz
-    -- The rotation the head pose turns on, in camParent's space: the head tracking node's, else
-    -- the turned view's yaw. Composed as quaternions: Euler angles read back from the engine
-    -- lose the head's pitch when it looks a quarter turn to the side.
-    local baseYaw = targetHeadRotY
-    local baseQx, baseQy, baseQz, baseQw = nil, nil, nil, nil
-
-    if cam.headTrackingNode ~= nil and camParent ~= 0 then
-        if type(localToLocalFn) == "function" then
-            cabTransX, cabTransY, cabTransZ = localToLocalFn(cam.headTrackingNode, camParent, eyeTx, eyeTy, eyeTz)
-            midCabTransX, midCabTransY, midCabTransZ = localToLocalFn(cam.headTrackingNode, camParent, tx, ty, tz)
-        else
-            local nodeTransX, nodeTransY, nodeTransZ = 0, 0, 0
-            if type(getTranslationFn) == "function" then
-                local ok, rawX, rawY, rawZ = pcall(getTranslationFn, cam.headTrackingNode)
-                if ok and rawX ~= nil then nodeTransX, nodeTransY, nodeTransZ = rawX, rawY, rawZ end
-            end
-            local rotTx, rotTy, rotTz = eyeTx, eyeTy, eyeTz
-            if type(self.rotateVectorByYaw) == "function" then
-                rotTx, rotTy, rotTz = self:rotateVectorByYaw(eyeTx, eyeTy, eyeTz, targetHeadRotY)
-            end
-            cabTransX = nodeTransX + rotTx
-            cabTransY = nodeTransY + rotTy
-            cabTransZ = nodeTransZ + rotTz
-
-            local rotMidTx, rotMidTy, rotMidTz = tx, ty, tz
-            if type(self.rotateVectorByYaw) == "function" then
-                rotMidTx, rotMidTy, rotMidTz = self:rotateVectorByYaw(tx, ty, tz, targetHeadRotY)
-            end
-            midCabTransX = nodeTransX + rotMidTx
-            midCabTransY = nodeTransY + rotMidTy
-            midCabTransZ = nodeTransZ + rotMidTz
-        end
-
-        baseQx, baseQy, baseQz, baseQw = self:getRotationInSpace(cam.headTrackingNode, camParent)
-    else
-        -- Fallback to driver seat anchor baseline when no dedicated headTrackingNode is assigned
-        local baseX = cam.origTransX or cam.transX or 0
-        local baseY = cam.origTransY or cam.transY or 0
-        local baseZ = cam.origTransZ or cam.transZ or 0
-
-        local totalGazeYaw = (type(self.normalizeAngle) == "function" and self:normalizeAngle((cam.origRotY or 0) + lookYaw)) or ((cam.origRotY or 0) + lookYaw)
-        local rotTx, rotTy, rotTz = eyeTx, eyeTy, eyeTz
-        if type(self.rotateVectorByYaw) == "function" then
-            rotTx, rotTy, rotTz = self:rotateVectorByYaw(eyeTx, eyeTy, eyeTz, totalGazeYaw)
-        end
-        cabTransX = baseX + rotTx
-        cabTransY = baseY + rotTy
-        cabTransZ = baseZ + rotTz
-
-        local rotMidTx, rotMidTy, rotMidTz = tx, ty, tz
-        if type(self.rotateVectorByYaw) == "function" then
-            rotMidTx, rotMidTy, rotMidTz = self:rotateVectorByYaw(tx, ty, tz, totalGazeYaw)
-        end
-        midCabTransX = baseX + rotMidTx
-        midCabTransY = baseY + rotMidTy
-        midCabTransZ = baseZ + rotMidTz
-
-        baseYaw = totalGazeYaw
-    end
-
-    if baseQw == nil then
-        baseQx, baseQy, baseQz, baseQw = self:yawQuaternion(baseYaw)
-    end
+    -- Where the head rests in the cab, and the rotation the head pose turns on, both in
+    -- camParent's space (the same step the Recenter Action realigns to). Composed as
+    -- quaternions: Euler angles read back from the engine lose the head's pitch when it looks a
+    -- quarter turn to the side.
+    local rest = self:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw, 0)
+    local baseQx, baseQy, baseQz, baseQw = rest.qx, rest.qy, rest.qz, rest.qw
+    local cabTransX, cabTransY, cabTransZ = self:cabPointFromHead(rest, camParent, eyeTx, eyeTy, eyeTz)
+    local midCabTransX, midCabTransY, midCabTransZ = self:cabPointFromHead(rest, camParent, tx, ty, tz)
     local cabQx, cabQy, cabQz, cabQw = self:composeHeadRotation(pose, baseQx, baseQy, baseQz, baseQw)
 
     self:placeAndBindEyes(cam.cameraNode, camParent,
@@ -1600,7 +1547,7 @@ function VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
 end
 
 function VRCompanion:updateMenuBackgroundCamera(dt)
-    if not self.isMenuVisible or self.is2DViewActive then
+    if not self:isMenuQuadShown() or self.is2DViewActive then
         return
     end
 

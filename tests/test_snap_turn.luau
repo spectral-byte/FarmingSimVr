@@ -495,6 +495,50 @@ test("GuiMenuGuardSuppressesSnapTurnsWhileMenuVisible", function()
     VRCompanion:resetSnapTurnDebounce()
 end)
 
+-- The menu quad showing and a menu taking the input are two states. Polling the GUI sets both together; the
+-- input one alone (no quad shown) must still refuse the turn.
+test("SnapTurnIsRefusedWhileAMenuTakesTheInputEvenWithoutTheMenuQuad", function()
+    VRCompanion:resetSnapTurnDebounce()
+
+    local mockCam = { isInside = true, cameraNode = 902, origRotY = 0.0, rotY = 0.0 }
+    _G.g_currentMission = {
+        controlledVehicle = { getActiveCamera = function() return mockCam end }
+    }
+
+    VRCompanion.isMenuVisible = false
+    VRCompanion.menuTakesInput = true
+    local ok, err = VRCompanion:snapTurnRight(nil, 1000)
+    assert(ok == false, "Snap turn must be rejected while a menu takes the input")
+    assert(err == "menu_visible", "Error reason must be menu_visible, got " .. tostring(err))
+    assert(math.abs(mockCam.rotY - 0.0) < 0.0001, "Camera rotY must not change while a menu takes the input")
+
+    VRCompanion.menuTakesInput = false
+    VRCompanion:resetSnapTurnDebounce()
+end)
+
+test("PollingAnOpenGuiRefusesSnapTurnUntilItCloses", function()
+    VRCompanion:resetSnapTurnDebounce()
+
+    local mockCam = { isInside = true, cameraNode = 903, origRotY = 0.0, rotY = 0.0 }
+    _G.g_currentMission = {
+        controlledVehicle = { getActiveCamera = function() return mockCam end }
+    }
+    local guiVisible = true
+    _G.g_gui = { getIsGuiVisible = function() return guiVisible end }
+
+    VRCompanion:pollGuiVisibility()
+    local okOpen = VRCompanion:snapTurnRight(nil, 1000)
+    assert(okOpen == false, "Snap turn must be rejected once polling sees the GUI open")
+
+    guiVisible = false
+    VRCompanion:pollGuiVisibility()
+    local okClosed = VRCompanion:snapTurnRight(nil, 1300)
+    assert(okClosed == true, "Snap turn must work again once polling sees the GUI closed")
+
+    _G.g_gui = nil
+    VRCompanion:resetSnapTurnDebounce()
+end)
+
 -- Slice 11: On-Foot Snap Turn Adjusts Player Character yawNode
 test("OnFootSnapTurnAdjustsPlayerCharacterYawNode", function()
     VRCompanion:resetSnapTurnDebounce()
@@ -1061,6 +1105,80 @@ test("InEngineActionEventRegistrationForSnapTurnLeftAndRight", function()
     _G.g_inputBinding = nil
     _G.g_i18n = nil
     VRCompanion:resetSnapTurnDebounce()
+end)
+
+-- Slice 16b: the events go into the gameplay input context, not the one that is current. At map load the loading
+-- screen's menu context is current; events registered there exist but never fire until a vehicle is entered.
+test("ActionEventsRegisterIntoTheGameplayContextAndFollowItIntoAndOutOfVehicles", function()
+    local nextEventId = 0
+    local contexts = {}  -- context name -> action name -> event
+    local inputBinding
+    inputBinding = {
+        events = {},
+        currentContextName = "MENU",
+        registrationContextName = nil,
+        beginActionEventsModification = function(self, name) self.registrationContextName = name end,
+        endActionEventsModification = function(self) self.registrationContextName = nil end,
+        registerActionEvent = function(self, actionName, target, callback)
+            local contextName = self.registrationContextName or self.currentContextName
+            contexts[contextName] = contexts[contextName] or {}
+            assert(contexts[contextName][actionName] == nil, actionName .. " registered twice in " .. contextName)
+            nextEventId = nextEventId + 1
+            local event = { id = nextEventId, actionName = actionName, contextName = contextName, callback = callback }
+            contexts[contextName][actionName] = event
+            self.events[event.id] = event
+            return true, event.id
+        end,
+        removeActionEvent = function(self, id)
+            local event = self.events[id]
+            if event == nil then return end
+            assert(event.contextName == self.registrationContextName, "an event must be removed from the context it is in")
+            contexts[event.contextName][event.actionName] = nil
+            self.events[id] = nil
+        end,
+    }
+    _G.g_inputBinding = inputBinding
+    _G.g_currentMission = {}
+    for _, field in ipairs({ "hudToggleActionEventId", "recenterActionEventId", "snapLeftActionEventId", "snapRightActionEventId", "toggleViewActionEventId", "seatSetActionEventId" }) do
+        VRCompanion[field] = nil
+    end
+    VRCompanion.actionEventsContextName = nil
+
+    local function eventsIn(contextName)
+        local count = 0
+        for _ in pairs(contexts[contextName] or {}) do count = count + 1 end
+        return count
+    end
+
+    -- Map load: the menu context is current, the player is on foot
+    VRCompanion:registerActionEvents(true)
+    assert(eventsIn("MENU") == 0, "no VR action event may land in the loading screen's menu context")
+    assert(eventsIn("PLAYER") == 6, "all six VR action events must be in the on-foot context, got " .. eventsIn("PLAYER"))
+    assert(inputBinding.registrationContextName == nil, "the registration context must be reset afterwards")
+
+    -- The periodic check leaves them alone while nothing changed
+    local before = nextEventId
+    VRCompanion:registerActionEvents(false)
+    assert(nextEventId == before, "the periodic check must not re-register events that are in place")
+
+    -- Into a vehicle: the periodic check moves them, even before the vehicle transition is seen
+    _G.g_currentMission.controlledVehicle = {}
+    VRCompanion:registerActionEvents(false)
+    assert(eventsIn("PLAYER") == 0 and eventsIn("VEHICLE") == 6, "the events must move to the vehicle context")
+    assert(contexts.VEHICLE.VR_SNAP_TURN_LEFT.id == VRCompanion.snapLeftActionEventId, "the stored id must be the new event's")
+
+    -- A forced registration in the same context replaces them rather than adding a second set
+    VRCompanion:registerActionEvents(true)
+    assert(eventsIn("VEHICLE") == 6, "a forced registration must not duplicate events")
+
+    -- Out of the vehicle: back to the on-foot context
+    _G.g_currentMission.controlledVehicle = nil
+    VRCompanion:registerActionEvents(false)
+    assert(eventsIn("VEHICLE") == 0 and eventsIn("PLAYER") == 6, "the events must move back to the on-foot context")
+
+    _G.g_inputBinding = nil
+    _G.g_currentMission = nil
+    VRCompanion.actionEventsContextName = nil
 end)
 
 -- Slice 17: XML Configuration Loading and Saving of <snapTurnAngle>

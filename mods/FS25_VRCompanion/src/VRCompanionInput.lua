@@ -8,10 +8,31 @@
 VRCompanion = VRCompanion or {}
 VRCompanion.Input = VRCompanion.Input or {}
 
+-- The input context the VR actions belong in: the vehicle's while controlling one, otherwise the player's on foot.
+-- registerActionEvent adds to the context that is current, and at map load that is the loading screen's menu context,
+-- which gameplay never uses: events registered there exist in g_inputBinding.events but never fire.
+function VRCompanion:getActionEventsContextName()
+    if type(self.getControlledVehicle) == "function" and self:getControlledVehicle() ~= nil then
+        return (Vehicle ~= nil and Vehicle.INPUT_CONTEXT_NAME) or "VEHICLE"
+    end
+    return (PlayerInputComponent ~= nil and PlayerInputComponent.INPUT_CONTEXT_NAME) or "PLAYER"
+end
+
+local ACTION_EVENT_ID_FIELDS = { "hudToggleActionEventId", "recenterActionEventId", "snapLeftActionEventId", "snapRightActionEventId", "toggleViewActionEventId", "seatSetActionEventId" }
+
 function VRCompanion:registerActionEvents(force)
     local inputBinding = g_inputBinding or _G.g_inputBinding
     if inputBinding == nil or type(inputBinding.registerActionEvent) ~= "function" then
         return
+    end
+
+    -- Events in another context than the gameplay one (the menu context at map load, or the vehicle's after getting
+    -- out) move to it: they still exist there, so the check below alone would never notice.
+    local contextName = self:getActionEventsContextName()
+    local canPickContext = type(inputBinding.beginActionEventsModification) == "function"
+        and type(inputBinding.endActionEventsModification) == "function"
+    if canPickContext and self.actionEventsContextName ~= contextName then
+        force = true
     end
 
     -- FS25 keys `events` by the event id registerActionEvent returns; `actionEvents`
@@ -22,31 +43,51 @@ function VRCompanion:registerActionEvents(force)
         print("[FS25_VR] [Warning] g_inputBinding.events is missing; action events will be re-registered on every check.")
         self.missingInputEventsLogged = true
     end
-    local isHudEventActive = false
-    local isRecenterEventActive = false
-    local isSnapLeftEventActive = false
-    local isSnapRightEventActive = false
-    local isToggleViewEventActive = false
+    local active = {}
     if not force and actionEvents ~= nil then
-        if self.hudToggleActionEventId ~= nil and actionEvents[self.hudToggleActionEventId] ~= nil then
-            isHudEventActive = true
+        local allActive = true
+        for _, field in ipairs(ACTION_EVENT_ID_FIELDS) do
+            active[field] = self[field] ~= nil and actionEvents[self[field]] ~= nil
+            allActive = allActive and active[field]
         end
-        if self.recenterActionEventId ~= nil and actionEvents[self.recenterActionEventId] ~= nil then
-            isRecenterEventActive = true
-        end
-        if self.snapLeftActionEventId ~= nil and actionEvents[self.snapLeftActionEventId] ~= nil then
-            isSnapLeftEventActive = true
-        end
-        if self.snapRightActionEventId ~= nil and actionEvents[self.snapRightActionEventId] ~= nil then
-            isSnapRightEventActive = true
-        end
-        if self.toggleViewActionEventId ~= nil and actionEvents[self.toggleViewActionEventId] ~= nil then
-            isToggleViewEventActive = true
-        end
-        if isHudEventActive and isRecenterEventActive and isSnapLeftEventActive and isSnapRightEventActive and isToggleViewEventActive then
+        if allActive then
             return
         end
     end
+
+    if not canPickContext then
+        self:registerActionEventsInContext(inputBinding, force, active)
+        return
+    end
+    -- A forced registration takes the old events out first, so a context never holds two of an action
+    if force and self.actionEventsContextName ~= nil and type(inputBinding.removeActionEvent) == "function" then
+        pcall(function()
+            inputBinding:beginActionEventsModification(self.actionEventsContextName)
+            for _, field in ipairs(ACTION_EVENT_ID_FIELDS) do
+                if self[field] ~= nil then inputBinding:removeActionEvent(self[field]) end
+            end
+            inputBinding:endActionEventsModification()
+        end)
+    end
+    -- Register into the gameplay context without switching to it, as PlayerInputComponent does from the UI context
+    inputBinding:beginActionEventsModification(contextName)
+    local ok, err = pcall(self.registerActionEventsInContext, self, inputBinding, force, active)
+    inputBinding:endActionEventsModification()
+    if not ok then error(err, 0) end
+    if self.actionEventsContextName ~= contextName then
+        print("[FS25_VR] VR action events registered in input context " .. tostring(contextName) .. ".")
+        self.actionEventsContextName = contextName
+    end
+end
+
+-- Registers the VR action events that are not active (all of them when forced) in the context being registered into.
+function VRCompanion:registerActionEventsInContext(inputBinding, force, active)
+    local isHudEventActive = active.hudToggleActionEventId == true
+    local isRecenterEventActive = active.recenterActionEventId == true
+    local isSnapLeftEventActive = active.snapLeftActionEventId == true
+    local isSnapRightEventActive = active.snapRightActionEventId == true
+    local isToggleViewEventActive = active.toggleViewActionEventId == true
+    local isSeatSetEventActive = active.seatSetActionEventId == true
 
     if force or not isHudEventActive then
         local actionId = (InputAction and InputAction.VR_HUD_TOGGLE) or (_G.InputAction and _G.InputAction.VR_HUD_TOGGLE) or "VR_HUD_TOGGLE"
@@ -179,6 +220,33 @@ function VRCompanion:registerActionEvents(force)
             if not self.toggleViewLoggedOnce then
                 print("[FS25_VR] Registered in-engine VR_TOGGLE_VIEW event.")
                 self.toggleViewLoggedOnce = true
+            end
+        end
+    end
+
+    if force or not isSeatSetEventActive then
+        local actionId = (InputAction and InputAction.VR_SET_SEAT) or (_G.InputAction and _G.InputAction.VR_SET_SEAT) or "VR_SET_SEAT"
+        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onSeatSetAction, false, true, false, true)
+        if success and eventId then
+            self.seatSetActionEventId = eventId
+            if type(inputBinding.setActionEventTextPriority) == "function" then
+                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
+            end
+            if type(inputBinding.setActionEventActive) == "function" then
+                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventTextVisibility) == "function" then
+                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
+            end
+            if type(inputBinding.setActionEventText) == "function" then
+                pcall(function()
+                    local txt = (g_i18n and g_i18n:getText("input_VR_SET_SEAT")) or "Set VR Seat Position"
+                    inputBinding:setActionEventText(eventId, txt)
+                end)
+            end
+            if not self.seatSetLoggedOnce then
+                print("[FS25_VR] Registered in-engine VR_SET_SEAT event.")
+                self.seatSetLoggedOnce = true
             end
         end
     end

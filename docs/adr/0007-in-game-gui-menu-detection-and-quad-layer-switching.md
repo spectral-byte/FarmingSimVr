@@ -10,7 +10,7 @@ To solve this, we extended the hybrid VR modding architecture with dynamic prese
 4. Frame parity and swapchain copied states are synchronized on transition boundaries, ensuring seamless, zero-stutter transitions without swapchain acquisition deadlocks or descriptor leaks.
 
 ## Status
-Accepted
+Accepted, amended: a short list of named Stereo Dialogs, starting with the fishing rod's catch dialog, stays in the stereoscopic view instead of the quad, see [ADR-0032](0032-stereo-dialogs-stay-in-the-stereoscopic-view.md). Every other menu still switches to the quad.
 
 ## Considered Options
 - Static projection rendering during menus (rejected: forces monoscopic 2D menus onto warped stereoscopic projection eyes, causing optical disparity, nausea, and HUD lock).

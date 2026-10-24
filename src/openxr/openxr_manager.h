@@ -2,10 +2,14 @@
 
 #include "openxr_dispatch.h"
 #include "openxr_cursor_overlay.h"
+#include "openxr_input.h"
+#include "openxr_types.h"
 #include "core/math_utils.h"
 #include "core/raii_utils.h"
+#include <cmath>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include <wrl/client.h>
@@ -43,22 +47,6 @@ struct OpenXrRuntimeInfo {
     LUID adapterLuid{};
 };
 
-struct HeadPose {
-    Vector3 position{ 0.0f, 0.0f, 0.0f };
-    Quaternion orientation{ 0.0f, 0.0f, 0.0f, 1.0f };
-    EulerAngles rotation{ 0.0f, 0.0f, 0.0f };
-
-    bool isValid = false;
-    bool positionTracked = false;
-    bool orientationTracked = false;
-
-    constexpr HeadPose() = default;
-    constexpr HeadPose(const Vector3& pos, const Quaternion& ori, const EulerAngles& rot,
-                       bool valid = true, bool posTracked = true, bool oriTracked = true)
-        : position(pos), orientation(ori), rotation(rot),
-          isValid(valid), positionTracked(posTracked), orientationTracked(oriTracked) {}
-};
-
 struct EyeProjection {
     float fovY = 0.0f;
     float fovX = 0.0f;
@@ -93,6 +81,19 @@ public:
     const HeadPose& GetLastPose() const { return m_lastPose; }
     const HeadPose& GetRawPose() const { return m_rawPose; }
 
+    // ---- Motion Controllers (ADR-0025) ----
+    // True when the Motion Controller action set was declared and attached for this session. False
+    // when the runtime refused any step (the session and head tracking are unaffected).
+    bool HasMotionControllerActions() const { return m_input.IsReady(); }
+    // One hand's state (0 = left, 1 = right), located at the head pose's predicted display time in
+    // the same Recenter-aware reference space. Untracked defaults when the action set is unavailable.
+    HandState GetHandState(uint32_t hand);
+    // A short vibration on one hand (0 = left, 1 = right): `durationSeconds` long at `amplitude`
+    // (clamped to 0..1) at the runtime's default frequency. False, and nothing played, for a hand that
+    // does not exist, a duration of zero or less, an unavailable action set, or a runtime that fails
+    // the call; never an error for the session.
+    bool PulseHaptic(uint32_t hand, double durationSeconds, float amplitude);
+
     EyeProjection PollEyeProjection(uint32_t eyeIndex = 0, XrTime time = 0);
     bool LocateActiveViews(XrTime time = 0);
     // "Now" in the runtime's time base. Extrapolates from the last predicted display time once
@@ -110,6 +111,13 @@ public:
     void SetPerformanceCounterSource(PerformanceCounterSource source);
     // counter / frequency in nanoseconds without overflowing for any int64 counter.
     static int64_t PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency);
+
+    // `observer` runs at the end of every BeginFrame that began a frame, after the hand state is synced. One
+    // observer per `owner` (the Virtual Gamepad publishes its snapshot and plays its rumble from here); clearing is by the same
+    // owner. Safe from any thread, and from inside an observer: a frame calls the observers it began with.
+    using FrameBeginObserver = std::function<void()>;
+    void SetFrameBeginObserver(const void* owner, FrameBeginObserver observer);
+    void ClearFrameBeginObserver(const void* owner);
     const EyeProjection& GetEyeProjection(uint32_t eyeIndex = 0) const;
     static EyeProjection ComputeProjectionFromFov(const XrFovf& fov);
 
@@ -151,6 +159,33 @@ public:
     void SetMenuQuadSize(float width, float height) { m_customMenuQuadSize = { width, height }; m_hasCustomMenuQuadSize = true; }
     XrExtent2Df GetMenuQuadSize() const { return ComputeMenuQuadSize(); }
     void ResetMenuQuadSettings() { m_menuQuadDistance = 1.5f; m_hasCustomMenuQuadSize = false; m_hasMenuQuadPose = false; }
+
+    // Where the ray of `hand` (0 = left, 1 = right) lands on the panel the next SubmitMenuQuad()
+    // submits, in normalized panel coordinates (see PanelHit). The hand's aim pose and the layer are
+    // both in the Recenter-aware local space, so the test holds across a Recenter. No hit for an
+    // untracked hand. Whether a panel is visible is the caller's (VRBridge's) knowledge.
+    PanelHit GetPanelHit(uint32_t hand);
+    // The same for a ray the caller gives, in the space the hand poses are in (the Pointer Ray starts at the
+    // index fingertip and runs along the finger, which only the Companion Mod knows). `direction` need not be
+    // a unit vector. No hit for an untracked `hand`, or a direction without a length.
+    PanelHit GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction);
+    // Pure ray (origin, -Z of rayOrientation) against a quad of `quadSize` at `quadPose`; the quad
+    // is hit from its front side only, like it is seen.
+    static PanelHit ComputeQuadRayHit(const XrPosef& quadPose, const XrExtent2Df& quadSize,
+                                      const Vector3& rayOrigin, const Quaternion& rayOrientation);
+    // The same for a ray with a direction vector (any length above zero; `distance` is along the unit direction).
+    static PanelHit ComputeQuadRayHitAlong(const XrPosef& quadPose, const XrExtent2Df& quadSize,
+                                           const Vector3& rayOrigin, const Vector3& rayDirection);
+
+    // While active the drawn cursor sits at (u, v) in PanelHit coordinates (clamped onto the panel)
+    // and MirrorWindowController ignores the Win32 cursor: the Pointer Ray has control of the cursor.
+    // Inactive means the desk mouse has it.
+    void SetPointerCursorOverride(bool active, float u = 0.0f, float v = 0.0f) {
+        m_pointerCursor.active = active;
+        m_pointerCursor.u = std::fmin(1.0f, std::fmax(0.0f, u));
+        m_pointerCursor.v = std::fmin(1.0f, std::fmax(0.0f, v));
+    }
+    const PointerCursorOverride& GetPointerCursorOverride() const { return m_pointerCursor; }
 
     uint64_t GetSubmittedQuadFrameCount() const { return m_submittedQuadFrameCount; }
     void ResetSubmittedQuadFrameCount() { m_submittedQuadFrameCount = 0; }
@@ -251,7 +286,14 @@ private:
     EyeSwapchain m_eyeSwapchains[2];
     bool m_hasEyeSwapchains = false;
     OpenXrCursorOverlay m_cursorOverlay;
+    OpenXrInput m_input;
+    // The frame whose hand snapshot (sync + poses) is held; valid only while that frame is begun.
+    uint64_t m_frameSerial = 0;
+    uint64_t m_handsFrameSerial = 0;
+    bool m_handPosesStale = false;
+    void RefreshHandState(XrTime time, bool resync);
     MenuCursorState m_menuCursorState;
+    PointerCursorOverride m_pointerCursor;
     float m_ipd = 0.064f;
     uint64_t m_submittedFramePairCount = 0;
     uint64_t m_submittedQuadFrameCount = 0;
@@ -266,6 +308,11 @@ private:
     XrTime m_lastPredictedDisplayTime = 0;
     int64_t m_lastPredictedQpc = 0;
     PerformanceCounterSource m_counterSource;
+    // Copy-on-write: an edit builds a new list under the mutex, a frame takes a reference to the current one (no copy, no
+    // allocation) and walks it without the lock.
+    using FrameBeginObserverList = std::vector<std::pair<const void*, FrameBeginObserver>>;
+    std::mutex m_frameBeginObserversMutex;
+    std::shared_ptr<const FrameBeginObserverList> m_frameBeginObservers = std::make_shared<const FrameBeginObserverList>();
     bool m_win32TimeConversionAvailable = false;
     PerformanceCounterSample ReadPerformanceCounter() const;
     XrTime m_lastPolledTime = 0;

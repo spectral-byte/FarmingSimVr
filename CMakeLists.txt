@@ -98,6 +98,8 @@ set(CORE_SOURCES
     src/core/injector_runtime.h
     src/core/dll_lifecycle.cpp
     src/core/dll_lifecycle.h
+    src/input/virtual_gamepad.cpp
+    src/input/virtual_gamepad.h
     src/luau/vr_bridge.cpp
     src/luau/vr_bridge.h
     src/luau/luau_interceptor.cpp
@@ -105,6 +107,8 @@ set(CORE_SOURCES
     src/openxr/openxr_dispatch.h
     src/openxr/openxr_cursor_overlay.h
     src/openxr/openxr_cursor_overlay.cpp
+    src/openxr/openxr_input.h
+    src/openxr/openxr_input.cpp
     src/openxr/openxr_manager.cpp
     src/openxr/openxr_manager.h
     src/proxy/system_dxgi.h
@@ -188,18 +192,78 @@ add_executable(fs25_vr_tests
     tests/test_thread_trace.cpp
     tests/test_openxr_cursor_overlay.cpp
     tests/test_openxr_manager.cpp
+    tests/test_openxr_motion_controllers.cpp
     tests/test_mirror_window_controller.cpp
     tests/test_dxgi_proxy.cpp
     tests/test_detour.cpp
     tests/test_vr_bridge.cpp
     tests/test_luau_interceptor.cpp
     tests/test_companion_mod.cpp
+    tests/test_motion_controllers.cpp
+    tests/test_pointer_ray.cpp
+    tests/test_virtual_hands.cpp
+    tests/test_pointer_handover.cpp
+    tests/test_haptics.cpp
+    tests/test_virtual_gamepad.cpp
+    tests/test_virtual_gamepad_rumble.cpp
+    tests/test_xinput_hooks.cpp
+    tests/test_interactive_control_auto_on.cpp
+    tests/test_menu_pointer_panel.cpp
+    tests/test_menu_pointer.cpp
+    tests/test_pointer_hand_switch.cpp
+    tests/test_virtual_gamepad_buttons.cpp
+    tests/test_menu_scroll_back.cpp
+    tests/test_wheel_grab_steering_wrap.cpp
+    tests/test_wheel_grab.cpp
+    tests/test_wheel_grab_pinned_hand.cpp
+    tests/test_wheel_grab_vehicles.cpp
+    tests/test_wheel_grab_pointer.cpp
+    tests/test_wheel_grab_ending.cpp
+    tests/test_wheel_grab_two_hands.cpp
+    tests/test_virtual_gamepad_menu_use.cpp
+    tests/test_virtual_gamepad_cab_use.cpp
+    tests/test_virtual_gamepad_default_bindings.cpp
     tests/test_virtual_ngx_handle.cpp
     tests/test_dlss_evaluation.cpp
     tests/test_ngx_interceptor.cpp
     tests/test_fidelityfx_interceptor.cpp
+    tests/test_hand_tools_lance.cpp
+    tests/test_hand_tools_trigger.cpp
+    tests/test_hand_tools_look_ray.cpp
+    tests/test_hand_tools_flashlight.cpp
     tests/luau_test_runner.cpp
     tests/test_luau_suites.cpp
+    tests/test_hand_tools_left_hand.cpp
+    tests/test_hand_tools_chainsaw.cpp
+    tests/test_hand_tools_haptics.cpp
+    tests/test_hand_tools_wrist_roll.cpp
+    tests/test_hand_tools_offset_tuning.cpp
+    tests/test_hand_tools_describe_unsupported.cpp
+    tests/test_hand_tools_spray_can.cpp
+    tests/test_hand_tools_spray_can_feedback.cpp
+    tests/test_hand_tools_draw.cpp
+    tests/test_hand_tools_horse_brush.cpp
+    tests/test_hand_tools_fishing_rod.cpp
+    tests/test_hand_tools_fishing_rod_haptics.cpp
+    tests/test_hand_tools_fishing_rod_diagnostics.cpp
+    tests/test_dialog_diagnostics.cpp
+    tests/test_stereo_dialogs.cpp
+    tests/test_fish_catch_auto_answer.cpp
+    tests/test_object_grab_aim.cpp
+    tests/test_object_grab_carry.cpp
+    tests/test_object_grab_diagnostics.cpp
+    tests/test_object_grab_feedback.cpp
+    tests/test_object_grab_game_actions.cpp
+    tests/test_object_grab_grip.cpp
+    tests/test_object_grab_off_hand.cpp
+    tests/test_object_grab_snap.cpp
+    tests/test_object_grab_throw.cpp
+    tests/test_object_grab_wraps.cpp
+    tests/test_animated_objects.cpp
+    tests/test_animated_objects_haptics.cpp
+    tests/test_animated_objects_nearer.cpp
+    tests/test_animated_objects_pointer.cpp
+    tests/test_animated_objects_wraps.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
@@ -207,6 +271,7 @@ target_link_libraries(fs25_vr_tests PRIVATE
     GTest::gtest_main
     Luau.Compiler
     dxgi.lib
+    xinput.lib
 )
 
 # The binary-load test loads the freshly built dxgi.dll next to the test executable

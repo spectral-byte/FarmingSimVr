@@ -6,12 +6,16 @@
 #include "openxr/openxr_manager.h"
 #include "fake_openxr_events.h"
 #include "fake_openxr_tracking.h"
+#include "fake_openxr_runtime.h"
 #include "ngx/ngx_interceptor.h"
 #include <wrl/client.h>
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <future>
+#include <thread>
 #include <unordered_set>
 
 using Microsoft::WRL::ComPtr;
@@ -131,6 +135,84 @@ TEST(DxgiProxyTest, ForwardsCreateDXGIFactory2SilentlyInPassThrough) {
     EXPECT_EQ(hr, S_OK);
     ASSERT_NE(factory.Get(), nullptr);
     EXPECT_TRUE(openXrManager->IsPassThrough());
+}
+
+// Like VDXR: xrGetSystem creates a DXGI factory, and the runtime's dxgi.dll import binds to the proxy.
+class DxgiCallingOpenXrRuntime : public FakeOpenXrRuntime {
+public:
+    DxgiProxy* proxy = nullptr;
+    HRESULT nestedResult = E_PENDING;
+    ComPtr<IDXGIFactory1> nestedFactory;
+
+    XrResult GetSystem(XrInstance instance, const XrSystemGetInfo* getInfo, XrSystemId* systemId) override {
+        nestedResult = proxy->CreateDXGIFactory1(IID_PPV_ARGS(&nestedFactory));
+        return FakeOpenXrRuntime::GetSystem(instance, getInfo, systemId);
+    }
+};
+
+TEST(DxgiProxyTest, RuntimeCreatingAFactoryDuringInitializationDoesNotDeadlock) {
+    // Leaked on a timeout: the blocked worker thread still uses them.
+    auto* runtime = new std::shared_ptr<DxgiCallingOpenXrRuntime>(std::make_shared<DxgiCallingOpenXrRuntime>());
+    auto* openXrManager = new std::shared_ptr<OpenXrManager>(std::make_shared<OpenXrManager>(*runtime));
+    auto* proxy = new DxgiProxy(std::make_shared<SystemDxgi>(), *openXrManager, nullptr, nullptr,
+                                std::make_shared<MirrorWindowController>(), nullptr);
+    (*runtime)->proxy = proxy;
+
+    // A detached thread rather than std::async, whose pool would keep a deadlocked process from exiting.
+    auto result = std::make_shared<std::promise<bool>>();
+    std::future<bool> outerCall = result->get_future();
+    std::thread([proxy, result] {
+        ComPtr<IDXGIFactory1> factory;
+        HRESULT hr = proxy->CreateDXGIFactory1(IID_PPV_ARGS(&factory));
+        result->set_value(SUCCEEDED(hr) && factory != nullptr);
+    }).detach();
+    if (outerCall.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+        FAIL() << "CreateDXGIFactory1 deadlocked when the runtime re-entered it during OpenXR initialization.";
+    }
+
+    EXPECT_TRUE(outerCall.get());
+    EXPECT_EQ((*runtime)->nestedResult, S_OK);
+    EXPECT_NE((*runtime)->nestedFactory.Get(), nullptr);
+    EXPECT_TRUE((*openXrManager)->IsActive());
+
+    (*runtime)->nestedFactory.Reset();
+    delete proxy;
+    delete openXrManager;
+    delete runtime;
+}
+
+// Like a real runtime: a session needs a graphics binding once a graphics extension is enabled.
+class GraphicsBindingRequiredOpenXrRuntime : public FakeOpenXrRuntime {
+public:
+    uint32_t createSessionCalls = 0;
+
+    XrResult CreateSession(XrInstance instance, const XrSessionCreateInfo* createInfo, XrSession* session) override {
+        ++createSessionCalls;
+        if (!createInfo || !createInfo->next) return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+        return FakeOpenXrRuntime::CreateSession(instance, createInfo, session);
+    }
+};
+
+TEST(DxgiProxyTest, SessionWaitsForTheGamesD3D12DeviceInsteadOfBeingCreatedAtStartup) {
+    auto runtime = std::make_shared<GraphicsBindingRequiredOpenXrRuntime>();
+    auto openXrManager = std::make_shared<OpenXrManager>(runtime);
+    DxgiProxy proxy(std::make_shared<SystemDxgi>(), openXrManager, nullptr, nullptr,
+                    std::make_shared<MirrorWindowController>(), nullptr);
+
+    // The game asks for a factory before it has a device to bind a session to.
+    ComPtr<IDXGIFactory1> factory;
+    ASSERT_EQ(proxy.CreateDXGIFactory1(IID_PPV_ARGS(&factory)), S_OK);
+    EXPECT_TRUE(openXrManager->IsActive());
+    EXPECT_EQ(runtime->createSessionCalls, 0u);
+    EXPECT_FALSE(openXrManager->HasSession());
+
+    // Its swap chain then supplies the device and queue, and the session is created once, bound to them.
+    auto* device = reinterpret_cast<ID3D12Device*>(static_cast<uintptr_t>(0x1000));
+    auto* queue = reinterpret_cast<ID3D12CommandQueue*>(static_cast<uintptr_t>(0x2000));
+    openXrManager->SetD3D12DeviceAndQueue(device, queue);
+    EXPECT_EQ(runtime->createSessionCalls, 1u);
+    EXPECT_TRUE(openXrManager->HasSession());
+    EXPECT_TRUE(openXrManager->HasTrackingSpaces());
 }
 
 TEST(DxgiProxyTest, BinaryLoadsAndInterceptsStartupInPassThrough) {

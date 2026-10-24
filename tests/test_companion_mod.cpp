@@ -1,235 +1,10 @@
-#include <gtest/gtest.h>
-#include "luau/vr_bridge.h"
+#include "companion_mod_fixture.h"
 #include "ngx/ngx_interceptor.h"
-#include "fake_openxr_runtime.h"
-#include "luacode.h"
-#include "luau_test_runner.h"
 #include <algorithm>
-#include <fstream>
+#include <filesystem>
 #include <map>
 #include <regex>
 #include <set>
-#include <sstream>
-#include <string>
-#include <vector>
-
-namespace {
-
-static std::vector<std::string> s_capturedLogs;
-
-int MockPrint(lua_State* L) {
-    int n = lua_gettop(L);
-    std::string line;
-    for (int i = 1; i <= n; ++i) {
-        if (i > 1) line += "\t";
-        const char* s = lua_tostring(L, i);
-        line += (s ? s : "");
-    }
-    s_capturedLogs.push_back(line);
-    return 0;
-}
-
-std::string ReadFile(const std::string& path) {
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        file.open("../" + path);
-    }
-#ifdef PROJECT_ROOT_DIR
-    if (!file.is_open()) {
-        file.open(std::string(PROJECT_ROOT_DIR) + "/" + path);
-    }
-#endif
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    return buffer.str();
-}
-
-// Loads the shipped module files in modDesc order (exactly as the engine does).
-int LoadCompanionModChecked(lua_State* L) {
-    std::string err;
-    int status = LoadCompanionMod(L, &err);
-    if (status != 0) {
-        fprintf(stderr, "\n[Companion Mod load error]: %s\n", err.c_str());
-    }
-    return status;
-}
-int RunLuauChunk(lua_State* L, const std::string& code, const char* chunkName) {
-    size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(code.c_str(), code.length(), nullptr, &bytecodeSize);
-    if (!bytecode) return -1;
-    int loadResult = luau_load(L, chunkName, bytecode, bytecodeSize, 0);
-    free(bytecode);
-    if (loadResult != 0) return loadResult;
-    int status = lua_pcall(L, 0, 0, 0);
-    if (status != 0) {
-        const char* err = lua_tostring(L, -1);
-        if (err) fprintf(stderr, "\n[Luau Error in %s]: %s\n", chunkName, err);
-    }
-    return status;
-}
-
-void SetupCameraMockGlobals(lua_State* L) {
-    RunLuauChunk(L, R"luau(
-        _G.cameraFovY = {}
-        _G.cameraProjectionOffsets = {}
-        function setFovY(node, fov)
-            _G.cameraFovY[node] = fov
-        end
-        function getFovY(node)
-            return _G.cameraFovY[node] or 1.0472
-        end
-        function setProjectionOffset(node, x, y)
-            _G.cameraProjectionOffsets[node] = { x = x, y = y }
-        end
-        function getProjectionOffset(node)
-            local curr = _G.cameraProjectionOffsets[node]
-            if curr then return curr.x, curr.y end
-            return 0.0, 0.0
-        end
-        MathUtil = {
-            getValidLimit = function(angle)
-                while angle > math.pi do angle = angle - 2 * math.pi end
-                while angle < -math.pi do angle = angle + 2 * math.pi end
-                return angle
-            end
-        }
-        if _G.setCamera == nil then
-            _G.activeCamera = 0
-            function setCamera(node)
-                _G.activeCamera = node
-            end
-        end
-        if _G.getCamera == nil then
-            function getCamera()
-                return _G.activeCamera or 0
-            end
-        end
-        if _G.setAudioListener == nil then
-            _G.activeAudioListener = 0
-            function setAudioListener(node)
-                _G.activeAudioListener = node
-            end
-        end
-        if _G.getAudioListener == nil then
-            function getAudioListener()
-                return _G.activeAudioListener or 0
-            end
-        end
-        if _G.createCamera == nil then
-            _G.cameraCount = 0
-            _G.createdCameras = {}
-            function createCamera(name, fovY, nearClip, farClip)
-                _G.cameraCount = (_G.cameraCount or 0) + 1
-                local id = 700 + _G.cameraCount
-                _G.createdCameras[id] = { name = name, fovY = fovY, nearClip = nearClip, farClip = farClip }
-                _G.cameraFovY[id] = fovY
-                if _G.nodes then
-                    _G.nodes[id] = { name = name, parent = 0, trans = {0, 0, 0}, rot = {0, 0, 0} }
-                end
-                return id
-            end
-        end
-        if _G.createTransformGroup == nil then
-            _G.transformGroupCount = 0
-            function createTransformGroup(name)
-                _G.transformGroupCount = (_G.transformGroupCount or 0) + 1
-                local id = 800 + _G.transformGroupCount
-                if _G.nodes then
-                    _G.nodes[id] = { name = name, parent = 0, trans = {0, 0, 0}, rot = {0, 0, 0} }
-                end
-                return id
-            end
-        end
-        if _G.nodeTranslations == nil then _G.nodeTranslations = {} end
-        if _G.setTranslation == nil then
-            function setTranslation(node, x, y, z)
-                _G.nodeTranslations[node] = { x = x, y = y, z = z, [1] = x, [2] = y, [3] = z }
-                if _G.nodes and _G.nodes[node] then
-                    _G.nodes[node].trans = { x, y, z }
-                end
-            end
-        end
-        if _G.getTranslation == nil then
-            function getTranslation(node)
-                if _G.nodes and _G.nodes[node] then
-                    local t = _G.nodes[node].trans or {0, 0, 0}
-                    return t[1], t[2], t[3]
-                end
-                local t = _G.nodeTranslations[node] or {0, 0, 0}
-                return t[1] or t.x or 0, t[2] or t.y or 0, t[3] or t.z or 0
-            end
-        end
-        if _G.nodeRotations == nil then _G.nodeRotations = {} end
-        if _G.setRotation == nil then
-            function setRotation(node, rx, ry, rz)
-                _G.nodeRotations[node] = { rx = rx, ry = ry, rz = rz, [1] = rx, [2] = ry, [3] = rz }
-                if _G.nodes and _G.nodes[node] then
-                    _G.nodes[node].rot = { rx, ry, rz }
-                end
-            end
-        end
-        if _G.getRotation == nil then
-            function getRotation(node)
-                if _G.nodes and _G.nodes[node] then
-                    local r = _G.nodes[node].rot or {0, 0, 0}
-                    return r[1], r[2], r[3]
-                end
-                local r = _G.nodeRotations[node] or {0, 0, 0}
-                return r[1] or r.rx or 0, r[2] or r.ry or 0, r[3] or r.rz or 0
-            end
-        end
-    )luau", "=setupCameraMocks");
-}
-
-} // anonymous namespace
-
-class CompanionModTest : public ::testing::Test {
-protected:
-    lua_State* L = nullptr;
-
-    void SetUp() override {
-        s_capturedLogs.clear();
-        L = luaL_newstate();
-        luaL_openlibs(L);
-
-        // Override print with mock to capture logs
-        lua_pushcclosure(L, &MockPrint, "print", 0);
-        lua_setglobal(L, "print");
-    }
-
-    void TearDown() override {
-        if (L) {
-            lua_close(L);
-            L = nullptr;
-        }
-    }
-
-    void RegisterTestSetFrameParity(fs25vr::VRBridge& bridge) {
-        lua_getglobal(L, "VRBridge");
-        lua_pushlightuserdata(L, &bridge);
-        lua_pushcclosure(L, [](lua_State* state) -> int {
-            auto* b = static_cast<fs25vr::VRBridge*>(lua_touserdata(state, lua_upvalueindex(1)));
-            if (b) {
-                b->SetFrameParity(static_cast<uint32_t>(luaL_checkinteger(state, 1)));
-            }
-            return 0;
-        }, "setFrameParity", 1);
-        lua_setfield(L, -2, "setFrameParity");
-
-        // With an active OpenXR session a mode change is queued until the DXGI proxy latches it at a
-        // completed frame boundary. These tests have no proxy, so Luau latches it explicitly.
-        lua_pushlightuserdata(L, &bridge);
-        lua_pushcclosure(L, [](lua_State* state) -> int {
-            auto* b = static_cast<fs25vr::VRBridge*>(lua_touserdata(state, lua_upvalueindex(1)));
-            if (b) {
-                b->LatchPendingRenderingMode();
-            }
-            return 0;
-        }, "latchPendingRenderingMode", 1);
-        lua_setfield(L, -2, "latchPendingRenderingMode");
-        lua_pop(L, 1);
-    }
-};
 
 TEST_F(CompanionModTest, MetadataDescriptorIsValid) {
     std::string modDescContent = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
@@ -304,6 +79,44 @@ TEST_F(CompanionModTest, PackagedModZipContainsModDescIconAndEveryModuleFile) {
         EXPECT_EQ(file.find('/', 4), std::string::npos) << file;
         EXPECT_EQ(file.substr(file.size() - 4), ".lua") << file;
     }
+}
+
+TEST_F(CompanionModTest, EveryScriptThatZipsTheModShipsTheVirtualHandModelItsShapesAndItsAttribution) {
+    // The Virtual Hand model is an asset, not a script: the zip must carry models/ or the Companion Mod
+    // starts without Virtual Hands in the player's game.
+    for (const char* scriptPath : { "scripts/deploy.ps1", "scripts/package_release.ps1" }) {
+        SCOPED_TRACE(scriptPath);
+        std::istringstream lines(ReadFile(scriptPath));
+        std::string line;
+        int zipLines = 0;
+        while (std::getline(lines, line)) {
+            if (line.find("tar.exe") == std::string::npos || line.find("modDesc.xml") == std::string::npos) continue;
+            ++zipLines;
+            EXPECT_NE(line.find("models/*"), std::string::npos) << line;
+        }
+        EXPECT_EQ(zipLines, 1) << "exactly one command zips the Companion Mod";
+    }
+#ifdef PROJECT_ROOT_DIR
+    const std::filesystem::path models = std::filesystem::path(PROJECT_ROOT_DIR) / "mods" / "FS25_VRCompanion" / "models";
+    for (const char* file : { "VirtualHandLeft.i3d", "VirtualHandLeft.i3d.shapes", "VirtualHandRight.i3d", "VirtualHandRight.i3d.shapes", "VirtualHand_ATTRIBUTION.txt" }) {
+        EXPECT_TRUE(std::filesystem::is_regular_file(models / file)) << file << " is part of the mod";
+    }
+#endif
+}
+
+TEST_F(CompanionModTest, TheVirtualHandModelRecordsItsSourceAuthorAndLicense) {
+    const std::string text = ReadFile("mods/FS25_VRCompanion/models/VirtualHand_ATTRIBUTION.txt");
+    ASSERT_FALSE(text.empty());
+    EXPECT_NE(text.find("https://poly.pizza/m/MTB4egc4Vh"), std::string::npos) << "source URL";
+    EXPECT_NE(text.find("J-Toastie"), std::string::npos) << "author";
+    EXPECT_NE(text.find("Creative Commons Attribution"), std::string::npos) << "license";
+    EXPECT_NE(text.find("https://creativecommons.org/licenses/by/3.0/"), std::string::npos) << "link to the license text, which CC BY asks for";
+    const std::string modDesc = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
+    EXPECT_NE(modDesc.find("J-Toastie"), std::string::npos) << "the credit is visible in the game's mod description";
+    EXPECT_NE(text.find("VirtualHandLeft.i3d"), std::string::npos) << "names the left hand file";
+    EXPECT_NE(text.find("VirtualHandRight.i3d"), std::string::npos) << "names the right hand file, a mirrored derivative";
+    EXPECT_NE(text.find("mirror"), std::string::npos) << "says the right hand is a mirrored derivative";
+    EXPECT_NE(text.find("metres"), std::string::npos) << "says the model was scaled to metres";
 }
 
 TEST_F(CompanionModTest, ReleaseBundleAndModZipShipTheGplLicense) {
@@ -3850,6 +3663,28 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresToggleViewActionAndBindings) 
     EXPECT_NE(modDescContent.find("<binding device=\"GAMEPAD_DEFAULT\""), std::string::npos);
     EXPECT_NE(modDescContent.find("BUTTON_9"), std::string::npos);
     EXPECT_NE(modDescContent.find("<text name=\"input_VR_TOGGLE_VIEW\">"), std::string::npos);
+}
+
+TEST_F(CompanionModTest, MetadataDescriptorDeclaresTheSeatSetActionWithAKeyboardDefaultAndNoPadDefault) {
+    std::string modDescContent = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
+    ASSERT_FALSE(modDescContent.empty());
+
+    EXPECT_NE(modDescContent.find("<action name=\"VR_SET_SEAT\" category=\"ONFOOT VEHICLE\"/>"), std::string::npos)
+        << "declared in the same categories as the other VR actions";
+    const size_t bindingStart = modDescContent.find("<actionBinding action=\"VR_SET_SEAT\">");
+    ASSERT_NE(bindingStart, std::string::npos);
+    const size_t bindingEnd = modDescContent.find("</actionBinding>", bindingStart);
+    ASSERT_NE(bindingEnd, std::string::npos);
+    const std::string binding = modDescContent.substr(bindingStart, bindingEnd - bindingStart);
+    EXPECT_NE(binding.find("<binding device=\"KB_MOUSE_DEFAULT\" input=\"KEY_rctrl KEY_numPad5\"/>"), std::string::npos)
+        << "Right Ctrl + NumPad 5 on the keyboard";
+    EXPECT_EQ(binding.find("GAMEPAD_DEFAULT"), std::string::npos) << "no gamepad default";
+
+    const size_t textStart = modDescContent.find("<text name=\"input_VR_SET_SEAT\">");
+    ASSERT_NE(textStart, std::string::npos);
+    const std::string text = modDescContent.substr(textStart, modDescContent.find("</text>", textStart) - textStart);
+    EXPECT_NE(text.find("<en>Set VR Seat Position</en>"), std::string::npos);
+    EXPECT_NE(text.find("<de>"), std::string::npos) << "with a German text alongside";
 }
 
 TEST_F(CompanionModTest, ToggleViewInEngineActionEventsRegistration) {

@@ -18,23 +18,36 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Reject proprietary files
         shell: pwsh
         run: scripts/check_proprietary.ps1
 
+      # Loads vcvars64.bat and exports what it changes to later steps. Done by
+      # hand because ilammy/msvc-dev-cmd has no release off deprecated Node 20.
       - name: Set up MSVC developer environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+        shell: pwsh
+        run: |
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $vs = & "$installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'No Visual Studio with the x64 C++ tools' }
+          $env:PATH += ";$installer"
+          $before = @{}
+          Get-ChildItem env: | ForEach-Object { $before[$_.Name] = $_.Value }
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$' -and $before[$Matches[1]] -ne $Matches[2]) {
+              "$($Matches[1])=$($Matches[2])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+            }
+          }
+          if ($LASTEXITCODE) { throw "vcvars64.bat failed ($LASTEXITCODE)" }
 
       # Fetched dependencies (OpenXR-SDK, GoogleTest, Luau) live outside the
       # build tree so they can be cached across runs. Only the sources and the
       # FetchContent stamps are cached; the *-build trees are rebuilt anyway.
       # Keyed on CMakeLists.txt, where the pinned dependency tags are declared.
       - name: Cache fetched dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             .deps/*-src
@@ -86,7 +99,7 @@ jobs:
         run: scripts/test_installer.ps1
 
       - name: Upload dxgi.dll
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dxgi-dll
           path: |
@@ -95,7 +108,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: installer
           path: build/release/FS25_VR_v*_Setup.exe

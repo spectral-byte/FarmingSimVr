@@ -17,7 +17,12 @@ VRCompanion.VEHICLE_SPEED_HOOK_RETRY_TICKS = 180
 VRCompanion.handshakeComplete = (VRCompanion.handshakeComplete ~= nil) and VRCompanion.handshakeComplete or false
 VRCompanion.frameTicks = VRCompanion.frameTicks or 0
 VRCompanion.lastControlledVehicle = VRCompanion.lastControlledVehicle or nil
+-- The menu quad is shown (presentation); see VRCompanion:isMenuQuadShown
 VRCompanion.isMenuVisible = (VRCompanion.isMenuVisible ~= nil) and VRCompanion.isMenuVisible or false
+-- A menu takes the input; see VRCompanion:doesMenuTakeInput
+VRCompanion.menuTakesInput = (VRCompanion.menuTakesInput ~= nil) and VRCompanion.menuTakesInput or false
+-- A Stereo Dialog is what is showing instead of the menu quad (ADR-0032); see VRCompanion:isStereoDialogShowing
+VRCompanion.stereoDialogShowing = (VRCompanion.stereoDialogShowing ~= nil) and VRCompanion.stereoDialogShowing or false
 VRCompanion.guiVisibilityInitialized = (VRCompanion.guiVisibilityInitialized ~= nil) and VRCompanion.guiVisibilityInitialized or false
 VRCompanion.vehicleCameraHooked = (VRCompanion.vehicleCameraHooked ~= nil) and VRCompanion.vehicleCameraHooked or false
 VRCompanion.playerCameraHooked = (VRCompanion.playerCameraHooked ~= nil) and VRCompanion.playerCameraHooked or false
@@ -26,6 +31,102 @@ VRCompanion.missionUpdateHooked = (VRCompanion.missionUpdateHooked ~= nil) and V
 VRCompanion.vehicleSpeedHooked = (VRCompanion.vehicleSpeedHooked ~= nil) and VRCompanion.vehicleSpeedHooked or false
 VRCompanion.stereoToggled = (VRCompanion.stereoToggled ~= nil) and VRCompanion.stereoToggled or false
 VRCompanion.inMissionUpdate = (VRCompanion.inMissionUpdate ~= nil) and VRCompanion.inMissionUpdate or false
+
+-- An engine global by name, or nil when the game does not have it: the engine's functions and tables are read through
+-- this, so that one that is missing is a nil to test for and not an error. Virtual Hands and Wheel Grab alias it as
+-- their local `engine`; this file loads before both.
+function VRCompanion.getEngineGlobal(name)
+    return _G and _G[name]
+end
+
+-- ---- Who aims the look ray ----------------------------------------------------------------------------------
+-- The game's Player:getLookRay is wrapped once, by this file, for as long as a subsystem that aims holds the wrap (Hand Tools and
+-- Object Grab each hold it, so that one giving up leaves the other aiming: see holdLookRayWrap). The wrap asks each subsystem
+-- that can aim, in this fixed order, and answers the first ray it gets: the game's own (the head's) when none does. A subsystem
+-- registers by name with an aimer, function(player) -> x, y, z, dirX, dirY, dirZ in the world, or nil when it is not aiming for
+-- that player (Hand Tools: a supported Hand Tool is in a tracked Tool Hand; Object Grab: the hands are empty and the Pointer Hand
+-- points).
+VRCompanion.LOOK_RAY_AIMER_ORDER = { "handTools", "objectGrab" }
+
+local lookRayAimers = {}
+
+-- Registers (or replaces) the aimer of a subsystem named in LOOK_RAY_AIMER_ORDER. Returns whether it was taken.
+function VRCompanion:registerLookRayAimer(name, aimer)
+    if type(aimer) ~= "function" then return false end
+    for _, known in ipairs(VRCompanion.LOOK_RAY_AIMER_ORDER) do
+        if known == name then
+            lookRayAimers[name] = aimer
+            return true
+        end
+    end
+    return false
+end
+
+-- The ray the first aiming subsystem answers for `player`, or nil (the game's own ray). An aimer that raises is not aiming: it is
+-- logged once, by name, with its error, and the next one is asked.
+local aimersLoggedAsRaising = {}
+
+function VRCompanion:getAimedLookRay(player)
+    for _, name in ipairs(VRCompanion.LOOK_RAY_AIMER_ORDER) do
+        local aimer = lookRayAimers[name]
+        if aimer ~= nil then
+            local ok, x, y, z, dx, dy, dz = pcall(aimer, player)
+            if ok and type(x) == "number" then return x, y, z, dx, dy, dz end
+            if not ok and not aimersLoggedAsRaising[name] then
+                aimersLoggedAsRaising[name] = true
+                print(string.format("[FS25_VR] [Warning] Look ray aimer '%s' raised: %s", name, tostring(x)))
+            end
+        end
+    end
+    return nil
+end
+
+-- ---- The one wrap of Player:getLookRay ------------------------------------------------------------------------------
+-- The wrap is put on the class once and stays while at least one subsystem holds it (holdLookRayWrap), whoever asked for it
+-- first. Each subsystem checks the shape of Player.getLookRay itself before holding it, and releases its hold when it gives up
+-- (or at map unload), so that a subsystem giving up lifts the wrap only when it was the last one that needed it. The wrapper is
+-- lifted only while it is still the class function, so another mod's later wrap is never undone.
+local lookRayWrap = nil   -- { class = <Player>, original = <the game's function>, wrapper = <what the wrap put there> }
+local lookRayHolders = {}
+
+local function installLookRayWrap()
+    local class = VRCompanion.getEngineGlobal("Player")
+    if type(class) ~= "table" then return false end
+    if lookRayWrap ~= nil and lookRayWrap.class == class then return true end
+    local original = class.getLookRay
+    if type(original) ~= "function" then return false end
+    local wrapper = function(player, ...)
+        if type(player) == "table" then
+            local x, y, z, dx, dy, dz = VRCompanion:getAimedLookRay(player)
+            if x ~= nil then return x, y, z, dx, dy, dz end
+        end
+        return original(player, ...)
+    end
+    lookRayWrap = { class = class, original = original, wrapper = wrapper }
+    class.getLookRay = wrapper
+    return true
+end
+
+-- Holds the wrap for the subsystem `owner` (a name), putting it on the class when it is not there. Returns whether it is there.
+function VRCompanion:holdLookRayWrap(owner)
+    if not installLookRayWrap() then return false end
+    lookRayHolders[owner] = true
+    return true
+end
+
+-- The subsystem lets go of the wrap; the class gets the game's function back when nobody holds it any more.
+function VRCompanion:releaseLookRayWrap(owner)
+    lookRayHolders[owner] = nil
+    if next(lookRayHolders) ~= nil or lookRayWrap == nil then return end
+    local wrap = lookRayWrap
+    lookRayWrap = nil
+    if wrap.class.getLookRay == wrap.wrapper then wrap.class.getLookRay = wrap.original end
+end
+
+-- The game's own Player:getLookRay while the wrap is on the class (the head's ray), or nil.
+function VRCompanion:getLookRayWrapOriginal()
+    return lookRayWrap ~= nil and lookRayWrap.original or nil
+end
 
 function VRCompanion:loadMap(name)
     print(string.format("[FS25_VR] Initializing Companion Mod on map '%s'...", tostring(name)))
@@ -135,6 +236,8 @@ function VRCompanion:loadMap(name)
 
     -- 6. Synchronize initial GUI menu visibility state
     self.isMenuVisible = false
+    self.menuTakesInput = false
+    self.stereoDialogShowing = false
     self.guiVisibilityInitialized = false
     self:pollGuiVisibility()
 
@@ -180,6 +283,11 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrObliqueProjection", "Toggle Oblique Frustum projection: vrObliqueProjection <true|false|toggle>", "consoleCommandSetObliqueProjection", self)
         addConsoleCommand("vrHudGroupShow","Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", "consoleCommandHudGroupShow", self)
     end
+    if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
+    if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
+    if type(self.registerFishCatchConsoleCommands) == "function" then self:registerFishCatchConsoleCommands() end
+    if type(self.registerSeatOffsetConsoleCommands) == "function" then self:registerSeatOffsetConsoleCommands() end
+    if type(self.registerStereoDialogDepthConsoleCommands) == "function" then self:registerStereoDialogDepthConsoleCommands() end
 
     if self.showHudLoadNotification == true then
         local mission = g_currentMission or _G.g_currentMission
@@ -201,11 +309,18 @@ function VRCompanion:pollGuiVisibility()
         end
     end
 
-    if self.isMenuVisible ~= isGuiVisible or not self.guiVisibilityInitialized then
-        local wasMenuVisible = self.isMenuVisible
-        self.isMenuVisible = isGuiVisible
+    -- A visible GUI takes the input. It also shows the menu quad, unless it is a Stereo Dialog, which stays in the
+    -- stereoscopic view. In 2D Floating Window Mode the presentation is already the quad, so a Stereo Dialog is any other menu.
+    local wasStereoDialogShowing = self.stereoDialogShowing == true
+    self.stereoDialogShowing = isGuiVisible and not self.is2DViewActive and self:findStereoDialog(gui) ~= nil
+    local menuQuadShown = isGuiVisible and not self.stereoDialogShowing
+    self.menuTakesInput = isGuiVisible
+
+    if self.isMenuVisible ~= menuQuadShown or not self.guiVisibilityInitialized then
+        local wasMenuQuadShown = self.isMenuVisible
+        self.isMenuVisible = menuQuadShown
         self.guiVisibilityInitialized = true
-        if wasMenuVisible and not isGuiVisible then
+        if wasMenuQuadShown and not menuQuadShown then
             if type(self.restoreMenuBackgroundCamera) == "function" then
                 self:restoreMenuBackgroundCamera()
             end
@@ -220,12 +335,12 @@ function VRCompanion:pollGuiVisibility()
             end
         end
         if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
-            VRBridge.setMenuVisible(isGuiVisible)
+            VRBridge.setMenuVisible(menuQuadShown)
         end
         if VRBridge ~= nil and type(VRBridge.resetTemporalHistory) == "function" then
             VRBridge.resetTemporalHistory()
         end
-        if isGuiVisible then
+        if isGuiVisible and not self.stereoDialogShowing then
             print("[FS25_VR] In-game GUI menu opened; switched presentation to 6DOF Quad layer.")
         elseif self.frameTicks > 0 then
             if self.is2DViewActive then
@@ -235,7 +350,63 @@ function VRCompanion:pollGuiVisibility()
             end
         end
     end
+    -- A Stereo Dialog does not switch the presentation, so it is told apart from the menu quad in the log.
+    if self.stereoDialogShowing and not wasStereoDialogShowing then
+        print("[FS25_VR] In-game GUI Stereo Dialog opened; kept the stereoscopic view, the menu takes the input.")
+    elseif wasStereoDialogShowing and not self.stereoDialogShowing then
+        print("[FS25_VR] In-game GUI Stereo Dialog closed.")
+    end
     return isGuiVisible
+end
+
+-- The Stereo Dialogs (ADR-0032): the game dialogs that stay in the stereoscopic view instead of getting the menu quad, by the
+-- name the game gives the dialog in g_gui.currentDialogName. A dialog joins this list only after it is tested in the headset;
+-- one that is not on it gets the quad. Measured in the game (ticket #143): the fish catch dialog (Highlands Fishing DLC) is
+-- "FishDialog", a yes/no dialog whose buttons are answered by the gamepad's MENU_ACCEPT (SELL) and MENU_BACK (RELEASE).
+VRCompanion.STEREO_DIALOGS = {
+    FishDialog = true,
+}
+
+-- The Stereo Dialog that is the only thing the game shows, as the dialog's root element (g_gui.dialogs[1], whose `target` is
+-- its controller object and whose buttons and position later tickets work on), or nil. A dialog opened over a screen (the pause
+-- menu sets g_gui.currentGuiName; a dialog does not) or over another dialog is not alone, and anything that cannot be read as
+-- a lone listed dialog counts as a menu, so that the player is never left in stereo with a GUI they cannot use.
+function VRCompanion:findStereoDialog(gui)
+    gui = gui or g_gui or _G.g_gui
+    if type(gui) ~= "table" then return nil end
+    local ok, root = pcall(function()
+        local screen = gui.currentGuiName
+        if screen ~= nil and screen ~= "" then return nil end
+        local dialogs = gui.dialogs
+        if type(dialogs) ~= "table" or #dialogs ~= 1 then return nil end
+        local name = gui.currentDialogName
+        if type(name) ~= "string" or self.STEREO_DIALOGS[name] ~= true then return nil end
+        return dialogs[1]
+    end)
+    return ok and root or nil
+end
+
+-- A visible game GUI means two different things, and every reader asks for the one it needs:
+--   isMenuQuadShown()  - the presentation: the menu quad is what the player sees (VRBridge is told so, the
+--                        stereo pipeline and HUD convergence stand down, the menu background camera runs, the
+--                        head is not placed in the world, the Virtual Hands are off)
+--   doesMenuTakeInput() - the input: a menu has the controls (locomotion, Snap Turn and Wheel Grab are refused,
+--                        the menu buttons and the Virtual Gamepad go to the menu)
+-- pollGuiVisibility sets both together. The quad is the field isMenuVisible (the name VRBridge uses for it); a
+-- shown quad always takes the input, so doesMenuTakeInput also holds while it is shown.
+function VRCompanion:isMenuQuadShown()
+    return self.isMenuVisible == true
+end
+
+function VRCompanion:doesMenuTakeInput()
+    return self.menuTakesInput == true or self.isMenuVisible == true
+end
+
+-- A Stereo Dialog is showing in the stereoscopic view: a menu takes the input but the quad is not shown. The dialog is answered
+-- with the gamepad's own menu buttons through the Virtual Gamepad, so the Companion Mod's quad menu (the Pointer Ray, the grip
+-- and lower face button as back, the thumbstick scroll) and the Virtual Gamepad's taking of every input are not engaged.
+function VRCompanion:isStereoDialogShowing()
+    return self.stereoDialogShowing == true
 end
 
 function VRCompanion:getPlayerCamera()
@@ -554,7 +725,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
     local isSequentialDualPass = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS)
         and not self.is2DViewActive
-        and not self.isMenuVisible
+        and not self:isMenuQuadShown()
         and not self:isPassThroughMode()
 
     if not isSequentialDualPass then
@@ -777,10 +948,13 @@ function VRCompanion:runUpdate(dt)
         end
     end
 
+    -- Answer the fish catch dialog if `vrFishCatch` says so: before the poll, so that the dialog is gone when the poll looks
+    if type(self.updateFishCatch) == "function" then self:updateFishCatch() end
+
     -- Poll in-game GUI visibility and synchronize with native VRBridge
     self:pollGuiVisibility()
 
-    if self.isMenuVisible and type(self.updateMenuBackgroundCamera) == "function" then
+    if self:isMenuQuadShown() and type(self.updateMenuBackgroundCamera) == "function" then
         self:updateMenuBackgroundCamera(dt)
     end
 
@@ -799,6 +973,9 @@ function VRCompanion:runUpdate(dt)
     if not self.missionUpdateHooked then
         self:hookMissionUpdate()
     end
+    if self.guiDrawHook == nil and type(self.hookGuiDraw) == "function" then
+        self:hookGuiDraw()
+    end
     -- Install dt=0 guards once, then only retry (to catch a late Ferry class or newly
     -- spawned vehicles) on a slow cadence or on a vehicle transition, never every frame.
     local speedHookRetryDue = self.vehicleSpeedHooked
@@ -813,7 +990,7 @@ function VRCompanion:runUpdate(dt)
     end
 
     -- Keep in-engine action events active across context transitions
-    if (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) then
+    if (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) or (self.seatSetActionEventId == nil) then
         if type(self.registerActionEvents) == "function" then
             self:registerActionEvents(false)
         end
@@ -830,6 +1007,9 @@ function VRCompanion:runUpdate(dt)
             self:onVehicleTransition(oldVeh, curVehicle)
         end
     end
+
+    -- Motion Controllers: poll both hands once per update
+    if type(self.updateMotionControllers) == "function" then self:updateMotionControllers(dt) end
 
     -- Follow the camera mode with the DLSS near plane (cab, outside camera, on foot)
     self:applyDlssNearClip(false)
@@ -886,6 +1066,9 @@ function VRCompanion:deleteMap()
     if type(self.unhookHud) == "function" then
         self:unhookHud()
     end
+    if type(self.unhookGuiDraw) == "function" then
+        self:unhookGuiDraw()
+    end
 
     -- Unhook mission update loop cleanly
     self:unhookMissionUpdate()
@@ -909,6 +1092,8 @@ function VRCompanion:deleteMap()
     self.appliedDlssNearClip = nil
     self.vehicleRotationStates = {}
     self.isMenuVisible = false
+    self.menuTakesInput = false
+    self.stereoDialogShowing = false
     self.guiVisibilityInitialized = false
 
     local deleteFn = delete or (_G and _G.delete)
@@ -968,11 +1153,14 @@ function VRCompanion:deleteMap()
     self.snapLeftActionEventId = nil
     self.snapRightActionEventId = nil
     self.toggleViewActionEventId = nil
+    self.seatSetActionEventId = nil
+    self.actionEventsContextName = nil
     self.hudToggleLoggedOnce = false
     self.recenterLoggedOnce = false
     self.snapLeftLoggedOnce = false
     self.snapRightLoggedOnce = false
     self.toggleViewLoggedOnce = false
+    self.seatSetLoggedOnce = false
     if type(self.resetToggleViewDebounce) == "function" then
         self:resetToggleViewDebounce()
     end
@@ -1016,6 +1204,12 @@ function VRCompanion:deleteMap()
         removeConsoleCommand("vrObliqueProjection")
         removeConsoleCommand("vrHudGroupShow")
     end
+
+    if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
+    if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
+    if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
+    if type(self.unregisterStereoDialogDepthConsoleCommands) == "function" then self:unregisterStereoDialogDepthConsoleCommands() end
+    if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end
 
 -- Export to Core subsystem table

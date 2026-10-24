@@ -2557,8 +2557,24 @@ TEST(OpenXrManagerTest, SessionStopDropsRecordedRenderPoses) {
     EXPECT_FALSE(f.manager->HasRecordedRenderPose(0));
 }
 
+// A dispatch that implements none of the input calls (every IOpenXrDispatch input virtual keeps its
+// XR_ERROR_FUNCTION_UNSUPPORTED default) is a runtime that refuses the Motion Controller action set.
+TEST(OpenXrManagerTest, DispatchWithoutInputSupportKeepsTheSessionAndReportsUntrackedHands) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+
+    EXPECT_TRUE(manager.CreateSession());
+    EXPECT_TRUE(manager.CreateTrackingSpaces());
+    manager.PollEvents();
+
+    EXPECT_TRUE(manager.IsSessionRunning());
+    EXPECT_FALSE(manager.HasMotionControllerActions());
+    EXPECT_FALSE(manager.GetHandState(0).tracked);
+    EXPECT_FALSE(manager.GetHandState(1).tracked);
+    EXPECT_EQ(mockDispatch->ApplyHapticFeedback(XR_NULL_HANDLE, nullptr, nullptr), XR_ERROR_FUNCTION_UNSUPPORTED);
+    EXPECT_EQ(mockDispatch->StopHapticFeedback(XR_NULL_HANDLE, nullptr), XR_ERROR_FUNCTION_UNSUPPORTED);
+}
+
 } // namespace fs25vr
-
-
-
-

@@ -33,6 +33,25 @@ void OpenXrManager::SetPerformanceCounterSource(PerformanceCounterSource source)
     m_counterSource = std::move(source);
 }
 
+void OpenXrManager::SetFrameBeginObserver(const void* owner, FrameBeginObserver observer) {
+    std::lock_guard<std::mutex> lock(m_frameBeginObserversMutex);
+    auto edited = std::make_shared<FrameBeginObserverList>();
+    for (const auto& entry : *m_frameBeginObservers) {
+        if (entry.first != owner) edited->push_back(entry);
+    }
+    edited->emplace_back(owner, std::move(observer));
+    m_frameBeginObservers = std::move(edited);
+}
+
+void OpenXrManager::ClearFrameBeginObserver(const void* owner) {
+    std::lock_guard<std::mutex> lock(m_frameBeginObserversMutex);
+    auto edited = std::make_shared<FrameBeginObserverList>();
+    for (const auto& entry : *m_frameBeginObservers) {
+        if (entry.first != owner) edited->push_back(entry);
+    }
+    m_frameBeginObservers = std::move(edited);
+}
+
 OpenXrManager::PerformanceCounterSample OpenXrManager::ReadPerformanceCounter() const {
     if (m_counterSource) return m_counterSource();
     LARGE_INTEGER qpc;
@@ -248,6 +267,7 @@ bool OpenXrManager::Initialize() {
 
 void OpenXrManager::Shutdown() {
     DestroyEyeSwapchains();
+    m_input.Destroy(*m_dispatch);
     if (m_viewSpace != XR_NULL_HANDLE) {
         m_dispatch->DestroySpace(m_viewSpace);
         m_viewSpace = XR_NULL_HANDLE;
@@ -319,6 +339,10 @@ bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queu
     }
     m_sessionState = XR_SESSION_STATE_IDLE;
     LogInfo("OpenXrManager: Session created successfully; waiting for the runtime to report READY.");
+
+    // Motion Controllers (ADR-0025): declared and attached once per session. A runtime that refuses
+    // any step leaves both hands untracked; it never fails the session.
+    m_input.Create(*m_dispatch, m_instance, m_session);
     return true;
 }
 
@@ -596,6 +620,44 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
     return m_lastPose;
 }
 
+void OpenXrManager::RefreshHandState(XrTime time, bool resync) {
+    if (resync) {
+        m_input.Sync(*m_dispatch, m_session);
+    }
+    m_input.LocatePoses(*m_dispatch, m_localSpace, time);
+    m_handPosesStale = false;
+    m_handsFrameSerial = m_frameSerial;
+}
+
+HandState OpenXrManager::GetHandState(uint32_t hand) {
+    if (hand >= OpenXrInput::kHandCount || m_state != OpenXrState::Active || m_session == XR_NULL_HANDLE ||
+        m_localSpace == XR_NULL_HANDLE || !m_input.IsReady()) {
+        return HandState{};
+    }
+
+    if (m_frameBegun && m_handsFrameSerial == m_frameSerial) {
+        // Inside a frame every read sees the snapshot taken at frame begin; only a Recenter moves
+        // the reference space under it.
+        if (m_handPosesStale) {
+            RefreshHandState(m_frameState.predictedDisplayTime, /*resync=*/false);
+        }
+    } else {
+        // No frame snapshot (before the first frame, or between frames): sync now and locate at the
+        // same time PollHeadPose uses.
+        RefreshHandState(GetCurrentXrTime(), /*resync=*/true);
+    }
+    return m_input.Get(hand);
+}
+
+bool OpenXrManager::PulseHaptic(uint32_t hand, double durationSeconds, float amplitude) {
+    if (m_state != OpenXrState::Active || m_session == XR_NULL_HANDLE || !(durationSeconds > 0.0)) {
+        return false;
+    }
+    const float strength = std::min(1.0f, std::max(0.0f, amplitude));
+    const double nanoseconds = std::min(durationSeconds * 1.0e9, 1.0e10);  // at most 10 s
+    return m_input.PulseHaptic(*m_dispatch, m_session, hand, static_cast<int64_t>(std::llround(nanoseconds)), strength);
+}
+
 void OpenXrManager::Recenter() {
     ClearRenderPoses();
     Vector3 recenterPos = m_rawPose.position;
@@ -641,6 +703,7 @@ void OpenXrManager::Recenter() {
     }
 
     m_lastPolledTime = 0;
+    m_handPosesStale = true;  // the hands are located against the local space that was just re-created
     AlignMenuQuadToHeadPose();
     LogInfo("OpenXrManager: Head pose recentered.");
 }
@@ -1017,6 +1080,11 @@ bool OpenXrManager::BeginFrame() {
     }
 
     m_frameBegun = true;
+    ++m_frameSerial;
+    // Motion Controllers: one sync per frame, located at the predicted display time like the head.
+    if (m_input.IsReady()) {
+        RefreshHandState(m_frameState.predictedDisplayTime != 0 ? m_frameState.predictedDisplayTime : GetCurrentXrTime(), /*resync=*/true);
+    }
 
     // OpenXR specification: actively locate views and update projections and head pose
     // for predictedDisplayTime within the active frame lifecycle boundary.
@@ -1025,6 +1093,14 @@ bool OpenXrManager::BeginFrame() {
         PollHeadPose(m_frameState.predictedDisplayTime);
     }
 
+    // The list this frame began with: an observer may add or clear observers (or another thread may), which shows from the
+    // next frame on. Holding a reference copies nothing.
+    std::shared_ptr<const FrameBeginObserverList> observers;
+    {
+        std::lock_guard<std::mutex> lock(m_frameBeginObserversMutex);
+        observers = m_frameBeginObservers;
+    }
+    for (const auto& entry : *observers) entry.second();
     return true;
 }
 
@@ -1406,6 +1482,69 @@ XrExtent2Df OpenXrManager::ComputeMenuQuadSize() const {
         aspect = static_cast<float>(m_eyeSwapchains[0].width) / static_cast<float>(m_eyeSwapchains[0].height);
     }
     return XrExtent2Df{ height * aspect, height };
+}
+
+PanelHit OpenXrManager::ComputeQuadRayHit(const XrPosef& quadPose, const XrExtent2Df& quadSize,
+                                          const Vector3& rayOrigin, const Quaternion& rayOrientation) {
+    return ComputeQuadRayHitAlong(quadPose, quadSize, rayOrigin,
+                                  RotateVectorByQuaternion(rayOrientation, Vector3(0.0f, 0.0f, -1.0f)));
+}
+
+PanelHit OpenXrManager::ComputeQuadRayHitAlong(const XrPosef& quadPose, const XrExtent2Df& quadSize,
+                                               const Vector3& rayOrigin, const Vector3& rayDirection) {
+    PanelHit miss;
+    if (quadSize.width <= 0.0f || quadSize.height <= 0.0f) {
+        return miss;
+    }
+    const float length = std::sqrt(rayDirection.x * rayDirection.x + rayDirection.y * rayDirection.y + rayDirection.z * rayDirection.z);
+    if (!(length > 1e-6f)) {
+        return miss;
+    }
+    // Into the quad's own frame, where the panel is the z = 0 plane facing +Z.
+    const Quaternion quadToWorld(quadPose.orientation.x, quadPose.orientation.y, quadPose.orientation.z, quadPose.orientation.w);
+    const Quaternion worldToQuad(-quadToWorld.x, -quadToWorld.y, -quadToWorld.z, quadToWorld.w);
+    const Vector3 offset(rayOrigin.x - quadPose.position.x, rayOrigin.y - quadPose.position.y, rayOrigin.z - quadPose.position.z);
+    const Vector3 origin = RotateVectorByQuaternion(worldToQuad, offset);
+    const Vector3 worldDir(rayDirection.x / length, rayDirection.y / length, rayDirection.z / length);
+    const Vector3 dir = RotateVectorByQuaternion(worldToQuad, worldDir);
+
+    // The panel is only visible from its front: the ray must start in front of it and head into it.
+    constexpr float kMinApproach = 1e-6f;
+    if (dir.z > -kMinApproach || origin.z <= 0.0f) {
+        return miss;
+    }
+    const float t = -origin.z / dir.z;
+    const float x = origin.x + dir.x * t;
+    const float y = origin.y + dir.y * t;
+    const float u = x / quadSize.width + 0.5f;
+    const float v = 0.5f - y / quadSize.height;
+    if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) {
+        return miss;
+    }
+    PanelHit hit;
+    hit.hit = true;
+    hit.u = u;
+    hit.v = v;
+    hit.distance = t;
+    return hit;
+}
+
+PanelHit OpenXrManager::GetPanelHit(uint32_t hand) {
+    const HandState state = GetHandState(hand);
+    if (!state.tracked || !state.aim.isValid) {
+        return {};
+    }
+    // The hand is located in the local space the quad layer is submitted in, so the pose and size
+    // SubmitMenuQuad() uses are the ones to test against.
+    return ComputeQuadRayHit(ComputeMenuQuadPose(), ComputeMenuQuadSize(), state.aim.position, state.aim.orientation);
+}
+
+PanelHit OpenXrManager::GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction) {
+    const HandState state = GetHandState(hand);
+    if (!state.tracked || !state.aim.isValid) {
+        return {};
+    }
+    return ComputeQuadRayHitAlong(ComputeMenuQuadPose(), ComputeMenuQuadSize(), origin, direction);
 }
 
 bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df* customSize) {

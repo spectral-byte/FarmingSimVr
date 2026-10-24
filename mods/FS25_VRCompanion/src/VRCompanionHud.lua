@@ -450,7 +450,7 @@ function VRCompanion:updateHudConvergence(dt)
     local isTrackingActive = self:isHeadTrackingActive()
 
     local targetDisparity = 0.0
-    if not isPassThrough and isTrackingActive and not self.isMenuVisible and not self.is2DViewActive then
+    if not isPassThrough and isTrackingActive and not self:isMenuQuadShown() and not self.is2DViewActive then
         local rawIpd = self:getIpd()
         targetDisparity = self:computeConvergenceDisparity(rawIpd, self.hudConvergenceDepth)
     end
@@ -717,8 +717,8 @@ function VRCompanion:rememberControlsExpanded(isExpanded)
     if type(isExpanded) ~= "boolean" or not self:isDisplayVisible("InputHelpDisplay") then
         return
     end
-    -- Asked of the GUI directly: a menu opens the input help as it opens, before isMenuVisible is next polled
-    local menuOpen = self.isMenuVisible == true
+    -- Asked of the GUI directly: a menu opens the input help as it opens, before the menu state is next polled
+    local menuOpen = self:doesMenuTakeInput()
     local gui = g_gui or _G.g_gui
     if gui ~= nil and type(gui.getIsGuiVisible) == "function" then
         local ok, visible = pcall(gui.getIsGuiVisible, gui)
@@ -1250,6 +1250,99 @@ function VRCompanion:unhookHud()
     print("[FS25_VR] Unhooked native engine HUD display interfaces.")
 end
 
+-- A Stereo Dialog (ADR-0032) is drawn at HUD depth: while it shows in the stereoscopic view, the game's GUI draw runs with the
+-- dialog's root moved by the HUD Convergence Offset of the eye being rendered, the same displacement the HUD Groups get (under
+-- AFR the sign alternates with the frame parity). The root is a full-screen element, and GuiElement:setAbsolutePosition moves
+-- it and all its descendants by the same amount, so the whole dialog moves with it. The draw is where the move happens, so that
+-- the eye is the one being rendered, and what was moved is moved back by the same amount afterwards, from wherever the draw
+-- left it, so that nothing the game places from the dialog's own values drifts (the lesson of the rod minigame, #140). A dialog
+-- whose root cannot be moved this way is drawn where the game placed it: zero disparity.
+-- The dialog has a depth of its own, `vrDialogDepth` (default 2.5 m, saved), set further back than the HUD's 1.8 m: it fills more of
+-- the view than a HUD group and read too close at the HUD's depth in the headset. Its disparity is that of the depth, with the sign
+-- of the eye being rendered; like the HUD's it is nil (no shift) while the HUD's convergence is off (pass-through, no tracking).
+VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH = 2.5
+VRCompanion.stereoDialogDepth = VRCompanion.stereoDialogDepth or VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH
+
+local STEREO_DIALOG_DEPTH_KEY = "vrSettings.stereoDialogDepth"
+
+function VRCompanion:getStereoDialogDrawShift(gui)
+    if self.is2DViewActive or not self:isStereoDialogShowing() then return nil end
+    if (self.currentConvergenceDisparity or 0.0) == 0.0 then return nil end
+    local root = self:findStereoDialog(gui)
+    if type(root) ~= "table" or type(root.setAbsolutePosition) ~= "function" or type(root.absPosition) ~= "table" then
+        return nil
+    end
+    local disparity = self:computeConvergenceDisparity(self:getIpd(), self.stereoDialogDepth or self.DEFAULT_STEREO_DIALOG_DEPTH)
+    local offset = self:getConvergenceOffset(nil, disparity)
+    if type(offset) ~= "number" or offset == 0.0 then return nil end
+    return root, offset
+end
+
+function VRCompanion:setStereoDialogDepth(depth, save)
+    if type(depth) ~= "number" or depth < self.MIN_CONVERGENCE_DEPTH or depth > self.MAX_CONVERGENCE_DEPTH then return false end
+    self.stereoDialogDepth = depth
+    if save and type(self.saveConfiguration) == "function" then self:saveConfiguration() end
+    return true
+end
+
+function VRCompanion:saveStereoDialogDepthSetting(xmlFile, xml)
+    if type(xml.setFloat) == "function" then
+        xml.setFloat(xmlFile, STEREO_DIALOG_DEPTH_KEY, self.stereoDialogDepth or self.DEFAULT_STEREO_DIALOG_DEPTH)
+    end
+end
+
+-- A key that is missing, or a depth out of range, keeps the current value.
+function VRCompanion:loadStereoDialogDepthSetting(xmlFile, xml)
+    if type(xml.getFloat) ~= "function" then return end
+    self:setStereoDialogDepth(xml.getFloat(xmlFile, STEREO_DIALOG_DEPTH_KEY))
+end
+
+function VRCompanion:consoleCommandSetStereoDialogDepth(arg)
+    local usage = string.format("Usage: vrDialogDepth [%.1f-%.1f] (metres, saved)", self.MIN_CONVERGENCE_DEPTH, self.MAX_CONVERGENCE_DEPTH)
+    if arg == nil or arg == "" then
+        return string.format("Dialog depth: %.1f m. %s", self.stereoDialogDepth or self.DEFAULT_STEREO_DIALOG_DEPTH, usage)
+    end
+    local depth = tonumber(arg)
+    if not self:setStereoDialogDepth(depth, true) then return usage end
+    print(string.format("[FS25_VR] Dialog depth set to: %.1f m", depth))
+    return string.format("Dialog depth set to: %.1f m (Saved)", depth)
+end
+
+function VRCompanion:registerStereoDialogDepthConsoleCommands()
+    if addConsoleCommand == nil then return end
+    addConsoleCommand("vrDialogDepth", "How far back a Stereo Dialog (the fish catch dialog) reads in the headset, in metres (saved; 2.5 by default; the HUD is at 1.8): vrDialogDepth [0.5-5.0]", "consoleCommandSetStereoDialogDepth", self)
+end
+
+function VRCompanion:unregisterStereoDialogDepthConsoleCommands()
+    if removeConsoleCommand ~= nil then removeConsoleCommand("vrDialogDepth") end
+end
+
+function VRCompanion:drawGuiAtHudDepth(original, gui, ...)
+    local root, offset = self:getStereoDialogDrawShift(gui)
+    if root == nil then return original(gui, ...) end
+    local moved = pcall(function() root:setAbsolutePosition(root.absPosition[1] + offset, root.absPosition[2]) end)
+    if not moved then return original(gui, ...) end
+    local results = table.pack(pcall(original, gui, ...))
+    pcall(function() root:setAbsolutePosition(root.absPosition[1] - offset, root.absPosition[2]) end)
+    if not results[1] then error(results[2], 0) end
+    return table.unpack(results, 2, results.n)
+end
+
+-- Wraps Gui.draw (once the class exists), the game's draw of every screen and dialog.
+function VRCompanion:hookGuiDraw()
+    local class = Gui or (_G and _G.Gui)
+    if type(class) ~= "table" or type(class.draw) ~= "function" then return end
+    local original = class.draw
+    local wrapper = function(gui, ...) return self:drawGuiAtHudDepth(original, gui, ...) end
+    class.draw = wrapper
+    self.guiDrawHook = { class = class, original = original, wrapper = wrapper }
+end
+
+function VRCompanion:unhookGuiDraw()
+    local hook = self.guiDrawHook
+    if hook ~= nil and hook.class.draw == hook.wrapper then hook.class.draw = hook.original end
+    self.guiDrawHook = nil
+end
 -- Export to Hud subsystem table
 VRCompanion.Hud.getHudGroupLayout = function(self, ...) return VRCompanion.getHudGroupLayout(VRCompanion, ...) end
 VRCompanion.Hud.setHudGroupLayout = function(self, ...) return VRCompanion.setHudGroupLayout(VRCompanion, ...) end
@@ -1284,5 +1377,7 @@ VRCompanion.Hud.applyHudSafeArea = function(self, ...) return VRCompanion.applyH
 VRCompanion.Hud.restoreHudSafeArea = function(self, ...) return VRCompanion.restoreHudSafeArea(VRCompanion, ...) end
 VRCompanion.Hud.hookHud = function(self, ...) return VRCompanion.hookHud(VRCompanion, ...) end
 VRCompanion.Hud.unhookHud = function(self, ...) return VRCompanion.unhookHud(VRCompanion, ...) end
+VRCompanion.Hud.hookGuiDraw = function(self, ...) return VRCompanion.hookGuiDraw(VRCompanion, ...) end
+VRCompanion.Hud.unhookGuiDraw = function(self, ...) return VRCompanion.unhookGuiDraw(VRCompanion, ...) end
 
 return VRCompanion.Hud

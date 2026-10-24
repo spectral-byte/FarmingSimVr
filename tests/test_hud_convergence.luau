@@ -776,6 +776,27 @@ test("MenuTransitionsPreserveConvergenceParityState", function()
     _G.VRBridge = nil
 end)
 
+-- Presentation and input are separate states: a menu that only takes the input leaves the stereo HUD depth alone
+test("AMenuThatOnlyTakesTheInputKeepsTheHudConvergence", function()
+    useSafeArea(0.20, 0.16)
+    _G.VRBridge = {
+        getFrameParity = function() return 0 end,
+        getIpd = function() return 0.064 end,
+        isReady = function() return true end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+
+    VRCompanion.isMenuVisible = false
+    VRCompanion.menuTakesInput = true
+    VRCompanion:updateHudConvergence()
+    assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.012) < 0.0001, "no menu quad: HUD convergence stays on")
+
+    VRCompanion.menuTakesInput = false
+    _G.VRBridge = nil
+end)
+
 -- The pass-through and head-tracking checks resolve once per update
 local function withProbedUpdate(probe)
     local real = VRCompanion.updateHudConvergence
