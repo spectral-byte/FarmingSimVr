@@ -103,6 +103,7 @@ inline constexpr const char* kStubHandToolHands = R"luau(
         into.node, into.x, into.y, into.z, into.distance = bestObject.node, x + dx * best, y + dy * best, z + dz * best, best
         return into
     end
+    StubHandTool.castAtLooseObjects = castAtLooseObjects  -- for the stubs of other features whose ray cast meets the same objects
 
     function StubHandTool.installHands(variant)
         variant = variant or "ok"
