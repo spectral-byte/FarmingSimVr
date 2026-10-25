@@ -131,7 +131,8 @@ public:
 
     bool CreateEyeSwapchains(uint32_t width = 0, uint32_t height = 0, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
     // Picks the supported swapchain format that a plain copy from a back buffer of
-    // `backBufferFormat` can target (same format family; UNORM/sRGB variants allowed).
+    // `backBufferFormat` can target (same format family; UNORM/sRGB variants allowed). For 8-bit
+    // families the sRGB variant is preferred over UNORM, whatever the back buffer's variant.
     // Returns DXGI_FORMAT_UNKNOWN when none is compatible.
     static DXGI_FORMAT SelectCompatibleSwapchainFormat(DXGI_FORMAT backBufferFormat, const std::vector<int64_t>& supported);
     // Called when the game creates its swap chain, before any DXGI overrides are applied. Releases
