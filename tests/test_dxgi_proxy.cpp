@@ -1300,6 +1300,9 @@ static int HookEntryPointsFailSafeChild() {
     FS25VR_CHILD_CHECK(DxgiProxy::Intercept_ResizeBuffers1(nullptr, 0, 0, 0, DXGI_FORMAT_UNKNOWN, 0, nullptr, nullptr) == E_FAIL);
     FS25VR_CHILD_CHECK(DxgiProxy::Intercept_CreateSwapChain(nullptr, nullptr, nullptr, nullptr) == E_FAIL);
     FS25VR_CHILD_CHECK(DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr) == E_FAIL);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_CheckColorSpaceSupport(nullptr, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, nullptr) == E_FAIL);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_SetColorSpace1(nullptr, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709) == E_FAIL);
+    FS25VR_CHILD_CHECK(DxgiProxy::Intercept_OutputGetDesc1(nullptr, nullptr) == E_FAIL);
     FS25VR_CHILD_CHECK(LuauInterceptor::DetourEntryPoint(nullptr) == 0);
 
     // The Win32 hooks fall through to the real, undetoured functions.
@@ -1357,6 +1360,148 @@ TEST(DxgiProxyTest, AttachFactoryHooksCreateSwapChain) {
 
     proxy.DetachAll();
     EXPECT_FALSE(proxy.IsFactoryAttached());
+}
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockSwapChain3QI(IUnknown* self, REFIID riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    if (riid == __uuidof(IDXGISwapChain) || riid == __uuidof(IDXGISwapChain1) ||
+        riid == __uuidof(IDXGISwapChain3) || riid == __uuidof(IUnknown)) {
+        *ppv = self;
+        return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+}
+
+// Reports every colour space as presentable, as a swap chain on an HDR display does.
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockCheckColorSpaceSupport(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE, UINT* pSupport) {
+    volatile UINT present = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;
+    if (pSupport) *pSupport = present;
+    return S_OK;
+}
+
+static int s_mockSetColorSpace1Calls = 0;
+static DXGI_COLOR_SPACE_TYPE s_mockLastColorSpace = DXGI_COLOR_SPACE_RESERVED;
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockSetColorSpace1(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE colorSpace) {
+    volatile int one = 1;
+    s_mockSetColorSpace1Calls += one;
+    s_mockLastColorSpace = colorSpace;
+    return S_OK;
+}
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockOutput6QI(IUnknown* self, REFIID riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    if (riid == __uuidof(IDXGIOutput) || riid == __uuidof(IDXGIOutput6) || riid == __uuidof(IUnknown)) {
+        *ppv = self;
+        return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+}
+
+// An HDR10 display.
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockOutputGetDesc1(IDXGIOutput6*, DXGI_OUTPUT_DESC1* pDesc) {
+    volatile int colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+    if (pDesc) {
+        *pDesc = {};
+        pDesc->ColorSpace = static_cast<DXGI_COLOR_SPACE_TYPE>(colorSpace);
+        pDesc->BitsPerColor = 10;
+    }
+    return S_OK;
+}
+
+TEST(DxgiProxyTest, IsHdrColorSpaceCoversHdr10ScRgbAndHlgOnly) {
+    EXPECT_TRUE(IsHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020));
+    EXPECT_TRUE(IsHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709));
+    EXPECT_TRUE(IsHdrColorSpace(DXGI_COLOR_SPACE_YCBCR_FULL_GHLG_TOPLEFT_P2020));
+    EXPECT_FALSE(IsHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709));
+    EXPECT_FALSE(IsHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020));
+}
+
+TEST(DxgiProxyTest, SwapChainReportsHdrColorSpacesUnsupportedOnlyWhileVrIsActive) {
+    s_mockSetColorSpace1Calls = 0;
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();  // offers R8G8B8A8_UNORM only
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+    DxgiProxy& proxy = proxyRuntime->GetDxgiProxy();
+
+    std::vector<void*> vtable(41, nullptr);
+    vtable[0] = reinterpret_cast<void*>(&MockSwapChain3QI);
+    vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+    vtable[2] = reinterpret_cast<void*>(&MockRelease);
+    vtable[7] = reinterpret_cast<void*>(&MockGetDevice);
+    vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
+    vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
+    vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    vtable[kCheckColorSpaceSupportVTableSlot] = reinterpret_cast<void*>(&MockCheckColorSpaceSupport);
+    vtable[kSetColorSpace1VTableSlot] = reinterpret_cast<void*>(&MockSetColorSpace1);
+    MockComObject mockSwapChain{ vtable.data() };
+    auto sc3 = reinterpret_cast<IDXGISwapChain3*>(&mockSwapChain);
+
+    ASSERT_TRUE(proxy.AttachSwapChain(reinterpret_cast<IDXGISwapChain*>(&mockSwapChain)));
+    ASSERT_TRUE(proxy.IsDetourColorSpaceInstalled());
+    auto pfnCheck = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE, UINT*)>(
+        vtable[kCheckColorSpaceSupportVTableSlot]);
+    auto pfnSet = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE)>(
+        vtable[kSetColorSpace1VTableSlot]);
+
+    UINT support = 0;
+    EXPECT_EQ(pfnCheck(sc3, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, &support), S_OK);
+    EXPECT_EQ(support, 0u);
+    EXPECT_EQ(pfnCheck(sc3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, &support), S_OK);
+    EXPECT_EQ(support, 0u);
+    EXPECT_EQ(pfnCheck(sc3, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, &support), S_OK);
+    EXPECT_EQ(support, static_cast<UINT>(DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT));
+
+    // SetColorSpace1 is only logged; the game's choice always reaches the real swap chain.
+    EXPECT_EQ(pfnSet(sc3, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020), S_OK);
+    EXPECT_EQ(s_mockSetColorSpace1Calls, 1);
+    EXPECT_EQ(s_mockLastColorSpace, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+
+    // Out of VR (Pass-Through Mode) the display's real capabilities come through.
+    EXPECT_FALSE(openXrManager->EnsureBackBufferFormatSupported(DXGI_FORMAT_R10G10B10A2_UNORM));
+    ASSERT_FALSE(proxy.IsActive());
+    EXPECT_EQ(pfnCheck(sc3, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, &support), S_OK);
+    EXPECT_EQ(support, static_cast<UINT>(DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT));
+
+    proxy.DetachAll();
+    EXPECT_FALSE(proxy.IsDetourColorSpaceInstalled());
+}
+
+TEST(DxgiProxyTest, DisplayOutputReportsSdrOnlyWhileVrIsActive) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();  // offers R8G8B8A8_UNORM only
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+    DxgiProxy& proxy = proxyRuntime->GetDxgiProxy();
+
+    std::vector<void*> vtable(29, nullptr);
+    vtable[0] = reinterpret_cast<void*>(&MockOutput6QI);
+    vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+    vtable[2] = reinterpret_cast<void*>(&MockRelease);
+    vtable[kOutputGetDesc1VTableSlot] = reinterpret_cast<void*>(&MockOutputGetDesc1);
+    MockComObject mockOutput{ vtable.data() };
+    auto output6 = reinterpret_cast<IDXGIOutput6*>(&mockOutput);
+
+    ASSERT_TRUE(proxy.AttachOutput(reinterpret_cast<IDXGIOutput*>(&mockOutput)));
+    auto pfnGetDesc1 = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIOutput6*, DXGI_OUTPUT_DESC1*)>(
+        vtable[kOutputGetDesc1VTableSlot]);
+
+    DXGI_OUTPUT_DESC1 desc{};
+    EXPECT_EQ(pfnGetDesc1(output6, &desc), S_OK);
+    EXPECT_EQ(desc.ColorSpace, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+    EXPECT_EQ(desc.BitsPerColor, 10u);
+
+    EXPECT_FALSE(openXrManager->EnsureBackBufferFormatSupported(DXGI_FORMAT_R10G10B10A2_UNORM));
+    ASSERT_FALSE(proxy.IsActive());
+    EXPECT_EQ(pfnGetDesc1(output6, &desc), S_OK);
+    EXPECT_EQ(desc.ColorSpace, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+
+    proxy.DetachAll();
+    EXPECT_FALSE(proxy.IsOutputAttached());
 }
 
 TEST(DxgiProxyTest, OnPresentPacesAfrFromTheFirstFrame) {

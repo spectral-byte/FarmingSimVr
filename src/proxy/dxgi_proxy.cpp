@@ -43,6 +43,20 @@ struct VrInitScope {
 
 } // anonymous namespace
 
+bool IsHdrColorSpace(DXGI_COLOR_SPACE_TYPE colorSpace) {
+    switch (colorSpace) {
+    case DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709:          // scRGB
+    case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:       // HDR10
+    case DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020:
+    case DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020:
+    case DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_TOPLEFT_P2020:
+    case DXGI_COLOR_SPACE_YCBCR_STUDIO_GHLG_TOPLEFT_P2020: // HLG
+    case DXGI_COLOR_SPACE_YCBCR_FULL_GHLG_TOPLEFT_P2020:
+        return true;
+    default:
+        return false;
+    }
+}
 
 DxgiProxy* DxgiProxy::ForHook(FunctionDetour DxgiProxy::*detour) {
     InjectorRuntime* runtime = InjectorRuntime::ForHook([detour](InjectorRuntime& r) {
@@ -222,6 +236,10 @@ bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
             void* fnResizeBuffers1 = vtable3[kResizeBuffers1VTableSlot];
             m_detourResizeBuffers1.Install(
                 fnResizeBuffers1, reinterpret_cast<void*>(&DxgiProxy::Intercept_ResizeBuffers1));
+            m_detourCheckColorSpaceSupport.Install(
+                vtable3[kCheckColorSpaceSupportVTableSlot], reinterpret_cast<void*>(&DxgiProxy::Intercept_CheckColorSpaceSupport));
+            m_detourSetColorSpace1.Install(
+                vtable3[kSetColorSpace1VTableSlot], reinterpret_cast<void*>(&DxgiProxy::Intercept_SetColorSpace1));
         }
     }
 
@@ -261,7 +279,10 @@ bool DxgiProxy::AttachFactory(IDXGIFactory* factory) {
         LogError("DxgiProxy::AttachFactory: Factory pointer is null.");
         return false;
     }
-    if (m_factoryAttached) return true;
+    if (m_factoryAttached) {
+        AttachFirstOutput(factory);
+        return true;
+    }
     if (!m_ownedByRuntime) {
         LogWarn("DxgiProxy::AttachFactory: Not owned by a live InjectorRuntime; detours not installed.");
         return false;
@@ -293,7 +314,39 @@ bool DxgiProxy::AttachFactory(IDXGIFactory* factory) {
     } else {
         LogInfo("DxgiProxy: Successfully attached factory swap chain creation detours.");
     }
+    // The game asks the display whether it is HDR before it creates its swap chain.
+    AttachFirstOutput(factory);
     return m_factoryAttached;
+}
+
+void DxgiProxy::AttachFirstOutput(IDXGIFactory* factory) {
+    if (m_outputAttached || !m_ownedByRuntime) return;
+    Microsoft::WRL::ComPtr<IDXGIFactory1> factory1;
+    if (FAILED(factory->QueryInterface(IID_PPV_ARGS(&factory1)))) return;
+    // An adapter with no display (a render-only GPU) has no outputs, so look past it.
+    for (UINT a = 0; a < 16 && !m_outputAttached; ++a) {
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        if (FAILED(factory1->EnumAdapters1(a, &adapter)) || !adapter) break;
+        Microsoft::WRL::ComPtr<IDXGIOutput> output;
+        if (SUCCEEDED(adapter->EnumOutputs(0, &output)) && output) {
+            AttachOutput(output.Get());
+        }
+    }
+}
+
+bool DxgiProxy::AttachOutput(IDXGIOutput* output) {
+    if (m_outputAttached) return true;
+    if (!output || !m_ownedByRuntime) return false;
+    Microsoft::WRL::ComPtr<IDXGIOutput6> output6;
+    if (FAILED(output->QueryInterface(IID_PPV_ARGS(&output6))) || !output6) return false;
+    void** vtable6 = *reinterpret_cast<void***>(output6.Get());
+    if (!vtable6) return false;
+    m_outputAttached = m_detourOutputGetDesc1.Install(
+        vtable6[kOutputGetDesc1VTableSlot], reinterpret_cast<void*>(&DxgiProxy::Intercept_OutputGetDesc1));
+    if (m_outputAttached) {
+        LogInfo("DxgiProxy: Attached display output detour; HDR is hidden from the game while VR is active.");
+    }
+    return m_outputAttached;
 }
 
 void DxgiProxy::DetachAll() {
@@ -306,8 +359,15 @@ void DxgiProxy::DetachAll() {
     if (m_detourResizeBuffers1.IsInstalled()) m_detourResizeBuffers1.Uninstall();
     if (m_detourCreateSwapChain.IsInstalled()) m_detourCreateSwapChain.Uninstall();
     if (m_detourCreateSwapChainForHwnd.IsInstalled()) m_detourCreateSwapChainForHwnd.Uninstall();
+    if (m_detourCheckColorSpaceSupport.IsInstalled()) m_detourCheckColorSpaceSupport.Uninstall();
+    if (m_detourSetColorSpace1.IsInstalled()) m_detourSetColorSpace1.Uninstall();
+    if (m_detourOutputGetDesc1.IsInstalled()) m_detourOutputGetDesc1.Uninstall();
     m_swapChainAttached = false;
     m_factoryAttached = false;
+    m_outputAttached = false;
+    m_lastSetColorSpace.reset();
+    m_loggedHiddenColorSpaces = 0;
+    m_loggedHiddenOutputHdr = false;
     m_cachedSwapChain = nullptr;
     m_cachedSwapChain3.Reset();
     m_cachedBackBuffers.clear();
@@ -649,6 +709,61 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers1(
         return orig(self, BufferCount, effectiveWidth, effectiveHeight, NewFormat, SwapChainFlags, pCreationNodeMask, ppPresentQueue);
     }
     return E_FAIL;
+}
+
+HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CheckColorSpaceSupport(
+    IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE colorSpace, UINT* pColorSpaceSupport) {
+    DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourCheckColorSpaceSupport);
+    if (!proxy) return E_FAIL;
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE, UINT*)>(
+        proxy->m_detourCheckColorSpaceSupport.GetOriginal());
+    HRESULT hr = orig ? orig(self, colorSpace, pColorSpaceSupport) : E_FAIL;
+    if (SUCCEEDED(hr) && pColorSpaceSupport && *pColorSpaceSupport != 0 &&
+        proxy->IsActive() && IsHdrColorSpace(colorSpace)) {
+        *pColorSpaceSupport = 0;
+        const uint32_t bit = static_cast<uint32_t>(colorSpace) < 32 ? 1u << colorSpace : 0u;
+        if (!(proxy->m_loggedHiddenColorSpaces & bit)) {
+            proxy->m_loggedHiddenColorSpaces |= bit;
+            LogInfo("DxgiProxy: Reporting HDR color space " + std::to_string(colorSpace) +
+                    " as unsupported while VR is active.");
+        }
+    }
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_SetColorSpace1(IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE colorSpace) {
+    DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourSetColorSpace1);
+    if (!proxy) return E_FAIL;
+    if (proxy->m_lastSetColorSpace != colorSpace) {
+        proxy->m_lastSetColorSpace = colorSpace;
+        const bool hdr = IsHdrColorSpace(colorSpace);
+        LogInfo("DxgiProxy: Game set swap chain color space " + std::to_string(colorSpace) +
+                (hdr ? " (HDR)." : " (SDR)."));
+        if (hdr && proxy->IsActive()) {
+            LogWarn("DxgiProxy: The game is outputting HDR while VR is active; the headset image will look washed out. "
+                    "Turn off HDR in Windows display settings or in the game.");
+        }
+    }
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE)>(
+        proxy->m_detourSetColorSpace1.GetOriginal());
+    return orig ? orig(self, colorSpace) : E_FAIL;
+}
+
+HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_OutputGetDesc1(IDXGIOutput6* self, DXGI_OUTPUT_DESC1* pDesc) {
+    DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourOutputGetDesc1);
+    if (!proxy) return E_FAIL;
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIOutput6*, DXGI_OUTPUT_DESC1*)>(
+        proxy->m_detourOutputGetDesc1.GetOriginal());
+    HRESULT hr = orig ? orig(self, pDesc) : E_FAIL;
+    if (SUCCEEDED(hr) && pDesc && proxy->IsActive() && IsHdrColorSpace(pDesc->ColorSpace)) {
+        if (!proxy->m_loggedHiddenOutputHdr) {
+            proxy->m_loggedHiddenOutputHdr = true;
+            LogInfo("DxgiProxy: Display reports HDR (color space " + std::to_string(pDesc->ColorSpace) +
+                    "); reporting SDR to the game while VR is active.");
+        }
+        pDesc->ColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+    }
+    return hr;
 }
 
 void DxgiProxy::GetDecoupledTargetResolution(uint32_t& outWidth, uint32_t& outHeight) const {
