@@ -304,6 +304,11 @@ private:
     XrCompositionLayerQuad m_lastSubmittedQuadLayer{ XR_TYPE_COMPOSITION_LAYER_QUAD };
     XrPosef m_menuQuadPose{};
     bool m_hasMenuQuadPose = false;
+    // The menu quad moves to the head on the first rendered frame with a valid head pose predicted at
+    // or after m_menuQuadAwaitsHeadAfter: it was placed from no pose, or the runtime recentered the
+    // local space under it.
+    bool m_menuQuadAwaitsHead = false;
+    XrTime m_menuQuadAwaitsHeadAfter = 0;
     bool m_frameBegun = false;
     XrFrameState m_frameState{XR_TYPE_FRAME_STATE};
     XrTime m_lastPredictedDisplayTime = 0;

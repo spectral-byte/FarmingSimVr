@@ -15,6 +15,14 @@ public:
         m_events.push_back(Pack(ev));
     }
 
+    // The runtime's own recenter: `type` moves at `changeTime` (0: at once).
+    void PushReferenceSpaceChangePending(XrReferenceSpaceType type, XrTime changeTime) {
+        XrEventDataReferenceSpaceChangePending ev{XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING};
+        ev.referenceSpaceType = type;
+        ev.changeTime = changeTime;
+        m_events.push_back(Pack(ev));
+    }
+
     void PushInstanceLossPending() {
         XrEventDataInstanceLossPending ev{XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING};
         m_events.push_back(Pack(ev));
