@@ -7,8 +7,9 @@
 #include "luau/vr_bridge.h"
 #include "core/detour.h"
 #include <d3d12.h>
-#include <dxgi1_4.h>
+#include <dxgi1_6.h>
 #include <wrl/client.h>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -23,7 +24,15 @@ inline constexpr size_t kResizeBuffersVTableSlot = 13;
 inline constexpr size_t kCreateSwapChainVTableSlot = 10;
 inline constexpr size_t kCreateSwapChainForHwndVTableSlot = 15;
 inline constexpr size_t kPresent1VTableSlot = 22;
+inline constexpr size_t kCheckColorSpaceSupportVTableSlot = 37;
+inline constexpr size_t kSetColorSpace1VTableSlot = 38;
 inline constexpr size_t kResizeBuffers1VTableSlot = 39;
+inline constexpr size_t kOutputGetDesc1VTableSlot = 27;
+
+// HDR10, scRGB and HLG colour spaces. OpenXR runtimes show the eye image as SDR, so HDR output
+// copied into an eye swapchain looks washed out; while VR is active the game is told the display
+// and swap chain support none of these, and renders SDR instead.
+bool IsHdrColorSpace(DXGI_COLOR_SPACE_TYPE colorSpace);
 
 class DxgiProxy {
 public:
@@ -46,10 +55,14 @@ public:
 
     bool AttachSwapChain(IDXGISwapChain* swapChain);
     bool AttachFactory(IDXGIFactory* factory);
+    // Hooks IDXGIOutput6::GetDesc1 (shared by every output) so the display reads as SDR while VR is
+    // active. AttachFactory calls it with the first output it finds.
+    bool AttachOutput(IDXGIOutput* output);
     void DetachAll();
 
     bool IsSwapChainAttached() const { return m_swapChainAttached; }
     bool IsFactoryAttached() const { return m_factoryAttached; }
+    bool IsOutputAttached() const { return m_outputAttached; }
 
     bool OnPresent(IDXGISwapChain* swapChain, UINT syncInterval = 0, UINT flags = 0);
     bool OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval = 0, UINT flags = 0, const DXGI_PRESENT_PARAMETERS* params = nullptr);
@@ -99,11 +112,17 @@ public:
     static HRESULT STDMETHODCALLTYPE Intercept_ResizeBuffers1(IDXGISwapChain3* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags, const UINT* pCreationNodeMask, IUnknown* const* ppPresentQueue);
     static HRESULT STDMETHODCALLTYPE Intercept_CreateSwapChain(IDXGIFactory* self, IUnknown* pDevice, DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain);
     static HRESULT STDMETHODCALLTYPE Intercept_CreateSwapChainForHwnd(IDXGIFactory2* self, IUnknown* pDevice, HWND hWnd, const DXGI_SWAP_CHAIN_DESC1* pDesc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc, IDXGIOutput* pRestrictToOutput, IDXGISwapChain1** ppSwapChain);
+    static HRESULT STDMETHODCALLTYPE Intercept_CheckColorSpaceSupport(IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE colorSpace, UINT* pColorSpaceSupport);
+    static HRESULT STDMETHODCALLTYPE Intercept_SetColorSpace1(IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE colorSpace);
+    static HRESULT STDMETHODCALLTYPE Intercept_OutputGetDesc1(IDXGIOutput6* self, DXGI_OUTPUT_DESC1* pDesc);
     bool IsDetourResizeBuffersInstalled() const { return m_detourResizeBuffers.IsInstalled(); }
     bool IsDetourResizeBuffers1Installed() const { return m_detourResizeBuffers1.IsInstalled(); }
+    bool IsDetourColorSpaceInstalled() const { return m_detourCheckColorSpaceSupport.IsInstalled() && m_detourSetColorSpace1.IsInstalled(); }
 
 private:
     void EnsureVrInitialized();
+    // Attaches the first output of any adapter the factory enumerates.
+    void AttachFirstOutput(IDXGIFactory* factory);
 
     // The proxy a hook entry point acts for: the one in a live runtime that installed `detour`, else
     // the current runtime's; null when no runtime is alive.
@@ -131,9 +150,17 @@ private:
     FunctionDetour m_detourResizeBuffers1;
     FunctionDetour m_detourCreateSwapChain;
     FunctionDetour m_detourCreateSwapChainForHwnd;
+    FunctionDetour m_detourCheckColorSpaceSupport;
+    FunctionDetour m_detourSetColorSpace1;
+    FunctionDetour m_detourOutputGetDesc1;
 
     bool m_swapChainAttached = false;
     bool m_factoryAttached = false;
+    bool m_outputAttached = false;
+    // Colour-space log state, so a game that polls these each frame logs each fact once.
+    std::optional<DXGI_COLOR_SPACE_TYPE> m_lastSetColorSpace;
+    uint32_t m_loggedHiddenColorSpaces = 0;  // bit per DXGI_COLOR_SPACE_TYPE value
+    bool m_loggedHiddenOutputHdr = false;
     bool m_ownedByRuntime = false;
     std::once_flag m_vrInitOnce;
     bool m_wasInQuadMode = false;

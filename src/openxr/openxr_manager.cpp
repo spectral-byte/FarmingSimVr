@@ -839,17 +839,20 @@ void OpenXrManager::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQu
 }
 
 DXGI_FORMAT OpenXrManager::SelectCompatibleSwapchainFormat(DXGI_FORMAT backBufferFormat, const std::vector<int64_t>& supported) {
-    // Candidates in preference order: exact match, then same-family variants.
-    DXGI_FORMAT candidates[3] = { backBufferFormat, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN };
+    // Candidates in preference order. An 8-bit back buffer holds sRGB-encoded colour even when its
+    // format is UNORM (flip-model swap chains can't be _SRGB), and runtimes treat a UNORM swapchain
+    // as linear and encode it again, which washes the headset image out. So the sRGB member of the
+    // family comes first and UNORM is only a fallback; other formats must match exactly.
+    DXGI_FORMAT candidates[2] = { backBufferFormat, DXGI_FORMAT_UNKNOWN };
     switch (backBufferFormat) {
-    case DXGI_FORMAT_R8G8B8A8_UNORM:      candidates[1] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; break;
-    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: candidates[1] = DXGI_FORMAT_R8G8B8A8_UNORM; break;
-    case DXGI_FORMAT_B8G8R8A8_UNORM:      candidates[1] = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB; break;
-    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: candidates[1] = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
     case DXGI_FORMAT_R8G8B8A8_TYPELESS:
         candidates[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
         candidates[1] = DXGI_FORMAT_R8G8B8A8_UNORM;
         break;
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
     case DXGI_FORMAT_B8G8R8A8_TYPELESS:
         candidates[0] = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
         candidates[1] = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -917,8 +920,10 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
         EnterPassThroughForIncompatibleFormat(format);
         return false;
     }
-    if (selectedFormat != format) {
-        LogInfo("OpenXrManager: Format " + std::to_string(format) + " not directly supported. Negotiated swapchain format: " + std::to_string(selectedFormat));
+    LogInfo("OpenXrManager: Eye swapchain format " + std::to_string(selectedFormat) +
+            " for back buffer format " + std::to_string(format) + ".");
+    if (selectedFormat == DXGI_FORMAT_R8G8B8A8_UNORM || selectedFormat == DXGI_FORMAT_B8G8R8A8_UNORM) {
+        LogWarn("OpenXrManager: The OpenXR runtime offers no sRGB eye swapchain format; the headset image may look washed out and too bright.");
     }
 
     for (uint32_t i = 0; i < 2; ++i) {

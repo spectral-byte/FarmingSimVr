@@ -1043,6 +1043,23 @@ TEST(OpenXrManagerTest, NegotiatesCopyCompatibleSrgbVariantOfBackBufferFormat) {
     EXPECT_EQ(manager.GetEyeSwapchain(1).format, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
 }
 
+TEST(OpenXrManagerTest, UnormBackBufferGetsSrgbEyeSwapchainEvenWhenUnormIsOffered) {
+    // The game's UNORM back buffer holds sRGB-encoded colour; a UNORM eye swapchain would make the
+    // runtime encode it again and wash the headset image out.
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    mockDispatch->mockSwapchainFormats = { DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+
+    EXPECT_TRUE(manager.CreateEyeSwapchains(1920, 1080, DXGI_FORMAT_R8G8B8A8_UNORM));
+    EXPECT_EQ(manager.GetEyeSwapchain(0).format, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    EXPECT_EQ(manager.GetEyeSwapchain(1).format, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+}
+
 TEST(OpenXrManagerTest, StaysInPassThroughWhenNoCompatibleSwapchainFormat) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
@@ -1140,8 +1157,15 @@ TEST(OpenXrManagerTest, SelectCompatibleSwapchainFormatRules) {
     using M = OpenXrManager;
     const std::vector<int64_t> all = { DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_B8G8R8A8_UNORM,
                                        DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R8G8B8A8_UNORM };
-    // Exact match wins over variant
-    EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM, all), DXGI_FORMAT_R8G8B8A8_UNORM);
+    // 8-bit: the sRGB variant wins over an exact UNORM match, so the runtime doesn't encode the
+    // already sRGB-encoded back buffer a second time
+    EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM, all), DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, all), DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
+                                                 { DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB }),
+              DXGI_FORMAT_B8G8R8A8_UNORM_SRGB);
+    // UNORM is still taken when the runtime offers no sRGB variant
+    EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_UNORM, { DXGI_FORMAT_R8G8B8A8_UNORM }), DXGI_FORMAT_R8G8B8A8_UNORM);
     EXPECT_EQ(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, all), DXGI_FORMAT_B8G8R8A8_UNORM);
     // Typeless back buffer resolves to a member of its family
     EXPECT_NE(M::SelectCompatibleSwapchainFormat(DXGI_FORMAT_R8G8B8A8_TYPELESS, all), DXGI_FORMAT_UNKNOWN);
