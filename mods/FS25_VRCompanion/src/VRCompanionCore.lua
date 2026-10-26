@@ -288,6 +288,7 @@ function VRCompanion:loadMap(name)
     if type(self.registerFishCatchConsoleCommands) == "function" then self:registerFishCatchConsoleCommands() end
     if type(self.registerSeatOffsetConsoleCommands) == "function" then self:registerSeatOffsetConsoleCommands() end
     if type(self.registerStereoDialogDepthConsoleCommands) == "function" then self:registerStereoDialogDepthConsoleCommands() end
+    if type(self.registerDualPassPhysicsConsoleCommands) == "function" then self:registerDualPassPhysicsConsoleCommands() end
 
     if self.showHudLoadNotification == true then
         local mission = g_currentMission or _G.g_currentMission
@@ -732,6 +733,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         self.accumulatedPass1Dt = 0.0
         self.deferRenderingCameraBind = false
         self:endEyeProjectionScope()
+        self:releaseDualPassPhysicsPause()
         return origUpdateFn(missionSelf, dt, ...)
     end
 
@@ -770,6 +772,8 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         if type(self.updateHudConvergence) == "function" then
             self:updateHudConvergence(0.0)
         end
+        -- The engine's physics runs natively whatever dt the update gets (VRCompanionDualPassPhysics.lua)
+        self:applyDualPassPhysicsPause(subPass, rawDt)
 
         return nil
     end
@@ -803,6 +807,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     if type(self.updateHudConvergence) == "function" then
         self:updateHudConvergence(effectiveDt)
     end
+    self:applyDualPassPhysicsPause(subPass, rawDt)
 
     return res
 end
@@ -825,6 +830,7 @@ function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam)
     if self.trackedCameraShown ~= false then
         self:bindRenderingCamera(targetCam)
         self:runSubPassStep(subPass, self.reportEyeCamera, eyeIndex, targetCam)
+        self:runSubPassStep(subPass, self.traceEyeFrame, eyeIndex, targetCam, subPass)
     end
     self:endEyeProjectionScope()
 end
@@ -1209,6 +1215,7 @@ function VRCompanion:deleteMap()
     if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
     if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
     if type(self.unregisterStereoDialogDepthConsoleCommands) == "function" then self:unregisterStereoDialogDepthConsoleCommands() end
+    if type(self.unregisterDualPassPhysicsConsoleCommands) == "function" then self:unregisterDualPassPhysicsConsoleCommands() end
     if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end
 

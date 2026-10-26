@@ -84,6 +84,8 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | Command | Purpose |
 | :--- | :--- |
 | `vrRenderingMode <afr\|dualpass\|toggle>` | Switch stereo mode |
+| `vrDualPassPhysicsPause [off\|on\|shifted]` | Experimental: pause physics for one frame of each Dual-Pass eye pair, so a moving vehicle doesn't flatten or exaggerate depth when you look to the side (default `off`, this session only) |
+| `vrEyePairTrace [frames]` | Log how far the vehicle and the eye camera move between rendered eye frames (default 32 frames) |
 | `vrSnapTurnAngle <degrees>` | Snap turn step (default `90`) |
 | `vrHudGroup <map\|speedometer\|info\|controls> <horizontal> <vertical> [scale]` | Place and scale a HUD group |
 | `vrHudGroupShow <group> <streamlined\|full> <on\|off>` | Choose which groups show in each HUD state |

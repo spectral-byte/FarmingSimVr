@@ -21,6 +21,7 @@ CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigg
         <sourceFile filename="src/VRCompanionConfig.lua"/>
         <sourceFile filename="src/VRCompanionCore.lua"/>
         <sourceFile filename="src/VRCompanionStereo.lua"/>
+        <sourceFile filename="src/VRCompanionDualPassPhysics.lua"/>
         <sourceFile filename="src/VRCompanionLocomotion.lua"/>
         <sourceFile filename="src/VRCompanionSeatOffset.lua"/>
         <sourceFile filename="src/VRCompanionHud.lua"/>
