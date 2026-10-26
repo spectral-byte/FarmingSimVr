@@ -425,6 +425,15 @@ void OpenXrManager::HandleSessionStateChanged(XrSessionState state) {
     case XR_SESSION_STATE_READY:
         BeginRunningSession();
         break;
+    case XR_SESSION_STATE_FOCUSED:
+        // The headset tracks before it is worn, so the first menu can be placed from wherever it
+        // rests. The first focus of a running session is when the player has it on.
+        if (!m_focusedSinceBegin) {
+            m_focusedSinceBegin = true;
+            m_menuQuadAwaitsHead = true;
+            m_menuQuadAwaitsHeadAfter = 0;
+        }
+        break;
     case XR_SESSION_STATE_STOPPING:
         EndRunningSession();
         break;
@@ -458,6 +467,7 @@ void OpenXrManager::BeginRunningSession() {
     }
     m_beginSessionFailures = 0;
     m_sessionRunning = true;
+    m_focusedSinceBegin = false;
     LogInfo("OpenXrManager: Session begun successfully.");
 }
 

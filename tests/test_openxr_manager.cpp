@@ -2361,6 +2361,43 @@ TEST(OpenXrManagerTest, MenuQuadWaitsForTheChangeTimeOfARuntimeRecenter) {
     EXPECT_NEAR(atChange.position.y, 0.7f, 0.001f);
 }
 
+TEST(OpenXrManagerTest, MenuQuadMovesToTheHeadTheFirstTimeTheSessionIsFocused) {
+    MenuQuadSession s;
+    // The game starts with the headset tracked but resting off to the side and low.
+    s.SetHead(0.5f, -0.3f, -0.4f, -0.2f, /*valid=*/true);
+    s.PresentQuadFrame(/*entersQuadMode=*/true);
+
+    // The player puts it on: the runtime focuses the session.
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    s.SetHead(0.0f, 0.1f, 0.0f, 0.0f, /*valid=*/true);
+    XrPosef worn = s.PresentQuadFrame();
+    EXPECT_NEAR(worn.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(worn.position.y, 0.1f, 0.001f);
+    EXPECT_NEAR(worn.position.z, -1.5f, 0.001f);
+
+    // A dashboard opened and closed focuses it again: the panel stays where the player left it.
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    s.SetHead(0.3f, 0.4f, 0.2f, 0.5f, /*valid=*/true);
+    XrPosef afterDashboard = s.PresentQuadFrame();
+    EXPECT_NEAR(afterDashboard.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(afterDashboard.position.y, 0.1f, 0.001f);
+    EXPECT_NEAR(afterDashboard.position.z, -1.5f, 0.001f);
+
+    // A session that stops and begins again is focused for the first time once more.
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_IDLE);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    s.SetHead(-0.2f, 0.2f, 0.1f, 0.0f, /*valid=*/true);
+    XrPosef resumed = s.PresentQuadFrame();
+    EXPECT_NEAR(resumed.position.x, -0.2f, 0.001f);
+    EXPECT_NEAR(resumed.position.y, 0.2f, 0.001f);
+    EXPECT_NEAR(resumed.position.z, 0.1f - 1.5f, 0.001f);
+}
+
 TEST(OpenXrManagerTest, ChangeOfAnotherReferenceSpaceLeavesMenuQuadInPlace) {
     MenuQuadSession s;
     s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, /*valid=*/true);
