@@ -18,7 +18,7 @@
 -- what is left over is added each pair, so a missed prediction is made up over a few pairs instead of swinging the next one.
 --
 -- PUBLIC SURFACE
---   VRCompanion:setDualPassPhysicsPause(mode)                       "off" (the default) or "on"; session only
+--   VRCompanion:setDualPassPhysicsPause(mode)                       "on" (the default) or "off"; session only
 --   VRCompanion:applyDualPassPhysicsPause(subPass, frameDt)         called by runMissionUpdate at the end of each sub-pass's
 --                                                                   update, with the frame's real dt
 --   VRCompanion:releaseDualPassPhysicsPause()                       physics running at normal speed again; outside Sequential
@@ -45,7 +45,7 @@ VRCompanion.DUAL_PASS_PHYSICS_SECOND_SUB_PASS_DT_SMOOTHING = 0.2
 VRCompanion.DUAL_PASS_PHYSICS_OWED_TIME_GAIN = 0.25
 VRCompanion.EYE_PAIR_TRACE_DEFAULT_FRAMES = 32
 
-VRCompanion.dualPassPhysicsPause = VRCompanion.dualPassPhysicsPause or "off"
+VRCompanion.dualPassPhysicsPause = VRCompanion.dualPassPhysicsPause or "on"
 
 local function engine(name)
     return _G[name]
@@ -237,7 +237,7 @@ end
 
 function VRCompanion:registerDualPassPhysicsConsoleCommands()
     if addConsoleCommand == nil then return end
-    addConsoleCommand("vrDualPassPhysicsPause", "Pause physics for one frame of each Sequential Dual-Pass pair, so a moving vehicle is still between the eyes (this session only; off by default): vrDualPassPhysicsPause [off|on]", "consoleCommandDualPassPhysicsPause", self)
+    addConsoleCommand("vrDualPassPhysicsPause", "Pause physics for one frame of each Sequential Dual-Pass pair, so a moving vehicle is still between the eyes (this session only; on by default): vrDualPassPhysicsPause [off|on]", "consoleCommandDualPassPhysicsPause", self)
     addConsoleCommand("vrEyePairTrace", "Log how far the vehicle and the eye camera moved between rendered eye frames, for some frames: vrEyePairTrace [frames]", "consoleCommandEyePairTrace", self)
 end
 

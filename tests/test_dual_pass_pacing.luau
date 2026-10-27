@@ -1327,7 +1327,7 @@ local function withPhysicsRecorder(fn)
     local ok, err = pcall(fn, calls, subPass)
 
     VRCompanion:releaseDualPassPhysicsPause()
-    VRCompanion:setDualPassPhysicsPause("off")
+    VRCompanion:setDualPassPhysicsPause("on")
     VRCompanion:unhookMissionUpdate()
     VRCompanion:setRenderingMode("AFR")
     VRCompanion:setSubPassIndex(0)
@@ -1337,6 +1337,11 @@ local function withPhysicsRecorder(fn)
     _G.simulatePhysicsTimeScale = nil
     if not ok then error(err, 0) end
 end
+
+test("DualPassPhysicsPauseIsOnByDefault", function()
+    assert(VRCompanion.dualPassPhysicsPause == "on",
+        "the pause must be on when the Companion Mod loads, got " .. tostring(VRCompanion.dualPassPhysicsPause))
+end)
 
 test("DualPassPhysicsPauseOffNeverTouchesPhysics", function()
     withPhysicsRecorder(function(calls, subPass)
@@ -1476,6 +1481,7 @@ test("DualPassPhysicsPauseConsoleCommand", function()
     assert(VRCompanion.dualPassPhysicsPause == "on" and reply:find("Usage", 1, true), "an unknown argument must print the usage")
     VRCompanion:consoleCommandDualPassPhysicsPause("off")
     assert(VRCompanion.dualPassPhysicsPause == "off", "off must clear the pause")
+    VRCompanion:setDualPassPhysicsPause("on")
 end)
 
 test("EyePairTraceLogsHowFarTheVehicleMovedSidewaysBetweenEyeFrames", function()
