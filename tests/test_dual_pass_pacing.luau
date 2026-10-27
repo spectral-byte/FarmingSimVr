@@ -1557,6 +1557,9 @@ test("EyePairTraceLogsTheDtsAndTimeScaleBehindTheMove", function()
     assert(lines[3]:find("physics dts 8.50/9.25/16.60", 1, true), "the dts must be read on each line: " .. lines[3])
     -- Resumed physics covers the paused 10 ms step and the next, predicted at the last second sub-pass's 12 ms
     assert(lines[4]:find("physics scale 1.83", 1, true), "the line must give the applied time scale: " .. lines[4])
+    assert(not second:find("predicted", 1, true), "nothing is predicted before the first pair: " .. second)
+    assert(lines[4]:find("rawDt 12.00 (predicted 12.00)", 1, true),
+        "a second sub-pass's line must give the dt its time scale was set for: " .. lines[4])
 end)
 
 print(string.format("Summary: %d passed, %d failed", passed, failed))

@@ -89,6 +89,7 @@ function VRCompanion:releaseDualPassPhysicsPause()
     self.physicsTimeOwed = 0.0
     self.physicsSecondSubPassDt = nil
     self.physicsSecondSubPassDtSmoothed = nil
+    self.physicsSecondSubPassDtPredicted = nil
     self.physicsPairPeriod = nil
     if not self.physicsPauseApplied and (self.physicsTimeScaleApplied or 1.0) == 1.0 then return end
     if gameHoldsPhysics() then return end
@@ -122,6 +123,7 @@ function VRCompanion:applyDualPassPhysicsPause(subPass, frameDt)
         return
     end
     local predicted = self.physicsSecondSubPassDtSmoothed
+    self.physicsSecondSubPassDtPredicted = predicted
     -- Nothing paused yet (the pause was just turned on): this pair runs at normal speed and the next one starts the pause
     if not stepPaused or lastSecondDt == nil or predicted == nil or predicted <= 0 then
         setPhysicsRunning(self, true, 1.0)
@@ -142,7 +144,8 @@ end
 -- engine's physics update index, the controlled vehicle's speed, and how far its root node and the eye camera moved in the
 -- world since the previous eye frame, with the part of the vehicle's move along the eyes (the head's left-right axis), which
 -- is what adds to or takes from the IPD. A still vehicle between the eyes of a pair shows as 0.00 cm on the second eye.
--- Then the timing behind the move: the update's real dt, the engine's physics dts as the game's Lua sees them (g_physicsDt,
+-- Then the timing behind the move: the update's real dt (on a second sub-pass with the pause on, with the dt the time scale
+-- was set for), the engine's physics dts as the game's Lua sees them (g_physicsDt,
 -- g_physicsDtUnclamped, g_physicsDtNonInterpolated, which is 0 on a frame that simulated nothing), and the physics pause
 -- state as it stands when the line is logged: set by the earlier sub-passes, before this one's own pause or resume.
 local trace = { frames = 0 }
@@ -199,11 +202,15 @@ function VRCompanion:traceEyeFrame(eyeIndex, camNode, subPass, frameDt)
 
     local physicsState = self.physicsPauseApplied and "paused"
         or string.format("scale %.2f", self.physicsTimeScaleApplied or 1.0)
+    local rawDt = formatDt(frameDt)
+    if subPass == 1 and self.physicsSecondSubPassDtPredicted ~= nil then
+        rawDt = string.format("%s (predicted %s)", rawDt, formatDt(self.physicsSecondSubPassDtPredicted))
+    end
 
     local line = string.format("[FS25_VR] Eye pair trace: frame %s %s eye %d | physics %s | %s | %s | camera moved %s | pause %s"
         .. " | rawDt %s | physics dts %s/%s/%s | physics %s",
         tostring(self.frameTicks), pass, eyeIndex or -1, physicsIndex, speed, vehicleMove, cameraMove,
-        tostring(self.dualPassPhysicsPause), formatDt(frameDt), formatDt(engine("g_physicsDt")),
+        tostring(self.dualPassPhysicsPause), rawDt, formatDt(engine("g_physicsDt")),
         formatDt(engine("g_physicsDtUnclamped")), formatDt(engine("g_physicsDtNonInterpolated")), physicsState)
     print(line)
     return line
