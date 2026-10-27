@@ -858,6 +858,77 @@ test("CameraUpdateAndRecenterRestAtTheSameCabPositionWithoutHeadTrackingNode", f
     runRestPositionAgreement(false)
 end)
 
+-- A cab whose forward yaw reads 0, entered with mouse look already turned (the game's "don't reset
+-- vehicle camera" brings back the last rotY): the head tracking node the mod builds and turns by the
+-- look yaw every frame must not be read back as the cab's forward, or the look yaw becomes the new
+-- forward and the Recenter Action rests there
+test("CabForwardOfZeroDoesNotTakeUpTheLookYaw", function()
+    local nodeRotations = {}
+    local nodeTranslations = {}
+
+    _G.setRotation = function(node, rx, ry, rz) nodeRotations[node] = { rx = rx, ry = ry, rz = rz } end
+    _G.getRotation = function(node)
+        local r = nodeRotations[node]
+        if r then return r.rx, r.ry, r.rz end
+        return 0, 0, 0
+    end
+    _G.setTranslation = function(node, x, y, z) nodeTranslations[node] = { x = x, y = y, z = z } end
+    _G.getTranslation = function(node)
+        local t = nodeTranslations[node]
+        if t then return t.x, t.y, t.z end
+        return 0, 0, 0
+    end
+    _G.getParent = function(node) return 888 end
+    _G.createTransformGroup = function(name) return 1302 end
+    _G.link = function(parent, child) end
+    _G.localToLocal = function(fromNode, toNode, x, y, z)
+        local fromR = nodeRotations[fromNode] or { rx = 0, ry = 0, rz = 0 }
+        local fromT = nodeTranslations[fromNode] or { x = 0, y = 0, z = 0 }
+        local rx, ry, rz = VRCompanion:rotateVectorByYaw(x, y, z, fromR.ry)
+        return fromT.x + rx, fromT.y + ry, fromT.z + rz
+    end
+
+    local simPose = { x = 0, y = 0, z = 0, pitch = 0, yaw = 0, roll = 0, isValid = true }
+    _G.VRBridge = {
+        isReady = function() return true end,
+        getFrameParity = function() return 0 end,
+        getRequiresAfrFallback = function() return false end,
+        getHeadPose = function() return simPose end,
+        recenter = function() return { success = true } end,
+        resetTemporalHistory = function() end
+    }
+
+    local cam = {
+        isInside = true,
+        cameraNode = 1301,
+        cameraPositionNode = 1303,
+        origRotY = 0, rotY = 0.5,
+        origRotX = 0, rotX = 0,
+        origTransX = 0.3, origTransY = 1.4, origTransZ = -0.2
+    }
+    nodeTranslations[1303] = { x = 0.3, y = 1.4, z = -0.2 }
+    local veh = { getActiveCamera = function() return cam end }
+    _G.g_currentMission = { controlledVehicle = veh }
+
+    VRCompanion:onEnterVehicle(veh, true, nil)
+    for _ = 1, 5 do
+        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
+    end
+    assert(cam.headTrackingNode == 1302, "The mod must build the cab's head tracking node")
+    assert(math.abs(cam.origHeadTrackingRotY or 0) < 0.0001,
+        string.format("The cab's forward must stay 0, got %f", cam.origHeadTrackingRotY or 0))
+    assert(math.abs(nodeRotations[1301].ry - 0.5) < 0.001,
+        string.format("The view must turn by the look yaw once (0.5), got %f", nodeRotations[1301].ry))
+
+    VRCompanion:onRecenterAction()
+    assert(math.abs(nodeRotations[1301].ry) < 0.001,
+        string.format("The Recenter Action must rest facing the cab's forward (0), got %f", nodeRotations[1301].ry))
+
+    VRCompanion:onLeaveVehicle(veh)
+    _G.createTransformGroup = nil
+    _G.link = nil
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed in test_vehicle_camera_yaw.luau", failed))
 

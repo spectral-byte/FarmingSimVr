@@ -157,21 +157,27 @@ function VRCompanion:initVehicleCameraState(veh, cam)
         cam.origTransZ = cam.transZ
     end
 
-    if cam.headTrackingNode ~= nil and cam.headTrackingNode ~= 0 then
-        if cam.origHeadTrackingRotY == nil or math.abs(cam.origHeadTrackingRotY) < 0.0001 then
-            local baseRy = cam.origRotY or math.pi
-            local getRotationFn = getRotation or (_G and _G.getRotation)
-            if type(getRotationFn) == "function" then
-                local ok, rx, ry, rz = pcall(getRotationFn, cam.headTrackingNode)
-                if ok and ry ~= nil and math.abs(ry) > 0.0001 then
-                    baseRy = ry
-                end
-            end
-            cam.origHeadTrackingRotX = 0
-            cam.origHeadTrackingRotY = baseRy
-            cam.origHeadTrackingRotZ = 0
+    self:recordHeadTrackingForward(cam)
+end
+
+-- Records the cab's forward yaw on its head tracking node, once: the node's own yaw before the mod
+-- first turns it, or the camera's neutral yaw when the node has none. Never read again, since from
+-- then on the node is turned by the look yaw every frame and reading it would take that up as forward.
+function VRCompanion:recordHeadTrackingForward(cam)
+    if cam.headTrackingNode == nil or cam.headTrackingNode == 0 or cam.origHeadTrackingRotY ~= nil then
+        return
+    end
+    local baseRy = cam.origRotY or math.pi
+    local getRotationFn = getRotation or (_G and _G.getRotation)
+    if type(getRotationFn) == "function" then
+        local ok, rx, ry, rz = pcall(getRotationFn, cam.headTrackingNode)
+        if ok and ry ~= nil and math.abs(ry) > 0.0001 then
+            baseRy = ry
         end
     end
+    cam.origHeadTrackingRotX = 0
+    cam.origHeadTrackingRotY = baseRy
+    cam.origHeadTrackingRotZ = 0
 end
 
 -- Records an Outside Camera's default orbit yaw and pitch ("forward" for the Recenter Action) the first
@@ -395,22 +401,10 @@ end
 function VRCompanion:updateVehicleCameraTrackingNode(cam)
     if not cam then return end
     local setRotationFn = setRotation or (_G and _G.setRotation)
-    local getRotationFn = getRotation or (_G and _G.getRotation)
     local lookYaw = self:getVehicleLookYaw(cam)
 
     if cam.headTrackingNode ~= nil and cam.headTrackingNode ~= 0 then
-        if cam.origHeadTrackingRotY == nil or math.abs(cam.origHeadTrackingRotY) < 0.0001 then
-            local baseRy = cam.origRotY or math.pi
-            if type(getRotationFn) == "function" then
-                local ok, rx, ry, rz = pcall(getRotationFn, cam.headTrackingNode)
-                if ok and ry ~= nil and math.abs(ry) > 0.0001 then
-                    baseRy = ry
-                end
-            end
-            cam.origHeadTrackingRotX = 0
-            cam.origHeadTrackingRotY = baseRy
-            cam.origHeadTrackingRotZ = 0
-        end
+        self:recordHeadTrackingForward(cam)
 
         local targetHeadRotY = self:normalizeAngle((cam.origHeadTrackingRotY or cam.origRotY or math.pi) + lookYaw)
 
@@ -612,7 +606,6 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
 
     local getParentFn = getParent or (_G and _G.getParent)
     local setRotationFn = setRotation or (_G and _G.setRotation)
-    local getRotationFn = getRotation or (_G and _G.getRotation)
     local setTranslationFn = setTranslation or (_G and _G.setTranslation)
 
     local camParent = 0
@@ -624,18 +617,7 @@ function VRCompanion:realignVehicleCameraToSeat(cam)
     local targetHeadRotY = self:normalizeAngle((cam.origRotY or math.pi) + lookYaw)
 
     if cam.headTrackingNode ~= nil and cam.headTrackingNode ~= 0 then
-        if cam.origHeadTrackingRotY == nil or math.abs(cam.origHeadTrackingRotY) < 0.0001 then
-            local baseRy = cam.origRotY or math.pi
-            if type(getRotationFn) == "function" then
-                local ok, rx, ry, rz = pcall(getRotationFn, cam.headTrackingNode)
-                if ok and ry ~= nil and math.abs(ry) > 0.0001 then
-                    baseRy = ry
-                end
-            end
-            cam.origHeadTrackingRotX = 0
-            cam.origHeadTrackingRotY = baseRy
-            cam.origHeadTrackingRotZ = 0
-        end
+        self:recordHeadTrackingForward(cam)
 
         targetHeadRotY = self:normalizeAngle((cam.origHeadTrackingRotY or cam.origRotY or math.pi) + lookYaw)
 
@@ -817,6 +799,7 @@ VRCompanion.Locomotion.getCurrentTimeMs = function(self, ...) return VRCompanion
 VRCompanion.Locomotion.isSnapTurnDebounced = function(self, ...) return VRCompanion.isSnapTurnDebounced(VRCompanion, ...) end
 VRCompanion.Locomotion.resetSnapTurnDebounce = function(self, ...) return VRCompanion.resetSnapTurnDebounce(VRCompanion, ...) end
 VRCompanion.Locomotion.initVehicleCameraState = function(self, ...) return VRCompanion.initVehicleCameraState(VRCompanion, ...) end
+VRCompanion.Locomotion.recordHeadTrackingForward = function(self, ...) return VRCompanion.recordHeadTrackingForward(VRCompanion, ...) end
 VRCompanion.Locomotion.saveVehicleRotationState = function(self, ...) return VRCompanion.saveVehicleRotationState(VRCompanion, ...) end
 VRCompanion.Locomotion.restoreVehicleRotationState = function(self, ...) return VRCompanion.restoreVehicleRotationState(VRCompanion, ...) end
 VRCompanion.Locomotion.resetVehicleTransforms = function(self, ...) return VRCompanion.resetVehicleTransforms(VRCompanion, ...) end
