@@ -8,7 +8,7 @@ VRCompanion = VRCompanion or {}
 VRCompanion.Core = VRCompanion.Core or {}
 
 VRCompanion.name = VRCompanion.name or g_currentModName or "FS25_VRCompanion"
-VRCompanion.version = VRCompanion.version or "1.1.1.0"
+VRCompanion.version = VRCompanion.version or "1.1.2.0"
 
 -- Slow retry cadence (in update ticks) for re-running the dt=0 guard install so a late
 -- Ferry class or newly spawned vehicles are picked up without scanning _G every frame.
