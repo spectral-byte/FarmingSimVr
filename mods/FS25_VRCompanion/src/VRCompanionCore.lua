@@ -768,7 +768,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         end
 
         -- Synchronize the eye's camera transforms without running engine simulation
-        self:finishSubPass(subPass, eye, targetCam)
+        self:finishSubPass(subPass, eye, targetCam, rawDt)
         if type(self.updateHudConvergence) == "function" then
             self:updateHudConvergence(0.0)
         end
@@ -803,7 +803,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         res = nil
     end
 
-    self:finishSubPass(subPass, eye, targetCam)
+    self:finishSubPass(subPass, eye, targetCam, rawDt)
     if type(self.updateHudConvergence) == "function" then
         self:updateHudConvergence(effectiveDt)
     end
@@ -822,7 +822,7 @@ function VRCompanion:runSubPassStep(subPass, fn, ...)
     end
 end
 
-function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam)
+function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam, frameDt)
     -- The eye sync's camera update records whether the game is showing the camera it tracks
     self.trackedCameraShown = nil
     self:runSubPassStep(subPass, self.syncActiveEyeCamera, eyeIndex)
@@ -830,7 +830,7 @@ function VRCompanion:finishSubPass(subPass, eyeIndex, targetCam)
     if self.trackedCameraShown ~= false then
         self:bindRenderingCamera(targetCam)
         self:runSubPassStep(subPass, self.reportEyeCamera, eyeIndex, targetCam)
-        self:runSubPassStep(subPass, self.traceEyeFrame, eyeIndex, targetCam, subPass)
+        self:runSubPassStep(subPass, self.traceEyeFrame, eyeIndex, targetCam, subPass, frameDt)
     end
     self:endEyeProjectionScope()
 end
