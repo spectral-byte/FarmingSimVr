@@ -432,6 +432,7 @@ void DxgiProxy::DetachAll() {
     m_cachedBackBuffers.clear();
     m_lastPresentSuppressed = false;
     m_desktopMirrorOffAnnounced = false;
+    m_desktopMirrorWasShowing = false;
     if (m_vrBridge) {
         m_vrBridge->ClearPendingRenderingMode();
     }
@@ -468,6 +469,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
         // Not Active: no eye pair can be in flight, so a queued mode change must not be lost.
         LatchPendingRenderingMode();
+        m_desktopMirrorWasShowing = true;
         return true;
     }
 
@@ -478,6 +480,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
         // Dropped to Pass-Through after a mode was queued; the released eye pair is abandoned.
         LatchPendingRenderingMode();
         m_lastPresentSuppressed = false;
+        m_desktopMirrorWasShowing = true;
         return true;
     }
 
@@ -570,6 +573,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
         LatchPendingRenderingMode();
         m_wasInQuadMode = false;
         m_lastPresentSuppressed = false;
+        m_desktopMirrorWasShowing = true;  // the mirror shows by itself: a resume with it off re-triggers the black frame
         return true;
     }
 
@@ -598,7 +602,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
             m_openXrManager->SubmitMenuQuad();
             // The quad frame is a completed compositor frame and no eye pair is in flight.
             LatchPendingRenderingMode();
-            return PresentToDesktopMirror();
+            return PresentToDesktopMirror(pBackBuffer);
         } else {
             if (m_wasInQuadMode) {
                 // Seamlessly returning to stereoscopic 3D VR view: reset AFR frame parity and subPassIndex
@@ -631,7 +635,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
                         m_vrBridge->AdvanceFrame();
                     }
                     LatchPendingRenderingMode();
-                    return PresentToDesktopMirror();
+                    return PresentToDesktopMirror(pBackBuffer);
                 }
             } else {
                 // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
@@ -649,13 +653,14 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
                 if (parity == 1) {
                     LatchPendingRenderingMode();
                 }
-                return PresentToDesktopMirror();
+                return PresentToDesktopMirror(pBackBuffer);
             }
         }
     }
     // No eye swapchains (creation failed or Pass-Through): no eye pair can be in flight.
     LatchPendingRenderingMode();
     m_lastPresentSuppressed = false;
+    m_desktopMirrorWasShowing = true;
     return true;
 }
 
@@ -688,9 +693,29 @@ void DxgiProxy::UpdateDesktopMirrorTitle() {
     if (m_windowController) m_windowController->RestoreTitle();
 }
 
-bool DxgiProxy::PresentToDesktopMirror() {
-    m_lastPresentSuppressed = IsDesktopMirrorOffNow();
-    return !m_lastPresentSuppressed;
+bool DxgiProxy::PresentToDesktopMirror(ID3D12Resource* backBuffer) {
+    if (!IsDesktopMirrorOffNow()) {
+        m_desktopMirrorWasShowing = true;
+        m_lastPresentSuppressed = false;
+        return true;
+    }
+    if (TakeDesktopMirrorBlackFrame(backBuffer)) {
+        m_lastPresentSuppressed = false;
+        return true;
+    }
+    m_lastPresentSuppressed = true;
+    return false;
+}
+
+bool DxgiProxy::TakeDesktopMirrorBlackFrame(ID3D12Resource* backBuffer) {
+    if (!m_desktopMirrorWasShowing) return false;
+    m_desktopMirrorWasShowing = false;
+    // Called after this frame's eye copy, so the headset has the game's frame; only the Desktop
+    // Mirror Window gets the black one. A null back buffer (unit tests) leaves nothing to clear.
+    if (m_openXrManager) {
+        m_openXrManager->ClearBackBufferToBlack(backBuffer);
+    }
+    return true;
 }
 
 void DxgiProxy::OnPresentReturned(HRESULT presentResult) {
