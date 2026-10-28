@@ -1014,6 +1014,7 @@ struct MirrorPresentRig {
             vrBridge->PerformHandshake();
         }
         vrBridge->SetRenderingMode(mode);
+        dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);  // the headset is on, as in play
         runtime = MakeRuntime(openXrManager, vrBridge);
         vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
         vtable[1] = reinterpret_cast<void*>(&MockAddRef);
@@ -1113,10 +1114,44 @@ TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsWhileTheSessionIsNotRunning) {
     ASSERT_FALSE(rig.openXrManager->IsSessionRunning());
 
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // headset back on: dark again
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
     EXPECT_EQ(rig.Present(), 1);  // after the one black frame (#195)
     EXPECT_EQ(rig.Present(), 0);
     EXPECT_EQ(rig.Present(), 0);
     EXPECT_TRUE(rig.openXrManager->IsSessionRunning());
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffShowsAgainWhileTheHeadsetIsAsleepEvenThoughTheSessionKeepsRunning) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+
+    // Real runtimes drop to SYNCHRONIZED when the headset sleeps; the session is not stopped.
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_TRUE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);  // headset back on: dark again
+    EXPECT_EQ(rig.Present(), 1);  // after the one black frame (#195)
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffShowsAgainWhileTheDashboardHasFocus) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);  // the dashboard took the focus
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    EXPECT_EQ(rig.Present(), 1);  // the one black frame
+    EXPECT_EQ(rig.Present(), 0);
 }
 
 TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsInPassThroughMode) {
@@ -1227,6 +1262,7 @@ TEST(DxgiProxyTest, BlackFrameTheSessionResumingWithTheMirrorOffPresentsExactlyO
     ASSERT_FALSE(rig.openXrManager->IsSessionRunning());
 
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // headset back on, mirror still off
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
     EXPECT_EQ(rig.Present(), 1);  // one black frame
     EXPECT_EQ(rig.Present(), 0);
     EXPECT_EQ(rig.Present(), 0);
@@ -4222,11 +4258,31 @@ TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheSessionStopsRunningAndSet
     EXPECT_EQ(window.Title(), L"Farming Simulator 25");
 
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
     rig.Present();
     EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
     rig.vrBridge->SetDesktopMirrorEnabled(true);
     rig.Present();
     EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhileTheHeadsetIsAsleepAndLogsWhy) {
+    LogCapture capture("fs25vr_desktop_mirror_title_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);  // asleep: the session keeps running
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+    EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (headset not in use)"), std::string::npos)
+        << capture.Text();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
 }
 
 TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredOnPassThroughDrop) {

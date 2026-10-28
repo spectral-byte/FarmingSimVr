@@ -667,7 +667,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
 bool DxgiProxy::IsDesktopMirrorOffNow() const {
     return m_vrBridge && m_vrBridge->IsCompanionActive() && !m_vrBridge->IsDesktopMirrorEnabled() &&
            m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning() &&
-           m_openXrManager->HasEyeSwapchains();
+           m_openXrManager->IsSessionFocused() && m_openXrManager->HasEyeSwapchains();
 }
 
 void DxgiProxy::UpdateDesktopMirrorTitle() {
@@ -695,6 +695,8 @@ void DxgiProxy::UpdateDesktopMirrorTitle() {
         reason = "by itself (Companion Mod handshake lost)";
     } else if (!m_openXrManager->HasEyeSwapchains() || !m_openXrManager->IsSessionRunning()) {
         reason = "by itself (session not running)";
+    } else if (!m_openXrManager->IsSessionFocused()) {
+        reason = "by itself (headset not in use)";
     }
     LogInfo(std::string("DxgiProxy: Desktop mirror on ") + reason + "; window title restored.");
     if (m_windowController) m_windowController->RestoreTitle();

@@ -233,6 +233,9 @@ public:
     XrSpace GetViewSpace() const { return m_viewSpace; }
     bool HasSession() const { return m_session != XR_NULL_HANDLE; }
     bool IsSessionRunning() const { return m_sessionRunning; }
+    // The headset is on and the game has the focus. A sleeping headset drops to SYNCHRONIZED and the dashboard to
+    // VISIBLE; neither ends the running session.
+    bool IsSessionFocused() const { return m_sessionState == XR_SESSION_STATE_FOCUSED; }
     XrSessionState GetSessionState() const { return m_sessionState; }
 
     // Drains the runtime event queue and drives the session lifecycle: begin on READY,
