@@ -81,8 +81,6 @@
 --   VRCompanion:getWheelGrabHandPose(hand) -> x, y, z, qx, qy, qz, qw   where a holding hand's Virtual Hand is drawn (world),
 --                                                             or nil when the hand does not hold
 --   VRCompanion:isWheelGrabAvailable() -> boolean, reason     whether a grab is possible now (as of the last update)
---   VRCompanion:isWheelGrabSendingSteering() -> boolean       true only while Wheel Grab's own setSteeringInput call
---                                                             runs: the way to tell it from every other device's call
 --   VRCompanion:setWheelGrabEnabled(enabled, save)
 --   VRCompanion:saveWheelGrabSetting(xmlFile, xml) / loadWheelGrabSetting(xmlFile, xml)   settings chain
 --   VRCompanion:getWheelGrabDiagnostics() -> string          the state of Wheel Grab, one line
@@ -97,7 +95,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.WheelGrab = VRCompanion.WheelGrab or {}
 
 -- vrWheelGrab on|off: saved, default on. Wheel Grab also needs Motion Controllers on.
 VRCompanion.DEFAULT_WHEEL_GRAB_ENABLED = true
@@ -569,7 +566,7 @@ local function reportSqueeze(self, hand, inUse, angle, radial, axial)
     print(string.format("[FS25_VR] Wheel Grab: %s grip squeezed, Steering Wheel %s%s", HAND_NAMES[hand], outcome, where))
 end
 
--- Wheel Grab's own call: the only place that steers the vehicle (ADR-0027). isWheelGrabSendingSteering() is true while it
+-- Wheel Grab's own call: the only place that steers the vehicle (ADR-0027). state.sending is true while it
 -- runs, which is how a wrap of setSteeringInput tells this call from every other device's.
 --
 -- The call is made inside pcall, and a game that raises from it (a function that is not what the shape check could tell, or
@@ -698,10 +695,6 @@ end
 
 function VRCompanion:isWheelGrabAvailable()
     return state.reason == nil, state.reason
-end
-
-function VRCompanion:isWheelGrabSendingSteering()
-    return state.sending
 end
 
 -- ---- Settings, persistence, console commands -------------------------------------------------------------------------
@@ -845,11 +838,3 @@ function VRCompanion:resetWheelGrab()
     unwrapAll()
     state = newState()
 end
-
-VRCompanion.WheelGrab.updateWheelGrab = function(self, ...) return VRCompanion.updateWheelGrab(VRCompanion, ...) end
-VRCompanion.WheelGrab.isHandHoldingSteeringWheel = function(self, ...) return VRCompanion.isHandHoldingSteeringWheel(VRCompanion, ...) end
-VRCompanion.WheelGrab.isSteeringWheelHeld = function(self, ...) return VRCompanion.isSteeringWheelHeld(VRCompanion, ...) end
-VRCompanion.WheelGrab.consoleCommandSetWheelGrab = function(self, ...) return VRCompanion.consoleCommandSetWheelGrab(VRCompanion, ...) end
-VRCompanion.WheelGrab.consoleCommandWheelGrabDiagnostics = function(self, ...) return VRCompanion.consoleCommandWheelGrabDiagnostics(VRCompanion, ...) end
-
-return VRCompanion.WheelGrab

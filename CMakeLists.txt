@@ -92,6 +92,7 @@ set(CORE_SOURCES
     src/core/perf_trace.cpp
     src/core/perf_trace.h
     src/core/math_utils.h
+    src/core/raii_utils.h
     src/core/camera_records.cpp
     src/core/camera_records.h
     src/core/detour.cpp
@@ -113,6 +114,7 @@ set(CORE_SOURCES
     src/openxr/openxr_input.cpp
     src/openxr/openxr_manager.cpp
     src/openxr/openxr_manager.h
+    src/openxr/openxr_types.h
     src/proxy/system_dxgi.h
     src/proxy/system_dxgi.cpp
     src/proxy/mirror_window_controller.h
@@ -130,6 +132,7 @@ set(CORE_SOURCES
     src/ngx/near_estimator.h
     src/ngx/near_estimator.cpp
     src/fidelityfx/ffx_defs.h
+    src/fidelityfx/ffx_mv_conventions.h
     src/fidelityfx/fidelityfx_interceptor.h
     src/fidelityfx/fidelityfx_interceptor.cpp
 )

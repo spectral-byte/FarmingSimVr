@@ -74,7 +74,6 @@
 --   VRCompanion.objectGrabEnabled              boolean, default true, saved (`vrObjectGrab on|off`)
 --   VRCompanion.OBJECT_GRAB_REACH_BEHIND       how far (m) the look ray's origin is moved back along the finger
 --   VRCompanion.OBJECT_GRAB_LAND_PULSE_MS / _STRENGTH   the light pulse on the Pointer Hand as the ray lands on something grabbable
---   VRCompanion:getObjectGrabAimedRay(player) -> x, y, z, dirX, dirY, dirZ | nil, why not   what Player:getLookRay answers
 --   VRCompanion:peekObjectGrabRayTarget() -> hasTarget, x, y, z, distance   the Pointer Ray's object target and how far along the ray
 --                                      from the fingertip it is (called by updatePointerRay); only looks: no pulse, no grab
 --   VRCompanion:settleObjectGrabRayTarget(isTarget)   the answer for the last peek: the object is what the ray ends on (the landing
@@ -108,7 +107,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.ObjectGrab = VRCompanion.ObjectGrab or {}
 
 local engine = VRCompanion.getEngineGlobal
 
@@ -370,10 +368,6 @@ local function aimedRay(self, player)
     if ray == nil then return nil, "the Pointer Ray is not placed" end
     local behind = self.OBJECT_GRAB_REACH_BEHIND
     return ray.ox - ray.dx * behind, ray.oy - ray.dy * behind, ray.oz - ray.dz * behind, ray.dx, ray.dy, ray.dz
-end
-
-function VRCompanion:getObjectGrabAimedRay(player)
-    return aimedRay(self, player)
 end
 
 -- Core asks for the ray of this subsystem after Hand Tools'.
@@ -1166,10 +1160,3 @@ function VRCompanion:resetObjectGrab()
 end
 
 wrapAll()  -- the game's classes are there as the files load
-
-VRCompanion.ObjectGrab.peekObjectGrabRayTarget = function(self, ...) return VRCompanion.peekObjectGrabRayTarget(VRCompanion, ...) end
-VRCompanion.ObjectGrab.settleObjectGrabRayTarget = function(self, ...) return VRCompanion.settleObjectGrabRayTarget(VRCompanion, ...) end
-VRCompanion.ObjectGrab.consoleCommandSetObjectGrab = function(self, ...) return VRCompanion.consoleCommandSetObjectGrab(VRCompanion, ...) end
-VRCompanion.ObjectGrab.consoleCommandObjectGrabDiagnostics = function(self, ...) return VRCompanion.consoleCommandObjectGrabDiagnostics(VRCompanion, ...) end
-
-return VRCompanion.ObjectGrab

@@ -124,7 +124,6 @@ public:
 
     bool Succeeded() const noexcept { return SUCCEEDED(m_hr) && m_data != nullptr; }
     explicit operator bool() const noexcept { return Succeeded(); }
-    HRESULT GetHResult() const noexcept { return m_hr; }
     T* Get() const noexcept { return m_data; }
     T* operator->() const noexcept { return m_data; }
     T& operator[](size_t index) const noexcept { return m_data[index]; }
@@ -168,7 +167,6 @@ public:
         return S_OK;
     }
 
-    bool IsClosed() const noexcept { return m_closed; }
 
 private:
     ID3D12GraphicsCommandList* m_cmdList = nullptr;

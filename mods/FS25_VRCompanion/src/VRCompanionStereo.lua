@@ -5,7 +5,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.Stereo = VRCompanion.Stereo or {}
 
 VRCompanion.RENDERING_MODE_AFR = "AFR"
 VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS = "SequentialDualPass"
@@ -1678,60 +1677,3 @@ function VRCompanion:restoreMenuBackgroundCamera()
         self.menuCamTicks = 0
     end
 end
-
--- Export to Stereo subsystem table
-VRCompanion.Stereo.getRenderingMode = function(self, ...) return VRCompanion.getRenderingMode(VRCompanion, ...) end
-VRCompanion.Stereo.setRenderingMode = function(self, ...) return VRCompanion.setRenderingMode(VRCompanion, ...) end
-VRCompanion.Stereo.getSubPassIndex = function(self, ...) return VRCompanion.getSubPassIndex(VRCompanion, ...) end
-VRCompanion.Stereo.getDualPassEye = function(self, ...) return VRCompanion.getDualPassEye(VRCompanion, ...) end
-VRCompanion.Stereo.setSubPassIndex = function(self, ...) return VRCompanion.setSubPassIndex(VRCompanion, ...) end
-VRCompanion.Stereo.advanceSubPass = function(self, ...) return VRCompanion.advanceSubPass(VRCompanion, ...) end
-VRCompanion.Stereo.getStereoCameraNodes = function(self, ...) return VRCompanion.getStereoCameraNodes(VRCompanion, ...) end
-VRCompanion.Stereo.isDualEyeCameraNode = function(self, ...) return VRCompanion.isDualEyeCameraNode(VRCompanion, ...) end
-VRCompanion.Stereo.getManagerActiveCamera = function(self, ...) return VRCompanion.getManagerActiveCamera(VRCompanion, ...) end
-VRCompanion.Stereo.registerDualEyeCameraNode = function(self, ...) return VRCompanion.registerDualEyeCameraNode(VRCompanion, ...) end
-VRCompanion.Stereo.unregisterDualEyeCameraNodes = function(self, ...) return VRCompanion.unregisterDualEyeCameraNodes(VRCompanion, ...) end
-VRCompanion.Stereo.getGameCamera = function(self, ...) return VRCompanion.getGameCamera(VRCompanion, ...) end
-VRCompanion.Stereo.bindRenderingCamera = function(self, ...) return VRCompanion.bindRenderingCamera(VRCompanion, ...) end
-VRCompanion.Stereo.isGameShowingCamera = function(self, ...) return VRCompanion.isGameShowingCamera(VRCompanion, ...) end
-VRCompanion.Stereo.syncActiveEyeCamera = function(self, ...) return VRCompanion.syncActiveEyeCamera(VRCompanion, ...) end
-VRCompanion.Stereo.initDualEyeCameraNodes = function(self, ...) return VRCompanion.initDualEyeCameraNodes(VRCompanion, ...) end
-VRCompanion.Stereo.ensureDualEyeCameraNodes = function(self, ...) return VRCompanion.ensureDualEyeCameraNodes(VRCompanion, ...) end
-VRCompanion.Stereo.initCyclopeanAudioListener = function(self, ...) return VRCompanion.initCyclopeanAudioListener(VRCompanion, ...) end
-VRCompanion.Stereo.ensureCyclopeanAudioListener = function(self, ...) return VRCompanion.ensureCyclopeanAudioListener(VRCompanion, ...) end
-VRCompanion.Stereo.signalDiscontinuityFlush = function(self, ...) return VRCompanion.signalDiscontinuityFlush(VRCompanion, ...) end
-VRCompanion.Stereo.getIs2DViewActive = function(self, ...) return VRCompanion.getIs2DViewActive(VRCompanion, ...) end
-VRCompanion.Stereo.set2DViewActive = function(self, ...) return VRCompanion.set2DViewActive(VRCompanion, ...) end
-VRCompanion.Stereo.toggle2DView = function(self, ...) return VRCompanion.toggle2DView(VRCompanion, ...) end
-VRCompanion.Stereo.isToggleViewDebounced = function(self, ...) return VRCompanion.isToggleViewDebounced(VRCompanion, ...) end
-VRCompanion.Stereo.resetToggleViewDebounce = function(self, ...) return VRCompanion.resetToggleViewDebounce(VRCompanion, ...) end
-VRCompanion.Stereo.onToggleVrViewAction = function(self, ...) return VRCompanion.onToggleVrViewAction(VRCompanion, ...) end
-VRCompanion.Stereo.restoreCameraProjectionsFor2D = function(self, ...) return VRCompanion.restoreCameraProjectionsFor2D(VRCompanion, ...) end
-VRCompanion.Stereo.isPassThroughMode = function(self, ...) return VRCompanion.isPassThroughMode(VRCompanion, ...) end
-VRCompanion.Stereo.setPassThroughMode = function(self, ...) return VRCompanion.setPassThroughMode(VRCompanion, ...) end
-VRCompanion.Stereo.isHeadTrackingActive = function(self, ...) return VRCompanion.isHeadTrackingActive(VRCompanion, ...) end
-VRCompanion.Stereo.setHeadTrackingEnabled = function(self, ...) return VRCompanion.setHeadTrackingEnabled(VRCompanion, ...) end
-VRCompanion.Stereo.applyCameraProjection = function(self, ...) return VRCompanion.applyCameraProjection(VRCompanion, ...) end
-VRCompanion.Stereo.getFrameParity = function(self, ...) return VRCompanion.getFrameParity(VRCompanion, ...) end
-VRCompanion.Stereo.getIpd = function(self, ...) return VRCompanion.getIpd(VRCompanion, ...) end
-VRCompanion.Stereo.requiresAfrFallback = function(self, ...) return VRCompanion.requiresAfrFallback(VRCompanion, ...) end
-VRCompanion.Stereo.computeEyeOffset = function(self, ...) return VRCompanion.computeEyeOffset(VRCompanion, ...) end
-VRCompanion.Stereo.getResolvedHeadPose = function(self, ...) return VRCompanion.getResolvedHeadPose(VRCompanion, ...) end
-VRCompanion.Stereo.getActiveEyeIndex = function(self, ...) return VRCompanion.getActiveEyeIndex(VRCompanion, ...) end
-VRCompanion.Stereo.matchEngineCameraLens = function(self, ...) return VRCompanion.matchEngineCameraLens(VRCompanion, ...) end
-VRCompanion.Stereo.placeAndBindEyes = function(self, ...) return VRCompanion.placeAndBindEyes(VRCompanion, ...) end
-VRCompanion.Stereo.getOutsideCameraBaseHeading = function(self, ...) return VRCompanion.getOutsideCameraBaseHeading(VRCompanion, ...) end
-VRCompanion.Stereo.renderThroughEngineCamera = function(self, ...) return VRCompanion.renderThroughEngineCamera(VRCompanion, ...) end
-VRCompanion.Stereo.showEngineCameraView = function(self, ...) return VRCompanion.showEngineCameraView(VRCompanion, ...) end
-VRCompanion.Stereo.restoreGameActiveCamera = function(self, ...) return VRCompanion.restoreGameActiveCamera(VRCompanion, ...) end
-VRCompanion.Stereo.onOutsideCameraUpdate = function(self, ...) return VRCompanion.onOutsideCameraUpdate(VRCompanion, ...) end
-VRCompanion.Stereo.placeOutsideCameraBase = function(self, ...) return VRCompanion.placeOutsideCameraBase(VRCompanion, ...) end
-VRCompanion.Stereo.onVehicleCameraUpdate = function(self, ...) return VRCompanion.onVehicleCameraUpdate(VRCompanion, ...) end
-VRCompanion.Stereo.onPlayerCameraMakeCurrent = function(self, ...) return VRCompanion.onPlayerCameraMakeCurrent(VRCompanion, ...) end
-VRCompanion.Stereo.onPlayerCameraUpdate = function(self, ...) return VRCompanion.onPlayerCameraUpdate(VRCompanion, ...) end
-VRCompanion.Stereo.getPlayerCameraYaw = function(self, ...) return VRCompanion.getPlayerCameraYaw(VRCompanion, ...) end
-VRCompanion.Stereo.onPlayerCameraUpdateRotation = function(self, ...) return VRCompanion.onPlayerCameraUpdateRotation(VRCompanion, ...) end
-VRCompanion.Stereo.updateMenuBackgroundCamera = function(self, ...) return VRCompanion.updateMenuBackgroundCamera(VRCompanion, ...) end
-VRCompanion.Stereo.restoreMenuBackgroundCamera = function(self, ...) return VRCompanion.restoreMenuBackgroundCamera(VRCompanion, ...) end
-
-return VRCompanion.Stereo
