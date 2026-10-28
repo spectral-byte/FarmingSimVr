@@ -32,10 +32,6 @@ _Avoid_: Dual rendering, double pass, simultaneous pass, split-frame stereo
 The selectable operational pipeline governing how stereoscopic views are rendered and paced (Alternate Frame Rendering or Sequential Dual-Pass).
 _Avoid_: 3D mode, render method, stereo toggle, vr mode
 
-**Oblique Frustum**:
-An off-axis perspective projection with asymmetric view angles matched to the optical center and field of view of a VR headset display.
-_Avoid_: Skewed frustum, asymmetric projection
-
 **Pass-Through Mode**:
 The inert operational state where the Injector forwards all DXGI calls to the system library without initiating an OpenXR session when no VR runtime is detected.
 _Avoid_: Bypass mode, fallback state

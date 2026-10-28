@@ -804,19 +804,12 @@ function VRCompanion:applyCameraProjection(camNode, eyeIndex, proj)
         setFovY(camNode, proj.fovY)
     end
 
-    -- In both AFR and Sequential Dual-Pass modes: keep camera centered on optical axis (0, 0) by default to guarantee
+    -- In both AFR and Sequential Dual-Pass modes: keep the camera centered on the optical axis (0, 0) to guarantee
     -- parallel rays at infinity and natural binocular convergence without cross-eyed disparity shear, matching
-    -- OpenXrManager::SubmitFramePair's aspect-ratio matched symmetric FOV.
-    -- If allowObliqueProjection is explicitly enabled, pass asymmetric projection offsets.
+    -- OpenXrManager::SubmitFramePair's aspect-ratio matched symmetric FOV (ADR-0005). The eye's tan offsets in
+    -- proj stay published by VRBridge but are not applied.
     if type(setProjectionOffset) == "function" then
-        local offsetX = 0
-        local offsetY = 0
-        local allowOblique = (self.allowObliqueProjection == true)
-        if allowOblique and proj.xOffset ~= nil and proj.yOffset ~= nil then
-            offsetX = proj.xOffset * (self.projectionOffsetScale or 1.0)
-            offsetY = proj.yOffset * (self.projectionOffsetScale or 1.0)
-        end
-        setProjectionOffset(camNode, offsetX, offsetY)
+        setProjectionOffset(camNode, 0, 0)
     end
 end
 
@@ -967,7 +960,7 @@ end
 -- Final step of a head-tracked camera frame, shared by every camera path: links the Dual Eye
 -- Camera Nodes and the Cyclopean Audio Listener Node under parentNode, places the listener at the
 -- centre of the head and the active eye at the eye position, gives that eye the lens of
--- referenceCamNode, applies its Oblique Frustum projection and binds it for rendering, for
+-- referenceCamNode, applies its projection and binds it for rendering, for
 -- whichever Stereo Presentation Mode is active. All transforms are in parentNode's space and
 -- share one rotation, the quaternion (qx, qy, qz, qw). referenceCamNode is the engine camera
 -- the eye renders in place of: it seeds node creation, lends its lens and is the mono fallback target when no left eye node exists. stereoRequested (the

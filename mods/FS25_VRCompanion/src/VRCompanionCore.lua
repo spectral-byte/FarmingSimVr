@@ -282,7 +282,6 @@ function VRCompanion:loadMap(name)
         addConsoleCommand("vrDlssNearClipOnFoot", "Set the DLSS near plane on foot: vrDlssNearClipOnFoot <meters|auto>", "consoleCommandDlssNearClipOnFoot", self)
         addConsoleCommand("vrDlssDiag","Trace DLSS evaluations to fs25_vr.log: vrDlssDiag [evaluations]", "consoleCommandDlssDiag", self)
         addConsoleCommand("vrRenderingMode", "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", "consoleCommandSetRenderingMode", self)
-        addConsoleCommand("vrObliqueProjection", "Toggle Oblique Frustum projection: vrObliqueProjection <true|false|toggle>", "consoleCommandSetObliqueProjection", self)
         addConsoleCommand("vrHudGroupShow","Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", "consoleCommandHudGroupShow", self)
     end
     if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
@@ -1235,7 +1234,6 @@ function VRCompanion:deleteMap()
         removeConsoleCommand("vr2DView")
         removeConsoleCommand("vrToggleView")
         removeConsoleCommand("vrRenderingMode")
-        removeConsoleCommand("vrObliqueProjection")
         removeConsoleCommand("vrHudGroupShow")
     end
 

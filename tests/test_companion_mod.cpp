@@ -579,7 +579,7 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
     EXPECT_TRUE(foundPlayerRealignLog);
 }
 
-TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCamera) {
+TEST_F(CompanionModTest, AppliesVerticalFovAndKeepsVehicleCameraCenteredWhateverTheSettingsSay) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
@@ -597,7 +597,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCame
     // Setup engine camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion.allowObliqueProjection = true
+        VRCompanion.allowObliqueProjection = true -- a leftover from an older version must change nothing
         _G.mockVehicleCam = {
             isInside = true,
             cameraNode = 301,
@@ -608,18 +608,18 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCame
     // Run vehicle camera update
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCam"), 0);
 
-    // Verify FOV and oblique frustum offsets applied
+    // The headset FOV is applied; the projection stays on the optical axis although the eye's tan offset is -0.23
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraFovY[301] ~= nil, "setFovY must be called on vehicle cameraNode")
         assert(math.abs(_G.cameraFovY[301] - 1.70) < 0.02, "vehicle vertical fov must match VR headset FOV")
 
         assert(_G.cameraProjectionOffsets[301] ~= nil, "setProjectionOffset must be called on vehicle cameraNode")
-        assert(math.abs(_G.cameraProjectionOffsets[301].x - (-0.23052)) < 0.01, "vehicle horizontal offset mismatch")
-        assert(math.abs(_G.cameraProjectionOffsets[301].y) < 0.01, "vehicle vertical offset mismatch")
+        assert(_G.cameraProjectionOffsets[301].x == 0, "vehicle horizontal offset must be zero")
+        assert(_G.cameraProjectionOffsets[301].y == 0, "vehicle vertical offset must be zero")
     )luau", "=verifyVehicleCamProjection"), 0);
 }
 
-TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamera) {
+TEST_F(CompanionModTest, AppliesVerticalFovAndKeepsPlayerCameraCenteredWhateverTheSettingsSay) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
@@ -637,7 +637,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamer
     // Setup player camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion.allowObliqueProjection = true
+        VRCompanion.allowObliqueProjection = true -- a leftover from an older version must change nothing
         _G.mockPlayerCam = {
             isFirstPerson = true,
             firstPersonCamera = 401
@@ -647,18 +647,18 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamer
     // Run player camera update
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCam"), 0);
 
-    // Verify FOV and oblique frustum offsets applied
+    // The headset FOV is applied; the projection stays on the optical axis although the eye's tan offset is -0.23
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraFovY[401] ~= nil, "setFovY must be called on player firstPersonCamera")
         assert(math.abs(_G.cameraFovY[401] - 1.70) < 0.02, "player vertical fov must match VR headset FOV")
 
         assert(_G.cameraProjectionOffsets[401] ~= nil, "setProjectionOffset must be called on player firstPersonCamera")
-        assert(math.abs(_G.cameraProjectionOffsets[401].x - (-0.23052)) < 0.01, "player horizontal offset mismatch")
-        assert(math.abs(_G.cameraProjectionOffsets[401].y) < 0.01, "player vertical offset mismatch")
+        assert(_G.cameraProjectionOffsets[401].x == 0, "player horizontal offset must be zero")
+        assert(_G.cameraProjectionOffsets[401].y == 0, "player vertical offset must be zero")
     )luau", "=verifyPlayerCamProjection"), 0);
 }
 
-TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDisparity) {
+TEST_F(CompanionModTest, CentersCameraProjectionToPreventCrossEyedDisparity) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
@@ -682,85 +682,33 @@ TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDispa
         }
     )luau", "=setupVehicleCamMock"), 0);
 
-    // Run vehicle camera update without allowObliqueProjection (default behavior)
+    // Run vehicle camera update
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCam"), 0);
 
     // Verify projection offset is explicitly 0, 0 to ensure zero disparity shear at infinity
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraProjectionOffsets[301] ~= nil, "setProjectionOffset must be called on vehicle cameraNode")
-        assert(math.abs(_G.cameraProjectionOffsets[301].x) < 0.0001, "vehicle horizontal offset must be zero by default")
-        assert(math.abs(_G.cameraProjectionOffsets[301].y) < 0.0001, "vehicle vertical offset must be zero by default")
+        assert(math.abs(_G.cameraProjectionOffsets[301].x) < 0.0001, "vehicle horizontal offset must be zero")
+        assert(math.abs(_G.cameraProjectionOffsets[301].y) < 0.0001, "vehicle vertical offset must be zero")
     )luau", "=verifyCenteredProjection"), 0);
 }
 
-TEST_F(CompanionModTest, ObliqueProjectionConsoleCommandTogglesPersistsAndAppliesOffsets) {
-    fs25vr::FakeTrackedHeadset headset;
-    auto oxr = headset.manager;
-    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    headset.SetEyeFov(0, leftFov);
-
-    fs25vr::HeadPose simPose;
-    simPose.isValid = true;
-    headset.SetHeadPose(simPose);
-
-    fs25vr::VRBridge bridge(oxr, nullptr);
-    ASSERT_TRUE(bridge.Inject(L));
-
+TEST_F(CompanionModTest, ObliqueProjectionConsoleCommandIsNoLongerRegistered) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredCommands = {}
-        local removedCommands = {}
         _G.addConsoleCommand = function(cmd, desc, funcName, target)
-            registeredCommands[cmd] = { desc = desc, funcName = funcName, target = target }
+            registeredCommands[cmd] = true
         end
-        _G.removeConsoleCommand = function(cmd)
-            removedCommands[cmd] = true
-        end
-
-        local savedBools = {}
-        _G.createXMLFile = function() return 1 end
-        _G.setXMLFloat = function() end
-        _G.setXMLBool = function(xml, key, val) savedBools[key] = val end
-        _G.setXMLString = function() end
-        _G.saveXMLFile = function() return true end
-        _G.delete = function() end
-        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+        _G.removeConsoleCommand = function() end
 
         VRCompanion:loadMap("testMap")
-        assert(registeredCommands["vrObliqueProjection"] ~= nil, "vrObliqueProjection console command must be registered on map load")
-        assert(registeredCommands["vrObliqueProjection"].funcName == "consoleCommandSetObliqueProjection",
-            "registered callback must be consoleCommandSetObliqueProjection")
-
-        -- Defaults to symmetric projection
-        assert(VRCompanion.allowObliqueProjection == false, "oblique projection must default to off")
-        local statusRes = VRCompanion:consoleCommandSetObliqueProjection("status")
-        assert(string.find(statusRes, "Disabled") ~= nil, "status must report disabled by default")
-
-        local invalidRes = VRCompanion:consoleCommandSetObliqueProjection("maybe")
-        assert(string.find(invalidRes, "Usage: vrObliqueProjection") ~= nil, "invalid input must return usage")
-        assert(VRCompanion.allowObliqueProjection == false, "invalid input must not change the setting")
-
-        local cam = { isInside = true, cameraNode = 301, origTransX = 0, origTransY = 1.5, origTransZ = 0 }
-
-        -- Enabling applies per-eye asymmetric offsets and persists to settings.xml
-        VRCompanion:consoleCommandSetObliqueProjection("true")
-        assert(VRCompanion.allowObliqueProjection == true, "true must enable oblique projection")
-        assert(savedBools["vrSettings.allowObliqueProjection"] == true, "enabled preference must persist to settings.xml")
-        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
-        assert(math.abs(_G.cameraProjectionOffsets[301].x) > 0.001, "enabled oblique projection must apply a horizontal offset")
-
-        -- Toggling back restores the centered projection and persists
-        VRCompanion:consoleCommandSetObliqueProjection("toggle")
-        assert(VRCompanion.allowObliqueProjection == false, "toggle must disable oblique projection")
-        assert(savedBools["vrSettings.allowObliqueProjection"] == false, "disabled preference must persist to settings.xml")
-        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
-        assert(math.abs(_G.cameraProjectionOffsets[301].x) < 0.0001, "disabled oblique projection must center the projection")
-
+        assert(registeredCommands["vrObliqueProjection"] == nil, "vrObliqueProjection must not be registered")
+        assert(registeredCommands["vrHudState"] == true, "the other core commands are still registered")
+        assert(VRCompanion.consoleCommandSetObliqueProjection == nil, "its handler is gone too")
         VRCompanion:deleteMap()
-        assert(removedCommands["vrObliqueProjection"] == true, "deleteMap must unregister vrObliqueProjection")
-    )luau", "=testObliqueProjectionConsoleCommand"), 0);
+    )luau", "=testObliqueProjectionConsoleCommandGone"), 0);
 }
 
 TEST_F(CompanionModTest, DlssMvFixConsoleCommandSwitchesTheMotionVectorPass) {
@@ -997,7 +945,7 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     // Setup camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion.allowObliqueProjection = true
+        _G.cameraProjectionOffsets[505] = { x = 0.07, y = -0.03 } -- the game camera's own lens
         _G.mockCam = {
             isInside = true,
             cameraNode = 505,
@@ -1011,7 +959,7 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     // Ensure modified
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(math.abs(_G.cameraFovY[505] - 1.70) < 0.02, "must be set to VR fov")
-        assert(math.abs(_G.cameraProjectionOffsets[505].x) > 0.05, "must be non-zero offset")
+        assert(_G.cameraProjectionOffsets[505].x == 0 and _G.cameraProjectionOffsets[505].y == 0, "must be centered while the mod owns the camera")
     )luau", "=checkModified"), 0);
 
     // Unload map
@@ -1020,12 +968,12 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     // Verify restored
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(math.abs(_G.cameraFovY[505] - 1.0472) < 0.001, "original FOV must be restored")
-        assert(math.abs(_G.cameraProjectionOffsets[505].x) < 0.001, "offset x must be reset to 0")
-        assert(math.abs(_G.cameraProjectionOffsets[505].y) < 0.001, "offset y must be reset to 0")
+        assert(math.abs(_G.cameraProjectionOffsets[505].x - 0.07) < 0.001, "offset x must be restored")
+        assert(math.abs(_G.cameraProjectionOffsets[505].y - (-0.03)) < 0.001, "offset y must be restored")
     )luau", "=checkRestored"), 0);
 }
 
-TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSequentialFramesInCab) {
+TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndKeepsBothEyesCenteredOnSequentialFramesInCab) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
@@ -1060,17 +1008,16 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
             cameraNode = 301,
             origTransX = 0, origTransY = 1.5, origTransZ = 0
         }
-        VRCompanion.allowObliqueProjection = true
     )luau", "=setupAFRVehicleMocks"), 0);
 
     // Frame 0 (even, left eye, parity = 0)
     ASSERT_EQ(bridge.GetFrameParity(), 0u);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCamFrame0"), 0);
 
-    // Check Frame 0: Left Eye projection (negative offset) and negative IPD offset (-0.032m)
+    // Check Frame 0: Left Eye projection centered although the eye's tan offset is -0.23, and negative IPD offset (-0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraProjectionOffsets[301] ~= nil, "projection offset must be set on vehicle camera")
-        assert(math.abs(_G.cameraProjectionOffsets[301].x - (-0.23052)) < 0.01, "frame 0 should have left eye projection offset")
+        assert(_G.cameraProjectionOffsets[301].x == 0 and _G.cameraProjectionOffsets[301].y == 0, "frame 0 should have a centered projection")
 
         assert(_G.cameraTranslations[301] ~= nil, "translation must be set on vehicle camera")
         assert(math.abs(_G.cameraTranslations[301].x - (-0.032)) < 0.001, "frame 0 should have -IPD/2 translation")
@@ -1085,16 +1032,16 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     // Frame 1 (odd, right eye, parity = 1)
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCamFrame1"), 0);
 
-    // Check Frame 1: Right Eye projection (positive offset) and positive IPD offset (+0.032m)
+    // Check Frame 1: Right Eye projection centered although the eye's tan offset is +0.23, and positive IPD offset (+0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(math.abs(_G.cameraProjectionOffsets[301].x - (0.23052)) < 0.01, "frame 1 should have right eye projection offset")
+        assert(_G.cameraProjectionOffsets[301].x == 0 and _G.cameraProjectionOffsets[301].y == 0, "frame 1 should have a centered projection")
         assert(math.abs(_G.cameraTranslations[301].x - (0.032)) < 0.001, "frame 1 should have +IPD/2 translation")
         assert(math.abs(_G.cameraTranslations[301].y - 1.5) < 0.001, "y translation should match base height")
         assert(math.abs(_G.cameraTranslations[301].z) < 0.001, "z translation should be zero")
     )luau", "=verifyFrame1InCab"), 0);
 }
 
-TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSequentialFramesOnFoot) {
+TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndKeepsBothEyesCenteredOnSequentialFramesOnFoot) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
@@ -1131,7 +1078,6 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
             isFirstPerson = true,
             firstPersonCamera = 401
         }
-        VRCompanion.allowObliqueProjection = true
     )luau", "=setupAFRPlayerMocks"), 0);
 
     // Frame 0 (even, left eye, parity = 0)
@@ -1139,10 +1085,10 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraMakeCurrent(_G.mockPlayerCam)", "=makeCurrentPlayer"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCamFrame0"), 0);
 
-    // Check Frame 0: Left Eye projection and negative IPD offset (-0.032m)
+    // Check Frame 0: Left Eye projection centered although the eye's tan offset is -0.23, and negative IPD offset (-0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraProjectionOffsets[401] ~= nil, "projection offset must be set on player camera")
-        assert(math.abs(_G.cameraProjectionOffsets[401].x - (-0.23052)) < 0.01, "frame 0 should have left eye projection offset")
+        assert(_G.cameraProjectionOffsets[401].x == 0 and _G.cameraProjectionOffsets[401].y == 0, "frame 0 should have a centered projection")
 
         assert(_G.cameraTranslations[401] ~= nil, "translation must be set on player camera")
         assert(math.abs(_G.cameraTranslations[401].x - (-0.032)) < 0.001, "frame 0 should have -IPD/2 translation")
@@ -1156,9 +1102,9 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     // Frame 1 (odd, right eye, parity = 1)
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCamFrame1"), 0);
 
-    // Check Frame 1: Right Eye projection and positive IPD offset (+0.032m)
+    // Check Frame 1: Right Eye projection centered although the eye's tan offset is +0.23, and positive IPD offset (+0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(math.abs(_G.cameraProjectionOffsets[401].x - (0.23052)) < 0.01, "frame 1 should have right eye projection offset")
+        assert(_G.cameraProjectionOffsets[401].x == 0 and _G.cameraProjectionOffsets[401].y == 0, "frame 1 should have a centered projection")
         assert(math.abs(_G.cameraTranslations[401].x - (0.032)) < 0.001, "frame 1 should have +IPD/2 translation")
         assert(math.abs(_G.cameraTranslations[401].y - 1.8) < 0.001, "y translation should match base head height")
     )luau", "=verifyFrame1OnFoot"), 0);
@@ -4875,12 +4821,12 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
         assert(math.abs(offX0) < 0.0001, "Camera projection X offset must remain centered in DualPass")
         assert(math.abs(offY0) < 0.0001, "Camera projection Y offset must remain centered in DualPass")
 
-        -- When allowObliqueProjection is explicitly enabled in DualPass, asymmetric offsets are applied
+        -- A leftover allowObliqueProjection from an older version changes nothing
         VRCompanion.allowObliqueProjection = true
         VRCompanion:applyCameraProjection(leftCam, 0)
-        local oblX, _ = getProjectionOffset(leftCam)
-        assert(math.abs(oblX) > 0.001, "Oblique frustum offset must be applied when allowObliqueProjection is true")
-        VRCompanion.allowObliqueProjection = false
+        local legacyX, legacyY = getProjectionOffset(leftCam)
+        assert(legacyX == 0 and legacyY == 0, "the projection must stay centered whatever the settings say")
+        VRCompanion.allowObliqueProjection = nil
 
         -- SubPass 1 (Right Eye)
         VRBridge.setSubPassIndex(1)
