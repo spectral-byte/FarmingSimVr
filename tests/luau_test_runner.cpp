@@ -18,8 +18,8 @@ LuauTestRunner::~LuauTestRunner() {
     }
 }
 
-// collectgarbage for allocation tests (Luau's base library only has gcinfo): "collect", "count" (KB, with the
-// byte remainder), "stop" and "restart".
+// Luau's base library only has gcinfo. collectgarbage serves weak-table tests (a forced full collection, the default)
+// and allocation tests: "collect", "count" (KB, with the byte remainder), "stop" and "restart".
 static int LuauCollectGarbage(lua_State* L) {
     std::string_view option = luaL_optstring(L, 1, "collect");
     if (option == "collect") {
@@ -63,13 +63,6 @@ void LuauTestRunner::InitializeEnvironment() {
     // Register loadCompanionMod (loads module files in modDesc order, as the engine does)
     lua_pushcfunction(L_, &LuauLoadCompanionMod, "loadCompanionMod");
     lua_setglobal(L_, "loadCompanionMod");
-
-    // Luau has no collectgarbage; weak-table tests need a forced full collection
-    lua_pushcfunction(L_, [](lua_State* L) -> int {
-        lua_gc(L, LUA_GCCOLLECT, 0);
-        return 0;
-    }, "collectgarbage");
-    lua_setglobal(L_, "collectgarbage");
 
     // Register require (supporting @lune/fs)
     lua_pushlightuserdata(L_, this);
