@@ -54,11 +54,12 @@ public:
         if (found == m_images.end()) return XR_ERROR_HANDLE_INVALID;
         if (count) *count = static_cast<uint32_t>(found->second.size());
         if (capacity >= found->second.size() && images) {
+            // The caller's array holds XrSwapchainImageD3D12KHR elements, so step by that size, not the base header's.
+            auto* d3d12Images = reinterpret_cast<XrSwapchainImageD3D12KHR*>(images);
             for (size_t i = 0; i < found->second.size(); ++i) {
-                auto* image = reinterpret_cast<XrSwapchainImageD3D12KHR*>(&images[i]);
-                image->type = XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR;
-                image->next = nullptr;
-                image->texture = found->second[i].Get();
+                d3d12Images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR;
+                d3d12Images[i].next = nullptr;
+                d3d12Images[i].texture = found->second[i].Get();
             }
         }
         return XR_SUCCESS;
