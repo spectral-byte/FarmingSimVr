@@ -11,25 +11,6 @@
 
 namespace fs25vr {
 
-// The performance counter frequency is fixed at boot, so it is queried once.
-static int64_t QpcFrequency() {
-    static const int64_t freq = [] {
-        LARGE_INTEGER f;
-        QueryPerformanceFrequency(&f);
-        return static_cast<int64_t>(f.QuadPart);
-    }();
-    return freq;
-}
-
-int64_t OpenXrManager::PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency) {
-    if (frequency <= 0) return 0;
-    // Split into whole seconds and a sub-second remainder: counter * 1e9 overflows int64 after
-    // ~15 minutes of uptime at a 10 MHz counter.
-    const int64_t seconds = counter / frequency;
-    const int64_t remainder = counter % frequency;
-    return seconds * 1000000000LL + (remainder * 1000000000LL) / frequency;
-}
-
 void OpenXrManager::SetPerformanceCounterSource(PerformanceCounterSource source) {
     m_counterSource = std::move(source);
 }
@@ -66,7 +47,7 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
     if (m_lastPredictedDisplayTime != 0) {
         int64_t elapsedQpc = now.counter - m_lastPredictedQpc;
         if (elapsedQpc > 0 && now.frequency > 0) {
-            return m_lastPredictedDisplayTime + PerformanceCounterToNanoseconds(elapsedQpc, now.frequency);
+            return m_lastPredictedDisplayTime + QpcTicksToNanoseconds(elapsedQpc, now.frequency);
         }
         return m_lastPredictedDisplayTime;
     }
@@ -84,7 +65,7 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
 
     // No runtime conversion: the counter in nanoseconds, computed without overflow. Runtimes that
     // back XrTime with the performance counter share this time base, and the counter is monotonic.
-    return PerformanceCounterToNanoseconds(now.counter, now.frequency);
+    return QpcTicksToNanoseconds(now.counter, now.frequency);
 }
 
 OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
@@ -1247,10 +1228,9 @@ void OpenXrManager::ReadCopyTimestamps(uint32_t ringSlot) {
     if (m_copiesSinceCalibration++ % 64 == 0) {
         UINT64 gpuTicks = 0;
         UINT64 cpuQpc = 0;
-        LARGE_INTEGER qpcFrequency{};
-        if (SUCCEEDED(m_queue->GetClockCalibration(&gpuTicks, &cpuQpc)) && QueryPerformanceFrequency(&qpcFrequency)) {
+        if (SUCCEEDED(m_queue->GetClockCalibration(&gpuTicks, &cpuQpc))) {
             m_gpuCalibrationTicks = gpuTicks;
-            m_gpuCalibrationCpuNs = QpcTicksToNanoseconds(static_cast<int64_t>(cpuQpc), qpcFrequency.QuadPart);
+            m_gpuCalibrationCpuNs = QpcTicksToNanoseconds(static_cast<int64_t>(cpuQpc), QpcFrequency());
         }
     }
     PerfTrace& trace = PerfTrace::Instance();

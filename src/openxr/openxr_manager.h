@@ -109,8 +109,6 @@ public:
     using PerformanceCounterSource = std::function<PerformanceCounterSample()>;
     // Replaces the QueryPerformanceCounter/Frequency reads (tests drive a fake clock).
     void SetPerformanceCounterSource(PerformanceCounterSource source);
-    // counter / frequency in nanoseconds without overflowing for any int64 counter.
-    static int64_t PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency);
 
     // `observer` runs at the end of every BeginFrame that began a frame, after the hand state is synced. One
     // observer per `owner` (the Virtual Gamepad publishes its snapshot and plays its rumble from here); clearing is by the same
