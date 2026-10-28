@@ -797,24 +797,29 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
     return hr;
 }
 
+void DxgiProxy::PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height) {
+    if (!proxy) return;
+    proxy->m_cachedSwapChain = nullptr;
+    proxy->m_cachedSwapChain3.Reset();
+    proxy->m_cachedBackBuffers.clear();
+    proxy->m_windowController->SetWindowClampDirty(true);
+    if (proxy->IsActive() && proxy->m_windowController->GetTargetRenderWidth() > 0 && proxy->m_windowController->GetTargetRenderHeight() > 0) {
+        const UINT requestedWidth = width;
+        const UINT requestedHeight = height;
+        width = proxy->m_windowController->GetTargetRenderWidth();
+        height = proxy->m_windowController->GetTargetRenderHeight();
+        LogInfo(std::string("DxgiProxy::") + hookName + ": Overriding dimensions from (" +
+                std::to_string(requestedWidth) + "x" + std::to_string(requestedHeight) + ") to target render resolution (" +
+                std::to_string(width) + "x" + std::to_string(height) + ")");
+    }
+}
+
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers(
     IDXGISwapChain* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags) {
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourResizeBuffers);
-    if (proxy) {
-        proxy->m_cachedSwapChain = nullptr;
-        proxy->m_cachedSwapChain3.Reset();
-        proxy->m_cachedBackBuffers.clear();
-        proxy->m_windowController->SetWindowClampDirty(true);
-    }
     UINT effectiveWidth = Width;
     UINT effectiveHeight = Height;
-    if (proxy && proxy->IsActive() && proxy->m_windowController->GetTargetRenderWidth() > 0 && proxy->m_windowController->GetTargetRenderHeight() > 0) {
-        effectiveWidth = proxy->m_windowController->GetTargetRenderWidth();
-        effectiveHeight = proxy->m_windowController->GetTargetRenderHeight();
-        LogInfo("DxgiProxy::Intercept_ResizeBuffers: Overriding dimensions from (" +
-                std::to_string(Width) + "x" + std::to_string(Height) + ") to target render resolution (" +
-                std::to_string(effectiveWidth) + "x" + std::to_string(effectiveHeight) + ")");
-    }
+    PrepareResize(proxy, "Intercept_ResizeBuffers", effectiveWidth, effectiveHeight);
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT)>(
         proxy ? proxy->m_detourResizeBuffers.GetOriginal() : nullptr
     );
@@ -828,21 +833,9 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers1(
     IDXGISwapChain3* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags,
     const UINT* pCreationNodeMask, IUnknown* const* ppPresentQueue) {
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourResizeBuffers1);
-    if (proxy) {
-        proxy->m_cachedSwapChain = nullptr;
-        proxy->m_cachedSwapChain3.Reset();
-        proxy->m_cachedBackBuffers.clear();
-        proxy->m_windowController->SetWindowClampDirty(true);
-    }
     UINT effectiveWidth = Width;
     UINT effectiveHeight = Height;
-    if (proxy && proxy->IsActive() && proxy->m_windowController->GetTargetRenderWidth() > 0 && proxy->m_windowController->GetTargetRenderHeight() > 0) {
-        effectiveWidth = proxy->m_windowController->GetTargetRenderWidth();
-        effectiveHeight = proxy->m_windowController->GetTargetRenderHeight();
-        LogInfo("DxgiProxy::Intercept_ResizeBuffers1: Overriding dimensions from (" +
-                std::to_string(Width) + "x" + std::to_string(Height) + ") to target render resolution (" +
-                std::to_string(effectiveWidth) + "x" + std::to_string(effectiveHeight) + ")");
-    }
+    PrepareResize(proxy, "Intercept_ResizeBuffers1", effectiveWidth, effectiveHeight);
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*)>(
         proxy ? proxy->m_detourResizeBuffers1.GetOriginal() : nullptr
     );
@@ -1005,7 +998,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
         proxy->m_detourCreateSwapChainForHwnd.GetOriginal()
     );
-    HRESULT hr = orig ? orig(self, pDevice, hWnd, pEffectiveDesc, pEffectiveFullscreenDesc, pRestrictToOutput, ppSwapChain) : S_OK;
+    HRESULT hr = orig ? orig(self, pDevice, hWnd, pEffectiveDesc, pEffectiveFullscreenDesc, pRestrictToOutput, ppSwapChain) : E_FAIL;
     if (SUCCEEDED(hr)) {
         if (hWnd && proxy->IsActive()) {
             proxy->m_windowController->ApplyInitialWindowClamp(hWnd);
@@ -1017,39 +1010,32 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     return hr;
 }
 
+void DxgiProxy::AttachCreatedFactory(HRESULT hr, void** ppFactory) {
+    if (!SUCCEEDED(hr) || !ppFactory || !*ppFactory || !m_openXrManager || !m_openXrManager->IsActive()) return;
+    Microsoft::WRL::ComPtr<IDXGIFactory> factory;
+    if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
+        AttachFactory(factory.Get());
+    }
+}
+
 HRESULT DxgiProxy::CreateDXGIFactory(REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
     HRESULT hr = ForwardFactoryCall("CreateDXGIFactory", SystemPfn(&ISystemDxgi::GetCreateDXGIFactory), riid, ppFactory);
-    if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
-        Microsoft::WRL::ComPtr<IDXGIFactory> factory;
-        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
-            AttachFactory(factory.Get());
-        }
-    }
+    AttachCreatedFactory(hr, ppFactory);
     return hr;
 }
 
 HRESULT DxgiProxy::CreateDXGIFactory1(REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
     HRESULT hr = ForwardFactoryCall("CreateDXGIFactory1", SystemPfn(&ISystemDxgi::GetCreateDXGIFactory1), riid, ppFactory);
-    if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
-        Microsoft::WRL::ComPtr<IDXGIFactory> factory;
-        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
-            AttachFactory(factory.Get());
-        }
-    }
+    AttachCreatedFactory(hr, ppFactory);
     return hr;
 }
 
 HRESULT DxgiProxy::CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
     HRESULT hr = ForwardFactoryCall("CreateDXGIFactory2", SystemPfn(&ISystemDxgi::GetCreateDXGIFactory2), Flags, riid, ppFactory);
-    if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
-        Microsoft::WRL::ComPtr<IDXGIFactory> factory;
-        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
-            AttachFactory(factory.Get());
-        }
-    }
+    AttachCreatedFactory(hr, ppFactory);
     return hr;
 }
 
