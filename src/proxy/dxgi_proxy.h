@@ -116,7 +116,6 @@ public:
     static HRESULT STDMETHODCALLTYPE Intercept_SetColorSpace1(IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE colorSpace);
     static HRESULT STDMETHODCALLTYPE Intercept_OutputGetDesc1(IDXGIOutput6* self, DXGI_OUTPUT_DESC1* pDesc);
     bool IsDetourResizeBuffersInstalled() const { return m_detourResizeBuffers.IsInstalled(); }
-    bool IsDetourResizeBuffers1Installed() const { return m_detourResizeBuffers1.IsInstalled(); }
     bool IsDetourColorSpaceInstalled() const { return m_detourCheckColorSpaceSupport.IsInstalled() && m_detourSetColorSpace1.IsInstalled(); }
 
 private:
