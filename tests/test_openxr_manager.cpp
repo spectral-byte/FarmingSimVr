@@ -312,6 +312,7 @@ public:
     std::unordered_set<XrSwapchain> acquiredSwapchains;
     uint32_t callOrderErrors = 0;
     XrBool32 mockShouldRender = XR_TRUE;
+    XrTime mockPredictedDisplayTime = 1000000;
 
     std::vector<XrSwapchainCreateInfo> lastSwapchainCreateInfos;
     XrFrameEndInfo lastFrameEndInfo{};
@@ -420,7 +421,7 @@ public:
         if (frameState) {
             frameState->type = XR_TYPE_FRAME_STATE;
             frameState->next = nullptr;
-            frameState->predictedDisplayTime = 1000000;
+            frameState->predictedDisplayTime = mockPredictedDisplayTime;
             frameState->predictedDisplayPeriod = 11111111;
             frameState->shouldRender = mockShouldRender;
         }
@@ -2237,6 +2238,175 @@ TEST(OpenXrManagerTest, MenuQuadRemainsAnchoredInLocalSpaceAcrossHeadMotion) {
     EXPECT_NEAR(quad.pose.position.x, 0.0f, 0.001f);
     EXPECT_NEAR(quad.pose.position.y, 1.7f, 0.001f);
     EXPECT_NEAR(quad.pose.position.z, -1.5f, 0.001f);
+}
+
+namespace {
+
+// A session whose local space origin sits well below the player's eyes, as SteamVR's seated origin
+// can: a menu quad placed at the origin shows at knee level.
+struct MenuQuadSession {
+    std::shared_ptr<MockOpenXrDispatch> dispatch = std::make_shared<MockOpenXrDispatch>();
+    OpenXrManager manager{dispatch};
+
+    MenuQuadSession() {
+        dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+        EXPECT_TRUE(manager.Initialize());
+        EXPECT_TRUE(manager.CreateSession());
+        EXPECT_TRUE(manager.CreateTrackingSpaces());
+        EXPECT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+    }
+
+    void SetHead(float x, float y, float z, float yaw, bool valid) {
+        HeadPose pose;
+        pose.position = Vector3(x, y, z);
+        pose.rotation = EulerAngles(0.0f, yaw, 0.0f);
+        pose.isValid = valid;
+        pose.positionTracked = valid;
+        pose.orientationTracked = valid;
+        dispatch->tracking.SetHeadPose(pose);
+    }
+
+    // One Present in quad mode, as DxgiProxy runs it: the copy begins the frame, entering quad mode
+    // places the panel, and the quad goes out. Each frame is predicted a frame period later.
+    XrPosef PresentQuadFrame(bool entersQuadMode = false) {
+        dispatch->mockPredictedDisplayTime += 11111111;
+        EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+        if (entersQuadMode) {
+            manager.AlignMenuQuadToHeadPose();
+        }
+        EXPECT_TRUE(manager.SubmitMenuQuad());
+        return manager.GetLastSubmittedQuadLayer().pose;
+    }
+};
+
+} // namespace
+
+TEST(OpenXrManagerTest, MenuQuadPlacedBeforeTheHeadIsTrackedMovesToTheHeadOnceTracked) {
+    MenuQuadSession s;
+    // The first menu frame of a session: the runtime has no head pose yet.
+    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, /*valid=*/false);
+    XrPosef first = s.PresentQuadFrame(/*entersQuadMode=*/true);
+    EXPECT_NEAR(first.position.y, 0.0f, 0.001f);
+
+    s.SetHead(0.2f, 0.6f, 0.1f, 0.0f, /*valid=*/true);
+    XrPosef tracked = s.PresentQuadFrame();
+    EXPECT_NEAR(tracked.position.x, 0.2f, 0.001f);
+    EXPECT_NEAR(tracked.position.y, 0.6f, 0.001f);
+    EXPECT_NEAR(tracked.position.z, 0.1f - 1.5f, 0.001f);
+
+    // Placed from a tracked head, it stays world-anchored as the head moves on.
+    s.SetHead(-0.3f, 0.9f, 0.4f, 0.5f, /*valid=*/true);
+    XrPosef later = s.PresentQuadFrame();
+    EXPECT_NEAR(later.position.x, 0.2f, 0.001f);
+    EXPECT_NEAR(later.position.y, 0.6f, 0.001f);
+    EXPECT_NEAR(later.position.z, 0.1f - 1.5f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, MenuQuadPlacedWhileTheRuntimeSkipsRenderingMovesToTheHeadOnceItRenders) {
+    MenuQuadSession s;
+    s.SetHead(0.0f, 0.6f, 0.0f, 0.0f, /*valid=*/true);
+    // The session has just begun and is not visible yet: the frame is not rendered, so the head is
+    // never located and the panel is placed from no pose at all.
+    s.dispatch->mockShouldRender = XR_FALSE;
+    s.dispatch->mockPredictedDisplayTime += 11111111;
+    s.manager.CopyBackBufferToEye(0, nullptr);
+    s.manager.AlignMenuQuadToHeadPose();
+    EXPECT_NEAR(s.manager.ComputeMenuQuadPose().position.y, 0.0f, 0.001f);
+    s.manager.EndFrame();
+
+    s.dispatch->mockShouldRender = XR_TRUE;
+    XrPosef rendered = s.PresentQuadFrame();
+    EXPECT_NEAR(rendered.position.y, 0.6f, 0.001f);
+    EXPECT_NEAR(rendered.position.z, -1.5f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, RuntimeRecenterOfTheLocalSpaceMovesMenuQuadToTheHead) {
+    MenuQuadSession s;
+    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, /*valid=*/true);
+    s.PresentQuadFrame(/*entersQuadMode=*/true);
+
+    // The player holds the headset's recenter button: the runtime re-bases the local space, so the
+    // head reads somewhere new in it from then on.
+    s.dispatch->events.PushReferenceSpaceChangePending(XR_REFERENCE_SPACE_TYPE_LOCAL, 0);
+    const float yaw = 0.6f;
+    s.SetHead(0.1f, 0.5f, -0.2f, yaw, /*valid=*/true);
+    XrPosef recentered = s.PresentQuadFrame();
+    EXPECT_NEAR(recentered.position.x, 0.1f - 1.5f * std::sin(yaw), 0.001f);
+    EXPECT_NEAR(recentered.position.y, 0.5f, 0.001f);
+    EXPECT_NEAR(recentered.position.z, -0.2f - 1.5f * std::cos(yaw), 0.001f);
+    EXPECT_NEAR(OpenXrManager::QuaternionToEuler(Quaternion(recentered.orientation.x, recentered.orientation.y,
+                                                            recentered.orientation.z, recentered.orientation.w)).yaw,
+                yaw, 0.001f);
+
+    // Once placed it stays put again.
+    s.SetHead(0.4f, 0.8f, 0.3f, 0.0f, /*valid=*/true);
+    XrPosef later = s.PresentQuadFrame();
+    EXPECT_NEAR(later.position.y, 0.5f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, MenuQuadWaitsForTheChangeTimeOfARuntimeRecenter) {
+    MenuQuadSession s;
+    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, /*valid=*/true);
+    s.PresentQuadFrame(/*entersQuadMode=*/true);
+
+    // Located poses respect the change only from changeTime on; until then they are the old ones.
+    const XrTime changeTime = s.dispatch->mockPredictedDisplayTime + 2 * 11111111;
+    s.dispatch->events.PushReferenceSpaceChangePending(XR_REFERENCE_SPACE_TYPE_LOCAL, changeTime);
+    s.SetHead(0.0f, 0.3f, 0.0f, 0.0f, /*valid=*/true);
+    XrPosef early = s.PresentQuadFrame();
+    EXPECT_NEAR(early.position.y, 0.0f, 0.001f);
+
+    s.SetHead(0.0f, 0.7f, 0.0f, 0.0f, /*valid=*/true);
+    XrPosef atChange = s.PresentQuadFrame();
+    EXPECT_NEAR(atChange.position.y, 0.7f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, MenuQuadMovesToTheHeadTheFirstTimeTheSessionIsFocused) {
+    MenuQuadSession s;
+    // The game starts with the headset tracked but resting off to the side and low.
+    s.SetHead(0.5f, -0.3f, -0.4f, -0.2f, /*valid=*/true);
+    s.PresentQuadFrame(/*entersQuadMode=*/true);
+
+    // The player puts it on: the runtime focuses the session.
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    s.SetHead(0.0f, 0.1f, 0.0f, 0.0f, /*valid=*/true);
+    XrPosef worn = s.PresentQuadFrame();
+    EXPECT_NEAR(worn.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(worn.position.y, 0.1f, 0.001f);
+    EXPECT_NEAR(worn.position.z, -1.5f, 0.001f);
+
+    // A dashboard opened and closed focuses it again: the panel stays where the player left it.
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    s.SetHead(0.3f, 0.4f, 0.2f, 0.5f, /*valid=*/true);
+    XrPosef afterDashboard = s.PresentQuadFrame();
+    EXPECT_NEAR(afterDashboard.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(afterDashboard.position.y, 0.1f, 0.001f);
+    EXPECT_NEAR(afterDashboard.position.z, -1.5f, 0.001f);
+
+    // A session that stops and begins again is focused for the first time once more.
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_IDLE);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    s.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    s.SetHead(-0.2f, 0.2f, 0.1f, 0.0f, /*valid=*/true);
+    XrPosef resumed = s.PresentQuadFrame();
+    EXPECT_NEAR(resumed.position.x, -0.2f, 0.001f);
+    EXPECT_NEAR(resumed.position.y, 0.2f, 0.001f);
+    EXPECT_NEAR(resumed.position.z, 0.1f - 1.5f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, ChangeOfAnotherReferenceSpaceLeavesMenuQuadInPlace) {
+    MenuQuadSession s;
+    s.SetHead(0.0f, 0.0f, 0.0f, 0.0f, /*valid=*/true);
+    s.PresentQuadFrame(/*entersQuadMode=*/true);
+
+    s.dispatch->events.PushReferenceSpaceChangePending(XR_REFERENCE_SPACE_TYPE_STAGE, 0);
+    s.SetHead(0.0f, 0.5f, 0.0f, 0.0f, /*valid=*/true);
+    XrPosef after = s.PresentQuadFrame();
+    EXPECT_NEAR(after.position.y, 0.0f, 0.001f);
 }
 
 TEST(OpenXrManagerTest, ComputeCursorQuadPoseProjectsNormalizedCoordinatesWithHotspotOffset) {

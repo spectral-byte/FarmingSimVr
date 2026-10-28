@@ -1026,6 +1026,10 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
             self:setNodeQuaternion(activeEyeCam, qx, qy, qz, qw)
             self:bindRenderingCamera(activeEyeCam)
             self:reportAfrEyeCamera(eyeIndex, activeEyeCam)
+            -- Sequential Dual-Pass traces once per sub-pass instead (finishSubPass)
+            if self:getRenderingMode() ~= self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS then
+                self:traceEyeFrame(eyeIndex, activeEyeCam, nil)
+            end
         end
     else
         local targetNode = self.cameraNodeLeft or referenceCamNode

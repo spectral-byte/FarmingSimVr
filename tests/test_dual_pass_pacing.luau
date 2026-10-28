@@ -1292,5 +1292,281 @@ test("MenuBackgroundCameraReusesOffsetRecordAndRestoresExactOffset", function()
     VRCompanion.isMenuVisible = false
 end)
 
+-- Dual-Pass Physics Pause: the engine simulates physics natively every frame, whatever dt the mission update is given,
+-- so the vehicle moved between the two sub-passes. The pause stops it for one of the two frames of a pair.
+local function withPhysicsRecorder(fn)
+    local calls = {}
+    _G.simulatePhysics = function(state) table.insert(calls, "simulate " .. tostring(state)) end
+    _G.simulatePhysicsTimeScale = function(scale) table.insert(calls, string.format("scale %.2f", scale)) end
+    _G.FSBaseMission = { update = function() end }
+    local curSubPass = 0
+    _G.VRBridge = {
+        isReady = function() return true end,
+        isCompanionActive = true,
+        getIpd = function() return 0.064 end,
+        getFrameParity = function() return curSubPass end,
+        getRenderingMode = function() return "SequentialDualPass" end,
+        getSubPassIndex = function() return curSubPass end,
+        setSubPassIndex = function(idx) curSubPass = idx end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.headTrackingEnabled = true
+    VRCompanion:setRenderingMode("DualPass")
+    VRCompanion.is2DViewActive = false
+    VRCompanion.isMenuVisible = false
+    VRCompanion.cameraNodeLeft = 2001
+    VRCompanion.cameraNodeRight = 2002
+    VRCompanion.accumulatedPass1Dt = 0.0
+    VRCompanion:hookMissionUpdate()
+
+    local function subPass(index, dt)
+        curSubPass = index
+        VRCompanion:setSubPassIndex(index)
+        _G.FSBaseMission:update(dt)
+    end
+    local ok, err = pcall(fn, calls, subPass)
+
+    VRCompanion:releaseDualPassPhysicsPause()
+    VRCompanion:setDualPassPhysicsPause("on")
+    VRCompanion:unhookMissionUpdate()
+    VRCompanion:setRenderingMode("AFR")
+    VRCompanion:setSubPassIndex(0)
+    _G.FSBaseMission = nil
+    _G.VRBridge = nil
+    _G.simulatePhysics = nil
+    _G.simulatePhysicsTimeScale = nil
+    if not ok then error(err, 0) end
+end
+
+test("DualPassPhysicsPauseIsOnByDefault", function()
+    assert(VRCompanion.dualPassPhysicsPause == "on",
+        "the pause must be on when the Companion Mod loads, got " .. tostring(VRCompanion.dualPassPhysicsPause))
+end)
+
+test("DualPassPhysicsPauseOffNeverTouchesPhysics", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("off")
+        subPass(0, 11); subPass(1, 11); subPass(0, 11); subPass(1, 11)
+        assert(#calls == 0, "with the pause off the physics natives must not be called, got " .. table.concat(calls, ", "))
+    end)
+end)
+
+test("DualPassPhysicsPauseOnStopsPhysicsForTheSecondSubPassAndCatchesUpOnTheFirst", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        subPass(0, 11)
+        assert(#calls == 0, "the first sub-pass with nothing paused must not touch physics, got " .. table.concat(calls, ", "))
+        subPass(1, 11)
+        assert(table.concat(calls, ", ") == "simulate false", "the second sub-pass must pause physics, got " .. table.concat(calls, ", "))
+        subPass(0, 11)
+        assert(table.concat(calls, ", ") == "simulate false, simulate true, scale 2.00",
+            "the next first sub-pass must resume physics at the pair's time scale, got " .. table.concat(calls, ", "))
+        subPass(1, 11)
+        assert(calls[#calls] == "simulate false", "every second sub-pass must pause physics again")
+    end)
+end)
+
+test("DualPassPhysicsPauseTimeScaleSimulatesThePairPeriodOverTheSecondSubPassesPredictedDt", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        -- The first pair runs at normal speed: nothing was paused before it
+        subPass(0, 10)
+        assert(#calls == 0, "the pair the pause starts in must run at normal speed, got " .. table.concat(calls, ", "))
+        subPass(1, 8); subPass(0, 12)
+        -- The pair period is the last second sub-pass's 8 ms and this first sub-pass's 12; the next step, predicted
+        -- at the only second sub-pass's 8 ms, must simulate it: 20 / 8
+        assert(calls[#calls] == "scale 2.50", "time scale must be the pair period over the predicted dt, got " .. tostring(calls[#calls]))
+    end)
+end)
+
+test("DualPassPhysicsPauseMakesUpAMissedPredictionAFractionAtATime", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        subPass(0, 10); subPass(1, 8); subPass(0, 12)
+        -- The second sub-pass took 10 ms, not the predicted 8: its step at 2.5 simulated 25 ms of the 22 owed
+        subPass(1, 10)
+        assert(math.abs(VRCompanion.physicsTimeOwed - (-3)) < 1e-6,
+            "physics time owed must be the real dt minus the simulated, got " .. tostring(VRCompanion.physicsTimeOwed))
+        subPass(0, 12)
+        -- The period moves toward this pair's 10 + 12, only a fraction of the 3 ms over is taken off, and the
+        -- prediction moves toward the 10 ms second sub-pass
+        local period = 20 + VRCompanion.DUAL_PASS_PHYSICS_PAIR_PERIOD_SMOOTHING * (22 - 20)
+        local predicted = 8 + VRCompanion.DUAL_PASS_PHYSICS_SECOND_SUB_PASS_DT_SMOOTHING * (10 - 8)
+        local expected = (period + VRCompanion.DUAL_PASS_PHYSICS_OWED_TIME_GAIN * -3) / predicted
+        assert(math.abs(VRCompanion.physicsTimeScaleApplied - expected) < 1e-6,
+            string.format("time scale must be (period + gain x left over) / predicted dt: expected %.4f, got %.4f",
+                expected, VRCompanion.physicsTimeScaleApplied))
+    end)
+end)
+
+test("DualPassPhysicsPauseSimulatesASteadyPairPeriodWhenThePairsOwnDtsSwing", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        -- As in the headset: each second sub-pass's frame and the next first sub-pass's add up to the 22.2 ms refresh,
+        -- while the second sub-pass's dt swings, so a pair's own two dts swing by twice as much
+        local secondDts = { 9.2, 10.1, 8.7, 10.0, 8.6, 9.9, 9.0, 10.2, 8.8, 9.8, 8.9, 10.0, 8.7, 9.9, 9.1, 10.1 }
+        local simulatedPerPair = {}
+        local firstDt = 13.0
+        for i = 1, #secondDts do
+            subPass(0, firstDt)
+            local scale = VRCompanion.physicsTimeScaleApplied or 1.0
+            subPass(1, secondDts[i])
+            table.insert(simulatedPerPair, secondDts[i] * scale)
+            firstDt = 22.2 - secondDts[i]
+        end
+        local total = 0
+        for i = 4, #simulatedPerPair do
+            total = total + simulatedPerPair[i]
+            -- The second sub-pass's dt swings 0.65 ms either side of the smoothed one, times a time scale of about 2.4
+            assert(math.abs(simulatedPerPair[i] - 22.2) < 2.5, string.format(
+                "pair %d simulated %.2f ms of a 22.2 ms period; only the prediction's miss may move it", i, simulatedPerPair[i]))
+        end
+        local mean = total / (#simulatedPerPair - 3)
+        assert(math.abs(mean - 22.2) < 0.5, string.format("physics must keep real time on average, simulated %.2f ms per pair", mean))
+        assert(math.abs(VRCompanion.physicsTimeOwed) < 5,
+            "physics time owed must stay bounded, got " .. tostring(VRCompanion.physicsTimeOwed))
+    end)
+end)
+
+test("LeavingDualPassReleasesThePhysicsPause", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        subPass(0, 11); subPass(1, 11); subPass(0, 11); subPass(1, 11)
+        -- 2D Floating Window Mode renders mono, outside Sequential Dual-Pass
+        VRCompanion.is2DViewActive = true
+        _G.FSBaseMission:update(11)
+        VRCompanion.is2DViewActive = false
+        assert(table.concat(calls, ", ") == "simulate false, simulate true, scale 2.00, simulate false, simulate true, scale 1.00",
+            "leaving Sequential Dual-Pass must resume physics at normal speed, got " .. table.concat(calls, ", "))
+        VRCompanion.is2DViewActive = true
+        _G.FSBaseMission:update(11)
+        VRCompanion.is2DViewActive = false
+        assert(#calls == 6, "once released the physics natives must not be called again")
+    end)
+end)
+
+test("TurningThePhysicsPauseOffReleasesIt", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        subPass(0, 11); subPass(1, 11)
+        VRCompanion:consoleCommandDualPassPhysicsPause("off")
+        -- The time scale was never changed, so only the pause is undone
+        assert(table.concat(calls, ", ") == "simulate false, simulate true",
+            "turning the pause off must resume physics at once, got " .. table.concat(calls, ", "))
+    end)
+end)
+
+test("DualPassPhysicsPauseLeavesTheGamesOwnVehicleReloadPauseAlone", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        subPass(0, 11); subPass(1, 11)
+        _G.g_currentMission = { vehicleSystem = { isReloadRunning = true } }
+        subPass(0, 11)
+        _G.g_currentMission = nil
+        assert(table.concat(calls, ", ") == "simulate false",
+            "while the game reloads vehicles with physics paused the mod must not resume it, got " .. table.concat(calls, ", "))
+    end)
+end)
+
+test("DualPassPhysicsPauseConsoleCommand", function()
+    local reply = VRCompanion:consoleCommandDualPassPhysicsPause("on")
+    assert(VRCompanion.dualPassPhysicsPause == "on", "on must set the pause")
+    assert(type(reply) == "string" and reply:find("on", 1, true), "the reply must name the new setting")
+    VRCompanion:consoleCommandDualPassPhysicsPause("OFF")
+    assert(VRCompanion.dualPassPhysicsPause == "off", "the argument must be case-insensitive")
+    VRCompanion:consoleCommandDualPassPhysicsPause("on")
+    reply = VRCompanion:consoleCommandDualPassPhysicsPause()
+    assert(VRCompanion.dualPassPhysicsPause == "on" and reply:find("is on", 1, true), "no argument must report the setting")
+    reply = VRCompanion:consoleCommandDualPassPhysicsPause("shifted")
+    assert(VRCompanion.dualPassPhysicsPause == "on" and reply:find("Usage", 1, true), "an unknown argument must print the usage")
+    VRCompanion:consoleCommandDualPassPhysicsPause("off")
+    assert(VRCompanion.dualPassPhysicsPause == "off", "off must clear the pause")
+    VRCompanion:setDualPassPhysicsPause("on")
+end)
+
+test("EyePairTraceLogsHowFarTheVehicleMovedSidewaysBetweenEyeFrames", function()
+    local vehiclePos = { 100, 0, 50 }
+    local cameraPos = { 100, 2, 50 }
+    local physicsIndex = 7
+    local vehicle = { rootNode = 9100, getLastSpeed = function() return 21.6 end }
+    _G.g_currentMission = { controlledVehicle = vehicle }
+    _G.getWorldTranslation = function(node)
+        if node == 9100 then return vehiclePos[1], vehiclePos[2], vehiclePos[3] end
+        return cameraPos[1], cameraPos[2], cameraPos[3]
+    end
+    -- The head looks along the vehicle's left: its right axis is the vehicle's forward, world +Z here
+    _G.localDirectionToWorld = function(node, x, y, z) return 0, 0, 1 end
+    _G.getPhysicsUpdateIndex = function() return physicsIndex end
+    local lines = {}
+    local function trace(eye, subPass)
+        local line = VRCompanion:traceEyeFrame(eye, 2001, subPass)
+        if line ~= nil then table.insert(lines, line) end
+    end
+
+    local ok, err = pcall(function()
+        VRCompanion:consoleCommandEyePairTrace("2")
+        trace(0, 0)
+        vehiclePos[3] = 50.06
+        cameraPos[3] = 50.06
+        physicsIndex = 8
+        trace(1, 1)
+        trace(0, 0)
+    end)
+    _G.g_currentMission = nil
+    _G.getWorldTranslation = nil
+    _G.localDirectionToWorld = nil
+    _G.getPhysicsUpdateIndex = nil
+    if not ok then error(err, 0) end
+
+    assert(#lines == 2, string.format("a trace of 2 frames must log 2 lines, got %d", #lines))
+    local second = lines[2]
+    assert(second:find("sub-pass 1", 1, true) and second:find("eye 1", 1, true), "the line must name the sub-pass and eye: " .. second)
+    assert(second:find("physics 8", 1, true), "the line must give the physics update index: " .. second)
+    assert(second:find("vehicle moved 6.00 cm", 1, true), "the line must give how far the vehicle moved: " .. second)
+    assert(second:find("6.00 cm along the eyes", 1, true), "the line must give the part along the eyes: " .. second)
+    assert(second:find("21.6 km/h", 1, true), "the line must give the vehicle's speed: " .. second)
+end)
+
+test("EyePairTraceLogsTheDtsAndTimeScaleBehindTheMove", function()
+    _G.getWorldTranslation = function() return 0, 0, 0 end
+    _G.g_physicsDt, _G.g_physicsDtUnclamped, _G.g_physicsDtNonInterpolated = 8.5, 9.25, 0
+    local lines = {}
+    local traceEyeFrame = VRCompanion.traceEyeFrame
+    VRCompanion.traceEyeFrame = function(...)
+        local line = traceEyeFrame(...)
+        if line ~= nil then table.insert(lines, line) end
+        return line
+    end
+
+    local ok, err = pcall(withPhysicsRecorder, function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        VRCompanion:consoleCommandEyePairTrace("4")
+        subPass(0, 10)
+        subPass(1, 12)
+        _G.g_physicsDtNonInterpolated = 16.6
+        subPass(0, 10)
+        subPass(1, 12)
+    end)
+    VRCompanion.traceEyeFrame = traceEyeFrame
+    _G.getWorldTranslation = nil
+    _G.g_physicsDt, _G.g_physicsDtUnclamped, _G.g_physicsDtNonInterpolated = nil, nil, nil
+    if not ok then error(err, 0) end
+
+    assert(#lines == 4, string.format("a trace of 4 frames must log 4 lines, got %d", #lines))
+    local second = lines[2]
+    assert(second:find("sub-pass 1", 1, true) and second:find("rawDt 12.00", 1, true),
+        "the line must give the sub-pass update's real dt: " .. second)
+    assert(second:find("physics dts 8.50/9.25/0.00", 1, true), "the line must give the engine's physics dts: " .. second)
+    -- Each line shows the state the earlier sub-passes left: logged before the sub-pass's own pause or resume
+    assert(second:find("physics scale 1.00", 1, true), "nothing is paused before the first pause: " .. second)
+    assert(lines[3]:find("physics paused", 1, true), "the first sub-pass after a pause must show it: " .. lines[3])
+    assert(lines[3]:find("physics dts 8.50/9.25/16.60", 1, true), "the dts must be read on each line: " .. lines[3])
+    -- Resumed physics covers the paused 10 ms step and the next, predicted at the last second sub-pass's 12 ms
+    assert(lines[4]:find("physics scale 1.83", 1, true), "the line must give the applied time scale: " .. lines[4])
+    assert(not second:find("predicted", 1, true), "nothing is predicted before the first pair: " .. second)
+    assert(lines[4]:find("rawDt 12.00 (predicted 12.00)", 1, true),
+        "a second sub-pass's line must give the dt its time scale was set for: " .. lines[4])
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed", failed))

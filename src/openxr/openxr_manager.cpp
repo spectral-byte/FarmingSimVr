@@ -372,6 +372,18 @@ void OpenXrManager::PollEvents() {
             HandleSessionStateChanged(changed->state);
             break;
         }
+        case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING: {
+            // The runtime's own recenter (holding the Meta button, SteamVR's Reset Seated Position).
+            // Before a savegame loads it is the only recenter there is, since the Recenter Action
+            // comes with the Companion Mod. Poses respect it from changeTime on.
+            const auto* change = reinterpret_cast<const XrEventDataReferenceSpaceChangePending*>(&event);
+            if (change->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL) {
+                m_menuQuadAwaitsHead = true;
+                m_menuQuadAwaitsHeadAfter = change->changeTime;
+                LogInfo("OpenXrManager: Runtime recentered the local space; the menu quad follows the head.");
+            }
+            break;
+        }
         case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
             ReleaseAndEnterPassThrough("instance loss pending");
             break;
@@ -413,6 +425,15 @@ void OpenXrManager::HandleSessionStateChanged(XrSessionState state) {
     case XR_SESSION_STATE_READY:
         BeginRunningSession();
         break;
+    case XR_SESSION_STATE_FOCUSED:
+        // The headset tracks before it is worn, so the first menu can be placed from wherever it
+        // rests. The first focus of a running session is when the player has it on.
+        if (!m_focusedSinceBegin) {
+            m_focusedSinceBegin = true;
+            m_menuQuadAwaitsHead = true;
+            m_menuQuadAwaitsHeadAfter = 0;
+        }
+        break;
     case XR_SESSION_STATE_STOPPING:
         EndRunningSession();
         break;
@@ -446,6 +467,7 @@ void OpenXrManager::BeginRunningSession() {
     }
     m_beginSessionFailures = 0;
     m_sessionRunning = true;
+    m_focusedSinceBegin = false;
     LogInfo("OpenXrManager: Session begun successfully.");
 }
 
@@ -1096,6 +1118,11 @@ bool OpenXrManager::BeginFrame() {
     if (m_frameState.shouldRender) {
         LocateActiveViews(m_frameState.predictedDisplayTime);
         PollHeadPose(m_frameState.predictedDisplayTime);
+        if (m_menuQuadAwaitsHead && m_hasMenuQuadPose && m_rawPose.isValid &&
+            m_frameState.predictedDisplayTime >= m_menuQuadAwaitsHeadAfter) {
+            AlignMenuQuadToHeadPose();
+            LogInfo("OpenXrManager: Menu quad placed in front of the tracked head.");
+        }
     }
 
     // The list this frame began with: an observer may add or clear observers (or another thread may), which shows from the
@@ -1463,6 +1490,11 @@ void OpenXrManager::AlignMenuQuadToHeadPose(const HeadPose* customPose) {
     const HeadPose& pose = customPose ? *customPose : m_rawPose;
     m_menuQuadPose = ComputeMenuQuadPoseFromHeadPose(pose, m_menuQuadDistance);
     m_hasMenuQuadPose = true;
+    // The first menu frame of a session usually has no head pose yet (the frame is not rendered, or
+    // the runtime is not tracking): the quad then sits at the local space origin, which can be far
+    // below the eyes, until the head is tracked.
+    m_menuQuadAwaitsHead = !pose.isValid;
+    m_menuQuadAwaitsHeadAfter = 0;
 }
 
 XrPosef OpenXrManager::ComputeMenuQuadPose() const {
