@@ -710,6 +710,7 @@ end
 local function endOutermostFrameChecks(self, ok, ...)
     self:resetFrameChecks()
     if not ok then
+        self.inMissionUpdate = false
         error((...), 0)
     end
     return ...
@@ -734,6 +735,12 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     return runWithFrameChecks(self, self.runMissionUpdate, missionSelf, dt, origUpdateFn, ...)
 end
 
+-- Clears the running mark after the game's update returned, and passes on its results.
+local function endAfrGameUpdate(self, ...)
+    self.inMissionUpdate = false
+    return ...
+end
+
 function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
     local isSequentialDualPass = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS)
@@ -746,11 +753,15 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         self.deferRenderingCameraBind = false
         self:endEyeProjectionScope()
         self:releaseDualPassPhysicsPause()
+        -- The game's update runs marked as running, so a second wrapper further down the
+        -- class chain passes straight through and the mod's update logic runs once. An error
+        -- skips the clear here; the outermost frame-check scope clears it.
+        self.inMissionUpdate = true
         if self.perfTracing then
             self:perfTraceBegin("gameUpdate")
-            return self:perfTraceEnd("gameUpdate", origUpdateFn(missionSelf, dt, ...))
+            return endAfrGameUpdate(self, self:perfTraceEnd("gameUpdate", origUpdateFn(missionSelf, dt, ...)))
         end
-        return origUpdateFn(missionSelf, dt, ...)
+        return endAfrGameUpdate(self, origUpdateFn(missionSelf, dt, ...))
     end
 
     local rawDt = dt or 0.0
