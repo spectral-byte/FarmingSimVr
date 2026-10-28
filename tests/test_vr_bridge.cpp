@@ -1385,7 +1385,12 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "reportCameraRecord",
         "setDlssMvFix",
         "setDlssDepthModel",
-        "setDlssNearClip"
+        "setDlssNearClip",
+        "startPerfTrace",
+        "stopPerfTrace",
+        "isPerfTracing",
+        "perfTraceBegin",
+        "perfTraceEnd"
     };
 
     lua_getglobal(L, "VRBridge");

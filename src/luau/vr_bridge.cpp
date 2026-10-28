@@ -1,8 +1,10 @@
 #include "vr_bridge.h"
 #include "core/logger.h"
+#include "core/perf_trace.h"
 #include "core/thread_trace.h"
 #include "ngx/ngx_interceptor.h"
 #include "fidelityfx/fidelityfx_interceptor.h"
+#include <algorithm>
 
 namespace fs25vr {
 
@@ -1232,6 +1234,41 @@ int VRBridge::Lua_DlssDiag(lua_State* L) {
     }
     lua_pushboolean(L, 1);
     return 1;
+}
+
+int VRBridge::Lua_StartPerfTrace(lua_State* L) {
+    FromUpvalue(L);
+    FS25VR_TRACE_THREAD("VRBridge.startPerfTrace");
+    const lua_Integer seconds = lua_isnumber(L, 1) ? lua_tointeger(L, 1) : PerfTrace::kDefaultSeconds;
+    PerfTrace::Instance().Start(static_cast<uint32_t>(std::clamp<lua_Integer>(seconds, 1, PerfTrace::kMaxSeconds)));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int VRBridge::Lua_StopPerfTrace(lua_State* L) {
+    FromUpvalue(L);
+    PerfTrace::Instance().Stop();
+    return 0;
+}
+
+int VRBridge::Lua_IsPerfTracing(lua_State* L) {
+    FromUpvalue(L);
+    lua_pushboolean(L, PerfTrace::Instance().IsActive() ? 1 : 0);
+    return 1;
+}
+
+int VRBridge::Lua_PerfTraceBegin(lua_State* L) {
+    FromUpvalue(L);
+    PerfSection section;
+    if (PerfSectionFromLuaName(lua_tostring(L, 1), section)) PerfTrace::Instance().Begin(section);
+    return 0;
+}
+
+int VRBridge::Lua_PerfTraceEnd(lua_State* L) {
+    FromUpvalue(L);
+    PerfSection section;
+    if (PerfSectionFromLuaName(lua_tostring(L, 1), section)) PerfTrace::Instance().End(section);
+    return 0;
 }
 
 } // namespace fs25vr

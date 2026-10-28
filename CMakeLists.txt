@@ -89,6 +89,8 @@ set(CORE_SOURCES
     src/core/logger.h
     src/core/thread_trace.cpp
     src/core/thread_trace.h
+    src/core/perf_trace.cpp
+    src/core/perf_trace.h
     src/core/math_utils.h
     src/core/camera_records.cpp
     src/core/camera_records.h
@@ -190,6 +192,7 @@ add_executable(fs25_vr_tests
     tests/test_near_estimator.cpp
     tests/test_logger.cpp
     tests/test_thread_trace.cpp
+    tests/test_perf_trace.cpp
     tests/test_openxr_cursor_overlay.cpp
     tests/test_openxr_manager.cpp
     tests/test_openxr_motion_controllers.cpp

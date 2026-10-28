@@ -141,4 +141,6 @@ TEST_F(LuauTestSuiteTest, TestVehicleCameraYaw) {
     RunSuite("tests/test_vehicle_camera_yaw.luau");
 }
 
-
+TEST_F(LuauTestSuiteTest, TestPerfTrace) {
+    RunSuite("tests/test_perf_trace.luau");
+}

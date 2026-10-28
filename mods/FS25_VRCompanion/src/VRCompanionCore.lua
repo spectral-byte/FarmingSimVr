@@ -294,6 +294,7 @@ function VRCompanion:loadMap(name)
     if type(self.registerStereoDialogDepthConsoleCommands) == "function" then self:registerStereoDialogDepthConsoleCommands() end
     if type(self.registerDualPassPhysicsConsoleCommands) == "function" then self:registerDualPassPhysicsConsoleCommands() end
     if type(self.registerDesktopMirrorConsoleCommands) == "function" then self:registerDesktopMirrorConsoleCommands() end
+    if type(self.registerPerfTraceConsoleCommands) == "function" then self:registerPerfTraceConsoleCommands() end
 
     if self.showHudLoadNotification == true then
         local mission = g_currentMission or _G.g_currentMission
@@ -506,7 +507,9 @@ function VRCompanion:hookVehicleCamera()
         self.origVehicleCameraUpdate = VehicleCamera.update
         VehicleCamera.update = function(cam, dt)
             self.origVehicleCameraUpdate(cam, dt)
+            if VRCompanion.perfTracing then VRCompanion:perfTraceBegin("modCamera") end
             VRCompanion:onVehicleCameraUpdate(cam, dt)
+            if VRCompanion.perfTracing then VRCompanion:perfTraceEnd("modCamera") end
         end
         self.vehicleCameraHooked = true
         print("[FS25_VR] Hooked VehicleCamera.update for 6DOF VR head tracking.")
@@ -659,20 +662,26 @@ function VRCompanion:hookPlayerCamera()
                     VRCompanion.origPlayerCameraUpdateRotation(cam, dt)
                     return
                 end
+                if VRCompanion.perfTracing then VRCompanion:perfTraceBegin("modCamera") end
                 VRCompanion:onPlayerCameraUpdateRotation(cam, dt)
+                if VRCompanion.perfTracing then VRCompanion:perfTraceEnd("modCamera") end
             end
         end
         if PlayerCamera.updatePosition ~= nil then
             self.origPlayerCameraUpdatePosition = PlayerCamera.updatePosition
             PlayerCamera.updatePosition = function(cam, dt)
                 self.origPlayerCameraUpdatePosition(cam, dt)
+                if VRCompanion.perfTracing then VRCompanion:perfTraceBegin("modCamera") end
                 VRCompanion:onPlayerCameraUpdate(cam, dt)
+                if VRCompanion.perfTracing then VRCompanion:perfTraceEnd("modCamera") end
             end
         elseif PlayerCamera.update ~= nil then
             self.origPlayerCameraUpdate = PlayerCamera.update
             PlayerCamera.update = function(cam, dt)
                 self.origPlayerCameraUpdate(cam, dt)
+                if VRCompanion.perfTracing then VRCompanion:perfTraceBegin("modCamera") end
                 VRCompanion:onPlayerCameraUpdate(cam, dt)
+                if VRCompanion.perfTracing then VRCompanion:perfTraceEnd("modCamera") end
             end
         end
         self.playerCameraHooked = true
@@ -739,6 +748,10 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         self.deferRenderingCameraBind = false
         self:endEyeProjectionScope()
         self:releaseDualPassPhysicsPause()
+        if self.perfTracing then
+            self:perfTraceBegin("gameUpdate")
+            return self:perfTraceEnd("gameUpdate", origUpdateFn(missionSelf, dt, ...))
+        end
         return origUpdateFn(missionSelf, dt, ...)
     end
 
@@ -797,7 +810,9 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
     -- Run mission update with accumulated real dt under reentrancy guard and pcall protection
     self.inMissionUpdate = true
+    if self.perfTracing then self:perfTraceBegin("gameUpdate") end
     local ok, res = pcall(origUpdateFn, missionSelf, effectiveDt, ...)
+    if self.perfTracing then self:perfTraceEnd("gameUpdate") end
     self.inMissionUpdate = false
     if not ok then
         if self.lastMissionUpdateError ~= tostring(res) then
@@ -945,11 +960,17 @@ function VRCompanion:unhookMissionUpdate()
 end
 
 function VRCompanion:update(dt)
+    if self.perfTracing then
+        self:perfTraceBegin("modUpdate")
+        return self:perfTraceEnd("modUpdate", runWithFrameChecks(self, self.runUpdate, dt))
+    end
     return runWithFrameChecks(self, self.runUpdate, dt)
 end
 
 function VRCompanion:runUpdate(dt)
     self.frameTicks = (self.frameTicks or 0) + 1
+    -- `vrPerfTrace`: the Injector ends a trace by itself
+    if self.perfTracing then self:refreshPerfTracing() end
 
     -- Synchronize 2D view active state with native VRBridge if changed externally
     if VRBridge ~= nil and type(VRBridge.getIs2DViewActive) == "function" then
@@ -1219,6 +1240,7 @@ function VRCompanion:deleteMap()
     if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
     if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
     if type(self.resetDesktopMirror) == "function" then self:resetDesktopMirror() end
+    if type(self.unregisterPerfTraceConsoleCommands) == "function" then self:unregisterPerfTraceConsoleCommands() end
     if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
     if type(self.unregisterStereoDialogDepthConsoleCommands) == "function" then self:unregisterStereoDialogDepthConsoleCommands() end
     if type(self.unregisterDualPassPhysicsConsoleCommands) == "function" then self:unregisterDualPassPhysicsConsoleCommands() end

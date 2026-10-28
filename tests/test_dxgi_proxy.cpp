@@ -3,6 +3,7 @@
 #include "core/dll_lifecycle.h"
 #include "core/injector_runtime.h"
 #include "core/logger.h"
+#include "core/perf_trace.h"
 #include "proxy/system_dxgi.h"
 #include "openxr/openxr_manager.h"
 #include "fake_openxr_events.h"
@@ -603,6 +604,41 @@ TEST(DxgiProxyTest, OnPresentCopiesLeftEyeOnFrame0AndRightEyeOnFrame1WithPairSub
     EXPECT_EQ(mockDispatch->endFrameCalls, 1u);
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u); // parity advanced back to 0
+}
+
+TEST(DxgiProxyTest, PerfTraceTimesTheInjectorsPresentPathPerStereoFrame) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::AFR);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+
+    int64_t nowNs = 0;
+    std::vector<std::string> lines;
+    PerfTrace& trace = PerfTrace::Instance();
+    trace.SetClock([&nowNs] { return nowNs += 100000; });  // every read is 0.1 ms later
+    trace.SetSink([&lines](const std::string& line) { lines.push_back(line); });
+    trace.Start(10);
+    for (int i = 0; i < 4; ++i) proxy.OnPresent(nullptr, 0, 0);
+    trace.Stop();
+    trace.SetClock(nullptr);
+    trace.SetSink(nullptr);
+
+    ASSERT_FALSE(lines.empty());
+    const std::string& summary = lines.back();
+    ASSERT_EQ(summary.rfind("[PerfTrace] Summary", 0), 0u) << summary;
+    EXPECT_NE(summary.find("(AFR)"), std::string::npos) << summary;
+    for (const char* section : {"| frame ", "| injector present ", "| swapchain wait ", "| xrEndFrame ", "| xrWaitFrame ",
+                                "| frame begin "}) {
+        EXPECT_NE(summary.find(section), std::string::npos) << section << " missing from: " << summary;
+    }
+    // Four eye frames are two headset frames: the frame begins once per pair
+    EXPECT_EQ(mockDispatch->endFrameCalls, 2u);
 }
 
 TEST(InjectorRuntimeTest, WiresSubsystemsWithFakesAndDrivesPresentEndToEnd) {

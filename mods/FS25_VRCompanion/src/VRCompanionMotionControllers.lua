@@ -859,6 +859,16 @@ end
 -- points settled in the update: under AFR the update and the draw both run per rendered frame, under
 -- Sequential Dual-Pass the one update's ray is drawn in each pass.
 function VRCompanion:draw()
+    if self.perfTracing then
+        self:perfTraceBegin("modDraw")
+        self:drawFrame()
+        self:perfTraceEnd("modDraw")
+        return
+    end
+    self:drawFrame()
+end
+
+function VRCompanion:drawFrame()
     if type(self.drawVirtualHands) == "function" then self:drawVirtualHands() end
     local ray = state.ray
     if not ray.visible then return end

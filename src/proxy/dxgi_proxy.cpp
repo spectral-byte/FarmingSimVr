@@ -3,6 +3,7 @@
 #include "core/thread_trace.h"
 #include "core/injector_runtime.h"
 #include "core/dll_lifecycle.h"
+#include "core/perf_trace.h"
 #include "ngx/ngx_interceptor.h"
 #include <utility>
 #include <windowsx.h>
@@ -446,8 +447,14 @@ void DxgiProxy::LatchPendingRenderingMode() {
 
 bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
     m_presentWasStereo = false;
-    bool shouldPresent = OnPresentImpl(swapChain, syncInterval, flags);
-    UpdateDesktopMirrorTitle();
+    bool shouldPresent;
+    {
+        PerfScope timing(PerfSection::InjectorPresent);
+        shouldPresent = OnPresentImpl(swapChain, syncInterval, flags);
+        UpdateDesktopMirrorTitle();
+    }
+    PerfTrace::Instance().MarkFrame(m_presentWasStereo,
+                                    m_vrBridge && m_vrBridge->GetRenderingMode() == VRRenderingMode::SequentialDualPass);
     // The rendered-frame counter stamps the Companion Mod's camera records and resolves them for DLSS
     // evaluations. It advances per stereo Present only; a Present outside stereo presentation (menu,
     // 2D Floating Window Mode, Pass-Through) renders no eye camera, so its records are dropped
@@ -761,7 +768,11 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UIN
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(
         proxy->m_detourPresent.GetOriginal()
     );
-    HRESULT hr = orig ? orig(self, proxy->EffectiveSyncInterval(syncInterval), flags) : S_OK;
+    HRESULT hr = S_OK;
+    if (orig) {
+        PerfScope timing(PerfSection::DriverPresent);
+        hr = orig(self, proxy->EffectiveSyncInterval(syncInterval), flags);
+    }
     proxy->OnPresentReturned(hr);
     return hr;
 }
@@ -777,7 +788,11 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*)>(
         proxy->m_detourPresent1.GetOriginal()
     );
-    HRESULT hr = orig ? orig(self, proxy->EffectiveSyncInterval(syncInterval), flags, params) : S_OK;
+    HRESULT hr = S_OK;
+    if (orig) {
+        PerfScope timing(PerfSection::DriverPresent);
+        hr = orig(self, proxy->EffectiveSyncInterval(syncInterval), flags, params);
+    }
     proxy->OnPresentReturned(hr);
     return hr;
 }

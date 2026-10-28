@@ -297,6 +297,20 @@ private:
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_clearCommandList;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_clearRtvHeap;
     uint64_t m_clearFenceValue = 0;
+    // `vrPerfTrace`: GPU timestamps before and after each eye copy, two per ring slot, read back when the
+    // slot is reused (its fence has passed by then). Created on the first copy a trace times.
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> m_copyTimestampHeap;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_copyTimestampReadback;
+    bool m_copyTimestampsFailed = false;
+    bool m_copyTimestampPending[kCopyRingSize] = {false, false};
+    int64_t m_copySubmitNs[kCopyRingSize] = {0, 0};
+    uint64_t m_gpuTimestampFrequency = 0;
+    uint64_t m_gpuCalibrationTicks = 0;
+    int64_t m_gpuCalibrationCpuNs = 0;
+    uint32_t m_copiesSinceCalibration = 0;
+    bool EnsureCopyTimestamps();
+    void ReadCopyTimestamps(uint32_t ringSlot);
+    XrResult DispatchEndFrame(const XrFrameEndInfo& endInfo);
 
     EyeSwapchain m_eyeSwapchains[2];
     bool m_hasEyeSwapchains = false;

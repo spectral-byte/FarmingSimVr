@@ -157,6 +157,13 @@ public:
     static int Lua_SetDlssDepthModel(lua_State* L);
     static int Lua_SetDlssNearClip(lua_State* L);
     static int Lua_SetDlssSdpMvScale(lua_State* L);
+    // `vrPerfTrace` (core/perf_trace.h): startPerfTrace([seconds]), stopPerfTrace(), isPerfTracing(), and
+    // perfTraceBegin(name) / perfTraceEnd(name) around a Companion Mod section ("gameUpdate", "modUpdate", ...).
+    static int Lua_StartPerfTrace(lua_State* L);
+    static int Lua_StopPerfTrace(lua_State* L);
+    static int Lua_IsPerfTracing(lua_State* L);
+    static int Lua_PerfTraceBegin(lua_State* L);
+    static int Lua_PerfTraceEnd(lua_State* L);
     // reportCameraRecord(eye, x, y, z, qx, qy, qz, qw, fovY, nearClip, farClip, projOffsetX, projOffsetY)
     static int Lua_ReportCameraRecord(lua_State* L);
 
@@ -235,6 +242,11 @@ public:
         {"setDlssMvFix", &Lua_SetDlssMvFix},
         {"setDlssDepthModel", &Lua_SetDlssDepthModel},
         {"setDlssNearClip", &Lua_SetDlssNearClip},
+        {"startPerfTrace", &Lua_StartPerfTrace},
+        {"stopPerfTrace", &Lua_StopPerfTrace},
+        {"isPerfTracing", &Lua_IsPerfTracing},
+        {"perfTraceBegin", &Lua_PerfTraceBegin},
+        {"perfTraceEnd", &Lua_PerfTraceEnd},
     };
 
     // 1 version property + one field per table entry.

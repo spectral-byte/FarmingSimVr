@@ -1,6 +1,7 @@
 #include "openxr_manager.h"
 #include "core/logger.h"
 #include "core/dll_lifecycle.h"
+#include "core/perf_trace.h"
 #include <vector>
 #include <cstring>
 #include <sstream>
@@ -1004,7 +1005,10 @@ void OpenXrManager::DestroyEyeSwapchains() {
         m_copyFenceValues[r] = 0;
         m_copyCommandLists[r].Reset();
         m_copyAllocators[r].Reset();
+        m_copyTimestampPending[r] = false;
     }
+    m_copyTimestampHeap.Reset();
+    m_copyTimestampReadback.Reset();
     m_copyRingIndex = 0;
     m_copyFenceEvent.Close();
     for (uint32_t i = 0; i < 2; ++i) {
@@ -1090,12 +1094,18 @@ bool OpenXrManager::BeginFrame() {
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
     m_frameState = {XR_TYPE_FRAME_STATE};
     m_frameState.shouldRender = XR_TRUE;
-    XrResult res = m_dispatch->WaitFrame(m_session, &waitInfo, &m_frameState);
+    XrResult res;
+    {
+        PerfScope waitTiming(PerfSection::XrWaitFrame);
+        res = m_dispatch->WaitFrame(m_session, &waitInfo, &m_frameState);
+    }
     if (XR_FAILED(res)) {
         LogError("OpenXrManager::BeginFrame: WaitFrame failed (result " + std::to_string(res) + ")");
         EnterPassThroughIfLost(res);
         return false;
     }
+    // The rest of the frame begin, up to whichever return ends it.
+    PerfScope beginTiming(PerfSection::FrameBegin);
 
     if (m_frameState.predictedDisplayTime != 0) {
         m_lastPredictedDisplayTime = m_frameState.predictedDisplayTime;
@@ -1151,7 +1161,7 @@ bool OpenXrManager::EndFrame() {
     endInfo.layerCount = 0;
     endInfo.layers = nullptr;
 
-    XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
+    XrResult res = DispatchEndFrame(endInfo);
     m_frameBegun = false;
     ClearRenderPoses();
     m_lastPolledTime = 0;
@@ -1174,6 +1184,80 @@ void OpenXrManager::EnsureCopyFence() {
     }
     if (!m_copyFenceEvent.IsValid()) {
         m_copyFenceEvent = ScopedEventHandle::Create(nullptr, FALSE, FALSE, nullptr);
+    }
+}
+
+XrResult OpenXrManager::DispatchEndFrame(const XrFrameEndInfo& endInfo) {
+    PerfScope timing(PerfSection::XrEndFrame);
+    return m_dispatch->EndFrame(m_session, &endInfo);
+}
+
+bool OpenXrManager::EnsureCopyTimestamps() {
+    if (m_copyTimestampHeap && m_copyTimestampReadback) return true;
+    if (m_copyTimestampsFailed || !m_device || !m_queue || !m_copyFence) return false;
+
+    D3D12_QUERY_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    heapDesc.Count = kCopyRingSize * 2;
+    D3D12_HEAP_PROPERTIES props{};
+    props.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = kCopyRingSize * 2 * sizeof(uint64_t);
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    UINT64 frequency = 0;
+    if (FAILED(m_device->CreateQueryHeap(&heapDesc, IID_PPV_ARGS(&m_copyTimestampHeap))) ||
+        FAILED(m_device->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                 nullptr, IID_PPV_ARGS(&m_copyTimestampReadback))) ||
+        FAILED(m_queue->GetTimestampFrequency(&frequency)) || frequency == 0) {
+        // The trace still has its CPU timings; only the GPU eye copy lines are missing.
+        LogWarn("OpenXrManager: GPU timestamps unavailable; vrPerfTrace logs no GPU eye copy timing");
+        m_copyTimestampHeap.Reset();
+        m_copyTimestampReadback.Reset();
+        m_copyTimestampsFailed = true;
+        return false;
+    }
+    m_gpuTimestampFrequency = frequency;
+    m_copiesSinceCalibration = 0;
+    PerfTrace::Instance().SetGpuTimestampFrequency(frequency);
+    return true;
+}
+
+void OpenXrManager::ReadCopyTimestamps(uint32_t ringSlot) {
+    if (!m_copyTimestampPending[ringSlot]) return;
+    m_copyTimestampPending[ringSlot] = false;
+    if (!m_copyTimestampReadback || !PerfTrace::Instance().IsActive()) return;
+
+    const D3D12_RANGE readRange{ringSlot * 2 * sizeof(uint64_t), (ringSlot * 2 + 2) * sizeof(uint64_t)};
+    void* mapped = nullptr;
+    if (FAILED(m_copyTimestampReadback->Map(0, &readRange, &mapped)) || !mapped) return;
+    const uint64_t* stamps = static_cast<const uint64_t*>(mapped) + ringSlot * 2;
+    const uint64_t start = stamps[0];
+    const uint64_t end = stamps[1];
+    const D3D12_RANGE written{0, 0};
+    m_copyTimestampReadback->Unmap(0, &written);
+    if (end < start) return;
+
+    // The GPU and CPU clocks drift apart slowly; recalibrating every few dozen copies keeps the lag exact.
+    if (m_copiesSinceCalibration++ % 64 == 0) {
+        UINT64 gpuTicks = 0;
+        UINT64 cpuQpc = 0;
+        LARGE_INTEGER qpcFrequency{};
+        if (SUCCEEDED(m_queue->GetClockCalibration(&gpuTicks, &cpuQpc)) && QueryPerformanceFrequency(&qpcFrequency)) {
+            m_gpuCalibrationTicks = gpuTicks;
+            m_gpuCalibrationCpuNs = QpcTicksToNanoseconds(static_cast<int64_t>(cpuQpc), qpcFrequency.QuadPart);
+        }
+    }
+    PerfTrace& trace = PerfTrace::Instance();
+    trace.AddSample(PerfSection::GpuEyeCopy, GpuTicksToNanoseconds(end - start, m_gpuTimestampFrequency));
+    if (m_gpuCalibrationTicks != 0) {
+        const int64_t startNs = GpuTimestampToCpuNanoseconds(start, m_gpuTimestampFrequency, m_gpuCalibrationTicks,
+                                                             m_gpuCalibrationCpuNs);
+        trace.AddSample(PerfSection::GpuQueueLag, startNs - m_copySubmitNs[ringSlot]);
     }
 }
 
@@ -1213,19 +1297,25 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
     XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     uint32_t imageIndex = 0;
-    XrResult res = m_dispatch->AcquireSwapchainImage(swapchain, &acquireInfo, &imageIndex);
+    XrResult res;
+    {
+        // Acquire and wait together: the image the compositor still holds can block either.
+        PerfScope swapchainTiming(PerfSection::SwapchainWait);
+        res = m_dispatch->AcquireSwapchainImage(swapchain, &acquireInfo, &imageIndex);
+        if (XR_SUCCEEDED(res)) {
+            XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+            waitInfo.timeout = XR_INFINITE_DURATION;
+            res = m_dispatch->WaitSwapchainImage(swapchain, &waitInfo);
+            if (XR_FAILED(res)) {
+                LogError("OpenXrManager::CopyBackBufferToEye: WaitSwapchainImage failed (result " + std::to_string(res) + ")");
+                XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+                m_dispatch->ReleaseSwapchainImage(swapchain, &releaseInfo);
+                return false;
+            }
+        }
+    }
     if (XR_FAILED(res)) {
         LogError("OpenXrManager::CopyBackBufferToEye: AcquireSwapchainImage failed (result " + std::to_string(res) + ")");
-        return false;
-    }
-
-    XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-    waitInfo.timeout = XR_INFINITE_DURATION;
-    res = m_dispatch->WaitSwapchainImage(swapchain, &waitInfo);
-    if (XR_FAILED(res)) {
-        LogError("OpenXrManager::CopyBackBufferToEye: WaitSwapchainImage failed (result " + std::to_string(res) + ")");
-        XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-        m_dispatch->ReleaseSwapchainImage(swapchain, &releaseInfo);
         return false;
     }
 
@@ -1249,14 +1339,20 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
         if (curCommandList && curAllocator) {
             // Synchronize with previous execution on this specific ring slot if GPU has not finished it
             uint64_t waitVal = m_copyFenceValues[ringSlot];
-            if (m_copyFence && waitVal > 0) {
-                if (m_copyFence->GetCompletedValue() < waitVal) {
-                    if (m_copyFenceEvent.IsValid()) {
-                        m_copyFence->SetEventOnCompletion(waitVal, m_copyFenceEvent.Get());
-                        WaitForSingleObject(m_copyFenceEvent.Get(), INFINITE);
+            {
+                PerfScope fenceTiming(PerfSection::CopyFenceWait);
+                if (m_copyFence && waitVal > 0) {
+                    if (m_copyFence->GetCompletedValue() < waitVal) {
+                        if (m_copyFenceEvent.IsValid()) {
+                            m_copyFence->SetEventOnCompletion(waitVal, m_copyFenceEvent.Get());
+                            WaitForSingleObject(m_copyFenceEvent.Get(), INFINITE);
+                        }
                     }
                 }
             }
+            // The slot's earlier copy has run, so its timestamps are written.
+            ReadCopyTimestamps(ringSlot);
+            const bool timed = PerfTrace::Instance().IsActive() && EnsureCopyTimestamps();
 
             curAllocator->Reset();
             curCommandList->Reset(curAllocator.Get(), nullptr);
@@ -1282,6 +1378,9 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
                 barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
                 barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
+                if (timed) {
+                    curCommandList->EndQuery(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2);
+                }
                 curCommandList->ResourceBarrier(2, barriers);
 
                 uint32_t scWidth = m_eyeSwapchains[eyeIndex].width;
@@ -1323,15 +1422,24 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
                 std::swap(barriers[0].Transition.StateBefore, barriers[0].Transition.StateAfter);
                 std::swap(barriers[1].Transition.StateBefore, barriers[1].Transition.StateAfter);
                 curCommandList->ResourceBarrier(2, barriers);
+                if (timed) {
+                    curCommandList->EndQuery(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2 + 1);
+                    curCommandList->ResolveQueryData(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2, 2,
+                                                     m_copyTimestampReadback.Get(), ringSlot * 2 * sizeof(uint64_t));
+                }
 
                 curCommandList->Close();
                 ID3D12CommandList* lists[] = { curCommandList.Get() };
+                if (timed) {
+                    m_copySubmitNs[ringSlot] = PerfTrace::Instance().Now();
+                }
                 m_queue->ExecuteCommandLists(1, lists);
 
                 if (m_copyFence) {
                     m_currentFenceValue++;
                     m_copyFenceValues[ringSlot] = m_currentFenceValue;
                     m_queue->Signal(m_copyFence.Get(), m_currentFenceValue);
+                    m_copyTimestampPending[ringSlot] = timed;
                 }
             }
         }
@@ -1499,7 +1607,7 @@ bool OpenXrManager::SubmitFramePair() {
     endInfo.layerCount = m_frameState.shouldRender ? 1 : 0;
     endInfo.layers = m_frameState.shouldRender ? layers : nullptr;
 
-    XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
+    XrResult res = DispatchEndFrame(endInfo);
     m_frameBegun = false;
     ClearRenderPoses();
     m_lastPolledTime = 0;
@@ -1708,7 +1816,7 @@ bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df*
     endInfo.layerCount = m_frameState.shouldRender ? (showCursor ? 2 : 1) : 0;
     endInfo.layers = m_frameState.shouldRender ? layers : nullptr;
 
-    XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
+    XrResult res = DispatchEndFrame(endInfo);
     m_frameBegun = false;
     ClearRenderPoses();
     m_lastPolledTime = 0;

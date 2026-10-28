@@ -1,5 +1,6 @@
 #include "mv_pass.h"
 #include "core/logger.h"
+#include "core/perf_trace.h"
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <cmath>
@@ -275,6 +276,8 @@ constexpr UINT kSelfCheckSamples = kSelfCheckGrid * kSelfCheckGrid;
 constexpr UINT kReadbackSlots = 8;      // self-checks in flight before a readback buffer is reused
 constexpr uint64_t kReadbackDelayCalls = 6;   // Records after which a self-check is read back (a few frames)
 constexpr uint64_t kReadbackGiveUpCalls = 64; // a readback that never shows the expected stamp is dropped
+constexpr UINT kTimingSlots = 32;               // `vrPerfTrace` timestamp pairs in flight
+constexpr uint64_t kTimingReadDelayCalls = 16;  // Records after which a timestamp pair is read (several frames)
 // Root constants, laid out as the shader's cbuffer (44 dwords).
 struct PassConstants {
     uint32_t a[4];    // width, height, self-check reads the corrected output, sequence
@@ -355,6 +358,7 @@ public:
             }
         }
         ++m_calls;
+        ReadTimings();
         ReleaseRetired();
 
         // Descriptors for this call: a ring slot, so the two eyes recorded in one frame do not overwrite
@@ -391,6 +395,8 @@ public:
         device->CreateUnorderedAccessView(m_results.Get(), nullptr, &resultsUav, cpu);
 
         ID3D12GraphicsCommandList* cl = in.cmdList;
+        // `vrPerfTrace`: GPU timestamps around the whole pass, the self-check included.
+        const int timingSlot = BeginTiming(cl);
         // Our own texture: shader resource (as the upscaler reads it) -> UAV for the write -> back.
         // The engine's depth and motion vectors are only read, in the state the upscaler already needs.
         Transition(cl, m_output.Get(), m_outputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -415,6 +421,8 @@ public:
         if (in.selfCheck && EnsureReadbackBuffers()) {
             RecordSelfCheck(cl, *in.selfCheck, width, height, gpu, correcting && !in.selfCheck->nearEstimate);
         }
+
+        EndTiming(cl, timingSlot);
 
         MvPassResult ok;
         ok.ok = true;
@@ -469,6 +477,87 @@ private:
         bool nearEstimate = false;
         float assumedNear = 0.0f;
     };
+
+    // The pass records on the game's command list, so no fence says when its timestamps are written: they are
+    // read many calls later, and a slot whose start stamp is unchanged since its last read has not run yet.
+    struct TimingSlot {
+        bool pending = false;
+        uint64_t recordedAtCall = 0;
+        uint64_t lastStart = 0;
+    };
+
+    bool EnsureTiming() {
+        if (m_timingHeap && m_timingReadback) return true;
+        if (m_timingFailed) return false;
+        D3D12_QUERY_HEAP_DESC heapDesc = {};
+        heapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+        heapDesc.Count = kTimingSlots * 2;
+        D3D12_HEAP_PROPERTIES props = {};
+        props.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC desc = {};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = kTimingSlots * 2 * sizeof(uint64_t);
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        HRESULT hr = m_device->CreateQueryHeap(&heapDesc, IID_PPV_ARGS(&m_timingHeap));
+        if (SUCCEEDED(hr)) {
+            hr = m_device->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                   nullptr, IID_PPV_ARGS(&m_timingReadback));
+        }
+        if (FAILED(hr)) {
+            LogWarn("MvPass: GPU timestamps unavailable (" + HrString(hr) + "); vrPerfTrace logs no GPU MV pass timing");
+            m_timingHeap.Reset();
+            m_timingReadback.Reset();
+            m_timingFailed = true;
+            return false;
+        }
+        return true;
+    }
+
+    // The timestamp slot this call is timed in, or -1 when it is not timed.
+    int BeginTiming(ID3D12GraphicsCommandList* cl) {
+        if (!PerfTrace::Instance().IsActive() || !EnsureTiming()) return -1;
+        const UINT slot = static_cast<UINT>(m_timedCalls++ % kTimingSlots);
+        if (m_timing[slot].pending) return -1;  // not read back yet
+        cl->EndQuery(m_timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2);
+        return static_cast<int>(slot);
+    }
+
+    void EndTiming(ID3D12GraphicsCommandList* cl, int slot) {
+        if (slot < 0) return;
+        const UINT s = static_cast<UINT>(slot);
+        cl->EndQuery(m_timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, s * 2 + 1);
+        cl->ResolveQueryData(m_timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, s * 2, 2, m_timingReadback.Get(),
+                             s * 2 * sizeof(uint64_t));
+        m_timing[s].pending = true;
+        m_timing[s].recordedAtCall = m_calls;
+    }
+
+    void ReadTimings() {
+        if (!m_timingReadback) return;
+        PerfTrace& trace = PerfTrace::Instance();
+        const uint64_t frequency = trace.GetGpuTimestampFrequency();
+        for (UINT s = 0; s < kTimingSlots; ++s) {
+            TimingSlot& t = m_timing[s];
+            if (!t.pending || m_calls < t.recordedAtCall + kTimingReadDelayCalls) continue;
+            t.pending = false;
+            if (!trace.IsActive() || frequency == 0) continue;
+            const D3D12_RANGE readRange = {s * 2 * sizeof(uint64_t), (s * 2 + 2) * sizeof(uint64_t)};
+            void* mapped = nullptr;
+            if (FAILED(m_timingReadback->Map(0, &readRange, &mapped)) || !mapped) continue;
+            const uint64_t* stamps = static_cast<const uint64_t*>(mapped) + s * 2;
+            const uint64_t start = stamps[0];
+            const uint64_t end = stamps[1];
+            const D3D12_RANGE written = {0, 0};
+            m_timingReadback->Unmap(0, &written);
+            if (start == 0 || start == t.lastStart || end < start || end - start > frequency) continue;
+            t.lastStart = start;
+            trace.AddSample(PerfSection::GpuMvPass, GpuTicksToNanoseconds(end - start, frequency));
+        }
+    }
 
     bool EnsureReadbackBuffers() {
         if (m_readbackReady) return true;
@@ -741,6 +830,11 @@ private:
     DXGI_FORMAT m_format = DXGI_FORMAT_UNKNOWN;
     uint64_t m_calls = 0;
     std::vector<std::pair<ComPtr<ID3D12Resource>, uint64_t>> m_retired;
+    ComPtr<ID3D12QueryHeap> m_timingHeap;
+    ComPtr<ID3D12Resource> m_timingReadback;
+    bool m_timingFailed = false;
+    TimingSlot m_timing[kTimingSlots];
+    uint64_t m_timedCalls = 0;
 };
 
 } // namespace

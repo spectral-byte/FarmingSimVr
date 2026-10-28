@@ -86,6 +86,7 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrRenderingMode <afr\|dualpass\|toggle>` | Switch stereo mode |
 | `vrDesktopMirror [on\|off]` | Turn the Desktop Mirror Window on or off while the headset is in use, to give the GPU time it costs to the headset. Nothing changes in the headset. It shows by itself while the headset is asleep or on the dashboard and before a savegame has loaded. Saved, on by default. Untested with frame generation: turn the mirror back on if something breaks with it. No arguments reports the current state |
 | `vrEyePairTrace [frames]` | Log how far the vehicle and the eye camera move between rendered eye frames (default 32 frames) |
+| `vrPerfTrace [seconds\|stop]` | Log where frame time goes to `fs25_vr.log` (next to `dxgi.dll`, not `log.txt`): one line per second, then a summary (default 10 s, up to 60). Each section is average/95th percentile/maximum milliseconds and calls per second: the engine frame, the Injector's present, eye copy and OpenXR calls, the game's Present, the GPU eye copy, how far the GPU runs behind, the GPU motion vector pass, and the Companion Mod's update, camera and draw. A long `xrWaitFrame` means headroom; a long `GPU queue lag` means the GPU is the limit |
 | `vrSnapTurnAngle <degrees>` | Snap turn step (default `90`) |
 | `vrHudGroup <map\|speedometer\|info\|controls> <horizontal> <vertical> [scale]` | Place and scale a HUD group |
 | `vrHudGroupShow <group> <streamlined\|full> <on\|off>` | Choose which groups show in each HUD state |
