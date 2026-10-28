@@ -10,7 +10,7 @@ ADR-0016 has the Companion Mod alternate two distinct scene-graph camera nodes (
 - **A camera registered with `g_cameraManager:addCamera` renders** through `setActiveCamera`, as a debug build confirmed.
 - **Two cameras that really alternate break DLSS and FSR.** With both eye nodes registered and alternating every frame, the temporal upscalers drop their history on each rendering camera change, so the image lost its anti-aliasing.
 
-**The Companion Mod renders both eyes through one camera node, registered with the camera manager.** The node is moved to each eye's position (and given that eye's Oblique Frustum projection) every AFR frame or Sequential Dual-Pass sub-pass. The engine sees a single camera, as it did when the game's own camera was moved between the eyes, and the Injector's per-eye correction (ADR-0020) handles the eye-stride motion vectors.
+**The Companion Mod renders both eyes through one camera node, registered with the camera manager.** The node is moved to each eye's position (and given that eye's projection) every AFR frame or Sequential Dual-Pass sub-pass. The engine sees a single camera, as it did when the game's own camera was moved between the eyes, and the Injector's per-eye correction (ADR-0020) handles the eye-stride motion vectors.
 
 - `cameraNodeLeft` and `cameraNodeRight` both hold the one node (the Dual Eye Camera Nodes in `CONTEXT.md`).
 - The mod registers the node with `addCamera` before binding it through `setActiveCamera`. The global `setCamera` is only the fallback when there is no camera manager.

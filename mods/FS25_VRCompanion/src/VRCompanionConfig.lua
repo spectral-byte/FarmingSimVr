@@ -77,10 +77,6 @@ VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICA
 VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE = true
 VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
 
--- Oblique Frustum (ADR-0005): symmetric projection by default; per-eye asymmetric offsets are opt-in
-VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION = false
-VRCompanion.allowObliqueProjection = VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION
-
 -- DLSS near plane per camera mode (vrDlssNearClipCab / Outside / OnFoot), in metres; 0 = auto, which the
 -- Injector estimates from the engine's motion vectors. The renderer's near differs between a vehicle's
 -- inside camera, its other cameras and the on-foot camera, so each can be fixed on its own. The cab and
@@ -231,7 +227,6 @@ function VRCompanion:saveConfiguration(xmlPath)
         if type(setXmlBoolFn) == "function" then
             setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
             setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
-            setXmlBoolFn(xmlFile, "vrSettings.allowObliqueProjection", self.allowObliqueProjection == true)
             for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
                 local group = (self.HUD_GROUPS or {})[groupName] or {}
                 local streamlined, full = group.streamlined, group.full
@@ -336,12 +331,6 @@ function VRCompanion:loadConfiguration(xmlPath)
                     self.recenterVrTrackingSpace = loadedRecenterTracking
                 end
 
-                local loadedAllowOblique = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
-                    "vrSettings.allowObliqueProjection")
-                if loadedAllowOblique ~= nil then
-                    self.allowObliqueProjection = loadedAllowOblique
-                end
-
                 for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
                     local group = (self.HUD_GROUPS or {})[groupName]
                     if group ~= nil then
@@ -434,9 +423,6 @@ function VRCompanion:loadConfiguration(xmlPath)
     end
     if self.recenterVrTrackingSpace == nil then
         self.recenterVrTrackingSpace = self.DEFAULT_RECENTER_VR_TRACKING_SPACE
-    end
-    if self.allowObliqueProjection == nil then
-        self.allowObliqueProjection = self.DEFAULT_ALLOW_OBLIQUE_PROJECTION
     end
     if self.snapTurnAngle == nil then
         self.snapTurnAngle = self.DEFAULT_SNAP_TURN_ANGLE
