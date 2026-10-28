@@ -588,4 +588,3 @@ function VRCompanion:consoleCommandSetRenderingMode(modeStr)
     print(string.format("[FS25_VR] Stereo Presentation Mode is now: %s (%s)", tostring(newMode), modeLabel))
     return string.format("Stereo Presentation Mode set to: %s (%s, Saved)", tostring(newMode), modeLabel)
 end
-

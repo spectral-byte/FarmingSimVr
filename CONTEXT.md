@@ -9,7 +9,7 @@ The native Direct3D 12 proxy library loaded by the game process that interacts w
 _Avoid_: Wrapper, loader, hook DLL
 
 **Companion Mod**:
-The in-engine Luau script mod executing inside GIANTS Engine 10 that manipulates camera transforms and asymmetric frustum projections.
+The in-engine Luau script mod executing inside GIANTS Engine 10 that manipulates camera transforms.
 _Avoid_: Script hook, Lua plugin
 
 **Installer**:
