@@ -245,6 +245,10 @@ function VRCompanion:loadMap(name)
     if type(self.loadConfiguration) == "function" then
         self:loadConfiguration()
     end
+    -- 7-. Send the saved Desktop Mirror setting to VRBridge: the handshake above is done, so the Injector sees it at once
+    if type(self.applyDesktopMirror) == "function" then
+        self:applyDesktopMirror()
+    end
     if type(self.applyHudSafeArea) == "function" then
         self:applyHudSafeArea()
     end
