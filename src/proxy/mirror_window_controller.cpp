@@ -56,6 +56,7 @@ void MirrorWindowController::SetGameHwnd(HWND hWnd) {
     if (!hWnd) return;
 
     if (m_gameHwnd != hWnd) {
+        RestoreTitle();
         if (m_gameHwnd && m_windowSubclassed) {
             DetachWindowSubclass();
         }
@@ -185,7 +186,29 @@ void MirrorWindowController::UninstallDetours() {
     }
 }
 
+void MirrorWindowController::ShowDesktopMirrorOffTitle() {
+    if (m_titleSwapped || !m_gameHwnd || !IsWindow(m_gameHwnd)) return;
+    const int length = GetWindowTextLengthW(m_gameHwnd);
+    std::wstring title(static_cast<size_t>(length > 0 ? length : 0) + 1, L'\0');
+    const int copied = GetWindowTextW(m_gameHwnd, title.data(), static_cast<int>(title.size()));
+    title.resize(static_cast<size_t>(copied > 0 ? copied : 0));
+    m_keptTitle = std::move(title);
+    m_titleHwnd = m_gameHwnd;
+    m_titleSwapped = SetWindowTextW(m_gameHwnd, kDesktopMirrorOffTitle) != FALSE;
+}
+
+void MirrorWindowController::RestoreTitle() {
+    if (!m_titleSwapped) return;
+    if (IsWindow(m_titleHwnd)) {
+        SetWindowTextW(m_titleHwnd, m_keptTitle.c_str());
+    }
+    m_keptTitle.clear();
+    m_titleHwnd = nullptr;
+    m_titleSwapped = false;
+}
+
 void MirrorWindowController::DetachAll() {
+    RestoreTitle();
     DetachWindowSubclass();
     m_inSizeMove = false;
     m_windowClampDirty = true;

@@ -863,6 +863,28 @@ TEST_F(VrBridgeTest, Exposes2DViewActiveMethodsAndPropertyToLuauScript) {
     )luau"), 0);
 }
 
+TEST_F(VrBridgeTest, DesktopMirrorFlagDefaultsToOnIsSetFromLuauAndResetsOnMapUnload) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getDesktopMirror() == true, "the desktop mirror is on by default")
+        VRBridge.setDesktopMirror(false)
+        assert(VRBridge.getDesktopMirror() == false, "setDesktopMirror(false) turns it off")
+    )luau"), 0);
+    EXPECT_FALSE(bridge.IsDesktopMirrorEnabled());
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        VRBridge.onMapUnload()
+        assert(VRBridge.getDesktopMirror() == true, "a map unload puts the mirror back on")
+        VRBridge.setDesktopMirror(false)
+        VRBridge.setDesktopMirror(true)
+        assert(VRBridge.getDesktopMirror() == true, "setDesktopMirror(true) turns it on")
+    )luau"), 0);
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
+}
+
 TEST_F(VrBridgeTest, MapUnloadResets2DViewActiveToFalse) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -1345,6 +1367,8 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "setMenuCursor",
         "set2DViewActive",
         "getIs2DViewActive",
+        "setDesktopMirror",
+        "getDesktopMirror",
         "getRenderingMode",
         "setRenderingMode",
         "getSubPassIndex",

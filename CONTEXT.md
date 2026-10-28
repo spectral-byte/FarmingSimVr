@@ -97,8 +97,8 @@ The presentation state where in-engine 3D gameplay is rendered monoscopically to
 _Avoid_: Theater mode, flat mode, cinema view, 2D mode
 
 **Desktop Mirror Window**:
-The Win32 desktop window displaying a scaled presentation of the game backbuffer while the player is in VR.
-_Avoid_: Companion window, flat window, monitor mirror, game screen
+The Win32 desktop window displaying a scaled presentation of the game backbuffer while the player is in VR. The player can turn it off to save GPU time (on by default, saved): while the headset is in use it then shows black and its title says it is off and how to turn it back on, and nothing changes in the headset, menus and 2D Floating Window Mode included. It shows again by itself while the headset is asleep or not yet ready, before a savegame has loaded, and always in Pass-Through Mode.
+_Avoid_: Companion window, flat window, monitor mirror, game screen, physical monitor
 
 **Resolution Decoupling**:
 The operational state where the in-engine Direct3D 12 swapchain rendering resolution is decoupled from the physical Win32 Desktop Mirror Window dimensions.

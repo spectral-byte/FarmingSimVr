@@ -144,6 +144,11 @@ public:
     const EyeSwapchain& GetEyeSwapchain(uint32_t eyeIndex = 0) const;
 
     bool CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backBuffer);
+    // Clears the game's back buffer to black on the game's queue and leaves it in the PRESENT state
+    // the game expects, so the next Present puts a black frame on the Desktop Mirror Window. Call it
+    // after the frame's eye copy, which has already taken what the headset needs. Returns false and
+    // does nothing when there is no back buffer, device or queue (unit tests, Pass-Through).
+    bool ClearBackBufferToBlack(ID3D12Resource* backBuffer);
     bool BeginFrame();
     bool EndFrame();
     bool IsFrameBegun() const { return m_frameBegun; }
@@ -228,6 +233,9 @@ public:
     XrSpace GetViewSpace() const { return m_viewSpace; }
     bool HasSession() const { return m_session != XR_NULL_HANDLE; }
     bool IsSessionRunning() const { return m_sessionRunning; }
+    // The headset is on and the game has the focus. A sleeping headset drops to SYNCHRONIZED and the dashboard to
+    // VISIBLE; neither ends the running session.
+    bool IsSessionFocused() const { return m_sessionState == XR_SESSION_STATE_FOCUSED; }
     XrSessionState GetSessionState() const { return m_sessionState; }
 
     // Drains the runtime event queue and drives the session lifecycle: begin on READY,
@@ -283,6 +291,12 @@ private:
     uint64_t m_currentFenceValue = 0;
     uint32_t m_copyRingIndex = 0;
     ScopedEventHandle m_copyFenceEvent;
+    void EnsureCopyFence();
+    // ClearBackBufferToBlack's own recording objects; it signals m_copyFence with m_clearFenceValue.
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_clearAllocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_clearCommandList;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_clearRtvHeap;
+    uint64_t m_clearFenceValue = 0;
 
     EyeSwapchain m_eyeSwapchains[2];
     bool m_hasEyeSwapchains = false;

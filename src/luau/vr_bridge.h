@@ -113,6 +113,11 @@ public:
     bool Is2DViewActive() const { return m_2dViewActive; }
     void Set2DViewActive(bool active);
 
+    // Whether the game presents to the Desktop Mirror Window while the headset session runs. On by
+    // default; the Companion Mod sets it (`vrDesktopMirror`) and the DXGI proxy reads it every present.
+    bool IsDesktopMirrorEnabled() const { return m_desktopMirrorEnabled; }
+    void SetDesktopMirrorEnabled(bool enabled) { m_desktopMirrorEnabled = enabled; }
+
     void SignalDiscontinuity();
     bool HasPendingDiscontinuity(uint32_t contextIndex = 0) const;
     bool ConsumeDiscontinuity(uint32_t contextIndex = 0);
@@ -140,6 +145,8 @@ public:
     static int Lua_GetIsMenuVisible(lua_State* L);
     static int Lua_Set2DViewActive(lua_State* L);
     static int Lua_GetIs2DViewActive(lua_State* L);
+    static int Lua_SetDesktopMirror(lua_State* L);
+    static int Lua_GetDesktopMirror(lua_State* L);
     static int Lua_ResetTemporalHistory(lua_State* L);
     static int Lua_SignalDiscontinuity(lua_State* L);
     static int Lua_SetDlssMvScale(lua_State* L);
@@ -209,6 +216,8 @@ public:
         {"setMenuCursor", &Lua_SetMenuCursor},
         {"set2DViewActive", &Lua_Set2DViewActive},
         {"getIs2DViewActive", &Lua_GetIs2DViewActive},
+        {"setDesktopMirror", &Lua_SetDesktopMirror},
+        {"getDesktopMirror", &Lua_GetDesktopMirror},
         {"getRenderingMode", &Lua_GetRenderingMode},
         {"setRenderingMode", &Lua_SetRenderingMode},
         {"getSubPassIndex", &Lua_GetSubPassIndex},
@@ -244,6 +253,7 @@ private:
     bool m_handshakeCompleted = false;
     bool m_menuVisible = false;
     bool m_2dViewActive = false;
+    bool m_desktopMirrorEnabled = true;
 
     std::atomic<VRRenderingMode> m_renderingMode{VRRenderingMode::SequentialDualPass};
     static constexpr int kNoPendingMode = -1;

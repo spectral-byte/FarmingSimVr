@@ -1204,6 +1204,20 @@ TEST(OpenXrManagerTest, CopiesBackBufferAndPerformsImageAcquireWaitRelease) {
     EXPECT_FALSE(manager.CopyBackBufferToEye(2, nullptr));
 }
 
+TEST(OpenXrManagerTest, ClearingANullBackBufferToBlackDoesNothing) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    EXPECT_FALSE(manager.ClearBackBufferToBlack(nullptr));
+    EXPECT_EQ(mockDispatch->acquireSwapchainImageCalls, 0u);
+}
+
 TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };

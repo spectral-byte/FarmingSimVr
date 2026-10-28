@@ -4569,6 +4569,227 @@ TEST_F(CompanionModTest, RenderingModeConsoleCommandAndNotificationAlert) {
     )luau", "=testRenderingModeConsoleCommand"), 0);
 }
 
+TEST_F(CompanionModTest, DesktopMirrorConsoleCommandSetsTheVRBridgeFlag) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        local removedCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName, target = target }
+        end
+        _G.removeConsoleCommand = function(cmd) removedCommands[cmd] = true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrDesktopMirror"] ~= nil, "vrDesktopMirror must be registered on map load")
+        assert(registeredCommands["vrDesktopMirror"].funcName == "consoleCommandSetDesktopMirror",
+            "registered callback must be consoleCommandSetDesktopMirror")
+        assert(VRCompanion.desktopMirror == true, "the mirror is on by default")
+        assert(VRBridge.getDesktopMirror() == true, "VRBridge flag is on by default")
+
+        -- No argument reports the state without changing it
+        local status = VRCompanion:consoleCommandSetDesktopMirror()
+        assert(type(status) == "string" and string.find(status, "on") ~= nil, "status must say the mirror is on: " .. tostring(status))
+        assert(VRBridge.getDesktopMirror() == true)
+
+        -- off / on set the VRBridge flag
+        VRCompanion:consoleCommandSetDesktopMirror("off")
+        assert(VRCompanion.desktopMirror == false)
+        assert(VRBridge.getDesktopMirror() == false, "vrDesktopMirror off must clear the VRBridge flag")
+        status = VRCompanion:consoleCommandSetDesktopMirror()
+        assert(string.find(status, "off") ~= nil, "status must say the mirror is off: " .. tostring(status))
+
+        VRCompanion:consoleCommandSetDesktopMirror("on")
+        assert(VRCompanion.desktopMirror == true)
+        assert(VRBridge.getDesktopMirror() == true, "vrDesktopMirror on must set the VRBridge flag")
+
+        -- Anything else is refused and changes nothing
+        VRCompanion:consoleCommandSetDesktopMirror("off")
+        local refused = VRCompanion:consoleCommandSetDesktopMirror("maybe")
+        assert(string.find(refused, "Usage: vrDesktopMirror") ~= nil, "an invalid argument returns the usage")
+        assert(VRBridge.getDesktopMirror() == false, "an invalid argument must not change the flag")
+
+        -- Map unload removes the command; the saved setting is read again by the next map load
+        VRCompanion:deleteMap()
+        assert(removedCommands["vrDesktopMirror"] == true, "deleteMap must unregister vrDesktopMirror")
+        assert(VRCompanion.desktopMirror == false, "deleteMap keeps the setting for the next map load")
+    )luau", "=testDesktopMirrorConsoleCommand"), 0);
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
+}
+
+TEST_F(CompanionModTest, DesktopMirrorCommandPersistsTheSettingToSettingsXml) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local savedBools = {}
+        local saves = 0
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLString = function() end
+        _G.setXMLBool = function(xml, key, val) savedBools[key] = val end
+        _G.saveXMLFile = function() saves = saves + 1; return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        -- The default is written as on
+        VRCompanion:saveConfiguration("dummy.xml")
+        assert(savedBools["vrSettings.desktopMirror"] == true, "the default is saved as on")
+
+        local savesBefore = saves
+        local response = VRCompanion:consoleCommandSetDesktopMirror("off")
+        assert(savedBools["vrSettings.desktopMirror"] == false, "vrDesktopMirror off must be saved to settings.xml")
+        assert(saves > savesBefore, "vrDesktopMirror off must write the file")
+        assert(string.find(response, "Saved") ~= nil, "the response says it was saved: " .. tostring(response))
+
+        VRCompanion:consoleCommandSetDesktopMirror("on")
+        assert(savedBools["vrSettings.desktopMirror"] == true, "vrDesktopMirror on must be saved to settings.xml")
+
+        -- An argument that changes nothing writes nothing
+        savesBefore = saves
+        VRCompanion:consoleCommandSetDesktopMirror("maybe")
+        VRCompanion:consoleCommandSetDesktopMirror()
+        assert(saves == savesBefore, "usage and status must not write the file")
+    )luau", "=testDesktopMirrorPersists"), 0);
+}
+
+TEST_F(CompanionModTest, DesktopMirrorMapLoadRestoresTheSavedValueAndSendsItToVRBridgeAfterTheHandshake) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        local store = { ["vrSettings.desktopMirror"] = false }
+        _G.loadXMLFile = function() return 2 end
+        _G.delete = function() end
+        _G.getXMLFloat = function() return nil end
+        _G.getXMLString = function() return nil end
+        _G.getXMLBool = function(xml, key) return store[key] end
+
+        -- Record the order in which the Companion Mod talks to VRBridge
+        local calls = {}
+        local realHandshake = VRBridge.handshake
+        local realSet = VRBridge.setDesktopMirror
+        VRBridge.handshake = function(...)
+            table.insert(calls, "handshake")
+            return realHandshake(...)
+        end
+        VRBridge.setDesktopMirror = function(enabled)
+            table.insert(calls, enabled and "mirror:on" or "mirror:off")
+            return realSet(enabled)
+        end
+
+        VRCompanion:loadMap("testMap")
+
+        assert(VRCompanion.desktopMirror == false, "the saved off must be restored on map load")
+        assert(VRBridge.getDesktopMirror() == false, "the saved off must reach VRBridge on map load")
+        local handshakeAt, lastMirrorAt = nil, nil
+        for i, c in ipairs(calls) do
+            if c == "handshake" and handshakeAt == nil then handshakeAt = i end
+            if string.sub(c, 1, 7) == "mirror:" then lastMirrorAt = i end
+        end
+        assert(handshakeAt ~= nil, "the handshake must run on map load")
+        assert(lastMirrorAt ~= nil, "the saved value must be sent to VRBridge")
+        assert(lastMirrorAt > handshakeAt, "the saved value is sent after the handshake: " .. table.concat(calls, ","))
+        assert(calls[lastMirrorAt] == "mirror:off", "the last value sent is the saved off: " .. table.concat(calls, ","))
+
+        -- A saved on is restored too, over a stale off
+        VRCompanion:deleteMap()
+        store["vrSettings.desktopMirror"] = true
+        VRBridge.setDesktopMirror(false)
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.desktopMirror == true)
+        assert(VRBridge.getDesktopMirror() == true, "the saved on must reach VRBridge on map load")
+    )luau", "=testDesktopMirrorRestore"), 0);
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
+}
+
+TEST_F(CompanionModTest, DesktopMirrorIsOnWhenNothingIsSaved) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    bridge.SetDesktopMirrorEnabled(false);  // a stale off in the bridge must not survive a map load
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        -- A settings file that has no desktop mirror key
+        _G.loadXMLFile = function() return 2 end
+        _G.getXMLFloat = function() return nil end
+        _G.getXMLBool = function() return nil end
+        _G.getXMLString = function() return nil end
+
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.desktopMirror == true, "the mirror is on when nothing is saved")
+        assert(VRBridge.getDesktopMirror() == true, "VRBridge gets on when nothing is saved")
+    )luau", "=testDesktopMirrorNothingSaved"), 0);
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
+}
+
+TEST_F(CompanionModTest, DesktopMirrorHelpTextSaysSavedOnByDefaultAndUntestedWithFrameGeneration) {
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registered = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target) registered[cmd] = desc end
+        VRCompanion:registerDesktopMirrorConsoleCommands()
+        local help = string.lower(registered["vrDesktopMirror"] or "")
+        assert(help ~= "", "vrDesktopMirror must be registered")
+        assert(string.find(help, "saved", 1, true) ~= nil, "help must say the setting is saved: " .. help)
+        assert(string.find(help, "on by default", 1, true) ~= nil, "help must say it is on by default: " .. help)
+        assert(string.find(help, "untested with frame generation", 1, true) ~= nil,
+            "help must say it is untested with frame generation: " .. help)
+
+        -- The no-argument report names the state
+        local status = VRCompanion:consoleCommandSetDesktopMirror()
+        assert(string.find(status, "Desktop Mirror is on", 1, true) ~= nil, status)
+        VRCompanion:consoleCommandSetDesktopMirror("off")
+        status = VRCompanion:consoleCommandSetDesktopMirror()
+        assert(string.find(status, "Desktop Mirror is off", 1, true) ~= nil, status)
+    )luau", "=testDesktopMirrorHelpText"), 0);
+}
+
+TEST_F(CompanionModTest, DesktopMirrorCommandIsHarmlessWithoutTheNativeBridgeFunction) {
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRBridge = { version = "1.0.0", handshake = function() return true end }
+        local result = VRCompanion:consoleCommandSetDesktopMirror("off")
+        assert(type(result) == "string")
+        assert(VRCompanion.desktopMirror == false)
+    )luau", "=testDesktopMirrorWithoutBridgeFunction"), 0);
+}
+
 TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDrivingAndOnFoot) {
     SetupCameraMockGlobals(L);
     fs25vr::FakeTrackedHeadset headset;

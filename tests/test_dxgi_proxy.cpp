@@ -2,6 +2,7 @@
 #include "proxy/dxgi_proxy.h"
 #include "core/dll_lifecycle.h"
 #include "core/injector_runtime.h"
+#include "core/logger.h"
 #include "proxy/system_dxgi.h"
 #include "openxr/openxr_manager.h"
 #include "fake_openxr_events.h"
@@ -14,7 +15,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <future>
+#include <iterator>
+#include <string>
 #include <thread>
 #include <unordered_set>
 
@@ -984,6 +989,332 @@ TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
     EXPECT_EQ(openXrManager->GetSubmittedFramePairCount(), 1u);
 
     proxy.DetachAll();
+}
+
+// The game's swapchain Present as the Desktop Mirror Window tests drive it: an active OpenXR mock, a real
+// VRBridge and a mock swapchain whose real Present calls are counted in s_mockPresentCalls.
+struct MirrorPresentRig {
+    std::shared_ptr<MockActiveOpenXrDispatch> dispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    std::shared_ptr<OpenXrManager> openXrManager = std::make_shared<OpenXrManager>(dispatch);
+    std::shared_ptr<VRBridge> vrBridge;
+    std::unique_ptr<InjectorRuntime> runtime;
+    std::vector<void*> vtable = std::vector<void*>(30, nullptr);
+    MockComObject mockSwapChain{ vtable.data() };
+    IDXGISwapChain* swapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
+    HRESULT(STDMETHODCALLTYPE* pfnPresent)(IDXGISwapChain*, UINT, UINT) = nullptr;
+
+    explicit MirrorPresentRig(VRRenderingMode mode, bool companionHandshake = true) {
+        s_mockPresentCalls = 0;
+        EXPECT_TRUE(openXrManager->Initialize());
+        EXPECT_TRUE(openXrManager->CreateSession());
+        EXPECT_TRUE(openXrManager->CreateTrackingSpaces());
+        EXPECT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+        vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+        if (companionHandshake) {
+            vrBridge->PerformHandshake();
+        }
+        vrBridge->SetRenderingMode(mode);
+        dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);  // the headset is on, as in play
+        runtime = MakeRuntime(openXrManager, vrBridge);
+        vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
+        vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+        vtable[2] = reinterpret_cast<void*>(&MockRelease);
+        vtable[7] = reinterpret_cast<void*>(&MockGetDevice);
+        vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
+        vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
+        vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+        EXPECT_TRUE(runtime->GetDxgiProxy().AttachSwapChain(swapChain));
+        void** hookedVTable = *reinterpret_cast<void***>(swapChain);
+        pfnPresent = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(hookedVTable[kPresentVTableSlot]);
+    }
+    ~MirrorPresentRig() { runtime->GetDxgiProxy().DetachAll(); }
+
+    // The game presents one frame; returns how many real Present calls reached DXGI for it.
+    int Present() {
+        int before = s_mockPresentCalls;
+        EXPECT_EQ(pfnPresent(swapChain, 1, 0), S_OK);
+        return (s_mockPresentCalls - before) / kMockPresentIncrement;
+    }
+};
+
+TEST(DxgiProxyTest, DesktopMirrorIsOnByDefaultAndEveryAfrPresentReachesDxgi) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_TRUE(rig.vrBridge->IsDesktopMirrorEnabled());
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(rig.Present(), 1);
+    }
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesEveryAfrPresentAndKeepsTheEyePairsFlowing) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+        EXPECT_TRUE(rig.runtime->GetDxgiProxy().IsPresentSuppressed());
+    }
+    EXPECT_EQ(s_mockPresentCalls, 0);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 2u);
+    EXPECT_EQ(rig.vrBridge->GetFrameIndex(), 4u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesBothSequentialDualPassSubPasses) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int pair = 0; pair < 2; ++pair) {
+        EXPECT_EQ(rig.Present(), 0);  // sub-pass 0
+        EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 1u);
+        EXPECT_EQ(rig.Present(), 0);  // sub-pass 1
+        EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 0u);
+    }
+    EXPECT_EQ(s_mockPresentCalls, 0);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 2u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesMenuQuadFramesAndKeepsSubmittingTheQuad) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+    }
+    EXPECT_EQ(rig.openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 0u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesPresentsInTwoDFloatingWindowMode) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    rig.vrBridge->Set2DViewActive(true);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+    }
+    EXPECT_EQ(rig.openXrManager->GetSubmittedQuadFrameCount(), 3u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTurnedOnAgainPresentsEveryFrameAgain) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_FALSE(rig.runtime->GetDxgiProxy().IsPresentSuppressed());
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsWhileTheSessionIsNotRunning) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+    ASSERT_TRUE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // headset asleep, dashboard
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_FALSE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // headset back on: dark again
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    EXPECT_EQ(rig.Present(), 1);  // after the one black frame (#195)
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_TRUE(rig.openXrManager->IsSessionRunning());
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffShowsAgainWhileTheHeadsetIsAsleepEvenThoughTheSessionKeepsRunning) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+
+    // Real runtimes drop to SYNCHRONIZED when the headset sleeps; the session is not stopped.
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_TRUE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);  // headset back on: dark again
+    EXPECT_EQ(rig.Present(), 1);  // after the one black frame (#195)
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffShowsAgainWhileTheDashboardHasFocus) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);  // the dashboard took the focus
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    EXPECT_EQ(rig.Present(), 1);  // the one black frame
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsInPassThroughMode) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_EQ(rig.Present(), 1);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsBeforeTheCompanionModHandshake) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+
+    rig.vrBridge->PerformHandshake();  // a savegame loaded: the mirror goes dark
+    EXPECT_EQ(rig.Present(), 1);  // the one black frame (#195)
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorSettingDoesNotChangeWhatTheHeadsetReceives) {
+    for (VRRenderingMode mode : { VRRenderingMode::AFR, VRRenderingMode::SequentialDualPass }) {
+        uint64_t pairs[2] = {};
+        uint64_t quads[2] = {};
+        uint64_t frames[2] = {};
+        uint64_t beginFrames[2] = {};
+        for (int mirrorOff = 0; mirrorOff < 2; ++mirrorOff) {
+            MirrorPresentRig rig(mode);
+            rig.vrBridge->SetDesktopMirrorEnabled(mirrorOff == 0);
+            for (int i = 0; i < 6; ++i) rig.Present();
+            rig.vrBridge->SetMenuVisible(true);
+            for (int i = 0; i < 2; ++i) rig.Present();
+            rig.vrBridge->SetMenuVisible(false);
+            for (int i = 0; i < 4; ++i) rig.Present();
+            pairs[mirrorOff] = rig.openXrManager->GetSubmittedFramePairCount();
+            quads[mirrorOff] = rig.openXrManager->GetSubmittedQuadFrameCount();
+            frames[mirrorOff] = rig.vrBridge->GetFrameIndex();
+            beginFrames[mirrorOff] = rig.dispatch->beginFrameCalls;
+        }
+        EXPECT_EQ(pairs[0], pairs[1]);
+        EXPECT_EQ(quads[0], quads[1]);
+        EXPECT_EQ(frames[0], frames[1]);
+        EXPECT_EQ(beginFrames[0], beginFrames[1]);
+        EXPECT_GT(pairs[0], 0u);
+        EXPECT_EQ(quads[0], 2u);
+    }
+}
+
+// Desktop Mirror Window black frame: each time the mirror goes from showing to off, one real Present reaches
+// DXGI (the backbuffer cleared black after the eye copy), then none until the mirror shows again.
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffWhileTheSessionRunsPresentsExactlyOnceInAfr) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_EQ(rig.Present(), 1);  // the mirror shows
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);  // the one black frame
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+    }
+}
+
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffPresentsExactlyOnceInSequentialDualPass) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(rig.Present(), 0);  // sub-pass 0 is always suppressed
+    EXPECT_EQ(rig.Present(), 1);  // sub-pass 1, mirror showing
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);  // sub-pass 0
+    EXPECT_EQ(rig.Present(), 1);  // sub-pass 1: the one black frame
+    for (int pair = 0; pair < 3; ++pair) {
+        EXPECT_EQ(rig.Present(), 0);
+        EXPECT_EQ(rig.Present(), 0);
+    }
+}
+
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffOnAMenuQuadFramePresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    EXPECT_EQ(rig.Present(), 1);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedQuadFrameCount(), 4u);
+}
+
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffInTwoDFloatingWindowModePresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    rig.vrBridge->Set2DViewActive(true);
+    EXPECT_EQ(rig.Present(), 1);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, BlackFrameTheSessionResumingWithTheMirrorOffPresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_EQ(rig.Present(), 1);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 0);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // headset asleep
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_FALSE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // headset back on, mirror still off
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    EXPECT_EQ(rig.Present(), 1);  // one black frame
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, BlackFrameTheCompanionHandshakeArrivingWithTheMirrorOffPresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+
+    rig.vrBridge->PerformHandshake();  // a savegame loaded: the mirror goes dark
+    EXPECT_EQ(rig.Present(), 1);  // one black frame
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, BlackFrameEachTimeTheMirrorGoesFromShowingToOffPresentsOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_EQ(rig.Present(), 1);
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        EXPECT_EQ(rig.Present(), 1);
+        EXPECT_EQ(rig.Present(), 0);
+        EXPECT_EQ(rig.Present(), 0);
+        rig.vrBridge->SetDesktopMirrorEnabled(true);
+        EXPECT_EQ(rig.Present(), 1);
+        EXPECT_EQ(rig.Present(), 1);
+    }
+}
+
+TEST(DxgiProxyTest, BlackFrameDoesNotChangeWhatTheHeadsetReceives) {
+    for (VRRenderingMode mode : { VRRenderingMode::AFR, VRRenderingMode::SequentialDualPass }) {
+        uint64_t pairs[2] = {};
+        uint64_t quads[2] = {};
+        uint64_t frames[2] = {};
+        uint64_t beginFrames[2] = {};
+        for (int mirrorOff = 0; mirrorOff < 2; ++mirrorOff) {
+            MirrorPresentRig rig(mode);
+            for (int i = 0; i < 4; ++i) rig.Present();
+            rig.vrBridge->SetDesktopMirrorEnabled(mirrorOff == 0);  // switch-off lands mid-run
+            for (int i = 0; i < 6; ++i) rig.Present();
+            pairs[mirrorOff] = rig.openXrManager->GetSubmittedFramePairCount();
+            quads[mirrorOff] = rig.openXrManager->GetSubmittedQuadFrameCount();
+            frames[mirrorOff] = rig.vrBridge->GetFrameIndex();
+            beginFrames[mirrorOff] = rig.dispatch->beginFrameCalls;
+        }
+        EXPECT_EQ(pairs[0], pairs[1]);
+        EXPECT_EQ(quads[0], quads[1]);
+        EXPECT_EQ(frames[0], frames[1]);
+        EXPECT_EQ(beginFrames[0], beginFrames[1]);
+        EXPECT_GT(pairs[0], 0u);
+    }
 }
 
 TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryFromSequentialDualPassToAfr) {
@@ -3091,6 +3422,90 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiv
     }
 }
 
+// Redirects the game log (Logger) to a temp file while a test runs and reads it back.
+namespace {
+class LogCapture {
+public:
+    explicit LogCapture(const char* fileName) : m_path(std::filesystem::temp_directory_path() / fileName) {
+        Logger::Instance().SetLogFile(m_path);
+    }
+    ~LogCapture() {
+        Logger::Instance().SetLogFile(Logger::DefaultLogPath());
+        std::filesystem::remove(m_path);
+    }
+    std::string Text() const {
+        Logger::Instance().Flush();
+        std::ifstream file(m_path);
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    }
+private:
+    std::filesystem::path m_path;
+};
+} // namespace
+
+// Swapchain descriptor logging: the log is the only record of how the game asked for its swapchain.
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainLogsRequestedAndPassedOnDescriptor) {
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+    LogCapture capture("fs25vr_swapchain_desc_test.log");
+
+    DXGI_SWAP_CHAIN_DESC desc{};
+    desc.BufferDesc.Width = 3840;
+    desc.BufferDesc.Height = 2160;
+    desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.BufferCount = 3;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    desc.Windowed = FALSE;
+
+    DxgiProxy::Intercept_CreateSwapChain(nullptr, nullptr, &desc, nullptr);
+
+    const std::string log = capture.Text();
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChain requested: 3840x2160 format=28 buffers=3 "
+                       "swapEffect=FLIP_DISCARD(4) flags=0x840 (ALLOW_TEARING|FRAME_LATENCY_WAITABLE_OBJECT) "
+                       "samples=1 modeScaling=0 windowed=0"), std::string::npos) << log;
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChain passed on: 3840x2160 format=28 buffers=3 "
+                       "swapEffect=FLIP_DISCARD(4) flags=0x840 (ALLOW_TEARING|FRAME_LATENCY_WAITABLE_OBJECT) "
+                       "samples=1 modeScaling=0 windowed=1"), std::string::npos) << log;
+}
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndLogsRequestedAndPassedOnDescriptor) {
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+    LogCapture capture("fs25vr_swapchain_desc_test.log");
+
+    DXGI_SWAP_CHAIN_DESC1 desc{};
+    desc.Width = 2560;
+    desc.Height = 1440;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.BufferCount = 2;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    desc.Scaling = DXGI_SCALING_NONE;
+    desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
+    fullscreenDesc.Windowed = FALSE;
+
+    DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, &desc, &fullscreenDesc, nullptr, nullptr);
+
+    const std::string log = capture.Text();
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChainForHwnd requested: 2560x1440 format=28 buffers=2 "
+                       "swapEffect=FLIP_SEQUENTIAL(3) flags=0x800 (ALLOW_TEARING) samples=1 "
+                       "scaling=NONE(1) alphaMode=3 windowed=0"), std::string::npos) << log;
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChainForHwnd passed on: 2560x1440 format=28 buffers=2 "
+                       "swapEffect=FLIP_SEQUENTIAL(3) flags=0x800 (ALLOW_TEARING) samples=1 "
+                       "scaling=STRETCH(0) alphaMode=3 windowed=1"), std::string::npos) << log;
+}
+
 TEST(DxgiProxyTest, ClampedWindowRestoresFullNormalizedMouseRangeAcrossEdges) {
     HWND testWnd = CreateWindowA("STATIC", "ClampedMouseTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 3840, 2160, nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(testWnd != nullptr);
@@ -3717,6 +4132,306 @@ TEST(DxgiProxyTest, AttachSwapChainDetoursResizeBuffersAndOverridesTargetResolut
 
     activeProxy.DetachAll();
     EXPECT_FALSE(activeProxy.IsDetourResizeBuffersInstalled());
+}
+
+// Desktop Mirror Window title (#196): while the mirror is off the game window's title says so and names
+// the command that restores it. These tests use a real window and read the title back.
+namespace {
+std::wstring WindowTitle(HWND hWnd) {
+    int length = GetWindowTextLengthW(hWnd);
+    std::wstring title(static_cast<size_t>(length) + 1, L'\0');
+    int copied = GetWindowTextW(hWnd, title.data(), length + 1);
+    title.resize(static_cast<size_t>(copied));
+    return title;
+}
+
+// A real top-level test window with a known title, handed to the proxy as the game window.
+struct MirrorTitleWindow {
+    explicit MirrorTitleWindow(MirrorPresentRig& rig, const char* title = "Farming Simulator 25") {
+        hWnd = CreateWindowA("STATIC", title, WS_OVERLAPPEDWINDOW, 0, 0, 640, 360, nullptr, nullptr, nullptr, nullptr);
+        EXPECT_NE(hWnd, nullptr);
+        rig.runtime->GetDxgiProxy().GetWindowController().SetGameHwnd(hWnd);
+    }
+    ~MirrorTitleWindow() {
+        if (hWnd) DestroyWindow(hWnd);
+    }
+    std::wstring Title() const { return WindowTitle(hWnd); }
+    HWND hWnd = nullptr;
+};
+
+bool TitleSaysMirrorIsOff(const std::wstring& title) {
+    return title.find(L"desktop mirror is off") != std::wstring::npos &&
+           title.find(L"vrDesktopMirror on") != std::wstring::npos;
+}
+} // namespace
+
+TEST(DxgiProxyTest, DesktopMirrorOffSetsATitleThatNamesTheCommandToRestoreIt) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title())) << "title was a different text";
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+}
+
+// #195 and #196 together: the frame that switches the mirror off sets the title and is also the one black
+// real Present; every Present after it is suppressed and the title stays.
+TEST(DxgiProxyTest, DesktopMirrorGoingOffSetsTheTitleAndPresentsExactlyOnceThenNone) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);  // the one black frame
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title())) << "title not set on the black frame";
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+        EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+    }
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsUntouchedWhileTheMirrorIsOn) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    for (int i = 0; i < 4; ++i) {
+        rig.Present();
+        EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+    }
+    // The game changes its own title while the mirror shows: the Injector leaves that alone.
+    SetWindowTextA(window.hWnd, "Farming Simulator 25 - map");
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25 - map");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTurnedOnRestoresTheKeptTitle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleKeepsTheFullLengthOfALongTitle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    const std::string longTitle = "Farming Simulator 25 - " + std::string(700, 'x') + " - end";
+    MirrorTitleWindow window(rig, longTitle.c_str());
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), std::wstring(longTitle.begin(), longTitle.end()));
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleBehavesTheSameInSequentialDualPassAndMenuFrames) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();  // sub-pass 0
+    rig.Present();  // sub-pass 1
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+    rig.vrBridge->SetMenuVisible(true);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheSessionStopsRunningAndSetAgainOnResume) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhileTheHeadsetIsAsleepAndLogsWhy) {
+    LogCapture capture("fs25vr_desktop_mirror_title_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);  // asleep: the session keeps running
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+    EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (headset not in use)"), std::string::npos)
+        << capture.Text();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredOnPassThroughDrop) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    rig.Present();
+    ASSERT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheHandshakeIsLost) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    // The savegame unloads: the Companion Mod's handshake is gone.
+    rig.vrBridge->SetCompanionActive(false);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheInjectorDetaches) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.runtime->GetDxgiProxy().DetachAll();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsNotChangedWhileTheMirrorShowsByItself) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    rig.Present();
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+// The game window can be unknown when the mirror goes off (it arrives with a later swapchain).
+TEST(DxgiProxyTest, DesktopMirrorOffTitleIsSetWhenTheGameWindowIsKnownOnlyAfterTheMirrorWentOff) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    rig.Present();
+
+    MirrorTitleWindow window(rig);
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title())) << "title never applied to the late window";
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+// The controller restores the old window's title when the game window changes; the mirror is still off.
+TEST(DxgiProxyTest, DesktopMirrorOffTitleMovesToTheNewGameWindowWhenTheWindowChangesWhileOff) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow oldWindow(rig, "Old Window");
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(oldWindow.Title()));
+
+    MirrorTitleWindow newWindow(rig, "New Window");
+    EXPECT_EQ(oldWindow.Title(), L"Old Window");
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(newWindow.Title())) << "title never applied to the new window";
+    EXPECT_EQ(oldWindow.Title(), L"Old Window");
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(newWindow.Title(), L"New Window");
+    EXPECT_EQ(oldWindow.Title(), L"Old Window");
+}
+
+namespace {
+size_t CountOf(const std::string& text, const std::string& needle) {
+    size_t count = 0;
+    for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) ++count;
+    return count;
+}
+} // namespace
+
+TEST(DxgiProxyTest, DesktopMirrorTransitionsAreLoggedOncePerChange) {
+    LogCapture capture("fs25vr_desktop_mirror_title_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+
+    rig.Present();
+    EXPECT_EQ(capture.Text().find("DxgiProxy: Desktop mirror"), std::string::npos) << capture.Text();
+
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), "DxgiProxy: Desktop mirror off"), 1u) << capture.Text();
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    const std::string log = capture.Text();
+    EXPECT_EQ(CountOf(log, "DxgiProxy: Desktop mirror on by command (vrDesktopMirror on)"), 1u) << log;
+    EXPECT_EQ(CountOf(log, "DxgiProxy: Desktop mirror off"), 1u) << log;
+}
+
+TEST(DxgiProxyTest, DesktopMirrorComingBackByItselfLogsTheReason) {
+    LogCapture capture("fs25vr_desktop_mirror_title_test.log");
+    {
+        MirrorPresentRig rig(VRRenderingMode::AFR);
+        MirrorTitleWindow window(rig);
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        rig.Present();
+        rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+        rig.Present();
+        EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (session not running)"), std::string::npos)
+            << capture.Text();
+    }
+    {
+        MirrorPresentRig rig(VRRenderingMode::AFR);
+        MirrorTitleWindow window(rig);
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        rig.Present();
+        rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+        rig.Present();
+        EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (Pass-Through Mode)"), std::string::npos)
+            << capture.Text();
+    }
+    {
+        MirrorPresentRig rig(VRRenderingMode::AFR);
+        MirrorTitleWindow window(rig);
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        rig.Present();
+        rig.vrBridge->SetCompanionActive(false);
+        rig.Present();
+        EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (Companion Mod handshake lost)"), std::string::npos)
+            << capture.Text();
+    }
 }
 
 } // namespace fs25vr

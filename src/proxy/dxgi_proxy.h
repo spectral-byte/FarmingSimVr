@@ -169,6 +169,24 @@ private:
     // advances the rendered-frame counter for it and discards camera records for any other Present.
     bool m_presentWasStereo = false;
     bool OnPresentImpl(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
+    // True while the Desktop Mirror Window is off right now: the player turned it off (VRBridge flag), the
+    // Companion Mod's handshake has completed, and the headset session runs with eye swapchains. Everywhere
+    // else (Pass-Through Mode, session not running, before the handshake) the mirror shows by itself.
+    bool IsDesktopMirrorOffNow() const;
+    // The decision at each Present that would reach DXGI: records it in m_lastPresentSuppressed and returns
+    // whether the game's real Present is called (false with the mirror off).
+    // A frame that goes from showing to off is the one exception: it presents once, black (see below).
+    bool ShouldCallRealPresent(ID3D12Resource* backBuffer);
+    // True while the Desktop Mirror Window showed at the last Present (on, or shown by itself); false once it switched off.
+    bool m_desktopMirrorWasShowing = false;
+    // If the mirror just went from showing to off: changes that state (it is now off), clears the back buffer to
+    // black (after the eye copy that already ran) and returns true so the real Present is called once. Else false.
+    bool ConsumeSwitchToOff(ID3D12Resource* backBuffer);
+    // After each Present: logs each change of IsDesktopMirrorOffNow() once, and keeps the game window's title
+    // matching it (off note whenever the mirror is off and the title is not shown, the kept title when it shows
+    // again). Leaves the title alone otherwise.
+    void UpdateDesktopMirrorTitle();
+    bool m_desktopMirrorOffAnnounced = false;
 
     IDXGISwapChain* m_cachedSwapChain = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;

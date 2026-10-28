@@ -996,6 +996,10 @@ void OpenXrManager::DestroyEyeSwapchains() {
     }
     m_copyFence.Reset();
     m_currentFenceValue = 0;
+    m_clearFenceValue = 0;
+    m_clearCommandList.Reset();
+    m_clearAllocator.Reset();
+    m_clearRtvHeap.Reset();
     for (uint32_t r = 0; r < kCopyRingSize; ++r) {
         m_copyFenceValues[r] = 0;
         m_copyCommandLists[r].Reset();
@@ -1160,6 +1164,19 @@ bool OpenXrManager::EndFrame() {
     return true;
 }
 
+void OpenXrManager::EnsureCopyFence() {
+    if (m_copyFence || !m_device) return;
+    m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_copyFence));
+    m_currentFenceValue = 0;
+    m_clearFenceValue = 0;
+    for (uint32_t r = 0; r < kCopyRingSize; ++r) {
+        m_copyFenceValues[r] = 0;
+    }
+    if (!m_copyFenceEvent.IsValid()) {
+        m_copyFenceEvent = ScopedEventHandle::Create(nullptr, FALSE, FALSE, nullptr);
+    }
+}
+
 bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backBuffer) {
     if (eyeIndex >= 2 || !m_hasEyeSwapchains) {
         return false;
@@ -1214,16 +1231,7 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
     // If backBuffer, device, and queue are present, perform D3D12 command list recording & execution
     if (backBuffer && m_device && m_queue) {
-        if (!m_copyFence) {
-            m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_copyFence));
-            m_currentFenceValue = 0;
-            for (uint32_t r = 0; r < kCopyRingSize; ++r) {
-                m_copyFenceValues[r] = 0;
-            }
-            if (!m_copyFenceEvent.IsValid()) {
-                m_copyFenceEvent = ScopedEventHandle::Create(nullptr, FALSE, FALSE, nullptr);
-            }
-        }
+        EnsureCopyFence();
 
         uint32_t ringSlot = m_copyRingIndex;
         m_copyRingIndex = (m_copyRingIndex + 1) % kCopyRingSize;
@@ -1338,6 +1346,68 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
     m_eyeSwapchains[eyeIndex].lastCopiedIndex = imageIndex;
     m_eyeSwapchains[eyeIndex].hasCopiedFrame = true;
+    return true;
+}
+
+bool OpenXrManager::ClearBackBufferToBlack(ID3D12Resource* backBuffer) {
+    if (!backBuffer || !m_device || !m_queue) {
+        return false;
+    }
+    EnsureCopyFence();
+    if (!m_copyFence) {
+        return false;
+    }
+
+    if (!m_clearAllocator) {
+        m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_clearAllocator));
+    }
+    if (!m_clearCommandList && m_clearAllocator) {
+        if (SUCCEEDED(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_clearAllocator.Get(), nullptr, IID_PPV_ARGS(&m_clearCommandList)))) {
+            m_clearCommandList->Close();
+        }
+    }
+    if (!m_clearRtvHeap) {
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+        heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        heapDesc.NumDescriptors = 1;
+        heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_clearRtvHeap));
+    }
+    if (!m_clearAllocator || !m_clearCommandList || !m_clearRtvHeap) {
+        return false;
+    }
+
+    // The previous clear's allocator is reusable only once the GPU has finished with it.
+    if (m_clearFenceValue > 0 && m_copyFence->GetCompletedValue() < m_clearFenceValue && m_copyFenceEvent.IsValid()) {
+        m_copyFence->SetEventOnCompletion(m_clearFenceValue, m_copyFenceEvent.Get());
+        WaitForSingleObject(m_copyFenceEvent.Get(), INFINITE);
+    }
+    m_clearAllocator->Reset();
+    m_clearCommandList->Reset(m_clearAllocator.Get(), nullptr);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_clearRtvHeap->GetCPUDescriptorHandleForHeapStart();
+    m_device->CreateRenderTargetView(backBuffer, nullptr, rtv);
+
+    // The game hands the back buffer to Present in the PRESENT state (as CopyBackBufferToEye assumes);
+    // it goes back to that state after the clear.
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = backBuffer;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_clearCommandList->ResourceBarrier(1, &barrier);
+    const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    m_clearCommandList->ClearRenderTargetView(rtv, black, 0, nullptr);
+    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+    m_clearCommandList->ResourceBarrier(1, &barrier);
+    m_clearCommandList->Close();
+
+    ID3D12CommandList* lists[] = { m_clearCommandList.Get() };
+    m_queue->ExecuteCommandLists(1, lists);
+    m_currentFenceValue++;
+    m_clearFenceValue = m_currentFenceValue;
+    m_queue->Signal(m_copyFence.Get(), m_currentFenceValue);
     return true;
 }
 
