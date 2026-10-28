@@ -156,5 +156,72 @@ test("MapUnloadEndsARunningTrace", function()
     assert(VRCompanion.perfTracing == false)
 end)
 
+-- The game's mission classes form a chain: the Mission00 subclass either inherits FSBaseMission's update
+-- or calls up to it. The mod wraps both, so the inner wrapper must pass straight through under AFR.
+local function countBegins(section)
+    local n = 0
+    for _, call in ipairs(_G.perfCalls) do
+        if call == "begin " .. section then n = n + 1 end
+    end
+    return n
+end
+
+local function withMissionChain(buildChain, fn)
+    local savedBase, savedM00 = _G.FSBaseMission, _G.Mission00
+    VRCompanion:unhookMissionUpdate()
+    local runs = { base = 0 }
+    buildChain(runs)
+    VRCompanion:hookMissionUpdate()
+    VRCompanion:consoleCommandPerfTrace("5")
+    _G.perfCalls = {}
+    local ok, err = pcall(fn, runs)
+    VRCompanion:consoleCommandPerfTrace("stop")
+    VRCompanion:unhookMissionUpdate()
+    _G.FSBaseMission, _G.Mission00 = savedBase, savedM00
+    VRCompanion:hookMissionUpdate()
+    assert(ok, tostring(err))
+end
+
+test("UnderAfrAnInheritedMissionUpdateRunsTheModLogicOnce", function()
+    withMissionChain(function(runs)
+        _G.FSBaseMission = { update = function(self, dt) runs.base = runs.base + 1 end }
+        _G.Mission00 = setmetatable({}, { __index = _G.FSBaseMission })
+    end, function(runs)
+        _G.Mission00.update({}, 16.6)
+        assert(runs.base == 1, "the game's update ran " .. runs.base .. " times")
+        assert(countBegins("gameUpdate") == 1, "game update samples: " .. calls())
+    end)
+end)
+
+test("UnderAfrASubclassCallingUpToTheBaseUpdateRunsTheModLogicOnce", function()
+    withMissionChain(function(runs)
+        _G.FSBaseMission = { update = function(self, dt) runs.base = runs.base + 1 end }
+        _G.Mission00 = { update = function(self, dt) _G.FSBaseMission.update(self, dt) end }
+    end, function(runs)
+        _G.Mission00.update({}, 16.6)
+        assert(runs.base == 1, "the game's update ran " .. runs.base .. " times")
+        assert(countBegins("gameUpdate") == 1, "game update samples: " .. calls())
+    end)
+end)
+
+test("UnderAfrAnErrorInTheGameUpdateStillClearsTheRunningMark", function()
+    withMissionChain(function(runs)
+        _G.FSBaseMission = {
+            update = function(self, dt)
+                runs.base = runs.base + 1
+                if runs.base == 1 then error("game update failed") end
+            end,
+        }
+        _G.Mission00 = setmetatable({}, { __index = _G.FSBaseMission })
+    end, function(runs)
+        local ok, err = pcall(_G.Mission00.update, {}, 16.6)
+        assert(not ok and string.find(tostring(err), "game update failed", 1, true), "the error reaches the engine: " .. tostring(err))
+        _G.perfCalls = {}
+        _G.Mission00.update({}, 16.6)
+        assert(runs.base == 2, "the next update ran the game's update")
+        assert(countBegins("gameUpdate") == 1, "the next update still runs the mod logic: " .. calls())
+    end)
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 assert(failed == 0, string.format("%d tests failed in test_perf_trace.luau", failed))

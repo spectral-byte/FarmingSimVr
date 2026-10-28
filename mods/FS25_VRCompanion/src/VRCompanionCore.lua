@@ -544,50 +544,52 @@ function VRCompanion:hookEnterable()
     end
 end
 
-function VRCompanion:hookVehicleSpeed()
-    if self.origVehicleSpeedFuncs == nil then
-        self.origVehicleSpeedFuncs = {}
+-- Wraps target.updateVehicleSpeed with the dt=0 guard. Vehicle instances keep their
+-- original in a weak-keyed table so a vehicle that is gone can be collected; classes are
+-- kept strongly (they live as long as the game).
+function VRCompanion:hookTableSpeed(target, label)
+    if target == nil or type(target.updateVehicleSpeed) ~= "function" then
+        return
     end
-
-    local function hookTableSpeed(target, label)
-        if target == nil or type(target.updateVehicleSpeed) ~= "function" then
-            return
-        end
-        if self.origVehicleSpeedFuncs[target] ~= nil then
-            return
-        end
-        local origFn = target.updateVehicleSpeed
+    if self.origVehicleSpeedFuncs[target] ~= nil or self.origClassSpeedFuncs[target] ~= nil then
+        return
+    end
+    local origFn = target.updateVehicleSpeed
+    if label then
+        self.origClassSpeedFuncs[target] = origFn
+    else
         self.origVehicleSpeedFuncs[target] = origFn
-        target.updateVehicleSpeed = function(vehSelf, dt, ...)
-            if dt == nil or dt <= 0.00001 then
-                return
-            end
-            return origFn(vehSelf, dt, ...)
+    end
+    target.updateVehicleSpeed = function(vehSelf, dt, ...)
+        if dt == nil or dt <= 0.00001 then
+            return
         end
-        if label then
-            print(string.format("[FS25_VR] Hooked %s.updateVehicleSpeed for dt=0 guard.", label))
-        end
+        return origFn(vehSelf, dt, ...)
+    end
+    if label then
+        print(string.format("[FS25_VR] Hooked %s.updateVehicleSpeed for dt=0 guard.", label))
+    end
+end
+
+-- Installs the dt=0 guards on the named classes, the mission's vehicles and Ferry.
+-- scanGlobals additionally walks every global table for classes with updateVehicleSpeed,
+-- which only the map load install does: it is too slow to repeat during play.
+function VRCompanion:installVehicleSpeedGuards(scanGlobals)
+    if self.origVehicleSpeedFuncs == nil then
+        self.origVehicleSpeedFuncs = setmetatable({}, { __mode = "k" })
+    end
+    if self.origClassSpeedFuncs == nil then
+        self.origClassSpeedFuncs = {}
     end
 
-    local vehClass = Vehicle or (_G and _G.Vehicle)
-    if vehClass ~= nil and type(vehClass.updateVehicleSpeed) == "function" and self.origVehicleUpdateVehicleSpeed == nil then
-        self.origVehicleUpdateVehicleSpeed = vehClass.updateVehicleSpeed
-    end
-    hookTableSpeed(vehClass, "Vehicle")
+    self:hookTableSpeed(Vehicle or (_G and _G.Vehicle), "Vehicle")
+    self:hookTableSpeed(RailroadVehicle or (_G and _G.RailroadVehicle), "RailroadVehicle")
+    self:hookTableSpeed(Locomotive or (_G and _G.Locomotive), "Locomotive")
 
-    local rrClass = RailroadVehicle or (_G and _G.RailroadVehicle)
-    hookTableSpeed(rrClass, "RailroadVehicle")
-
-    local locoClass = Locomotive or (_G and _G.Locomotive)
-    hookTableSpeed(locoClass, "Locomotive")
-
-    -- Scan _G for any classes/tables with updateVehicleSpeed
-    if _G ~= nil then
+    if scanGlobals and _G ~= nil then
         for name, val in pairs(_G) do
-            if type(name) == "string" and type(val) == "table" and type(val.updateVehicleSpeed) == "function" then
-                if self.origVehicleSpeedFuncs[val] == nil then
-                    hookTableSpeed(val, name)
-                end
+            if type(name) == "string" and type(val) == "table" then
+                self:hookTableSpeed(val, name)
             end
         end
     end
@@ -596,10 +598,8 @@ function VRCompanion:hookVehicleSpeed()
     local mission = g_currentMission or (_G and _G.g_currentMission)
     if mission ~= nil and mission.vehicles ~= nil then
         for _, veh in pairs(mission.vehicles) do
-            if type(veh) == "table" and type(veh.updateVehicleSpeed) == "function" then
-                if self.origVehicleSpeedFuncs[veh] == nil then
-                    hookTableSpeed(veh, nil)
-                end
+            if type(veh) == "table" then
+                self:hookTableSpeed(veh, nil)
             end
         end
     end
@@ -621,21 +621,26 @@ function VRCompanion:hookVehicleSpeed()
     self.lastVehicleSpeedHookTick = self.frameTicks or 0
 end
 
+-- Map load install: also finds custom vehicle classes among the globals.
+function VRCompanion:hookVehicleSpeed()
+    self:installVehicleSpeedGuards(true)
+end
+
+-- Retry cadence and vehicle transitions: named classes and the mission's vehicles only.
+function VRCompanion:refreshVehicleSpeedGuards()
+    self:installVehicleSpeedGuards(false)
+end
+
 function VRCompanion:unhookVehicleSpeed()
-    if self.origVehicleSpeedFuncs ~= nil then
-        for target, origFn in pairs(self.origVehicleSpeedFuncs) do
+    for _, originals in ipairs({ self.origVehicleSpeedFuncs or {}, self.origClassSpeedFuncs or {} }) do
+        for target, origFn in pairs(originals) do
             if target ~= nil and origFn ~= nil then
                 target.updateVehicleSpeed = origFn
             end
         end
-        self.origVehicleSpeedFuncs = {}
     end
-
-    local vehClass = Vehicle or (_G and _G.Vehicle)
-    if self.origVehicleUpdateVehicleSpeed ~= nil and vehClass ~= nil then
-        vehClass.updateVehicleSpeed = self.origVehicleUpdateVehicleSpeed
-        self.origVehicleUpdateVehicleSpeed = nil
-    end
+    self.origVehicleSpeedFuncs = nil
+    self.origClassSpeedFuncs = nil
 
     local ferryClass = Ferry or (_G and _G.Ferry)
     if self.origFerryUpdatePosition ~= nil and ferryClass ~= nil then
@@ -713,6 +718,7 @@ end
 local function endOutermostFrameChecks(self, ok, ...)
     self:resetFrameChecks()
     if not ok then
+        self.inMissionUpdate = false
         error((...), 0)
     end
     return ...
@@ -737,6 +743,12 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     return runWithFrameChecks(self, self.runMissionUpdate, missionSelf, dt, origUpdateFn, ...)
 end
 
+-- Clears the running mark after the game's update returned, and passes on its results.
+local function endAfrGameUpdate(self, ...)
+    self.inMissionUpdate = false
+    return ...
+end
+
 function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
     local isSequentialDualPass = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS)
@@ -749,11 +761,15 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         self.deferRenderingCameraBind = false
         self:endEyeProjectionScope()
         self:releaseDualPassPhysicsPause()
+        -- The game's update runs marked as running, so a second wrapper further down the
+        -- class chain passes straight through and the mod's update logic runs once. An error
+        -- skips the clear here; the outermost frame-check scope clears it.
+        self.inMissionUpdate = true
         if self.perfTracing then
             self:perfTraceBegin("gameUpdate")
-            return self:perfTraceEnd("gameUpdate", origUpdateFn(missionSelf, dt, ...))
+            return endAfrGameUpdate(self, self:perfTraceEnd("gameUpdate", origUpdateFn(missionSelf, dt, ...)))
         end
-        return origUpdateFn(missionSelf, dt, ...)
+        return endAfrGameUpdate(self, origUpdateFn(missionSelf, dt, ...))
     end
 
     local rawDt = dt or 0.0
@@ -1007,8 +1023,10 @@ function VRCompanion:runUpdate(dt)
     -- spawned vehicles) on a slow cadence or on a vehicle transition, never every frame.
     local speedHookRetryDue = self.vehicleSpeedHooked
         and (self.frameTicks - (self.lastVehicleSpeedHookTick or 0)) >= self.VEHICLE_SPEED_HOOK_RETRY_TICKS
-    if not self.vehicleSpeedHooked or speedHookRetryDue then
+    if not self.vehicleSpeedHooked then
         self:hookVehicleSpeed()
+    elseif speedHookRetryDue then
+        self:refreshVehicleSpeedGuards()
     end
 
     -- Update physical IPD-scaled HUD convergence parity across alternating AFR frames
@@ -1029,7 +1047,7 @@ function VRCompanion:runUpdate(dt)
         local oldVeh = self.lastControlledVehicle
         self.lastControlledVehicle = curVehicle
         -- A new vehicle may have just been spawned/entered: re-run the guard install.
-        self:hookVehicleSpeed()
+        self:refreshVehicleSpeedGuards()
         if type(self.onVehicleTransition) == "function" then
             self:onVehicleTransition(oldVeh, curVehicle)
         end
@@ -1175,19 +1193,11 @@ function VRCompanion:deleteMap()
     self.activeFillLevelsDisplay = nil
     self.passThroughMode = nil
     self.headTrackingEnabled = true
-    self.hudToggleActionEventId = nil
-    self.recenterActionEventId = nil
-    self.snapLeftActionEventId = nil
-    self.snapRightActionEventId = nil
-    self.toggleViewActionEventId = nil
-    self.seatSetActionEventId = nil
+    for _, row in ipairs(self.ACTION_EVENTS) do
+        self[row.idField] = nil
+        self[row.loggedField] = false
+    end
     self.actionEventsContextName = nil
-    self.hudToggleLoggedOnce = false
-    self.recenterLoggedOnce = false
-    self.snapLeftLoggedOnce = false
-    self.snapRightLoggedOnce = false
-    self.toggleViewLoggedOnce = false
-    self.seatSetLoggedOnce = false
     if type(self.resetToggleViewDebounce) == "function" then
         self:resetToggleViewDebounce()
     end

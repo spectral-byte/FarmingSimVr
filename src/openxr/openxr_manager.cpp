@@ -11,25 +11,6 @@
 
 namespace fs25vr {
 
-// The performance counter frequency is fixed at boot, so it is queried once.
-static int64_t QpcFrequency() {
-    static const int64_t freq = [] {
-        LARGE_INTEGER f;
-        QueryPerformanceFrequency(&f);
-        return static_cast<int64_t>(f.QuadPart);
-    }();
-    return freq;
-}
-
-int64_t OpenXrManager::PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency) {
-    if (frequency <= 0) return 0;
-    // Split into whole seconds and a sub-second remainder: counter * 1e9 overflows int64 after
-    // ~15 minutes of uptime at a 10 MHz counter.
-    const int64_t seconds = counter / frequency;
-    const int64_t remainder = counter % frequency;
-    return seconds * 1000000000LL + (remainder * 1000000000LL) / frequency;
-}
-
 void OpenXrManager::SetPerformanceCounterSource(PerformanceCounterSource source) {
     m_counterSource = std::move(source);
 }
@@ -66,7 +47,7 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
     if (m_lastPredictedDisplayTime != 0) {
         int64_t elapsedQpc = now.counter - m_lastPredictedQpc;
         if (elapsedQpc > 0 && now.frequency > 0) {
-            return m_lastPredictedDisplayTime + PerformanceCounterToNanoseconds(elapsedQpc, now.frequency);
+            return m_lastPredictedDisplayTime + QpcTicksToNanoseconds(elapsedQpc, now.frequency);
         }
         return m_lastPredictedDisplayTime;
     }
@@ -84,7 +65,7 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
 
     // No runtime conversion: the counter in nanoseconds, computed without overflow. Runtimes that
     // back XrTime with the performance counter share this time base, and the counter is monotonic.
-    return PerformanceCounterToNanoseconds(now.counter, now.frequency);
+    return QpcTicksToNanoseconds(now.counter, now.frequency);
 }
 
 OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
@@ -305,6 +286,9 @@ void OpenXrManager::Shutdown() {
     m_eyeProjections[1] = {};
     m_viewConfigViews.clear();
     m_submittedQuadFrameCount = 0;
+    m_lastLoggedIpd = 0.0f;
+    m_loggedEyeCopySizeMismatch = false;
+    m_headPoseLocateFailures = 0;
     m_hasCustomMenuQuadSize = false;
     m_menuQuadDistance = 1.5f;
     m_lastSubmittedQuadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
@@ -617,8 +601,7 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
     XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
     XrResult res = m_dispatch->LocateSpace(m_viewSpace, m_localSpace, time, &location);
     if (XR_FAILED(res)) {
-        static uint32_t s_locateFailCount = 0;
-        if (++s_locateFailCount % 300 == 1) {
+        if (++m_headPoseLocateFailures % 300 == 1) {
             LogWarn("OpenXrManager::PollHeadPose: LocateSpace failed (result " + std::to_string(res) + ")");
         }
         return m_lastPose;
@@ -805,9 +788,8 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
             m_ipd = measuredIpd;
         }
 
-        static float s_lastLoggedIpd = 0.0f;
-        if (std::abs(m_ipd - s_lastLoggedIpd) > 0.002f) {
-            s_lastLoggedIpd = m_ipd;
+        if (std::abs(m_ipd - m_lastLoggedIpd) > 0.002f) {
+            m_lastLoggedIpd = m_ipd;
             std::stringstream ss;
             ss << "OpenXrManager: Calibrated hardware IPD = " << (m_ipd * 1000.0f) << " mm"
                << " (View0 pos: " << views[0].pose.position.x << ", " << views[0].pose.position.y << ", " << views[0].pose.position.z << ")"
@@ -1246,10 +1228,9 @@ void OpenXrManager::ReadCopyTimestamps(uint32_t ringSlot) {
     if (m_copiesSinceCalibration++ % 64 == 0) {
         UINT64 gpuTicks = 0;
         UINT64 cpuQpc = 0;
-        LARGE_INTEGER qpcFrequency{};
-        if (SUCCEEDED(m_queue->GetClockCalibration(&gpuTicks, &cpuQpc)) && QueryPerformanceFrequency(&qpcFrequency)) {
+        if (SUCCEEDED(m_queue->GetClockCalibration(&gpuTicks, &cpuQpc))) {
             m_gpuCalibrationTicks = gpuTicks;
-            m_gpuCalibrationCpuNs = QpcTicksToNanoseconds(static_cast<int64_t>(cpuQpc), qpcFrequency.QuadPart);
+            m_gpuCalibrationCpuNs = QpcTicksToNanoseconds(static_cast<int64_t>(cpuQpc), QpcFrequency());
         }
     }
     PerfTrace& trace = PerfTrace::Instance();
@@ -1259,6 +1240,16 @@ void OpenXrManager::ReadCopyTimestamps(uint32_t ringSlot) {
                                                              m_gpuCalibrationCpuNs);
         trace.AddSample(PerfSection::GpuQueueLag, startNs - m_copySubmitNs[ringSlot]);
     }
+}
+
+void OpenXrManager::LogEyeCopySizeMismatchOnce(uint64_t srcWidth, uint32_t srcHeight, uint64_t dstWidth, uint32_t dstHeight) {
+    if (m_loggedEyeCopySizeMismatch) {
+        return;
+    }
+    m_loggedEyeCopySizeMismatch = true;
+    LogWarn("OpenXrManager::CopyBackBufferToEye: Dimension mismatch! BackBuffer: " +
+            std::to_string(srcWidth) + "x" + std::to_string(srcHeight) +
+            ", OpenXR swapchain: " + std::to_string(dstWidth) + "x" + std::to_string(dstHeight));
 }
 
 bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backBuffer) {
@@ -1391,13 +1382,7 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
                     curCommandList->CopyResource(destTexture, backBuffer);
                 } else {
                     D3D12_RESOURCE_DESC dstDesc = destTexture->GetDesc();
-                    static bool loggedMismatch = false;
-                    if (!loggedMismatch) {
-                        LogWarn("OpenXrManager::CopyBackBufferToEye: Dimension mismatch! BackBuffer: " +
-                                std::to_string(srcDesc.Width) + "x" + std::to_string(srcDesc.Height) +
-                                ", OpenXR swapchain: " + std::to_string(dstDesc.Width) + "x" + std::to_string(dstDesc.Height));
-                        loggedMismatch = true;
-                    }
+                    LogEyeCopySizeMismatchOnce(srcDesc.Width, srcDesc.Height, dstDesc.Width, dstDesc.Height);
                     D3D12_TEXTURE_COPY_LOCATION dstLoc{};
                     dstLoc.pResource = destTexture;
                     dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;

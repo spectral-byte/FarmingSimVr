@@ -64,6 +64,13 @@ void LuauTestRunner::InitializeEnvironment() {
     lua_pushcfunction(L_, &LuauLoadCompanionMod, "loadCompanionMod");
     lua_setglobal(L_, "loadCompanionMod");
 
+    // Luau has no collectgarbage; weak-table tests need a forced full collection
+    lua_pushcfunction(L_, [](lua_State* L) -> int {
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        return 0;
+    }, "collectgarbage");
+    lua_setglobal(L_, "collectgarbage");
+
     // Register require (supporting @lune/fs)
     lua_pushlightuserdata(L_, this);
     lua_pushcclosure(L_, &LuauRequire, "require", 1);
