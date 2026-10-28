@@ -1183,19 +1183,11 @@ function VRCompanion:deleteMap()
     self.activeFillLevelsDisplay = nil
     self.passThroughMode = nil
     self.headTrackingEnabled = true
-    self.hudToggleActionEventId = nil
-    self.recenterActionEventId = nil
-    self.snapLeftActionEventId = nil
-    self.snapRightActionEventId = nil
-    self.toggleViewActionEventId = nil
-    self.seatSetActionEventId = nil
+    for _, row in ipairs(self.ACTION_EVENTS) do
+        self[row.idField] = nil
+        self[row.loggedField] = false
+    end
     self.actionEventsContextName = nil
-    self.hudToggleLoggedOnce = false
-    self.recenterLoggedOnce = false
-    self.snapLeftLoggedOnce = false
-    self.snapRightLoggedOnce = false
-    self.toggleViewLoggedOnce = false
-    self.seatSetLoggedOnce = false
     if type(self.resetToggleViewDebounce) == "function" then
         self:resetToggleViewDebounce()
     end
