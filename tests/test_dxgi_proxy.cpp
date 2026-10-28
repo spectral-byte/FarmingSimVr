@@ -2,6 +2,7 @@
 #include "proxy/dxgi_proxy.h"
 #include "core/dll_lifecycle.h"
 #include "core/injector_runtime.h"
+#include "core/logger.h"
 #include "proxy/system_dxgi.h"
 #include "openxr/openxr_manager.h"
 #include "fake_openxr_events.h"
@@ -13,6 +14,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <cstring>
 #include <future>
 #include <thread>
@@ -3089,6 +3093,88 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiv
         auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
         EXPECT_NO_THROW(DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr));
     }
+}
+
+// Swapchain descriptor logging: the log is the only record of how the game asked for its swapchain.
+namespace {
+class SwapChainLogCapture {
+public:
+    SwapChainLogCapture() : m_path(std::filesystem::temp_directory_path() / "fs25vr_swapchain_desc_test.log") {
+        Logger::Instance().SetLogFile(m_path);
+    }
+    ~SwapChainLogCapture() {
+        Logger::Instance().SetLogFile(Logger::DefaultLogPath());
+        std::filesystem::remove(m_path);
+    }
+    std::string Text() const {
+        Logger::Instance().Flush();
+        std::ifstream file(m_path);
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    }
+private:
+    std::filesystem::path m_path;
+};
+} // namespace
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainLogsRequestedAndPassedOnDescriptor) {
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+    SwapChainLogCapture capture;
+
+    DXGI_SWAP_CHAIN_DESC desc{};
+    desc.BufferDesc.Width = 3840;
+    desc.BufferDesc.Height = 2160;
+    desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.BufferCount = 3;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    desc.Windowed = FALSE;
+
+    DxgiProxy::Intercept_CreateSwapChain(nullptr, nullptr, &desc, nullptr);
+
+    const std::string log = capture.Text();
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChain requested: 3840x2160 format=28 buffers=3 "
+                       "swapEffect=FLIP_DISCARD(4) flags=0x840 (ALLOW_TEARING|FRAME_LATENCY_WAITABLE_OBJECT) "
+                       "samples=1 modeScaling=0 windowed=0"), std::string::npos) << log;
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChain passed on: 3840x2160 format=28 buffers=3 "
+                       "swapEffect=FLIP_DISCARD(4) flags=0x840 (ALLOW_TEARING|FRAME_LATENCY_WAITABLE_OBJECT) "
+                       "samples=1 modeScaling=0 windowed=1"), std::string::npos) << log;
+}
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndLogsRequestedAndPassedOnDescriptor) {
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+    SwapChainLogCapture capture;
+
+    DXGI_SWAP_CHAIN_DESC1 desc{};
+    desc.Width = 2560;
+    desc.Height = 1440;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.BufferCount = 2;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    desc.Scaling = DXGI_SCALING_NONE;
+    desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
+    fullscreenDesc.Windowed = FALSE;
+
+    DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, &desc, &fullscreenDesc, nullptr, nullptr);
+
+    const std::string log = capture.Text();
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChainForHwnd requested: 2560x1440 format=28 buffers=2 "
+                       "swapEffect=FLIP_SEQUENTIAL(3) flags=0x800 (ALLOW_TEARING) samples=1 "
+                       "scaling=NONE(1) alphaMode=3 windowed=0"), std::string::npos) << log;
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChainForHwnd passed on: 2560x1440 format=28 buffers=2 "
+                       "swapEffect=FLIP_SEQUENTIAL(3) flags=0x800 (ALLOW_TEARING) samples=1 "
+                       "scaling=STRETCH(0) alphaMode=3 windowed=1"), std::string::npos) << log;
 }
 
 TEST(DxgiProxyTest, ClampedWindowRestoresFullNormalizedMouseRangeAcrossEdges) {
