@@ -19,3 +19,11 @@ Expected resource states per the OpenXR D3D12 extension:
 The negotiated eye swapchain format must be in the same format family as the back buffer
 (UNORM/sRGB variants allowed). If the runtime offers none, the Injector logs an error and
 stays in Pass-Through Mode.
+
+## Automated check on a WARP device
+
+`OpenXrEyeCopyD3D12Test.EyeCopyOnARealDeviceReportsNoDebugLayerErrors` (`tests/test_openxr_eye_copy_d3d12.cpp`) runs the
+eye copy against a real D3D12 device on the WARP adapter with the debug layer on, and fails on any error the layer
+reports. It copies more frames than the copy ring has slots, recreates the eye swapchains, and runs a copy with no
+destination texture. It skips when the debug layer is not installed (the Windows optional feature Graphics Tools), so
+the manual check above stays the fallback on such a machine.

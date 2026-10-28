@@ -1321,13 +1321,23 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
             m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_copyAllocators[ringSlot]));
         }
         if (!m_copyCommandLists[ringSlot] && m_copyAllocators[ringSlot]) {
-            m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_copyAllocators[ringSlot].Get(), nullptr, IID_PPV_ARGS(&m_copyCommandLists[ringSlot]));
+            // A new list is created open. Close it so every use starts from a closed list that can be reset.
+            if (SUCCEEDED(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_copyAllocators[ringSlot].Get(), nullptr, IID_PPV_ARGS(&m_copyCommandLists[ringSlot])))) {
+                m_copyCommandLists[ringSlot]->Close();
+            }
         }
 
         auto& curAllocator = m_copyAllocators[ringSlot];
         auto& curCommandList = m_copyCommandLists[ringSlot];
 
-        if (curCommandList && curAllocator) {
+        // A copy with no destination texture records nothing: the slot's list stays closed, nothing is
+        // executed and its fence value is not advanced.
+        ID3D12Resource* destTexture = nullptr;
+        if (imageIndex < m_eyeSwapchains[eyeIndex].images.size()) {
+            destTexture = m_eyeSwapchains[eyeIndex].images[imageIndex].texture;
+        }
+
+        if (curCommandList && curAllocator && destTexture) {
             // Synchronize with previous execution on this specific ring slot if GPU has not finished it
             uint64_t waitVal = m_copyFenceValues[ringSlot];
             {
@@ -1345,87 +1355,81 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
             ReadCopyTimestamps(ringSlot);
             const bool timed = PerfTrace::Instance().IsActive() && EnsureCopyTimestamps();
 
+            // The slot's fence has passed, so the allocator is idle; its list is closed, so it can be reset.
             curAllocator->Reset();
             curCommandList->Reset(curAllocator.Get(), nullptr);
 
-            ID3D12Resource* destTexture = nullptr;
-            if (imageIndex < m_eyeSwapchains[eyeIndex].images.size()) {
-                destTexture = m_eyeSwapchains[eyeIndex].images[imageIndex].texture;
+            D3D12_RESOURCE_BARRIER barriers[2]{};
+            barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barriers[0].Transition.pResource = backBuffer;
+            barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+            barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barriers[1].Transition.pResource = destTexture;
+            // OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be
+            // returned to RENDER_TARGET before release.
+            barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+            if (timed) {
+                curCommandList->EndQuery(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2);
+            }
+            curCommandList->ResourceBarrier(2, barriers);
+
+            uint32_t scWidth = m_eyeSwapchains[eyeIndex].width;
+            uint32_t scHeight = m_eyeSwapchains[eyeIndex].height;
+
+            D3D12_RESOURCE_DESC srcDesc = backBuffer->GetDesc();
+            if (srcDesc.Width == scWidth && srcDesc.Height == scHeight) {
+                curCommandList->CopyResource(destTexture, backBuffer);
+            } else {
+                D3D12_RESOURCE_DESC dstDesc = destTexture->GetDesc();
+                LogEyeCopySizeMismatchOnce(srcDesc.Width, srcDesc.Height, dstDesc.Width, dstDesc.Height);
+                D3D12_TEXTURE_COPY_LOCATION dstLoc{};
+                dstLoc.pResource = destTexture;
+                dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                dstLoc.SubresourceIndex = 0;
+
+                D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+                srcLoc.pResource = backBuffer;
+                srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                srcLoc.SubresourceIndex = 0;
+
+                D3D12_BOX box{};
+                box.left = 0;
+                box.top = 0;
+                box.front = 0;
+                box.right = static_cast<UINT>(std::min(srcDesc.Width, static_cast<UINT64>(dstDesc.Width)));
+                box.bottom = static_cast<UINT>(std::min(srcDesc.Height, dstDesc.Height));
+                box.back = 1;
+
+                curCommandList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &box);
             }
 
-            if (destTexture) {
-                D3D12_RESOURCE_BARRIER barriers[2]{};
-                barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                barriers[0].Transition.pResource = backBuffer;
-                barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-                barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-                barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            std::swap(barriers[0].Transition.StateBefore, barriers[0].Transition.StateAfter);
+            std::swap(barriers[1].Transition.StateBefore, barriers[1].Transition.StateAfter);
+            curCommandList->ResourceBarrier(2, barriers);
+            if (timed) {
+                curCommandList->EndQuery(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2 + 1);
+                curCommandList->ResolveQueryData(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2, 2,
+                                                 m_copyTimestampReadback.Get(), ringSlot * 2 * sizeof(uint64_t));
+            }
 
-                barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                barriers[1].Transition.pResource = destTexture;
-                // OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be
-                // returned to RENDER_TARGET before release.
-                barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-                barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-                barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            curCommandList->Close();
+            ID3D12CommandList* lists[] = { curCommandList.Get() };
+            if (timed) {
+                m_copySubmitNs[ringSlot] = PerfTrace::Instance().Now();
+            }
+            m_queue->ExecuteCommandLists(1, lists);
 
-                if (timed) {
-                    curCommandList->EndQuery(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2);
-                }
-                curCommandList->ResourceBarrier(2, barriers);
-
-                uint32_t scWidth = m_eyeSwapchains[eyeIndex].width;
-                uint32_t scHeight = m_eyeSwapchains[eyeIndex].height;
-
-                D3D12_RESOURCE_DESC srcDesc = backBuffer->GetDesc();
-                if (srcDesc.Width == scWidth && srcDesc.Height == scHeight) {
-                    curCommandList->CopyResource(destTexture, backBuffer);
-                } else {
-                    D3D12_RESOURCE_DESC dstDesc = destTexture->GetDesc();
-                    LogEyeCopySizeMismatchOnce(srcDesc.Width, srcDesc.Height, dstDesc.Width, dstDesc.Height);
-                    D3D12_TEXTURE_COPY_LOCATION dstLoc{};
-                    dstLoc.pResource = destTexture;
-                    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                    dstLoc.SubresourceIndex = 0;
-
-                    D3D12_TEXTURE_COPY_LOCATION srcLoc{};
-                    srcLoc.pResource = backBuffer;
-                    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                    srcLoc.SubresourceIndex = 0;
-
-                    D3D12_BOX box{};
-                    box.left = 0;
-                    box.top = 0;
-                    box.front = 0;
-                    box.right = static_cast<UINT>(std::min(srcDesc.Width, static_cast<UINT64>(dstDesc.Width)));
-                    box.bottom = static_cast<UINT>(std::min(srcDesc.Height, dstDesc.Height));
-                    box.back = 1;
-
-                    curCommandList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &box);
-                }
-
-                std::swap(barriers[0].Transition.StateBefore, barriers[0].Transition.StateAfter);
-                std::swap(barriers[1].Transition.StateBefore, barriers[1].Transition.StateAfter);
-                curCommandList->ResourceBarrier(2, barriers);
-                if (timed) {
-                    curCommandList->EndQuery(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2 + 1);
-                    curCommandList->ResolveQueryData(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2, 2,
-                                                     m_copyTimestampReadback.Get(), ringSlot * 2 * sizeof(uint64_t));
-                }
-
-                curCommandList->Close();
-                ID3D12CommandList* lists[] = { curCommandList.Get() };
-                if (timed) {
-                    m_copySubmitNs[ringSlot] = PerfTrace::Instance().Now();
-                }
-                m_queue->ExecuteCommandLists(1, lists);
-
-                if (m_copyFence) {
-                    m_currentFenceValue++;
-                    m_copyFenceValues[ringSlot] = m_currentFenceValue;
-                    m_queue->Signal(m_copyFence.Get(), m_currentFenceValue);
-                    m_copyTimestampPending[ringSlot] = timed;
-                }
+            if (m_copyFence) {
+                m_currentFenceValue++;
+                m_copyFenceValues[ringSlot] = m_currentFenceValue;
+                m_queue->Signal(m_copyFence.Get(), m_currentFenceValue);
+                m_copyTimestampPending[ringSlot] = timed;
             }
         }
     }
