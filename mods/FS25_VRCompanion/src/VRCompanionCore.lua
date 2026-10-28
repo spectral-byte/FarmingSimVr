@@ -382,18 +382,21 @@ VRCompanion.STEREO_DIALOGS = {
 -- its controller object and whose buttons and position later tickets work on), or nil. A dialog opened over a screen (the pause
 -- menu sets g_gui.currentGuiName; a dialog does not) or over another dialog is not alone, and anything that cannot be read as
 -- a lone listed dialog counts as a menu, so that the player is never left in stereo with a GUI they cannot use.
+-- The GUI fields read in one protected call. Defined once, so that polling a menu every update makes no closure.
+local function readLoneStereoDialog(gui)
+    local screen = gui.currentGuiName
+    if screen ~= nil and screen ~= "" then return nil end
+    local dialogs = gui.dialogs
+    if type(dialogs) ~= "table" or #dialogs ~= 1 then return nil end
+    local name = gui.currentDialogName
+    if type(name) ~= "string" or VRCompanion.STEREO_DIALOGS[name] ~= true then return nil end
+    return dialogs[1]
+end
+
 function VRCompanion:findStereoDialog(gui)
     gui = gui or g_gui or _G.g_gui
     if type(gui) ~= "table" then return nil end
-    local ok, root = pcall(function()
-        local screen = gui.currentGuiName
-        if screen ~= nil and screen ~= "" then return nil end
-        local dialogs = gui.dialogs
-        if type(dialogs) ~= "table" or #dialogs ~= 1 then return nil end
-        local name = gui.currentDialogName
-        if type(name) ~= "string" or self.STEREO_DIALOGS[name] ~= true then return nil end
-        return dialogs[1]
-    end)
+    local ok, root = pcall(readLoneStereoDialog, gui)
     return ok and root or nil
 end
 
