@@ -2,6 +2,7 @@
 #include "openxr/openxr_manager.h"
 #include "core/dll_lifecycle.h"
 #include "core/logger.h"
+#include "core/perf_trace.h"
 #include "fake_openxr_tracking.h"
 #include "luau/vr_bridge.h"
 #include "fake_openxr_events.h"
@@ -580,14 +581,6 @@ bool Contains(const std::vector<std::string>& v, const char* name) {
 }
 }  // namespace
 
-TEST(OpenXrManagerTest, PerformanceCounterToNanosecondsDoesNotOverflowForDaysOfUptime) {
-    // counter * 1e9 would be ~4.3e22 here, far beyond int64.
-    EXPECT_EQ(OpenXrManager::PerformanceCounterToNanoseconds(kDaysOfUptimeCounter, kTenMhz),
-              5LL * 24 * 3600 * 1000000000LL);
-    EXPECT_EQ(OpenXrManager::PerformanceCounterToNanoseconds(kDaysOfUptimeCounter + 5, kTenMhz),
-              5LL * 24 * 3600 * 1000000000LL + 500);
-}
-
 TEST(OpenXrManagerTest, EnablesTimeConversionExtensionWhenRuntimeOffersIt) {
     auto dispatch = std::make_shared<MockOpenXrDispatch>();
     dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME,
@@ -620,7 +613,7 @@ TEST(OpenXrManagerTest, InitializeSucceedsWithoutTimeConversionExtensionAndFallb
 
     // The counter in nanoseconds, the time base of runtimes that back XrTime with it.
     XrTime t0 = manager.GetCurrentXrTime();
-    EXPECT_EQ(t0, OpenXrManager::PerformanceCounterToNanoseconds(kDaysOfUptimeCounter, kTenMhz));
+    EXPECT_EQ(t0, QpcTicksToNanoseconds(kDaysOfUptimeCounter, kTenMhz));
     EXPECT_GT(t0, 0);
     counter += kTenMhz / 2;  // half a second later
     XrTime t1 = manager.GetCurrentXrTime();

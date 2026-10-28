@@ -4,7 +4,12 @@
 #include "lua.h"
 #include "lualib.h"
 #include "luacode.h"
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
+#include <memory>
+#include <thread>
+#include <windows.h>
 #include <string>
 #include <vector>
 
@@ -50,6 +55,17 @@ TEST(PerfTraceMathTest, PerformanceCounterTicksBecomeNanosecondsWithoutOverflow)
     const int64_t tenYears = 10000000LL * 60 * 60 * 24 * 365 * 10;
     EXPECT_EQ(fs25vr::QpcTicksToNanoseconds(tenYears, 10000000), tenYears * 100);
     EXPECT_EQ(fs25vr::QpcTicksToNanoseconds(5, 0), 0);
+    // Five days of a 10 MHz counter, to the nanosecond (ticks * 1e9 would be ~4.3e22)
+    const int64_t fiveDays = 5LL * 24 * 3600 * 10000000;
+    EXPECT_EQ(fs25vr::QpcTicksToNanoseconds(fiveDays, 10000000), 5LL * 24 * 3600 * 1000000000LL);
+    EXPECT_EQ(fs25vr::QpcTicksToNanoseconds(fiveDays + 5, 10000000), 5LL * 24 * 3600 * 1000000000LL + 500);
+}
+
+TEST(PerfTraceMathTest, TheCounterFrequencyIsTheSystemsAndIsQueriedOnce) {
+    LARGE_INTEGER system{};
+    ASSERT_TRUE(QueryPerformanceFrequency(&system));
+    EXPECT_GT(fs25vr::QpcFrequency(), 0);
+    EXPECT_EQ(fs25vr::QpcFrequency(), system.QuadPart);
 }
 
 TEST(PerfTraceMathTest, GpuTimestampsArePlacedOnTheCpuClockThroughTheCalibration) {
@@ -123,6 +139,35 @@ TEST_F(PerfTraceTest, LogsOneLinePerSecondAndASummaryThenEndsByItself) {
     const size_t count = lines.size();
     Frames(200, 10);
     EXPECT_EQ(lines.size(), count);
+}
+
+// A sink that waits for another thread's AddSample, as the motion vector pass's render thread would
+// while a line is being written. If the lock were still held while writing, that AddSample could not
+// finish until the sink returned, so the sink would time out waiting for it.
+TEST_F(PerfTraceTest, WritesToTheSinkOutsideItsLock) {
+    int blocked = 0;
+    int calls = 0;
+    std::vector<std::thread> others;
+    trace.SetSink([&](const std::string& line) {
+        lines.push_back(line);
+        if (line.rfind("[PerfTrace] second", 0) != 0 && line.rfind("[PerfTrace] Summary", 0) != 0) return;
+        ++calls;
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        others.emplace_back([this, done] {
+            trace.AddSample(PerfSection::GpuMvPass, kMs);
+            *done = true;
+        });
+        for (int i = 0; i < 200 && !*done; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (!*done) ++blocked;  // returns, which lets the held lock go and the thread end
+    });
+
+    trace.Start(2);
+    Frames(300, 7);  // two per-second lines, then the summary
+    for (auto& t : others) t.join();
+
+    EXPECT_FALSE(trace.IsActive());
+    EXPECT_EQ(calls, 3);
+    EXPECT_EQ(blocked, 0) << "the sink was called while the trace's lock was held";
 }
 
 TEST_F(PerfTraceTest, TheLastSecondIsNumberedAfterThePreviousOneWhenTheTraceEndsLate) {
