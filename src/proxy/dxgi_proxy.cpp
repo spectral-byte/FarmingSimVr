@@ -8,6 +8,7 @@
 #include <windowsx.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace fs25vr {
 
@@ -40,6 +41,64 @@ struct VrInitScope {
     VrInitScope(const VrInitScope&) = delete;
     VrInitScope& operator=(const VrInitScope&) = delete;
 };
+
+// The swapchain fields shared by both descriptor structs, in one log-friendly string. Flags are hex with
+// the bits worth reading off (tearing, frame-latency waitable object) named, so a log shows at a glance
+// whether the game's swapchain can present without vsync or paces itself on a waitable handle.
+std::string FormatSwapChainFields(UINT width, UINT height, DXGI_FORMAT format, UINT bufferCount,
+                                  DXGI_SWAP_EFFECT swapEffect, UINT flags, UINT sampleCount) {
+    const char* effect = "UNKNOWN";
+    switch (swapEffect) {
+        case DXGI_SWAP_EFFECT_DISCARD: effect = "DISCARD"; break;
+        case DXGI_SWAP_EFFECT_SEQUENTIAL: effect = "SEQUENTIAL"; break;
+        case DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL: effect = "FLIP_SEQUENTIAL"; break;
+        case DXGI_SWAP_EFFECT_FLIP_DISCARD: effect = "FLIP_DISCARD"; break;
+        default: break;
+    }
+    char hexFlags[16];
+    std::snprintf(hexFlags, sizeof(hexFlags), "0x%X", flags);
+    std::string flagNames;
+    const auto addFlag = [&](UINT bit, const char* name) {
+        if (!(flags & bit)) return;
+        if (!flagNames.empty()) flagNames += "|";
+        flagNames += name;
+    };
+    addFlag(DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING, "ALLOW_TEARING");
+    addFlag(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, "FRAME_LATENCY_WAITABLE_OBJECT");
+
+    std::string text = std::to_string(width) + "x" + std::to_string(height) +
+        " format=" + std::to_string(static_cast<int>(format)) +
+        " buffers=" + std::to_string(bufferCount) +
+        " swapEffect=" + effect + "(" + std::to_string(static_cast<int>(swapEffect)) + ")" +
+        " flags=" + hexFlags;
+    if (!flagNames.empty()) text += " (" + flagNames + ")";
+    text += " samples=" + std::to_string(sampleCount);
+    return text;
+}
+
+std::string FormatSwapChainDesc(const DXGI_SWAP_CHAIN_DESC& desc) {
+    return FormatSwapChainFields(desc.BufferDesc.Width, desc.BufferDesc.Height, desc.BufferDesc.Format,
+                                 desc.BufferCount, desc.SwapEffect, desc.Flags, desc.SampleDesc.Count) +
+        " modeScaling=" + std::to_string(static_cast<int>(desc.BufferDesc.Scaling)) +
+        " windowed=" + (desc.Windowed ? "1" : "0");
+}
+
+std::string FormatSwapChainDesc1(const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreenDesc) {
+    const char* scaling = "UNKNOWN";
+    switch (desc->Scaling) {
+        case DXGI_SCALING_STRETCH: scaling = "STRETCH"; break;
+        case DXGI_SCALING_NONE: scaling = "NONE"; break;
+        case DXGI_SCALING_ASPECT_RATIO_STRETCH: scaling = "ASPECT_RATIO_STRETCH"; break;
+        default: break;
+    }
+    // No fullscreen descriptor means the swapchain is windowed.
+    const bool windowed = !fullscreenDesc || fullscreenDesc->Windowed;
+    return FormatSwapChainFields(desc->Width, desc->Height, desc->Format, desc->BufferCount, desc->SwapEffect,
+                                 desc->Flags, desc->SampleDesc.Count) +
+        " scaling=" + scaling + "(" + std::to_string(static_cast<int>(desc->Scaling)) + ")" +
+        " alphaMode=" + std::to_string(static_cast<int>(desc->AlphaMode)) +
+        " windowed=" + (windowed ? "1" : "0");
+}
 
 } // anonymous namespace
 
@@ -785,6 +844,9 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
+    if (pDesc) {
+        LogInfo("DxgiProxy: CreateSwapChain requested: " + FormatSwapChainDesc(*pDesc));
+    }
     if (pDesc && proxy->IsActive()) {
         // Before any override below: an unusable format must leave the swap chain untouched.
         proxy->m_openXrManager->EnsureBackBufferFormatSupported(pDesc->BufferDesc.Format);
@@ -797,6 +859,9 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
     }
     if (pDesc && pDesc->OutputWindow) {
         proxy->m_windowController->SetGameHwnd(pDesc->OutputWindow);
+    }
+    if (pDesc) {
+        LogInfo("DxgiProxy: CreateSwapChain passed on: " + FormatSwapChainDesc(*pDesc));
     }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**)>(
         proxy->m_detourCreateSwapChain.GetOriginal()
@@ -821,6 +886,10 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     if (!proxy) return E_FAIL;
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
+    }
+    if (pDesc) {
+        // Before the overrides below, which also write through to the caller's descriptors.
+        LogInfo("DxgiProxy: CreateSwapChainForHwnd requested: " + FormatSwapChainDesc1(pDesc, pFullscreenDesc));
     }
     if (pDesc && proxy->IsActive()) {
         // Before any override below: an unusable format must leave the swap chain untouched.
@@ -855,7 +924,11 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
         LogInfo("DxgiProxy: Enforced Windowed = TRUE on swapchain descriptor for resolution decoupling.");
     }
 
-    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
+    if (pEffectiveDesc) {
+        LogInfo("DxgiProxy: CreateSwapChainForHwnd passed on: " +
+                FormatSwapChainDesc1(pEffectiveDesc, pEffectiveFullscreenDesc));
+    }
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND,const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
         proxy->m_detourCreateSwapChainForHwnd.GetOriginal()
     );
     HRESULT hr = orig ? orig(self, pDevice, hWnd, pEffectiveDesc, pEffectiveFullscreenDesc, pRestrictToOutput, ppSwapChain) : S_OK;
