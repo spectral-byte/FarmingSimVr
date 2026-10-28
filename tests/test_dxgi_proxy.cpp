@@ -3254,6 +3254,41 @@ TEST(DxgiProxyTest, SubclassInterceptsWindowPosChangingAndClampsDimensions) {
     DestroyWindow(testWnd);
 }
 
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockFactory2QI(IUnknown* self, REFIID riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    if (riid == __uuidof(IDXGIFactory) || riid == __uuidof(IDXGIFactory2) || riid == __uuidof(IUnknown)) {
+        *ppv = self;
+        return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+}
+
+static int s_mockCreateSwapChainForHwndCalls = 0;
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockCreateSwapChainForHwnd(
+    IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*,
+    IDXGIOutput*, IDXGISwapChain1**) {
+    volatile int a = 5;
+    volatile int b = 6;
+    volatile int c = a + b;
+    s_mockCreateSwapChainForHwndCalls += c;
+    return S_OK;
+}
+
+// A factory whose CreateSwapChainForHwnd succeeds, so the hook has an original to call.
+struct MockFactory2 {
+    std::vector<void*> vtable;
+    MockComObject object;
+    MockFactory2() : vtable(30, nullptr), object{ vtable.data() } {
+        vtable[0] = reinterpret_cast<void*>(&MockFactory2QI);
+        vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+        vtable[2] = reinterpret_cast<void*>(&MockRelease);
+        vtable[kCreateSwapChainVTableSlot] = reinterpret_cast<void*>(&MockCreateSwapChain);
+        vtable[kCreateSwapChainForHwndVTableSlot] = reinterpret_cast<void*>(&MockCreateSwapChainForHwnd);
+    }
+    IDXGIFactory* Get() { return reinterpret_cast<IDXGIFactory*>(&object); }
+};
+
 TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndAppliesInitialPrePresentationClamp) {
     HWND testWnd = CreateWindowA("STATIC", "InitialClampTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 4000, 3000, nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(testWnd != nullptr);
@@ -3267,6 +3302,8 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndAppliesInitialPrePresentation
 
         auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
         DxgiProxy& activeProxy = activeProxyRuntime->GetDxgiProxy();
+        MockFactory2 factory;
+        ASSERT_TRUE(activeProxy.AttachFactory(factory.Get()));
 
         RECT expectedClamped = MirrorWindowController::ComputeClampedMirrorWindowRect(testWnd);
         int expectedW = expectedClamped.right - expectedClamped.left;
@@ -3456,6 +3493,18 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiv
         auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
         EXPECT_NO_THROW(DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr));
     }
+}
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndReportsFailureWhenNoOriginalIsAvailable) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+
+    IDXGISwapChain1* swapChain = nullptr;
+    EXPECT_EQ(DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &swapChain), E_FAIL);
+    EXPECT_EQ(swapChain, nullptr);
 }
 
 // Redirects the game log (Logger) to a temp file while a test runs and reads it back.

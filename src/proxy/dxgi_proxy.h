@@ -123,6 +123,13 @@ private:
     // Attaches the first output of any adapter the factory enumerates.
     void AttachFirstOutput(IDXGIFactory* factory);
 
+    // The part of both ResizeBuffers hooks that precedes the call to the original: forgets the cached
+    // back buffers, marks the window clamp dirty and, in Active VR Mode, replaces the requested size
+    // with the Render Resolution.
+    static void PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height);
+    // Hooks the factory a successful CreateDXGIFactory* call returned, in Active VR Mode.
+    void AttachCreatedFactory(HRESULT hr, void** ppFactory);
+
     // The proxy a hook entry point acts for: the one in a live runtime that installed `detour`, else
     // the current runtime's; null when no runtime is alive.
     static DxgiProxy* ForHook(FunctionDetour DxgiProxy::*detour);
