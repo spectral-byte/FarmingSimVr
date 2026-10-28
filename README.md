@@ -84,8 +84,7 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | Command | Purpose |
 | :--- | :--- |
 | `vrRenderingMode <afr\|dualpass\|toggle>` | Switch stereo mode |
-| `vrDualPassPhysicsPause [off\|on]` | Pause physics for one frame of each Dual-Pass eye pair and catch it up on the other, so a moving vehicle doesn't flatten or exaggerate depth when you look to the side (default `on`, this session only) |
-| `vrDesktopMirror [on\|off]` | Turn the Desktop Mirror Window on or off while the headset is in use, to give the GPU time it costs to the headset. Nothing changes in the headset. It shows by itself while the headset is asleep or on the dashboard and before a savegame has loaded. Toggles the mirror for this session. No arguments reports the current state |
+| `vrDesktopMirror [on\|off]` | Turn the Desktop Mirror Window on or off while the headset is in use, to give the GPU time it costs to the headset. Nothing changes in the headset. It shows by itself while the headset is asleep or on the dashboard and before a savegame has loaded. Saved, on by default. Untested with frame generation: turn the mirror back on if something breaks with it. No arguments reports the current state |
 | `vrEyePairTrace [frames]` | Log how far the vehicle and the eye camera move between rendered eye frames (default 32 frames) |
 | `vrSnapTurnAngle <degrees>` | Snap turn step (default `90`) |
 | `vrHudGroup <map\|speedometer\|info\|controls> <horizontal> <vertical> [scale]` | Place and scale a HUD group |
