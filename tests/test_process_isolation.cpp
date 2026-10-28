@@ -43,7 +43,9 @@ TEST(TestProcessIsolationTest, OpenXrLoaderIsPointedAtARuntimeThatDoesNotExist) 
 }
 
 TEST(TestProcessIsolationTest, DxgiFactoryCallThroughProductionRuntimeEntersPassThrough) {
-    fs25vr::InjectorRuntime& runtime = fs25vr::InjectorRuntime::Instance();
+    // A runtime of its own, built from production parts, so the hooks the factory call installs are
+    // unwound when it goes out of scope instead of lingering for the tests that run after this one.
+    fs25vr::InjectorRuntime runtime{fs25vr::InjectorRuntime::Dependencies{}};
     ComPtr<IDXGIFactory1> factory;
     ASSERT_EQ(runtime.GetDxgiProxy().CreateDXGIFactory1(IID_PPV_ARGS(&factory)), S_OK);
     EXPECT_TRUE(runtime.GetOpenXrManager().IsPassThrough());
