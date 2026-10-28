@@ -6,7 +6,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.Input = VRCompanion.Input or {}
 
 -- The input context the VR actions belong in: the vehicle's while controlling one, otherwise the player's on foot.
 -- registerActionEvent adds to the context that is current, and at map load that is the loading screen's menu context,
@@ -18,7 +17,23 @@ function VRCompanion:getActionEventsContextName()
     return (PlayerInputComponent ~= nil and PlayerInputComponent.INPUT_CONTEXT_NAME) or "PLAYER"
 end
 
-local ACTION_EVENT_ID_FIELDS = { "hudToggleActionEventId", "recenterActionEventId", "snapLeftActionEventId", "snapRightActionEventId", "toggleViewActionEventId", "seatSetActionEventId" }
+-- The VR action events, one row each: the field holding the registered event id, the input action, the handler
+-- (named, so it is looked up on VRCompanion when registering), the i18n text key and its fallback text, and the
+-- field remembering that the event was logged this map. Adding an event means adding a row.
+VRCompanion.ACTION_EVENTS = {
+    { idField = "hudToggleActionEventId", action = "VR_HUD_TOGGLE", handler = "onHudToggleAction",
+        textKey = "input_VR_HUD_TOGGLE", fallbackText = "Toggle VR HUD Mode", loggedField = "hudToggleLoggedOnce" },
+    { idField = "recenterActionEventId", action = "VR_RECENTER_VIEW", handler = "onRecenterAction",
+        textKey = "input_VR_RECENTER_VIEW", fallbackText = "Recenter VR View", loggedField = "recenterLoggedOnce" },
+    { idField = "snapLeftActionEventId", action = "VR_SNAP_TURN_LEFT", handler = "onSnapTurnLeftAction",
+        textKey = "input_VR_SNAP_TURN_LEFT", fallbackText = "VR Snap Turn Left", loggedField = "snapLeftLoggedOnce" },
+    { idField = "snapRightActionEventId", action = "VR_SNAP_TURN_RIGHT", handler = "onSnapTurnRightAction",
+        textKey = "input_VR_SNAP_TURN_RIGHT", fallbackText = "VR Snap Turn Right", loggedField = "snapRightLoggedOnce" },
+    { idField = "toggleViewActionEventId", action = "VR_TOGGLE_VIEW", handler = "onToggleVrViewAction",
+        textKey = "input_VR_TOGGLE_VIEW", fallbackText = "Toggle VR / 2D View", loggedField = "toggleViewLoggedOnce" },
+    { idField = "seatSetActionEventId", action = "VR_SET_SEAT", handler = "onSeatSetAction",
+        textKey = "input_VR_SET_SEAT", fallbackText = "Set VR Seat Position", loggedField = "seatSetLoggedOnce" },
+}
 
 function VRCompanion:registerActionEvents(force)
     local inputBinding = g_inputBinding or _G.g_inputBinding
@@ -46,9 +61,10 @@ function VRCompanion:registerActionEvents(force)
     local active = {}
     if not force and actionEvents ~= nil then
         local allActive = true
-        for _, field in ipairs(ACTION_EVENT_ID_FIELDS) do
-            active[field] = self[field] ~= nil and actionEvents[self[field]] ~= nil
-            allActive = allActive and active[field]
+        for _, row in ipairs(self.ACTION_EVENTS) do
+            local isActive = self[row.idField] ~= nil and actionEvents[self[row.idField]] ~= nil
+            active[row.idField] = isActive
+            allActive = allActive and isActive
         end
         if allActive then
             return
@@ -63,8 +79,8 @@ function VRCompanion:registerActionEvents(force)
     if force and self.actionEventsContextName ~= nil and type(inputBinding.removeActionEvent) == "function" then
         pcall(function()
             inputBinding:beginActionEventsModification(self.actionEventsContextName)
-            for _, field in ipairs(ACTION_EVENT_ID_FIELDS) do
-                if self[field] ~= nil then inputBinding:removeActionEvent(self[field]) end
+            for _, row in ipairs(self.ACTION_EVENTS) do
+                if self[row.idField] ~= nil then inputBinding:removeActionEvent(self[row.idField]) end
             end
             inputBinding:endActionEventsModification()
         end)
@@ -82,171 +98,31 @@ end
 
 -- Registers the VR action events that are not active (all of them when forced) in the context being registered into.
 function VRCompanion:registerActionEventsInContext(inputBinding, force, active)
-    local isHudEventActive = active.hudToggleActionEventId == true
-    local isRecenterEventActive = active.recenterActionEventId == true
-    local isSnapLeftEventActive = active.snapLeftActionEventId == true
-    local isSnapRightEventActive = active.snapRightActionEventId == true
-    local isToggleViewEventActive = active.toggleViewActionEventId == true
-    local isSeatSetEventActive = active.seatSetActionEventId == true
-
-    if force or not isHudEventActive then
-        local actionId = (InputAction and InputAction.VR_HUD_TOGGLE) or (_G.InputAction and _G.InputAction.VR_HUD_TOGGLE) or "VR_HUD_TOGGLE"
-        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onHudToggleAction, false, true, false, true)
-        if success and eventId then
-            self.hudToggleActionEventId = eventId
-            if type(inputBinding.setActionEventTextPriority) == "function" then
-                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
-            end
-            if type(inputBinding.setActionEventActive) == "function" then
-                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventTextVisibility) == "function" then
-                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventText) == "function" then
-                pcall(function()
-                    local txt = (g_i18n and g_i18n:getText("input_VR_HUD_TOGGLE")) or "Toggle VR HUD Mode"
-                    inputBinding:setActionEventText(eventId, txt)
-                end)
-            end
-            if not self.hudToggleLoggedOnce then
-                print("[FS25_VR] Registered in-engine VR_HUD_TOGGLE event.")
-                self.hudToggleLoggedOnce = true
-            end
-        end
-    end
-
-    if force or not isRecenterEventActive then
-        local actionId = (InputAction and InputAction.VR_RECENTER_VIEW) or (_G.InputAction and _G.InputAction.VR_RECENTER_VIEW) or "VR_RECENTER_VIEW"
-        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onRecenterAction, false, true, false, true)
-        if success and eventId then
-            self.recenterActionEventId = eventId
-            if type(inputBinding.setActionEventTextPriority) == "function" then
-                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
-            end
-            if type(inputBinding.setActionEventActive) == "function" then
-                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventTextVisibility) == "function" then
-                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventText) == "function" then
-                pcall(function()
-                    local txt = (g_i18n and g_i18n:getText("input_VR_RECENTER_VIEW")) or "Recenter VR View"
-                    inputBinding:setActionEventText(eventId, txt)
-                end)
-            end
-            if not self.recenterLoggedOnce then
-                print("[FS25_VR] Registered in-engine VR_RECENTER_VIEW event.")
-                self.recenterLoggedOnce = true
-            end
-        end
-    end
-
-    if force or not isSnapLeftEventActive then
-        local actionId = (InputAction and InputAction.VR_SNAP_TURN_LEFT) or (_G.InputAction and _G.InputAction.VR_SNAP_TURN_LEFT) or "VR_SNAP_TURN_LEFT"
-        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onSnapTurnLeftAction, false, true, false, true)
-        if success and eventId then
-            self.snapLeftActionEventId = eventId
-            if type(inputBinding.setActionEventTextPriority) == "function" then
-                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
-            end
-            if type(inputBinding.setActionEventActive) == "function" then
-                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventTextVisibility) == "function" then
-                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventText) == "function" then
-                pcall(function()
-                    local txt = (g_i18n and g_i18n:getText("input_VR_SNAP_TURN_LEFT")) or "VR Snap Turn Left"
-                    inputBinding:setActionEventText(eventId, txt)
-                end)
-            end
-            if not self.snapLeftLoggedOnce then
-                print("[FS25_VR] Registered in-engine VR_SNAP_TURN_LEFT event.")
-                self.snapLeftLoggedOnce = true
-            end
-        end
-    end
-
-    if force or not isSnapRightEventActive then
-        local actionId = (InputAction and InputAction.VR_SNAP_TURN_RIGHT) or (_G.InputAction and _G.InputAction.VR_SNAP_TURN_RIGHT) or "VR_SNAP_TURN_RIGHT"
-        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onSnapTurnRightAction, false, true, false, true)
-        if success and eventId then
-            self.snapRightActionEventId = eventId
-            if type(inputBinding.setActionEventTextPriority) == "function" then
-                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
-            end
-            if type(inputBinding.setActionEventActive) == "function" then
-                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventTextVisibility) == "function" then
-                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventText) == "function" then
-                pcall(function()
-                    local txt = (g_i18n and g_i18n:getText("input_VR_SNAP_TURN_RIGHT")) or "VR Snap Turn Right"
-                    inputBinding:setActionEventText(eventId, txt)
-                end)
-            end
-            if not self.snapRightLoggedOnce then
-                print("[FS25_VR] Registered in-engine VR_SNAP_TURN_RIGHT event.")
-                self.snapRightLoggedOnce = true
-            end
-        end
-    end
-
-    if force or not isToggleViewEventActive then
-        local actionId = (InputAction and InputAction.VR_TOGGLE_VIEW) or (_G.InputAction and _G.InputAction.VR_TOGGLE_VIEW) or "VR_TOGGLE_VIEW"
-        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onToggleVrViewAction, false, true, false, true)
-        if success and eventId then
-            self.toggleViewActionEventId = eventId
-            if type(inputBinding.setActionEventTextPriority) == "function" then
-                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
-            end
-            if type(inputBinding.setActionEventActive) == "function" then
-                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventTextVisibility) == "function" then
-                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventText) == "function" then
-                pcall(function()
-                    local txt = (g_i18n and g_i18n:getText("input_VR_TOGGLE_VIEW")) or "Toggle VR / 2D View"
-                    inputBinding:setActionEventText(eventId, txt)
-                end)
-            end
-            if not self.toggleViewLoggedOnce then
-                print("[FS25_VR] Registered in-engine VR_TOGGLE_VIEW event.")
-                self.toggleViewLoggedOnce = true
-            end
-        end
-    end
-
-    if force or not isSeatSetEventActive then
-        local actionId = (InputAction and InputAction.VR_SET_SEAT) or (_G.InputAction and _G.InputAction.VR_SET_SEAT) or "VR_SET_SEAT"
-        local success, eventId = inputBinding:registerActionEvent(actionId, self, self.onSeatSetAction, false, true, false, true)
-        if success and eventId then
-            self.seatSetActionEventId = eventId
-            if type(inputBinding.setActionEventTextPriority) == "function" then
-                pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
-            end
-            if type(inputBinding.setActionEventActive) == "function" then
-                pcall(function() inputBinding:setActionEventActive(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventTextVisibility) == "function" then
-                pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
-            end
-            if type(inputBinding.setActionEventText) == "function" then
-                pcall(function()
-                    local txt = (g_i18n and g_i18n:getText("input_VR_SET_SEAT")) or "Set VR Seat Position"
-                    inputBinding:setActionEventText(eventId, txt)
-                end)
-            end
-            if not self.seatSetLoggedOnce then
-                print("[FS25_VR] Registered in-engine VR_SET_SEAT event.")
-                self.seatSetLoggedOnce = true
+    for _, row in ipairs(self.ACTION_EVENTS) do
+        if force or active[row.idField] ~= true then
+            local actionId = (InputAction and InputAction[row.action]) or (_G.InputAction and _G.InputAction[row.action]) or row.action
+            local success, eventId = inputBinding:registerActionEvent(actionId, self, self[row.handler], false, true, false, true)
+            if success and eventId then
+                self[row.idField] = eventId
+                if type(inputBinding.setActionEventTextPriority) == "function" then
+                    pcall(function() inputBinding:setActionEventTextPriority(eventId, (GS_PRIO_HIGH or _G.GS_PRIO_HIGH or 1)) end)
+                end
+                if type(inputBinding.setActionEventActive) == "function" then
+                    pcall(function() inputBinding:setActionEventActive(eventId, true) end)
+                end
+                if type(inputBinding.setActionEventTextVisibility) == "function" then
+                    pcall(function() inputBinding:setActionEventTextVisibility(eventId, true) end)
+                end
+                if type(inputBinding.setActionEventText) == "function" then
+                    pcall(function()
+                        local txt = (g_i18n and g_i18n:getText(row.textKey)) or row.fallbackText
+                        inputBinding:setActionEventText(eventId, txt)
+                    end)
+                end
+                if not self[row.loggedField] then
+                    print("[FS25_VR] Registered in-engine " .. row.action .. " event.")
+                    self[row.loggedField] = true
+                end
             end
         end
     end
@@ -712,62 +588,3 @@ function VRCompanion:consoleCommandSetRenderingMode(modeStr)
     print(string.format("[FS25_VR] Stereo Presentation Mode is now: %s (%s)", tostring(newMode), modeLabel))
     return string.format("Stereo Presentation Mode set to: %s (%s, Saved)", tostring(newMode), modeLabel)
 end
-
-function VRCompanion:consoleCommandSetObliqueProjection(enabledStr)
-    local cur = (self.allowObliqueProjection == true)
-    if enabledStr == nil or enabledStr == "" or string.lower(tostring(enabledStr)) == "status" then
-        return string.format("Current Oblique Frustum projection: %s. Usage: vrObliqueProjection <true|false|toggle>",
-            cur and "Enabled" or "Disabled (symmetric)")
-    end
-
-    local low = string.lower(tostring(enabledStr))
-    local enabled
-    if low == "toggle" then
-        enabled = not cur
-    elseif low == "true" or low == "1" or low == "on" then
-        enabled = true
-    elseif low == "false" or low == "0" or low == "off" then
-        enabled = false
-    else
-        return "Usage: vrObliqueProjection <true|false|toggle>"
-    end
-
-    self.allowObliqueProjection = enabled
-    self:saveConfiguration()
-    local mission = g_currentMission or _G.g_currentMission
-    if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
-        pcall(function()
-            mission:showBlinkingWarning(string.format("VR Oblique Frustum: %s (Saved)",
-                enabled and "Enabled" or "Disabled"), 2500)
-        end)
-    end
-    print(string.format("[FS25_VR] Oblique Frustum projection set to: %s", tostring(enabled)))
-    return string.format("Oblique Frustum projection set to: %s (Saved)", tostring(enabled))
-end
-
--- Export to Input subsystem table
-VRCompanion.Input.registerActionEvents = function(self, ...) return VRCompanion.registerActionEvents(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudSafeArea = function(self, ...) return VRCompanion.consoleCommandSetHudSafeArea(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudGroup = function(self, ...) return VRCompanion.consoleCommandSetHudGroup(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandHudGroupShow = function(self, ...) return VRCompanion.consoleCommandHudGroupShow(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudState = function(self, ...) return VRCompanion.consoleCommandSetHudState(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudLoadNotification = function(self, ...) return VRCompanion.consoleCommandSetHudLoadNotification(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetRecenterMode = function(self, ...) return VRCompanion.consoleCommandSetRecenterMode(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetSnapTurnAngle = function(self, ...) return VRCompanion.consoleCommandSetSnapTurnAngle(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSet2DView = function(self, ...) return VRCompanion.consoleCommandSet2DView(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandToggleView = function(self, ...) return VRCompanion.consoleCommandToggleView(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetDlssMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssMvScale(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetDlssSharpness = function(self, ...) return VRCompanion.consoleCommandSetDlssSharpness(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetDlssPreset = function(self, ...) return VRCompanion.consoleCommandSetDlssPreset(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetDlssSdpMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssSdpMvScale(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssMvFix = function(self, ...) return VRCompanion.consoleCommandDlssMvFix(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssDepthModel = function(self, ...) return VRCompanion.consoleCommandDlssDepthModel(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssNearClip = function(self, ...) return VRCompanion.consoleCommandDlssNearClip(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssNearClipCab = function(self, ...) return VRCompanion.consoleCommandDlssNearClipCab(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssNearClipOutside = function(self, ...) return VRCompanion.consoleCommandDlssNearClipOutside(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssNearClipOnFoot = function(self, ...) return VRCompanion.consoleCommandDlssNearClipOnFoot(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssDiag = function(self, ...) return VRCompanion.consoleCommandDlssDiag(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetRenderingMode = function(self, ...) return VRCompanion.consoleCommandSetRenderingMode(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetObliqueProjection = function(self, ...) return VRCompanion.consoleCommandSetObliqueProjection(VRCompanion, ...) end
-
-return VRCompanion.Input

@@ -23,7 +23,7 @@ To deliver a comfortable, responsive, and immersive HUD in VR without fragile or
      - `Full`: Unhides all base-game HUD elements with full VR insets and convergence disparity.
 
 ## Status
-Accepted, amended: the global VR HUD inset and UI scale (item 1) are replaced by per-group HUD margins and a separate HUD Safe Area, see [ADR-0022](0022-per-group-hud-margins-and-a-separate-safe-area.md). The convergence parity (item 2) and the three-stage toggle (item 3) stand, with the Streamlined and Full contents now set per group.
+Accepted, amended: the global VR HUD inset and UI scale (item 1) are replaced by per-group HUD margins and a separate HUD Safe Area, see [ADR-0022](0022-per-group-hud-margins-and-a-separate-safe-area.md). The convergence parity (item 2) and the three-stage toggle (item 3) stand, with the Streamlined and Full contents now set per group. Also amended: the Oblique Frustum this ADR cites as distorting the HUD was removed and projection is always symmetric, see [ADR-0005](0005-oblique-frustum-projection-via-vrbridge.md).
 
 ## Considered Options
 - Unmodified corner screen-space rendering (rejected: corners are pushed outside VR headset optics, causing chromatic aberration, lens cutoff, and illegibility).

@@ -34,7 +34,10 @@ const char* PerfSectionLabel(PerfSection section);
 // The section a Companion Mod name stands for ("gameUpdate", "modUpdate", "modCamera", "modDraw").
 bool PerfSectionFromLuaName(const char* name, PerfSection& section);
 
-// The QueryPerformanceCounter ticks in nanoseconds, without overflowing for any counter.
+// The QueryPerformanceCounter frequency in ticks per second. It is fixed at boot, so it is queried once.
+int64_t QpcFrequency();
+// The QueryPerformanceCounter ticks in nanoseconds, without overflowing for any counter. The one
+// conversion the perf trace and the OpenXR timing share.
 int64_t QpcTicksToNanoseconds(int64_t ticks, int64_t frequency);
 // GPU timestamp ticks (ID3D12CommandQueue::GetTimestampFrequency) in nanoseconds.
 int64_t GpuTicksToNanoseconds(uint64_t ticks, uint64_t frequency);
@@ -97,8 +100,16 @@ private:
         void Clear();
     };
 
-    void Report(const char* label, const Samples& samples, int64_t elapsedNs);
-    void FinishLocked(int64_t now);
+    // Lines built while the lock is held, written to the sink after it is released.
+    struct Output {
+        Sink sink;
+        std::vector<std::string> lines;
+        void Write() const;
+    };
+
+    static std::string BuildReport(const char* label, const Samples& samples, int64_t elapsedNs);
+    void MarkFrameLocked(bool stereo, bool sequentialDualPass, Output& out);
+    void FinishLocked(int64_t now, Output& out);
 
     std::atomic<bool> m_active{false};
     std::atomic<uint64_t> m_gpuFrequency{0};

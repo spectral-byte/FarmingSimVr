@@ -9,7 +9,7 @@ The native Direct3D 12 proxy library loaded by the game process that interacts w
 _Avoid_: Wrapper, loader, hook DLL
 
 **Companion Mod**:
-The in-engine Luau script mod executing inside GIANTS Engine 10 that manipulates camera transforms and asymmetric frustum projections.
+The in-engine Luau script mod executing inside GIANTS Engine 10 that manipulates camera transforms.
 _Avoid_: Script hook, Lua plugin
 
 **Installer**:
@@ -31,10 +31,6 @@ _Avoid_: Dual rendering, double pass, simultaneous pass, split-frame stereo
 **Stereo Presentation Mode**:
 The selectable operational pipeline governing how stereoscopic views are rendered and paced (Alternate Frame Rendering or Sequential Dual-Pass).
 _Avoid_: 3D mode, render method, stereo toggle, vr mode
-
-**Oblique Frustum**:
-An off-axis perspective projection with asymmetric view angles matched to the optical center and field of view of a VR headset display.
-_Avoid_: Skewed frustum, asymmetric projection
 
 **Pass-Through Mode**:
 The inert operational state where the Injector forwards all DXGI calls to the system library without initiating an OpenXR session when no VR runtime is detected.

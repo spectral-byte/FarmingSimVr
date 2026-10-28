@@ -77,6 +77,10 @@ protected:
     }
 };
 
+TEST_F(LuauTestSuiteTest, TestActionEvents) {
+    RunSuite("tests/test_action_events.luau");
+}
+
 TEST_F(LuauTestSuiteTest, Test2dViewMode) {
     RunSuite("tests/test_2d_view_mode.luau");
 }
@@ -111,6 +115,10 @@ TEST_F(LuauTestSuiteTest, TestOutsideCamera) {
 
 TEST_F(LuauTestSuiteTest, TestRenderingCamera) {
     RunSuite("tests/test_rendering_camera.luau");
+}
+
+TEST_F(LuauTestSuiteTest, TestPerUpdateAllocations) {
+    RunSuite("tests/test_per_update_allocations.luau");
 }
 
 TEST_F(LuauTestSuiteTest, TestReusableTables) {

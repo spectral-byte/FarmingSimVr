@@ -37,8 +37,6 @@ public:
 
     // D3D12 Texture upload
     bool UploadTexture(ID3D12Device* device, ID3D12CommandQueue* queue, std::shared_ptr<IOpenXrDispatch> dispatch);
-    bool IsTextureUploaded() const { return m_textureUploaded; }
-    void ResetTextureUploaded() { m_textureUploaded = false; }
 
     // Composition layer quad generation
     bool PrepareCompositionLayer(const XrCompositionLayerQuad& menuQuad, const MenuCursorState& cursorState,
@@ -48,7 +46,6 @@ public:
 
     const XrCompositionLayerQuad& GetLastSubmittedCursorQuadLayer() const { return m_lastSubmittedCursorQuadLayer; }
     bool HasLastSubmittedCursorQuadLayer() const { return m_hasLastSubmittedCursorQuadLayer; }
-    void ResetLastSubmittedCursorQuadLayer() { m_hasLastSubmittedCursorQuadLayer = false; }
 
 private:
     bool EnumerateSwapchainImages(std::shared_ptr<IOpenXrDispatch> dispatch);

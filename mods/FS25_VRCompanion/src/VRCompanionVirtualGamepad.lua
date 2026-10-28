@@ -108,7 +108,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.VirtualGamepad = VRCompanion.VirtualGamepad or {}
 
 -- vrVirtualGamepad on|off: saved. Off removes the pad from the game altogether.
 VRCompanion.DEFAULT_VIRTUAL_GAMEPAD_ENABLED = true
@@ -719,12 +718,3 @@ function VRCompanion:resetVirtualGamepad()
     end
     state = newState()
 end
-
--- Export to VirtualGamepad subsystem table
-VRCompanion.VirtualGamepad.updateVirtualGamepad = function(self, ...) return VRCompanion.updateVirtualGamepad(VRCompanion, ...) end
-VRCompanion.VirtualGamepad.updateVirtualGamepadUse = function(self, ...) return VRCompanion.updateVirtualGamepadUse(VRCompanion, ...) end
-VRCompanion.VirtualGamepad.takeVirtualGamepadInput = function(self, ...) return VRCompanion.takeVirtualGamepadInput(VRCompanion, ...) end
-VRCompanion.VirtualGamepad.getVirtualGamepadStatus =function(self, ...) return VRCompanion.getVirtualGamepadStatus(VRCompanion, ...) end
-VRCompanion.VirtualGamepad.consoleCommandSetVirtualGamepad = function(self, ...) return VRCompanion.consoleCommandSetVirtualGamepad(VRCompanion, ...) end
-
-return VRCompanion.VirtualGamepad
