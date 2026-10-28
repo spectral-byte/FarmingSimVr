@@ -305,6 +305,9 @@ void OpenXrManager::Shutdown() {
     m_eyeProjections[1] = {};
     m_viewConfigViews.clear();
     m_submittedQuadFrameCount = 0;
+    m_lastLoggedIpd = 0.0f;
+    m_loggedEyeCopySizeMismatch = false;
+    m_headPoseLocateFailures = 0;
     m_hasCustomMenuQuadSize = false;
     m_menuQuadDistance = 1.5f;
     m_lastSubmittedQuadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
@@ -617,8 +620,7 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
     XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
     XrResult res = m_dispatch->LocateSpace(m_viewSpace, m_localSpace, time, &location);
     if (XR_FAILED(res)) {
-        static uint32_t s_locateFailCount = 0;
-        if (++s_locateFailCount % 300 == 1) {
+        if (++m_headPoseLocateFailures % 300 == 1) {
             LogWarn("OpenXrManager::PollHeadPose: LocateSpace failed (result " + std::to_string(res) + ")");
         }
         return m_lastPose;
@@ -805,9 +807,8 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
             m_ipd = measuredIpd;
         }
 
-        static float s_lastLoggedIpd = 0.0f;
-        if (std::abs(m_ipd - s_lastLoggedIpd) > 0.002f) {
-            s_lastLoggedIpd = m_ipd;
+        if (std::abs(m_ipd - m_lastLoggedIpd) > 0.002f) {
+            m_lastLoggedIpd = m_ipd;
             std::stringstream ss;
             ss << "OpenXrManager: Calibrated hardware IPD = " << (m_ipd * 1000.0f) << " mm"
                << " (View0 pos: " << views[0].pose.position.x << ", " << views[0].pose.position.y << ", " << views[0].pose.position.z << ")"
@@ -1261,6 +1262,16 @@ void OpenXrManager::ReadCopyTimestamps(uint32_t ringSlot) {
     }
 }
 
+void OpenXrManager::LogEyeCopySizeMismatchOnce(uint64_t srcWidth, uint32_t srcHeight, uint64_t dstWidth, uint32_t dstHeight) {
+    if (m_loggedEyeCopySizeMismatch) {
+        return;
+    }
+    m_loggedEyeCopySizeMismatch = true;
+    LogWarn("OpenXrManager::CopyBackBufferToEye: Dimension mismatch! BackBuffer: " +
+            std::to_string(srcWidth) + "x" + std::to_string(srcHeight) +
+            ", OpenXR swapchain: " + std::to_string(dstWidth) + "x" + std::to_string(dstHeight));
+}
+
 bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backBuffer) {
     if (eyeIndex >= 2 || !m_hasEyeSwapchains) {
         return false;
@@ -1391,13 +1402,7 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
                     curCommandList->CopyResource(destTexture, backBuffer);
                 } else {
                     D3D12_RESOURCE_DESC dstDesc = destTexture->GetDesc();
-                    static bool loggedMismatch = false;
-                    if (!loggedMismatch) {
-                        LogWarn("OpenXrManager::CopyBackBufferToEye: Dimension mismatch! BackBuffer: " +
-                                std::to_string(srcDesc.Width) + "x" + std::to_string(srcDesc.Height) +
-                                ", OpenXR swapchain: " + std::to_string(dstDesc.Width) + "x" + std::to_string(dstDesc.Height));
-                        loggedMismatch = true;
-                    }
+                    LogEyeCopySizeMismatchOnce(srcDesc.Width, srcDesc.Height, dstDesc.Width, dstDesc.Height);
                     D3D12_TEXTURE_COPY_LOCATION dstLoc{};
                     dstLoc.pResource = destTexture;
                     dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
