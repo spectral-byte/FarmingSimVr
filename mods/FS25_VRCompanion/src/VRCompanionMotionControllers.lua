@@ -182,8 +182,8 @@ local function newState()
         ignoredCleared = false,  -- Motion Controller input was ignored and the cached hands were already cleared
         bridgeMissing = false,   -- the Injector offers no VRBridge.getHandState
         pointerOwner = VRCompanion.POINTER_CONTROL_MOUSE,  -- see "Who controls the pointer"
-        mousePosition = nil,     -- {x, y}: where the desk mouse was last seen
-        movedThisUpdate = {},    -- [hand] = true when the hand's aim moved far enough to count this update
+        mousePosition = { seen = false, x = 0, y = 0 },  -- where the desk mouse was last seen (seen: x and y hold a sample)
+        movedThisUpdate = {},    -- [hand] = true when the hand's aim moved far enough to count this update; one table, cleared in place
     }
 end
 
@@ -361,13 +361,13 @@ end
 -- using the mouse) or sampled (a first sample only learns where it is). It took control when it moved.
 local function noteDeskMouse(self, x, y, isEvent)
     if type(x) ~= "number" or type(y) ~= "number" then return end
-    local last = state.mousePosition
-    state.mousePosition = { x = x, y = y }
+    local last = state.mousePosition  -- one table, overwritten in place
     local moved = isEvent
-    if last ~= nil then
+    if last.seen then
         local epsilon = self.POINTER_MOUSE_MOVE_EPSILON
         moved = moved or math.abs(x - last.x) > epsilon or math.abs(y - last.y) > epsilon
     end
+    last.x, last.y, last.seen = x, y, true
     if moved then
         self:notePointerMouseMoved(isEvent and "mouse event" or "mouse position sampled")
     end
@@ -449,7 +449,9 @@ function VRCompanion:updateMotionControllers(dt)
         return
     end
     local now = self:getCurrentTimeMs()
-    state.movedThisUpdate = {}
+    for _, hand in ipairs(HANDS) do
+        state.movedThisUpdate[hand] = false
+    end
     for _, hand in ipairs(HANDS) do
         -- The bridge fills a table in place once it holds every field, and otherwise hands back a
         -- complete one that is adopted here, so nothing is allocated per frame.
