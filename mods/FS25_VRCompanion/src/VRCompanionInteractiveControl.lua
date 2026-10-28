@@ -36,7 +36,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.InteractiveControl = VRCompanion.InteractiveControl or {}
 
 local MOD_NAME = "FS25_interactiveControl"
 local CLICK_POINT_FUNCTIONS = {
@@ -426,8 +425,3 @@ function VRCompanion:resetInteractiveControlSupport()
     end
     state = newState()
 end
-
-VRCompanion.InteractiveControl.updateInteractiveControl = function(self, ...) return VRCompanion.updateInteractiveControl(VRCompanion, ...) end
-VRCompanion.InteractiveControl.resetInteractiveControlSupport = function(self, ...) return VRCompanion.resetInteractiveControlSupport(VRCompanion, ...) end
-
-return VRCompanion.InteractiveControl
