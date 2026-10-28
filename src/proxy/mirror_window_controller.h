@@ -39,7 +39,6 @@ public:
     bool IsWindowSubclassed() const { return m_windowSubclassed; }
 
     bool IsInSizeMove() const { return m_inSizeMove; }
-    void SetInSizeMove(bool inSizeMove) { m_inSizeMove = inSizeMove; }
 
     bool IsWindowClampDirty() const { return m_windowClampDirty; }
     void SetWindowClampDirty(bool dirty) { m_windowClampDirty = dirty; }
