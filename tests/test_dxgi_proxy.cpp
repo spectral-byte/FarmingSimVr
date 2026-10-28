@@ -14,11 +14,11 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
-#include <cstring>
 #include <future>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -3386,14 +3386,14 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiv
     }
 }
 
-// Swapchain descriptor logging: the log is the only record of how the game asked for its swapchain.
+// Redirects the game log (Logger) to a temp file while a test runs and reads it back.
 namespace {
-class SwapChainLogCapture {
+class LogCapture {
 public:
-    SwapChainLogCapture() : m_path(std::filesystem::temp_directory_path() / "fs25vr_swapchain_desc_test.log") {
+    explicit LogCapture(const char* fileName) : m_path(std::filesystem::temp_directory_path() / fileName) {
         Logger::Instance().SetLogFile(m_path);
     }
-    ~SwapChainLogCapture() {
+    ~LogCapture() {
         Logger::Instance().SetLogFile(Logger::DefaultLogPath());
         std::filesystem::remove(m_path);
     }
@@ -3407,13 +3407,15 @@ private:
 };
 } // namespace
 
+// Swapchain descriptor logging: the log is the only record of how the game asked for its swapchain.
+
 TEST(DxgiProxyTest, InterceptCreateSwapChainLogsRequestedAndPassedOnDescriptor) {
     auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
     ASSERT_TRUE(openXrManager->Initialize());
     ASSERT_TRUE(openXrManager->CreateSession());
     auto proxyRuntime = MakeRuntime(openXrManager);
-    SwapChainLogCapture capture;
+    LogCapture capture("fs25vr_swapchain_desc_test.log");
 
     DXGI_SWAP_CHAIN_DESC desc{};
     desc.BufferDesc.Width = 3840;
@@ -3442,7 +3444,7 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndLogsRequestedAndPassedOnDescr
     ASSERT_TRUE(openXrManager->Initialize());
     ASSERT_TRUE(openXrManager->CreateSession());
     auto proxyRuntime = MakeRuntime(openXrManager);
-    SwapChainLogCapture capture;
+    LogCapture capture("fs25vr_swapchain_desc_test.log");
 
     DXGI_SWAP_CHAIN_DESC1 desc{};
     desc.Width = 2560;
@@ -4278,26 +4280,44 @@ TEST(DxgiProxyTest, DesktopMirrorTitleIsNotChangedWhileTheMirrorShowsByItself) {
     EXPECT_EQ(window.Title(), L"Farming Simulator 25");
 }
 
-namespace {
-// Reads the game log written through Logger while a test runs.
-class MirrorLogCapture {
-public:
-    MirrorLogCapture() : m_path(std::filesystem::temp_directory_path() / "fs25vr_desktop_mirror_title_test.log") {
-        Logger::Instance().SetLogFile(m_path);
-    }
-    ~MirrorLogCapture() {
-        Logger::Instance().SetLogFile(Logger::DefaultLogPath());
-        std::filesystem::remove(m_path);
-    }
-    std::string Text() const {
-        Logger::Instance().Flush();
-        std::ifstream file(m_path);
-        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
-    }
-private:
-    std::filesystem::path m_path;
-};
+// The game window can be unknown when the mirror goes off (it arrives with a later swapchain).
+TEST(DxgiProxyTest, DesktopMirrorOffTitleIsSetWhenTheGameWindowIsKnownOnlyAfterTheMirrorWentOff) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    rig.Present();
 
+    MirrorTitleWindow window(rig);
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title())) << "title never applied to the late window";
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+// The controller restores the old window's title when the game window changes; the mirror is still off.
+TEST(DxgiProxyTest, DesktopMirrorOffTitleMovesToTheNewGameWindowWhenTheWindowChangesWhileOff) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow oldWindow(rig, "Old Window");
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(oldWindow.Title()));
+
+    MirrorTitleWindow newWindow(rig, "New Window");
+    EXPECT_EQ(oldWindow.Title(), L"Old Window");
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(newWindow.Title())) << "title never applied to the new window";
+    EXPECT_EQ(oldWindow.Title(), L"Old Window");
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(newWindow.Title(), L"New Window");
+    EXPECT_EQ(oldWindow.Title(), L"Old Window");
+}
+
+namespace {
 size_t CountOf(const std::string& text, const std::string& needle) {
     size_t count = 0;
     for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) ++count;
@@ -4306,7 +4326,7 @@ size_t CountOf(const std::string& text, const std::string& needle) {
 } // namespace
 
 TEST(DxgiProxyTest, DesktopMirrorTransitionsAreLoggedOncePerChange) {
-    MirrorLogCapture capture;
+    LogCapture capture("fs25vr_desktop_mirror_title_test.log");
     MirrorPresentRig rig(VRRenderingMode::AFR);
     MirrorTitleWindow window(rig);
 
@@ -4325,7 +4345,7 @@ TEST(DxgiProxyTest, DesktopMirrorTransitionsAreLoggedOncePerChange) {
 }
 
 TEST(DxgiProxyTest, DesktopMirrorComingBackByItselfLogsTheReason) {
-    MirrorLogCapture capture;
+    LogCapture capture("fs25vr_desktop_mirror_title_test.log");
     {
         MirrorPresentRig rig(VRRenderingMode::AFR);
         MirrorTitleWindow window(rig);

@@ -35,13 +35,7 @@ end
 
 -- The on/off an argument says, or nil when it says neither (the parser is shared with the other on/off commands)
 local function parseArgument(arg)
-    if type(VRCompanion.parseOnOffArgument) == "function" then
-        return VRCompanion.parseOnOffArgument(arg)
-    end
-    local low = string.lower(tostring(arg))
-    if low == "on" or low == "true" or low == "1" then return true end
-    if low == "off" or low == "false" or low == "0" then return false end
-    return nil
+    return VRCompanion.parseOnOffArgument(arg)
 end
 
 -- Send the field to the Injector. Called on map load after the handshake and whenever the command changes the field.

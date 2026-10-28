@@ -602,7 +602,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
             m_openXrManager->SubmitMenuQuad();
             // The quad frame is a completed compositor frame and no eye pair is in flight.
             LatchPendingRenderingMode();
-            return PresentToDesktopMirror(pBackBuffer);
+            return ShouldCallRealPresent(pBackBuffer);
         } else {
             if (m_wasInQuadMode) {
                 // Seamlessly returning to stereoscopic 3D VR view: reset AFR frame parity and subPassIndex
@@ -635,7 +635,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
                         m_vrBridge->AdvanceFrame();
                     }
                     LatchPendingRenderingMode();
-                    return PresentToDesktopMirror(pBackBuffer);
+                    return ShouldCallRealPresent(pBackBuffer);
                 }
             } else {
                 // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
@@ -653,7 +653,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
                 if (parity == 1) {
                     LatchPendingRenderingMode();
                 }
-                return PresentToDesktopMirror(pBackBuffer);
+                return ShouldCallRealPresent(pBackBuffer);
             }
         }
     }
@@ -672,14 +672,21 @@ bool DxgiProxy::IsDesktopMirrorOffNow() const {
 
 void DxgiProxy::UpdateDesktopMirrorTitle() {
     const bool off = IsDesktopMirrorOffNow();
-    if (off == m_desktopMirrorOffAnnounced) return;
-    m_desktopMirrorOffAnnounced = off;
-
     if (off) {
-        LogInfo("DxgiProxy: Desktop mirror off; window title says so until it shows again.");
-        if (m_windowController) m_windowController->ShowDesktopMirrorOffTitle();
+        // The transition is logged once. The title is applied whenever it is not shown, because it can be
+        // missing while the mirror stays off: the game window may be unknown yet, or may have changed.
+        if (!m_desktopMirrorOffAnnounced) {
+            m_desktopMirrorOffAnnounced = true;
+            LogInfo("DxgiProxy: Desktop mirror off; window title says so until it shows again.");
+        }
+        if (m_windowController && !m_windowController->IsDesktopMirrorOffTitleShown()) {
+            m_windowController->ShowDesktopMirrorOffTitle();
+        }
         return;
     }
+    if (!m_desktopMirrorOffAnnounced) return;
+    m_desktopMirrorOffAnnounced = false;
+
     // The handshake and Pass-Through checks come first: a savegame unload also resets the flag to on.
     const char* reason = "by command (vrDesktopMirror on)";
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
@@ -693,13 +700,13 @@ void DxgiProxy::UpdateDesktopMirrorTitle() {
     if (m_windowController) m_windowController->RestoreTitle();
 }
 
-bool DxgiProxy::PresentToDesktopMirror(ID3D12Resource* backBuffer) {
+bool DxgiProxy::ShouldCallRealPresent(ID3D12Resource* backBuffer) {
     if (!IsDesktopMirrorOffNow()) {
         m_desktopMirrorWasShowing = true;
         m_lastPresentSuppressed = false;
         return true;
     }
-    if (TakeDesktopMirrorBlackFrame(backBuffer)) {
+    if (ConsumeSwitchToOff(backBuffer)) {
         m_lastPresentSuppressed = false;
         return true;
     }
@@ -707,7 +714,7 @@ bool DxgiProxy::PresentToDesktopMirror(ID3D12Resource* backBuffer) {
     return false;
 }
 
-bool DxgiProxy::TakeDesktopMirrorBlackFrame(ID3D12Resource* backBuffer) {
+bool DxgiProxy::ConsumeSwitchToOff(ID3D12Resource* backBuffer) {
     if (!m_desktopMirrorWasShowing) return false;
     m_desktopMirrorWasShowing = false;
     // Called after this frame's eye copy, so the headset has the game's frame; only the Desktop
@@ -978,7 +985,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
         LogInfo("DxgiProxy: CreateSwapChainForHwnd passed on: " +
                 FormatSwapChainDesc1(pEffectiveDesc, pEffectiveFullscreenDesc));
     }
-    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND,const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
         proxy->m_detourCreateSwapChainForHwnd.GetOriginal()
     );
     HRESULT hr = orig ? orig(self, pDevice, hWnd, pEffectiveDesc, pEffectiveFullscreenDesc, pRestrictToOutput, ppSwapChain) : S_OK;

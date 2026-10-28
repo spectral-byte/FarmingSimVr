@@ -176,16 +176,15 @@ private:
     // The decision at each Present that would reach DXGI: records it in m_lastPresentSuppressed and returns
     // whether the game's real Present is called (false with the mirror off).
     // A frame that goes from showing to off is the one exception: it presents once, black (see below).
-    bool PresentToDesktopMirror(ID3D12Resource* backBuffer);
-    // Desktop Mirror Window black frame: whether the mirror was showing at the last Present that decided it.
-    // Every Present where the mirror shows by itself (session not running, Pass-Through, no handshake) or
-    // is on sets it, so the first Present after a resume with the mirror off is a showing-to-off switch.
+    bool ShouldCallRealPresent(ID3D12Resource* backBuffer);
+    // True while the Desktop Mirror Window showed at the last Present (on, or shown by itself); false once it switched off.
     bool m_desktopMirrorWasShowing = false;
-    // The mirror just went from showing to off: clears the back buffer to black (after the eye copy that
-    // already ran) and returns true so the real Present is called once. False when no switch happened.
-    bool TakeDesktopMirrorBlackFrame(ID3D12Resource* backBuffer);
-    // After each Present: on a change of IsDesktopMirrorOffNow(), logs it and swaps the game window's title
-    // (off note while the mirror is off, the kept title when it shows again). Leaves the title alone otherwise.
+    // If the mirror just went from showing to off: changes that state (it is now off), clears the back buffer to
+    // black (after the eye copy that already ran) and returns true so the real Present is called once. Else false.
+    bool ConsumeSwitchToOff(ID3D12Resource* backBuffer);
+    // After each Present: logs each change of IsDesktopMirrorOffNow() once, and keeps the game window's title
+    // matching it (off note whenever the mirror is off and the title is not shown, the kept title when it shows
+    // again). Leaves the title alone otherwise.
     void UpdateDesktopMirrorTitle();
     bool m_desktopMirrorOffAnnounced = false;
 
