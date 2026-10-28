@@ -113,6 +113,10 @@ TEST_F(LuauTestSuiteTest, TestRenderingCamera) {
     RunSuite("tests/test_rendering_camera.luau");
 }
 
+TEST_F(LuauTestSuiteTest, TestPerUpdateAllocations) {
+    RunSuite("tests/test_per_update_allocations.luau");
+}
+
 TEST_F(LuauTestSuiteTest, TestReusableTables) {
     RunSuite("tests/test_reusable_tables.luau");
 }
