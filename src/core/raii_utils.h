@@ -167,7 +167,6 @@ public:
         return S_OK;
     }
 
-
 private:
     ID3D12GraphicsCommandList* m_cmdList = nullptr;
     bool m_closed = false;

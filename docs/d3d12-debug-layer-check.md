@@ -1,8 +1,9 @@
 # Manual D3D12 debug-layer check for the eye-swapchain copy
 
-The unit tests use a mock OpenXR dispatch with no real D3D12 device, so resource-state
-correctness of `OpenXrManager::CopyBackBufferToEye` cannot be validated automatically.
-Verify it manually after touching the copy path:
+The unit tests that use a mock OpenXR dispatch have no real D3D12 device, so they cannot validate resource-state
+correctness of `OpenXrManager::CopyBackBufferToEye`. The WARP test described under "Automated check on a WARP
+device" below can, when the D3D12 debug layer is installed. Where it is not, or after touching the copy path,
+verify manually:
 
 1. Enable the D3D12 debug layer for the game (DirectX Control Panel, or `ID3D12Debug::EnableDebugLayer`),
    and optionally GPU-based validation.
