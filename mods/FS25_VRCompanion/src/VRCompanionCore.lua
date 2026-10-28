@@ -126,6 +126,33 @@ function VRCompanion:getLookRayWrapOriginal()
     return lookRayWrap ~= nil and lookRayWrap.original or nil
 end
 
+-- Every console command the core registers on map load: map load adds them and map unload removes them, both from this one list.
+VRCompanion.CORE_CONSOLE_COMMANDS = {
+    { name = "vrHudSafeArea", description = "Set the VR HUD Safe Area, the margin that keeps warnings, notifications and other mods' HUDs inside the lens: vrHudSafeArea <horizontal> <vertical>", method = "consoleCommandSetHudSafeArea" },
+    { name = "vrHudGroup", description = "Set a VR HUD Group Margin and scale: vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]", method = "consoleCommandSetHudGroup" },
+    { name = "vrHudState", description = "Set VR HUD state: vrHudState <0=Hidden | 1=Streamlined | 2=Full>", method = "consoleCommandSetHudState" },
+    { name = "vrHudLoadNotification", description = "Toggle HUD alert on map load: vrHudLoadNotification <true|false>", method = "consoleCommandSetHudLoadNotification" },
+    { name = "vrHudLoadAlert", description = "Toggle HUD alert on map load: vrHudLoadAlert <true|false>", method = "consoleCommandSetHudLoadNotification" },
+    { name = "vrRecenterMode", description = "Set VR Recenter Action mode: vrRecenterMode [Both | VehicleOnly | toggle]", method = "consoleCommandSetRecenterMode" },
+    { name = "vrRecenterTracking", description = "Set VR Recenter Action mode: vrRecenterTracking [Both | VehicleOnly | toggle]", method = "consoleCommandSetRecenterMode" },
+    { name = "vrSnapTurnAngle", description = "Set or query VR snap turn angle in degrees: vrSnapTurnAngle [degrees]", method = "consoleCommandSetSnapTurnAngle" },
+    { name = "vr2DView", description = "Set or query 2D Floating Window Mode: vr2DView [true|false|toggle]", method = "consoleCommandSet2DView" },
+    { name = "vrToggleView", description = "Toggle 2D Floating Window Mode: vrToggleView", method = "consoleCommandToggleView" },
+    { name = "vrDlssMvScale", description = "Set DLSS motion vector scale multiplier: vrDlssMvScale <scaleX> [scaleY]", method = "consoleCommandSetDlssMvScale" },
+    { name = "vrDlssSharpness", description = "Set DLSS sharpness override: vrDlssSharpness <sharpness 0.0-1.0>", method = "consoleCommandSetDlssSharpness" },
+    { name = "vrDlssPreset", description = "Set DLSS preset hint: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L>", method = "consoleCommandSetDlssPreset" },
+    { name = "vrDlssSdpMvScale", description = "Set DLSS motion vector scale under Sequential Dual-Pass: vrDlssSdpMvScale <scaleX> [scaleY]", method = "consoleCommandSetDlssSdpMvScale" },
+    { name = "vrDlssMvFix", description = "Switch the DLSS motion vector pass for A/B comparison: vrDlssMvFix <on|off>", method = "consoleCommandDlssMvFix" },
+    { name = "vrDlssDepthModel", description = "Set the depth model of the DLSS motion vector correction for A/B comparison: vrDlssDepthModel <infinite|finite>", method = "consoleCommandDlssDepthModel" },
+    { name = "vrDlssNearClip", description = "Set the near plane of the DLSS motion vector correction for every camera in metres (0 or auto = estimate it automatically): vrDlssNearClip <meters|auto>", method = "consoleCommandDlssNearClip" },
+    { name = "vrDlssNearClipCab", description = "Set the DLSS near plane for a vehicle's inside camera: vrDlssNearClipCab <meters|auto>", method = "consoleCommandDlssNearClipCab" },
+    { name = "vrDlssNearClipOutside", description = "Set the DLSS near plane for a vehicle's outside cameras: vrDlssNearClipOutside <meters|auto>", method = "consoleCommandDlssNearClipOutside" },
+    { name = "vrDlssNearClipOnFoot", description = "Set the DLSS near plane on foot: vrDlssNearClipOnFoot <meters|auto>", method = "consoleCommandDlssNearClipOnFoot" },
+    { name = "vrDlssDiag", description = "Trace DLSS evaluations to fs25_vr.log: vrDlssDiag [evaluations]", method = "consoleCommandDlssDiag" },
+    { name = "vrRenderingMode", description = "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", method = "consoleCommandSetRenderingMode" },
+    { name = "vrHudGroupShow", description = "Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", method = "consoleCommandHudGroupShow" },
+}
+
 function VRCompanion:loadMap(name)
     print(string.format("[FS25_VR] Initializing Companion Mod on map '%s'...", tostring(name)))
 
@@ -260,29 +287,9 @@ function VRCompanion:loadMap(name)
 
     -- 9. Register developer and tuning console commands
     if addConsoleCommand ~= nil then
-        addConsoleCommand("vrHudSafeArea", "Set the VR HUD Safe Area, the margin that keeps warnings, notifications and other mods' HUDs inside the lens: vrHudSafeArea <horizontal> <vertical>", "consoleCommandSetHudSafeArea", self)
-        addConsoleCommand("vrHudGroup", "Set a VR HUD Group Margin and scale: vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]", "consoleCommandSetHudGroup", self)
-        addConsoleCommand("vrHudState", "Set VR HUD state: vrHudState <0=Hidden | 1=Streamlined | 2=Full>", "consoleCommandSetHudState", self)
-        addConsoleCommand("vrHudLoadNotification", "Toggle HUD alert on map load: vrHudLoadNotification <true|false>", "consoleCommandSetHudLoadNotification", self)
-        addConsoleCommand("vrHudLoadAlert", "Toggle HUD alert on map load: vrHudLoadAlert <true|false>", "consoleCommandSetHudLoadNotification", self)
-        addConsoleCommand("vrRecenterMode", "Set VR Recenter Action mode: vrRecenterMode [Both | VehicleOnly | toggle]", "consoleCommandSetRecenterMode", self)
-        addConsoleCommand("vrRecenterTracking", "Set VR Recenter Action mode: vrRecenterTracking [Both | VehicleOnly | toggle]", "consoleCommandSetRecenterMode", self)
-        addConsoleCommand("vrSnapTurnAngle", "Set or query VR snap turn angle in degrees: vrSnapTurnAngle [degrees]", "consoleCommandSetSnapTurnAngle", self)
-        addConsoleCommand("vr2DView", "Set or query 2D Floating Window Mode: vr2DView [true|false|toggle]", "consoleCommandSet2DView", self)
-        addConsoleCommand("vrToggleView", "Toggle 2D Floating Window Mode: vrToggleView", "consoleCommandToggleView", self)
-        addConsoleCommand("vrDlssMvScale", "Set DLSS motion vector scale multiplier: vrDlssMvScale <scaleX> [scaleY]", "consoleCommandSetDlssMvScale", self)
-        addConsoleCommand("vrDlssSharpness", "Set DLSS sharpness override: vrDlssSharpness <sharpness 0.0-1.0>", "consoleCommandSetDlssSharpness", self)
-        addConsoleCommand("vrDlssPreset", "Set DLSS preset hint: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L>", "consoleCommandSetDlssPreset", self)
-        addConsoleCommand("vrDlssSdpMvScale", "Set DLSS motion vector scale under Sequential Dual-Pass: vrDlssSdpMvScale <scaleX> [scaleY]", "consoleCommandSetDlssSdpMvScale", self)
-        addConsoleCommand("vrDlssMvFix", "Switch the DLSS motion vector pass for A/B comparison: vrDlssMvFix <on|off>", "consoleCommandDlssMvFix", self)
-        addConsoleCommand("vrDlssDepthModel", "Set the depth model of the DLSS motion vector correction for A/B comparison: vrDlssDepthModel <infinite|finite>", "consoleCommandDlssDepthModel", self)
-        addConsoleCommand("vrDlssNearClip", "Set the near plane of the DLSS motion vector correction for every camera in metres (0 or auto = estimate it automatically): vrDlssNearClip <meters|auto>", "consoleCommandDlssNearClip", self)
-        addConsoleCommand("vrDlssNearClipCab", "Set the DLSS near plane for a vehicle's inside camera: vrDlssNearClipCab <meters|auto>", "consoleCommandDlssNearClipCab", self)
-        addConsoleCommand("vrDlssNearClipOutside", "Set the DLSS near plane for a vehicle's outside cameras: vrDlssNearClipOutside <meters|auto>", "consoleCommandDlssNearClipOutside", self)
-        addConsoleCommand("vrDlssNearClipOnFoot", "Set the DLSS near plane on foot: vrDlssNearClipOnFoot <meters|auto>", "consoleCommandDlssNearClipOnFoot", self)
-        addConsoleCommand("vrDlssDiag","Trace DLSS evaluations to fs25_vr.log: vrDlssDiag [evaluations]", "consoleCommandDlssDiag", self)
-        addConsoleCommand("vrRenderingMode", "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", "consoleCommandSetRenderingMode", self)
-        addConsoleCommand("vrHudGroupShow","Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", "consoleCommandHudGroupShow", self)
+        for _, command in ipairs(self.CORE_CONSOLE_COMMANDS) do
+            addConsoleCommand(command.name, command.description, command.method, self)
+        end
     end
     if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
     if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
@@ -375,18 +382,21 @@ VRCompanion.STEREO_DIALOGS = {
 -- its controller object and whose buttons and position later tickets work on), or nil. A dialog opened over a screen (the pause
 -- menu sets g_gui.currentGuiName; a dialog does not) or over another dialog is not alone, and anything that cannot be read as
 -- a lone listed dialog counts as a menu, so that the player is never left in stereo with a GUI they cannot use.
+-- The GUI fields read in one protected call. Defined once, so that polling a menu every update makes no closure.
+local function readLoneStereoDialog(gui)
+    local screen = gui.currentGuiName
+    if screen ~= nil and screen ~= "" then return nil end
+    local dialogs = gui.dialogs
+    if type(dialogs) ~= "table" or #dialogs ~= 1 then return nil end
+    local name = gui.currentDialogName
+    if type(name) ~= "string" or VRCompanion.STEREO_DIALOGS[name] ~= true then return nil end
+    return dialogs[1]
+end
+
 function VRCompanion:findStereoDialog(gui)
     gui = gui or g_gui or _G.g_gui
     if type(gui) ~= "table" then return nil end
-    local ok, root = pcall(function()
-        local screen = gui.currentGuiName
-        if screen ~= nil and screen ~= "" then return nil end
-        local dialogs = gui.dialogs
-        if type(dialogs) ~= "table" or #dialogs ~= 1 then return nil end
-        local name = gui.currentDialogName
-        if type(name) ~= "string" or self.STEREO_DIALOGS[name] ~= true then return nil end
-        return dialogs[1]
-    end)
+    local ok, root = pcall(readLoneStereoDialog, gui)
     return ok and root or nil
 end
 
@@ -1225,16 +1235,9 @@ function VRCompanion:deleteMap()
 
     -- Remove console commands
     if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrHudSafeArea")
-        removeConsoleCommand("vrHudGroup")
-        removeConsoleCommand("vrHudState")
-        removeConsoleCommand("vrRecenterMode")
-        removeConsoleCommand("vrRecenterTracking")
-        removeConsoleCommand("vrSnapTurnAngle")
-        removeConsoleCommand("vr2DView")
-        removeConsoleCommand("vrToggleView")
-        removeConsoleCommand("vrRenderingMode")
-        removeConsoleCommand("vrHudGroupShow")
+        for _, command in ipairs(self.CORE_CONSOLE_COMMANDS) do
+            removeConsoleCommand(command.name)
+        end
     end
 
     if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end

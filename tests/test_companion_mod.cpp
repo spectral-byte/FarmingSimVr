@@ -711,6 +711,61 @@ TEST_F(CompanionModTest, ObliqueProjectionConsoleCommandIsNoLongerRegistered) {
     )luau", "=testObliqueProjectionConsoleCommandGone"), 0);
 }
 
+TEST_F(CompanionModTest, EveryConsoleCommandIsRemovedOnUnloadSoASecondMapLoadsCleanly) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        -- Models the engine: a console command can only be added while its name is free
+        local present = {}
+        local handlers = {}
+        local duplicates = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            if present[cmd] then table.insert(duplicates, cmd) end
+            present[cmd] = true
+            handlers[cmd] = { funcName = funcName, target = target }
+        end
+        _G.removeConsoleCommand = function(cmd) present[cmd] = nil end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        local function leftBehind()
+            local names = {}
+            for cmd in pairs(present) do table.insert(names, cmd) end
+            table.sort(names)
+            return table.concat(names, ", ")
+        end
+
+        VRCompanion:loadMap("firstMap")
+        VRCompanion:deleteMap()
+        assert(leftBehind() == "", "map unload must remove every command it registered, left: " .. leftBehind())
+
+        VRCompanion:loadMap("secondMap")
+        assert(#duplicates == 0, "no command may be registered while already present: " .. table.concat(duplicates, ", "))
+
+        local mustRun = {
+            "vrHudLoadNotification", "vrHudLoadAlert", "vrDlssMvScale", "vrDlssSharpness", "vrDlssPreset",
+            "vrDlssSdpMvScale", "vrDlssMvFix", "vrDlssDepthModel", "vrDlssNearClip", "vrDlssNearClipCab",
+            "vrDlssNearClipOutside", "vrDlssNearClipOnFoot", "vrDlssDiag",
+        }
+        for _, cmd in ipairs(mustRun) do
+            local entry = handlers[cmd]
+            assert(entry ~= nil and present[cmd], cmd .. " must be registered on the second map")
+            local ok, err = pcall(function() return entry.target[entry.funcName](entry.target) end)
+            assert(ok, cmd .. " must run on the second map: " .. tostring(err))
+        end
+
+        VRCompanion:deleteMap()
+        assert(leftBehind() == "", "second map unload must remove every command, left: " .. leftBehind())
+    )luau", "=testEveryConsoleCommandRemovedOnUnload"), 0);
+}
+
 TEST_F(CompanionModTest, DlssMvFixConsoleCommandSwitchesTheMotionVectorPass) {
     auto ngx = std::make_shared<fs25vr::NgxInterceptor>();
     fs25vr::VRBridge bridge(nullptr, ngx);

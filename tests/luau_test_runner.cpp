@@ -18,6 +18,30 @@ LuauTestRunner::~LuauTestRunner() {
     }
 }
 
+// Luau's base library only has gcinfo. collectgarbage serves weak-table tests (a forced full collection, the default)
+// and allocation tests: "collect", "count" (KB, with the byte remainder), "stop" and "restart".
+static int LuauCollectGarbage(lua_State* L) {
+    std::string_view option = luaL_optstring(L, 1, "collect");
+    if (option == "collect") {
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        return 0;
+    }
+    if (option == "count") {
+        lua_pushnumber(L, lua_gc(L, LUA_GCCOUNT, 0) + lua_gc(L, LUA_GCCOUNTB, 0) / 1024.0);
+        return 1;
+    }
+    if (option == "stop") {
+        lua_gc(L, LUA_GCSTOP, 0);
+        return 0;
+    }
+    if (option == "restart") {
+        lua_gc(L, LUA_GCRESTART, 0);
+        return 0;
+    }
+    luaL_error(L, "collectgarbage: unsupported option '%s'", option.data());
+    return 0;
+}
+
 void LuauTestRunner::InitializeEnvironment() {
     L_ = luaL_newstate();
     if (!L_) return;
@@ -29,6 +53,9 @@ void LuauTestRunner::InitializeEnvironment() {
     lua_pushcclosure(L_, &LuauPrint, "print", 1);
     lua_setglobal(L_, "print");
 
+    lua_pushcfunction(L_, &LuauCollectGarbage, "collectgarbage");
+    lua_setglobal(L_, "collectgarbage");
+
     // Register loadstring
     lua_pushcfunction(L_, &LuauLoadString, "loadstring");
     lua_setglobal(L_, "loadstring");
@@ -36,13 +63,6 @@ void LuauTestRunner::InitializeEnvironment() {
     // Register loadCompanionMod (loads module files in modDesc order, as the engine does)
     lua_pushcfunction(L_, &LuauLoadCompanionMod, "loadCompanionMod");
     lua_setglobal(L_, "loadCompanionMod");
-
-    // Luau has no collectgarbage; weak-table tests need a forced full collection
-    lua_pushcfunction(L_, [](lua_State* L) -> int {
-        lua_gc(L, LUA_GCCOLLECT, 0);
-        return 0;
-    }, "collectgarbage");
-    lua_setglobal(L_, "collectgarbage");
 
     // Register require (supporting @lune/fs)
     lua_pushlightuserdata(L_, this);
