@@ -289,6 +289,7 @@ function VRCompanion:loadMap(name)
     if type(self.registerSeatOffsetConsoleCommands) == "function" then self:registerSeatOffsetConsoleCommands() end
     if type(self.registerStereoDialogDepthConsoleCommands) == "function" then self:registerStereoDialogDepthConsoleCommands() end
     if type(self.registerDualPassPhysicsConsoleCommands) == "function" then self:registerDualPassPhysicsConsoleCommands() end
+    if type(self.registerDesktopMirrorConsoleCommands) == "function" then self:registerDesktopMirrorConsoleCommands() end
 
     if self.showHudLoadNotification == true then
         local mission = g_currentMission or _G.g_currentMission
@@ -1213,6 +1214,7 @@ function VRCompanion:deleteMap()
 
     if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
     if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
+    if type(self.resetDesktopMirror) == "function" then self:resetDesktopMirror() end
     if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
     if type(self.unregisterStereoDialogDepthConsoleCommands) == "function" then self:unregisterStereoDialogDepthConsoleCommands() end
     if type(self.unregisterDualPassPhysicsConsoleCommands) == "function" then self:unregisterDualPassPhysicsConsoleCommands() end

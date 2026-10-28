@@ -986,6 +986,182 @@ TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
     proxy.DetachAll();
 }
 
+// The game's swapchain Present as the Desktop Mirror Window tests drive it: an active OpenXR mock, a real
+// VRBridge and a mock swapchain whose real Present calls are counted in s_mockPresentCalls.
+struct MirrorPresentRig {
+    std::shared_ptr<MockActiveOpenXrDispatch> dispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    std::shared_ptr<OpenXrManager> openXrManager = std::make_shared<OpenXrManager>(dispatch);
+    std::shared_ptr<VRBridge> vrBridge;
+    std::unique_ptr<InjectorRuntime> runtime;
+    std::vector<void*> vtable = std::vector<void*>(30, nullptr);
+    MockComObject mockSwapChain{ vtable.data() };
+    IDXGISwapChain* swapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
+    HRESULT(STDMETHODCALLTYPE* pfnPresent)(IDXGISwapChain*, UINT, UINT) = nullptr;
+
+    explicit MirrorPresentRig(VRRenderingMode mode, bool companionHandshake = true) {
+        s_mockPresentCalls = 0;
+        EXPECT_TRUE(openXrManager->Initialize());
+        EXPECT_TRUE(openXrManager->CreateSession());
+        EXPECT_TRUE(openXrManager->CreateTrackingSpaces());
+        EXPECT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+        vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+        if (companionHandshake) {
+            vrBridge->PerformHandshake();
+        }
+        vrBridge->SetRenderingMode(mode);
+        runtime = MakeRuntime(openXrManager, vrBridge);
+        vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
+        vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+        vtable[2] = reinterpret_cast<void*>(&MockRelease);
+        vtable[7] = reinterpret_cast<void*>(&MockGetDevice);
+        vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
+        vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
+        vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+        EXPECT_TRUE(runtime->GetDxgiProxy().AttachSwapChain(swapChain));
+        void** hookedVTable = *reinterpret_cast<void***>(swapChain);
+        pfnPresent = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(hookedVTable[kPresentVTableSlot]);
+    }
+    ~MirrorPresentRig() { runtime->GetDxgiProxy().DetachAll(); }
+
+    // The game presents one frame; returns how many real Present calls reached DXGI for it.
+    int Present() {
+        int before = s_mockPresentCalls;
+        EXPECT_EQ(pfnPresent(swapChain, 1, 0), S_OK);
+        return (s_mockPresentCalls - before) / kMockPresentIncrement;
+    }
+};
+
+TEST(DxgiProxyTest, DesktopMirrorIsOnByDefaultAndEveryAfrPresentReachesDxgi) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_TRUE(rig.vrBridge->IsDesktopMirrorEnabled());
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(rig.Present(), 1);
+    }
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesEveryAfrPresentAndKeepsTheEyePairsFlowing) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+        EXPECT_TRUE(rig.runtime->GetDxgiProxy().IsPresentSuppressed());
+    }
+    EXPECT_EQ(s_mockPresentCalls, 0);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 2u);
+    EXPECT_EQ(rig.vrBridge->GetFrameIndex(), 4u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesBothSequentialDualPassSubPasses) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int pair = 0; pair < 2; ++pair) {
+        EXPECT_EQ(rig.Present(), 0);  // sub-pass 0
+        EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 1u);
+        EXPECT_EQ(rig.Present(), 0);  // sub-pass 1
+        EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 0u);
+    }
+    EXPECT_EQ(s_mockPresentCalls, 0);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 2u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesMenuQuadFramesAndKeepsSubmittingTheQuad) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+    }
+    EXPECT_EQ(rig.openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 0u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesPresentsInTwoDFloatingWindowMode) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    rig.vrBridge->Set2DViewActive(true);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+    }
+    EXPECT_EQ(rig.openXrManager->GetSubmittedQuadFrameCount(), 3u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTurnedOnAgainPresentsEveryFrameAgain) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_FALSE(rig.runtime->GetDxgiProxy().IsPresentSuppressed());
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsWhileTheSessionIsNotRunning) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+    ASSERT_TRUE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // headset asleep, dashboard
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_FALSE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // headset back on: dark again
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_TRUE(rig.openXrManager->IsSessionRunning());
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsInPassThroughMode) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_EQ(rig.Present(), 1);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsBeforeTheCompanionModHandshake) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+
+    rig.vrBridge->PerformHandshake();  // a savegame loaded: the mirror goes dark
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorSettingDoesNotChangeWhatTheHeadsetReceives) {
+    for (VRRenderingMode mode : { VRRenderingMode::AFR, VRRenderingMode::SequentialDualPass }) {
+        uint64_t pairs[2] = {};
+        uint64_t quads[2] = {};
+        uint64_t frames[2] = {};
+        uint64_t beginFrames[2] = {};
+        for (int mirrorOff = 0; mirrorOff < 2; ++mirrorOff) {
+            MirrorPresentRig rig(mode);
+            rig.vrBridge->SetDesktopMirrorEnabled(mirrorOff == 0);
+            for (int i = 0; i < 6; ++i) rig.Present();
+            rig.vrBridge->SetMenuVisible(true);
+            for (int i = 0; i < 2; ++i) rig.Present();
+            rig.vrBridge->SetMenuVisible(false);
+            for (int i = 0; i < 4; ++i) rig.Present();
+            pairs[mirrorOff] = rig.openXrManager->GetSubmittedFramePairCount();
+            quads[mirrorOff] = rig.openXrManager->GetSubmittedQuadFrameCount();
+            frames[mirrorOff] = rig.vrBridge->GetFrameIndex();
+            beginFrames[mirrorOff] = rig.dispatch->beginFrameCalls;
+        }
+        EXPECT_EQ(pairs[0], pairs[1]);
+        EXPECT_EQ(quads[0], quads[1]);
+        EXPECT_EQ(frames[0], frames[1]);
+        EXPECT_EQ(beginFrames[0], beginFrames[1]);
+        EXPECT_GT(pairs[0], 0u);
+        EXPECT_EQ(quads[0], 2u);
+    }
+}
+
 TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryFromSequentialDualPassToAfr) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);

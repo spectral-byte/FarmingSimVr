@@ -179,6 +179,7 @@ PERFORMANCE & SETTINGS
 
 - In-Game Console Commands (press ~ to open console):
   * vrRenderingMode <afr|dualpass|toggle>
+  * vrDesktopMirror [on|off]             (turn the Desktop Mirror Window on or off for this session)
   * vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]
                                          (defaults: speedometer 0.30 0.20 0.82, map 0.30 0.22 0.82,
                                           info 0.30 0.30 0.82, controls 0.30 0.30 0.82)

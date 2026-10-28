@@ -170,6 +170,7 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
     self->ResetSubPass();
     self->SetMenuVisible(false);
     self->Set2DViewActive(false);
+    self->SetDesktopMirrorEnabled(true);
     LogInfo("[VRBridge] Companion Mod map unloaded; reverted to Menu Quad layer mode.");
     return 0;
 }
@@ -911,6 +912,21 @@ int VRBridge::Lua_GetIs2DViewActive(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     lua_pushboolean(L, self->Is2DViewActive() ? 1 : 0);
+    return 1;
+}
+
+int VRBridge::Lua_SetDesktopMirror(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setDesktopMirror");
+    self->SetDesktopMirrorEnabled(lua_gettop(L) < 1 || lua_toboolean(L, 1) != 0);
+    return 0;
+}
+
+int VRBridge::Lua_GetDesktopMirror(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    lua_pushboolean(L, self->IsDesktopMirrorEnabled() ? 1 : 0);
     return 1;
 }
 

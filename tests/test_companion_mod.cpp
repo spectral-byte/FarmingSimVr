@@ -4569,6 +4569,73 @@ TEST_F(CompanionModTest, RenderingModeConsoleCommandAndNotificationAlert) {
     )luau", "=testRenderingModeConsoleCommand"), 0);
 }
 
+TEST_F(CompanionModTest, DesktopMirrorConsoleCommandSetsTheVRBridgeFlag) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        local removedCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName, target = target }
+        end
+        _G.removeConsoleCommand = function(cmd) removedCommands[cmd] = true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrDesktopMirror"] ~= nil, "vrDesktopMirror must be registered on map load")
+        assert(registeredCommands["vrDesktopMirror"].funcName == "consoleCommandSetDesktopMirror",
+            "registered callback must be consoleCommandSetDesktopMirror")
+        assert(VRCompanion.desktopMirror == true, "the mirror is on by default")
+        assert(VRBridge.getDesktopMirror() == true, "VRBridge flag is on by default")
+
+        -- No argument reports the state without changing it
+        local status = VRCompanion:consoleCommandSetDesktopMirror()
+        assert(type(status) == "string" and string.find(status, "on") ~= nil, "status must say the mirror is on: " .. tostring(status))
+        assert(VRBridge.getDesktopMirror() == true)
+
+        -- off / on set the VRBridge flag
+        VRCompanion:consoleCommandSetDesktopMirror("off")
+        assert(VRCompanion.desktopMirror == false)
+        assert(VRBridge.getDesktopMirror() == false, "vrDesktopMirror off must clear the VRBridge flag")
+        status = VRCompanion:consoleCommandSetDesktopMirror()
+        assert(string.find(status, "off") ~= nil, "status must say the mirror is off: " .. tostring(status))
+
+        VRCompanion:consoleCommandSetDesktopMirror("on")
+        assert(VRCompanion.desktopMirror == true)
+        assert(VRBridge.getDesktopMirror() == true, "vrDesktopMirror on must set the VRBridge flag")
+
+        -- Anything else is refused and changes nothing
+        VRCompanion:consoleCommandSetDesktopMirror("off")
+        local refused = VRCompanion:consoleCommandSetDesktopMirror("maybe")
+        assert(string.find(refused, "Usage: vrDesktopMirror") ~= nil, "an invalid argument returns the usage")
+        assert(VRBridge.getDesktopMirror() == false, "an invalid argument must not change the flag")
+
+        -- Map unload removes the command and puts the mirror back on
+        VRCompanion:deleteMap()
+        assert(removedCommands["vrDesktopMirror"] == true, "deleteMap must unregister vrDesktopMirror")
+        assert(VRCompanion.desktopMirror == true, "deleteMap resets the mirror to on")
+    )luau", "=testDesktopMirrorConsoleCommand"), 0);
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
+}
+
+TEST_F(CompanionModTest, DesktopMirrorCommandIsHarmlessWithoutTheNativeBridgeFunction) {
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRBridge = { version = "1.0.0", handshake = function() return true end }
+        local result = VRCompanion:consoleCommandSetDesktopMirror("off")
+        assert(type(result) == "string")
+        assert(VRCompanion.desktopMirror == false)
+    )luau", "=testDesktopMirrorWithoutBridgeFunction"), 0);
+}
+
 TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDrivingAndOnFoot) {
     SetupCameraMockGlobals(L);
     fs25vr::FakeTrackedHeadset headset;

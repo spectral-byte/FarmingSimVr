@@ -537,8 +537,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
             m_openXrManager->SubmitMenuQuad();
             // The quad frame is a completed compositor frame and no eye pair is in flight.
             LatchPendingRenderingMode();
-            m_lastPresentSuppressed = false;
-            return true;
+            return PresentToDesktopMirror();
         } else {
             if (m_wasInQuadMode) {
                 // Seamlessly returning to stereoscopic 3D VR view: reset AFR frame parity and subPassIndex
@@ -571,8 +570,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
                         m_vrBridge->AdvanceFrame();
                     }
                     LatchPendingRenderingMode();
-                    m_lastPresentSuppressed = false;
-                    return true;
+                    return PresentToDesktopMirror();
                 }
             } else {
                 // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
@@ -590,8 +588,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
                 if (parity == 1) {
                     LatchPendingRenderingMode();
                 }
-                m_lastPresentSuppressed = false;
-                return true;
+                return PresentToDesktopMirror();
             }
         }
     }
@@ -599,6 +596,17 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
     LatchPendingRenderingMode();
     m_lastPresentSuppressed = false;
     return true;
+}
+
+bool DxgiProxy::IsDesktopMirrorOffNow() const {
+    return m_vrBridge && m_vrBridge->IsCompanionActive() && !m_vrBridge->IsDesktopMirrorEnabled() &&
+           m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning() &&
+           m_openXrManager->HasEyeSwapchains();
+}
+
+bool DxgiProxy::PresentToDesktopMirror() {
+    m_lastPresentSuppressed = IsDesktopMirrorOffNow();
+    return !m_lastPresentSuppressed;
 }
 
 void DxgiProxy::OnPresentReturned(HRESULT presentResult) {
