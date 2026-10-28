@@ -198,6 +198,7 @@ add_executable(fs25_vr_tests
     tests/test_perf_trace.cpp
     tests/test_openxr_cursor_overlay.cpp
     tests/test_openxr_manager.cpp
+    tests/test_openxr_eye_copy_d3d12.cpp
     tests/test_openxr_motion_controllers.cpp
     tests/test_mirror_window_controller.cpp
     tests/test_dxgi_proxy.cpp
