@@ -77,6 +77,10 @@ protected:
     }
 };
 
+TEST_F(LuauTestSuiteTest, TestActionEvents) {
+    RunSuite("tests/test_action_events.luau");
+}
+
 TEST_F(LuauTestSuiteTest, Test2dViewMode) {
     RunSuite("tests/test_2d_view_mode.luau");
 }
