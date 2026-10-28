@@ -431,6 +431,7 @@ void DxgiProxy::DetachAll() {
     m_cachedSwapChain3.Reset();
     m_cachedBackBuffers.clear();
     m_lastPresentSuppressed = false;
+    m_desktopMirrorOffAnnounced = false;
     if (m_vrBridge) {
         m_vrBridge->ClearPendingRenderingMode();
     }
@@ -445,6 +446,7 @@ void DxgiProxy::LatchPendingRenderingMode() {
 bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
     m_presentWasStereo = false;
     bool shouldPresent = OnPresentImpl(swapChain, syncInterval, flags);
+    UpdateDesktopMirrorTitle();
     // The rendered-frame counter stamps the Companion Mod's camera records and resolves them for DLSS
     // evaluations. It advances per stereo Present only; a Present outside stereo presentation (menu,
     // 2D Floating Window Mode, Pass-Through) renders no eye camera, so its records are dropped
@@ -661,6 +663,29 @@ bool DxgiProxy::IsDesktopMirrorOffNow() const {
     return m_vrBridge && m_vrBridge->IsCompanionActive() && !m_vrBridge->IsDesktopMirrorEnabled() &&
            m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning() &&
            m_openXrManager->HasEyeSwapchains();
+}
+
+void DxgiProxy::UpdateDesktopMirrorTitle() {
+    const bool off = IsDesktopMirrorOffNow();
+    if (off == m_desktopMirrorOffAnnounced) return;
+    m_desktopMirrorOffAnnounced = off;
+
+    if (off) {
+        LogInfo("DxgiProxy: Desktop mirror off; window title says so until it shows again.");
+        if (m_windowController) m_windowController->ShowDesktopMirrorOffTitle();
+        return;
+    }
+    // The handshake and Pass-Through checks come first: a savegame unload also resets the flag to on.
+    const char* reason = "by command (vrDesktopMirror on)";
+    if (!m_openXrManager || !m_openXrManager->IsActive()) {
+        reason = "by itself (Pass-Through Mode)";
+    } else if (!m_vrBridge || !m_vrBridge->IsCompanionActive()) {
+        reason = "by itself (Companion Mod handshake lost)";
+    } else if (!m_openXrManager->HasEyeSwapchains() || !m_openXrManager->IsSessionRunning()) {
+        reason = "by itself (session not running)";
+    }
+    LogInfo(std::string("DxgiProxy: Desktop mirror on ") + reason + "; window title restored.");
+    if (m_windowController) m_windowController->RestoreTitle();
 }
 
 bool DxgiProxy::PresentToDesktopMirror() {

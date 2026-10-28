@@ -19,6 +19,7 @@
 #include <iterator>
 #include <cstring>
 #include <future>
+#include <string>
 #include <thread>
 #include <unordered_set>
 
@@ -3979,6 +3980,251 @@ TEST(DxgiProxyTest, AttachSwapChainDetoursResizeBuffersAndOverridesTargetResolut
 
     activeProxy.DetachAll();
     EXPECT_FALSE(activeProxy.IsDetourResizeBuffersInstalled());
+}
+
+// Desktop Mirror Window title (#196): while the mirror is off the game window's title says so and names
+// the command that restores it. These tests use a real window and read the title back.
+namespace {
+std::wstring WindowTitle(HWND hWnd) {
+    int length = GetWindowTextLengthW(hWnd);
+    std::wstring title(static_cast<size_t>(length) + 1, L'\0');
+    int copied = GetWindowTextW(hWnd, title.data(), length + 1);
+    title.resize(static_cast<size_t>(copied));
+    return title;
+}
+
+// A real top-level test window with a known title, handed to the proxy as the game window.
+struct MirrorTitleWindow {
+    explicit MirrorTitleWindow(MirrorPresentRig& rig, const char* title = "Farming Simulator 25") {
+        hWnd = CreateWindowA("STATIC", title, WS_OVERLAPPEDWINDOW, 0, 0, 640, 360, nullptr, nullptr, nullptr, nullptr);
+        EXPECT_NE(hWnd, nullptr);
+        rig.runtime->GetDxgiProxy().GetWindowController().SetGameHwnd(hWnd);
+    }
+    ~MirrorTitleWindow() {
+        if (hWnd) DestroyWindow(hWnd);
+    }
+    std::wstring Title() const { return WindowTitle(hWnd); }
+    HWND hWnd = nullptr;
+};
+
+bool TitleSaysMirrorIsOff(const std::wstring& title) {
+    return title.find(L"desktop mirror is off") != std::wstring::npos &&
+           title.find(L"vrDesktopMirror on") != std::wstring::npos;
+}
+} // namespace
+
+TEST(DxgiProxyTest, DesktopMirrorOffSetsATitleThatNamesTheCommandToRestoreIt) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title())) << "title was a different text";
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsUntouchedWhileTheMirrorIsOn) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    for (int i = 0; i < 4; ++i) {
+        rig.Present();
+        EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+    }
+    // The game changes its own title while the mirror shows: the Injector leaves that alone.
+    SetWindowTextA(window.hWnd, "Farming Simulator 25 - map");
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25 - map");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTurnedOnRestoresTheKeptTitle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleKeepsTheFullLengthOfALongTitle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    const std::string longTitle = "Farming Simulator 25 - " + std::string(700, 'x') + " - end";
+    MirrorTitleWindow window(rig, longTitle.c_str());
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), std::wstring(longTitle.begin(), longTitle.end()));
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleBehavesTheSameInSequentialDualPassAndMenuFrames) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();  // sub-pass 0
+    rig.Present();  // sub-pass 1
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+    rig.vrBridge->SetMenuVisible(true);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheSessionStopsRunningAndSetAgainOnResume) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredOnPassThroughDrop) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    rig.Present();
+    ASSERT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheHandshakeIsLost) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    // The savegame unloads: the Companion Mod's handshake is gone.
+    rig.vrBridge->SetCompanionActive(false);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheInjectorDetaches) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.runtime->GetDxgiProxy().DetachAll();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsNotChangedWhileTheMirrorShowsByItself) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    rig.Present();
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+namespace {
+// Reads the game log written through Logger while a test runs.
+class MirrorLogCapture {
+public:
+    MirrorLogCapture() : m_path(std::filesystem::temp_directory_path() / "fs25vr_desktop_mirror_title_test.log") {
+        Logger::Instance().SetLogFile(m_path);
+    }
+    ~MirrorLogCapture() {
+        Logger::Instance().SetLogFile(Logger::DefaultLogPath());
+        std::filesystem::remove(m_path);
+    }
+    std::string Text() const {
+        Logger::Instance().Flush();
+        std::ifstream file(m_path);
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    }
+private:
+    std::filesystem::path m_path;
+};
+
+size_t CountOf(const std::string& text, const std::string& needle) {
+    size_t count = 0;
+    for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) ++count;
+    return count;
+}
+} // namespace
+
+TEST(DxgiProxyTest, DesktopMirrorTransitionsAreLoggedOncePerChange) {
+    MirrorLogCapture capture;
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+
+    rig.Present();
+    EXPECT_EQ(capture.Text().find("DxgiProxy: Desktop mirror"), std::string::npos) << capture.Text();
+
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), "DxgiProxy: Desktop mirror off"), 1u) << capture.Text();
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    const std::string log = capture.Text();
+    EXPECT_EQ(CountOf(log, "DxgiProxy: Desktop mirror on by command (vrDesktopMirror on)"), 1u) << log;
+    EXPECT_EQ(CountOf(log, "DxgiProxy: Desktop mirror off"), 1u) << log;
+}
+
+TEST(DxgiProxyTest, DesktopMirrorComingBackByItselfLogsTheReason) {
+    MirrorLogCapture capture;
+    {
+        MirrorPresentRig rig(VRRenderingMode::AFR);
+        MirrorTitleWindow window(rig);
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        rig.Present();
+        rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+        rig.Present();
+        EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (session not running)"), std::string::npos)
+            << capture.Text();
+    }
+    {
+        MirrorPresentRig rig(VRRenderingMode::AFR);
+        MirrorTitleWindow window(rig);
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        rig.Present();
+        rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+        rig.Present();
+        EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (Pass-Through Mode)"), std::string::npos)
+            << capture.Text();
+    }
+    {
+        MirrorPresentRig rig(VRRenderingMode::AFR);
+        MirrorTitleWindow window(rig);
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        rig.Present();
+        rig.vrBridge->SetCompanionActive(false);
+        rig.Present();
+        EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (Companion Mod handshake lost)"), std::string::npos)
+            << capture.Text();
+    }
 }
 
 } // namespace fs25vr

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 
 struct IDXGISwapChain;
 
@@ -14,6 +15,10 @@ namespace fs25vr {
 class OpenXrManager;
 
 inline constexpr UINT_PTR kMirrorWindowSubclassId = 0x56524653; // 'FSVR'
+
+// The game window's title while the Desktop Mirror Window is off: says so and names the command that restores it.
+inline constexpr const wchar_t* kDesktopMirrorOffTitle =
+    L"FS25 VR - desktop mirror is off. Type vrDesktopMirror on in the console to restore it.";
 
 class MirrorWindowController {
 public:
@@ -80,6 +85,13 @@ public:
     static BOOL WINAPI Intercept_SetCursorPos(int X, int Y);
     static BOOL WINAPI Intercept_ClipCursor(const RECT* lpRect);
 
+    // Game window title while the Desktop Mirror Window is off: keeps the window's current title and sets
+    // the off note; RestoreTitle puts the kept title back. Both are no-ops when there is nothing to do, and
+    // the controller restores the title itself in DetachAll.
+    void ShowDesktopMirrorOffTitle();
+    void RestoreTitle();
+    bool IsDesktopMirrorOffTitleShown() const { return m_titleSwapped; }
+
     void DetachAll();
 
 private:
@@ -99,6 +111,11 @@ private:
     int m_lastEnforcedWidth = 0;
     int m_lastEnforcedHeight = 0;
     HMONITOR m_lastMonitor = nullptr;
+
+    // The title the game window had before ShowDesktopMirrorOffTitle replaced it, on m_titleHwnd.
+    std::wstring m_keptTitle;
+    HWND m_titleHwnd = nullptr;
+    bool m_titleSwapped = false;
 
     uint32_t m_targetRenderWidth = 0;
     uint32_t m_targetRenderHeight = 0;

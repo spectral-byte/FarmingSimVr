@@ -176,6 +176,10 @@ private:
     // The decision at each Present that would reach DXGI: records it in m_lastPresentSuppressed and returns
     // whether the game's real Present is called (false with the mirror off).
     bool PresentToDesktopMirror();
+    // After each Present: on a change of IsDesktopMirrorOffNow(), logs it and swaps the game window's title
+    // (off note while the mirror is off, the kept title when it shows again). Leaves the title alone otherwise.
+    void UpdateDesktopMirrorTitle();
+    bool m_desktopMirrorOffAnnounced = false;
 
     IDXGISwapChain* m_cachedSwapChain = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;
