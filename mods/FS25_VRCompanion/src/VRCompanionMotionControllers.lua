@@ -126,7 +126,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.MotionControllers = VRCompanion.MotionControllers or {}
 
 VRCompanion.MOTION_HAND_LEFT = 0
 VRCompanion.MOTION_HAND_RIGHT = 1
@@ -1123,22 +1122,3 @@ function VRCompanion:resetMotionControllers()
     initHands()
     self.pointerHand = nil
 end
--- Export to MotionControllers subsystem table
-VRCompanion.MotionControllers.getHandState = function(self, ...) return VRCompanion.getHandState(VRCompanion, ...) end
-VRCompanion.MotionControllers.isHandInUse = function(self, ...) return VRCompanion.isHandInUse(VRCompanion, ...) end
-VRCompanion.MotionControllers.getPointerHand = function(self, ...) return VRCompanion.getPointerHand(VRCompanion, ...) end
-VRCompanion.MotionControllers.consoleCommandSetMotionControllers = function(self, ...) return VRCompanion.consoleCommandSetMotionControllers(VRCompanion, ...) end
-VRCompanion.MotionControllers.consoleCommandMotionControllerStatus = function(self, ...) return VRCompanion.consoleCommandMotionControllerStatus(VRCompanion, ...) end
-VRCompanion.MotionControllers.getPointerOwner = function(self, ...) return VRCompanion.getPointerOwner(VRCompanion, ...) end
-VRCompanion.MotionControllers.isPointerRayInControl = function(self, ...) return VRCompanion.isPointerRayInControl(VRCompanion, ...) end
-VRCompanion.MotionControllers.notePointerRayMoved = function(self, ...) return VRCompanion.notePointerRayMoved(VRCompanion, ...) end
-VRCompanion.MotionControllers.notePointerMouseMoved = function(self, ...) return VRCompanion.notePointerMouseMoved(VRCompanion, ...) end
-VRCompanion.MotionControllers.mouseEvent = function(self, ...) return VRCompanion.mouseEvent(VRCompanion, ...) end
-VRCompanion.MotionControllers.updateMotionControllers =function(self, ...) return VRCompanion.updateMotionControllers(VRCompanion, ...) end
-VRCompanion.MotionControllers.resetMotionControllerMovement = function(self, ...) return VRCompanion.resetMotionControllerMovement(VRCompanion, ...) end
-VRCompanion.MotionControllers.consoleCommandSetPointerCone = function(self, ...) return VRCompanion.consoleCommandSetPointerCone(VRCompanion, ...) end
-VRCompanion.MotionControllers.getPointerRay = function(self, ...) return VRCompanion.getPointerRay(VRCompanion, ...) end
-VRCompanion.MotionControllers.getPointerTrigger = function(self, ...) return VRCompanion.getPointerTrigger(VRCompanion, ...) end
-VRCompanion.MotionControllers.draw =function(self, ...) return VRCompanion.draw(VRCompanion, ...) end
-
-return VRCompanion.MotionControllers

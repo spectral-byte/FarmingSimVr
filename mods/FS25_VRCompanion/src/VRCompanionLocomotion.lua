@@ -5,7 +5,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.Locomotion = VRCompanion.Locomotion or {}
 
 -- Recenter VR Tracking Space Configuration
 VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE = true
@@ -788,41 +787,3 @@ end
 function VRCompanion:onSnapTurnRightAction()
     self:snapTurnRight()
 end
-
--- Export to Locomotion subsystem table
-VRCompanion.Locomotion.getRecenterMode = function(self, ...) return VRCompanion.getRecenterMode(VRCompanion, ...) end
-VRCompanion.Locomotion.setRecenterMode = function(self, ...) return VRCompanion.setRecenterMode(VRCompanion, ...) end
-VRCompanion.Locomotion.getSnapTurnAngle = function(self, ...) return VRCompanion.getSnapTurnAngle(VRCompanion, ...) end
-VRCompanion.Locomotion.setSnapTurnAngle = function(self, ...) return VRCompanion.setSnapTurnAngle(VRCompanion, ...) end
-VRCompanion.Locomotion.getSnapTurnAngleDegrees = function(self, ...) return VRCompanion.getSnapTurnAngleDegrees(VRCompanion, ...) end
-VRCompanion.Locomotion.getCurrentTimeMs = function(self, ...) return VRCompanion.getCurrentTimeMs(VRCompanion, ...) end
-VRCompanion.Locomotion.isSnapTurnDebounced = function(self, ...) return VRCompanion.isSnapTurnDebounced(VRCompanion, ...) end
-VRCompanion.Locomotion.resetSnapTurnDebounce = function(self, ...) return VRCompanion.resetSnapTurnDebounce(VRCompanion, ...) end
-VRCompanion.Locomotion.initVehicleCameraState = function(self, ...) return VRCompanion.initVehicleCameraState(VRCompanion, ...) end
-VRCompanion.Locomotion.recordHeadTrackingForward = function(self, ...) return VRCompanion.recordHeadTrackingForward(VRCompanion, ...) end
-VRCompanion.Locomotion.saveVehicleRotationState = function(self, ...) return VRCompanion.saveVehicleRotationState(VRCompanion, ...) end
-VRCompanion.Locomotion.restoreVehicleRotationState = function(self, ...) return VRCompanion.restoreVehicleRotationState(VRCompanion, ...) end
-VRCompanion.Locomotion.resetVehicleTransforms = function(self, ...) return VRCompanion.resetVehicleTransforms(VRCompanion, ...) end
-VRCompanion.Locomotion.onEnterVehicle = function(self, ...) return VRCompanion.onEnterVehicle(VRCompanion, ...) end
-VRCompanion.Locomotion.onLeaveVehicle = function(self, ...) return VRCompanion.onLeaveVehicle(VRCompanion, ...) end
-VRCompanion.Locomotion.onVehicleTransition = function(self, ...) return VRCompanion.onVehicleTransition(VRCompanion, ...) end
-VRCompanion.Locomotion.onVehicleCameraChanged = function(self, ...) return VRCompanion.onVehicleCameraChanged(VRCompanion, ...) end
-VRCompanion.Locomotion.getPlayerBaseTranslation = function(self, ...) return VRCompanion.getPlayerBaseTranslation(VRCompanion, ...) end
-VRCompanion.Locomotion.normalizeAngle = function(self, ...) return VRCompanion.normalizeAngle(VRCompanion, ...) end
-VRCompanion.Locomotion.getVehicleLookYaw = function(self, ...) return VRCompanion.getVehicleLookYaw(VRCompanion, ...) end
-VRCompanion.Locomotion.rotateVectorByYaw = function(self, ...) return VRCompanion.rotateVectorByYaw(VRCompanion, ...) end
-VRCompanion.Locomotion.updateVehicleCameraTrackingNode = function(self, ...) return VRCompanion.updateVehicleCameraTrackingNode(VRCompanion, ...) end
-VRCompanion.Locomotion.snapTurn = function(self, ...) return VRCompanion.snapTurn(VRCompanion, ...) end
-VRCompanion.Locomotion.snapTurnOutsideCamera = function(self, ...) return VRCompanion.snapTurnOutsideCamera(VRCompanion, ...) end
-VRCompanion.Locomotion.completeSnapTurn = function(self, ...) return VRCompanion.completeSnapTurn(VRCompanion, ...) end
-VRCompanion.Locomotion.recordOutsideCameraDefaults = function(self, ...) return VRCompanion.recordOutsideCameraDefaults(VRCompanion, ...) end
-VRCompanion.Locomotion.resetOutsideCameraOrbit = function(self, ...) return VRCompanion.resetOutsideCameraOrbit(VRCompanion, ...) end
-VRCompanion.Locomotion.snapTurnLeft = function(self, ...) return VRCompanion.snapTurnLeft(VRCompanion, ...) end
-VRCompanion.Locomotion.snapTurnRight = function(self, ...) return VRCompanion.snapTurnRight(VRCompanion, ...) end
-VRCompanion.Locomotion.realignVehicleCameraToSeat = function(self, ...) return VRCompanion.realignVehicleCameraToSeat(VRCompanion, ...) end
-VRCompanion.Locomotion.realignPlayerCameraToRoot = function(self, ...) return VRCompanion.realignPlayerCameraToRoot(VRCompanion, ...) end
-VRCompanion.Locomotion.onRecenterAction = function(self, ...) return VRCompanion.onRecenterAction(VRCompanion, ...) end
-VRCompanion.Locomotion.onSnapTurnLeftAction = function(self, ...) return VRCompanion.onSnapTurnLeftAction(VRCompanion, ...) end
-VRCompanion.Locomotion.onSnapTurnRightAction = function(self, ...) return VRCompanion.onSnapTurnRightAction(VRCompanion, ...) end
-
-return VRCompanion.Locomotion

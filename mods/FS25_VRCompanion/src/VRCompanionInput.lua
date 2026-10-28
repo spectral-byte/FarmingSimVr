@@ -6,7 +6,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.Input = VRCompanion.Input or {}
 
 -- The input context the VR actions belong in: the vehicle's while controlling one, otherwise the player's on foot.
 -- registerActionEvent adds to the context that is current, and at map load that is the loading screen's menu context,
@@ -744,30 +743,3 @@ function VRCompanion:consoleCommandSetObliqueProjection(enabledStr)
     print(string.format("[FS25_VR] Oblique Frustum projection set to: %s", tostring(enabled)))
     return string.format("Oblique Frustum projection set to: %s (Saved)", tostring(enabled))
 end
-
--- Export to Input subsystem table
-VRCompanion.Input.registerActionEvents = function(self, ...) return VRCompanion.registerActionEvents(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudSafeArea = function(self, ...) return VRCompanion.consoleCommandSetHudSafeArea(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudGroup = function(self, ...) return VRCompanion.consoleCommandSetHudGroup(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandHudGroupShow = function(self, ...) return VRCompanion.consoleCommandHudGroupShow(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudState = function(self, ...) return VRCompanion.consoleCommandSetHudState(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetHudLoadNotification = function(self, ...) return VRCompanion.consoleCommandSetHudLoadNotification(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetRecenterMode = function(self, ...) return VRCompanion.consoleCommandSetRecenterMode(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetSnapTurnAngle = function(self, ...) return VRCompanion.consoleCommandSetSnapTurnAngle(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSet2DView = function(self, ...) return VRCompanion.consoleCommandSet2DView(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandToggleView = function(self, ...) return VRCompanion.consoleCommandToggleView(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetDlssMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssMvScale(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetDlssSharpness = function(self, ...) return VRCompanion.consoleCommandSetDlssSharpness(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetDlssPreset = function(self, ...) return VRCompanion.consoleCommandSetDlssPreset(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetDlssSdpMvScale = function(self, ...) return VRCompanion.consoleCommandSetDlssSdpMvScale(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssMvFix = function(self, ...) return VRCompanion.consoleCommandDlssMvFix(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssDepthModel = function(self, ...) return VRCompanion.consoleCommandDlssDepthModel(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssNearClip = function(self, ...) return VRCompanion.consoleCommandDlssNearClip(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssNearClipCab = function(self, ...) return VRCompanion.consoleCommandDlssNearClipCab(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssNearClipOutside = function(self, ...) return VRCompanion.consoleCommandDlssNearClipOutside(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssNearClipOnFoot = function(self, ...) return VRCompanion.consoleCommandDlssNearClipOnFoot(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandDlssDiag = function(self, ...) return VRCompanion.consoleCommandDlssDiag(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetRenderingMode = function(self, ...) return VRCompanion.consoleCommandSetRenderingMode(VRCompanion, ...) end
-VRCompanion.Input.consoleCommandSetObliqueProjection = function(self, ...) return VRCompanion.consoleCommandSetObliqueProjection(VRCompanion, ...) end
-
-return VRCompanion.Input

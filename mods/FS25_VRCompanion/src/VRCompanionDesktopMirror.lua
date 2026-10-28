@@ -21,7 +21,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.DesktopMirror = VRCompanion.DesktopMirror or {}
 
 VRCompanion.DEFAULT_DESKTOP_MIRROR = true
 VRCompanion.desktopMirror = VRCompanion.DEFAULT_DESKTOP_MIRROR
@@ -99,7 +98,3 @@ function VRCompanion:resetDesktopMirror()
         removeConsoleCommand("vrDesktopMirror")
     end
 end
-
-VRCompanion.DesktopMirror.consoleCommandSetDesktopMirror = function(self, ...) return VRCompanion.consoleCommandSetDesktopMirror(VRCompanion, ...) end
-
-return VRCompanion.DesktopMirror

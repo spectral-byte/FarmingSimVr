@@ -5,10 +5,8 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.Core = VRCompanion.Core or {}
 
 VRCompanion.name = VRCompanion.name or g_currentModName or "FS25_VRCompanion"
-VRCompanion.version = VRCompanion.version or "1.1.3.0"
 
 -- Slow retry cadence (in update ticks) for re-running the dt=0 guard install so a late
 -- Ferry class or newly spawned vehicles are picked up without scanning _G every frame.
@@ -946,12 +944,6 @@ function VRCompanion:unhookMissionUpdate()
         self.origMission00Update = nil
     end
 
-    local mission = g_currentMission or (_G and _G.g_currentMission)
-    if self.origMissionInstanceUpdate ~= nil and mission ~= nil then
-        mission.update = self.origMissionInstanceUpdate
-        self.origMissionInstanceUpdate = nil
-    end
-
     self.accumulatedPass1Dt = 0.0
     self.deferRenderingCameraBind = false
     self:endEyeProjectionScope()
@@ -1246,26 +1238,3 @@ function VRCompanion:deleteMap()
     if type(self.unregisterDualPassPhysicsConsoleCommands) == "function" then self:unregisterDualPassPhysicsConsoleCommands() end
     if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end
-
--- Export to Core subsystem table
-VRCompanion.Core.loadMap = function(self, ...) return VRCompanion.loadMap(VRCompanion, ...) end
-VRCompanion.Core.update = function(self, ...) return VRCompanion.update(VRCompanion, ...) end
-VRCompanion.Core.deleteMap = function(self, ...) return VRCompanion.deleteMap(VRCompanion, ...) end
-VRCompanion.Core.pollGuiVisibility = function(self, ...) return VRCompanion.pollGuiVisibility(VRCompanion, ...) end
-VRCompanion.Core.getPlayerCamera = function(self, ...) return VRCompanion.getPlayerCamera(VRCompanion, ...) end
-VRCompanion.Core.getControlledVehicle = function(self, ...) return VRCompanion.getControlledVehicle(VRCompanion, ...) end
-VRCompanion.Core.getActiveVehicleCamera = function(self, ...) return VRCompanion.getActiveVehicleCamera(VRCompanion, ...) end
-VRCompanion.Core.getVehicleActiveCamera = function(self, ...) return VRCompanion.getVehicleActiveCamera(VRCompanion, ...) end
-VRCompanion.Core.getDlssNearClipMode = function(self, ...) return VRCompanion.getDlssNearClipMode(VRCompanion, ...) end
-VRCompanion.Core.getDlssNearClipForCurrentCamera = function(self, ...) return VRCompanion.getDlssNearClipForCurrentCamera(VRCompanion, ...) end
-VRCompanion.Core.applyDlssNearClip = function(self, ...) return VRCompanion.applyDlssNearClip(VRCompanion, ...) end
-VRCompanion.Core.hookVehicleCamera =function(self, ...) return VRCompanion.hookVehicleCamera(VRCompanion, ...) end
-VRCompanion.Core.hookEnterable = function(self, ...) return VRCompanion.hookEnterable(VRCompanion, ...) end
-VRCompanion.Core.hookVehicleSpeed = function(self, ...) return VRCompanion.hookVehicleSpeed(VRCompanion, ...) end
-VRCompanion.Core.unhookVehicleSpeed = function(self, ...) return VRCompanion.unhookVehicleSpeed(VRCompanion, ...) end
-VRCompanion.Core.hookPlayerCamera = function(self, ...) return VRCompanion.hookPlayerCamera(VRCompanion, ...) end
-VRCompanion.Core.onMissionUpdate = function(self, ...) return VRCompanion.onMissionUpdate(VRCompanion, ...) end
-VRCompanion.Core.hookMissionUpdate = function(self, ...) return VRCompanion.hookMissionUpdate(VRCompanion, ...) end
-VRCompanion.Core.unhookMissionUpdate = function(self, ...) return VRCompanion.unhookMissionUpdate(VRCompanion, ...) end
-
-return VRCompanion.Core

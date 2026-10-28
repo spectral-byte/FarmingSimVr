@@ -104,7 +104,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.VirtualHands = VRCompanion.VirtualHands or {}
 
 -- The mod's own folder, known only while the engine loads the mod's scripts.
 VRCompanion.modDirectory = VRCompanion.modDirectory or g_currentModDirectory or ""
@@ -777,10 +776,3 @@ function VRCompanion:resetVirtualHands()
     discardScene()
     state = newState()
 end
-
-VRCompanion.VirtualHands.updateVirtualHands = function(self, ...) return VRCompanion.updateVirtualHands(VRCompanion, ...) end
-VRCompanion.VirtualHands.resetVirtualHands = function(self, ...) return VRCompanion.resetVirtualHands(VRCompanion, ...) end
-VRCompanion.VirtualHands.getVirtualHandsDiagnostics = function(self, ...) return VRCompanion.getVirtualHandsDiagnostics(VRCompanion, ...) end
-VRCompanion.VirtualHands.consoleCommandVirtualHandsDiagnostics = function(self, ...) return VRCompanion.consoleCommandVirtualHandsDiagnostics(VRCompanion, ...) end
-
-return VRCompanion.VirtualHands
