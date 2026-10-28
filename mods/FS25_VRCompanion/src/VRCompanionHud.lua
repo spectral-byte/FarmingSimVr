@@ -6,7 +6,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.Hud = VRCompanion.Hud or {}
 
 -- VR HUD Three-Stage State Machine Constants
 VRCompanion.HUD_STATE_HIDDEN = 0
@@ -1343,41 +1342,3 @@ function VRCompanion:unhookGuiDraw()
     if hook ~= nil and hook.class.draw == hook.wrapper then hook.class.draw = hook.original end
     self.guiDrawHook = nil
 end
--- Export to Hud subsystem table
-VRCompanion.Hud.getHudGroupLayout = function(self, ...) return VRCompanion.getHudGroupLayout(VRCompanion, ...) end
-VRCompanion.Hud.setHudGroupLayout = function(self, ...) return VRCompanion.setHudGroupLayout(VRCompanion, ...) end
-VRCompanion.Hud.getHudBaseUiScale = function(self, ...) return VRCompanion.getHudBaseUiScale(VRCompanion, ...) end
-VRCompanion.Hud.getHudGroupScale = function(self, ...) return VRCompanion.getHudGroupScale(VRCompanion, ...) end
-VRCompanion.Hud.getHudDisplayScale = function(self, ...) return VRCompanion.getHudDisplayScale(VRCompanion, ...) end
-VRCompanion.Hud.getHudDisplayPosition = function(self, ...) return VRCompanion.getHudDisplayPosition(VRCompanion, ...) end
-VRCompanion.Hud.getFillLevelsBlockSize = function(self, ...) return VRCompanion.getFillLevelsBlockSize(VRCompanion, ...) end
-VRCompanion.Hud.getHudGroupLabel = function(self, ...) return VRCompanion.getHudGroupLabel(VRCompanion, ...) end
-VRCompanion.Hud.computeConvergenceDisparity = function(self, ...) return VRCompanion.computeConvergenceDisparity(VRCompanion, ...) end
-VRCompanion.Hud.getConvergenceDisparity = function(self, ...) return VRCompanion.getConvergenceDisparity(VRCompanion, ...) end
-VRCompanion.Hud.getConvergenceOffset = function(self, ...) return VRCompanion.getConvergenceOffset(VRCompanion, ...) end
-VRCompanion.Hud.getFillLevelsDisplay = function(self, ...) return VRCompanion.getFillLevelsDisplay(VRCompanion, ...) end
-VRCompanion.Hud.positionFillLevelsUnderSpeedometer = function(self, ...) return VRCompanion.positionFillLevelsUnderSpeedometer(VRCompanion, ...) end
-VRCompanion.Hud.updateHudConvergence = function(self, ...) return VRCompanion.updateHudConvergence(VRCompanion, ...) end
-VRCompanion.Hud.repositionHudForConvergence = function(self, ...) return VRCompanion.repositionHudForConvergence(VRCompanion, ...) end
-VRCompanion.Hud.getHudState =function(self, ...) return VRCompanion.getHudState(VRCompanion, ...) end
-VRCompanion.Hud.isDisplayVisible = function(self, ...) return VRCompanion.isDisplayVisible(VRCompanion, ...) end
-VRCompanion.Hud.applyHudState = function(self, ...) return VRCompanion.applyHudState(VRCompanion, ...) end
-VRCompanion.Hud.setHudState = function(self, ...) return VRCompanion.setHudState(VRCompanion, ...) end
-VRCompanion.Hud.getEnabledHudGroups = function(self, ...) return VRCompanion.getEnabledHudGroups(VRCompanion, ...) end
-VRCompanion.Hud.setHudGroupVisibility = function(self, ...) return VRCompanion.setHudGroupVisibility(VRCompanion, ...) end
-VRCompanion.Hud.rememberControlsExpanded = function(self, ...) return VRCompanion.rememberControlsExpanded(VRCompanion, ...) end
-VRCompanion.Hud.cycleHudState = function(self, ...) return VRCompanion.cycleHudState(VRCompanion, ...) end
-VRCompanion.Hud.onHudToggleAction = function(self, ...) return VRCompanion.onHudToggleAction(VRCompanion, ...) end
-VRCompanion.Hud.calculateHudAnchors = function(self, ...) return VRCompanion.calculateHudAnchors(VRCompanion, ...) end
-VRCompanion.Hud.configureHudSafeArea = function(self, ...) return VRCompanion.configureHudSafeArea(VRCompanion, ...) end
-VRCompanion.Hud.getHudSafeArea = function(self, ...) return VRCompanion.getHudSafeArea(VRCompanion, ...) end
-VRCompanion.Hud.positionHudDisplay = function(self, ...) return VRCompanion.positionHudDisplay(VRCompanion, ...) end
-VRCompanion.Hud.repositionAllHudDisplays = function(self, ...) return VRCompanion.repositionAllHudDisplays(VRCompanion, ...) end
-VRCompanion.Hud.applyHudSafeArea = function(self, ...) return VRCompanion.applyHudSafeArea(VRCompanion, ...) end
-VRCompanion.Hud.restoreHudSafeArea = function(self, ...) return VRCompanion.restoreHudSafeArea(VRCompanion, ...) end
-VRCompanion.Hud.hookHud = function(self, ...) return VRCompanion.hookHud(VRCompanion, ...) end
-VRCompanion.Hud.unhookHud = function(self, ...) return VRCompanion.unhookHud(VRCompanion, ...) end
-VRCompanion.Hud.hookGuiDraw = function(self, ...) return VRCompanion.hookGuiDraw(VRCompanion, ...) end
-VRCompanion.Hud.unhookGuiDraw = function(self, ...) return VRCompanion.unhookGuiDraw(VRCompanion, ...) end
-
-return VRCompanion.Hud

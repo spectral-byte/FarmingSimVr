@@ -4,7 +4,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.Config = VRCompanion.Config or {}
 
 -- HUD Safe Area constants (the engine's global HUD anchors, ADR-0022)
 VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL = 0.30
@@ -460,11 +459,3 @@ function VRCompanion:loadConfiguration(xmlPath)
 
     return self:getHudSafeArea()
 end
-
--- Export to Config subsystem table
-VRCompanion.Config.clamp = function(self, ...) return VRCompanion.clamp(VRCompanion, ...) end
-VRCompanion.Config.getUserSettingsPath = function(self, ...) return VRCompanion.getUserSettingsPath(VRCompanion, ...) end
-VRCompanion.Config.saveConfiguration = function(self, ...) return VRCompanion.saveConfiguration(VRCompanion, ...) end
-VRCompanion.Config.loadConfiguration = function(self, ...) return VRCompanion.loadConfiguration(VRCompanion, ...) end
-
-return VRCompanion.Config

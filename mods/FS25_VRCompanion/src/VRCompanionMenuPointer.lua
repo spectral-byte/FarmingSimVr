@@ -45,7 +45,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.MenuPointer = VRCompanion.MenuPointer or {}
 
 -- The grip counts as pressed (back / close) at 0.6 and as let go below 0.3.
 VRCompanion.MENU_BACK_PRESS = 0.6
@@ -353,8 +352,3 @@ function VRCompanion:resetMenuPointer()
     hands = {}
     scroll.dir, scroll.nextMs = 0, nil
 end
-
-VRCompanion.MenuPointer.updateMenuPointer = function(self, ...) return VRCompanion.updateMenuPointer(VRCompanion, ...) end
-VRCompanion.MenuPointer.resetMenuPointer = function(self, ...) return VRCompanion.resetMenuPointer(VRCompanion, ...) end
-
-return VRCompanion.MenuPointer

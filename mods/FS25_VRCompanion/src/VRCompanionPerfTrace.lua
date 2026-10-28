@@ -23,7 +23,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.PerfTrace = VRCompanion.PerfTrace or {}
 
 VRCompanion.PERF_TRACE_DEFAULT_SECONDS = 10
 VRCompanion.PERF_TRACE_MAX_SECONDS = 60
@@ -99,7 +98,3 @@ function VRCompanion:unregisterPerfTraceConsoleCommands()
         self.perfTracing = false
     end
 end
-
-VRCompanion.PerfTrace.consoleCommandPerfTrace = function(self, ...) return VRCompanion.consoleCommandPerfTrace(VRCompanion, ...) end
-
-return VRCompanion.PerfTrace

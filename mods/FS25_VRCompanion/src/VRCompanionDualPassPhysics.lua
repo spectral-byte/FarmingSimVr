@@ -31,7 +31,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.DualPassPhysics = VRCompanion.DualPassPhysics or {}
 
 VRCompanion.DUAL_PASS_PHYSICS_PAUSE_MODES = { off = true, on = true }
 VRCompanion.DUAL_PASS_PHYSICS_MAX_TIME_SCALE = 4.0
@@ -250,8 +249,3 @@ function VRCompanion:unregisterDualPassPhysicsConsoleCommands()
     self:releaseDualPassPhysicsPause()
     trace = { frames = 0 }
 end
-
-VRCompanion.DualPassPhysics.consoleCommandDualPassPhysicsPause = function(self, ...) return VRCompanion.consoleCommandDualPassPhysicsPause(VRCompanion, ...) end
-VRCompanion.DualPassPhysics.consoleCommandEyePairTrace = function(self, ...) return VRCompanion.consoleCommandEyePairTrace(VRCompanion, ...) end
-
-return VRCompanion.DualPassPhysics
