@@ -1112,6 +1112,7 @@ TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsWhileTheSessionIsNotRunning) {
     ASSERT_FALSE(rig.openXrManager->IsSessionRunning());
 
     rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // headset back on: dark again
+    EXPECT_EQ(rig.Present(), 1);  // after the one black frame (#195)
     EXPECT_EQ(rig.Present(), 0);
     EXPECT_EQ(rig.Present(), 0);
     EXPECT_TRUE(rig.openXrManager->IsSessionRunning());
@@ -1135,6 +1136,7 @@ TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsBeforeTheCompanionModHandshake)
     EXPECT_EQ(rig.Present(), 1);
 
     rig.vrBridge->PerformHandshake();  // a savegame loaded: the mirror goes dark
+    EXPECT_EQ(rig.Present(), 1);  // the one black frame (#195)
     EXPECT_EQ(rig.Present(), 0);
 }
 
@@ -1163,6 +1165,118 @@ TEST(DxgiProxyTest, DesktopMirrorSettingDoesNotChangeWhatTheHeadsetReceives) {
         EXPECT_EQ(beginFrames[0], beginFrames[1]);
         EXPECT_GT(pairs[0], 0u);
         EXPECT_EQ(quads[0], 2u);
+    }
+}
+
+// Desktop Mirror Window black frame: each time the mirror goes from showing to off, one real Present reaches
+// DXGI (the backbuffer cleared black after the eye copy), then none until the mirror shows again.
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffWhileTheSessionRunsPresentsExactlyOnceInAfr) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_EQ(rig.Present(), 1);  // the mirror shows
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);  // the one black frame
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+    }
+}
+
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffPresentsExactlyOnceInSequentialDualPass) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(rig.Present(), 0);  // sub-pass 0 is always suppressed
+    EXPECT_EQ(rig.Present(), 1);  // sub-pass 1, mirror showing
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);  // sub-pass 0
+    EXPECT_EQ(rig.Present(), 1);  // sub-pass 1: the one black frame
+    for (int pair = 0; pair < 3; ++pair) {
+        EXPECT_EQ(rig.Present(), 0);
+        EXPECT_EQ(rig.Present(), 0);
+    }
+}
+
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffOnAMenuQuadFramePresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    EXPECT_EQ(rig.Present(), 1);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedQuadFrameCount(), 4u);
+}
+
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffInTwoDFloatingWindowModePresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    rig.vrBridge->Set2DViewActive(true);
+    EXPECT_EQ(rig.Present(), 1);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, BlackFrameTheSessionResumingWithTheMirrorOffPresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_EQ(rig.Present(), 1);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 0);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // headset asleep
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_FALSE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // headset back on, mirror still off
+    EXPECT_EQ(rig.Present(), 1);  // one black frame
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, BlackFrameTheCompanionHandshakeArrivingWithTheMirrorOffPresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+
+    rig.vrBridge->PerformHandshake();  // a savegame loaded: the mirror goes dark
+    EXPECT_EQ(rig.Present(), 1);  // one black frame
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, BlackFrameEachTimeTheMirrorGoesFromShowingToOffPresentsOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_EQ(rig.Present(), 1);
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        EXPECT_EQ(rig.Present(), 1);
+        EXPECT_EQ(rig.Present(), 0);
+        EXPECT_EQ(rig.Present(), 0);
+        rig.vrBridge->SetDesktopMirrorEnabled(true);
+        EXPECT_EQ(rig.Present(), 1);
+        EXPECT_EQ(rig.Present(), 1);
+    }
+}
+
+TEST(DxgiProxyTest, BlackFrameDoesNotChangeWhatTheHeadsetReceives) {
+    for (VRRenderingMode mode : { VRRenderingMode::AFR, VRRenderingMode::SequentialDualPass }) {
+        uint64_t pairs[2] = {};
+        uint64_t quads[2] = {};
+        uint64_t frames[2] = {};
+        uint64_t beginFrames[2] = {};
+        for (int mirrorOff = 0; mirrorOff < 2; ++mirrorOff) {
+            MirrorPresentRig rig(mode);
+            for (int i = 0; i < 4; ++i) rig.Present();
+            rig.vrBridge->SetDesktopMirrorEnabled(mirrorOff == 0);  // switch-off lands mid-run
+            for (int i = 0; i < 6; ++i) rig.Present();
+            pairs[mirrorOff] = rig.openXrManager->GetSubmittedFramePairCount();
+            quads[mirrorOff] = rig.openXrManager->GetSubmittedQuadFrameCount();
+            frames[mirrorOff] = rig.vrBridge->GetFrameIndex();
+            beginFrames[mirrorOff] = rig.dispatch->beginFrameCalls;
+        }
+        EXPECT_EQ(pairs[0], pairs[1]);
+        EXPECT_EQ(quads[0], quads[1]);
+        EXPECT_EQ(frames[0], frames[1]);
+        EXPECT_EQ(beginFrames[0], beginFrames[1]);
+        EXPECT_GT(pairs[0], 0u);
     }
 }
 
