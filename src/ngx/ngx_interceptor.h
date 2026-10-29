@@ -80,7 +80,6 @@ public:
 
     // Discontinuity flushing coordination
     void TriggerDiscontinuityFlush();
-    void ResetTemporalHistory() { TriggerDiscontinuityFlush(); }
     bool HasPendingDiscontinuity(uint32_t contextIndex = 0) const;
     bool ConsumeDiscontinuity(uint32_t contextIndex = 0);
 

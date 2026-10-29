@@ -5,10 +5,8 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.Core = VRCompanion.Core or {}
 
 VRCompanion.name = VRCompanion.name or g_currentModName or "FS25_VRCompanion"
-VRCompanion.version = VRCompanion.version or "1.1.3.0"
 
 -- Slow retry cadence (in update ticks) for re-running the dt=0 guard install so a late
 -- Ferry class or newly spawned vehicles are picked up without scanning _G every frame.
@@ -127,6 +125,33 @@ end
 function VRCompanion:getLookRayWrapOriginal()
     return lookRayWrap ~= nil and lookRayWrap.original or nil
 end
+
+-- Every console command the core registers on map load: map load adds them and map unload removes them, both from this one list.
+VRCompanion.CORE_CONSOLE_COMMANDS = {
+    { name = "vrHudSafeArea", description = "Set the VR HUD Safe Area, the margin that keeps warnings, notifications and other mods' HUDs inside the lens: vrHudSafeArea <horizontal> <vertical>", method = "consoleCommandSetHudSafeArea" },
+    { name = "vrHudGroup", description = "Set a VR HUD Group Margin and scale: vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]", method = "consoleCommandSetHudGroup" },
+    { name = "vrHudState", description = "Set VR HUD state: vrHudState <0=Hidden | 1=Streamlined | 2=Full>", method = "consoleCommandSetHudState" },
+    { name = "vrHudLoadNotification", description = "Toggle HUD alert on map load: vrHudLoadNotification <true|false>", method = "consoleCommandSetHudLoadNotification" },
+    { name = "vrHudLoadAlert", description = "Toggle HUD alert on map load: vrHudLoadAlert <true|false>", method = "consoleCommandSetHudLoadNotification" },
+    { name = "vrRecenterMode", description = "Set VR Recenter Action mode: vrRecenterMode [Both | VehicleOnly | toggle]", method = "consoleCommandSetRecenterMode" },
+    { name = "vrRecenterTracking", description = "Set VR Recenter Action mode: vrRecenterTracking [Both | VehicleOnly | toggle]", method = "consoleCommandSetRecenterMode" },
+    { name = "vrSnapTurnAngle", description = "Set or query VR snap turn angle in degrees: vrSnapTurnAngle [degrees]", method = "consoleCommandSetSnapTurnAngle" },
+    { name = "vr2DView", description = "Set or query 2D Floating Window Mode: vr2DView [true|false|toggle]", method = "consoleCommandSet2DView" },
+    { name = "vrToggleView", description = "Toggle 2D Floating Window Mode: vrToggleView", method = "consoleCommandToggleView" },
+    { name = "vrDlssMvScale", description = "Set DLSS motion vector scale multiplier: vrDlssMvScale <scaleX> [scaleY]", method = "consoleCommandSetDlssMvScale" },
+    { name = "vrDlssSharpness", description = "Set DLSS sharpness override: vrDlssSharpness <sharpness 0.0-1.0>", method = "consoleCommandSetDlssSharpness" },
+    { name = "vrDlssPreset", description = "Set DLSS preset hint: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L>", method = "consoleCommandSetDlssPreset" },
+    { name = "vrDlssSdpMvScale", description = "Set DLSS motion vector scale under Sequential Dual-Pass: vrDlssSdpMvScale <scaleX> [scaleY]", method = "consoleCommandSetDlssSdpMvScale" },
+    { name = "vrDlssMvFix", description = "Switch the DLSS motion vector pass for A/B comparison: vrDlssMvFix <on|off>", method = "consoleCommandDlssMvFix" },
+    { name = "vrDlssDepthModel", description = "Set the depth model of the DLSS motion vector correction for A/B comparison: vrDlssDepthModel <infinite|finite>", method = "consoleCommandDlssDepthModel" },
+    { name = "vrDlssNearClip", description = "Set the near plane of the DLSS motion vector correction for every camera in metres (0 or auto = estimate it automatically): vrDlssNearClip <meters|auto>", method = "consoleCommandDlssNearClip" },
+    { name = "vrDlssNearClipCab", description = "Set the DLSS near plane for a vehicle's inside camera: vrDlssNearClipCab <meters|auto>", method = "consoleCommandDlssNearClipCab" },
+    { name = "vrDlssNearClipOutside", description = "Set the DLSS near plane for a vehicle's outside cameras: vrDlssNearClipOutside <meters|auto>", method = "consoleCommandDlssNearClipOutside" },
+    { name = "vrDlssNearClipOnFoot", description = "Set the DLSS near plane on foot: vrDlssNearClipOnFoot <meters|auto>", method = "consoleCommandDlssNearClipOnFoot" },
+    { name = "vrDlssDiag", description = "Trace DLSS evaluations to fs25_vr.log: vrDlssDiag [evaluations]", method = "consoleCommandDlssDiag" },
+    { name = "vrRenderingMode", description = "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", method = "consoleCommandSetRenderingMode" },
+    { name = "vrHudGroupShow", description = "Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", method = "consoleCommandHudGroupShow" },
+}
 
 function VRCompanion:loadMap(name)
     print(string.format("[FS25_VR] Initializing Companion Mod on map '%s'...", tostring(name)))
@@ -262,30 +287,9 @@ function VRCompanion:loadMap(name)
 
     -- 9. Register developer and tuning console commands
     if addConsoleCommand ~= nil then
-        addConsoleCommand("vrHudSafeArea", "Set the VR HUD Safe Area, the margin that keeps warnings, notifications and other mods' HUDs inside the lens: vrHudSafeArea <horizontal> <vertical>", "consoleCommandSetHudSafeArea", self)
-        addConsoleCommand("vrHudGroup", "Set a VR HUD Group Margin and scale: vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]", "consoleCommandSetHudGroup", self)
-        addConsoleCommand("vrHudState", "Set VR HUD state: vrHudState <0=Hidden | 1=Streamlined | 2=Full>", "consoleCommandSetHudState", self)
-        addConsoleCommand("vrHudLoadNotification", "Toggle HUD alert on map load: vrHudLoadNotification <true|false>", "consoleCommandSetHudLoadNotification", self)
-        addConsoleCommand("vrHudLoadAlert", "Toggle HUD alert on map load: vrHudLoadAlert <true|false>", "consoleCommandSetHudLoadNotification", self)
-        addConsoleCommand("vrRecenterMode", "Set VR Recenter Action mode: vrRecenterMode [Both | VehicleOnly | toggle]", "consoleCommandSetRecenterMode", self)
-        addConsoleCommand("vrRecenterTracking", "Set VR Recenter Action mode: vrRecenterTracking [Both | VehicleOnly | toggle]", "consoleCommandSetRecenterMode", self)
-        addConsoleCommand("vrSnapTurnAngle", "Set or query VR snap turn angle in degrees: vrSnapTurnAngle [degrees]", "consoleCommandSetSnapTurnAngle", self)
-        addConsoleCommand("vr2DView", "Set or query 2D Floating Window Mode: vr2DView [true|false|toggle]", "consoleCommandSet2DView", self)
-        addConsoleCommand("vrToggleView", "Toggle 2D Floating Window Mode: vrToggleView", "consoleCommandToggleView", self)
-        addConsoleCommand("vrDlssMvScale", "Set DLSS motion vector scale multiplier: vrDlssMvScale <scaleX> [scaleY]", "consoleCommandSetDlssMvScale", self)
-        addConsoleCommand("vrDlssSharpness", "Set DLSS sharpness override: vrDlssSharpness <sharpness 0.0-1.0>", "consoleCommandSetDlssSharpness", self)
-        addConsoleCommand("vrDlssPreset", "Set DLSS preset hint: vrDlssPreset <0=Default|3=C|4=D|10=J|11=K|12=L>", "consoleCommandSetDlssPreset", self)
-        addConsoleCommand("vrDlssSdpMvScale", "Set DLSS motion vector scale under Sequential Dual-Pass: vrDlssSdpMvScale <scaleX> [scaleY]", "consoleCommandSetDlssSdpMvScale", self)
-        addConsoleCommand("vrDlssMvFix", "Switch the DLSS motion vector pass for A/B comparison: vrDlssMvFix <on|off>", "consoleCommandDlssMvFix", self)
-        addConsoleCommand("vrDlssDepthModel", "Set the depth model of the DLSS motion vector correction for A/B comparison: vrDlssDepthModel <infinite|finite>", "consoleCommandDlssDepthModel", self)
-        addConsoleCommand("vrDlssNearClip", "Set the near plane of the DLSS motion vector correction for every camera in metres (0 or auto = estimate it automatically): vrDlssNearClip <meters|auto>", "consoleCommandDlssNearClip", self)
-        addConsoleCommand("vrDlssNearClipCab", "Set the DLSS near plane for a vehicle's inside camera: vrDlssNearClipCab <meters|auto>", "consoleCommandDlssNearClipCab", self)
-        addConsoleCommand("vrDlssNearClipOutside", "Set the DLSS near plane for a vehicle's outside cameras: vrDlssNearClipOutside <meters|auto>", "consoleCommandDlssNearClipOutside", self)
-        addConsoleCommand("vrDlssNearClipOnFoot", "Set the DLSS near plane on foot: vrDlssNearClipOnFoot <meters|auto>", "consoleCommandDlssNearClipOnFoot", self)
-        addConsoleCommand("vrDlssDiag","Trace DLSS evaluations to fs25_vr.log: vrDlssDiag [evaluations]", "consoleCommandDlssDiag", self)
-        addConsoleCommand("vrRenderingMode", "Set Stereo Presentation Mode: vrRenderingMode <afr|dualpass|toggle>", "consoleCommandSetRenderingMode", self)
-        addConsoleCommand("vrObliqueProjection", "Toggle Oblique Frustum projection: vrObliqueProjection <true|false|toggle>", "consoleCommandSetObliqueProjection", self)
-        addConsoleCommand("vrHudGroupShow","Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", "consoleCommandHudGroupShow", self)
+        for _, command in ipairs(self.CORE_CONSOLE_COMMANDS) do
+            addConsoleCommand(command.name, command.description, command.method, self)
+        end
     end
     if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
     if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
@@ -378,18 +382,21 @@ VRCompanion.STEREO_DIALOGS = {
 -- its controller object and whose buttons and position later tickets work on), or nil. A dialog opened over a screen (the pause
 -- menu sets g_gui.currentGuiName; a dialog does not) or over another dialog is not alone, and anything that cannot be read as
 -- a lone listed dialog counts as a menu, so that the player is never left in stereo with a GUI they cannot use.
+-- The GUI fields read in one protected call. Defined once, so that polling a menu every update makes no closure.
+local function readLoneStereoDialog(gui)
+    local screen = gui.currentGuiName
+    if screen ~= nil and screen ~= "" then return nil end
+    local dialogs = gui.dialogs
+    if type(dialogs) ~= "table" or #dialogs ~= 1 then return nil end
+    local name = gui.currentDialogName
+    if type(name) ~= "string" or VRCompanion.STEREO_DIALOGS[name] ~= true then return nil end
+    return dialogs[1]
+end
+
 function VRCompanion:findStereoDialog(gui)
     gui = gui or g_gui or _G.g_gui
     if type(gui) ~= "table" then return nil end
-    local ok, root = pcall(function()
-        local screen = gui.currentGuiName
-        if screen ~= nil and screen ~= "" then return nil end
-        local dialogs = gui.dialogs
-        if type(dialogs) ~= "table" or #dialogs ~= 1 then return nil end
-        local name = gui.currentDialogName
-        if type(name) ~= "string" or self.STEREO_DIALOGS[name] ~= true then return nil end
-        return dialogs[1]
-    end)
+    local ok, root = pcall(readLoneStereoDialog, gui)
     return ok and root or nil
 end
 
@@ -543,50 +550,52 @@ function VRCompanion:hookEnterable()
     end
 end
 
-function VRCompanion:hookVehicleSpeed()
-    if self.origVehicleSpeedFuncs == nil then
-        self.origVehicleSpeedFuncs = {}
+-- Wraps target.updateVehicleSpeed with the dt=0 guard. Vehicle instances keep their
+-- original in a weak-keyed table so a vehicle that is gone can be collected; classes are
+-- kept strongly (they live as long as the game).
+function VRCompanion:hookTableSpeed(target, label)
+    if target == nil or type(target.updateVehicleSpeed) ~= "function" then
+        return
     end
-
-    local function hookTableSpeed(target, label)
-        if target == nil or type(target.updateVehicleSpeed) ~= "function" then
-            return
-        end
-        if self.origVehicleSpeedFuncs[target] ~= nil then
-            return
-        end
-        local origFn = target.updateVehicleSpeed
+    if self.origVehicleSpeedFuncs[target] ~= nil or self.origClassSpeedFuncs[target] ~= nil then
+        return
+    end
+    local origFn = target.updateVehicleSpeed
+    if label then
+        self.origClassSpeedFuncs[target] = origFn
+    else
         self.origVehicleSpeedFuncs[target] = origFn
-        target.updateVehicleSpeed = function(vehSelf, dt, ...)
-            if dt == nil or dt <= 0.00001 then
-                return
-            end
-            return origFn(vehSelf, dt, ...)
+    end
+    target.updateVehicleSpeed = function(vehSelf, dt, ...)
+        if dt == nil or dt <= 0.00001 then
+            return
         end
-        if label then
-            print(string.format("[FS25_VR] Hooked %s.updateVehicleSpeed for dt=0 guard.", label))
-        end
+        return origFn(vehSelf, dt, ...)
+    end
+    if label then
+        print(string.format("[FS25_VR] Hooked %s.updateVehicleSpeed for dt=0 guard.", label))
+    end
+end
+
+-- Installs the dt=0 guards on the named classes, the mission's vehicles and Ferry.
+-- scanGlobals additionally walks every global table for classes with updateVehicleSpeed,
+-- which only the map load install does: it is too slow to repeat during play.
+function VRCompanion:installVehicleSpeedGuards(scanGlobals)
+    if self.origVehicleSpeedFuncs == nil then
+        self.origVehicleSpeedFuncs = setmetatable({}, { __mode = "k" })
+    end
+    if self.origClassSpeedFuncs == nil then
+        self.origClassSpeedFuncs = {}
     end
 
-    local vehClass = Vehicle or (_G and _G.Vehicle)
-    if vehClass ~= nil and type(vehClass.updateVehicleSpeed) == "function" and self.origVehicleUpdateVehicleSpeed == nil then
-        self.origVehicleUpdateVehicleSpeed = vehClass.updateVehicleSpeed
-    end
-    hookTableSpeed(vehClass, "Vehicle")
+    self:hookTableSpeed(Vehicle or (_G and _G.Vehicle), "Vehicle")
+    self:hookTableSpeed(RailroadVehicle or (_G and _G.RailroadVehicle), "RailroadVehicle")
+    self:hookTableSpeed(Locomotive or (_G and _G.Locomotive), "Locomotive")
 
-    local rrClass = RailroadVehicle or (_G and _G.RailroadVehicle)
-    hookTableSpeed(rrClass, "RailroadVehicle")
-
-    local locoClass = Locomotive or (_G and _G.Locomotive)
-    hookTableSpeed(locoClass, "Locomotive")
-
-    -- Scan _G for any classes/tables with updateVehicleSpeed
-    if _G ~= nil then
+    if scanGlobals and _G ~= nil then
         for name, val in pairs(_G) do
-            if type(name) == "string" and type(val) == "table" and type(val.updateVehicleSpeed) == "function" then
-                if self.origVehicleSpeedFuncs[val] == nil then
-                    hookTableSpeed(val, name)
-                end
+            if type(name) == "string" and type(val) == "table" then
+                self:hookTableSpeed(val, name)
             end
         end
     end
@@ -595,10 +604,8 @@ function VRCompanion:hookVehicleSpeed()
     local mission = g_currentMission or (_G and _G.g_currentMission)
     if mission ~= nil and mission.vehicles ~= nil then
         for _, veh in pairs(mission.vehicles) do
-            if type(veh) == "table" and type(veh.updateVehicleSpeed) == "function" then
-                if self.origVehicleSpeedFuncs[veh] == nil then
-                    hookTableSpeed(veh, nil)
-                end
+            if type(veh) == "table" then
+                self:hookTableSpeed(veh, nil)
             end
         end
     end
@@ -620,21 +627,26 @@ function VRCompanion:hookVehicleSpeed()
     self.lastVehicleSpeedHookTick = self.frameTicks or 0
 end
 
+-- Map load install: also finds custom vehicle classes among the globals.
+function VRCompanion:hookVehicleSpeed()
+    self:installVehicleSpeedGuards(true)
+end
+
+-- Retry cadence and vehicle transitions: named classes and the mission's vehicles only.
+function VRCompanion:refreshVehicleSpeedGuards()
+    self:installVehicleSpeedGuards(false)
+end
+
 function VRCompanion:unhookVehicleSpeed()
-    if self.origVehicleSpeedFuncs ~= nil then
-        for target, origFn in pairs(self.origVehicleSpeedFuncs) do
+    for _, originals in ipairs({ self.origVehicleSpeedFuncs or {}, self.origClassSpeedFuncs or {} }) do
+        for target, origFn in pairs(originals) do
             if target ~= nil and origFn ~= nil then
                 target.updateVehicleSpeed = origFn
             end
         end
-        self.origVehicleSpeedFuncs = {}
     end
-
-    local vehClass = Vehicle or (_G and _G.Vehicle)
-    if self.origVehicleUpdateVehicleSpeed ~= nil and vehClass ~= nil then
-        vehClass.updateVehicleSpeed = self.origVehicleUpdateVehicleSpeed
-        self.origVehicleUpdateVehicleSpeed = nil
-    end
+    self.origVehicleSpeedFuncs = nil
+    self.origClassSpeedFuncs = nil
 
     local ferryClass = Ferry or (_G and _G.Ferry)
     if self.origFerryUpdatePosition ~= nil and ferryClass ~= nil then
@@ -712,6 +724,7 @@ end
 local function endOutermostFrameChecks(self, ok, ...)
     self:resetFrameChecks()
     if not ok then
+        self.inMissionUpdate = false
         error((...), 0)
     end
     return ...
@@ -736,6 +749,12 @@ function VRCompanion:onMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     return runWithFrameChecks(self, self.runMissionUpdate, missionSelf, dt, origUpdateFn, ...)
 end
 
+-- Clears the running mark after the game's update returned, and passes on its results.
+local function endAfrGameUpdate(self, ...)
+    self.inMissionUpdate = false
+    return ...
+end
+
 function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
     local isSequentialDualPass = (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS)
@@ -748,11 +767,15 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
         self.deferRenderingCameraBind = false
         self:endEyeProjectionScope()
         self:releaseDualPassPhysicsPause()
+        -- The game's update runs marked as running, so a second wrapper further down the
+        -- class chain passes straight through and the mod's update logic runs once. An error
+        -- skips the clear here; the outermost frame-check scope clears it.
+        self.inMissionUpdate = true
         if self.perfTracing then
             self:perfTraceBegin("gameUpdate")
-            return self:perfTraceEnd("gameUpdate", origUpdateFn(missionSelf, dt, ...))
+            return endAfrGameUpdate(self, self:perfTraceEnd("gameUpdate", origUpdateFn(missionSelf, dt, ...)))
         end
-        return origUpdateFn(missionSelf, dt, ...)
+        return endAfrGameUpdate(self, origUpdateFn(missionSelf, dt, ...))
     end
 
     local rawDt = dt or 0.0
@@ -946,12 +969,6 @@ function VRCompanion:unhookMissionUpdate()
         self.origMission00Update = nil
     end
 
-    local mission = g_currentMission or (_G and _G.g_currentMission)
-    if self.origMissionInstanceUpdate ~= nil and mission ~= nil then
-        mission.update = self.origMissionInstanceUpdate
-        self.origMissionInstanceUpdate = nil
-    end
-
     self.accumulatedPass1Dt = 0.0
     self.deferRenderingCameraBind = false
     self:endEyeProjectionScope()
@@ -1012,8 +1029,10 @@ function VRCompanion:runUpdate(dt)
     -- spawned vehicles) on a slow cadence or on a vehicle transition, never every frame.
     local speedHookRetryDue = self.vehicleSpeedHooked
         and (self.frameTicks - (self.lastVehicleSpeedHookTick or 0)) >= self.VEHICLE_SPEED_HOOK_RETRY_TICKS
-    if not self.vehicleSpeedHooked or speedHookRetryDue then
+    if not self.vehicleSpeedHooked then
         self:hookVehicleSpeed()
+    elseif speedHookRetryDue then
+        self:refreshVehicleSpeedGuards()
     end
 
     -- Update physical IPD-scaled HUD convergence parity across alternating AFR frames
@@ -1034,7 +1053,7 @@ function VRCompanion:runUpdate(dt)
         local oldVeh = self.lastControlledVehicle
         self.lastControlledVehicle = curVehicle
         -- A new vehicle may have just been spawned/entered: re-run the guard install.
-        self:hookVehicleSpeed()
+        self:refreshVehicleSpeedGuards()
         if type(self.onVehicleTransition) == "function" then
             self:onVehicleTransition(oldVeh, curVehicle)
         end
@@ -1180,19 +1199,11 @@ function VRCompanion:deleteMap()
     self.activeFillLevelsDisplay = nil
     self.passThroughMode = nil
     self.headTrackingEnabled = true
-    self.hudToggleActionEventId = nil
-    self.recenterActionEventId = nil
-    self.snapLeftActionEventId = nil
-    self.snapRightActionEventId = nil
-    self.toggleViewActionEventId = nil
-    self.seatSetActionEventId = nil
+    for _, row in ipairs(self.ACTION_EVENTS) do
+        self[row.idField] = nil
+        self[row.loggedField] = false
+    end
     self.actionEventsContextName = nil
-    self.hudToggleLoggedOnce = false
-    self.recenterLoggedOnce = false
-    self.snapLeftLoggedOnce = false
-    self.snapRightLoggedOnce = false
-    self.toggleViewLoggedOnce = false
-    self.seatSetLoggedOnce = false
     if type(self.resetToggleViewDebounce) == "function" then
         self:resetToggleViewDebounce()
     end
@@ -1224,17 +1235,9 @@ function VRCompanion:deleteMap()
 
     -- Remove console commands
     if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrHudSafeArea")
-        removeConsoleCommand("vrHudGroup")
-        removeConsoleCommand("vrHudState")
-        removeConsoleCommand("vrRecenterMode")
-        removeConsoleCommand("vrRecenterTracking")
-        removeConsoleCommand("vrSnapTurnAngle")
-        removeConsoleCommand("vr2DView")
-        removeConsoleCommand("vrToggleView")
-        removeConsoleCommand("vrRenderingMode")
-        removeConsoleCommand("vrObliqueProjection")
-        removeConsoleCommand("vrHudGroupShow")
+        for _, command in ipairs(self.CORE_CONSOLE_COMMANDS) do
+            removeConsoleCommand(command.name)
+        end
     end
 
     if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
@@ -1246,26 +1249,3 @@ function VRCompanion:deleteMap()
     if type(self.unregisterDualPassPhysicsConsoleCommands) == "function" then self:unregisterDualPassPhysicsConsoleCommands() end
     if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end
-
--- Export to Core subsystem table
-VRCompanion.Core.loadMap = function(self, ...) return VRCompanion.loadMap(VRCompanion, ...) end
-VRCompanion.Core.update = function(self, ...) return VRCompanion.update(VRCompanion, ...) end
-VRCompanion.Core.deleteMap = function(self, ...) return VRCompanion.deleteMap(VRCompanion, ...) end
-VRCompanion.Core.pollGuiVisibility = function(self, ...) return VRCompanion.pollGuiVisibility(VRCompanion, ...) end
-VRCompanion.Core.getPlayerCamera = function(self, ...) return VRCompanion.getPlayerCamera(VRCompanion, ...) end
-VRCompanion.Core.getControlledVehicle = function(self, ...) return VRCompanion.getControlledVehicle(VRCompanion, ...) end
-VRCompanion.Core.getActiveVehicleCamera = function(self, ...) return VRCompanion.getActiveVehicleCamera(VRCompanion, ...) end
-VRCompanion.Core.getVehicleActiveCamera = function(self, ...) return VRCompanion.getVehicleActiveCamera(VRCompanion, ...) end
-VRCompanion.Core.getDlssNearClipMode = function(self, ...) return VRCompanion.getDlssNearClipMode(VRCompanion, ...) end
-VRCompanion.Core.getDlssNearClipForCurrentCamera = function(self, ...) return VRCompanion.getDlssNearClipForCurrentCamera(VRCompanion, ...) end
-VRCompanion.Core.applyDlssNearClip = function(self, ...) return VRCompanion.applyDlssNearClip(VRCompanion, ...) end
-VRCompanion.Core.hookVehicleCamera =function(self, ...) return VRCompanion.hookVehicleCamera(VRCompanion, ...) end
-VRCompanion.Core.hookEnterable = function(self, ...) return VRCompanion.hookEnterable(VRCompanion, ...) end
-VRCompanion.Core.hookVehicleSpeed = function(self, ...) return VRCompanion.hookVehicleSpeed(VRCompanion, ...) end
-VRCompanion.Core.unhookVehicleSpeed = function(self, ...) return VRCompanion.unhookVehicleSpeed(VRCompanion, ...) end
-VRCompanion.Core.hookPlayerCamera = function(self, ...) return VRCompanion.hookPlayerCamera(VRCompanion, ...) end
-VRCompanion.Core.onMissionUpdate = function(self, ...) return VRCompanion.onMissionUpdate(VRCompanion, ...) end
-VRCompanion.Core.hookMissionUpdate = function(self, ...) return VRCompanion.hookMissionUpdate(VRCompanion, ...) end
-VRCompanion.Core.unhookMissionUpdate = function(self, ...) return VRCompanion.unhookMissionUpdate(VRCompanion, ...) end
-
-return VRCompanion.Core

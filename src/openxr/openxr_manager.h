@@ -109,8 +109,6 @@ public:
     using PerformanceCounterSource = std::function<PerformanceCounterSample()>;
     // Replaces the QueryPerformanceCounter/Frequency reads (tests drive a fake clock).
     void SetPerformanceCounterSource(PerformanceCounterSource source);
-    // counter / frequency in nanoseconds without overflowing for any int64 counter.
-    static int64_t PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency);
 
     // `observer` runs at the end of every BeginFrame that began a frame, after the hand state is synced. One
     // observer per `owner` (the Virtual Gamepad publishes its snapshot and plays its rumble from here); clearing is by the same
@@ -194,15 +192,12 @@ public:
     const PointerCursorOverride& GetPointerCursorOverride() const { return m_pointerCursor; }
 
     uint64_t GetSubmittedQuadFrameCount() const { return m_submittedQuadFrameCount; }
-    void ResetSubmittedQuadFrameCount() { m_submittedQuadFrameCount = 0; }
     const XrCompositionLayerQuad& GetLastSubmittedQuadLayer() const { return m_lastSubmittedQuadLayer; }
 
     bool CreateCursorSwapchain(uint32_t width = 64, uint32_t height = 64, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
     void DestroyCursorSwapchain();
     bool HasCursorSwapchain() const { return m_cursorOverlay.HasSwapchain(); }
     const EyeSwapchain& GetCursorSwapchain() const { return m_cursorOverlay.GetSwapchain(); }
-    OpenXrCursorOverlay& GetCursorOverlay() { return m_cursorOverlay; }
-    const OpenXrCursorOverlay& GetCursorOverlay() const { return m_cursorOverlay; }
 
     void SetMenuCursorState(const MenuCursorState& cursorState) { m_menuCursorState = cursorState; }
     const MenuCursorState& GetMenuCursorState() const { return m_menuCursorState; }
@@ -215,18 +210,19 @@ public:
     const XrCompositionLayerQuad& GetLastSubmittedCursorQuadLayer() const { return m_cursorOverlay.GetLastSubmittedCursorQuadLayer(); }
     bool HasLastSubmittedCursorQuadLayer() const { return m_cursorOverlay.HasLastSubmittedCursorQuadLayer(); }
 
+    // Logs a back buffer that is not the eye swapchain size, once per session (Shutdown clears the guard).
+    void LogEyeCopySizeMismatchOnce(uint64_t srcWidth, uint32_t srcHeight, uint64_t dstWidth, uint32_t dstHeight);
+
     float GetIpd() const { return m_ipd; }
     void SetIpd(float ipd) { m_ipd = ipd; }
 
     uint64_t GetSubmittedFramePairCount() const { return m_submittedFramePairCount; }
-    void ResetSubmittedFramePairCount() { m_submittedFramePairCount = 0; }
 
     OpenXrState GetState() const { return m_state; }
     bool IsPassThrough() const { return m_state == OpenXrState::PassThrough; }
     bool IsActive() const { return m_state == OpenXrState::Active; }
 
     const OpenXrRuntimeInfo& GetRuntimeInfo() const { return m_runtimeInfo; }
-    XrInstance GetInstance() const { return m_instance; }
     XrSession GetSession() const { return m_session; }
     XrSpace GetLocalSpace() const { return m_localSpace; }
     XrSpace GetBaseLocalSpace() const { return m_baseLocalSpace; }
@@ -324,6 +320,10 @@ private:
     MenuCursorState m_menuCursorState;
     PointerCursorOverride m_pointerCursor;
     float m_ipd = 0.064f;
+    // One-time log guards. Per instance and cleared by Shutdown, so each OpenXR session logs these again.
+    float m_lastLoggedIpd = 0.0f;
+    bool m_loggedEyeCopySizeMismatch = false;
+    uint32_t m_headPoseLocateFailures = 0;
     uint64_t m_submittedFramePairCount = 0;
     uint64_t m_submittedQuadFrameCount = 0;
     float m_menuQuadDistance = 1.5f;
