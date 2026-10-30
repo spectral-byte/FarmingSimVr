@@ -452,6 +452,7 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT fla
         PerfScope timing(PerfSection::InjectorPresent);
         shouldPresent = OnPresentImpl(swapChain, syncInterval, flags);
         UpdateDesktopMirrorTitle();
+        UpdateMouseConfinement();
     }
     PerfTrace::Instance().MarkFrame(m_presentWasStereo,
                                     m_vrBridge && m_vrBridge->GetRenderingMode() == VRRenderingMode::SequentialDualPass);
@@ -707,6 +708,23 @@ void DxgiProxy::UpdateDesktopMirrorTitle() {
     }
     LogInfo(std::string("DxgiProxy: Desktop mirror on ") + reason + "; window title restored.");
     if (m_windowController) m_windowController->RestoreTitle();
+}
+
+void DxgiProxy::UpdateMouseConfinement() {
+    if (!m_windowController) return;
+    using State = MirrorWindowController::MouseConfinementState;
+    // The Injector is inert in Pass-Through Mode; "session running" is the one that decides whether the
+    // Desktop Mirror Window shows by itself (a running session that is not focused still counts).
+    // The Mouse Confinement setting (#218) joins these conditions here, and with it a "by command" reason.
+    State state = State::Holding;
+    if (!m_openXrManager || !m_openXrManager->IsActive()) {
+        state = State::PassThroughMode;
+    } else if (!m_openXrManager->HasEyeSwapchains() || !m_openXrManager->IsSessionRunning()) {
+        state = State::SessionNotRunning;
+    } else if (!m_windowController->IsGameWindowForeground()) {
+        state = State::FocusLost;
+    }
+    m_windowController->UpdateMouseConfinement(state);
 }
 
 bool DxgiProxy::ShouldCallRealPresent(ID3D12Resource* backBuffer) {

@@ -193,6 +193,9 @@ private:
     // again). Leaves the title alone otherwise.
     void UpdateDesktopMirrorTitle();
     bool m_desktopMirrorOffAnnounced = false;
+    // After each Present, on every Present path: tells the Mirror Window Controller whether Mouse
+    // Confinement holds the Desk Mouse to the game picture, so that it can also let go on every path.
+    void UpdateMouseConfinement();
 
     IDXGISwapChain* m_cachedSwapChain = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;

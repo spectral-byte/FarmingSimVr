@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 struct IDXGISwapChain;
@@ -75,6 +76,21 @@ public:
     // Menu cursor state update
     void UpdateMenuCursorState(IDXGISwapChain* swapChain, OpenXrManager* openXrManager);
 
+    // Mouse Confinement: while the headset is in use and the game window has focus, the Desk Mouse is kept
+    // on the game picture (the window's client area in physical screen coordinates). The game's Present
+    // says once per frame whether it should hold, and if not why not (the reason is only logged).
+    enum class MouseConfinementState {
+        Holding,
+        PassThroughMode,
+        SessionNotRunning,
+        FocusLost,
+    };
+    void UpdateMouseConfinement(MouseConfinementState state);
+
+    // The game's own ClipCursor call, as the hook receives it: remembers what the game asked for and puts
+    // it on the desktop, except that while Mouse Confinement holds the game's release becomes the picture.
+    bool HandleGameClipCursor(const RECT* lpRect);
+
     // Win32 Detours management. Detours are installed only while a live InjectorRuntime owns the
     // controller, so the hooks can always find the controller that holds their originals.
     void SetOwnedByRuntime(bool owned) { m_ownedByRuntime = owned; }
@@ -105,6 +121,12 @@ public:
 private:
     bool GetPhysicalWindowMetrics(HWND hWnd, RECT& outPhysRect, POINT& outClientOrigin) const;
 
+    // The game picture: the game window's real client area in screen coordinates, whatever size the game
+    // is told (Resolution Decoupling). False when the window has no client area to hold the mouse to.
+    bool GetGamePicture(RECT& outPicture) const;
+    // Mouse Confinement lets go: puts back what the game last asked for, but only a clip it set itself.
+    void StopHoldingMouse(const char* reason);
+
     // The controller a Win32 hook acts for: the one in a live runtime that installed `detour`, else
     // the current runtime's; null when no runtime is alive.
     static MirrorWindowController* ForHook(FunctionDetour MirrorWindowController::*detour);
@@ -128,6 +150,14 @@ private:
 
     uint32_t m_targetRenderWidth = 0;
     uint32_t m_targetRenderHeight = 0;
+
+    // Mouse Confinement. m_gameClip is what the game last asked ClipCursor for (empty: a release);
+    // m_holdingMouse is whether it holds now; m_setMouseClip is whether the clip on the desktop is one it set.
+    // m_lastMouseRelease is why it last let go, for the log line when it holds again.
+    std::optional<RECT> m_gameClip;
+    bool m_holdingMouse = false;
+    bool m_setMouseClip = false;
+    std::optional<MouseConfinementState> m_lastMouseRelease;
 
     FunctionDetour m_detourGetClientRect;
     FunctionDetour m_detourScreenToClient;
