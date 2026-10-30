@@ -4920,6 +4920,127 @@ TEST(DxgiProxyTest, MouseConfinementLogsEachStartAndStopOnceWithItsReason) {
     EXPECT_EQ(CountOf(capture.Text(), "Mouse Confinement"), 6u) << capture.Text();
 }
 
+// Centre the Desk Mouse (#217): holding starts with the cursor off the picture, it comes to the middle.
+namespace {
+POINT PictureCentre(const RECT& picture) {
+    return { (picture.left + picture.right) / 2, (picture.top + picture.bottom) / 2 };
+}
+// A spot on the desktop that is not on the game picture (the test window is inset from the top left).
+POINT OffThePicture(const RECT& picture) {
+    return { picture.left - 20, picture.top - 20 };
+}
+} // namespace
+
+TEST(DxgiProxyTest, MouseConfinementStartingToHoldWithTheDeskMouseOffThePictureBringsItToTheMiddle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
+
+    rig.Present();
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+    EXPECT_EQ(rig.cursorPort->cursor.x, PictureCentre(rig.clientArea).x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, PictureCentre(rig.clientArea).y);
+}
+
+TEST(DxgiProxyTest, MouseConfinementStartingToHoldWithTheDeskMouseOnThePictureLeavesItWhereItIs) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.cursorPort->foreground = rig.gameWindow;
+    const POINT spot{ rig.clientArea.left + 10, rig.clientArea.bottom - 10 };  // on the picture, near its corner
+    rig.cursorPort->cursor = spot;
+
+    rig.Present();
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 0);
+    EXPECT_EQ(rig.cursorPort->cursor.x, spot.x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, spot.y);
+}
+
+TEST(DxgiProxyTest, MouseConfinementNeverMovesTheDeskMouseWhileItKeepsHolding) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    // Something puts the cursor off the picture and clears the clip mid-hold: the clip is set again,
+    // the cursor is left alone.
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
+    rig.cursorPort->clip.reset();
+    for (int i = 0; i < 3; ++i) rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 0);
+    EXPECT_EQ(rig.cursorPort->cursor.x, OffThePicture(rig.clientArea).x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, OffThePicture(rig.clientArea).y);
+}
+
+TEST(DxgiProxyTest, MouseConfinementBringsAnOutsideDeskMouseToTheMiddleWhenTheGameWindowRegainsFocus) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    rig.cursorPort->foreground = GetDesktopWindow();  // Alt+Tab away
+    rig.Present();
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);  // the player works on another monitor
+    rig.Present();
+    ASSERT_EQ(rig.cursorPort->setCursorPosCalls, 0) << "moved while the game window had no focus";
+
+    rig.cursorPort->foreground = rig.gameWindow;  // Alt+Tab back
+    rig.Present();
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+    EXPECT_EQ(rig.cursorPort->cursor.x, PictureCentre(rig.clientArea).x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, PictureCentre(rig.clientArea).y);
+}
+
+TEST(DxgiProxyTest, MouseConfinementBringsAnOutsideDeskMouseToTheMiddleWhenTheSessionRunsAgain) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // the headset goes to sleep
+    rig.Present();
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
+    rig.Present();
+    ASSERT_EQ(rig.cursorPort->setCursorPosCalls, 0) << "moved while the session was not running";
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // the headset wakes up
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    rig.Present();
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+    EXPECT_EQ(rig.cursorPort->cursor.x, PictureCentre(rig.clientArea).x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, PictureCentre(rig.clientArea).y);
+}
+
+TEST(DxgiProxyTest, MouseConfinementMovesTheDeskMouseOnlyOncePerStartAcrossFramesAndPresentPaths) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
+
+    for (int i = 0; i < 4; ++i) rig.Present();
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+}
+
+TEST(DxgiProxyTest, MouseConfinementBringsTheDeskMouseToThePhysicalMiddleWhenTheRenderSizeIsLargerThanTheWindow) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.runtime->GetWindowController().SetTargetRenderResolution(3840, 2160);
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
+
+    rig.Present();
+
+    // The port is the original SetCursorPos: the point is the window's real middle, not the render-size one.
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+    EXPECT_EQ(rig.cursorPort->cursor.x, PictureCentre(rig.clientArea).x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, PictureCentre(rig.clientArea).y);
+}
+
 // The vrMouseConfinement setting (#218): the VRBridge flag, read on every Present once the Companion Mod
 // has done its handshake (a savegame has loaded).
 TEST(DxgiProxyTest, MouseConfinementLetsGoWhileTheFlagIsOffAndHoldsAgainWhenItIsBackOn) {
