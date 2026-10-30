@@ -540,10 +540,15 @@ bool MirrorWindowController::GetGamePicture(RECT& outPicture) const {
 
 void MirrorWindowController::UpdateMouseConfinement(MouseConfinementState state) {
     if (state != MouseConfinementState::Holding) {
-        if (!m_holdingMouse) return;
+        if (!m_holdingMouse) {
+            // Turned off while it was not holding (focus already lost): when it is turned on again, that is the reason.
+            if (state == MouseConfinementState::TurnedOffByCommand) m_lastMouseRelease = state;
+            return;
+        }
         const char* reason = "focus lost";
         if (state == MouseConfinementState::PassThroughMode) reason = "Pass-Through Mode";
         if (state == MouseConfinementState::SessionNotRunning) reason = "session not running";
+        if (state == MouseConfinementState::TurnedOffByCommand) reason = "turned off by command (vrMouseConfinement off)";
         StopHoldingMouse(reason);
         m_lastMouseRelease = state;
         return;
@@ -557,6 +562,7 @@ void MirrorWindowController::UpdateMouseConfinement(MouseConfinementState state)
         const char* reason = "headset in use";
         if (m_lastMouseRelease == MouseConfinementState::FocusLost) reason = "focus regained";
         if (m_lastMouseRelease == MouseConfinementState::SessionNotRunning) reason = "session running again";
+        if (m_lastMouseRelease == MouseConfinementState::TurnedOffByCommand) reason = "turned on by command";
         LogInfo(std::string("MirrorWindowController: Mouse Confinement holds the Desk Mouse to the game picture (") + reason + ").");
     }
 

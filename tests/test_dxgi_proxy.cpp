@@ -4920,6 +4920,168 @@ TEST(DxgiProxyTest, MouseConfinementLogsEachStartAndStopOnceWithItsReason) {
     EXPECT_EQ(CountOf(capture.Text(), "Mouse Confinement"), 6u) << capture.Text();
 }
 
+// The vrMouseConfinement setting (#218): the VRBridge flag, read on every Present once the Companion Mod
+// has done its handshake (a savegame has loaded).
+TEST(DxgiProxyTest, MouseConfinementLetsGoWhileTheFlagIsOffAndHoldsAgainWhenItIsBackOn) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+    rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+
+    rig.vrBridge->SetMouseConfinementEnabled(true);
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementNeverSetsAnythingWhileTheFlagIsOffEvenWithoutAHeldClip) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+    EXPECT_EQ(rig.cursorPort->setClipCalls, 0);
+}
+
+TEST(DxgiProxyTest, MouseConfinementFlagOffDoesNotTurnTheGamesReleaseInAMenuIntoTheirPicture) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+
+    EXPECT_TRUE(ClipCursor(nullptr));  // the game lets go in a menu
+
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+}
+
+// Before a savegame has loaded there is no Companion Mod to have turned it off: it always holds.
+TEST(DxgiProxyTest, MouseConfinementHoldsWithTheFlagOffWhileThereIsNoCompanionHandshake) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    GiveTheGameWindowFocus(rig);
+
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+// Leaving to the main menu is a map unload: the Companion Mod is gone and the flag goes back on.
+TEST(DxgiProxyTest, MouseConfinementHoldsAgainAfterTheMapUnloadsWithTheFlagOff) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_FALSE(rig.cursorPort->clip.has_value());
+
+    rig.vrBridge->SetCompanionActive(false);
+    rig.vrBridge->SetMouseConfinementEnabled(true);  // what VRBridge.onMapUnload does
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementFlagOffStillAppliesTheGamesOwnGameplayRectangle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);  // no Resolution Decoupling: the rectangle is the game's own
+    RECT gameRect = rig.clientArea;
+    InflateRect(&gameRect, -100, -100);
+
+    EXPECT_TRUE(ClipCursor(&gameRect));
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, gameRect));
+}
+
+TEST(DxgiProxyTest, MouseConfinementTurnedOffDuringGameplayLeavesTheGamesRectangleInPlace) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);
+    RECT gameRect = rig.clientArea;
+    InflateRect(&gameRect, -100, -100);
+    EXPECT_TRUE(ClipCursor(&gameRect));
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));  // holding replaced it with the picture
+
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, gameRect)) << "mouse-look must keep the game's own capture";
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, gameRect));
+}
+
+TEST(DxgiProxyTest, MouseConfinementTurnedOffDuringGameplayWithTheGamesRectangleEqualToThePictureKeepsIt) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);
+    RECT gameRect = rig.clientArea;
+    EXPECT_TRUE(ClipCursor(&gameRect));
+    rig.Present();
+
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, gameRect));
+}
+
+TEST(DxgiProxyTest, MouseConfinementLogsStartsAndStopsCausedByTheSettingAsByCommand) {
+    LogCapture capture("fs25vr_mouse_confinement_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    const std::string holds = "Mouse Confinement holds the Desk Mouse to the game picture (";
+    const std::string releases = "Mouse Confinement released the Desk Mouse (";
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), holds + "headset in use)"), 1u) << capture.Text();
+
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), releases + "turned off by command (vrMouseConfinement off))"), 1u) << capture.Text();
+
+    rig.vrBridge->SetMouseConfinementEnabled(true);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), holds + "turned on by command)"), 1u) << capture.Text();
+    EXPECT_EQ(CountOf(capture.Text(), "Mouse Confinement"), 3u) << capture.Text();
+}
+
+// Focus lost and the flag off together: the log names the setting, and turning it back on while the game
+// window is still not in front says nothing until the focus is back.
+TEST(DxgiProxyTest, MouseConfinementLogsTheSettingWhenTheFlagIsTurnedOffWhileFocusIsAlreadyLost) {
+    LogCapture capture("fs25vr_mouse_confinement_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+
+    rig.cursorPort->foreground = GetDesktopWindow();
+    rig.Present();
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.cursorPort->foreground = rig.gameWindow;
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+
+    rig.vrBridge->SetMouseConfinementEnabled(true);
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    EXPECT_NE(capture.Text().find("Mouse Confinement holds the Desk Mouse to the game picture (turned on by command)"), std::string::npos)
+        << capture.Text();
+}
+
 } // namespace fs25vr
 
 

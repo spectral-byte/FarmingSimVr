@@ -274,6 +274,9 @@ function VRCompanion:loadMap(name)
     if type(self.applyDesktopMirror) == "function" then
         self:applyDesktopMirror()
     end
+    if type(self.applyMouseConfinement) == "function" then
+        self:applyMouseConfinement()
+    end
     if type(self.applyHudSafeArea) == "function" then
         self:applyHudSafeArea()
     end
@@ -298,6 +301,7 @@ function VRCompanion:loadMap(name)
     if type(self.registerStereoDialogDepthConsoleCommands) == "function" then self:registerStereoDialogDepthConsoleCommands() end
     if type(self.registerDualPassPhysicsConsoleCommands) == "function" then self:registerDualPassPhysicsConsoleCommands() end
     if type(self.registerDesktopMirrorConsoleCommands) == "function" then self:registerDesktopMirrorConsoleCommands() end
+    if type(self.registerMouseConfinementConsoleCommands) == "function" then self:registerMouseConfinementConsoleCommands() end
     if type(self.registerPerfTraceConsoleCommands) == "function" then self:registerPerfTraceConsoleCommands() end
 
     if self.showHudLoadNotification == true then
@@ -1243,6 +1247,7 @@ function VRCompanion:deleteMap()
     if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
     if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
     if type(self.resetDesktopMirror) == "function" then self:resetDesktopMirror() end
+    if type(self.resetMouseConfinement) == "function" then self:resetMouseConfinement() end
     if type(self.unregisterPerfTraceConsoleCommands) == "function" then self:unregisterPerfTraceConsoleCommands() end
     if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
     if type(self.unregisterStereoDialogDepthConsoleCommands) == "function" then self:unregisterStereoDialogDepthConsoleCommands() end

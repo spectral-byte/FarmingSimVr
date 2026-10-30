@@ -4791,6 +4791,219 @@ TEST_F(CompanionModTest, DesktopMirrorCommandIsHarmlessWithoutTheNativeBridgeFun
     )luau", "=testDesktopMirrorWithoutBridgeFunction"), 0);
 }
 
+TEST_F(CompanionModTest, MouseConfinementConsoleCommandSetsTheVRBridgeFlag) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        local removedCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName, target = target }
+        end
+        _G.removeConsoleCommand = function(cmd) removedCommands[cmd] = true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrMouseConfinement"] ~= nil, "vrMouseConfinement must be registered on map load")
+        assert(registeredCommands["vrMouseConfinement"].funcName == "consoleCommandSetMouseConfinement",
+            "registered callback must be consoleCommandSetMouseConfinement")
+        assert(registeredCommands["vrMouseConfinement"].target == VRCompanion)
+        assert(VRCompanion.mouseConfinement == true, "Mouse Confinement is on by default")
+        assert(VRBridge.getMouseConfinement() == true, "VRBridge flag is on by default")
+
+        -- No argument reports the state without changing it
+        local status = VRCompanion:consoleCommandSetMouseConfinement()
+        assert(string.find(status, "Mouse Confinement is on", 1, true) ~= nil, "status must say it is on: " .. tostring(status))
+        assert(VRBridge.getMouseConfinement() == true)
+
+        -- off / on set the VRBridge flag
+        VRCompanion:consoleCommandSetMouseConfinement("off")
+        assert(VRCompanion.mouseConfinement == false)
+        assert(VRBridge.getMouseConfinement() == false, "vrMouseConfinement off must clear the VRBridge flag")
+        status = VRCompanion:consoleCommandSetMouseConfinement()
+        assert(string.find(status, "Mouse Confinement is off", 1, true) ~= nil, "status must say it is off: " .. tostring(status))
+        assert(VRBridge.getDesktopMirror() == true, "the Desktop Mirror flag is not touched")
+
+        VRCompanion:consoleCommandSetMouseConfinement("on")
+        assert(VRCompanion.mouseConfinement == true)
+        assert(VRBridge.getMouseConfinement() == true, "vrMouseConfinement on must set the VRBridge flag")
+
+        -- Anything else is refused and changes nothing
+        VRCompanion:consoleCommandSetMouseConfinement("off")
+        local refused = VRCompanion:consoleCommandSetMouseConfinement("maybe")
+        assert(string.find(refused, "Usage: vrMouseConfinement", 1, true) ~= nil, "an invalid argument returns the usage")
+        assert(VRCompanion.mouseConfinement == false)
+        assert(VRBridge.getMouseConfinement() == false, "an invalid argument must not change the flag")
+
+        -- Map unload removes the command; the saved setting is read again by the next map load
+        VRCompanion:deleteMap()
+        assert(removedCommands["vrMouseConfinement"] == true, "deleteMap must unregister vrMouseConfinement")
+        assert(VRCompanion.mouseConfinement == false, "deleteMap keeps the setting for the next map load")
+    )luau", "=testMouseConfinementConsoleCommand"), 0);
+    EXPECT_TRUE(bridge.IsMouseConfinementEnabled());
+}
+
+TEST_F(CompanionModTest, MouseConfinementCommandPersistsTheSettingToSettingsXml) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local savedBools = {}
+        local saves = 0
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLString = function() end
+        _G.setXMLBool = function(xml, key, val) savedBools[key] = val end
+        _G.saveXMLFile = function() saves = saves + 1; return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        -- The default is written as on
+        VRCompanion:saveConfiguration("dummy.xml")
+        assert(savedBools["vrSettings.mouseConfinement"] == true, "the default is saved as on")
+
+        local savesBefore = saves
+        local response = VRCompanion:consoleCommandSetMouseConfinement("off")
+        assert(savedBools["vrSettings.mouseConfinement"] == false, "vrMouseConfinement off must be saved to settings.xml")
+        assert(saves > savesBefore, "vrMouseConfinement off must write the file")
+        assert(string.find(response, "Saved") ~= nil, "the response says it was saved: " .. tostring(response))
+
+        VRCompanion:consoleCommandSetMouseConfinement("on")
+        assert(savedBools["vrSettings.mouseConfinement"] == true, "vrMouseConfinement on must be saved to settings.xml")
+
+        -- An argument that changes nothing writes nothing
+        savesBefore = saves
+        VRCompanion:consoleCommandSetMouseConfinement("maybe")
+        VRCompanion:consoleCommandSetMouseConfinement()
+        assert(saves == savesBefore, "usage and status must not write the file")
+    )luau", "=testMouseConfinementPersists"), 0);
+}
+
+TEST_F(CompanionModTest, MouseConfinementMapLoadRestoresTheSavedValueAndSendsItToVRBridgeAfterTheHandshake) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        local store = { ["vrSettings.mouseConfinement"] = false }
+        _G.loadXMLFile = function() return 2 end
+        _G.delete = function() end
+        _G.getXMLFloat = function() return nil end
+        _G.getXMLString = function() return nil end
+        _G.getXMLBool = function(xml, key) return store[key] end
+
+        -- Record the order in which the Companion Mod talks to VRBridge
+        local calls = {}
+        local realHandshake = VRBridge.handshake
+        local realSet = VRBridge.setMouseConfinement
+        VRBridge.handshake = function(...)
+            table.insert(calls, "handshake")
+            return realHandshake(...)
+        end
+        VRBridge.setMouseConfinement = function(enabled)
+            table.insert(calls, enabled and "confinement:on" or "confinement:off")
+            return realSet(enabled)
+        end
+
+        VRCompanion:loadMap("testMap")
+
+        assert(VRCompanion.mouseConfinement == false, "the saved off must be restored on map load")
+        assert(VRBridge.getMouseConfinement() == false, "the saved off must reach VRBridge on map load")
+        local handshakeAt, lastAt = nil, nil
+        for i, c in ipairs(calls) do
+            if c == "handshake" and handshakeAt == nil then handshakeAt = i end
+            if string.sub(c, 1, 12) == "confinement:" then lastAt = i end
+        end
+        assert(handshakeAt ~= nil, "the handshake must run on map load")
+        assert(lastAt ~= nil, "the saved value must be sent to VRBridge")
+        assert(lastAt > handshakeAt, "the saved value is sent after the handshake: " .. table.concat(calls, ","))
+        assert(calls[lastAt] == "confinement:off", "the last value sent is the saved off: " .. table.concat(calls, ","))
+
+        -- A saved on is restored too, over a stale off
+        VRCompanion:deleteMap()
+        store["vrSettings.mouseConfinement"] = true
+        VRBridge.setMouseConfinement(false)
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.mouseConfinement == true)
+        assert(VRBridge.getMouseConfinement() == true, "the saved on must reach VRBridge on map load")
+    )luau", "=testMouseConfinementRestore"), 0);
+    EXPECT_TRUE(bridge.IsMouseConfinementEnabled());
+}
+
+TEST_F(CompanionModTest, MouseConfinementIsOnWhenNothingIsSaved) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    bridge.SetMouseConfinementEnabled(false);  // a stale off in the bridge must not survive a map load
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        -- A settings file that has no Mouse Confinement key
+        _G.loadXMLFile = function() return 2 end
+        _G.getXMLFloat = function() return nil end
+        _G.getXMLBool = function() return nil end
+        _G.getXMLString = function() return nil end
+
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.mouseConfinement == true, "Mouse Confinement is on when nothing is saved")
+        assert(VRBridge.getMouseConfinement() == true, "VRBridge gets on when nothing is saved")
+    )luau", "=testMouseConfinementNothingSaved"), 0);
+    EXPECT_TRUE(bridge.IsMouseConfinementEnabled());
+}
+
+TEST_F(CompanionModTest, MouseConfinementHelpTextSaysWhatItDoesAndThatItIsSavedAndOnByDefault) {
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registered = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target) registered[cmd] = desc end
+        VRCompanion:registerMouseConfinementConsoleCommands()
+        assert(registered["vrMouseConfinement"] == "Keep the Desk Mouse on the game picture while the headset is in use (saved; on by default): vrMouseConfinement [on|off]",
+            "help text: " .. tostring(registered["vrMouseConfinement"]))
+    )luau", "=testMouseConfinementHelpText"), 0);
+}
+
+TEST_F(CompanionModTest, MouseConfinementCommandIsHarmlessWithoutTheNativeBridgeFunction) {
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRBridge = { version = "1.0.0", handshake = function() return true end }
+        local result = VRCompanion:consoleCommandSetMouseConfinement("off")
+        assert(type(result) == "string")
+        assert(VRCompanion.mouseConfinement == false)
+    )luau", "=testMouseConfinementWithoutBridgeFunction"), 0);
+}
+
 TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDrivingAndOnFoot) {
     SetupCameraMockGlobals(L);
     fs25vr::FakeTrackedHeadset headset;
