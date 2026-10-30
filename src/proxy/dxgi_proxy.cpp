@@ -447,12 +447,13 @@ void DxgiProxy::LatchPendingRenderingMode() {
 
 bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
     m_presentWasStereo = false;
+    m_mouseConfinementUpdated = false;
     bool shouldPresent;
     {
         PerfScope timing(PerfSection::InjectorPresent);
         shouldPresent = OnPresentImpl(swapChain, syncInterval, flags);
         UpdateDesktopMirrorTitle();
-        UpdateMouseConfinement();
+        if (!m_mouseConfinementUpdated) UpdateMouseConfinement();
     }
     PerfTrace::Instance().MarkFrame(m_presentWasStereo,
                                     m_vrBridge && m_vrBridge->GetRenderingMode() == VRRenderingMode::SequentialDualPass);
@@ -600,6 +601,9 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
             if (!m_openXrManager->HasCursorSwapchain()) {
                 m_openXrManager->CreateCursorSwapchain();
             }
+            // Mouse Confinement first: when it starts holding it brings the Desk Mouse to the middle of
+            // the picture, and this frame's drawn cursor reads where the Desk Mouse is.
+            UpdateMouseConfinement();
             m_windowController->UpdateMenuCursorState(swapChain, m_openXrManager.get());
 
             // Floating quad layer mode:
@@ -728,6 +732,7 @@ void DxgiProxy::UpdateMouseConfinement() {
     } else if (!m_windowController->IsGameWindowForeground()) {
         state = State::FocusLost;
     }
+    m_mouseConfinementUpdated = true;
     m_windowController->UpdateMouseConfinement(state);
 }
 

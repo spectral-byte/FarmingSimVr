@@ -33,11 +33,6 @@ local function describe(enabled)
     return enabled and "on" or "off"
 end
 
--- The on/off an argument says, or nil when it says neither (the parser is shared with the other on/off commands)
-local function parseArgument(arg)
-    return VRCompanion.parseOnOffArgument(arg)
-end
-
 -- Send the field to the Injector. Called on map load after the handshake and whenever the command changes the field.
 function VRCompanion:applyMouseConfinement()
     if type(VRBridge) == "table" and type(VRBridge.setMouseConfinement) == "function" then
@@ -67,7 +62,7 @@ function VRCompanion:loadMouseConfinementSetting(xmlFile, xml)
     end
     if loaded == nil and type(xml.getString) == "function" then
         local str = xml.getString(xmlFile, SETTING_KEY)
-        if str ~= nil then loaded = parseArgument(str) end
+        if str ~= nil then loaded = VRCompanion.parseOnOffArgument(str) end
     end
     if loaded ~= nil then
         self.mouseConfinement = loaded
@@ -78,7 +73,7 @@ function VRCompanion:consoleCommandSetMouseConfinement(arg)
     if arg == nil or arg == "" then
         return string.format("Mouse Confinement is %s. %s", describe(self.mouseConfinement ~= false), USAGE)
     end
-    local enabled = parseArgument(arg)
+    local enabled = VRCompanion.parseOnOffArgument(arg)
     if enabled == nil then
         return USAGE
     end

@@ -214,7 +214,9 @@ void MirrorWindowController::RestoreTitle() {
 void MirrorWindowController::DetachAll() {
     StopHoldingMouse("controller detached");
     m_gameClip.reset();
+    m_gameClipOrigin.reset();
     m_lastMouseRelease.reset();
+    m_hasHeldMouse = false;
     RestoreTitle();
     DetachWindowSubclass();
     m_inSizeMove = false;
@@ -540,17 +542,17 @@ bool MirrorWindowController::GetGamePicture(RECT& outPicture) const {
 
 void MirrorWindowController::UpdateMouseConfinement(MouseConfinementState state) {
     if (state != MouseConfinementState::Holding) {
-        if (!m_holdingMouse) {
-            // Turned off while it was not holding (focus already lost): when it is turned on again, that is the reason.
-            if (state == MouseConfinementState::TurnedOffByCommand) m_lastMouseRelease = state;
-            return;
-        }
+        // The latest cause is recorded whether or not it was holding, so the line for the next start names
+        // what actually ended last (a setting turned on while focus is lost is not why it holds again).
+        // Until it has held once, the first start is just the headset coming into use, whatever kept it from
+        // holding before (the window not in front yet, the session not running); only the setting is kept.
+        if (m_hasHeldMouse || state == MouseConfinementState::TurnedOffByCommand) m_lastMouseRelease = state;
+        if (!m_holdingMouse) return;
         const char* reason = "focus lost";
         if (state == MouseConfinementState::PassThroughMode) reason = "Pass-Through Mode";
         if (state == MouseConfinementState::SessionNotRunning) reason = "session not running";
         if (state == MouseConfinementState::TurnedOffByCommand) reason = "turned off by command (vrMouseConfinement off)";
         StopHoldingMouse(reason);
-        m_lastMouseRelease = state;
         return;
     }
 
@@ -559,6 +561,7 @@ void MirrorWindowController::UpdateMouseConfinement(MouseConfinementState state)
 
     if (!m_holdingMouse) {
         m_holdingMouse = true;
+        m_hasHeldMouse = true;
         const char* reason = "headset in use";
         if (m_lastMouseRelease == MouseConfinementState::FocusLost) reason = "focus regained";
         if (m_lastMouseRelease == MouseConfinementState::SessionNotRunning) reason = "session running again";
@@ -576,20 +579,39 @@ void MirrorWindowController::UpdateMouseConfinement(MouseConfinementState state)
     // Set again only when the clip differs from the picture: Windows or another program may have cleared it.
     RECT current{};
     if (!m_cursorPort->GetClip(current) || !EqualRect(&current, &picture)) {
-        m_cursorPort->SetClip(&picture);
-        m_setMouseClip = true;
+        SetPictureClip(picture);
     }
+}
+
+bool MirrorWindowController::SetPictureClip(const RECT& picture) {
+    m_setMousePicture = picture;
+    return m_cursorPort->SetClip(&picture);
+}
+
+std::optional<RECT> MirrorWindowController::GameClipOnScreen() const {
+    if (!m_gameClip) return std::nullopt;
+    RECT clip = *m_gameClip;
+    RECT picture{};
+    if (m_gameClipOrigin && m_gameHwnd && GetGamePicture(picture)) {
+        // The window may have moved since the game asked: the clip keeps its place in the picture.
+        OffsetRect(&clip, picture.left - m_gameClipOrigin->x, picture.top - m_gameClipOrigin->y);
+    }
+    return clip;
 }
 
 void MirrorWindowController::StopHoldingMouse(const char* reason) {
     if (!m_holdingMouse) return;
     m_holdingMouse = false;
     LogInfo(std::string("MirrorWindowController: Mouse Confinement released the Desk Mouse (") + reason + ").");
-    // Put back what the game last asked for, so its own mouse-look capture survives; a clip the
-    // controller did not set is not its to release.
-    if (m_setMouseClip) {
-        m_setMouseClip = false;
-        m_cursorPort->SetClip(m_gameClip ? &*m_gameClip : nullptr);
+    // Put back what the game last asked for, so its own mouse-look capture survives. Only a clip that is
+    // still the picture it set itself is its to release: one the game, Windows or another program put
+    // there since (or took away) stays as it is.
+    const std::optional<RECT> set = m_setMousePicture;
+    m_setMousePicture.reset();
+    RECT current{};
+    if (set && m_cursorPort->GetClip(current) && EqualRect(&current, &*set)) {
+        const std::optional<RECT> gameClip = GameClipOnScreen();
+        m_cursorPort->SetClip(gameClip ? &*gameClip : nullptr);
     }
 }
 
@@ -599,18 +621,23 @@ bool MirrorWindowController::HandleGameClipCursor(const RECT* lpRect) {
     if (lpRect && IsActive() && m_gameHwnd && ConstrainVirtualClipRectToPhysical(m_gameHwnd, lpRect, physClip)) {
         clip = &physClip;
     }
+    RECT picture{};
+    const bool havePicture = m_gameHwnd && GetGamePicture(picture);
     if (clip) {
         m_gameClip = *clip;
+        m_gameClipOrigin.reset();
+        if (havePicture) m_gameClipOrigin = POINT{ picture.left, picture.top };
     } else {
         m_gameClip.reset();
+        m_gameClipOrigin.reset();
     }
 
-    RECT picture{};
-    if (!clip && m_holdingMouse && GetGamePicture(picture)) {
+    if (!clip && m_holdingMouse && havePicture) {
         // The game lets go (it does in a menu) but the Desk Mouse stays on the picture.
-        m_setMouseClip = true;
-        return m_cursorPort->SetClip(&picture);
+        return SetPictureClip(picture);
     }
+    // The game's own clip is on the desktop now: not one Mouse Confinement set, so not its to release.
+    m_setMousePicture.reset();
     return m_cursorPort->SetClip(clip);
 }
 

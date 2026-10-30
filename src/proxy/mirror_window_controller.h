@@ -125,8 +125,13 @@ private:
     // The game picture: the game window's real client area in screen coordinates, whatever size the game
     // is told (Resolution Decoupling). False when the window has no client area to hold the mouse to.
     bool GetGamePicture(RECT& outPicture) const;
-    // Mouse Confinement lets go: puts back what the game last asked for, but only a clip it set itself.
+    // Mouse Confinement lets go: puts back what the game last asked for, but only while the clip on the
+    // desktop is still the picture it set itself.
     void StopHoldingMouse(const char* reason);
+    // What the game last asked ClipCursor for, moved to follow the window since; empty for a release.
+    std::optional<RECT> GameClipOnScreen() const;
+    // Puts the picture on the desktop as the clip and remembers it as the one it set.
+    bool SetPictureClip(const RECT& picture);
 
     // The controller a Win32 hook acts for: the one in a live runtime that installed `detour`, else
     // the current runtime's; null when no runtime is alive.
@@ -152,12 +157,17 @@ private:
     uint32_t m_targetRenderWidth = 0;
     uint32_t m_targetRenderHeight = 0;
 
-    // Mouse Confinement. m_gameClip is what the game last asked ClipCursor for (empty: a release);
-    // m_holdingMouse is whether it holds now; m_setMouseClip is whether the clip on the desktop is one it set.
-    // m_lastMouseRelease is why it last let go, for the log line when it holds again.
+    // Mouse Confinement. m_gameClip is what the game last asked ClipCursor for (empty: a release), in screen
+    // coordinates as of when it asked; m_gameClipOrigin is where the game picture's top left was then, so the
+    // clip can be put back where the window is now (GameClipOnScreen).
+    // m_holdingMouse is whether it holds now; m_setMousePicture is the picture it last put on the desktop as
+    // the clip (empty: it has set nothing that is still its to release).
+    // m_lastMouseRelease is the latest reason it was not holding, for the log line when it holds again.
     std::optional<RECT> m_gameClip;
+    std::optional<POINT> m_gameClipOrigin;
     bool m_holdingMouse = false;
-    bool m_setMouseClip = false;
+    bool m_hasHeldMouse = false;  // it has held at least once since the controller was attached
+    std::optional<RECT> m_setMousePicture;
     std::optional<MouseConfinementState> m_lastMouseRelease;
 
     FunctionDetour m_detourGetClientRect;
