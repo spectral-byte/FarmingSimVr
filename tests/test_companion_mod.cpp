@@ -12,7 +12,7 @@ TEST_F(CompanionModTest, MetadataDescriptorIsValid) {
 
     EXPECT_NE(modDescContent.find("<modDesc descVersion=\"105\">"), std::string::npos);
     EXPECT_NE(modDescContent.find("<title>"), std::string::npos);
-    EXPECT_NE(modDescContent.find("<version>1.1.3.0</version>"), std::string::npos);
+    EXPECT_NE(modDescContent.find("<version>1.1.4.0</version>"), std::string::npos);
     EXPECT_NE(modDescContent.find("<extraSourceFiles>"), std::string::npos);
     EXPECT_NE(modDescContent.find("VRCompanion.lua"), std::string::npos);
 }
