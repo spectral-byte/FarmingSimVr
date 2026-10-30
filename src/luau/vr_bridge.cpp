@@ -173,6 +173,7 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
     self->SetMenuVisible(false);
     self->Set2DViewActive(false);
     self->SetDesktopMirrorEnabled(true);
+    self->SetMouseConfinementEnabled(true);
     LogInfo("[VRBridge] Companion Mod map unloaded; reverted to Menu Quad layer mode.");
     return 0;
 }
@@ -929,6 +930,21 @@ int VRBridge::Lua_GetDesktopMirror(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     lua_pushboolean(L, self->IsDesktopMirrorEnabled() ? 1 : 0);
+    return 1;
+}
+
+int VRBridge::Lua_SetMouseConfinement(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setMouseConfinement");
+    self->SetMouseConfinementEnabled(lua_gettop(L) < 1 || lua_toboolean(L, 1) != 0);
+    return 0;
+}
+
+int VRBridge::Lua_GetMouseConfinement(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    lua_pushboolean(L, self->IsMouseConfinementEnabled() ? 1 : 0);
     return 1;
 }
 

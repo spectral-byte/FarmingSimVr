@@ -83,6 +83,7 @@ public:
         Holding,
         PassThroughMode,
         SessionNotRunning,
+        TurnedOffByCommand,
         FocusLost,
     };
     void UpdateMouseConfinement(MouseConfinementState state);

@@ -715,12 +715,16 @@ void DxgiProxy::UpdateMouseConfinement() {
     using State = MirrorWindowController::MouseConfinementState;
     // The Injector is inert in Pass-Through Mode; "session running" is the one that decides whether the
     // Desktop Mirror Window shows by itself (a running session that is not focused still counts).
-    // The Mouse Confinement setting (#218) joins these conditions here, and with it a "by command" reason.
+    // The vrMouseConfinement setting only counts once a savegame has loaded (the Companion Mod's handshake):
+    // before that, in the main menu, it always holds. It is tested before the focus so that a setting turned
+    // off while the game window is not in front is the reason that is logged when it is turned on again.
     State state = State::Holding;
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
         state = State::PassThroughMode;
     } else if (!m_openXrManager->HasEyeSwapchains() || !m_openXrManager->IsSessionRunning()) {
         state = State::SessionNotRunning;
+    } else if (m_vrBridge && m_vrBridge->IsCompanionActive() && !m_vrBridge->IsMouseConfinementEnabled()) {
+        state = State::TurnedOffByCommand;
     } else if (!m_windowController->IsGameWindowForeground()) {
         state = State::FocusLost;
     }
