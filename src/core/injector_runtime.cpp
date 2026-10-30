@@ -85,7 +85,7 @@ InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
         m_deps.vrBridge = std::make_shared<VRBridge>(m_deps.openXrManager, m_deps.ngxInterceptor);
     }
     if (!m_deps.luauInterceptor) m_deps.luauInterceptor = std::make_shared<LuauInterceptor>(m_deps.vrBridge);
-    if (!m_deps.windowController) m_deps.windowController = std::make_shared<MirrorWindowController>();
+    if (!m_deps.windowController) m_deps.windowController = std::make_shared<MirrorWindowController>(nullptr, m_deps.cursorPort);
 
     m_proxy = std::make_unique<DxgiProxy>(
         m_deps.systemDxgi, m_deps.openXrManager, m_deps.luauInterceptor,

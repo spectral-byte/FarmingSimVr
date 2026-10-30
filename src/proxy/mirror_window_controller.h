@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/detour.h"
+#include "proxy/desktop_cursor_port.h"
 #include <windows.h>
 #include <commctrl.h>
 #include <cstdint>
@@ -22,8 +23,12 @@ inline constexpr const wchar_t* kDesktopMirrorOffTitle =
 
 class MirrorWindowController {
 public:
-    explicit MirrorWindowController(std::function<bool()> isVrActive = nullptr);
+    // cursorPort is how the controller reaches the desktop's cursor and focus; null uses the real one.
+    explicit MirrorWindowController(std::function<bool()> isVrActive = nullptr,
+                                    std::shared_ptr<IDesktopCursorPort> cursorPort = nullptr);
     ~MirrorWindowController();
+
+    IDesktopCursorPort& GetCursorPort() { return *m_cursorPort; }
 
     // Active VR state predicate
     bool IsActive() const;
@@ -62,6 +67,10 @@ public:
     static bool ScreenToNormalizedClient(HWND hWnd, POINT screenPt, float& outNormX, float& outNormY);
     bool ScaleVirtualCursorToPhysical(HWND hWnd, int screenX, int screenY, int& outPhysScreenX, int& outPhysScreenY) const;
     bool ConstrainVirtualClipRectToPhysical(HWND hWnd, const RECT* lpRect, RECT& outPhysClipRect) const;
+
+    // Whether the game window has focus: the foreground window is the game window or one of its children.
+    // The one answer wherever "the game window has focus" matters.
+    bool IsGameWindowForeground() const;
 
     // Menu cursor state update
     void UpdateMenuCursorState(IDXGISwapChain* swapChain, OpenXrManager* openXrManager);
@@ -102,6 +111,7 @@ private:
 
     HWND m_gameHwnd = nullptr;
     std::function<bool()> m_isVrActive;
+    std::shared_ptr<IDesktopCursorPort> m_cursorPort;
 
     bool m_ownedByRuntime = false;
     bool m_windowSubclassed = false;

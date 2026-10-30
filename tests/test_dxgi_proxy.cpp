@@ -6,6 +6,7 @@
 #include "core/perf_trace.h"
 #include "proxy/system_dxgi.h"
 #include "openxr/openxr_manager.h"
+#include "fake_desktop_cursor_port.h"
 #include "fake_openxr_events.h"
 #include "fake_openxr_tracking.h"
 #include "fake_openxr_runtime.h"
@@ -36,10 +37,12 @@ namespace fs25vr {
 // runtime gets its own window controller and Luau interceptor.
 static std::unique_ptr<InjectorRuntime> MakeRuntime(
     std::shared_ptr<OpenXrManager> openXrManager,
-    std::shared_ptr<VRBridge> vrBridge = nullptr) {
+    std::shared_ptr<VRBridge> vrBridge = nullptr,
+    std::shared_ptr<IDesktopCursorPort> cursorPort = nullptr) {
     InjectorRuntime::Dependencies deps;
     deps.openXrManager = std::move(openXrManager);
     deps.vrBridge = std::move(vrBridge);
+    deps.cursorPort = std::move(cursorPort);
     return std::make_unique<InjectorRuntime>(std::move(deps));
 }
 
@@ -1029,10 +1032,17 @@ TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
 
 // The game's swapchain Present as the Desktop Mirror Window tests drive it: an active OpenXR mock, a real
 // VRBridge and a mock swapchain whose real Present calls are counted in s_mockPresentCalls.
+// The game has a window (an on-screen test window of 800x600, whose client area in screen coordinates is
+// clientArea), and the runtime reaches the desktop's cursor and focus through cursorPort, a fake: the test
+// chooses the foreground window and reads the clip and the cursor position. Tests never touch the real
+// cursor.
 struct MirrorPresentRig {
     std::shared_ptr<MockActiveOpenXrDispatch> dispatch = std::make_shared<MockActiveOpenXrDispatch>();
     std::shared_ptr<OpenXrManager> openXrManager = std::make_shared<OpenXrManager>(dispatch);
     std::shared_ptr<VRBridge> vrBridge;
+    std::shared_ptr<FakeDesktopCursorPort> cursorPort = std::make_shared<FakeDesktopCursorPort>();
+    HWND gameWindow = nullptr;
+    RECT clientArea{};
     std::unique_ptr<InjectorRuntime> runtime;
     std::vector<void*> vtable = std::vector<void*>(30, nullptr);
     MockComObject mockSwapChain{ vtable.data() };
@@ -1041,6 +1051,14 @@ struct MirrorPresentRig {
 
     explicit MirrorPresentRig(VRRenderingMode mode, bool companionHandshake = true) {
         s_mockPresentCalls = 0;
+        gameWindow = CreateWindowA("STATIC", "MirrorPresentRigGameWnd", WS_OVERLAPPEDWINDOW,
+            GetSystemMetrics(SM_XVIRTUALSCREEN) + 50, GetSystemMetrics(SM_YVIRTUALSCREEN) + 50, 800, 600,
+            nullptr, nullptr, nullptr, nullptr);
+        EXPECT_TRUE(gameWindow != nullptr);
+        GetClientRect(gameWindow, &clientArea);
+        POINT origin{ 0, 0 };
+        ClientToScreen(gameWindow, &origin);
+        OffsetRect(&clientArea, origin.x, origin.y);
         EXPECT_TRUE(openXrManager->Initialize());
         EXPECT_TRUE(openXrManager->CreateSession());
         EXPECT_TRUE(openXrManager->CreateTrackingSpaces());
@@ -1051,7 +1069,8 @@ struct MirrorPresentRig {
         }
         vrBridge->SetRenderingMode(mode);
         dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);  // the headset is on, as in play
-        runtime = MakeRuntime(openXrManager, vrBridge);
+        runtime = MakeRuntime(openXrManager, vrBridge, cursorPort);
+        runtime->GetWindowController().SetGameHwnd(gameWindow);
         vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
         vtable[1] = reinterpret_cast<void*>(&MockAddRef);
         vtable[2] = reinterpret_cast<void*>(&MockRelease);
@@ -1063,7 +1082,10 @@ struct MirrorPresentRig {
         void** hookedVTable = *reinterpret_cast<void***>(swapChain);
         pfnPresent = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(hookedVTable[kPresentVTableSlot]);
     }
-    ~MirrorPresentRig() { runtime->GetDxgiProxy().DetachAll(); }
+    ~MirrorPresentRig() {
+        runtime->GetDxgiProxy().DetachAll();
+        if (gameWindow) DestroyWindow(gameWindow);
+    }
 
     // The game presents one frame; returns how many real Present calls reached DXGI for it.
     int Present() {
@@ -1351,6 +1373,81 @@ TEST(DxgiProxyTest, BlackFrameDoesNotChangeWhatTheHeadsetReceives) {
         EXPECT_EQ(beginFrames[0], beginFrames[1]);
         EXPECT_GT(pairs[0], 0u);
     }
+}
+
+// Whether the clip the fake desktop holds is exactly `expected`.
+static ::testing::AssertionResult ClipIs(const std::optional<RECT>& actual, const RECT& expected) {
+    if (!actual) {
+        return ::testing::AssertionFailure() << "the cursor is not clipped";
+    }
+    if (actual->left != expected.left || actual->top != expected.top ||
+        actual->right != expected.right || actual->bottom != expected.bottom) {
+        return ::testing::AssertionFailure() << "clip is [" << actual->left << "," << actual->top << " - " << actual->right
+                                             << "," << actual->bottom << "], expected [" << expected.left << "," << expected.top
+                                             << " - " << expected.right << "," << expected.bottom << "]";
+    }
+    return ::testing::AssertionSuccess();
+}
+
+TEST(DxgiProxyTest, TheGamesGameplayClipReachesTheDesktopAsThePhysicalClientAreaUnderResolutionDecoupling) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.runtime->GetWindowController().SetTargetRenderResolution(3840, 2160);
+    // The game's call is hooked: it must reach the fake desktop, never the real cursor.
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+
+    RECT gameplayClip{ 0, 0, 3840, 2160 };  // the whole render-size picture, as mouse-look asks for it
+    EXPECT_TRUE(ClipCursor(&gameplayClip));
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, TheGamesMouseLookWarpReachesTheDesktopAsThePhysicalCenterUnderResolutionDecoupling) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.runtime->GetWindowController().SetTargetRenderResolution(3840, 2160);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourSetCursorPosInstalled());
+
+    // The game centres the cursor for mouse-look at the middle of the render-size picture.
+    EXPECT_TRUE(SetCursorPos(rig.clientArea.left + 1920, rig.clientArea.top + 1080));
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+    EXPECT_NEAR(rig.cursorPort->cursor.x, (rig.clientArea.left + rig.clientArea.right) / 2, 1);
+    EXPECT_NEAR(rig.cursorPort->cursor.y, (rig.clientArea.top + rig.clientArea.bottom) / 2, 1);
+}
+
+// The menu quad shows the drawn cursor where the Desk Mouse is, while the game window has focus.
+TEST(DxgiProxyTest, TheDrawnCursorFollowsTheDesktopCursorWhileTheGameWindowIsInTheForeground) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);  // no handshake: the menu quad shows
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = { rig.clientArea.left + (rig.clientArea.right - rig.clientArea.left) / 4,
+                               rig.clientArea.top + (rig.clientArea.bottom - rig.clientArea.top) / 2 };
+
+    rig.Present();
+
+    const MenuCursorState& cursor = rig.openXrManager->GetMenuCursorState();
+    EXPECT_TRUE(cursor.visible);
+    EXPECT_NEAR(cursor.normX, 0.25f, 0.01f);
+    EXPECT_NEAR(cursor.normY, 0.5f, 0.01f);
+}
+
+TEST(DxgiProxyTest, TheDrawnCursorIsHiddenWhileAnotherWindowIsInTheForeground) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.cursorPort->cursor = { (rig.clientArea.left + rig.clientArea.right) / 2, (rig.clientArea.top + rig.clientArea.bottom) / 2 };
+    rig.cursorPort->foreground = GetDesktopWindow();
+
+    rig.Present();
+
+    EXPECT_FALSE(rig.openXrManager->GetMenuCursorState().visible);
+}
+
+TEST(DxgiProxyTest, TheDrawnCursorIsHiddenWhileTheSystemCursorIsHidden) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = { (rig.clientArea.left + rig.clientArea.right) / 2, (rig.clientArea.top + rig.clientArea.bottom) / 2 };
+    rig.cursorPort->cursorShowing = false;
+
+    rig.Present();
+
+    EXPECT_FALSE(rig.openXrManager->GetMenuCursorState().visible);
 }
 
 TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryFromSequentialDualPassToAfr) {
@@ -4034,12 +4131,14 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
+    // The hooked calls below reach a fake desktop: the real cursor is never moved or clipped.
+    auto cursorPort = std::make_shared<FakeDesktopCursorPort>();
+    auto activeProxyRuntime = MakeRuntime(activeOpenXrManager, nullptr, cursorPort);
     DxgiProxy& activeProxy = activeProxyRuntime->GetDxgiProxy();
     activeProxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
     EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
-    EXPECT_TRUE(activeProxy.GetWindowController().IsDetourSetCursorPosInstalled());
-    EXPECT_TRUE(activeProxy.GetWindowController().IsDetourClipCursorInstalled());
+    ASSERT_TRUE(activeProxy.GetWindowController().IsDetourSetCursorPosInstalled());
+    ASSERT_TRUE(activeProxy.GetWindowController().IsDetourClipCursorInstalled());
 
     // Query physical client rect using InternalWindowQueryScope
     RECT physRc{};
@@ -4080,33 +4179,19 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     EXPECT_EQ(constrainedClipRc.right, physTopLeft.x + physW);
     EXPECT_EQ(constrainedClipRc.bottom, physTopLeft.y + physH);
 
-    // 3. Verify hooked Win32 API invocations (handles interactive desktop or headless/CI ERROR_INVALID_ADDRESS / ERROR_ACCESS_DENIED)
-    BOOL setPosRes = SetCursorPos(warpVirtualCenter.x, warpVirtualCenter.y);
-    if (setPosRes) {
-        POINT actualCursorPos{};
-        if (GetCursorPos(&actualCursorPos)) {
-            EXPECT_NEAR(actualCursorPos.x, expectedPhysCenterX, 1);
-            EXPECT_NEAR(actualCursorPos.y, expectedPhysCenterY, 1);
-        }
-    } else {
-        DWORD err = GetLastError();
-        EXPECT_TRUE(err == ERROR_INVALID_ADDRESS || err == ERROR_ACCESS_DENIED);
-    }
+    // 3. Verify hooked Win32 API invocations, as the fake desktop received them
+    EXPECT_TRUE(SetCursorPos(warpVirtualCenter.x, warpVirtualCenter.y));
+    EXPECT_NEAR(cursorPort->cursor.x, expectedPhysCenterX, 1);
+    EXPECT_NEAR(cursorPort->cursor.y, expectedPhysCenterY, 1);
 
-    BOOL clipRes = ClipCursor(&virtualClipRc);
-    if (clipRes) {
-        RECT actualClipRc{};
-        if (GetClipCursor(&actualClipRc)) {
-            EXPECT_NEAR(actualClipRc.left, physTopLeft.x, 1);
-            EXPECT_NEAR(actualClipRc.top, physTopLeft.y, 1);
-            EXPECT_NEAR(actualClipRc.right, physTopLeft.x + physW, 1);
-            EXPECT_NEAR(actualClipRc.bottom, physTopLeft.y + physH, 1);
-        }
-        ClipCursor(nullptr);
-    } else {
-        DWORD err = GetLastError();
-        EXPECT_TRUE(err == ERROR_INVALID_ADDRESS || err == ERROR_ACCESS_DENIED);
-    }
+    EXPECT_TRUE(ClipCursor(&virtualClipRc));
+    ASSERT_TRUE(cursorPort->clip.has_value());
+    EXPECT_NEAR(cursorPort->clip->left, physTopLeft.x, 1);
+    EXPECT_NEAR(cursorPort->clip->top, physTopLeft.y, 1);
+    EXPECT_NEAR(cursorPort->clip->right, physTopLeft.x + physW, 1);
+    EXPECT_NEAR(cursorPort->clip->bottom, physTopLeft.y + physH, 1);
+    EXPECT_TRUE(ClipCursor(nullptr));
+    EXPECT_FALSE(cursorPort->clip.has_value());
 
     // 4. Bidirectional delta parity:
     // When the mouse is at physical center and user moves delta right or left,

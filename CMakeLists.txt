@@ -117,6 +117,8 @@ set(CORE_SOURCES
     src/openxr/openxr_types.h
     src/proxy/system_dxgi.h
     src/proxy/system_dxgi.cpp
+    src/proxy/desktop_cursor_port.h
+    src/proxy/desktop_cursor_port.cpp
     src/proxy/mirror_window_controller.h
     src/proxy/mirror_window_controller.cpp
     src/proxy/dxgi_proxy.cpp
