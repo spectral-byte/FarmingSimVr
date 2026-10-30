@@ -558,6 +558,13 @@ void MirrorWindowController::UpdateMouseConfinement(MouseConfinementState state)
         if (m_lastMouseRelease == MouseConfinementState::FocusLost) reason = "focus regained";
         if (m_lastMouseRelease == MouseConfinementState::SessionNotRunning) reason = "session running again";
         LogInfo(std::string("MirrorWindowController: Mouse Confinement holds the Desk Mouse to the game picture (") + reason + ").");
+
+        // A Desk Mouse that is off the picture when holding starts comes to the middle of the physical client
+        // area, through the port's original SetCursorPos. Only at the start: never while it keeps holding.
+        POINT cursor{};
+        if (m_cursorPort->GetCursorPos(cursor) && !PtInRect(&picture, cursor)) {
+            m_cursorPort->SetCursorPos((picture.left + picture.right) / 2, (picture.top + picture.bottom) / 2);
+        }
     }
 
     // Set again only when the clip differs from the picture: Windows or another program may have cleared it.
