@@ -35,8 +35,12 @@ MirrorWindowController* MirrorWindowController::ForHook(FunctionDetour MirrorWin
     return runtime ? &runtime->GetWindowController() : nullptr;
 }
 
-MirrorWindowController::MirrorWindowController(std::function<bool()> isVrActive)
-    : m_isVrActive(std::move(isVrActive)) {
+MirrorWindowController::MirrorWindowController(std::function<bool()> isVrActive,
+                                               std::shared_ptr<IDesktopCursorPort> cursorPort)
+    : m_isVrActive(std::move(isVrActive)), m_cursorPort(std::move(cursorPort)) {
+    if (!m_cursorPort) {
+        m_cursorPort = std::make_shared<Win32DesktopCursorPort>(m_detourClipCursor, m_detourSetCursorPos);
+    }
 }
 
 MirrorWindowController::~MirrorWindowController() {
@@ -208,6 +212,11 @@ void MirrorWindowController::RestoreTitle() {
 }
 
 void MirrorWindowController::DetachAll() {
+    StopHoldingMouse("controller detached");
+    m_gameClip.reset();
+    m_gameClipOrigin.reset();
+    m_lastMouseRelease.reset();
+    m_hasHeldMouse = false;
     RestoreTitle();
     DetachWindowSubclass();
     m_inSizeMove = false;
@@ -473,6 +482,12 @@ bool MirrorWindowController::ConstrainVirtualClipRectToPhysical(HWND hWnd, const
     return true;
 }
 
+bool MirrorWindowController::IsGameWindowForeground() const {
+    if (!m_gameHwnd) return false;
+    HWND foreground = m_cursorPort->GetForegroundWindow();
+    return foreground == m_gameHwnd || IsChild(m_gameHwnd, foreground);
+}
+
 void MirrorWindowController::UpdateMenuCursorState(IDXGISwapChain* swapChain, OpenXrManager* openXrManager) {
     if (!openXrManager) return;
 
@@ -497,26 +512,133 @@ void MirrorWindowController::UpdateMenuCursorState(IDXGISwapChain* swapChain, Op
         return;
     }
 
-    HWND fgWnd = GetForegroundWindow();
-    if (fgWnd != hWnd && !IsChild(hWnd, fgWnd)) {
+    if (!IsGameWindowForeground()) {
         openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
         return;
     }
 
-    CURSORINFO ci{ sizeof(CURSORINFO) };
-    bool cursorShowing = (GetCursorInfo(&ci) != FALSE) && ((ci.flags & CURSOR_SHOWING) != 0);
-
-    if (cursorShowing) {
-        POINT curPos{};
-        POINT screenPt = GetCursorPos(&curPos) ? curPos : ci.ptScreenPos;
+    if (m_cursorPort->IsCursorShowing()) {
+        POINT screenPt{};
         float normX = 0.0f, normY = 0.0f;
-        if (ScreenToNormalizedClient(hWnd, screenPt, normX, normY)) {
+        if (m_cursorPort->GetCursorPos(screenPt) && ScreenToNormalizedClient(hWnd, screenPt, normX, normY)) {
             openXrManager->SetMenuCursorState({ true, normX, normY, MenuCursorState::kDefaultCursorSize });
             return;
         }
     }
 
     openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
+}
+
+bool MirrorWindowController::GetGamePicture(RECT& outPicture) const {
+    RECT clientSize{};
+    POINT clientOrigin{ 0, 0 };
+    if (!GetPhysicalWindowMetrics(m_gameHwnd, clientSize, clientOrigin)) return false;
+    const int width = clientSize.right - clientSize.left;
+    const int height = clientSize.bottom - clientSize.top;
+    if (width <= 0 || height <= 0) return false;
+    outPicture = { clientOrigin.x, clientOrigin.y, clientOrigin.x + width, clientOrigin.y + height };
+    return true;
+}
+
+void MirrorWindowController::UpdateMouseConfinement(MouseConfinementState state) {
+    if (state != MouseConfinementState::Holding) {
+        // The latest cause is recorded whether or not it was holding, so the line for the next start names
+        // what actually ended last (a setting turned on while focus is lost is not why it holds again).
+        // Until it has held once, the first start is just the headset coming into use, whatever kept it from
+        // holding before (the window not in front yet, the session not running); only the setting is kept.
+        if (m_hasHeldMouse || state == MouseConfinementState::TurnedOffByCommand) m_lastMouseRelease = state;
+        if (!m_holdingMouse) return;
+        const char* reason = "focus lost";
+        if (state == MouseConfinementState::PassThroughMode) reason = "Pass-Through Mode";
+        if (state == MouseConfinementState::SessionNotRunning) reason = "session not running";
+        if (state == MouseConfinementState::TurnedOffByCommand) reason = "turned off by command (vrMouseConfinement off)";
+        StopHoldingMouse(reason);
+        return;
+    }
+
+    RECT picture{};
+    if (!m_gameHwnd || !GetGamePicture(picture)) return;
+
+    if (!m_holdingMouse) {
+        m_holdingMouse = true;
+        m_hasHeldMouse = true;
+        const char* reason = "headset in use";
+        if (m_lastMouseRelease == MouseConfinementState::FocusLost) reason = "focus regained";
+        if (m_lastMouseRelease == MouseConfinementState::SessionNotRunning) reason = "session running again";
+        if (m_lastMouseRelease == MouseConfinementState::TurnedOffByCommand) reason = "turned on by command";
+        LogInfo(std::string("MirrorWindowController: Mouse Confinement holds the Desk Mouse to the game picture (") + reason + ").");
+
+        // A Desk Mouse that is off the picture when holding starts comes to the middle of the physical client
+        // area, through the port's original SetCursorPos. Only at the start: never while it keeps holding.
+        POINT cursor{};
+        if (m_cursorPort->GetCursorPos(cursor) && !PtInRect(&picture, cursor)) {
+            m_cursorPort->SetCursorPos((picture.left + picture.right) / 2, (picture.top + picture.bottom) / 2);
+        }
+    }
+
+    // Set again only when the clip differs from the picture: Windows or another program may have cleared it.
+    RECT current{};
+    if (!m_cursorPort->GetClip(current) || !EqualRect(&current, &picture)) {
+        SetPictureClip(picture);
+    }
+}
+
+bool MirrorWindowController::SetPictureClip(const RECT& picture) {
+    m_setMousePicture = picture;
+    return m_cursorPort->SetClip(&picture);
+}
+
+std::optional<RECT> MirrorWindowController::GameClipOnScreen() const {
+    if (!m_gameClip) return std::nullopt;
+    RECT clip = *m_gameClip;
+    RECT picture{};
+    if (m_gameClipOrigin && m_gameHwnd && GetGamePicture(picture)) {
+        // The window may have moved since the game asked: the clip keeps its place in the picture.
+        OffsetRect(&clip, picture.left - m_gameClipOrigin->x, picture.top - m_gameClipOrigin->y);
+    }
+    return clip;
+}
+
+void MirrorWindowController::StopHoldingMouse(const char* reason) {
+    if (!m_holdingMouse) return;
+    m_holdingMouse = false;
+    LogInfo(std::string("MirrorWindowController: Mouse Confinement released the Desk Mouse (") + reason + ").");
+    // Put back what the game last asked for, so its own mouse-look capture survives. Only a clip that is
+    // still the picture it set itself is its to release: one the game, Windows or another program put
+    // there since (or took away) stays as it is.
+    const std::optional<RECT> set = m_setMousePicture;
+    m_setMousePicture.reset();
+    RECT current{};
+    if (set && m_cursorPort->GetClip(current) && EqualRect(&current, &*set)) {
+        const std::optional<RECT> gameClip = GameClipOnScreen();
+        m_cursorPort->SetClip(gameClip ? &*gameClip : nullptr);
+    }
+}
+
+bool MirrorWindowController::HandleGameClipCursor(const RECT* lpRect) {
+    const RECT* clip = lpRect;
+    RECT physClip{};
+    if (lpRect && IsActive() && m_gameHwnd && ConstrainVirtualClipRectToPhysical(m_gameHwnd, lpRect, physClip)) {
+        clip = &physClip;
+    }
+    RECT picture{};
+    const bool havePicture = m_gameHwnd && GetGamePicture(picture);
+    if (clip) {
+        m_gameClip = *clip;
+        m_gameClipOrigin.reset();
+        if (havePicture) m_gameClipOrigin = POINT{ picture.left, picture.top };
+    } else {
+        m_gameClip.reset();
+        m_gameClipOrigin.reset();
+    }
+
+    if (!clip && m_holdingMouse && havePicture) {
+        // The game lets go (it does in a menu) but the Desk Mouse stays on the picture.
+        return SetPictureClip(picture);
+    }
+    // The game's own clip is on the desktop now: not one Mouse Confinement set, so not its to release.
+    m_setMousePicture.reset();
+    return m_cursorPort->SetClip(clip);
 }
 
 LRESULT CALLBACK MirrorWindowController::MirrorWindowSubclassProc(
@@ -723,7 +845,9 @@ BOOL WINAPI MirrorWindowController::Intercept_SetCursorPos(int X, int Y) {
     auto orig = reinterpret_cast<BOOL(WINAPI*)(int, int)>(
         ctrl ? ctrl->m_detourSetCursorPos.GetOriginal() : nullptr
     );
-    auto invokeOrig = [orig](int x, int y) -> BOOL {
+    // With a live runtime the move goes through the desktop cursor port; without one, straight to user32.
+    auto invokeOrig = [orig, ctrl](int x, int y) -> BOOL {
+        if (ctrl) return ctrl->m_cursorPort->SetCursorPos(x, y) ? TRUE : FALSE;
         return orig ? orig(x, y) : ::SetCursorPos(x, y);
     };
 
@@ -747,25 +871,12 @@ BOOL WINAPI MirrorWindowController::Intercept_ClipCursor(const RECT* lpRect) {
     auto orig = reinterpret_cast<BOOL(WINAPI*)(const RECT*)>(
         ctrl ? ctrl->m_detourClipCursor.GetOriginal() : nullptr
     );
-    auto invokeOrig = [orig](const RECT* r) -> BOOL {
-        return orig ? orig(r) : ::ClipCursor(r);
-    };
-
-    if (t_isInternalWindowQuery) {
-        return invokeOrig(lpRect);
+    // With a live runtime the clip goes through the desktop cursor port; without one, straight to user32.
+    if (ctrl) {
+        if (t_isInternalWindowQuery) return ctrl->m_cursorPort->SetClip(lpRect) ? TRUE : FALSE;
+        return ctrl->HandleGameClipCursor(lpRect) ? TRUE : FALSE;
     }
-    if (!lpRect) {
-        return invokeOrig(nullptr);
-    }
-
-    if (ctrl && ctrl->IsActive() && ctrl->m_gameHwnd) {
-        RECT physClip{};
-        if (ctrl->ConstrainVirtualClipRectToPhysical(ctrl->m_gameHwnd, lpRect, physClip)) {
-            return invokeOrig(&physClip);
-        }
-    }
-
-    return invokeOrig(lpRect);
+    return orig ? orig(lpRect) : ::ClipCursor(lpRect);
 }
 
 } // namespace fs25vr

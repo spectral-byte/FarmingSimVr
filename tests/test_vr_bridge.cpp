@@ -885,6 +885,29 @@ TEST_F(VrBridgeTest, DesktopMirrorFlagDefaultsToOnIsSetFromLuauAndResetsOnMapUnl
     EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
 }
 
+TEST_F(VrBridgeTest, MouseConfinementFlagDefaultsToOnIsSetFromLuauAndResetsOnMapUnload) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    EXPECT_TRUE(bridge.IsMouseConfinementEnabled());
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getMouseConfinement() == true, "Mouse Confinement is on by default")
+        VRBridge.setMouseConfinement(false)
+        assert(VRBridge.getMouseConfinement() == false, "setMouseConfinement(false) turns it off")
+    )luau"), 0);
+    EXPECT_FALSE(bridge.IsMouseConfinementEnabled());
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled()) << "the two flags are independent";
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        VRBridge.onMapUnload()
+        assert(VRBridge.getMouseConfinement() == true, "a map unload puts Mouse Confinement back on")
+        VRBridge.setMouseConfinement(false)
+        VRBridge.setMouseConfinement(true)
+        assert(VRBridge.getMouseConfinement() == true, "setMouseConfinement(true) turns it on")
+    )luau"), 0);
+    EXPECT_TRUE(bridge.IsMouseConfinementEnabled());
+}
+
 TEST_F(VrBridgeTest, MapUnloadResets2DViewActiveToFalse) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -1369,6 +1392,8 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "getIs2DViewActive",
         "setDesktopMirror",
         "getDesktopMirror",
+        "setMouseConfinement",
+        "getMouseConfinement",
         "getRenderingMode",
         "setRenderingMode",
         "getSubPassIndex",

@@ -240,6 +240,7 @@ function VRCompanion:saveConfiguration(xmlPath)
         if type(self.saveMotionControllerSettings) == "function" then self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn }) end
         if type(self.saveFishCatchSetting) == "function" then self:saveFishCatchSetting(xmlFile, { setString = setXmlStringFn }) end
         if type(self.saveDesktopMirrorSetting) == "function" then self:saveDesktopMirrorSetting(xmlFile, { setBool = setXmlBoolFn }) end
+        if type(self.saveMouseConfinementSetting) == "function" then self:saveMouseConfinementSetting(xmlFile, { setBool = setXmlBoolFn }) end
         if type(self.saveStereoDialogDepthSetting) == "function" then self:saveStereoDialogDepthSetting(xmlFile, { setFloat = setXmlFloatFn }) end
         if type(self.saveSeatOffsetSettings) == "function" then self:saveSeatOffsetSettings(xmlFile, { setString = setXmlStringFn, setInt = setXmlIntFn,setFloat = setXmlFloatFn }) end
         if type(setXmlStringFn) == "function" then
@@ -349,6 +350,7 @@ function VRCompanion:loadConfiguration(xmlPath)
                 if type(self.loadMotionControllerSettings) == "function" then self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn }) end
                 if type(self.loadFishCatchSetting) == "function" then self:loadFishCatchSetting(xmlFile, { getString = getXmlStringFn }) end
                 if type(self.loadDesktopMirrorSetting) == "function" then self:loadDesktopMirrorSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn }) end
+                if type(self.loadMouseConfinementSetting) == "function" then self:loadMouseConfinementSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn }) end
                 if type(self.loadStereoDialogDepthSetting) == "function" then self:loadStereoDialogDepthSetting(xmlFile, { getFloat = getXmlFloatFn }) end
                 if type(self.loadSeatOffsetSettings) == "function" then self:loadSeatOffsetSettings(xmlFile, { has = hasXmlPropertyFn, getString = getXmlStringFn, getInt = getXmlIntFn,getFloat = getXmlFloatFn }) end
 
