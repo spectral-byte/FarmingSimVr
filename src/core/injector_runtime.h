@@ -9,6 +9,7 @@ class OpenXrManager;
 class VRBridge;
 class LuauInterceptor;
 class MirrorWindowController;
+class IDesktopCursorPort;
 class NgxInterceptor;
 class FidelityFxInterceptor;
 class DxgiProxy;
@@ -34,6 +35,9 @@ public:
         std::shared_ptr<VRBridge> vrBridge;
         std::shared_ptr<LuauInterceptor> luauInterceptor;
         std::shared_ptr<MirrorWindowController> windowController;
+        // How the window controller reaches the desktop's cursor and focus; used only when the runtime
+        // creates the controller itself (a supplied controller brings its own port). Null: the real one.
+        std::shared_ptr<IDesktopCursorPort> cursorPort;
         std::shared_ptr<NgxInterceptor> ngxInterceptor;
         std::shared_ptr<FidelityFxInterceptor> ffxInterceptor;
     };

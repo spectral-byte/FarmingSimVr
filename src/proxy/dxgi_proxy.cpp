@@ -447,11 +447,13 @@ void DxgiProxy::LatchPendingRenderingMode() {
 
 bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
     m_presentWasStereo = false;
+    m_mouseConfinementUpdated = false;
     bool shouldPresent;
     {
         PerfScope timing(PerfSection::InjectorPresent);
         shouldPresent = OnPresentImpl(swapChain, syncInterval, flags);
         UpdateDesktopMirrorTitle();
+        if (!m_mouseConfinementUpdated) UpdateMouseConfinement();
     }
     PerfTrace::Instance().MarkFrame(m_presentWasStereo,
                                     m_vrBridge && m_vrBridge->GetRenderingMode() == VRRenderingMode::SequentialDualPass);
@@ -599,6 +601,9 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
             if (!m_openXrManager->HasCursorSwapchain()) {
                 m_openXrManager->CreateCursorSwapchain();
             }
+            // Mouse Confinement first: when it starts holding it brings the Desk Mouse to the middle of
+            // the picture, and this frame's drawn cursor reads where the Desk Mouse is.
+            UpdateMouseConfinement();
             m_windowController->UpdateMenuCursorState(swapChain, m_openXrManager.get());
 
             // Floating quad layer mode:
@@ -707,6 +712,28 @@ void DxgiProxy::UpdateDesktopMirrorTitle() {
     }
     LogInfo(std::string("DxgiProxy: Desktop mirror on ") + reason + "; window title restored.");
     if (m_windowController) m_windowController->RestoreTitle();
+}
+
+void DxgiProxy::UpdateMouseConfinement() {
+    if (!m_windowController) return;
+    using State = MirrorWindowController::MouseConfinementState;
+    // The Injector is inert in Pass-Through Mode; "session running" is the one that decides whether the
+    // Desktop Mirror Window shows by itself (a running session that is not focused still counts).
+    // The vrMouseConfinement setting only counts once a savegame has loaded (the Companion Mod's handshake):
+    // before that, in the main menu, it always holds. It is tested before the focus so that a setting turned
+    // off while the game window is not in front is the reason that is logged when it is turned on again.
+    State state = State::Holding;
+    if (!m_openXrManager || !m_openXrManager->IsActive()) {
+        state = State::PassThroughMode;
+    } else if (!m_openXrManager->HasEyeSwapchains() || !m_openXrManager->IsSessionRunning()) {
+        state = State::SessionNotRunning;
+    } else if (m_vrBridge && m_vrBridge->IsCompanionActive() && !m_vrBridge->IsMouseConfinementEnabled()) {
+        state = State::TurnedOffByCommand;
+    } else if (!m_windowController->IsGameWindowForeground()) {
+        state = State::FocusLost;
+    }
+    m_mouseConfinementUpdated = true;
+    m_windowController->UpdateMouseConfinement(state);
 }
 
 bool DxgiProxy::ShouldCallRealPresent(ID3D12Resource* backBuffer) {

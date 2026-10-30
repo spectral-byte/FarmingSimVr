@@ -193,6 +193,13 @@ private:
     // again). Leaves the title alone otherwise.
     void UpdateDesktopMirrorTitle();
     bool m_desktopMirrorOffAnnounced = false;
+    // At each Present, on every Present path: tells the Mirror Window Controller whether Mouse
+    // Confinement holds the Desk Mouse to the game picture, so that it can also let go on every path.
+    // The menu quad path does it before it reads the Desk Mouse for the drawn cursor, so the frame
+    // where holding starts already draws the cursor where it was brought to; every other path does it
+    // after the Present's work. It runs once per Present (m_mouseConfinementUpdated).
+    void UpdateMouseConfinement();
+    bool m_mouseConfinementUpdated = false;
 
     IDXGISwapChain* m_cachedSwapChain = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;

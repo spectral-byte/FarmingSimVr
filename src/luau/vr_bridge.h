@@ -118,6 +118,11 @@ public:
     bool IsDesktopMirrorEnabled() const { return m_desktopMirrorEnabled; }
     void SetDesktopMirrorEnabled(bool enabled) { m_desktopMirrorEnabled = enabled; }
 
+    // Whether Mouse Confinement may keep the Desk Mouse on the game picture while the headset is in use.
+    // On by default; the Companion Mod sets it (`vrMouseConfinement`) and the DXGI proxy reads it every present.
+    bool IsMouseConfinementEnabled() const { return m_mouseConfinementEnabled; }
+    void SetMouseConfinementEnabled(bool enabled) { m_mouseConfinementEnabled = enabled; }
+
     void SignalDiscontinuity();
     bool HasPendingDiscontinuity(uint32_t contextIndex = 0) const;
     bool ConsumeDiscontinuity(uint32_t contextIndex = 0);
@@ -147,6 +152,8 @@ public:
     static int Lua_GetIs2DViewActive(lua_State* L);
     static int Lua_SetDesktopMirror(lua_State* L);
     static int Lua_GetDesktopMirror(lua_State* L);
+    static int Lua_SetMouseConfinement(lua_State* L);
+    static int Lua_GetMouseConfinement(lua_State* L);
     static int Lua_ResetTemporalHistory(lua_State* L);
     static int Lua_SignalDiscontinuity(lua_State* L);
     static int Lua_SetDlssMvScale(lua_State* L);
@@ -225,6 +232,8 @@ public:
         {"getIs2DViewActive", &Lua_GetIs2DViewActive},
         {"setDesktopMirror", &Lua_SetDesktopMirror},
         {"getDesktopMirror", &Lua_GetDesktopMirror},
+        {"setMouseConfinement", &Lua_SetMouseConfinement},
+        {"getMouseConfinement", &Lua_GetMouseConfinement},
         {"getRenderingMode", &Lua_GetRenderingMode},
         {"setRenderingMode", &Lua_SetRenderingMode},
         {"getSubPassIndex", &Lua_GetSubPassIndex},
@@ -266,6 +275,7 @@ private:
     bool m_menuVisible = false;
     bool m_2dViewActive = false;
     bool m_desktopMirrorEnabled = true;
+    bool m_mouseConfinementEnabled = true;
 
     std::atomic<VRRenderingMode> m_renderingMode{VRRenderingMode::SequentialDualPass};
     static constexpr int kNoPendingMode = -1;
