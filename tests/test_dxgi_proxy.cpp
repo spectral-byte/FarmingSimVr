@@ -4604,6 +4604,322 @@ TEST(DxgiProxyTest, DesktopMirrorComingBackByItselfLogsTheReason) {
     }
 }
 
+// Mouse Confinement (#214, #216): while the headset is in use and the game window has focus, the Desk Mouse
+// is kept on the game picture. These tests drive the game's Present and the game's own ClipCursor calls and
+// assert the clip and the cursor the fake desktop holds.
+namespace {
+// The game window has focus and the Desk Mouse is on the picture, as in a headset session at the desk.
+void GiveTheGameWindowFocus(MirrorPresentRig& rig) {
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = { (rig.clientArea.left + rig.clientArea.right) / 2, (rig.clientArea.top + rig.clientArea.bottom) / 2 };
+}
+} // namespace
+
+TEST(DxgiProxyTest, MouseConfinementHoldsToTheClientAreaInTheMainMenu) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);  // no handshake: the main menu
+    GiveTheGameWindowFocus(rig);
+
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+// What is showing makes no difference, nor does the Present path the frame takes.
+TEST(DxgiProxyTest, MouseConfinementHoldsWhateverIsShowingOnEveryPresentPath) {
+    struct Scenario {
+        const char* name;
+        VRRenderingMode mode;
+        bool handshake;
+        bool menuVisible;
+        bool twoDView;
+    };
+    const Scenario scenarios[] = {
+        { "main menu (no handshake)", VRRenderingMode::AFR, false, false, false },
+        { "in-game menu", VRRenderingMode::AFR, true, true, false },
+        { "dialog on the menu quad", VRRenderingMode::SequentialDualPass, true, true, false },
+        { "2D Floating Window Mode", VRRenderingMode::SequentialDualPass, true, false, true },
+        { "gameplay, AFR", VRRenderingMode::AFR, true, false, false },
+        { "gameplay, Sequential Dual Pass", VRRenderingMode::SequentialDualPass, true, false, false },
+    };
+    for (const Scenario& scenario : scenarios) {
+        SCOPED_TRACE(scenario.name);
+        MirrorPresentRig rig(scenario.mode, scenario.handshake);
+        rig.vrBridge->SetMenuVisible(scenario.menuVisible);
+        rig.vrBridge->Set2DViewActive(scenario.twoDView);
+        GiveTheGameWindowFocus(rig);
+
+        rig.Present();
+        EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+        rig.cursorPort->clip.reset();
+        rig.Present();  // both sub-passes of a Sequential Dual Pass frame count
+        EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    }
+}
+
+TEST(DxgiProxyTest, MouseConfinementKeepsTheDeskMouseOnThePictureWhenTheGameReleasesItsClipInAMenu) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+
+    EXPECT_TRUE(ClipCursor(nullptr));  // the game lets go in a menu
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementRestoresAClipClearedFromOutsideAndDoesNotSetARightClipAgain) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    const int setClipCalls = rig.cursorPort->setClipCalls;
+
+    rig.Present();
+    rig.Present();
+    EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls) << "a clip that is already right was set again";
+
+    rig.cursorPort->clip.reset();  // Windows or another program clears it
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls + 1);
+}
+
+TEST(DxgiProxyTest, MouseConfinementLetsGoWhileAnotherWindowIsInTheForegroundAndHoldsAgainWhenTheGameWindowIsBack) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.cursorPort->foreground = GetDesktopWindow();  // Alt+Tab, the Win key, a UAC prompt
+    rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementHoldsWhileAChildOfTheGameWindowHasFocus) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    HWND child = CreateWindowA("STATIC", "child", WS_CHILD | WS_VISIBLE, 0, 0, 50, 50, rig.gameWindow, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(child != nullptr);
+    rig.cursorPort->foreground = child;
+
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    DestroyWindow(child);
+}
+
+TEST(DxgiProxyTest, MouseConfinementNeverSetsAnythingWhileTheGameWindowDoesNotHaveFocus) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.cursorPort->foreground = GetDesktopWindow();
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+    EXPECT_EQ(rig.cursorPort->setClipCalls, 0);
+}
+
+TEST(DxgiProxyTest, MouseConfinementLeavesNoClipOnceTheGameHasReleasedItsOwnAfterFocusIsLostInGameplay) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    EXPECT_TRUE(ClipCursor(&rig.clientArea));  // mouse-look
+    rig.Present();
+    const int setClipCalls = rig.cursorPort->setClipCalls;
+
+    rig.cursorPort->foreground = GetDesktopWindow();
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea)) << "the game's own clip is not the Injector's to release";
+    EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls);
+
+    EXPECT_TRUE(ClipCursor(nullptr));  // the game lets go on focus loss, as it does itself
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+}
+
+TEST(DxgiProxyTest, MouseConfinementLettingGoDuringGameplayPutsBackTheGamesOwnRectangle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);  // no Resolution Decoupling: the rectangle is the game's own
+    RECT gameRect = rig.clientArea;
+    InflateRect(&gameRect, -100, -100);
+    EXPECT_TRUE(ClipCursor(&gameRect));
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // the headset goes to sleep
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, gameRect));
+}
+
+TEST(DxgiProxyTest, MouseConfinementLettingGoInAMenuLeavesNoClip) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    EXPECT_TRUE(ClipCursor(nullptr));
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    rig.Present();
+
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+}
+
+TEST(DxgiProxyTest, MouseConfinementLetsGoWhileTheSessionIsNotRunningAndHoldsAgainWhenItRunsAgain) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // the headset is off or asleep
+    rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+    rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // the headset is back on
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementKeepsHoldingWhileTheRuntimeDashboardHasTheFocus) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);  // running, but not focused
+    rig.cursorPort->clip.reset();
+    rig.Present();
+    ASSERT_FALSE(rig.openXrManager->IsSessionFocused());
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementFollowsTheWindowWhenItMovesOrResizes) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    RECT windowRect{};
+    ASSERT_TRUE(GetWindowRect(rig.gameWindow, &windowRect));
+    ASSERT_TRUE(SetWindowPos(rig.gameWindow, nullptr, windowRect.left + 30, windowRect.top + 20, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE));
+    RECT movedArea = rig.clientArea;
+    OffsetRect(&movedArea, 30, 20);
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, movedArea));
+
+    // Resized to a client area of 640x480 (the frame stays the same).
+    RECT frame{ 0, 0, 640, 480 };
+    AdjustWindowRectEx(&frame, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    ASSERT_TRUE(SetWindowPos(rig.gameWindow, nullptr, 0, 0, frame.right - frame.left, frame.bottom - frame.top,
+                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE));
+    POINT origin{ 0, 0 };
+    ClientToScreen(rig.gameWindow, &origin);
+    const RECT resizedArea{ origin.x, origin.y, origin.x + 640, origin.y + 480 };
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, resizedArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementHoldsToThePhysicalClientAreaWhenTheRenderSizeIsLargerThanTheWindow) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.runtime->GetWindowController().SetTargetRenderResolution(3840, 2160);
+    GiveTheGameWindowFocus(rig);
+
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementSetsNothingInPassThroughMode) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+
+    for (int i = 0; i < 3; ++i) rig.Present();
+
+    ASSERT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+    EXPECT_EQ(rig.cursorPort->setClipCalls, 0);
+}
+
+TEST(DxgiProxyTest, MouseConfinementLetsGoWhenTheInjectorDropsToPassThroughMode) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    rig.Present();
+
+    ASSERT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+}
+
+TEST(DxgiProxyTest, MouseConfinementIsReleasedWhenTheControllerDetaches) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.runtime->GetDxgiProxy().DetachAll();  // leaving VR
+
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+}
+
+TEST(DxgiProxyTest, MouseConfinementLogsEachStartAndStopOnceWithItsReason) {
+    LogCapture capture("fs25vr_mouse_confinement_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    const std::string holds = "Mouse Confinement holds the Desk Mouse to the game picture (";
+    const std::string releases = "Mouse Confinement released the Desk Mouse (";
+
+    rig.Present();  // the game window does not have focus yet
+    EXPECT_EQ(capture.Text().find("Mouse Confinement"), std::string::npos) << capture.Text();
+
+    GiveTheGameWindowFocus(rig);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), holds + "headset in use)"), 1u) << capture.Text();
+
+    rig.cursorPort->foreground = GetDesktopWindow();
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), releases + "focus lost)"), 1u) << capture.Text();
+
+    rig.cursorPort->foreground = rig.gameWindow;
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), holds + "focus regained)"), 1u) << capture.Text();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), releases + "session not running)"), 1u) << capture.Text();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), holds + "session running again)"), 1u) << capture.Text();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), releases + "Pass-Through Mode)"), 1u) << capture.Text();
+    EXPECT_EQ(CountOf(capture.Text(), "Mouse Confinement"), 6u) << capture.Text();
+}
+
 } // namespace fs25vr
 
 

@@ -212,6 +212,9 @@ void MirrorWindowController::RestoreTitle() {
 }
 
 void MirrorWindowController::DetachAll() {
+    StopHoldingMouse("controller detached");
+    m_gameClip.reset();
+    m_lastMouseRelease.reset();
     RestoreTitle();
     DetachWindowSubclass();
     m_inSizeMove = false;
@@ -524,6 +527,80 @@ void MirrorWindowController::UpdateMenuCursorState(IDXGISwapChain* swapChain, Op
     openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
 }
 
+bool MirrorWindowController::GetGamePicture(RECT& outPicture) const {
+    RECT clientSize{};
+    POINT clientOrigin{ 0, 0 };
+    if (!GetPhysicalWindowMetrics(m_gameHwnd, clientSize, clientOrigin)) return false;
+    const int width = clientSize.right - clientSize.left;
+    const int height = clientSize.bottom - clientSize.top;
+    if (width <= 0 || height <= 0) return false;
+    outPicture = { clientOrigin.x, clientOrigin.y, clientOrigin.x + width, clientOrigin.y + height };
+    return true;
+}
+
+void MirrorWindowController::UpdateMouseConfinement(MouseConfinementState state) {
+    if (state != MouseConfinementState::Holding) {
+        if (!m_holdingMouse) return;
+        const char* reason = "focus lost";
+        if (state == MouseConfinementState::PassThroughMode) reason = "Pass-Through Mode";
+        if (state == MouseConfinementState::SessionNotRunning) reason = "session not running";
+        StopHoldingMouse(reason);
+        m_lastMouseRelease = state;
+        return;
+    }
+
+    RECT picture{};
+    if (!m_gameHwnd || !GetGamePicture(picture)) return;
+
+    if (!m_holdingMouse) {
+        m_holdingMouse = true;
+        const char* reason = "headset in use";
+        if (m_lastMouseRelease == MouseConfinementState::FocusLost) reason = "focus regained";
+        if (m_lastMouseRelease == MouseConfinementState::SessionNotRunning) reason = "session running again";
+        LogInfo(std::string("MirrorWindowController: Mouse Confinement holds the Desk Mouse to the game picture (") + reason + ").");
+    }
+
+    // Set again only when the clip differs from the picture: Windows or another program may have cleared it.
+    RECT current{};
+    if (!m_cursorPort->GetClip(current) || !EqualRect(&current, &picture)) {
+        m_cursorPort->SetClip(&picture);
+        m_setMouseClip = true;
+    }
+}
+
+void MirrorWindowController::StopHoldingMouse(const char* reason) {
+    if (!m_holdingMouse) return;
+    m_holdingMouse = false;
+    LogInfo(std::string("MirrorWindowController: Mouse Confinement released the Desk Mouse (") + reason + ").");
+    // Put back what the game last asked for, so its own mouse-look capture survives; a clip the
+    // controller did not set is not its to release.
+    if (m_setMouseClip) {
+        m_setMouseClip = false;
+        m_cursorPort->SetClip(m_gameClip ? &*m_gameClip : nullptr);
+    }
+}
+
+bool MirrorWindowController::HandleGameClipCursor(const RECT* lpRect) {
+    const RECT* clip = lpRect;
+    RECT physClip{};
+    if (lpRect && IsActive() && m_gameHwnd && ConstrainVirtualClipRectToPhysical(m_gameHwnd, lpRect, physClip)) {
+        clip = &physClip;
+    }
+    if (clip) {
+        m_gameClip = *clip;
+    } else {
+        m_gameClip.reset();
+    }
+
+    RECT picture{};
+    if (!clip && m_holdingMouse && GetGamePicture(picture)) {
+        // The game lets go (it does in a menu) but the Desk Mouse stays on the picture.
+        m_setMouseClip = true;
+        return m_cursorPort->SetClip(&picture);
+    }
+    return m_cursorPort->SetClip(clip);
+}
+
 LRESULT CALLBACK MirrorWindowController::MirrorWindowSubclassProc(
     HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     auto* controller = reinterpret_cast<MirrorWindowController*>(dwRefData);
@@ -755,26 +832,11 @@ BOOL WINAPI MirrorWindowController::Intercept_ClipCursor(const RECT* lpRect) {
         ctrl ? ctrl->m_detourClipCursor.GetOriginal() : nullptr
     );
     // With a live runtime the clip goes through the desktop cursor port; without one, straight to user32.
-    auto invokeOrig = [orig, ctrl](const RECT* r) -> BOOL {
-        if (ctrl) return ctrl->m_cursorPort->SetClip(r) ? TRUE : FALSE;
-        return orig ? orig(r) : ::ClipCursor(r);
-    };
-
-    if (t_isInternalWindowQuery) {
-        return invokeOrig(lpRect);
+    if (ctrl) {
+        if (t_isInternalWindowQuery) return ctrl->m_cursorPort->SetClip(lpRect) ? TRUE : FALSE;
+        return ctrl->HandleGameClipCursor(lpRect) ? TRUE : FALSE;
     }
-    if (!lpRect) {
-        return invokeOrig(nullptr);
-    }
-
-    if (ctrl && ctrl->IsActive() && ctrl->m_gameHwnd) {
-        RECT physClip{};
-        if (ctrl->ConstrainVirtualClipRectToPhysical(ctrl->m_gameHwnd, lpRect, physClip)) {
-            return invokeOrig(&physClip);
-        }
-    }
-
-    return invokeOrig(lpRect);
+    return orig ? orig(lpRect) : ::ClipCursor(lpRect);
 }
 
 } // namespace fs25vr
