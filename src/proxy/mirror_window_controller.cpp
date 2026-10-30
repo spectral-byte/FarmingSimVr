@@ -35,8 +35,12 @@ MirrorWindowController* MirrorWindowController::ForHook(FunctionDetour MirrorWin
     return runtime ? &runtime->GetWindowController() : nullptr;
 }
 
-MirrorWindowController::MirrorWindowController(std::function<bool()> isVrActive)
-    : m_isVrActive(std::move(isVrActive)) {
+MirrorWindowController::MirrorWindowController(std::function<bool()> isVrActive,
+                                               std::shared_ptr<IDesktopCursorPort> cursorPort)
+    : m_isVrActive(std::move(isVrActive)), m_cursorPort(std::move(cursorPort)) {
+    if (!m_cursorPort) {
+        m_cursorPort = std::make_shared<Win32DesktopCursorPort>(m_detourClipCursor, m_detourSetCursorPos);
+    }
 }
 
 MirrorWindowController::~MirrorWindowController() {
@@ -473,6 +477,12 @@ bool MirrorWindowController::ConstrainVirtualClipRectToPhysical(HWND hWnd, const
     return true;
 }
 
+bool MirrorWindowController::IsGameWindowForeground() const {
+    if (!m_gameHwnd) return false;
+    HWND foreground = m_cursorPort->GetForegroundWindow();
+    return foreground == m_gameHwnd || IsChild(m_gameHwnd, foreground);
+}
+
 void MirrorWindowController::UpdateMenuCursorState(IDXGISwapChain* swapChain, OpenXrManager* openXrManager) {
     if (!openXrManager) return;
 
@@ -497,20 +507,15 @@ void MirrorWindowController::UpdateMenuCursorState(IDXGISwapChain* swapChain, Op
         return;
     }
 
-    HWND fgWnd = GetForegroundWindow();
-    if (fgWnd != hWnd && !IsChild(hWnd, fgWnd)) {
+    if (!IsGameWindowForeground()) {
         openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
         return;
     }
 
-    CURSORINFO ci{ sizeof(CURSORINFO) };
-    bool cursorShowing = (GetCursorInfo(&ci) != FALSE) && ((ci.flags & CURSOR_SHOWING) != 0);
-
-    if (cursorShowing) {
-        POINT curPos{};
-        POINT screenPt = GetCursorPos(&curPos) ? curPos : ci.ptScreenPos;
+    if (m_cursorPort->IsCursorShowing()) {
+        POINT screenPt{};
         float normX = 0.0f, normY = 0.0f;
-        if (ScreenToNormalizedClient(hWnd, screenPt, normX, normY)) {
+        if (m_cursorPort->GetCursorPos(screenPt) && ScreenToNormalizedClient(hWnd, screenPt, normX, normY)) {
             openXrManager->SetMenuCursorState({ true, normX, normY, MenuCursorState::kDefaultCursorSize });
             return;
         }
@@ -723,7 +728,9 @@ BOOL WINAPI MirrorWindowController::Intercept_SetCursorPos(int X, int Y) {
     auto orig = reinterpret_cast<BOOL(WINAPI*)(int, int)>(
         ctrl ? ctrl->m_detourSetCursorPos.GetOriginal() : nullptr
     );
-    auto invokeOrig = [orig](int x, int y) -> BOOL {
+    // With a live runtime the move goes through the desktop cursor port; without one, straight to user32.
+    auto invokeOrig = [orig, ctrl](int x, int y) -> BOOL {
+        if (ctrl) return ctrl->m_cursorPort->SetCursorPos(x, y) ? TRUE : FALSE;
         return orig ? orig(x, y) : ::SetCursorPos(x, y);
     };
 
@@ -747,7 +754,9 @@ BOOL WINAPI MirrorWindowController::Intercept_ClipCursor(const RECT* lpRect) {
     auto orig = reinterpret_cast<BOOL(WINAPI*)(const RECT*)>(
         ctrl ? ctrl->m_detourClipCursor.GetOriginal() : nullptr
     );
-    auto invokeOrig = [orig](const RECT* r) -> BOOL {
+    // With a live runtime the clip goes through the desktop cursor port; without one, straight to user32.
+    auto invokeOrig = [orig, ctrl](const RECT* r) -> BOOL {
+        if (ctrl) return ctrl->m_cursorPort->SetClip(r) ? TRUE : FALSE;
         return orig ? orig(r) : ::ClipCursor(r);
     };
 
