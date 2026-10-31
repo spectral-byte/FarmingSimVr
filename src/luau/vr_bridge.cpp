@@ -943,9 +943,7 @@ int VRBridge::Lua_GetDesktopMirror(lua_State* L) {
 }
 
 void VRBridge::SetFovOverscan(float percent) {
-    // A number that is not 0 or more (NaN included) counts as 0.
-    if (!(percent >= 0.0f)) percent = 0.0f;
-    if (percent > OpenXrManager::kMaxFovOverscanPercent) percent = OpenXrManager::kMaxFovOverscanPercent;
+    percent = OpenXrManager::ClampFovOverscan(percent);
     m_fovOverscan = percent;
     if (m_openXrManager) {
         m_openXrManager->SetFovOverscan(percent);

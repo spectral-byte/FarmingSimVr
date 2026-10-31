@@ -717,11 +717,14 @@ void OpenXrManager::Recenter() {
     LogInfo("OpenXrManager: Head pose recentered.");
 }
 
+float OpenXrManager::ClampFovOverscan(float percent) {
+    if (!(percent >= 0.0f)) return 0.0f;
+    return std::min(percent, kMaxFovOverscanPercent);
+}
+
 void OpenXrManager::SetFovOverscan(float percent) {
-    // NaN is refused as 0; the bridge clamps too, this keeps the manager safe on its own.
-    if (!(percent >= 0.0f)) percent = 0.0f;
-    if (percent > kMaxFovOverscanPercent) percent = kMaxFovOverscanPercent;
-    m_requestedFovOverscan.store(percent);
+    // The bridge clamps too, this keeps the manager safe on its own.
+    m_requestedFovOverscan.store(ClampFovOverscan(percent));
 }
 
 EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov, float swapchainAspect, float fovOverscanPercent) {
@@ -858,43 +861,38 @@ void OpenXrManager::LogFovIfChanged() {
     if (!m_eyeProjections[0].isValid || !m_eyeProjections[1].isValid) {
         return;
     }
-    auto changed = [](const float* logged, const float* current, int count) {
-        for (int i = 0; i < count; ++i) {
-            if (std::abs(logged[i] - current[i]) > 1e-4f) return true;
-        }
-        return false;
-    };
     const float radToDeg = 180.0f / 3.14159265358979f;
 
-    float headset[8];
-    float rendered[4];
+    HeadsetFov headset[2];
+    RenderedFov rendered[2];
     for (int eye = 0; eye < 2; ++eye) {
         const EyeProjection& proj = m_eyeProjections[eye];
-        headset[eye * 4 + 0] = proj.angleLeft;
-        headset[eye * 4 + 1] = proj.angleRight;
-        headset[eye * 4 + 2] = proj.angleUp;
-        headset[eye * 4 + 3] = proj.angleDown;
-        rendered[eye * 2 + 0] = proj.fovY;
-        rendered[eye * 2 + 1] = proj.fovX;
+        headset[eye] = { proj.angleLeft, proj.angleRight, proj.angleUp, proj.angleDown };
+        rendered[eye] = { proj.fovY, proj.fovX };
     }
 
-    if (!m_loggedHeadsetFovValid || changed(m_loggedHeadsetFov, headset, 8)) {
-        std::copy(headset, headset + 8, m_loggedHeadsetFov);
+    const bool headsetChanged = !m_loggedHeadsetFovValid || !(headset[0] == m_loggedHeadsetFov[0]) ||
+                                !(headset[1] == m_loggedHeadsetFov[1]);
+    if (headsetChanged) {
+        std::copy(headset, headset + 2, m_loggedHeadsetFov);
         m_loggedHeadsetFovValid = true;
         std::stringstream ss;
         ss.setf(std::ios::fixed);
         ss.precision(1);
         ss << "OpenXrManager: Headset FOV (degrees, left/right/up/down)";
         for (int eye = 0; eye < 2; ++eye) {
-            ss << " - Eye" << eye << ": [" << headset[eye * 4 + 0] * radToDeg << ", " << headset[eye * 4 + 1] * radToDeg
-               << ", " << headset[eye * 4 + 2] * radToDeg << ", " << headset[eye * 4 + 3] * radToDeg << "]";
+            const HeadsetFov& fov = headset[eye];
+            ss << " - Eye" << eye << ": [" << fov.left * radToDeg << ", " << fov.right * radToDeg << ", "
+               << fov.up * radToDeg << ", " << fov.down * radToDeg << "]";
         }
         LogInfo(ss.str());
     }
 
-    if (!m_loggedRenderedFovValid || changed(m_loggedRenderedFov, rendered, 4) ||
-        std::abs(m_loggedFovOverscan - m_fovOverscan) > 1e-4f) {
-        std::copy(rendered, rendered + 4, m_loggedRenderedFov);
+    const bool renderedChanged = !m_loggedRenderedFovValid || !(rendered[0] == m_loggedRenderedFov[0]) ||
+                                 !(rendered[1] == m_loggedRenderedFov[1]) ||
+                                 std::abs(m_loggedFovOverscan - m_fovOverscan) > 1e-4f;
+    if (renderedChanged) {
+        std::copy(rendered, rendered + 2, m_loggedRenderedFov);
         m_loggedRenderedFovValid = true;
         m_loggedFovOverscan = m_fovOverscan;
         std::stringstream ss;
@@ -902,7 +900,8 @@ void OpenXrManager::LogFovIfChanged() {
         ss.precision(1);
         ss << "OpenXrManager: Rendered FOV (degrees, vertical x horizontal)";
         for (int eye = 0; eye < 2; ++eye) {
-            ss << " - Eye" << eye << ": " << rendered[eye * 2 + 0] * radToDeg << " x " << rendered[eye * 2 + 1] * radToDeg;
+            ss << " - Eye" << eye << ": " << rendered[eye].vertical * radToDeg << " x "
+               << rendered[eye].horizontal * radToDeg;
         }
         ss << " - Overscan " << m_fovOverscan << "%";
         LogInfo(ss.str());
@@ -1648,9 +1647,8 @@ bool OpenXrManager::SubmitFramePair() {
         if (halfFovY <= 0.01f || halfFovX <= 0.01f) {
             // No usable headset FOV yet: a safe ~90 degree vertical FOV at the swapchain aspect.
             halfFovY = 0.785398f;
-            float aspect = (m_eyeSwapchains[i].height > 0)
-                ? static_cast<float>(m_eyeSwapchains[i].width) / static_cast<float>(m_eyeSwapchains[i].height)
-                : 1.0f;
+            const float swapchainAspect = SwapchainAspect(i);
+            const float aspect = (swapchainAspect > 0.0f) ? swapchainAspect : 1.0f;
             halfFovX = std::atan(aspect * std::tan(halfFovY));
         }
 

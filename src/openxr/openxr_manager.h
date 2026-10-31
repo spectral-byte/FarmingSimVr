@@ -129,6 +129,8 @@ public:
     void SetFovOverscan(float percent);
     float GetFovOverscan() const { return m_requestedFovOverscan.load(); }
     static constexpr float kMaxFovOverscanPercent = 20.0f;
+    // Clamps a percent to 0..kMaxFovOverscanPercent; a number that is not 0 or more (NaN included) counts as 0.
+    static float ClampFovOverscan(float percent);
     // The overscan only touches the stereoscopic view: while a menu or 2D Floating Window Mode is shown the eyes are
     // rendered without it (it shows again, with the next frame, when the stereoscopic view is back).
     void SetFovOverscanSuspended(bool suspended) { m_fovOverscanSuspended.store(suspended); }
@@ -383,8 +385,23 @@ private:
     void RefreshRenderedFov();
     // Logs the headset's own per-eye FOV and the rendered FOV, each only when it differs from what was last logged.
     void LogFovIfChanged();
-    float m_loggedHeadsetFov[8]{};   // per eye: left, right, up, down (radians)
-    float m_loggedRenderedFov[4]{};  // per eye: vertical, horizontal (radians)
+    // What LogFovIfChanged last logged. Two FOVs are the same when every angle is within 1e-4 radians.
+    static bool NearlyEqualAngle(float a, float b) { return !(std::abs(a - b) > 1e-4f); }
+    struct HeadsetFov {
+        float left = 0.0f, right = 0.0f, up = 0.0f, down = 0.0f;  // radians
+        bool operator==(const HeadsetFov& other) const {
+            return NearlyEqualAngle(left, other.left) && NearlyEqualAngle(right, other.right) &&
+                   NearlyEqualAngle(up, other.up) && NearlyEqualAngle(down, other.down);
+        }
+    };
+    struct RenderedFov {
+        float vertical = 0.0f, horizontal = 0.0f;  // radians
+        bool operator==(const RenderedFov& other) const {
+            return NearlyEqualAngle(vertical, other.vertical) && NearlyEqualAngle(horizontal, other.horizontal);
+        }
+    };
+    HeadsetFov m_loggedHeadsetFov[2]{};
+    RenderedFov m_loggedRenderedFov[2]{};
     bool m_loggedHeadsetFovValid = false;
     bool m_loggedRenderedFovValid = false;
     float m_loggedFovOverscan = 0.0f;
