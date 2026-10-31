@@ -137,7 +137,7 @@ The width and height the engine allocates its backbuffer at, taken from the game
 _Avoid_: Game resolution, screen resolution, window size
 
 **FOV Overscan**:
-The extra field of view, in percent, that the eyes are rendered with beyond what is needed to cover the headset's own FOV, so a frame the VR runtime turns to follow the head still covers the display.
+The extra field of view, in percent, that the eyes are rendered with beyond what is needed to cover the headset's own FOV, so a frame the VR runtime turns to follow the head still covers the display. The HUD Groups, the HUD Safe Area and the HUD Convergence Offset shrink toward the screen centre by the same factor, so the HUD keeps its angular size, position and depth.
 _Avoid_: FOV boost, zoom, border padding, supersampling
 
 **Headset-Native Target Upscaling**:
