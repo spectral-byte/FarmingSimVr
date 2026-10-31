@@ -287,6 +287,8 @@ void OpenXrManager::Shutdown() {
     m_viewConfigViews.clear();
     m_submittedQuadFrameCount = 0;
     m_lastLoggedIpd = 0.0f;
+    m_loggedHeadsetFovValid = false;
+    m_loggedRenderedFovValid = false;
     m_loggedEyeCopySizeMismatch = false;
     m_headPoseLocateFailures = 0;
     m_hasCustomMenuQuadSize = false;
@@ -714,7 +716,7 @@ void OpenXrManager::Recenter() {
     LogInfo("OpenXrManager: Head pose recentered.");
 }
 
-EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov) {
+EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov, float swapchainAspect) {
     EyeProjection proj;
     proj.angleLeft = fov.angleLeft;
     proj.angleRight = fov.angleRight;
@@ -739,12 +741,19 @@ EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov) {
         proj.yOffsetNorm = proj.yOffset / tanHeight;
     }
 
-    proj.fovY = 2.0f * std::atan(tanHeight * 0.5f);
-    proj.fovX = 2.0f * std::atan(tanWidth * 0.5f);
-
     if (std::abs(tanHeight) > 1e-6f) {
         proj.aspectRatio = tanWidth / tanHeight;
     }
+
+    // The rendered FOV (ADR-0005): symmetric, and wide enough to cover every edge of the headset FOV. Its vertical
+    // half-angle tangent is the largest of the up tangent, the down tangent and the wider horizontal tangent divided
+    // by the aspect of the image it is rendered into (the eye swapchain; the headset FOV's own aspect before the
+    // swapchains exist). The horizontal half-angle follows from the aspect.
+    const float aspect = (swapchainAspect > 1e-6f) ? swapchainAspect : proj.aspectRatio;
+    const float widerTanX = std::max(std::abs(proj.tanLeft), std::abs(proj.tanRight));
+    const float tanHalfY = std::max({ std::abs(proj.tanUp), std::abs(proj.tanDown), widerTanX / aspect });
+    proj.fovY = 2.0f * std::atan(tanHalfY);
+    proj.fovX = 2.0f * std::atan(aspect * tanHalfY);
 
     proj.isValid = true;
     return proj;
@@ -778,8 +787,9 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
 
     XrResult res = m_dispatch->LocateViews(m_session, &locateInfo, &viewState, 2, &viewCount, views);
     if (XR_SUCCEEDED(res) && viewCount >= 2) {
-        m_eyeProjections[0] = ComputeProjectionFromFov(views[0].fov);
-        m_eyeProjections[1] = ComputeProjectionFromFov(views[1].fov);
+        m_eyeProjections[0] = ComputeProjectionFromFov(views[0].fov, SwapchainAspect(0));
+        m_eyeProjections[1] = ComputeProjectionFromFov(views[1].fov, SwapchainAspect(1));
+        LogFovIfChanged();
         float dx = views[1].pose.position.x - views[0].pose.position.x;
         float dy = views[1].pose.position.y - views[0].pose.position.y;
         float dz = views[1].pose.position.z - views[0].pose.position.z;
@@ -800,6 +810,77 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
         return true;
     }
     return false;
+}
+
+float OpenXrManager::SwapchainAspect(uint32_t eyeIndex) const {
+    if (!m_hasEyeSwapchains || eyeIndex >= 2 || m_eyeSwapchains[eyeIndex].height == 0) {
+        return 0.0f;
+    }
+    return static_cast<float>(m_eyeSwapchains[eyeIndex].width) / static_cast<float>(m_eyeSwapchains[eyeIndex].height);
+}
+
+void OpenXrManager::RefreshRenderedFov() {
+    for (uint32_t i = 0; i < 2; ++i) {
+        const EyeProjection& current = m_eyeProjections[i];
+        if (!current.isValid) {
+            continue;
+        }
+        const XrFovf headsetFov{ current.angleLeft, current.angleRight, current.angleUp, current.angleDown };
+        m_eyeProjections[i] = ComputeProjectionFromFov(headsetFov, SwapchainAspect(i));
+    }
+    LogFovIfChanged();
+}
+
+void OpenXrManager::LogFovIfChanged() {
+    if (!m_eyeProjections[0].isValid || !m_eyeProjections[1].isValid) {
+        return;
+    }
+    auto changed = [](const float* logged, const float* current, int count) {
+        for (int i = 0; i < count; ++i) {
+            if (std::abs(logged[i] - current[i]) > 1e-4f) return true;
+        }
+        return false;
+    };
+    const float radToDeg = 180.0f / 3.14159265358979f;
+
+    float headset[8];
+    float rendered[4];
+    for (int eye = 0; eye < 2; ++eye) {
+        const EyeProjection& proj = m_eyeProjections[eye];
+        headset[eye * 4 + 0] = proj.angleLeft;
+        headset[eye * 4 + 1] = proj.angleRight;
+        headset[eye * 4 + 2] = proj.angleUp;
+        headset[eye * 4 + 3] = proj.angleDown;
+        rendered[eye * 2 + 0] = proj.fovY;
+        rendered[eye * 2 + 1] = proj.fovX;
+    }
+
+    if (!m_loggedHeadsetFovValid || changed(m_loggedHeadsetFov, headset, 8)) {
+        std::copy(headset, headset + 8, m_loggedHeadsetFov);
+        m_loggedHeadsetFovValid = true;
+        std::stringstream ss;
+        ss.setf(std::ios::fixed);
+        ss.precision(1);
+        ss << "OpenXrManager: Headset FOV (degrees, left/right/up/down)";
+        for (int eye = 0; eye < 2; ++eye) {
+            ss << " - Eye" << eye << ": [" << headset[eye * 4 + 0] * radToDeg << ", " << headset[eye * 4 + 1] * radToDeg
+               << ", " << headset[eye * 4 + 2] * radToDeg << ", " << headset[eye * 4 + 3] * radToDeg << "]";
+        }
+        LogInfo(ss.str());
+    }
+
+    if (!m_loggedRenderedFovValid || changed(m_loggedRenderedFov, rendered, 4)) {
+        std::copy(rendered, rendered + 4, m_loggedRenderedFov);
+        m_loggedRenderedFovValid = true;
+        std::stringstream ss;
+        ss.setf(std::ios::fixed);
+        ss.precision(1);
+        ss << "OpenXrManager: Rendered FOV (degrees, vertical x horizontal)";
+        for (int eye = 0; eye < 2; ++eye) {
+            ss << " - Eye" << eye << ": " << rendered[eye * 2 + 0] * radToDeg << " x " << rendered[eye * 2 + 1] * radToDeg;
+        }
+        LogInfo(ss.str());
+    }
 }
 
 EyeProjection OpenXrManager::PollEyeProjection(uint32_t eyeIndex, XrTime time) {
@@ -964,6 +1045,7 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
     }
 
     m_hasEyeSwapchains = true;
+    RefreshRenderedFov();  // the coverage now uses the swapchain aspect
     LogInfo("OpenXrManager: Created stereoscopic eye swapchains (" + std::to_string(m_eyeSwapchains[0].width) + "x" + std::to_string(m_eyeSwapchains[0].height) + ").");
     return true;
 }
@@ -1006,6 +1088,7 @@ void OpenXrManager::DestroyEyeSwapchains() {
         EndFrame();
     }
     m_hasEyeSwapchains = false;
+    RefreshRenderedFov();  // back to the headset FOV's own aspect
 }
 
 const EyeSwapchain& OpenXrManager::GetEyeSwapchain(uint32_t eyeIndex) const {
@@ -1528,21 +1611,21 @@ bool OpenXrManager::SubmitFramePair() {
         projViews[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
         projViews[i].next = nullptr;
 
-        // Compute aspect-ratio matched FOV for the eye swapchain:
-        // GIANTS Engine renders using vertical FOV (fovY) and scales horizontal FOV by backbuffer aspect ratio (W / H).
-        // To preserve exact 1:1 square pixel geometry and eliminate horizontal squashing and cross-eyed distortion:
+        // The submitted FOV is the rendered FOV the eye projection publishes, which is also the vertical FOV the
+        // Companion Mod gives the engine camera: the engine renders with that vertical FOV and scales the horizontal
+        // one by the backbuffer aspect (W / H), so the submitted frustum matches the rendered one exactly and keeps
+        // square pixels (ADR-0005).
         float halfFovY = m_eyeProjections[i].fovY * 0.5f;
-        if (halfFovY <= 0.01f) {
-            halfFovY = 0.785398f; // safe ~90 deg fallback
+        float halfFovX = m_eyeProjections[i].fovX * 0.5f;
+        if (halfFovY <= 0.01f || halfFovX <= 0.01f) {
+            // No usable headset FOV yet: a safe ~90 degree vertical FOV at the swapchain aspect.
+            halfFovY = 0.785398f;
+            float aspect = (m_eyeSwapchains[i].height > 0)
+                ? static_cast<float>(m_eyeSwapchains[i].width) / static_cast<float>(m_eyeSwapchains[i].height)
+                : 1.0f;
+            halfFovX = std::atan(aspect * std::tan(halfFovY));
         }
-        float tanHalfY = std::tan(halfFovY);
-        float aspect = (m_eyeSwapchains[i].height > 0)
-            ? static_cast<float>(m_eyeSwapchains[i].width) / static_cast<float>(m_eyeSwapchains[i].height)
-            : 1.0f;
-        float tanHalfX = aspect * tanHalfY;
-        float halfFovX = std::atan(tanHalfX);
 
-        // Aspect-ratio matched symmetric FOV prevents horizontal squashing and aligns optical centers
         projViews[i].fov.angleLeft = -halfFovX;
         projViews[i].fov.angleRight = halfFovX;
         projViews[i].fov.angleUp = halfFovY;

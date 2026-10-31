@@ -239,7 +239,7 @@ TEST_F(VrBridgeTest, ExposesEyeProjectionAndPrunesAliasesInLuauScript) {
         assert(left.eye == 0, "left eye index must be 0")
         assert(math.abs(left.xOffset - (-0.23052)) < 0.005, "left xOffset mismatch")
         assert(math.abs(left.yOffset) < 0.005, "left yOffset mismatch")
-        assert(math.abs(left.fovY - 1.70) < 0.01, "left fovY mismatch")
+        assert(math.abs(left.fovY - 1.80) < 0.01, "left fovY mismatch (rendered FOV covering the outer side)")
 
         -- Verify redundant aliases are pruned from projection table
         assert(left.offsetX == nil, "offsetX alias must be pruned")
@@ -256,7 +256,7 @@ TEST_F(VrBridgeTest, ExposesEyeProjectionAndPrunesAliasesInLuauScript) {
         assert(right.eye == 1, "right eye index must be 1")
         assert(math.abs(right.xOffset - 0.23052) < 0.005, "right xOffset mismatch")
         assert(math.abs(right.yOffset) < 0.005, "right yOffset mismatch")
-        assert(math.abs(right.fovY - 1.70) < 0.01, "right fovY mismatch")
+        assert(math.abs(right.fovY - 1.80) < 0.01, "right fovY mismatch (rendered FOV covering the outer side)")
 
         -- Asymmetry verify
         assert(left.xOffset < 0.0, "left xOffset must be negative (nasal/temporal)")

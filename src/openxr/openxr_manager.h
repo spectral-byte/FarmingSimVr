@@ -117,7 +117,10 @@ public:
     void SetFrameBeginObserver(const void* owner, FrameBeginObserver observer);
     void ClearFrameBeginObserver(const void* owner);
     const EyeProjection& GetEyeProjection(uint32_t eyeIndex = 0) const;
-    static EyeProjection ComputeProjectionFromFov(const XrFovf& fov);
+    // `fovY`/`fovX` of the result are the rendered FOV (ADR-0005): symmetric, covering every edge of `fov`, at the
+    // aspect of the eye swapchain (`swapchainAspect`; 0 uses the headset FOV's own aspect). The tangents, angles and
+    // offsets keep describing the headset's own FOV.
+    static EyeProjection ComputeProjectionFromFov(const XrFovf& fov, float swapchainAspect = 0.0f);
 
     uint32_t GetRecommendedEyeWidth(uint32_t eyeIndex = 0) const;
     uint32_t GetRecommendedEyeHeight(uint32_t eyeIndex = 0) const;
@@ -361,6 +364,16 @@ private:
     void ClearRenderPoses();
 
     EyeProjection m_eyeProjections[2];
+    // The eye swapchain's width / height, or 0 while the swapchains do not exist.
+    float SwapchainAspect(uint32_t eyeIndex) const;
+    // Recomputes the rendered FOV of the located projections (the swapchains were created or destroyed).
+    void RefreshRenderedFov();
+    // Logs the headset's own per-eye FOV and the rendered FOV, each only when it differs from what was last logged.
+    void LogFovIfChanged();
+    float m_loggedHeadsetFov[8]{};   // per eye: left, right, up, down (radians)
+    float m_loggedRenderedFov[4]{};  // per eye: vertical, horizontal (radians)
+    bool m_loggedHeadsetFovValid = false;
+    bool m_loggedRenderedFovValid = false;
 
     std::vector<XrViewConfigurationView> m_viewConfigViews;
 

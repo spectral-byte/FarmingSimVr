@@ -6,6 +6,7 @@
 #include "fake_openxr_tracking.h"
 #include <cstring>
 #include <memory>
+#include <vector>
 
 namespace fs25vr {
 
@@ -177,7 +178,25 @@ public:
         return XR_SUCCESS;
     }
     XrResult BeginFrame(XrSession, const XrFrameBeginInfo*) override { return XR_SUCCESS; }
-    XrResult EndFrame(XrSession, const XrFrameEndInfo*) override { return XR_SUCCESS; }
+    // The views of the last projection layer submitted at xrEndFrame: the FOV and pose the compositor
+    // received. Empty until a frame with a projection layer ends; a later frame without one clears it.
+    std::vector<XrCompositionLayerProjectionView> lastSubmittedProjectionViews;
+
+    XrResult EndFrame(XrSession, const XrFrameEndInfo* frameEndInfo) override {
+        lastSubmittedProjectionViews.clear();
+        if (frameEndInfo && frameEndInfo->layers) {
+            for (uint32_t l = 0; l < frameEndInfo->layerCount; ++l) {
+                const auto* header = frameEndInfo->layers[l];
+                if (header && header->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
+                    const auto* layer = reinterpret_cast<const XrCompositionLayerProjection*>(header);
+                    for (uint32_t v = 0; layer->views && v < layer->viewCount; ++v) {
+                        lastSubmittedProjectionViews.push_back(layer->views[v]);
+                    }
+                }
+            }
+        }
+        return XR_SUCCESS;
+    }
 };
 
 // Options for FakeTrackedHeadset that must be in place before the session is created.
@@ -206,6 +225,8 @@ struct FakeTrackedHeadset {
 
     void SetHeadPose(const HeadPose& pose) { runtime->tracking.SetHeadPose(pose); }
     void SetEyeFov(uint32_t eyeIndex, const XrFovf& fov) { runtime->tracking.SetEyeFov(eyeIndex, fov); }
+    // The FOV and pose the compositor received for each eye at the last xrEndFrame (empty if none).
+    const std::vector<XrCompositionLayerProjectionView>& SubmittedViews() const { return runtime->lastSubmittedProjectionViews; }
 
     // Places a hand's aim pose in the runtime's tracking origin (before Recenter re-bases it) and
     // switches the controller on or off. Only position and orientation of `pose` are used.
