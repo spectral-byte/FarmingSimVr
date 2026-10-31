@@ -274,7 +274,7 @@ function VRCompanion:loadMap(name)
     if type(self.applyDesktopMirror) == "function" then
         self:applyDesktopMirror()
     end
-    -- 7-. Send this session's FOV Overscan to VRBridge too (a map unload put it back to 0 there)
+    -- 7-. Send the saved FOV Overscan to VRBridge too (a map unload put it back to 0 there)
     if type(self.applyFovOverscan) == "function" then
         self:applyFovOverscan()
     end

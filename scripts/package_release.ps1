@@ -180,7 +180,7 @@ PERFORMANCE & SETTINGS
 - In-Game Console Commands (press ~ to open console):
   * vrRenderingMode <afr|dualpass|toggle>
   * vrDesktopMirror [on|off]             (turn the Desktop Mirror Window on or off; saved, on by default, untested with frame generation)
-  * vrFovOverscan [0-20]                 (widen the field of view the eyes are rendered with, in percent, to hide black edges during head movement; this session only, 0 by default)
+  * vrFovOverscan [0-20]                 (widen the field of view the eyes are rendered with, in percent, to hide black edges during head movement; saved, 0 by default)
   * vrMouseConfinement [on|off]          (keep the Desk Mouse on the game picture while the headset is in use; saved, on by default)
   * vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]
                                          (defaults: speedometer 0.30 0.20 0.82, map 0.30 0.22 0.82,

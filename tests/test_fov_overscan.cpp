@@ -342,7 +342,7 @@ TEST_F(FovOverscanCommandTest, WithoutAnArgumentItReportsThePercentTheRenderedFo
         -- Rendered at 3072x3216 over the asymmetric fixture: 111.3 degrees vertical, 108.9 horizontal
         assert(string.find(report, "111.3", 1, true) ~= nil, report)
         assert(string.find(report, "108.9", 1, true) ~= nil, report)
-        assert(string.find(report, "vrFovOverscan [0-20] (0 by default)", 1, true) ~= nil, report)
+        assert(string.find(report, "vrFovOverscan [0-20] (saved, 0 by default)", 1, true) ~= nil, report)
         assert(VRBridge.getFovOverscan() == 0, "reporting changes nothing")
 
         VRCompanion:consoleCommandSetFovOverscan("10")
@@ -360,7 +360,7 @@ TEST_F(FovOverscanCommandTest, WithoutAHeadsetProjectionTheReportHasThePercentAn
         local report = VRCompanion:consoleCommandSetFovOverscan()
         assert(string.find(report, "FOV Overscan is 0%", 1, true) ~= nil, report)
         assert(string.find(report, "degrees", 1, true) == nil, "there is no FOV to report: " .. report)
-        assert(string.find(report, "vrFovOverscan [0-20] (0 by default)", 1, true) ~= nil, report)
+        assert(string.find(report, "vrFovOverscan [0-20] (saved, 0 by default)", 1, true) ~= nil, report)
     )luau", "=reportWithoutProjection"), 0);
 }
 
@@ -399,7 +399,7 @@ TEST_F(FovOverscanCommandTest, AnythingElseReturnsTheUsageAndChangesNothing) {
         VRCompanion:consoleCommandSetFovOverscan("8")
         for _, bad in ipairs({ "21", "-1", "20.5", "abc", "8x", "nan", "inf", "-inf", "1e3", "on", " " }) do
             local reply = VRCompanion:consoleCommandSetFovOverscan(bad)
-            assert(string.find(reply, "Usage: vrFovOverscan [0-20] (0 by default)", 1, true) ~= nil,
+            assert(string.find(reply, "Usage: vrFovOverscan [0-20] (saved, 0 by default)", 1, true) ~= nil,
                 "'" .. bad .. "' returns the usage: " .. tostring(reply))
             assert(VRBridge.getFovOverscan() == 8, "'" .. bad .. "' must not change the overscan")
             assert(VRCompanion.fovOverscan == 8, "'" .. bad .. "' must not change the setting")
@@ -469,4 +469,150 @@ TEST_F(CompanionModTest, TheRenderedFovLineNamesTheOverscanAndIsWrittenWheneverI
     SubmitPair(headset);
     SubmitPair(headset);
     EXPECT_EQ(log.Count("OpenXrManager: Rendered FOV"), linesAtZero + 1) << "an unchanged rendered FOV is not logged again";
+}
+
+// The saved FOV Overscan (spec #221, ticket #224): the command writes it to settings.xml, and a map load reads it back and
+// sends it to VRBridge so the stereoscopic view is rendered with it. The settings file is a store the mocks write to and read
+// from, so a value saved in one map load is what the next one finds.
+class FovOverscanSavedTest : public FovOverscanCommandTest {
+protected:
+    static constexpr const char* kSettingsStoreMocks = R"luau(
+        _G.settingsStore = { floats = {}, bools = {}, strings = {}, ints = {} }
+        _G.settingsSaves = 0
+        _G.createXMLFile = function() return 1 end
+        _G.loadXMLFile = function() return 2 end
+        _G.setXMLFloat = function(xml, key, value) _G.settingsStore.floats[key] = value end
+        _G.setXMLBool = function(xml, key, value) _G.settingsStore.bools[key] = value end
+        _G.setXMLString = function(xml, key, value) _G.settingsStore.strings[key] = value end
+        _G.setXMLInt = function(xml, key, value) _G.settingsStore.ints[key] = value end
+        _G.getXMLFloat = function(xml, key) return _G.settingsStore.floats[key] end
+        _G.getXMLBool = function(xml, key) return _G.settingsStore.bools[key] end
+        _G.getXMLString = function(xml, key) return _G.settingsStore.strings[key] end
+        _G.getXMLInt = function(xml, key) return _G.settingsStore.ints[key] end
+        _G.saveXMLFile = function() _G.settingsSaves = _G.settingsSaves + 1; return true end
+    )luau";
+
+    // Loads the Companion Mod and a map over the settings file that is the store.
+    void LoadModAndMapOverSettingsStore(fs25vr::VRBridge& bridge) {
+        ASSERT_TRUE(bridge.Inject(L));
+        ASSERT_EQ(LoadCompanionModChecked(L), 0);
+        ASSERT_EQ(RunLuauChunk(L, kMapLoadMocks, "=mapLoadMocks"), 0);
+        ASSERT_EQ(RunLuauChunk(L, kSettingsStoreMocks, "=settingsStoreMocks"), 0);
+        ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('testMap')", "=loadMap"), 0);
+    }
+};
+
+TEST_F(FovOverscanSavedTest, TheCommandSavesTheValueInSettingsXmlAndTheReplySaysSo) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    LoadModAndMapOverSettingsStore(bridge);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local savesBefore = _G.settingsSaves
+        local reply = VRCompanion:consoleCommandSetFovOverscan("8")
+        assert(string.find(reply, "FOV Overscan set to: 8% (Saved)", 1, true) ~= nil, "the reply says it was saved: " .. reply)
+        assert(_G.settingsSaves == savesBefore + 1, "the command writes settings.xml")
+        assert(_G.settingsStore.floats["vrSettings.fovOverscan"] == 8, "saved under vrSettings.fovOverscan")
+
+        VRCompanion:consoleCommandSetFovOverscan("7.5")
+        assert(_G.settingsStore.floats["vrSettings.fovOverscan"] == 7.5, "decimals are saved")
+
+        -- Reporting and refusing write nothing
+        savesBefore = _G.settingsSaves
+        VRCompanion:consoleCommandSetFovOverscan()
+        VRCompanion:consoleCommandSetFovOverscan("21")
+        VRCompanion:consoleCommandSetFovOverscan("abc")
+        assert(_G.settingsSaves == savesBefore, "usage and status must not write the file")
+        assert(_G.settingsStore.floats["vrSettings.fovOverscan"] == 7.5, "a refused value leaves the saved one")
+
+        -- Any other save of the settings writes the current value too
+        _G.settingsStore.floats["vrSettings.fovOverscan"] = nil
+        VRCompanion:saveConfiguration("dummy.xml")
+        assert(_G.settingsStore.floats["vrSettings.fovOverscan"] == 7.5)
+    )luau", "=saved"), 0);
+}
+
+TEST_F(FovOverscanSavedTest, AValueSetAndSavedInOneMapLoadIsTheSubmittedOverscanAfterTheNextMapLoad) {
+    fs25vr::FakeTrackedHeadset headset;
+    StartHeadset(headset, kSquarish);
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    LoadModAndMapOverSettingsStore(bridge);
+
+    SubmitPair(headset);
+    ASSERT_EQ(headset.SubmittedViews().size(), 2u);
+    const XrFovf base[2] = { headset.SubmittedViews()[0].fov, headset.SubmittedViews()[1].fov };
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:consoleCommandSetFovOverscan('8')", "=set"), 0);
+
+    // Leave to the main menu, then start the game again (a fresh Companion Mod) and load another savegame; the only thing
+    // that carries the value across is settings.xml.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:deleteMap()
+        assert(VRBridge.getFovOverscan() == 0, "a map unload puts VRBridge back to 0")
+        VRCompanion = nil
+    )luau", "=unload"), 0);
+    SubmitPair(headset);
+    for (int eye = 0; eye < 2; ++eye) {
+        EXPECT_NEAR(std::tan(headset.SubmittedViews()[eye].fov.angleUp) / std::tan(base[eye].angleUp), 1.0, 1e-4)
+            << "eye " << eye << " is back on the covering FOV while no map is loaded";
+    }
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(VRCompanion.fovOverscan == 0, "a fresh Companion Mod starts from the default")
+        VRCompanion:loadMap('otherMap')
+    )luau", "=reload"), 0);
+
+    EXPECT_EQ(EvalLua(L, "VRBridge.getFovOverscan()"), "8");
+    SubmitPair(headset);
+    ASSERT_EQ(headset.SubmittedViews().size(), 2u);
+    for (int eye = 0; eye < 2; ++eye) {
+        const XrFovf& submitted = headset.SubmittedViews()[eye].fov;
+        EXPECT_NEAR(std::tan(submitted.angleUp) / std::tan(base[eye].angleUp), 1.08, 1e-4) << "eye " << eye << " up";
+        EXPECT_NEAR(std::tan(submitted.angleDown) / std::tan(base[eye].angleDown), 1.08, 1e-4) << "eye " << eye << " down";
+        EXPECT_NEAR(std::tan(submitted.angleLeft) / std::tan(base[eye].angleLeft), 1.08, 1e-4) << "eye " << eye << " left";
+        EXPECT_NEAR(std::tan(submitted.angleRight) / std::tan(base[eye].angleRight), 1.08, 1e-4) << "eye " << eye << " right";
+    }
+}
+
+TEST_F(FovOverscanSavedTest, TheSavedValueIsSentToVRBridgeAfterTheHandshakeOnMapLoad) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, kMapLoadMocks, "=mapLoadMocks"), 0);
+    ASSERT_EQ(RunLuauChunk(L, kSettingsStoreMocks, "=settingsStoreMocks"), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.settingsStore.floats["vrSettings.fovOverscan"] = 12.5
+        local calls = {}
+        local realHandshake = VRBridge.handshake
+        local realSet = VRBridge.setFovOverscan
+        VRBridge.handshake = function(...) table.insert(calls, "handshake"); return realHandshake(...) end
+        VRBridge.setFovOverscan = function(percent) table.insert(calls, "overscan:" .. tostring(percent)); return realSet(percent) end
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.fovOverscan == 12.5, "the saved value is read with the rest of settings.xml")
+        assert(VRBridge.getFovOverscan() == 12.5, "and reaches VRBridge")
+        local handshakeAt, overscanAt = nil, nil
+        for i, c in ipairs(calls) do
+            if c == "handshake" and handshakeAt == nil then handshakeAt = i end
+            if c == "overscan:12.5" then overscanAt = i end
+        end
+        assert(handshakeAt ~= nil and overscanAt ~= nil and overscanAt > handshakeAt,
+            "the value is sent after the handshake: " .. table.concat(calls, ","))
+    )luau", "=savedAfterHandshake"), 0);
+}
+
+TEST_F(FovOverscanSavedTest, AMissingKeyKeepsZeroAndASavedValueOutOfRangeIsNotUsed) {
+    fs25vr::FakeTrackedHeadset headset;
+    StartHeadset(headset, kSquarish);
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    LoadModAndMapOverSettingsStore(bridge);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        assert(_G.settingsStore.floats["vrSettings.fovOverscan"] == nil, "nothing saved yet")
+        assert(VRCompanion.fovOverscan == 0, "a missing key keeps 0")
+        assert(VRBridge.getFovOverscan() == 0)
+        VRCompanion:deleteMap()
+
+        -- A settings file edited by hand to something the command would refuse
+        _G.settingsStore.floats["vrSettings.fovOverscan"] = 55
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.fovOverscan == 0, "55 is not used: " .. VRCompanion.fovOverscan)
+        assert(VRBridge.getFovOverscan() == 0)
+    )luau", "=missingKey"), 0);
 }

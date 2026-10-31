@@ -8,17 +8,17 @@
 -- did) and submits to the headset, so the camera and the submitted frame widen together and the world keeps its true scale.
 -- The Injector applies a new value when the next OpenXR frame begins, so both eyes of a pair share one FOV.
 --
--- In this version the value lasts for the session: it survives leaving to the main menu and loading another savegame, but not
--- a restart of the game (saving it is a later step of spec #221). When a savegame loads, Core's loadMap calls
--- applyFovOverscan, which sends the value to VRBridge after the handshake.
+-- The setting is saved in settings.xml (0 by default), like the Desktop Mirror setting. When a savegame loads, Core's loadMap
+-- reads settings.xml and then calls applyFovOverscan, which sends the value to VRBridge after the handshake.
 --
 -- PUBLIC SURFACE
 --   VRCompanion.fovOverscan                          percent, 0 to 20 (0 by default)
---   VRCompanion:setFovOverscan(percent)              sets the field and pushes it to VRBridge; false (and nothing changes) when
---                                                    `percent` is not a number from 0 to 20
---   VRCompanion:applyFovOverscan()                   pushes the field to VRBridge (map load, after the handshake)
---   VRCompanion:consoleCommandSetFovOverscan(arg)    nil reports the percent and the rendered FOV, a number from 0 to 20 sets it,
---                                                    anything else returns the usage
+--   VRCompanion:setFovOverscan(percent, save)        sets the field, pushes it to VRBridge and saves settings.xml when `save`;
+--                                                    false (and nothing changes) when `percent` is not a number from 0 to 20
+--   VRCompanion:applyFovOverscan()                   pushes the field to VRBridge (map load, after loadConfiguration and the handshake)
+--   VRCompanion:saveFovOverscanSetting(xmlFile, xml) / loadFovOverscanSetting(xmlFile, xml)   hooks of saveConfiguration / loadConfiguration
+--   VRCompanion:consoleCommandSetFovOverscan(arg)    nil reports the percent and the rendered FOV, a number from 0 to 20 sets
+--                                                    and saves it, anything else returns the usage
 --   VRCompanion:registerFovOverscanConsoleCommands() / resetFovOverscan()   map load / unload
 --   Console: vrFovOverscan [0-20]
 -- ====================================================================
@@ -30,7 +30,8 @@ VRCompanion.MIN_FOV_OVERSCAN = 0
 VRCompanion.MAX_FOV_OVERSCAN = 20
 VRCompanion.fovOverscan = VRCompanion.DEFAULT_FOV_OVERSCAN
 
-local USAGE = "Usage: vrFovOverscan [0-20] (0 by default)"
+local SETTING_KEY = "vrSettings.fovOverscan"
+local USAGE = "Usage: vrFovOverscan [0-20] (saved, 0 by default)"
 
 -- The percent an argument says, or nil when it is not a number from 0 to 20
 local function parseArgument(arg)
@@ -61,12 +62,31 @@ function VRCompanion:applyFovOverscan()
     end
 end
 
-function VRCompanion:setFovOverscan(percent)
+function VRCompanion:setFovOverscan(percent, save)
     percent = parseArgument(percent)
     if percent == nil then return false end
     self.fovOverscan = percent
     self:applyFovOverscan()
+    if save and type(self.saveConfiguration) == "function" then
+        self:saveConfiguration()
+    end
     return true
+end
+
+function VRCompanion:saveFovOverscanSetting(xmlFile, xml)
+    if type(xml.setFloat) == "function" then
+        xml.setFloat(xmlFile, SETTING_KEY, self.fovOverscan or self.DEFAULT_FOV_OVERSCAN)
+    end
+end
+
+-- A key that is missing, or a value the command would refuse, keeps the current value (0 by default). Sending it to VRBridge
+-- is applyFovOverscan's job.
+function VRCompanion:loadFovOverscanSetting(xmlFile, xml)
+    if type(xml.getFloat) ~= "function" then return end
+    local loaded = parseArgument(xml.getFloat(xmlFile, SETTING_KEY))
+    if loaded ~= nil then
+        self.fovOverscan = loaded
+    end
 end
 
 function VRCompanion:consoleCommandSetFovOverscan(arg)
@@ -78,20 +98,20 @@ function VRCompanion:consoleCommandSetFovOverscan(arg)
         end
         return string.format("FOV Overscan is %s. %s", describe(current), USAGE)
     end
-    if not self:setFovOverscan(arg) then
+    if not self:setFovOverscan(arg, true) then
         return USAGE
     end
     print(string.format("[FS25_VR] FOV Overscan set to: %s", describe(self.fovOverscan)))
-    return string.format("FOV Overscan set to: %s", describe(self.fovOverscan))
+    return string.format("FOV Overscan set to: %s (Saved)", describe(self.fovOverscan))
 end
 
 function VRCompanion:registerFovOverscanConsoleCommands()
     if addConsoleCommand == nil then return end
-    addConsoleCommand("vrFovOverscan", "Widen the field of view the eyes are rendered with, in percent, to hide black edges during head movement (0 by default; a higher value softens the picture): vrFovOverscan [0-20]", "consoleCommandSetFovOverscan", self)
+    addConsoleCommand("vrFovOverscan", "Widen the field of view the eyes are rendered with, in percent, to hide black edges during head movement (saved; 0 by default; a higher value softens the picture): vrFovOverscan [0-20]", "consoleCommandSetFovOverscan", self)
 end
 
--- Map unload: the command goes. The value stays for the next map load of this session (the Injector's VRBridge value is reset
--- by VRBridge.onMapUnload).
+-- Map unload: the command goes. The saved setting stays as it is, and the next map load reads it again (the Injector's VRBridge
+-- value is reset by VRBridge.onMapUnload).
 function VRCompanion:resetFovOverscan()
     if removeConsoleCommand ~= nil then
         removeConsoleCommand("vrFovOverscan")
