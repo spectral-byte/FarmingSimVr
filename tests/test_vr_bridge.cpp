@@ -885,6 +885,41 @@ TEST_F(VrBridgeTest, DesktopMirrorFlagDefaultsToOnIsSetFromLuauAndResetsOnMapUnl
     EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
 }
 
+TEST_F(VrBridgeTest, FovOverscanDefaultsToZeroIsClampedToZeroToTwentyAndResetsOnMapUnload) {
+    fs25vr::FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getFovOverscan() == 0, "the overscan is 0 by default")
+        VRBridge.setFovOverscan(8)
+        assert(VRBridge.getFovOverscan() == 8, "setFovOverscan(8) is read back")
+        VRBridge.setFovOverscan(7.5)
+        assert(VRBridge.getFovOverscan() == 7.5, "decimals are kept")
+        VRBridge.setFovOverscan(35)
+        assert(VRBridge.getFovOverscan() == 20, "the bridge clamps above 20")
+        VRBridge.setFovOverscan(-4)
+        assert(VRBridge.getFovOverscan() == 0, "the bridge clamps below 0")
+        VRBridge.setFovOverscan(12)
+        VRBridge.onMapUnload()
+        assert(VRBridge.getFovOverscan() == 0, "a map unload puts the overscan back to 0")
+    )luau"), 0);
+}
+
+TEST_F(VrBridgeTest, FovOverscanWithoutAnOpenXrManagerIsAcceptedAndHasNoEffect) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        VRBridge.setFovOverscan(10)
+        assert(type(VRBridge.getFovOverscan()) == "number")
+        local projection = VRBridge.getEyeProjection(0)
+        assert(projection == nil or projection.isValid ~= true, "Pass-Through Mode has no projection to widen")
+        VRBridge.onMapUnload()
+        assert(VRBridge.getFovOverscan() == 0)
+    )luau"), 0);
+}
+
 TEST_F(VrBridgeTest, MouseConfinementFlagDefaultsToOnIsSetFromLuauAndResetsOnMapUnload) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -1394,6 +1429,8 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "getDesktopMirror",
         "setMouseConfinement",
         "getMouseConfinement",
+        "setFovOverscan",
+        "getFovOverscan",
         "getRenderingMode",
         "setRenderingMode",
         "getSubPassIndex",

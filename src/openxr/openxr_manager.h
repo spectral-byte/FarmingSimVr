@@ -6,6 +6,7 @@
 #include "openxr_types.h"
 #include "core/math_utils.h"
 #include "core/raii_utils.h"
+#include <atomic>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -120,7 +121,17 @@ public:
     // `fovY`/`fovX` of the result are the rendered FOV (ADR-0005): symmetric, covering every edge of `fov`, at the
     // aspect of the eye swapchain (`swapchainAspect`; 0 uses the headset FOV's own aspect). The tangents, angles and
     // offsets keep describing the headset's own FOV.
-    static EyeProjection ComputeProjectionFromFov(const XrFovf& fov, float swapchainAspect = 0.0f);
+    // `fovOverscanPercent` widens the rendered FOV's tangents by (1 + percent / 100) (FOV Overscan).
+    static EyeProjection ComputeProjectionFromFov(const XrFovf& fov, float swapchainAspect = 0.0f, float fovOverscanPercent = 0.0f);
+
+    // FOV Overscan, in percent (0 to 20; clamped). A new value is stored here and takes effect when the next frame
+    // begins, so the pair in progress keeps the FOV it began with.
+    void SetFovOverscan(float percent);
+    float GetFovOverscan() const { return m_requestedFovOverscan.load(); }
+    static constexpr float kMaxFovOverscanPercent = 20.0f;
+    // The overscan only touches the stereoscopic view: while a menu or 2D Floating Window Mode is shown the eyes are
+    // rendered without it (it shows again, with the next frame, when the stereoscopic view is back).
+    void SetFovOverscanSuspended(bool suspended) { m_fovOverscanSuspended.store(suspended); }
 
     uint32_t GetRecommendedEyeWidth(uint32_t eyeIndex = 0) const;
     uint32_t GetRecommendedEyeHeight(uint32_t eyeIndex = 0) const;
@@ -366,6 +377,8 @@ private:
     EyeProjection m_eyeProjections[2];
     // The eye swapchain's width / height, or 0 while the swapchains do not exist.
     float SwapchainAspect(uint32_t eyeIndex) const;
+    // Makes the requested FOV Overscan the one the views are located with.
+    void LatchFovOverscan();
     // Recomputes the rendered FOV of the located projections (the swapchains were created or destroyed).
     void RefreshRenderedFov();
     // Logs the headset's own per-eye FOV and the rendered FOV, each only when it differs from what was last logged.
@@ -374,6 +387,12 @@ private:
     float m_loggedRenderedFov[4]{};  // per eye: vertical, horizontal (radians)
     bool m_loggedHeadsetFovValid = false;
     bool m_loggedRenderedFovValid = false;
+    float m_loggedFovOverscan = 0.0f;
+    // The overscan last set, and the one the located projections are rendered with: it is taken over from the requested
+    // one when a frame begins (or while no frame is in flight).
+    std::atomic<float> m_requestedFovOverscan{0.0f};
+    std::atomic<bool> m_fovOverscanSuspended{false};
+    float m_fovOverscan = 0.0f;
 
     std::vector<XrViewConfigurationView> m_viewConfigViews;
 

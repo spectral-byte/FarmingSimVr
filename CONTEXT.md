@@ -136,6 +136,10 @@ _Avoid_: Neutral audio node, center ear node, mono listener node
 The width and height the engine allocates its backbuffer at, taken from the game's display settings. Under Resolution Decoupling it is independent of the Desktop Mirror Window size, so it can match the headset's per-eye resolution even when no monitor supports that size.
 _Avoid_: Game resolution, screen resolution, window size
 
+**FOV Overscan**:
+The extra field of view, in percent, that the eyes are rendered with beyond what is needed to cover the headset's own FOV, so a frame the VR runtime turns to follow the head still covers the display.
+_Avoid_: FOV boost, zoom, border padding, supersampling
+
 **Headset-Native Target Upscaling**:
 The operational configuration where temporal upscaler output dimensions are matched directly to the decoupled OpenXR recommended eye resolution rather than the desktop mirror window.
 _Avoid_: VR DLSS resolution, mirror scaling, headset supersampling target
