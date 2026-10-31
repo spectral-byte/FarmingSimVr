@@ -1554,6 +1554,62 @@ test("DualPassPhysicsPauseLeavesTheGamesOwnVehicleReloadPauseAlone", function()
     end)
 end)
 
+-- In multiplayer the game corrects the player's predicted movement against the server's through physics steps, and a
+-- paused step makes the view rubber-band, so the pause stands aside there whatever its setting.
+test("DualPassPhysicsPauseNeverTouchesPhysicsInMultiplayer", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        _G.g_currentMission = { missionDynamicInfo = { isMultiplayer = true } }
+        local ok, err = pcall(function()
+            subPass(0, 11); subPass(1, 11); subPass(0, 11); subPass(1, 11)
+        end)
+        _G.g_currentMission = nil
+        if not ok then error(err, 0) end
+        assert(#calls == 0, "in multiplayer the physics natives must not be called, got " .. table.concat(calls, ", "))
+        assert(VRCompanion.dualPassPhysicsPause == "on", "multiplayer must not change the player's setting")
+    end)
+end)
+
+test("DualPassPhysicsPauseStillPausesInASinglePlayerMission", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        _G.g_currentMission = { missionDynamicInfo = { isMultiplayer = false } }
+        local ok, err = pcall(function()
+            subPass(0, 11); subPass(1, 11)
+        end)
+        _G.g_currentMission = nil
+        if not ok then error(err, 0) end
+        assert(table.concat(calls, ", ") == "simulate false",
+            "a single-player mission must still pause physics, got " .. table.concat(calls, ", "))
+    end)
+end)
+
+test("DualPassPhysicsPauseAppliedWhenAMultiplayerMissionStartsIsReleased", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        subPass(0, 11); subPass(1, 11)
+        _G.g_currentMission = { missionDynamicInfo = { isMultiplayer = true } }
+        local ok, err = pcall(function()
+            subPass(0, 11); subPass(1, 11)
+        end)
+        _G.g_currentMission = nil
+        if not ok then error(err, 0) end
+        assert(table.concat(calls, ", ") == "simulate false, simulate true",
+            "a pause left from before must be resumed at normal speed in multiplayer, got " .. table.concat(calls, ", "))
+    end)
+end)
+
+test("DualPassPhysicsPauseConsoleCommandSaysItIsHeldOffInMultiplayer", function()
+    _G.g_currentMission = { missionDynamicInfo = { isMultiplayer = true } }
+    local ok, reply = pcall(function() return VRCompanion:consoleCommandDualPassPhysicsPause() end)
+    _G.g_currentMission = nil
+    if not ok then error(reply, 0) end
+    assert(type(reply) == "string" and reply:find("multiplayer", 1, true),
+        "in multiplayer the reply must say the pause is held off, got " .. tostring(reply))
+    reply = VRCompanion:consoleCommandDualPassPhysicsPause()
+    assert(not reply:find("multiplayer", 1, true), "outside multiplayer the reply must not mention it, got " .. reply)
+end)
+
 test("DualPassPhysicsPauseConsoleCommand", function()
     local reply = VRCompanion:consoleCommandDualPassPhysicsPause("on")
     assert(VRCompanion.dualPassPhysicsPause == "on", "on must set the pause")
