@@ -86,6 +86,7 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrRenderingMode <afr\|dualpass\|toggle>` | Switch stereo mode |
 | `vrDesktopMirror [on\|off]` | Turn the Desktop Mirror Window on or off while the headset is in use, to give the GPU time it costs to the headset. Nothing changes in the headset. It shows by itself while the headset is asleep or on the dashboard and before a savegame has loaded. Saved, on by default. Untested with frame generation: turn the mirror back on if something breaks with it. No arguments reports the current state |
 | `vrMouseConfinement [on\|off]` | Keep the Desk Mouse on the game picture (not the title bar) while the headset is in use and the game window has focus, so a click you cannot see never lands on another program. Takes effect at once. It always holds in the main menu until a savegame has loaded, and again after you leave to the main menu. Saved, on by default. No arguments reports the current state |
+| `vrFovOverscan [0-20]` | Render the picture this many percent wider than the headset needs, so the black edges that can show at the borders during head movement stay covered (see Troubleshooting). Takes effect at once. Saved, 0 by default. A higher value makes the picture slightly softer. No arguments reports the current value and the field of view being rendered |
 | `vrEyePairTrace [frames]` | Log how far the vehicle and the eye camera move between rendered eye frames (default 32 frames) |
 | `vrPerfTrace [seconds\|stop]` | Log where frame time goes to `fs25_vr.log` (next to `dxgi.dll`, not `log.txt`): one line per second, then a summary (default 10 s, up to 60). Each section is average/95th percentile/maximum milliseconds and calls per second: the engine frame, the Injector's present, eye copy and OpenXR calls, the game's Present, the GPU eye copy, how far the GPU runs behind, the GPU motion vector pass, and the Companion Mod's update, camera and draw. A long `xrWaitFrame` means headroom; a long `GPU queue lag` means the GPU is the limit |
 | `vrSnapTurnAngle <degrees>` | Snap turn step (default `90`) |
@@ -104,6 +105,12 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 ### Motion Controller buttons
 
 The Motion Controllers' buttons, triggers, grips and thumbsticks reach the game as the Virtual Gamepad, an Xbox-style pad (`vrVirtualGamepad`, on by default). Bind it in the game's Controls screen like any gamepad, for any game action and for the VR actions (Snap turn, Recenter view, Cycle HUD, Toggle 3D VR / 2D window). Each control on each hand is its own pad input:
+
+## Troubleshooting
+
+### Black edges at the borders of the view during head movement
+
+Most often seen on Virtual Desktop. For an instant after you move your head, a thin black strip shows at the top, bottom, left or right of the picture. Open the console and try `vrFovOverscan 5`, then `vrFovOverscan 10` if the edges are still there. It takes effect at once and is saved, so you set it once. The picture gets slightly softer, because the same Render Resolution is spread over a wider view. Raise the Render Resolution by the same percentage to win the sharpness back.
 
 ## License
 

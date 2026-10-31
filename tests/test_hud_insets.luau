@@ -1613,6 +1613,68 @@ test("TwoDFloatingWindowModeUsesTheFullScreenAnchorsAndTheSafeAreaReturnsWithVr"
     unloadMap()
 end)
 
+-- FOV Overscan widens the view by (1 + percent / 100) in tangent, so a screen-space HUD placed as before would grow and sit
+-- nearer. HUD placement, scale and convergence disparity shrink toward the screen centre by the same factor instead.
+local OVERSCAN_COMPENSATION = 1.0 / 1.2
+
+local function withOverscan(percent, fn)
+    VRCompanion.fovOverscan = percent
+    local ok, err = pcall(fn)
+    VRCompanion.fovOverscan = 0
+    if not ok then error(err, 0) end
+end
+
+test("FovOverscanPullsEveryGroupInTowardTheCentreAndShrinksIt", function()
+    local hud = makeHud()
+    loadMapWith(hud)
+    withOverscan(20, function()
+        VRCompanion:repositionAllHudDisplays(hud)
+        local m = 0.5 - (0.5 - 0.30) * OVERSCAN_COMPENSATION
+        -- Map group, bottom-left: both margins measured from the corner, pulled in toward the centre
+        local mapY = 0.5 - (0.5 - 0.22) * OVERSCAN_COMPENSATION
+        assert(near(hud.ingameMap.position.x, m) and near(hud.ingameMap.position.y, mapY), "map margins are pulled in by the overscan")
+        -- Info group, top-right: the display's size is subtracted from the pulled-in margin
+        assert(near(hud.gameInfo.position.x, 1.0 - m - 0.20) and near(hud.gameInfo.position.y, 1.0 - m - 0.12), "info margins are pulled in by the overscan")
+        for _, name in ipairs(DISPLAY_NAMES) do
+            assert(near(hud[name].scale, 0.82 * OVERSCAN_COMPENSATION), name .. " is drawn smaller by the overscan")
+        end
+    end)
+    unloadMap()
+end)
+
+test("FovOverscanShrinksTheConvergenceDisparityToKeepTheHudsDepth", function()
+    withOverscan(20, function()
+        local disparity = VRCompanion:computeConvergenceDisparity(0.064, 1.8)
+        assert(near(disparity, 0.012 * OVERSCAN_COMPENSATION), string.format("disparity must shrink with the overscan, got %f", disparity))
+    end)
+    assert(near(VRCompanion:computeConvergenceDisparity(0.064, 1.8), 0.012), "no overscan leaves the disparity alone")
+end)
+
+test("FovOverscanPullsTheSafeAreaAnchorsInTowardTheCentre", function()
+    local hud = makeHud()
+    loadMapWith(hud)
+    withOverscan(20, function()
+        VRCompanion:updateHudConvergence(0.016)
+        assert(near(_G.g_hudAnchorLeft, 0.5 - 0.20 * OVERSCAN_COMPENSATION), "left anchor is pulled in")
+        assert(near(_G.g_hudAnchorRight, 0.5 + 0.20 * OVERSCAN_COMPENSATION), "right anchor is pulled in")
+        assert(near(_G.g_hudAnchorBottom, 0.5 - 0.28 * OVERSCAN_COMPENSATION), "bottom anchor is pulled in")
+        assert(near(_G.g_hudAnchorTop, 0.5 + 0.28 * OVERSCAN_COMPENSATION), "top anchor is pulled in")
+    end)
+    unloadMap()
+end)
+
+test("ChangingTheFovOverscanReplacesTheHudAtOnce", function()
+    local hud = makeHud()
+    loadMapWith(hud)
+    assert(near(hud.ingameMap.position.x, 0.30), "no overscan places the map at its margin")
+    VRCompanion:setFovOverscan(20, false)
+    assert(near(hud.ingameMap.position.x, 0.5 - 0.20 * OVERSCAN_COMPENSATION), "the HUD moves when the overscan is set")
+    assert(near(hud.ingameMap.scale, 0.82 * OVERSCAN_COMPENSATION), "the HUD shrinks when the overscan is set")
+    VRCompanion:setFovOverscan(0, false)
+    assert(near(hud.ingameMap.position.x, 0.30) and near(hud.ingameMap.scale, 0.82), "the HUD returns with the overscan")
+    unloadMap()
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 if failed > 0 then
     error(string.format("%d tests failed", failed))

@@ -118,6 +118,12 @@ public:
     bool IsDesktopMirrorEnabled() const { return m_desktopMirrorEnabled; }
     void SetDesktopMirrorEnabled(bool enabled) { m_desktopMirrorEnabled = enabled; }
 
+    // FOV Overscan in percent, 0 to 20 (0 by default; the Companion Mod sets it with `vrFovOverscan`). The bridge clamps and
+    // forwards it to the OpenXR manager, which applies it when the next frame begins. Without a manager (Pass-Through Mode)
+    // it is accepted and has no effect. A map unload puts it back to 0.
+    float GetFovOverscan() const { return m_fovOverscan; }
+    void SetFovOverscan(float percent);
+
     // Whether Mouse Confinement may keep the Desk Mouse on the game picture while the headset is in use.
     // On by default; the Companion Mod sets it (`vrMouseConfinement`) and the DXGI proxy reads it every present.
     bool IsMouseConfinementEnabled() const { return m_mouseConfinementEnabled; }
@@ -152,6 +158,8 @@ public:
     static int Lua_GetIs2DViewActive(lua_State* L);
     static int Lua_SetDesktopMirror(lua_State* L);
     static int Lua_GetDesktopMirror(lua_State* L);
+    static int Lua_SetFovOverscan(lua_State* L);
+    static int Lua_GetFovOverscan(lua_State* L);
     static int Lua_SetMouseConfinement(lua_State* L);
     static int Lua_GetMouseConfinement(lua_State* L);
     static int Lua_ResetTemporalHistory(lua_State* L);
@@ -234,6 +242,8 @@ public:
         {"getDesktopMirror", &Lua_GetDesktopMirror},
         {"setMouseConfinement", &Lua_SetMouseConfinement},
         {"getMouseConfinement", &Lua_GetMouseConfinement},
+        {"setFovOverscan", &Lua_SetFovOverscan},
+        {"getFovOverscan", &Lua_GetFovOverscan},
         {"getRenderingMode", &Lua_GetRenderingMode},
         {"setRenderingMode", &Lua_SetRenderingMode},
         {"getSubPassIndex", &Lua_GetSubPassIndex},
@@ -276,6 +286,9 @@ private:
     bool m_2dViewActive = false;
     bool m_desktopMirrorEnabled = true;
     bool m_mouseConfinementEnabled = true;
+    float m_fovOverscan = 0.0f;
+    // The OpenXR manager renders without the overscan while a menu or 2D Floating Window Mode is shown.
+    void UpdateFovOverscanSuspension();
 
     std::atomic<VRRenderingMode> m_renderingMode{VRRenderingMode::SequentialDualPass};
     static constexpr int kNoPendingMode = -1;
