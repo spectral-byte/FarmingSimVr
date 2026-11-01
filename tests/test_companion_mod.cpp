@@ -12,7 +12,7 @@ TEST_F(CompanionModTest, MetadataDescriptorIsValid) {
 
     EXPECT_NE(modDescContent.find("<modDesc descVersion=\"105\">"), std::string::npos);
     EXPECT_NE(modDescContent.find("<title>"), std::string::npos);
-    EXPECT_NE(modDescContent.find("<version>1.1.4.0</version>"), std::string::npos);
+    EXPECT_NE(modDescContent.find("<version>1.1.7.0</version>"), std::string::npos);
     EXPECT_NE(modDescContent.find("<extraSourceFiles>"), std::string::npos);
     EXPECT_NE(modDescContent.find("VRCompanion.lua"), std::string::npos);
 }
@@ -611,7 +611,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndKeepsVehicleCameraCenteredWhatever
     // The headset FOV is applied; the projection stays on the optical axis although the eye's tan offset is -0.23
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraFovY[301] ~= nil, "setFovY must be called on vehicle cameraNode")
-        assert(math.abs(_G.cameraFovY[301] - 1.70) < 0.02, "vehicle vertical fov must match VR headset FOV")
+        assert(math.abs(_G.cameraFovY[301] - 1.80) < 0.02, "vehicle vertical fov must be the rendered FOV covering the headset FOV (outer side 0.90 at the headset aspect)")
 
         assert(_G.cameraProjectionOffsets[301] ~= nil, "setProjectionOffset must be called on vehicle cameraNode")
         assert(_G.cameraProjectionOffsets[301].x == 0, "vehicle horizontal offset must be zero")
@@ -650,7 +650,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndKeepsPlayerCameraCenteredWhateverT
     // The headset FOV is applied; the projection stays on the optical axis although the eye's tan offset is -0.23
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraFovY[401] ~= nil, "setFovY must be called on player firstPersonCamera")
-        assert(math.abs(_G.cameraFovY[401] - 1.70) < 0.02, "player vertical fov must match VR headset FOV")
+        assert(math.abs(_G.cameraFovY[401] - 1.80) < 0.02, "player vertical fov must be the rendered FOV covering the headset FOV (outer side 0.90 at the headset aspect)")
 
         assert(_G.cameraProjectionOffsets[401] ~= nil, "setProjectionOffset must be called on player firstPersonCamera")
         assert(_G.cameraProjectionOffsets[401].x == 0, "player horizontal offset must be zero")
@@ -1013,7 +1013,7 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
 
     // Ensure modified
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(math.abs(_G.cameraFovY[505] - 1.70) < 0.02, "must be set to VR fov")
+        assert(math.abs(_G.cameraFovY[505] - 1.80) < 0.02, "must be set to the rendered VR fov")
         assert(_G.cameraProjectionOffsets[505].x == 0 and _G.cameraProjectionOffsets[505].y == 0, "must be centered while the mod owns the camera")
     )luau", "=checkModified"), 0);
 
@@ -3475,7 +3475,7 @@ TEST_F(CompanionModTest, CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMo
         VRCompanion:set2DViewActive(false)
         VRCompanion:applyCameraProjection(camNode, 0)
         local vrFov = getFovY(camNode)
-        assert(math.abs(vrFov - 1.70) < 0.02, "3D VR mode must apply VR headset FOV")
+        assert(math.abs(vrFov - 1.80) < 0.02, "3D VR mode must apply the rendered VR FOV")
 
         -- 2. Switch to 2D mode (is2DViewActive == true)
         VRCompanion:set2DViewActive(true)

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no" ?>
 <modDesc descVersion="105">
     <author>spectral-byte</author>
-    <version>1.1.4.0</version>
+    <version>1.1.7.0</version>
     <title>
         <en>FS25 VR Companion Mod</en>
         <de>FS25 VR Begleit-Mod</de>
@@ -36,10 +36,12 @@ CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigg
         <sourceFile filename="src/VRCompanionDialogProbe.lua"/>
         <sourceFile filename="src/VRCompanionFishCatch.lua"/>
         <sourceFile filename="src/VRCompanionDesktopMirror.lua"/>
+        <sourceFile filename="src/VRCompanionFovOverscan.lua"/>
         <sourceFile filename="src/VRCompanionMouseConfinement.lua"/>
         <sourceFile filename="src/VRCompanionPerfTrace.lua"/>
         <sourceFile filename="src/VRCompanionInteractiveControl.lua"/>
         <sourceFile filename="src/VRCompanionAnimatedObjects.lua"/>
+        <sourceFile filename="src/VRCompanionManualAttach.lua"/>
         <sourceFile filename="src/VRCompanion.lua"/>
     </extraSourceFiles>
     <l10n>

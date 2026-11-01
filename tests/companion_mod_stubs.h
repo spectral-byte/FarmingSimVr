@@ -575,11 +575,15 @@ inline constexpr const char* kStubModelLoading = R"luau(
 // StubIC.addPoint(name, x, y, z, options) -> Click Point at a world position
 //   options: analog (bool), inRange (default true: IC activates it), screenX, screenY (where the stub's
 //   mouse test finds it; default 0.5, 0.5), facesAway (bool: like a static outdoor Click Point facing away
-//   from the camera, IC tests it with no mouse position, so it is never clickable)
+//   from the camera, IC tests it with no mouse position, so it is never clickable), outdoor (bool: on a
+//   vehicle's exterior, for a player on foot; see StubIC.tick), offScreen (bool: it projects off the screen, so
+//   IC runs no mouse test on it at all and its clickable state stays as it was)
 // StubIC.equip(vehicle, state) / StubIC.stateSetting (1 toggle, 2 always on, 3 always off) /
 //   StubIC.stateWrites / StubIC.changeCamera(vehicle, cam)  the vehicle side, see below
-// StubIC.tick()  one frame of IC's own vehicle update: every Click Point updates (activation, the mouse
-//   hit test through updateClickable, hover blink), as IC does each frame
+// StubIC.tick()  one frame of IC's own update of its Click Points (activation, the mouse hit test through
+//   updateClickable, hover blink). Like IC, a Click Point in a cab updates every frame (IC updates those from the
+//   vehicle's draw), an outdoor one only on the vehicle's update tick: every StubIC.outdoorTickFrames frames
+//   (default 4). StubIC.framesToOutdoorTick is how many frames until the next tick (1: the next frame has it).
 // StubIC.executed  names of the Click Points IC executed through its controller, in order
 // StubIC.blinks[name]  hover blinks IC drew on a Click Point     StubIC.mouseX / mouseY  the desk mouse
 // StubIC.selected()  name of the Click Point IC currently treats as the clickable one, or nil
@@ -595,6 +599,7 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
 
         StubIC.points, StubIC.executed, StubIC.blinks = {}, {}, {}
         StubIC.mouseX, StubIC.mouseY = 0.9, 0.9
+        StubIC.outdoorTickFrames, StubIC.framesToOutdoorTick = 4, 1
         StubIC.Point = Point
 
         function Point:isActivated() return self.activated end
@@ -615,6 +620,7 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
             Point.updateClickable = hitTest
         end
         function Point:updateScreenPosition(mx, my)
+            if self.offScreen then return end
             if self.facesAway then mx, my = nil, nil end
             (self.updateClickable or self.updateClickableRenamed)(self, mx, my)
         end
@@ -670,6 +676,7 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
         local point = setmetatable({
             name = name, node = node, activated = false, clickable = false, size = 0.04,
             inRange = options.inRange ~= false, facesAway = options.facesAway == true,
+            outdoor = options.outdoor == true, offScreen = options.offScreen == true,
             screenPosX = options.screenX or 0.5, screenPosY = options.screenY or 0.5,
             interactiveController = controller,
         }, StubIC.Point)
@@ -700,7 +707,18 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
     end
 
     function StubIC.tick()
-        for _, point in ipairs(StubIC.points or {}) do point:update(true, false, true) end
+        StubIC.framesToOutdoorTick = (StubIC.framesToOutdoorTick or 1) - 1
+        local outdoorTick = StubIC.framesToOutdoorTick <= 0
+        if outdoorTick then StubIC.framesToOutdoorTick = StubIC.outdoorTickFrames or 1 end
+        for _, point in ipairs(StubIC.points or {}) do
+            if not point.outdoor then
+                -- The cab's Click Points are updated from the vehicle's draw, which the game skips while the HUD is hidden
+                -- (StubIC.noVehicleDraw).
+                if not StubIC.noVehicleDraw then point:update(true, false, true) end
+            elseif outdoorTick then
+                point:update(false, true, false)
+            end
+        end
     end
 
     function StubIC.selected()

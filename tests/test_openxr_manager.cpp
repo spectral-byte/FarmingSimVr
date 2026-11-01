@@ -960,7 +960,8 @@ TEST(OpenXrManagerTest, LocatesViewsAndExtractsAsymmetricFovTangents) {
     EXPECT_NEAR(leftProj.tanRight, 1.02964f, 0.005f);
     EXPECT_NEAR(leftProj.xOffset, -0.23052f, 0.005f);
     EXPECT_NEAR(leftProj.yOffset, 0.0f, 0.005f);
-    EXPECT_NEAR(leftProj.fovY, 1.70f, 0.01f);
+    // fovY is the rendered FOV: the outer side (tan 0.90) at the headset FOV's own aspect (no swapchains yet).
+    EXPECT_NEAR(leftProj.fovY, 1.80f, 0.01f);
 
     EyeProjection rightProj = manager.PollEyeProjection(1);
     EXPECT_TRUE(rightProj.isValid);
@@ -970,7 +971,7 @@ TEST(OpenXrManagerTest, LocatesViewsAndExtractsAsymmetricFovTangents) {
     EXPECT_NEAR(rightProj.tanRight, 1.26016f, 0.005f);
     EXPECT_NEAR(rightProj.xOffset, 0.23052f, 0.005f);
     EXPECT_NEAR(rightProj.yOffset, 0.0f, 0.005f);
-    EXPECT_NEAR(rightProj.fovY, 1.70f, 0.01f);
+    EXPECT_NEAR(rightProj.fovY, 1.80f, 0.01f);
 
     // Asymmetry verify: opposite signs for nasal/temporal convergence
     EXPECT_LT(leftProj.xOffset, 0.0f);
@@ -1224,8 +1225,9 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     ASSERT_TRUE(manager.CreateTrackingSpaces());
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
-    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
+    // Vertically asymmetric: the lower side (0.65) is shallower than the upper one (0.85).
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.65f };
+    XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.65f };
     mockDispatch->tracking.SetEyeFov(0, leftFov);
     mockDispatch->tracking.SetEyeFov(1, rightFov);
 
@@ -1256,7 +1258,9 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     const auto& leftView = mockDispatch->lastSubmittedProjectionViews[0];
     const auto& rightView = mockDispatch->lastSubmittedProjectionViews[1];
 
-    // Verify aspect-ratio matched symmetric FOV (preserving 1:1 square pixel geometry for 1920x1080)
+    // Verify the covering symmetric FOV at the swapchain aspect (1:1 square pixels for 1920x1080): the widest side
+    // is the upper one (0.85; the average of the vertical span would be 0.759 and leave the top uncovered), and
+    // the horizontal half-angle is atan(16/9 * tan 0.85) = 1.112.
     EXPECT_NEAR(leftView.fov.angleLeft, -1.112f, 0.01f);
     EXPECT_NEAR(leftView.fov.angleRight, 1.112f, 0.01f);
     EXPECT_NEAR(leftView.fov.angleUp, 0.85f, 0.001f);

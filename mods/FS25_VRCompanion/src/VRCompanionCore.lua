@@ -254,9 +254,12 @@ function VRCompanion:loadMap(name)
         self:initCyclopeanAudioListener()
     end
 
-    -- 5. Register in-engine actions (Recenter and HUD Toggle)
+    -- 5. Register in-engine actions (Recenter and HUD Toggle), and again whenever the player changes a binding
     if type(self.registerActionEvents) == "function" then
         self:registerActionEvents(true)
+    end
+    if type(self.subscribeToInputBindingChanges) == "function" then
+        self:subscribeToInputBindingChanges()
     end
 
     -- 6. Synchronize initial GUI menu visibility state
@@ -273,6 +276,10 @@ function VRCompanion:loadMap(name)
     -- 7-. Send the saved Desktop Mirror setting to VRBridge: the handshake above is done, so the Injector sees it at once
     if type(self.applyDesktopMirror) == "function" then
         self:applyDesktopMirror()
+    end
+    -- 7-. Send the saved FOV Overscan to VRBridge too (a map unload put it back to 0 there)
+    if type(self.applyFovOverscan) == "function" then
+        self:applyFovOverscan()
     end
     if type(self.applyMouseConfinement) == "function" then
         self:applyMouseConfinement()
@@ -301,6 +308,7 @@ function VRCompanion:loadMap(name)
     if type(self.registerStereoDialogDepthConsoleCommands) == "function" then self:registerStereoDialogDepthConsoleCommands() end
     if type(self.registerDualPassPhysicsConsoleCommands) == "function" then self:registerDualPassPhysicsConsoleCommands() end
     if type(self.registerDesktopMirrorConsoleCommands) == "function" then self:registerDesktopMirrorConsoleCommands() end
+    if type(self.registerFovOverscanConsoleCommands) == "function" then self:registerFovOverscanConsoleCommands() end
     if type(self.registerMouseConfinementConsoleCommands) == "function" then self:registerMouseConfinementConsoleCommands() end
     if type(self.registerPerfTraceConsoleCommands) == "function" then self:registerPerfTraceConsoleCommands() end
 
@@ -1044,10 +1052,12 @@ function VRCompanion:runUpdate(dt)
         self:updateHudConvergence(dt)
     end
 
-    -- Keep in-engine action events active across context transitions
-    if (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) or (self.seatSetActionEventId == nil) then
+    -- Keep in-engine action events active across context transitions, and register them all again after a binding change
+    local bindingsChanged = self.inputBindingsChanged == true
+    if bindingsChanged or (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) or (self.seatSetActionEventId == nil) then
         if type(self.registerActionEvents) == "function" then
-            self:registerActionEvents(false)
+            self.inputBindingsChanged = false
+            self:registerActionEvents(bindingsChanged)
         end
     end
 
@@ -1203,6 +1213,9 @@ function VRCompanion:deleteMap()
     self.activeFillLevelsDisplay = nil
     self.passThroughMode = nil
     self.headTrackingEnabled = true
+    if type(self.unsubscribeFromInputBindingChanges) == "function" then
+        self:unsubscribeFromInputBindingChanges()
+    end
     for _, row in ipairs(self.ACTION_EVENTS) do
         self[row.idField] = nil
         self[row.loggedField] = false
@@ -1247,6 +1260,7 @@ function VRCompanion:deleteMap()
     if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
     if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
     if type(self.resetDesktopMirror) == "function" then self:resetDesktopMirror() end
+    if type(self.resetFovOverscan) == "function" then self:resetFovOverscan() end
     if type(self.resetMouseConfinement) == "function" then self:resetMouseConfinement() end
     if type(self.unregisterPerfTraceConsoleCommands) == "function" then self:unregisterPerfTraceConsoleCommands() end
     if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
