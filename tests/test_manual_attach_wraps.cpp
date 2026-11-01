@@ -91,6 +91,25 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, NoWarningWhileNoMotionControllerIsTr
     EXPECT_EQ(Warnings(), 0) << "with Motion Controllers off the support is never looked at";
 }
 
+TEST_F(VirtualGamepadManualAttachWrapsTest, AnErrorWhileLookingForHitchesIsLoggedOnceNotEveryFrameAndSelectsNothing) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(kTractorAndImplement);
+    // Manual Attach's own update does not use its class's isVehicleValid here (the stand-in has a local), the module does.
+    Lua("StubManualAttach.Handler.isVehicleValid = function(vehicle) error('boom') end");
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(5);
+    EXPECT_EQ(CountLogLines("Manual Attach support error"), 1) << "logged, and once however many frames it fails";
+    EXPECT_NE(CountLogLines("boom"), 0) << "with what went wrong";
+    EXPECT_EQ(DrawnEnd(), "none");
+    PullTrigger(kRight);
+    EXPECT_EQ(Performs(), 0);
+    EXPECT_EQ(Warnings(), 0) << "not a reason to give the support up";
+
+    Lua("StubManualAttach.Handler.isVehicleValid = function(vehicle) return true end");
+    FRAMES(2);
+    EXPECT_EQ(DrawnEnd(), kRearHitch) << "and it works again once the game does";
+}
+
 // ---- Unloading the map -----------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadManualAttachWrapsTest, UnloadingTheMapLeavesManualAttachExactlyAsFoundAndTheNextMapStartsAgain) {

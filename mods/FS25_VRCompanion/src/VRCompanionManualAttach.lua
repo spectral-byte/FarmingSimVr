@@ -92,6 +92,7 @@ local function newState()
         installed = false,
         gaveUp = false,       -- the support was found unusable (warned once); do not look again
         gaveUpBecause = nil,  -- why (the warning's problem), for the diagnostics
+        loggedErrors = {},    -- [message] = true for each error of the hitch listing already logged (once each)
         instance = nil,       -- g_manualAttach
         handler = nil,        -- its vehicle attachment handler
         class = nil,          -- the VehicleAttachmentHandler class
@@ -453,6 +454,16 @@ function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
         unwrapCandidateUpdate()
         giveUp(problem)
         return false
+    end
+    if not collected then
+        -- An error in the game's side of a vehicle: nothing is selected this update. Each message is logged once (until the map is unloaded),
+        -- not every frame.
+        state.count = 0
+        local message = tostring(problem)
+        if not state.loggedErrors[message] then
+            state.loggedErrors[message] = true
+            print("[FS25_VR] [Warning] Manual Attach support error while looking for hitches (nothing is selected until it passes): " .. message)
+        end
     end
     if collected then selected, kind = selectFromRay(self, self:getPointerRay(), canPerform) end
     -- (Within TIE_COSINE of each other, floating point noise included, they are equally near: the Click Point's.)
