@@ -146,6 +146,13 @@ local function findManualAttach()
     if type(joint) ~= "table" then return nil, nil, nil, "the attachment handler has no vehicleJointAttachment" end
     problem = shapeProblem(joint, "the joint attachment", ACTION_INFO) or shapeProblem(joint, "the joint attachment", PERFORM)
     if problem ~= nil then return nil, nil, nil, problem end
+    -- The PTO and hoses attachments (the PTO stub and the hose couplers act through them) have the same two functions.
+    for _, entry in ipairs({ { "powerTakeOffAttachment", "the PTO attachment" }, { "connectionHosesAttachment", "the hoses attachment" } }) do
+        local attachment = handler[entry[1]]
+        if type(attachment) ~= "table" then return nil, nil, nil, "the attachment handler has no " .. entry[1] end
+        problem = shapeProblem(attachment, entry[2], ACTION_INFO) or shapeProblem(attachment, entry[2], PERFORM)
+        if problem ~= nil then return nil, nil, nil, problem end
+    end
     return instance, handler, class, nil
 end
 
@@ -210,8 +217,22 @@ local function isInReach(joint, playerRoot)
     return x * x + y * y + z * z < state.class.PLAYER_MIN_DISTANCE_SQ
 end
 
+-- Why the game's PTO output or hose target lookup on a vehicle is not what the module expects, or nil when it is (or the vehicle has none).
+-- The vehicle side of the PTO stub and the hose couplers is read from the game's PowerTakeOffs and ConnectionHoses specializations.
+local function vehicleLookupProblem(vehicle)
+    if type(vehicle.spec_powerTakeOffs) == "table" and type(vehicle.getOutputPowerTakeOffs) ~= "function" then
+        return "the game's getOutputPowerTakeOffs is missing on a vehicle"
+    end
+    local hoses = vehicle.spec_connectionHoses
+    if type(hoses) == "table" and (type(hoses.targetNodes) ~= "table" or type(hoses.customHoseTargetsByAttacher) ~= "table") then
+        return "the game's hose targets (spec_connectionHoses.targetNodes, customHoseTargetsByAttacher) are missing on a vehicle"
+    end
+    return nil
+end
+
 -- Lists every hitch within Manual Attach's reach of the player, from the vehicles its detection has found: a free hitch with an Implement
--- lined up (through its own helper and constants) and a hitch with an Implement on it, as its nearest-candidate search walks them.
+-- lined up (through its own helper and constants) and a hitch with an Implement on it, as its nearest-candidate search walks them. Returns why
+-- the support cannot go on when the game's side of a vehicle has another shape than expected.
 local function collectHitches(player)
     state.count = 0
     local playerRoot = player.rootNode
@@ -222,6 +243,8 @@ local function collectHitches(player)
     for _, vehicle in ipairs(state.handler.detectedVehicles) do
         local spec = vehicle.spec_attacherJoints
         if class.isVehicleValid(vehicle) and type(spec) == "table" and type(spec.attacherJoints) == "table" then
+            local problem = vehicleLookupProblem(vehicle)
+            if problem ~= nil then return problem end
             if type(vehicle.getAttachedImplements) == "function" then
                 for _, implement in ipairs(vehicle:getAttachedImplements()) do
                     local joint = spec.attacherJoints[implement.jointDescIndex]
@@ -368,7 +391,15 @@ function VRCompanion:updateManualAttach(dt, suppressed)
     end
 
     local selected, kind = nil, nil
-    if pcall(collectHitches, player) then selected, kind = selectFromRay(self, self:getPointerRay(), canPerform) end
+    local collected, problem = pcall(collectHitches, player)
+    if collected and problem ~= nil then
+        -- The game's side of a vehicle is not what the support expects: it switches itself off, with one warning, for good.
+        state.installed, state.selected, state.selectedKind, state.count = false, nil, nil, 0
+        state.landedVehicle, state.landedJoint, state.landedKind = nil, nil, nil
+        giveUp(problem)
+        return false
+    end
+    if collected then selected, kind = selectFromRay(self, self:getPointerRay(), canPerform) end
     state.selected, state.selectedKind = selected, kind
     -- The select pulse of a Click Point: one on the Pointer Hand as the ray lands on a hitch it was not on.
     local vehicle, joint = selected and selected.vehicle or nil, selected and selected.jointIndex or nil

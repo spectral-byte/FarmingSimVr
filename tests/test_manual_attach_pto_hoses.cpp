@@ -13,6 +13,33 @@ namespace {
 using namespace hand_tools_test;
 using namespace manual_attach_test;
 
+class VirtualGamepadManualAttachPtoHosesWrapsTest : public VirtualGamepadManualAttachTest {
+protected:
+    // Manual Attach or the game is in a release where something the PTO and hose support relies on is missing or reshaped: the module warns once,
+    // selects nothing, works nothing, and Manual Attach (its key: the handler's own execute path) works as it does without VR.
+    void ExpectTheSupportGivesUpWith(const char* variant) {
+        SCOPED_TRACE(variant);
+        ASSERT_NO_FATAL_FAILURE(StartWithManualAttach(variant));
+        Lua(kTractorWithAttachedImplement);
+        NoteManualAttachFunctions();
+        POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+        FRAMES(3);
+        EXPECT_EQ(Warnings(), 1) << "one warning, however many frames";
+        EXPECT_EQ(DrawnEnd(), "none") << "nothing is selected, not even the hitch";
+        PullTrigger(kRight);
+        EXPECT_EQ(Performs(), 0) << "and a pull works nothing";
+        EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger is a binding's";
+        EXPECT_TRUE(ManualAttachFunctionsAreAsFound()) << "Manual Attach is untouched";
+        EXPECT_NE(EvalLua(L, "VRCompanion:getManualAttachDiagnostics()").find("gave up"), std::string::npos);
+        EXPECT_EQ(Warnings(), 1);
+        ReleaseTrigger(kRight);
+
+        // Manual Attach itself still works its candidate with its own key.
+        Lua("StubManualAttach.handler:executeAttachment(StubManualAttach.handler.vehicleJointAttachment)");
+        EXPECT_EQ(Attached("plow"), "false") << "its detach, as without VR";
+    }
+};
+
 }  // namespace
 
 // ---- The PTO stub ---------------------------------------------------------------------------------------------------------------
@@ -191,6 +218,32 @@ TEST_F(VirtualGamepadManualAttachTest, EachPullRunsExactlyOneOfManualAttachsPath
     EXPECT_EQ(HosesConnected("plow"), "false");
     EXPECT_EQ(Attached("plow"), "true") << "and the detach was refused, with Manual Attach's own warning, as the PTO is on";
     EXPECT_EQ(BlinkingWarnings(), 1);
+}
+
+// ---- Giving up -------------------------------------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, ARenamedPtoActionInfoTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("ptoActionInfoMissing"); }
+TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, AReshapedPtoActionInfoTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("ptoActionInfoReshaped"); }
+TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, ARenamedPtoPerformTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("ptoPerformMissing"); }
+TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, ARenamedHoseActionInfoTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("hoseActionInfoMissing"); }
+TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, AReshapedHoseActionInfoTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("hoseActionInfoReshaped"); }
+TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, ARenamedHosePerformTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("hosePerformMissing"); }
+TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, AGamePtoOutputLookupThatIsGoneTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("ptoLookupReshaped"); }
+TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, AGameHoseTargetListThatIsGoneTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("hoseTargetsReshaped"); }
+
+TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, AVehicleWithNoPtoOutputsOrHoseTargetsAtAllIsNoReleaseProblem) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(R"luau(
+        _G.trailer = StubManualAttach.trailer('trailer', { -0.4, -0.2, 2.0 })
+        _G.baler = StubManualAttach.implement('baler', { hasPto = true, hasHoses = true })
+        StubManualAttach.lineUp(baler, trailer, 1)
+        StubManualAttach.attach(trailer, baler, 1, 1)
+        StubManualAttach.detect(trailer)
+    )luau");
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(3);
+    EXPECT_EQ(DrawnEnd(), kRearHitch) << "the hitch is a Coupling Point; its vehicle simply has no PTO stub or hose coupler";
+    EXPECT_EQ(Warnings(), 0);
 }
 
 // ---- The pulses -----------------------------------------------------------------------------------------------------------------
