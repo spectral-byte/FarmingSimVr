@@ -120,7 +120,7 @@
 --     ManualAttach updatePointerRay -> updateManualAttach(dt, suppressed) after Interactive Control, before Animated Objects and Object
 --                 Grab (a hitch the ray is on suppresses both, as a Click Point does; also, as suppressed, on the paths where input is
 --                 ignored, so the selection clears), getPointerDiagnostics -> getManualAttachDiagnostics(), resetMotionControllers ->
---                 resetManualAttachSupport() (VRCompanionManualAttach.lua, ADR-0035). Nothing of Manual Attach is wrapped.
+--                 resetManualAttachSupport() (VRCompanionManualAttach.lua, ADR-0035). The one thing of Manual Attach it wraps is the handler class's candidate update.
 --     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
 --                 setting rides on save/loadMotionControllerSettings, the status command ends with the pad's state and
 --                 the console command registers next to the others (VRCompanionVirtualGamepad.lua, ADR-0028)

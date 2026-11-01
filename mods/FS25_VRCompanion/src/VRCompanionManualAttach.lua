@@ -22,14 +22,20 @@
 --   FS25_manualAttach.VehicleAttachmentHandler (the global table is the fallback)   the constants MAX_ATTACH_DISTANCE_SQ, MAX_ATTACH_ANGLE and
 --       PLAYER_MIN_DISTANCE_SQ; the static getAttachableInJointRange(vehicleSystem, vehicle, attacherJoint, maxDistanceSq, maxAngle, isPlayerBased)
 --       and isVehicleValid(vehicle)
---   the handler   detectedVehicles, executeAttachment(attachment), vehicleJointAttachment, and the candidate fields attacherVehicle,
+--   VehicleAttachmentHandler.updateCandidates(handler) (wrapped, see below)
+--   the handler   detectedVehicles, executeAttachment(attachment), vehicleJointAttachment, playerCanPerformManualAttachment, and the candidate fields attacherVehicle,
 --       attacherVehicleJointDescIndex, attachable, attachableJointDescIndex, attachedImplement
 --   the joint attachment   getActionEventInfo(attacherVehicle, attachable, attachedImplement, jointDescIndex, playerCanPerform), performAttachment
 --   g_currentMission.vehicleSystem, g_localPlayer.rootNode, localToLocal, getWorldTranslation
 --   on a vehicle   spec_attacherJoints.attacherJoints[i].jointTransform, getAttachedImplements() ({ object, jointDescIndex })
--- Nothing of Manual Attach is wrapped or rewritten, its bindings included; the module only reads, and sets the candidate fields before it runs
--- the execute path. When what it relies on is missing or has another shape, the Companion Mod logs ONE warning when Motion Controllers are in
--- use and leaves Manual Attach, and every other feature, alone.
+-- Prompts and keys follow the hitch (ticket #230). The module wraps ONE function of Manual Attach, VehicleAttachmentHandler.updateCandidates
+-- (the candidate update, at the class level so the handler instance finds it), original first: after Manual Attach has picked its nearest
+-- candidate, while the ray is on a hitch (and the player can attach by hand), the five candidate fields are set to that hitch's. Manual
+-- Attach's own draw (the input help prompts, the context box) and its own keys read those fields, so the text, the keys and the pull never
+-- disagree; with the ray on no hitch the wrap changes nothing. Map unload hands the function back as found. Nothing else of Manual Attach is
+-- wrapped or rewritten, its bindings included; the module otherwise only reads, and sets the candidate fields before it runs the execute path.
+-- When what it relies on (updateCandidates included, one parameter: the handler) is missing or has another shape, the Companion Mod logs ONE
+-- warning when Motion Controllers are in use, wraps nothing and leaves Manual Attach, and every other feature, alone.
 --
 -- When the ray can work a hitch. Only while Manual Attach says the player can attach by hand (canPlayerPerformManualAttachment: on foot, no Hand
 -- Tool in hand, no Held Object), only while the Pointer Ray has control of the pointer (not the desk mouse), the head is placed in the world,
@@ -43,7 +49,7 @@
 --       "trigger")). The Pointer Hand feels it as a Click Point (VRCompanion:onClickPointEvent): a light pulse as the ray lands on a hitch
 --       it was not on, a firmer one for each pull that ran Manual Attach's path.
 --   VRCompanion:getManualAttachDiagnostics() -> string   one line for vrPointerDiagnostics
---   VRCompanion:resetManualAttachSupport()               map unload (hands back anything it set up: nothing is wrapped)
+--   VRCompanion:resetManualAttachSupport()               map unload (hands the wrapped candidate update back as found)
 --
 -- Hooks into the rest of the mod
 --   MotionControllers   updatePointerRay -> updateManualAttach(dt, hitX ~= nil) after Interactive Control, before Animated Objects and Object
@@ -66,6 +72,8 @@ local EXECUTE = { name = "executeAttachment", parameters = 2, describe = "(handl
 local ACTION_INFO = { name = "getActionEventInfo", parameters = 6, describe = "(attachment, attacherVehicle, attachable, attachedImplement, jointDescIndex, playerCanPerform)" }
 local PERFORM = { name = "performAttachment", parameters = 7, describe = "(attachment, attacherVehicle, attachable, attachedImplement, attacherJointDescIndex, attachableJointDescIndex, playerCanPerform)" }
 
+local CANDIDATE_UPDATE = { name = "updateCandidates", parameters = 1, describe = "(handler)" }
+
 local function newState()
     return {
         installed = false,
@@ -78,6 +86,8 @@ local function newState()
         selected = nil,       -- the hitch the ray is on (one of hitches)
         landedVehicle = nil,  -- the hitch the ray is on and has pulsed for
         landedJoint = nil,
+        candidateUpdate = nil,        -- the class's candidate update as found, while the module has it wrapped
+        candidateUpdateWrap = nil,    -- and what the module put there
     }
 end
 
@@ -138,7 +148,7 @@ local function findManualAttach()
     if type(instance.canPlayerPerformManualAttachment) ~= "boolean" then
         return nil, nil, nil, "g_manualAttach has no canPlayerPerformManualAttachment"
     end
-    problem = shapeProblem(handler, "the attachment handler", EXECUTE)
+    problem = shapeProblem(handler, "the attachment handler", EXECUTE) or shapeProblem(class, "VehicleAttachmentHandler", CANDIDATE_UPDATE)
     if problem ~= nil then return nil, nil, nil, problem end
     local joint = handler.vehicleJointAttachment
     if type(joint) ~= "table" then return nil, nil, nil, "the attachment handler has no vehicleJointAttachment" end
@@ -158,7 +168,23 @@ local function anyHandTracked(self)
         or self:getHandState(self.MOTION_HAND_RIGHT).tracked == true
 end
 
--- Looks for Manual Attach when a Motion Controller is in use. Nothing of it is wrapped, so there is nothing to hand back at map unload.
+-- Wraps the class's candidate update, original first: after Manual Attach has picked its nearest candidate, while the ray is on a hitch, the
+-- five candidate fields are that hitch's, so Manual Attach's prompts, context box and keys describe and act on the pointed hitch.
+local function wrapCandidateUpdate(class)
+    local original = class.updateCandidates
+    local function updateCandidates(handler, ...)
+        original(handler, ...)
+        local selected = state.selected
+        if selected ~= nil and handler == state.handler and handler.playerCanPerformManualAttachment == true then
+            handler.attacherVehicle, handler.attacherVehicleJointDescIndex = selected.vehicle, selected.jointIndex
+            handler.attachable, handler.attachableJointDescIndex, handler.attachedImplement = selected.attachable, selected.attachableJointIndex, selected.implement
+        end
+    end
+    state.candidateUpdate, state.candidateUpdateWrap = original, updateCandidates
+    class.updateCandidates = updateCandidates
+end
+
+-- Looks for Manual Attach when a Motion Controller is in use.
 local function tryInstall()
     local instance, handler, class, problem = findManualAttach()
     if problem ~= nil then
@@ -166,12 +192,17 @@ local function tryInstall()
         return
     end
     state.instance, state.handler, state.class = instance, handler, class
+    wrapCandidateUpdate(class)
     state.installed = true
     print("[FS25_VR] Manual Attach support: installed")
 end
 
--- Map unload (and the end of a session): the module wrapped nothing, so it only forgets.
+-- Map unload (and the end of a session): the class's candidate update is handed back as found (unless something else wrapped it since, which
+-- cannot be taken out from under it), and the module forgets.
 function VRCompanion:resetManualAttachSupport()
+    if state.class ~= nil and state.candidateUpdateWrap ~= nil and state.class.updateCandidates == state.candidateUpdateWrap then
+        state.class.updateCandidates = state.candidateUpdate
+    end
     state = newState()
 end
 

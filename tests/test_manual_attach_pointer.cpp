@@ -377,7 +377,7 @@ TEST_F(VirtualGamepadManualAttachTest, PointingAndPullingLeavesManualAttachItsel
     ReleaseTrigger(kRight);
     PullTrigger(kRight);
     ASSERT_EQ(Performs("joint"), 2);
-    EXPECT_TRUE(ManualAttachFunctionsAreAsFound()) << "nothing of Manual Attach is wrapped, replaced or added: its bindings and actions are as they were";
+    EXPECT_TRUE(ManualAttachFunctionsAreAsFound()) << "nothing of Manual Attach but its candidate update is wrapped, replaced or added: its bindings and actions are as they were";
 }
 
 // ---- The pulses ---------------------------------------------------------------------------------------------------------------------

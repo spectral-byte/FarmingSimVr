@@ -29,6 +29,7 @@ protected:
         EXPECT_EQ(Performs(), 0) << "and a pull works nothing";
         EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger is a binding's";
         EXPECT_TRUE(ManualAttachFunctionsAreAsFound()) << "Manual Attach is untouched";
+        EXPECT_TRUE(CandidateUpdateIsAsFound()) << "its candidate update included: nothing is wrapped";
         EXPECT_NE(EvalLua(L, "VRCompanion:getManualAttachDiagnostics()").find("gave up"), std::string::npos);
         EXPECT_EQ(Warnings(), 1);
     }
@@ -54,6 +55,8 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, AReshapedExecutePathTurnsTheSupportO
 TEST_F(VirtualGamepadManualAttachWrapsTest, ARenamedPerformTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("performMissing"); }
 TEST_F(VirtualGamepadManualAttachWrapsTest, NoListOfDetectedVehiclesTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("detectedMissing"); }
 TEST_F(VirtualGamepadManualAttachWrapsTest, NoCanAttachByHandFlagTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("flagMissing"); }
+TEST_F(VirtualGamepadManualAttachWrapsTest, ARenamedCandidateUpdateTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("candidateUpdateMissing"); }
+TEST_F(VirtualGamepadManualAttachWrapsTest, AReshapedCandidateUpdateTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("candidateUpdateReshaped"); }
 
 TEST_F(VirtualGamepadManualAttachWrapsTest, AGameWithoutManualAttachAtAllWarnsOnceAndLeavesTheRestAlone) {
     ASSERT_NO_FATAL_FAILURE(StartWithoutManualAttach());
