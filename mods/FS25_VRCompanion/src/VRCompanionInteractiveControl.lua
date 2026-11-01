@@ -27,6 +27,10 @@
 -- Pointer Ray is not drawn and the trigger clicks nothing; a trigger pulled in that time does not click
 -- (or keep an analog Click Point acting) once the hand moves, only a new pull does.
 --
+-- A Click Point shares the cone with a hitch of Manual Attach (VRCompanionManualAttach.lua, ADR-0035): the one nearer the ray's centre is the
+-- target. peekInteractiveControlTarget() reports the best Click Point's angle (as a cosine) before it is committed, and
+-- updateInteractiveControl(dt, selectNone) selects no Click Point for that update when the hitch is nearer.
+--
 -- Other modules build on:
 --   VRCompanion:onClickPointEvent(kind, clickPoint)   optional hook, called with "selected" (the
 --       selected Click Point changed, clickPoint may be nil) and "clicked" (a trigger pull was executed:

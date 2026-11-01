@@ -33,12 +33,14 @@
 --
 -- When the ray can work a hitch. Only while Manual Attach says the player can attach by hand (canPlayerPerformManualAttachment: on foot, no Hand
 -- Tool in hand, no Held Object), only while the Pointer Ray has control of the pointer (not the desk mouse), the head is placed in the world,
--- no menu or Stereo Dialog takes the input, and Motion Controllers are on. A Click Point within the cone wins over a hitch, and a hitch the ray
--- is on over an Animated Object and over an object Object Grab can pick up.
+-- no menu or Stereo Dialog takes the input, and Motion Controllers are on. Of a Click Point and a hitch both within the cone, the one nearer the
+-- ray's centre wins (a tie is the Click Point's) and the other selects nothing; either one over an Animated Object and over an object Object Grab
+-- can pick up.
 --
 -- PUBLIC SURFACE
---   VRCompanion:updateManualAttach(dt, suppressed) -> hasTarget, hitX, hitY, hitZ   once per update after the Pointer Ray is placed
---       (VRCompanion:updatePointerRay), after Interactive Control; suppressed: a Click Point has the ray, so nothing is selected.
+--   VRCompanion:updateManualAttach(dt, suppressed, clickCos) -> hasTarget, hitX, hitY, hitZ   once per update after the Pointer Ray is placed
+--       (VRCompanion:updatePointerRay), after Interactive Control has reported its best Click Point (peekInteractiveControlTarget) and before it
+--       commits; suppressed: nothing is selected; clickCos: the cosine of that Click Point's angle from the ray's centre, or nil without one.
 --       While the ray is on a hitch the Pointer Hand's trigger is taken off the Virtual Gamepad (VRCompanion:takeVirtualGamepadInput(hand,
 --       "trigger")). The Pointer Hand feels it as a Click Point (VRCompanion:onClickPointEvent): a light pulse as the ray lands on a hitch
 --       it was not on, a firmer one for each pull that ran Manual Attach's path.
@@ -46,8 +48,8 @@
 --   VRCompanion:resetManualAttachSupport()               map unload (hands back anything it set up: nothing is wrapped)
 --
 -- Hooks into the rest of the mod
---   MotionControllers   updatePointerRay -> updateManualAttach(dt, hitX ~= nil) after Interactive Control, before Animated Objects and Object
---       Grab; settleInteractiveControl (the paths where Motion Controller input is ignored) -> updateManualAttach(dt, true) so the selection
+--   MotionControllers   updatePointerRay -> peekInteractiveControlTarget(), updateManualAttach(dt, false, clickCos), updateInteractiveControl(dt,
+--       selectNone), before Animated Objects and Object Grab; settleInteractiveControl (the paths where Motion Controller input is ignored) -> updateManualAttach(dt, true) so the selection
 --       clears; getPointerDiagnostics -> getManualAttachDiagnostics(); resetMotionControllers -> resetManualAttachSupport()
 -- ====================================================================
 

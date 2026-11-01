@@ -117,9 +117,10 @@
 --                 where input is ignored, so the selection clears), getPointerDiagnostics -> getAnimatedObjectsDiagnostics(),
 --                 resetMotionControllers -> resetAnimatedObjectsSupport() (VRCompanionAnimatedObjects.lua, ADR-0034). While the
 --                 ray is on one, the Pointer Hand's trigger is taken off the Virtual Gamepad and a pull runs the game's own toggle.
---     ManualAttach updatePointerRay -> updateManualAttach(dt, suppressed) after Interactive Control, before Animated Objects and Object
---                 Grab (a hitch the ray is on suppresses both, as a Click Point does; also, as suppressed, on the paths where input is
---                 ignored, so the selection clears), getPointerDiagnostics -> getManualAttachDiagnostics(), resetMotionControllers ->
+--     ManualAttach updatePointerRay -> peekInteractiveControlTarget() (the angle of the best Click Point), updateManualAttach(dt, suppressed,
+--                 clickCos) (the hitch nearer the ray's centre than that Click Point is the target), then updateInteractiveControl(dt,
+--                 selectNone) (told to select none when the hitch won), all before Animated Objects and Object Grab (either one selected
+--                 suppresses both; also, as suppressed, on the paths where input is ignored, so the selection clears), getPointerDiagnostics -> getManualAttachDiagnostics(), resetMotionControllers ->
 --                 resetManualAttachSupport() (VRCompanionManualAttach.lua, ADR-0035). Nothing of Manual Attach is wrapped.
 --     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
 --                 setting rides on save/loadMotionControllerSettings, the status command ends with the pad's state and
