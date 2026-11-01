@@ -779,24 +779,25 @@ function VRCompanion:updatePointerRay(dt)
                 or "keeps the aim direction (POINTER_RAY_FOLLOWS_FINGER_DIRECTION is false)"))
     end
     local hasTarget, hitX, hitY, hitZ = false, nil, nil, nil
-    if type(self.updateInteractiveControl) == "function" then
-        hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt)
+    -- Click Points and hitches (Coupling Points) share the cone (ADR-0035): of the Click Point and the hitch within it, the one nearer the ray's
+    -- centre is the target and the other selects nothing (a tie is the Click Point's). Interactive Control reports its best Click Point before it
+    -- commits, Manual Attach support ranks its hitch against it, and Interactive Control is then told to select none when the hitch won.
+    local clickCos = nil
+    if type(self.peekInteractiveControlTarget) == "function" then clickCos = self:peekInteractiveControlTarget() end
+    local onHitch, hitchX, hitchY, hitchZ = false, nil, nil, nil
+    if type(self.updateManualAttach) == "function" then
+        onHitch, hitchX, hitchY, hitchZ = self:updateManualAttach(dt, false, clickCos)
     end
-    -- A Click Point within the cone wins over everything: Interactive Control answers a hit point only when it selected one (it answers
-    -- hasTarget, with no hit point, merely for "Click Points exist", which an Animated Object may replace).
+    if type(self.updateInteractiveControl) == "function" then
+        hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt, onHitch)
+    end
+    -- Either of them selected wins over everything else (Animated Objects and Object Grab): Interactive Control answers a hit point only when it
+    -- selected one (it answers hasTarget, with no hit point, merely for "Click Points exist", which an Animated Object may replace).
+    if onHitch then hasTarget, hitX, hitY, hitZ = true, hitchX, hitchY, hitchZ end
     -- Object Grab: the ray is on an object the empty hands can pick up. Only looked at here: it pulses and grabs once it is the target.
     local grabbable, grabX, grabY, grabZ, grabDistance = false, nil, nil, nil, nil
     if not hasTarget and type(self.peekObjectGrabRayTarget) == "function" then
         grabbable, grabX, grabY, grabZ, grabDistance = self:peekObjectGrabRayTarget()
-    end
-    -- Manual Attach: the ray is on a hitch of a vehicle in reach (ADR-0035). Of what the ray can be on, a Click Point within the cone wins, then a
-    -- hitch; the hitch the ray is on also suppresses Animated Objects and what Object Grab can pick up, as a Click Point does.
-    if type(self.updateManualAttach) == "function" then
-        local onHitch, hitchX, hitchY, hitchZ = self:updateManualAttach(dt, hitX ~= nil)
-        if onHitch then
-            hasTarget, hitX, hitY, hitZ = true, hitchX, hitchY, hitchZ
-            grabbable = false
-        end
     end
     -- Animated Objects: the ray is on a door or gate in whose zone the player stands. Of the two the ray meets first, the nearer wins.
     if type(self.updateAnimatedObjects) == "function" then

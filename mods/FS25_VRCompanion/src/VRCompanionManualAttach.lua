@@ -57,6 +57,8 @@ local engine = VRCompanion.getEngineGlobal
 
 local MOD_NAME = "FS25_manualAttach"
 local CONSTANTS = { "MAX_ATTACH_DISTANCE_SQ", "MAX_ATTACH_ANGLE", "PLAYER_MIN_DISTANCE_SQ" }
+-- How near in cosine (about 0.08 degrees at the ray's centre) a Click Point and a hitch must be to count as equally near the ray's centre.
+local TIE_COSINE = 1e-6
 
 -- The functions the module relies on: how many parameters the function must declare at least (a reshaped function declares fewer, self counts
 -- in a method) and what they are, for the warning.
@@ -265,7 +267,7 @@ local function selectFromRay(self, ray, canPerform)
                 local cos = (vx * ray.dx + vy * ray.dy + vz * ray.dz) / distance
                 if cos >= bestCos then
                     best, bestCos = hitch, cos
-                    hitch.x, hitch.y, hitch.z = px, py, pz
+                    hitch.x, hitch.y, hitch.z, hitch.cos = px, py, pz, cos
                 end
             end
         end
@@ -298,8 +300,9 @@ local function rayMayWork(self)
 end
 
 -- Called by the Pointer Ray code once per Companion Mod update, after the ray is placed. Returns whether the ray is on a hitch that can be
--- worked and, then, where it ends. `suppressed`: a Click Point has the ray.
-function VRCompanion:updateManualAttach(dt, suppressed)
+-- worked and, then, where it ends. `suppressed`: nothing is selected. `clickCos`: the cosine of the angle from the ray's centre of the Click Point
+-- Interactive Control would select; it keeps the ray when it is as near the centre as the hitch or nearer.
+function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
     if not state.installed then
         -- Looked for once, when a Motion Controller is in use: a player without them is never told.
         if state.gaveUp or self.motionControllersEnabled == false or not anyHandTracked(self) then return false end
@@ -316,6 +319,8 @@ function VRCompanion:updateManualAttach(dt, suppressed)
 
     local selected = nil
     if pcall(collectHitches, player) then selected = selectFromRay(self, self:getPointerRay(), canPerform) end
+    -- (Within TIE_COSINE of each other, floating point noise included, they are equally near: the Click Point's.)
+    if selected ~= nil and clickCos ~= nil and clickCos >= selected.cos - TIE_COSINE then selected = nil end
     state.selected = selected
     -- The select pulse of a Click Point: one on the Pointer Hand as the ray lands on a hitch it was not on.
     local vehicle, joint = selected and selected.vehicle or nil, selected and selected.jointIndex or nil
