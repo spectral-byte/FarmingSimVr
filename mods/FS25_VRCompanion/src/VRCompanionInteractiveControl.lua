@@ -76,6 +76,9 @@ local function newState()
         pullArmed = false,    -- the trigger went down while the ray had control and is still down
         pullPoint = nil,      -- the Click Point a pull was aimed at that Interactive Control has not executed yet
         pullAtMs = 0,         -- clockMs of that pull
+        vehicleReport = nil,  -- what was last logged about the vehicle being driven (see reportVehicle)
+        vehicleCheckMs = 0,   -- time until reportVehicle looks again
+        vehicleLogs = 0,      -- lines reportVehicle logged this map
     }
 end
 
@@ -215,6 +218,84 @@ local function tryInstall(self)
     print("[FS25_VR] Interactive Control support: installed")
 end
 
+-- ---- Cab Click Points while the VR HUD is hidden ------------------------------------------------
+-- Interactive Control updates a cab's Click Points from the vehicle's draw, and the game draws the vehicle being driven as
+-- part of the HUD. With the VR HUD hidden (its default, VRCompanionHud.lua) that draw never runs, so no indoor Click Point
+-- became active and the ray had nothing to hit in a cab; outdoor ones are updated on the vehicle's tick and kept working.
+-- While the HUD is hidden the Companion Mod runs Interactive Control's indoor update itself, once per update, as Interactive
+-- Control does from its tick in the game's no-HUD mode: the call its onDraw makes, under the same conditions (its state on
+-- and its indoor check), without the hand-tool crosshair the draw would also render. Not while a menu takes the input.
+local CAB_UPDATE_FUNCTIONS = { "updateInteractiveController", "isInteractiveControlActivated", "isIndoorActive", "getIsActiveForInput" }
+
+local function updateCabClickPointsWithoutDraw(self)
+    if self:getHudState() ~= self.HUD_STATE_HIDDEN or self:doesMenuTakeInput() then return end
+    local vehicle = self:getControlledVehicle()
+    if vehicle == nil or type(vehicle.spec_interactiveControl) ~= "table" then return end
+    for _, name in ipairs(CAB_UPDATE_FUNCTIONS) do
+        if type(vehicle[name]) ~= "function" then return end
+    end
+    if vehicle:isInteractiveControlActivated() ~= true or vehicle:isIndoorActive() ~= true then return end
+    pcall(vehicle.updateInteractiveController, vehicle, true, false, vehicle:getIsActiveForInput(true))
+end
+
+-- ---- What Interactive Control reports for the vehicle being driven ------------------------------
+-- Interactive Control makes a cab's (indoor) Click Points active only while its state is on, its indoor check passes (an
+-- inside camera, or indoor sound), the vehicle is active for input (entered, no AI helper driving it), and the vehicle's
+-- draw runs, which updates them every frame. When the ray finds nothing in a cab, this says which of those failed: it is
+-- logged when it changes (looked at once a second while driving, at most VEHICLE_LOG_LIMIT lines a map) and shown by
+-- vrPointerDiagnostics.
+local VEHICLE_CHECK_MS = 1000
+local VEHICLE_LOG_LIMIT = 20
+local INDOOR_TYPES = { [1] = true, [3] = true }  -- InteractiveAction.ACTION_TYPES INDOOR and INDOOR_OUTDOOR
+
+local function askVehicle(vehicle, name, ...)
+    if type(vehicle[name]) ~= "function" then return "?" end
+    local ok, value = pcall(vehicle[name], vehicle, ...)
+    return ok and tostring(value) or "error"
+end
+
+-- One phrase for the vehicle being driven, or nil when it has no Interactive Control.
+local function describeVehicle(self)
+    local vehicle = self:getControlledVehicle()
+    local spec = vehicle ~= nil and vehicle.spec_interactiveControl or nil
+    if type(spec) ~= "table" or type(spec.interactiveControllers) ~= "table" then return nil end
+    local indoor, active = 0, 0
+    for _, controller in ipairs(spec.interactiveControllers) do
+        local actions = type(controller) == "table" and controller.interactiveActions or nil
+        if type(actions) == "table" then
+            for _, action in ipairs(actions) do
+                -- Click Points are the actions with a mouse test; buttons have none.
+                if type(action) == "table" and action.updateClickable ~= nil and INDOOR_TYPES[action.type] then
+                    indoor = indoor + 1
+                    if isPointActive(action) then active = active + 1 end
+                end
+            end
+        end
+    end
+    local updated = 0
+    for point, seen in pairs(state.points) do
+        local controller = point.interactiveController
+        if type(controller) == "table" and controller.target == vehicle and state.clockMs - seen <= STALE_MS then
+            updated = updated + 1
+        end
+    end
+    return string.format("state on: %s, indoor check: %s, active for input: %s, AI driving: %s | indoor Click Points: %d (active %d, updated lately %d)",
+        askVehicle(vehicle, "isInteractiveControlActivated"), askVehicle(vehicle, "isIndoorActive"),
+        askVehicle(vehicle, "getIsActiveForInput", true), askVehicle(vehicle, "getIsAIActive"), indoor, active, updated)
+end
+
+local function reportVehicle(self, dt)
+    state.vehicleCheckMs = (state.vehicleCheckMs or 0) - (type(dt) == "number" and dt or 0)
+    if state.vehicleCheckMs > 0 then return end
+    state.vehicleCheckMs = VEHICLE_CHECK_MS
+    local report = describeVehicle(self)
+    if report ~= nil and report ~= state.vehicleReport and state.vehicleLogs < VEHICLE_LOG_LIMIT then
+        state.vehicleLogs = state.vehicleLogs + 1
+        print("[FS25_VR] Interactive Control in the driven vehicle: " .. report)
+    end
+    state.vehicleReport = report
+end
+
 -- One line for vrPointerDiagnostics: whether the wrap is installed and what it currently sees.
 function VRCompanion:getInteractiveControlDiagnostics()
     if state.gaveUp then return "Interactive Control support: gave up (see the warning in the log)" end
@@ -227,8 +308,9 @@ function VRCompanion:getInteractiveControlDiagnostics()
         tracked = tracked + 1
         if isPointActive(point) then live = live + 1 end
     end
-    return string.format("Interactive Control support: installed | Click Points seen: %d (active %d) | selected: %s | updates: %d",
-        tracked, live, state.selected ~= nil and "yes" or "none", state.updates)
+    return string.format("Interactive Control support: installed | Click Points seen: %d (active %d) | selected: %s | updates: %d | driven vehicle: %s",
+        tracked, live, state.selected ~= nil and "yes" or "none", state.updates,
+        describeVehicle(self) or "none with Interactive Control")
 end
 
 local function anyHandTracked(self)
@@ -424,6 +506,8 @@ function VRCompanion:updateInteractiveControl(dt, selectNone)
     state.updates = state.updates + 1
     if type(dt) == "number" and dt > 0 then state.clockMs = state.clockMs + dt end
     updateAutoOn(self)
+    updateCabClickPointsWithoutDraw(self)
+    reportVehicle(self, dt)
 
     -- A Stereo Dialog takes the input and is answered with the pad's buttons: the Pointer Ray hits no Click Point behind it and
     -- the trigger clicks nothing, so a press for the dialog is not also a click.

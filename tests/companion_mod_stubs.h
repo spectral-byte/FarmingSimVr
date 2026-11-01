@@ -712,7 +712,9 @@ inline constexpr const char* kStubInteractiveControl = R"luau(
         if outdoorTick then StubIC.framesToOutdoorTick = StubIC.outdoorTickFrames or 1 end
         for _, point in ipairs(StubIC.points or {}) do
             if not point.outdoor then
-                point:update(true, false, true)
+                -- The cab's Click Points are updated from the vehicle's draw, which the game skips while the HUD is hidden
+                -- (StubIC.noVehicleDraw).
+                if not StubIC.noVehicleDraw then point:update(true, false, true) end
             elseif outdoorTick then
                 point:update(false, true, false)
             end

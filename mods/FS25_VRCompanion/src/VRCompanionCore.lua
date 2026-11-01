@@ -254,9 +254,12 @@ function VRCompanion:loadMap(name)
         self:initCyclopeanAudioListener()
     end
 
-    -- 5. Register in-engine actions (Recenter and HUD Toggle)
+    -- 5. Register in-engine actions (Recenter and HUD Toggle), and again whenever the player changes a binding
     if type(self.registerActionEvents) == "function" then
         self:registerActionEvents(true)
+    end
+    if type(self.subscribeToInputBindingChanges) == "function" then
+        self:subscribeToInputBindingChanges()
     end
 
     -- 6. Synchronize initial GUI menu visibility state
@@ -1049,10 +1052,12 @@ function VRCompanion:runUpdate(dt)
         self:updateHudConvergence(dt)
     end
 
-    -- Keep in-engine action events active across context transitions
-    if (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) or (self.seatSetActionEventId == nil) then
+    -- Keep in-engine action events active across context transitions, and register them all again after a binding change
+    local bindingsChanged = self.inputBindingsChanged == true
+    if bindingsChanged or (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) or (self.seatSetActionEventId == nil) then
         if type(self.registerActionEvents) == "function" then
-            self:registerActionEvents(false)
+            self.inputBindingsChanged = false
+            self:registerActionEvents(bindingsChanged)
         end
     end
 
@@ -1208,6 +1213,9 @@ function VRCompanion:deleteMap()
     self.activeFillLevelsDisplay = nil
     self.passThroughMode = nil
     self.headTrackingEnabled = true
+    if type(self.unsubscribeFromInputBindingChanges) == "function" then
+        self:unsubscribeFromInputBindingChanges()
+    end
     for _, row in ipairs(self.ACTION_EVENTS) do
         self[row.idField] = nil
         self[row.loggedField] = false
