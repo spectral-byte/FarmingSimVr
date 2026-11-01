@@ -44,7 +44,9 @@
 -- disagree; with the ray on no hitch the wrap changes nothing. Map unload hands the function back as found. Nothing else of Manual Attach is
 -- wrapped or rewritten, its bindings included; the module otherwise only reads, and sets the candidate fields before it runs the execute path.
 -- When what it relies on (updateCandidates included, one parameter: the handler) is missing or has another shape, the Companion Mod logs ONE
--- warning when Motion Controllers are in use, wraps nothing and leaves Manual Attach, and every other feature, alone.
+-- warning when Motion Controllers are in use, wraps nothing and leaves Manual Attach, and every other feature, alone. Its instance and attachment
+-- handler, which it makes as the map loads, are waited for (WAIT_FOR_OBJECTS_MS, counted over the updates with a tracked Motion Controller) before
+-- that warning; the mod not being loaded, or a function missing or reshaped, is final at the first look.
 --
 -- When the ray can work a hitch. Only while Manual Attach says the player can attach by hand (canPlayerPerformManualAttachment: on foot, no Hand
 -- Tool in hand, no Held Object), only while the Pointer Ray has control of the pointer (not the desk mouse), the head is placed in the world,
@@ -76,6 +78,9 @@ local MOD_NAME = "FS25_manualAttach"
 local CONSTANTS = { "MAX_ATTACH_DISTANCE_SQ", "MAX_ATTACH_ANGLE", "PLAYER_MIN_DISTANCE_SQ" }
 -- How near in cosine (about 0.08 degrees at the ray's centre) a Click Point and a hitch must be to count as equally near the ray's centre.
 local TIE_COSINE = 1e-6
+-- How long (ms of updates with a tracked Motion Controller) Manual Attach's instance and attachment handler are waited for before the support
+-- gives up. Manual Attach makes them as the map loads, so in release 1.1.0.0 they are there at the first look.
+local WAIT_FOR_OBJECTS_MS = 10000
 
 -- The functions the module relies on: how many parameters the function must declare at least (a reshaped function declares fewer, self counts
 -- in a method) and what they are, for the warning.
@@ -92,6 +97,8 @@ local function newState()
         installed = false,
         gaveUp = false,       -- the support was found unusable (warned once); do not look again
         gaveUpBecause = nil,  -- why (the warning's problem), for the diagnostics
+        waitedMs = 0,         -- how long Manual Attach's instance or handler has been waited for
+        waitingFor = nil,     -- what is waited for (the problem found at the last look), for the diagnostics
         loggedErrors = {},    -- [message] = true for each error of the hitch listing already logged (once each)
         instance = nil,       -- g_manualAttach
         handler = nil,        -- its vehicle attachment handler
@@ -151,10 +158,12 @@ local function findManualAttach()
         local loaded = engine("g_modIsLoaded")
         if type(loaded) ~= "table" or loaded[MOD_NAME] ~= true then return nil, nil, nil, "the mod " .. MOD_NAME .. " is not loaded" end
     end
-    if type(instance) ~= "table" then return nil, nil, nil, "g_manualAttach was not found" end
+    -- The instance and its handler are made when the map loads: a release or a load order that makes them later is waited for (the fifth value
+    -- says so). The class and everything below are there when the mod's files are, and are final.
+    if type(instance) ~= "table" then return nil, nil, nil, "g_manualAttach was not found", true end
     if type(class) ~= "table" then return nil, nil, nil, "its VehicleAttachmentHandler class was not found" end
     local handler = instance.vehicleAttachmentHandler
-    if type(handler) ~= "table" then return nil, nil, nil, "g_manualAttach has no attachment handler" end
+    if type(handler) ~= "table" then return nil, nil, nil, "g_manualAttach has no attachment handler", true end
 
     for _, name in ipairs(CONSTANTS) do
         if type(class[name]) ~= "number" then return nil, nil, nil, "VehicleAttachmentHandler." .. name .. " is missing" end
@@ -213,9 +222,17 @@ local function wrapCandidateUpdate(class)
 end
 
 -- Looks for Manual Attach when a Motion Controller is in use.
-local function tryInstall()
-    local instance, handler, class, problem = findManualAttach()
+local function tryInstall(dt)
+    local instance, handler, class, problem, mayAppear = findManualAttach()
     if problem ~= nil then
+        if mayAppear then
+            -- Not there yet: look again next update, for a bounded time of updates with a tracked Motion Controller, then give up as for the rest.
+            state.waitedMs = state.waitedMs + (tonumber(dt) or 0)
+            if state.waitedMs < WAIT_FOR_OBJECTS_MS then
+                state.waitingFor = problem
+                return
+            end
+        end
         giveUp(problem)
         return
     end
@@ -434,7 +451,7 @@ function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
     if not state.installed then
         -- Looked for once, when a Motion Controller is in use: a player without them is never told.
         if state.gaveUp or self.motionControllersEnabled == false or not anyHandTracked(self) then return false end
-        tryInstall()
+        tryInstall(dt)
         if not state.installed then return false end
     end
     state.selected, state.count = nil, 0
@@ -494,7 +511,12 @@ end
 -- One line for vrPointerDiagnostics: whether the support is installed, how many hitches are in reach and which one is selected.
 function VRCompanion:getManualAttachDiagnostics()
     if state.gaveUp then return "Manual Attach support: gave up (" .. tostring(state.gaveUpBecause) .. ")" end
-    if not state.installed then return "Manual Attach support: not installed yet (waiting for a tracked Motion Controller)" end
+    if not state.installed then
+        if state.waitingFor ~= nil then
+            return "Manual Attach support: not installed yet (waiting for Manual Attach's objects: " .. state.waitingFor .. ")"
+        end
+        return "Manual Attach support: not installed yet (waiting for a tracked Motion Controller)"
+    end
     local selected = state.selected
     local text = "none"
     if selected ~= nil then
