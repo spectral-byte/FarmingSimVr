@@ -96,6 +96,37 @@ function VRCompanion:registerActionEvents(force)
     end
 end
 
+-- The game ties an action event to its action's bindings when the event is registered, so a binding changed in the
+-- Controls screen only reaches an event registered after the change: Snap Turn kept firing from the right stick after
+-- the player had moved it to smooth look. The game's own owners of events (the on-foot player, an entered vehicle)
+-- register theirs again on MessageType.INPUT_BINDINGS_CHANGED; the VR events do the same, forced, at the next update.
+function VRCompanion:subscribeToInputBindingChanges()
+    local messageCenter = g_messageCenter or _G.g_messageCenter
+    local messageTypes = MessageType or _G.MessageType
+    if messageCenter == nil or type(messageCenter.subscribe) ~= "function"
+        or messageTypes == nil or messageTypes.INPUT_BINDINGS_CHANGED == nil then
+        return
+    end
+    messageCenter:subscribe(messageTypes.INPUT_BINDINGS_CHANGED, self.onInputBindingsChanged, self)
+end
+
+function VRCompanion:unsubscribeFromInputBindingChanges()
+    local messageCenter = g_messageCenter or _G.g_messageCenter
+    local messageTypes = MessageType or _G.MessageType
+    if messageCenter ~= nil and type(messageCenter.unsubscribe) == "function"
+        and messageTypes ~= nil and messageTypes.INPUT_BINDINGS_CHANGED ~= nil then
+        messageCenter:unsubscribe(messageTypes.INPUT_BINDINGS_CHANGED, self)
+    end
+    self.inputBindingsChanged = false
+end
+
+function VRCompanion:onInputBindingsChanged()
+    if not self.inputBindingsChanged then
+        print("[FS25_VR] Input bindings changed: the VR action events are registered again.")
+    end
+    self.inputBindingsChanged = true
+end
+
 -- Registers the VR action events that are not active (all of them when forced) in the context being registered into.
 function VRCompanion:registerActionEventsInContext(inputBinding, force, active)
     for _, row in ipairs(self.ACTION_EVENTS) do

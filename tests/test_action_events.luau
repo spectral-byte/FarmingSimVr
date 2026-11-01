@@ -214,6 +214,92 @@ test("ASeventhRowIsRegisteredLoggedOnceAndForgottenOnMapUnloadWithoutOtherChange
     assert(ok, err)
 end)
 
+-- The game ties an action event to its action's bindings when the event is registered, so a binding the player changes in
+-- the Controls screen (Snap Turn taken off the right stick for smooth look) reaches the VR events only once they are
+-- registered again. They listen for the game's INPUT_BINDINGS_CHANGED, as the on-foot player and an entered vehicle do.
+local subscriptions
+
+local function installMessageCenter()
+    subscriptions = {}
+    _G.MessageType = { INPUT_BINDINGS_CHANGED = 77 }
+    _G.g_messageCenter = {
+        subscribe = function(self, messageType, callback, target)
+            subscriptions[#subscriptions + 1] = { messageType = messageType, callback = callback, target = target }
+        end,
+        unsubscribe = function(self, messageType, target)
+            for i = #subscriptions, 1, -1 do
+                if subscriptions[i].messageType == messageType and subscriptions[i].target == target then
+                    table.remove(subscriptions, i)
+                end
+            end
+        end,
+    }
+end
+
+local function publish(messageType)
+    for _, subscription in ipairs(subscriptions) do
+        if subscription.messageType == messageType then subscription.callback(subscription.target) end
+    end
+end
+
+local function cleanupMessageCenter()
+    VRCompanion:unsubscribeFromInputBindingChanges()
+    _G.g_messageCenter, _G.MessageType = nil, nil
+end
+
+test("TheMapListensForBindingChangesUntilItIsUnloaded", function()
+    installBinding()
+    installMessageCenter()
+    VRCompanion:loadMap("mapUS")
+    assert(#subscriptions == 1, "one subscription while the map is loaded, got " .. #subscriptions)
+    assert(subscriptions[1].messageType == 77 and subscriptions[1].target == VRCompanion
+        and subscriptions[1].callback == VRCompanion.onInputBindingsChanged, "to INPUT_BINDINGS_CHANGED, answered by the VR events")
+    VRCompanion:deleteMap()
+    assert(#subscriptions == 0, "map unload unsubscribes, so the next map does not listen twice")
+    cleanupMessageCenter()
+    cleanup()
+end)
+
+test("AChangedBindingRegistersEveryVrEventAgainAtTheNextUpdate", function()
+    installBinding()
+    installMessageCenter()
+    local removed = {}
+    _G.g_inputBinding.removeActionEvent = function(self, id)
+        removed[id] = true
+        self.events[id] = nil
+    end
+    VRCompanion:subscribeToInputBindingChanges()
+    VRCompanion:registerActionEvents(true)
+    local old = {}
+    for _, row in ipairs(SIX) do old[row.action] = VRCompanion[row.idField] end
+
+    -- Off the periodic check's tick: nothing is registered while every event is in place and no binding changed
+    VRCompanion.frameTicks = 0
+    VRCompanion:update(16.6)
+    local before = nextEventId
+    assert(VRCompanion.frameTicks % 30 ~= 0, "the update is off the periodic tick")
+
+    captureLogs()
+    publish(77)
+    publish(77)
+    stopCapturingLogs()
+    assert(nextEventId == before, "the change is acted on at the next update, not inside the message")
+    assert(countLogs("Input bindings changed: the VR action events are registered again.") == 1,
+        "the game log says so once for changes that come before the update")
+    VRCompanion:update(16.6)
+    assert(nextEventId == before + #SIX, "all six are registered again, got " .. (nextEventId - before))
+    for _, row in ipairs(SIX) do
+        local id = VRCompanion[row.idField]
+        assert(id ~= old[row.action] and registered[row.action].id == id, row.action .. " has a fresh event")
+        assert(removed[old[row.action]] == true, row.action .. "'s old event, tied to the old bindings, is removed")
+    end
+
+    VRCompanion:update(16.6)
+    assert(nextEventId == before + #SIX, "once: the next update registers nothing again")
+    cleanupMessageCenter()
+    cleanup()
+end)
+
 print(string.format("Action Event Tests: %d passed, %d failed", passed, failed))
 if failed > 0 then
     error(string.format("%d Action Event test(s) failed", failed))
