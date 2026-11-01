@@ -10,7 +10,8 @@ The Manual Attach mod (`FS25_manualAttach`, by Wopster, release 1.1.0.0) makes t
 - Coupling Points rank with Click Points: of all of either in the cone, the one nearest the ray's centre wins, and both beat Animated Objects and objects Object Grab can pick up.
 - While the ray is on a Coupling Point, the Pointer Hand's trigger reads released on the Virtual Gamepad. Manual Attach's bindings are not rewritten.
 - In the cab nothing changes: Manual Attach's key and its auto attach work as before, and the ray stays with Click Points.
-- The support is installed only when `FS25_manualAttach` is loaded and `g_manualAttach` has every function it calls. Otherwise the Companion Mod logs one warning and leaves Manual Attach, and the rest of the Motion Controller support, untouched. It has no switch of its own; it follows the Motion Controllers switch.
+- The support is installed only when `FS25_manualAttach` is loaded and `g_manualAttach` has every function it calls. Otherwise the Companion Mod logs one warning and leaves Manual Attach, and the rest of the Motion Controller support, untouched. Manual Attach's instance and attachment handler, made as the map loads, are waited for a bounded time before that warning; a missing mod, function or constant is final at the first look. It has no switch of its own; it follows the Motion Controllers switch.
+- The one thing of Manual Attach the support wraps is `VehicleAttachmentHandler.updateCandidates`, at the class level so the handler instance finds it. The original runs first; then, while the ray is on a Coupling Point and the player can attach by hand, the handler's five candidate fields are set to that hitch's. Manual Attach's draw (prompts and context box) and keys read those fields, so they follow the pointed hitch, and with the ray on no Coupling Point the wrap changes nothing. Map unload hands the function back as found. Nothing else of Manual Attach is wrapped or rewritten.
 
 ## Status
 Proposed.
@@ -23,7 +24,7 @@ Proposed.
 - **Reach Coupling Points from anywhere along the ray** (rejected: it skips the point of the mod, walking to the hitch, as ADR-0034 rejected opening sheds from across the yard).
 
 ## Consequences
-- The Companion Mod depends on Manual Attach's internals: `g_manualAttach`, its attachment handler's candidates and each attachment's `performAttachment`. A release that renames or reshapes them turns the support off with a warning, and must never break Manual Attach or the game. A test against a stub of them pins the dependency.
+- The Companion Mod depends on Manual Attach's internals: `g_manualAttach`, its attachment handler's candidate fields, its `updateCandidates` (wrapped, see above) and each attachment's `performAttachment`. A release that renames or reshapes them turns the support off with a warning, and must never break Manual Attach or the game. A test against a stub of them pins the dependency.
 - The hitch and the PTO stub sit close together: 15 cm apart is about 4° from 2 m, inside the 5° cone. The nearest-to-centre rule picks between them, more easily up close.
 - A vehicle with no PTO output or hose target of its own for a hitch (a pass-through PTO, for one) has no Coupling Point for that action, which stays on Manual Attach's key.
 - Multiplayer stays in sync through Manual Attach's own events and the game's attach event, because its own paths are what runs.
