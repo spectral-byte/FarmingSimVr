@@ -75,9 +75,11 @@ local function newState()
         class = nil,          -- the VehicleAttachmentHandler class
         hitches = {},         -- scratch, reused each update: the hitches in reach
         count = 0,            -- how many of them are in reach
-        selected = nil,       -- the hitch the ray is on (one of hitches)
+        selected = nil,       -- the hitch the ray is on a Coupling Point of (one of hitches)
+        selectedKind = nil,   -- which of its Coupling Points: "hitch" or "pto"
         landedVehicle = nil,  -- the hitch the ray is on and has pulsed for
         landedJoint = nil,
+        landedKind = nil,
     }
 end
 
@@ -241,47 +243,75 @@ local function collectHitches(player)
     end
 end
 
--- Whether Manual Attach's joint attachment would show its attach or detach prompt for the hitch's candidate. What it refuses in its perform
--- path is not asked here: a refused hitch is pointed at and the pull shows Manual Attach's warning.
-local function isPointable(hitch, canPerform)
-    local attachment = state.handler.vehicleJointAttachment
+-- Whether one of Manual Attach's attachments (the joint, PTO or hoses attachment) would show its prompt for the hitch's candidate. What it
+-- refuses in its perform path is not asked here: a refused hitch is pointed at and the pull shows Manual Attach's warning.
+local function isPointable(attachment, hitch, canPerform)
     local ok, info = pcall(attachment.getActionEventInfo, attachment, hitch.vehicle, hitch.attachable, hitch.implement, hitch.jointIndex, canPerform)
     return ok and type(info) == "table" and info.visibility == true
 end
 
--- The hitch nearest the centre of the ray within the pointer cone, or nil; its world position is in x, y, z of the result.
-local function selectFromRay(self, ray, canPerform)
-    local getWorldTranslation = engine("getWorldTranslation")
-    local bestCos = math.cos(math.rad(self.pointerConeDegrees))
-    local best = nil
-    for i = 1, state.count do
-        local hitch = state.hitches[i]
-        if isPointable(hitch, canPerform) then
-            hitch.pointable = true
-            local px, py, pz = getWorldTranslation(hitch.joint.jointTransform)
-            local vx, vy, vz = px - ray.ox, py - ray.oy, pz - ray.oz
-            local distance = math.sqrt(vx * vx + vy * vy + vz * vz)
-            if distance > 0.01 then
-                local cos = (vx * ray.dx + vy * ray.dy + vz * ray.dz) / distance
-                if cos >= bestCos then
-                    best, bestCos = hitch, cos
-                    hitch.x, hitch.y, hitch.z = px, py, pz
-                end
-            end
+-- The Coupling Point nearest the centre of the ray so far in this update (its angle's cosine, the hitch it belongs to, which of the three it
+-- is, and its world position), reused each update.
+local pick = { cos = 0, hitch = nil, kind = nil, x = 0, y = 0, z = 0 }
+
+-- Takes a node (a hitch, a PTO stub or a hose coupler) as the pick when it is within the pointer cone and nearer the centre than the pick so far.
+local function consider(hitch, kind, node, ray, getWorldTranslation)
+    local px, py, pz = getWorldTranslation(node)
+    local vx, vy, vz = px - ray.ox, py - ray.oy, pz - ray.oz
+    local distance = math.sqrt(vx * vx + vy * vy + vz * vz)
+    if distance <= 0.01 then return end
+    local cos = (vx * ray.dx + vy * ray.dy + vz * ray.dz) / distance
+    if cos >= pick.cos then
+        pick.cos, pick.hitch, pick.kind = cos, hitch, kind
+        pick.x, pick.y, pick.z = px, py, pz
+    end
+end
+
+-- The hitch's Coupling Points on the vehicle's side that are not the hitch: its own PTO outputs for the joint that have an output node (a
+-- pass-through output, which resolves to another vehicle, has none of its own).
+local function considerPtoStubs(hitch, ray, getWorldTranslation)
+    local vehicle = hitch.vehicle
+    if type(vehicle.getOutputPowerTakeOffs) ~= "function" then return end
+    for _, output in ipairs(vehicle:getOutputPowerTakeOffs() or {}) do
+        local joints = output.attacherJointIndices
+        if output.outputNode ~= nil and type(joints) == "table" and joints[hitch.jointIndex] ~= nil then
+            consider(hitch, "pto", output.outputNode, ray, getWorldTranslation)
         end
     end
-    return best
+end
+
+-- The Coupling Point of the hitch nearest the centre of the ray within the pointer cone, or nil. Returns the hitch and which of its Coupling
+-- Points ("hitch", "pto") it is; the world position is in x, y, z of the hitch.
+local function selectFromRay(self, ray, canPerform)
+    local getWorldTranslation = engine("getWorldTranslation")
+    pick.cos, pick.hitch, pick.kind = math.cos(math.rad(self.pointerConeDegrees)), nil, nil
+    for i = 1, state.count do
+        local hitch = state.hitches[i]
+        if isPointable(state.handler.vehicleJointAttachment, hitch, canPerform) then
+            hitch.pointable = true
+            consider(hitch, "hitch", hitch.joint.jointTransform, ray, getWorldTranslation)
+        end
+        -- The PTO acts on the Implement on the hitch: with nothing attached there is nothing to connect.
+        if hitch.implement ~= nil and isPointable(state.handler.powerTakeOffAttachment, hitch, canPerform) then
+            considerPtoStubs(hitch, ray, getWorldTranslation)
+        end
+    end
+    local best = pick.hitch
+    if best == nil then return nil, nil end
+    best.x, best.y, best.z = pick.x, pick.y, pick.z
+    return best, pick.kind
 end
 
 -- ---- Working a hitch ----------------------------------------------------------------------------------------------------------
 
--- A pull sets the handler's candidate to the hitch and runs its own execute path for the joint attachment. Guarded: nothing reaches the game.
--- Returns whether the path ran without an error.
-local function work(hitch)
+-- A pull sets the handler's candidate to the hitch and runs its own execute path for the attachment of the Coupling Point (the joint attachment
+-- for the hitch, the PTO attachment for the PTO stub). Guarded: nothing reaches the game. Returns whether the path ran without an error.
+local function work(hitch, kind)
     local handler = state.handler
     handler.attacherVehicle, handler.attacherVehicleJointDescIndex = hitch.vehicle, hitch.jointIndex
     handler.attachable, handler.attachableJointDescIndex, handler.attachedImplement = hitch.attachable, hitch.attachableJointIndex, hitch.implement
-    return (pcall(handler.executeAttachment, handler, handler.vehicleJointAttachment))
+    local attachment = kind == "pto" and handler.powerTakeOffAttachment or handler.vehicleJointAttachment
+    return (pcall(handler.executeAttachment, handler, attachment))
 end
 
 -- The pulses of a Click Point, on the Pointer Hand only: "selected" as the ray lands, "clicked" for a pull that ran Manual Attach's path.
@@ -310,17 +340,17 @@ function VRCompanion:updateManualAttach(dt, suppressed)
     local player = localPlayer()
     local canPerform = state.instance.canPlayerPerformManualAttachment == true
     if suppressed or not canPerform or type(player) ~= "table" or not rayMayWork(self) then
-        state.landedVehicle, state.landedJoint = nil, nil
+        state.landedVehicle, state.landedJoint, state.landedKind = nil, nil, nil
         return false
     end
 
-    local selected = nil
-    if pcall(collectHitches, player) then selected = selectFromRay(self, self:getPointerRay(), canPerform) end
-    state.selected = selected
+    local selected, kind = nil, nil
+    if pcall(collectHitches, player) then selected, kind = selectFromRay(self, self:getPointerRay(), canPerform) end
+    state.selected, state.selectedKind = selected, kind
     -- The select pulse of a Click Point: one on the Pointer Hand as the ray lands on a hitch it was not on.
     local vehicle, joint = selected and selected.vehicle or nil, selected and selected.jointIndex or nil
-    if vehicle ~= state.landedVehicle or joint ~= state.landedJoint then
-        state.landedVehicle, state.landedJoint = vehicle, joint
+    if vehicle ~= state.landedVehicle or joint ~= state.landedJoint or kind ~= state.landedKind then
+        state.landedVehicle, state.landedJoint, state.landedKind = vehicle, joint, kind
         if selected ~= nil then feel(self, "selected", selected) end
     end
     if selected == nil then return false end
@@ -334,7 +364,7 @@ function VRCompanion:updateManualAttach(dt, suppressed)
     end
     if mayUseTrigger then
         local pressed = self:getPointerTrigger()
-        if pressed and work(selected) then feel(self, "clicked", selected) end
+        if pressed and work(selected, kind) then feel(self, "clicked", selected) end
     end
     return true, selected.x, selected.y, selected.z
 end

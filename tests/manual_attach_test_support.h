@@ -121,13 +121,42 @@ inline constexpr const char* kStubManualAttach = R"luau(
         elseif variant == "actionInfoReshaped" then Joint.getActionEventInfo = function(self) return { visibility = true } end
         else Joint.getActionEventInfo = actionInfo end
 
-        -- the PTO and hoses attachments: not worked by the first ticket, but the handler has them
-        local function other(kind)
+        -- ---- the PTO and hoses attachments (PowerTakeOffAttachment.lua, ConnectionHosesAttachment.lua): they act on the attached Implement
+        -- alone (its attacher vehicle is where the PTO and hoses go), as the real ones do: a connect when it can be connected, else a disconnect.
+        -- The Implement has a PTO or hoses when it says so (hasPto, hasHoses) and its vehicle has the outputs or targets for them.
+        -- `prefix` names the variants: <prefix>PerformMissing, <prefix>ActionInfoMissing, <prefix>ActionInfoReshaped.
+        local function other(kind, prefix)
+            local connectedKey, hasKey = kind == "pto" and "ptoConnected" or "hosesConnected", kind == "pto" and "hasPto" or "hasHoses"
             local attachment = {}
-            function attachment:performAttachment(av, at, impl, ji, aji, playerCan)
-                table.insert(S.performs, { kind = kind, attacherVehicle = av, jointIndex = ji, attachable = at, attachedImplement = impl })
+            local function vehicleSide(vehicle)
+                if kind == "pto" then return vehicle.getOutputPowerTakeOffs ~= nil and #vehicle:getOutputPowerTakeOffs() > 0 end
+                return vehicle.spec_connectionHoses ~= nil
             end
-            function attachment:getActionEventInfo() return { id = 2, visibility = false } end
+            local function canConnect(attacherVehicle, implement)
+                return attacherVehicle ~= nil and implement ~= nil and implement[hasKey] == true and vehicleSide(attacherVehicle) and not implement[connectedKey]
+            end
+            local function canDisconnect(attacherVehicle, implement)
+                return attacherVehicle ~= nil and implement ~= nil and implement[connectedKey] == true
+            end
+            local function perform(self, av, at, impl, ji, aji, playerCan)
+                table.insert(S.performs, { kind = kind, attacherVehicle = av, jointIndex = ji, attachable = at, attachedImplement = impl })
+                if impl == nil or not playerCan then return end
+                local attacherVehicle = impl:getAttacherVehicle()
+                if canConnect(attacherVehicle, impl) then impl[connectedKey] = true
+                elseif canDisconnect(attacherVehicle, impl) then impl[connectedKey] = false end
+            end
+            local function info(self, av, at, impl, ji, playerCan)
+                local result = { id = 2, text = nil, priority = 1, visibility = false, isExtraInfo = kind == "hoses" }
+                if impl == nil or not playerCan then return result end
+                local attacherVehicle = impl:getAttacherVehicle()
+                if canConnect(attacherVehicle, impl) then result.text, result.visibility = "Connect", true
+                elseif canDisconnect(attacherVehicle, impl) then result.text, result.visibility = "Disconnect", true end
+                return result
+            end
+            if variant == prefix .. "PerformMissing" then attachment.perform = perform else attachment.performAttachment = perform end
+            if variant == prefix .. "ActionInfoMissing" then attachment.getActionInfo = info
+            elseif variant == prefix .. "ActionInfoReshaped" then attachment.getActionEventInfo = function(self) return { visibility = true } end
+            else attachment.getActionEventInfo = info end
             return attachment
         end
 
@@ -209,8 +238,8 @@ inline constexpr const char* kStubManualAttach = R"luau(
         handler.detectedVehicles = S.detectedList
         if variant == "detectedMissing" then handler.detectedVehicles = nil end
         handler.vehicleJointAttachment = setmetatable({}, Joint)
-        handler.powerTakeOffAttachment = other("pto")
-        handler.connectionHosesAttachment = other("hoses")
+        handler.powerTakeOffAttachment = other("pto", "pto")
+        handler.connectionHosesAttachment = other("hoses", "hose")
         handler.attachments = { handler.vehicleJointAttachment, handler.powerTakeOffAttachment, handler.connectionHosesAttachment }
         S.handler, S.Handler = handler, Handler
 
@@ -302,6 +331,35 @@ inline constexpr const char* kStubManualAttachVehicles = R"luau(
                 jointType = 1, jointIndex = 0, allowsLowering = true, moveDown = false,
             })
         end
+        -- the vehicle side of the PTO and the hoses (PowerTakeOffs.lua, ConnectionHoses.lua), per attacher joint, beside it on the tractor's side:
+        -- a PTO output with an output node 0.4 m above the joint and 0.3 m behind it, a hose target node 0.35 m to its +X and a custom hose target
+        -- 0.35 m to its -X (both 0.15 m above and 0.3 m behind). options.pto / options.hoses: have them; options.passThroughPto: PTO outputs
+        -- with no node of their own that skip to the vehicle's own attacher vehicle (a trailer passing the tractor's PTO on).
+        if options.pto or options.passThroughPto then
+            vehicle.spec_powerTakeOffs = { outputPowerTakeOffs = {} }
+            for i, p in ipairs(joints) do
+                local output = { attacherJointIndices = { [i] = true }, ptoName = "DEFAULT_PTO" }
+                if options.passThroughPto then output.skipToInputAttacherIndex = 1
+                else output.outputNode = StubScene.newNode(name .. "PtoOutput" .. i, 0, p[1], p[2] + 0.4, p[3] - 0.3) end
+                table.insert(vehicle.spec_powerTakeOffs.outputPowerTakeOffs, output)
+            end
+            if S.variant ~= "ptoLookupReshaped" then
+                function vehicle:getOutputPowerTakeOffs() return self.spec_powerTakeOffs.outputPowerTakeOffs end
+            end
+        end
+        if options.hoses then
+            vehicle.spec_connectionHoses = { targetNodes = {}, customHoseTargetsByAttacher = {} }
+            for i, p in ipairs(joints) do
+                table.insert(vehicle.spec_connectionHoses.targetNodes, { type = "HYDRAULIC", attacherJointIndices = { [i] = i },
+                    node = StubScene.newNode(name .. "HoseTarget" .. i, 0, p[1] + 0.35, p[2] + 0.15, p[3] - 0.3) })
+                vehicle.spec_connectionHoses.customHoseTargetsByAttacher[i] = { { type = "CUSTOM", attacherJointIndices = { [i] = i },
+                    node = StubScene.newNode(name .. "CustomHoseTarget" .. i, 0, p[1] - 0.35, p[2] + 0.15, p[3] - 0.3) } }
+            end
+            if S.variant == "hoseTargetsReshaped" then
+                vehicle.spec_connectionHoses.targetsByNode, vehicle.spec_connectionHoses.targetNodes = vehicle.spec_connectionHoses.targetNodes, nil
+            end
+        end
+        vehicle.hasPto, vehicle.hasHoses = options.hasPto == true, options.hasHoses == true
         function vehicle:getAttachedImplements() return self.attachedImplements end
         function vehicle:getAttacherVehicle() return self.attacherVehicle end
         function vehicle:getAttacherJointByJointDescIndex(i) return self.spec_attacherJoints.attacherJoints[i] end
@@ -330,6 +388,8 @@ inline constexpr const char* kStubManualAttachVehicles = R"luau(
     function S.tractor(options)
         options = options or {}
         local rear, front = options.rear or { -0.4, -0.2, 2.0 }, options.front or { 0.8, -0.2, 2.0 }
+        if options.pto == nil then options.pto = not options.passThroughPto end
+        if options.hoses == nil then options.hoses = true end
         return newVehicle(options.name or "tractor", { rear, front }, options)
     end
     function S.implement(name, options) return newVehicle(name, {}, options) end
@@ -400,6 +460,22 @@ constexpr const char* kFrontAndRear = R"luau(
 )luau";
 // Where the ray of the hand at kHandX ends when it is on that rear hitch.
 constexpr const char* kRearHitch = "-0.40 -0.20 2.00";
+// The same tractor with a plow that has a PTO and hoses already attached at its rear hitch, as _G.tractor and _G.plow (the PTO and the hoses are
+// not connected yet).
+constexpr const char* kTractorWithAttachedImplement = R"luau(
+    _G.tractor = StubManualAttach.tractor({})
+    _G.plow = StubManualAttach.implement('plow', { hasPto = true, hasHoses = true })
+    StubManualAttach.lineUp(plow, tractor, 1)
+    StubManualAttach.attach(tractor, plow, 1, 1)
+    StubManualAttach.detectAll()
+)luau";
+// Where the rays end on the tractor's Coupling Points of the rear hitch other than the hitch: its PTO stub, its hose target and its custom hose
+// target. The hand that points at the hitch (kHandX, kHandY) points at these at kHandX / kHandY of kPtoHandY, kHoseHandX / kHoseHandY and
+// kCustomHoseHandX / kHoseHandY (the tracking space is the world mirrored in X and Z).
+constexpr const char* kRearPtoStub = "-0.40 0.20 1.70";
+constexpr const char* kRearHoseCoupler = "-0.05 -0.05 1.70";
+constexpr const char* kRearCustomHoseCoupler = "-0.75 -0.05 1.70";
+constexpr float kPtoHandY = 0.2f, kHoseHandX = 0.05f, kCustomHoseHandX = 0.75f, kHoseHandY = -0.05f;
 
 // A test of the Pointer Ray working hitches, seen from what Manual Attach's stand-in recorded and what the game reads from the Virtual Gamepad:
 // the mod started on a player on foot with the game's empty hands, the Virtual Gamepad on, the game clock set, and Manual Attach in the game.
@@ -423,6 +499,9 @@ protected:
     int Warnings() { return CountLogLines("Manual Attach support disabled"); }
     int BlinkingWarnings() { return static_cast<int>(Number(L, "#StubManualAttach.warnings")); }
     std::string Attached(const char* implement) { return EvalLua(L, std::string("tostring(") + implement + ".attacherVehicle ~= nil)"); }
+    // "true" when the Implement's PTO / hoses are connected.
+    std::string PtoConnected(const char* implement) { return EvalLua(L, std::string("tostring(") + implement + ".ptoConnected == true)"); }
+    std::string HosesConnected(const char* implement) { return EvalLua(L, std::string("tostring(") + implement + ".hosesConnected == true)"); }
 
     // The game without Manual Attach at all.
     void StartWithoutManualAttach() {

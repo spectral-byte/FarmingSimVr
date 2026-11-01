@@ -280,6 +280,7 @@ add_executable(fs25_vr_tests
     tests/test_manual_attach_reach.cpp
     tests/test_manual_attach_pointer.cpp
     tests/test_manual_attach_wraps.cpp
+    tests/test_manual_attach_pto_hoses.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
