@@ -55,6 +55,7 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, AReshapedExecutePathTurnsTheSupportO
 TEST_F(VirtualGamepadManualAttachWrapsTest, ARenamedPerformTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("performMissing"); }
 TEST_F(VirtualGamepadManualAttachWrapsTest, NoListOfDetectedVehiclesTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("detectedMissing"); }
 TEST_F(VirtualGamepadManualAttachWrapsTest, NoCanAttachByHandFlagTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("flagMissing"); }
+TEST_F(VirtualGamepadManualAttachWrapsTest, NoCanAttachByHandFlagOnTheHandlerTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("handlerFlagMissing"); }
 TEST_F(VirtualGamepadManualAttachWrapsTest, ARenamedCandidateUpdateTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("candidateUpdateMissing"); }
 TEST_F(VirtualGamepadManualAttachWrapsTest, AReshapedCandidateUpdateTurnsTheSupportOffWithOneWarning) { ExpectTheSupportGivesUpWith("candidateUpdateReshaped"); }
 

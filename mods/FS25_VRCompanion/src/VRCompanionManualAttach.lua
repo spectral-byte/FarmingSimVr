@@ -164,6 +164,10 @@ local function findManualAttach()
     if type(instance.canPlayerPerformManualAttachment) ~= "boolean" then
         return nil, nil, nil, "g_manualAttach has no canPlayerPerformManualAttachment"
     end
+    -- The candidate update wrap reads the handler's own copy of the flag.
+    if type(handler.playerCanPerformManualAttachment) ~= "boolean" then
+        return nil, nil, nil, "the attachment handler has no playerCanPerformManualAttachment"
+    end
     problem = shapeProblem(handler, "the attachment handler", EXECUTE) or shapeProblem(class, "VehicleAttachmentHandler", CANDIDATE_UPDATE)
     if problem ~= nil then return nil, nil, nil, problem end
     local joint = handler.vehicleJointAttachment

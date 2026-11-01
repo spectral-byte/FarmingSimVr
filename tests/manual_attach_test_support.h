@@ -21,6 +21,7 @@
 //   fewer parameters), "validHelperMissing" / "validHelperReshaped" (isVehicleValid), "constantsMissing" (PLAYER_MIN_DISTANCE_SQ gone),
 //   "actionInfoMissing" / "actionInfoReshaped" (the joint attachment's getActionEventInfo), "executeMissing" / "executeReshaped"
 //   (executeAttachment), "performMissing" (the joint attachment's performAttachment), "detectedMissing" (the handler has no detectedVehicles),
+//   "handlerFlagMissing" (the handler has no playerCanPerformManualAttachment, which its candidate update reads),
 //   "ptoActionInfoMissing" / "ptoActionInfoReshaped" / "ptoPerformMissing" and "hoseActionInfoMissing" / "hoseActionInfoReshaped" /
 //   "hosePerformMissing" (the same of the PTO and the hoses attachments), "ptoLookupReshaped" (the game's vehicles have the PTO specialization
 //   without getOutputPowerTakeOffs), "hoseTargetsReshaped" (the game's vehicles have spec_connectionHoses without targetNodes).
@@ -250,6 +251,7 @@ inline constexpr const char* kStubManualAttach = R"luau(
         S.detectedList = S.detectedList or {}
         handler.detectedVehicles = S.detectedList
         if variant == "detectedMissing" then handler.detectedVehicles = nil end
+        if variant == "handlerFlagMissing" then handler.playerCanPerformManualAttachment = nil end
         handler.vehicleJointAttachment = setmetatable({}, Joint)
         handler.powerTakeOffAttachment = other("pto", "pto")
         handler.connectionHosesAttachment = other("hoses", "hose")
@@ -286,7 +288,7 @@ inline constexpr const char* kStubManualAttach = R"luau(
         local can = player ~= nil and _G.g_currentMission.controlledVehicle == nil and player.currentHandTool == nil
             and not (hands ~= nil and hands.spec_hands.heldItemNode ~= nil)
         if S.variant ~= "flagMissing" then instance.canPlayerPerformManualAttachment = can end
-        handler.playerCanPerformManualAttachment = can
+        if S.variant ~= "handlerFlagMissing" then handler.playerCanPerformManualAttachment = can end
         for _, joint in ipairs(S.inputJoints) do
             local x, y, z = getWorldTranslation(joint.node)
             joint.translation[1], joint.translation[2], joint.translation[3] = x, y, z
