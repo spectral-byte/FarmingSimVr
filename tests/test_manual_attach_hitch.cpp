@@ -12,15 +12,6 @@ namespace {
 using namespace hand_tools_test;
 using namespace manual_attach_test;
 
-// The rear hitch of the stand-in's tractor, where the ray ends when it is on it.
-constexpr const char* kRearHitch = "-0.40 -0.20 2.00";
-constexpr const char* kTractorAndImplement = R"luau(
-    _G.tractor = StubManualAttach.tractor({})
-    _G.plow = StubManualAttach.implement('plow')
-    StubManualAttach.lineUp(plow, tractor, 1)
-    StubManualAttach.detectAll()
-)luau";
-
 }  // namespace
 
 TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnAHitchAttachesTheLinedUpImplementAndASecondPullDetachesIt) {

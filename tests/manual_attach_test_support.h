@@ -378,6 +378,15 @@ inline std::string ManualAttachStubs(const char* variant = "ok") {
 // geometry as the Object Grab and Animated Objects tests): the rear hitch of the stand-in's tractor is straight ahead of it, 1.7 m away.
 // A tractor on foot's side, within Manual Attach's reach of the player (who stands at the world origin).
 constexpr const char* kTractorAhead = "_G.tractor = StubManualAttach.tractor({}); StubManualAttach.detectAll()";
+// The same tractor with a plow lined up at its rear hitch, as _G.tractor and _G.plow.
+constexpr const char* kTractorAndImplement = R"luau(
+    _G.tractor = StubManualAttach.tractor({})
+    _G.plow = StubManualAttach.implement('plow')
+    StubManualAttach.lineUp(plow, tractor, 1)
+    StubManualAttach.detectAll()
+)luau";
+// Where the ray of the hand at kHandX ends when it is on that rear hitch.
+constexpr const char* kRearHitch = "-0.40 -0.20 2.00";
 
 // A test of the Pointer Ray working hitches, seen from what Manual Attach's stand-in recorded and what the game reads from the Virtual Gamepad:
 // the mod started on a player on foot with the game's empty hands, the Virtual Gamepad on, the game clock set, and Manual Attach in the game.
