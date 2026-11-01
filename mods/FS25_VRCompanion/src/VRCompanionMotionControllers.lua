@@ -69,7 +69,8 @@
 --     VRCompanion.POINTER_RAY_FOLLOWS_FINGER_DIRECTION  true (default): along the finger; false: keeps the aim direction
 --     VRCompanion:getPointerTrigger() -> pressed, held   the Pointer Hand's trigger (hysteresis 0.6 / 0.4)
 --     VRCompanion.pointerConeDegrees               saved by `vrPointerCone <degrees>` (default 5)
---     VRCompanion:draw()                           the line and dot, drawn from the update's end points
+--     VRCompanion:placePointerRayForRender()      the line and dot, drawn before every rendered frame from the update's
+--                                                  end points relative to the head (called by placeAndBindEyes)
 --
 --   Haptics (VRBridge.pulseHaptic(hand, durationMs, strength) -> boolean)
 --     VRCompanion:pulseHand(hand, durationMs, strength) -> boolean   one hand; false when off or the runtime refuses
@@ -181,6 +182,7 @@ local function newState()
         triggerPressed = {},  -- [hand] = it went down this update
         triggerConsumed = {}, -- [hand] = a Pointer Hand switch took this pull: it counts for nothing until let go
         ray = { valid = false, ox = 0, oy = 0, oz = 0, dx = 0, dy = 0, dz = -1 },
+        rayInHead = { valid = false },  -- the drawn line's ends in the head's space, from the update (placePointerRayForRender)
         fingerLogged = {},    -- [hand] = the line about the ray starting at the index finger was logged this map
         headScratch = nil,    -- table VRBridge.getHeadPose fills in place
         pointerHand = nil,
@@ -546,7 +548,7 @@ end
 --     ox, oy, oz (origin, world), dx, dy, dz (unit direction), visible (drawn), ex, ey, ez (end point)
 --     Read it, never keep or edit it.
 --   VRCompanion:getPointerTrigger() -> pressed, held   the Pointer Hand's trigger this update
---   VRCompanion:draw()                           the engine calls it per rendered frame (per eye under AFR)
+--   VRCompanion:placePointerRayForRender()       draws the line and dot for a rendered frame (see below)
 
 -- Rotates (x, y, z) by the unit quaternion (qx, qy, qz, qw).
 local function qrotate(qx, qy, qz, qw, x, y, z)
@@ -748,12 +750,25 @@ local function placePointerRay(self, hand)
     return true, fromFinger and SOURCE_FINGER or SOURCE_AIM
 end
 
+-- Takes the drawn line's ends into the space of the head (the Cyclopean Audio Listener Node), for the frames rendered until
+-- the next update (VRCompanion:placePointerRayForRender).
+local function noteRayInHead(self, ray)
+    local inHead = state.rayInHead
+    local listener = self.cyclopeanAudioListenerNode
+    local worldToLocalFn = worldToLocal or (_G and _G.worldToLocal)
+    if listener == nil or listener == 0 or type(worldToLocalFn) ~= "function" then return end
+    inHead.ox, inHead.oy, inHead.oz = worldToLocalFn(listener, ray.ox, ray.oy, ray.oz)
+    inHead.ex, inHead.ey, inHead.ez = worldToLocalFn(listener, ray.ex, ray.ey, ray.ez)
+    inHead.valid = true
+end
+
 -- Called at the end of every updateMotionControllers. Places the ray, lets Interactive Control select
 -- and click, and settles what is drawn.
 function VRCompanion:updatePointerRay(dt)
     local ray = state.ray
     ray.valid = false
     ray.visible = false
+    state.rayInHead.valid = false
     local hand = state.pointerHand
     local reason = "there is no Pointer Hand (no hand in use)"
     local source = nil
@@ -821,6 +836,7 @@ function VRCompanion:updatePointerRay(dt)
             local length = self.POINTER_RAY_LENGTH
             ray.ex, ray.ey, ray.ez = ray.ox + ray.dx * length, ray.oy + ray.dy * length, ray.oz + ray.dz * length
         end
+        noteRayInHead(self, ray)
     end
 end
 
@@ -874,9 +890,32 @@ function VRCompanion:onClickPointEvent(kind, clickPoint)
     end
 end
 
--- A line from the hand with a dot where it lands, drawn with the engine's debug drawing from the end
--- points settled in the update: under AFR the update and the draw both run per rendered frame, under
--- Sequential Dual-Pass the one update's ray is drawn in each pass.
+-- A line from the hand with a dot where it lands, drawn with the engine's debug drawing. Called by
+-- VRCompanion:placeAndBindEyes once it has placed the head for a frame, which happens before every frame the engine
+-- renders, after the Virtual Hands are placed for it. The ends are the update's, relative to the head, carried into the
+-- world from where the head is now: the game renders some frames with no update before them, after the cab moved again
+-- (Sequential Dual-Pass's second pass), and the update runs before the game moves the cab camera. A line drawn from the
+-- update's world ends (in VRCompanion:draw) was a copy lagging behind the cab in one eye, as the Virtual Hands were.
+-- The camera path may place the head more than once before a frame; each time draws the same line again.
+function VRCompanion:placePointerRayForRender()
+    local inHead = state.rayInHead
+    if not state.ray.visible or not inHead.valid then return end
+    local listener = self.cyclopeanAudioListenerNode
+    local localToWorldFn = localToWorld or (_G and _G.localToWorld)
+    if listener == nil or listener == 0 or type(localToWorldFn) ~= "function" then return end
+    local ox, oy, oz = localToWorldFn(listener, inHead.ox, inHead.oy, inHead.oz)
+    local ex, ey, ez = localToWorldFn(listener, inHead.ex, inHead.ey, inHead.ez)
+    local drawLine = drawDebugLine or (_G and _G.drawDebugLine)
+    local drawPoint = drawDebugPoint or (_G and _G.drawDebugPoint)
+    local r, g, b = 0.25, 0.85, 1.0
+    if type(drawLine) == "function" then
+        drawLine(ox, oy, oz, r, g, b, ex, ey, ez, r, g, b, false)
+    end
+    if type(drawPoint) == "function" then
+        drawPoint(ex, ey, ez, 1.0, 1.0, 1.0, 1.0, false)
+    end
+end
+
 function VRCompanion:draw()
     if self.perfTracing then
         self:perfTraceBegin("modDraw")
@@ -889,17 +928,6 @@ end
 
 function VRCompanion:drawFrame()
     if type(self.drawVirtualHands) == "function" then self:drawVirtualHands() end
-    local ray = state.ray
-    if not ray.visible then return end
-    local drawLine = drawDebugLine or (_G and _G.drawDebugLine)
-    local drawPoint = drawDebugPoint or (_G and _G.drawDebugPoint)
-    local r, g, b = 0.25, 0.85, 1.0
-    if type(drawLine) == "function" then
-        drawLine(ray.ox, ray.oy, ray.oz, r, g, b, ray.ex, ray.ey, ray.ez, r, g, b, false)
-    end
-    if type(drawPoint) == "function" then
-        drawPoint(ray.ex, ray.ey, ray.ez, 1.0, 1.0, 1.0, 1.0, false)
-    end
 end
 
 -- ---- Settings, persistence, console commands ------------------------------------------------

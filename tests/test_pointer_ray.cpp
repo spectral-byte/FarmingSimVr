@@ -41,7 +41,8 @@ FakeOpenXrControllers::Inputs Trigger(float value) {
     return inputs;
 }
 
-// The engine globals the Companion Mod looks at when it draws.
+// The engine globals the Companion Mod draws the Pointer Ray with. A pass is the camera path the game runs before a frame
+// is rendered, which draws it.
 constexpr const char* kDrawStubs = R"luau(
     _G.debugLines, _G.debugPoints = {}, {}
     _G.drawDebugLine = function(x0, y0, z0, r0, g0, b0, x1, y1, z1, r1, g1, b1, solid)
@@ -52,7 +53,7 @@ constexpr const char* kDrawStubs = R"luau(
     end
     _G.drawPass = function()
         _G.debugLines, _G.debugPoints = {}, {}
-        VRCompanion:draw()
+        StubScene.updateCamera()
     end
 )luau";
 
@@ -473,6 +474,37 @@ TEST_F(CompanionModTest, ThePointerRayStartsAtTheFingertipWhereverTheCabStandsAn
         local length = math.sqrt((line.x1 - line.x0)^2 + (line.y1 - line.y0)^2 + (line.z1 - line.z0)^2)
         assert(near((line.x1 - line.x0) / length, fx) and near((line.z1 - line.z0) / length, fz), "direction")
     )luau", "=originAndDirection"), 0);
+}
+
+// The game renders some frames with no update before them (Sequential Dual-Pass's second pass), after the cab moved again:
+// the camera path draws the ray for each frame from where the head is then, so it rides with the cab instead of a copy
+// lagging behind in one eye.
+TEST_F(CompanionModTest, ThePointerRayRidesWithTheCabInAFrameRenderedWithoutAnUpdate) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "ok", "_G.cabScene = StubScene.cab({ x = 100, y = 2, z = 50, yaw = 0.7 })"));
+    ASSERT_EQ(RunLuauChunk(L, kExpectedWorldMath, "=expectedMath"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('switch', 0, 0, 0)", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, -0.2f, -0.4f);
+    FRAMES(2);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local cab = { x = 100, y = 2, z = 50, yaw = 0.7 }
+        -- the second eye: the cab moved and the camera followed, but no update ran
+        setTranslation(cabScene.parent, cab.x + 0.12, cab.y, cab.z + 0.05)
+        drawPass()
+        cab.x, cab.z = cab.x + 0.12, cab.z + 0.05
+        assert(#debugLines == 1 and #debugPoints == 1, "one line and one dot")
+        local line, dot = debugLines[1], debugPoints[1]
+        local ox, oy, oz = expectedOrigin(cab, 0.7 + math.pi, 0.3, -0.2, -0.4)
+        assert(near(line.x0, ox) and near(line.y0, oy) and near(line.z0, oz),
+            string.format("starts at %.3f %.3f %.3f, the fingertip in the moved cab is at %.3f %.3f %.3f", line.x0, line.y0, line.z0, ox, oy, oz))
+        local fx, fy, fz = turnedY(0.7 + math.pi, 0, 0, -1)
+        local length = VRCompanion.POINTER_RAY_LENGTH
+        assert(near(line.x1, ox + fx * length) and near(line.y1, oy + fy * length) and near(line.z1, oz + fz * length),
+            string.format("ends at %.3f %.3f %.3f, not on the ray in the moved cab", line.x1, line.y1, line.z1))
+        assert(near(dot.x, line.x1) and near(dot.y, line.y1) and near(dot.z, line.z1), "the dot is at the end")
+    )luau", "=drawWithoutUpdate"), 0);
 }
 
 TEST_F(CompanionModTest, ThePointerRayStaysOnTheFingerAfterASnapTurnAndTheRecenterAction) {
