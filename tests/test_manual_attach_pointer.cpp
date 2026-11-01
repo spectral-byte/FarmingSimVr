@@ -371,33 +371,13 @@ TEST_F(VirtualGamepadManualAttachTest, WithTheRayOnNoHitchManualAttachKeepsItsOw
 TEST_F(VirtualGamepadManualAttachTest, PointingAndPullingLeavesManualAttachItselfAsFoundBesidesTheCandidateItWorks) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(kTractorAndImplement);
-    // Every function of Manual Attach's class, instance, handler and attachments, as found.
-    Lua(R"luau(
-        local function snapshot()
-            local list = {}
-            for _, owner in ipairs({ StubManualAttach.Handler, StubManualAttach.instance, StubManualAttach.handler, StubManualAttach.handler.vehicleJointAttachment,
-                    getmetatable(StubManualAttach.handler.vehicleJointAttachment), StubManualAttach.handler.powerTakeOffAttachment,
-                    StubManualAttach.handler.connectionHosesAttachment }) do
-                for key, value in pairs(owner) do
-                    if type(value) == "function" then list[tostring(owner) .. key] = value end
-                end
-            end
-            return list
-        end
-        _G.before = snapshot()
-        _G.snapshot = snapshot
-    )luau");
+    NoteManualAttachFunctions();
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     PullTrigger(kRight);
     ReleaseTrigger(kRight);
     PullTrigger(kRight);
-    Lua(R"luau(
-        _G.sameFunctions = true
-        local after = snapshot()
-        for key, value in pairs(before) do if after[key] ~= value then sameFunctions = false end end
-        for key, value in pairs(after) do if before[key] ~= value then sameFunctions = false end end
-    )luau");
-    EXPECT_EQ(EvalLua(L, "tostring(sameFunctions)"), "true") << "nothing of Manual Attach is wrapped or replaced";
+    ASSERT_EQ(Performs("joint"), 2);
+    EXPECT_TRUE(ManualAttachFunctionsAreAsFound()) << "nothing of Manual Attach is wrapped, replaced or added: its bindings and actions are as they were";
 }
 
 // ---- The pulses ---------------------------------------------------------------------------------------------------------------------

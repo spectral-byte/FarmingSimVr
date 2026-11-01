@@ -48,7 +48,7 @@ inline constexpr const char* kStubManualAttach = R"luau(
     function S.install(variant)
         variant = variant or "ok"
         S.variant = variant
-        S.performs, S.warnings, S.vehicles, S.inputJoints = {}, {}, {}, {}
+        S.performs, S.warnings, S.vehicles, S.inputJoints, S.detectedList = {}, {}, {}, {}, {}
 
         _G.g_currentMission = _G.g_currentMission or {}
         local mission = _G.g_currentMission
@@ -164,7 +164,7 @@ inline constexpr const char* kStubManualAttach = R"luau(
 
         -- getCandidatesInAttachRange for the player: the nearest hitch with an Implement lined up, or the nearest attached Implement
         function Handler:updateCandidates()
-            if #self.detectedVehicles == 0 then return end
+            if #S.detectedList == 0 then return end
             local player = self.playerCanPerformManualAttachment and _G.g_localPlayer or nil
             if player == nil then
                 self.attacherVehicle, self.attacherVehicleJointDescIndex, self.attachable, self.attachableJointDescIndex, self.attachedImplement = nil, nil, nil, nil, nil
@@ -172,20 +172,20 @@ inline constexpr const char* kStubManualAttach = R"luau(
             end
             local av, aji, at, atji, impl = nil, nil, nil, nil, nil
             local minDist, minImplDist = math.huge, math.huge
-            for _, vehicle in ipairs(self.detectedVehicles) do
+            for _, vehicle in ipairs(S.detectedList) do
                 local spec = vehicle.spec_attacherJoints
-                if Handler.isVehicleValid(vehicle) and spec ~= nil then
+                if isVehicleValid(vehicle) and spec ~= nil then
                     for _, implement in ipairs(vehicle:getAttachedImplements()) do
                         local x, y, z = localToLocal(spec.attacherJoints[implement.jointDescIndex].jointTransform, player.rootNode, 0, 0, 0)
                         local distSq = x * x + y * y + z * z
-                        if distSq < Handler.PLAYER_MIN_DISTANCE_SQ and distSq < minImplDist then impl, minImplDist = implement.object, distSq end
+                        if distSq < (Handler.PLAYER_MIN_DISTANCE_SQ or 8) and distSq < minImplDist then impl, minImplDist = implement.object, distSq end
                     end
                     for k, joint in ipairs(spec.attacherJoints) do
                         if joint.jointIndex == 0 then
                             local x, y, z = localToLocal(joint.jointTransform, player.rootNode, 0, 0, 0)
                             local distSq = x * x + y * y + z * z
-                            if distSq < Handler.PLAYER_MIN_DISTANCE_SQ and distSq < minDist then
-                                local found, foundIndex = Handler.getAttachableInJointRange(mission.vehicleSystem, vehicle, joint,
+                            if distSq < (Handler.PLAYER_MIN_DISTANCE_SQ or 8) and distSq < minDist then
+                                local found, foundIndex = inJointRange(mission.vehicleSystem, vehicle, joint,
                                     Handler.MAX_ATTACH_DISTANCE_SQ, Handler.MAX_ATTACH_ANGLE, true)
                                 if found ~= nil then av, aji, at, atji, minDist = vehicle, k, found, foundIndex, distSq end
                             end
@@ -205,6 +205,8 @@ inline constexpr const char* kStubManualAttach = R"luau(
         else Handler.executeAttachment = execute end
 
         local handler = setmetatable({ detectedVehicles = {}, playerCanPerformManualAttachment = false }, Handler)
+        S.detectedList = S.detectedList or {}
+        handler.detectedVehicles = S.detectedList
         if variant == "detectedMissing" then handler.detectedVehicles = nil end
         handler.vehicleJointAttachment = setmetatable({}, Joint)
         handler.powerTakeOffAttachment = other("pto")
@@ -247,12 +249,12 @@ inline constexpr const char* kStubManualAttach = R"luau(
             local x, y, z = getWorldTranslation(joint.node)
             joint.translation[1], joint.translation[2], joint.translation[3] = x, y, z
         end
-        if handler.detectedVehicles ~= nil then handler:updateCandidates() end
+        handler:updateCandidates()
     end
 
     function S.detect(...)
         local list = { ... }
-        local detected = S.handler.detectedVehicles
+        local detected = S.detectedList
         for i = #detected, 1, -1 do detected[i] = nil end
         for _, vehicle in ipairs(list) do table.insert(detected, vehicle) end
     end
@@ -421,6 +423,42 @@ protected:
     int Warnings() { return CountLogLines("Manual Attach support disabled"); }
     int BlinkingWarnings() { return static_cast<int>(Number(L, "#StubManualAttach.warnings")); }
     std::string Attached(const char* implement) { return EvalLua(L, std::string("tostring(") + implement + ".attacherVehicle ~= nil)"); }
+
+    // The game without Manual Attach at all.
+    void StartWithoutManualAttach() {
+        stubs_ = std::string(kStubAnimatedObjects) + "\nStubAnimatedObject.install('ok')\n";
+        StartOptions options;
+        options.extraStubs = stubs_.c_str();
+        ASSERT_NO_FATAL_FAILURE(Start(options));
+        ASSERT_EQ(RunLuauChunk(L, kAnimatedObjectHelpers, "=animatedObjectHelpers"), 0);
+    }
+
+    // Takes note of every function of Manual Attach's class, instance, handler and attachments, and later says whether they are still as found
+    // (nothing wrapped, replaced or added).
+    void NoteManualAttachFunctions() {
+        Lua(R"luau(
+            function _G.manualAttachFunctions()
+                local list = {}
+                local handler = StubManualAttach.handler
+                for _, owner in ipairs({ StubManualAttach.Handler, StubManualAttach.instance, handler, handler.vehicleJointAttachment,
+                        getmetatable(handler.vehicleJointAttachment), handler.powerTakeOffAttachment, handler.connectionHosesAttachment }) do
+                    for key, value in pairs(owner) do
+                        if type(value) == "function" then list[tostring(owner) .. key] = value end
+                    end
+                end
+                return list
+            end
+            _G.functionsBefore = manualAttachFunctions()
+        )luau");
+    }
+    bool ManualAttachFunctionsAreAsFound() {
+        return EvalLua(L, R"luau((function()
+            local after = manualAttachFunctions()
+            for key, value in pairs(functionsBefore) do if after[key] ~= value then return 'false' end end
+            for key, value in pairs(after) do if functionsBefore[key] ~= value then return 'false' end end
+            return 'true'
+        end)())luau") == "true";
+    }
 
 private:
     std::string stubs_;
