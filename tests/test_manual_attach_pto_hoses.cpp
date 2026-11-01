@@ -246,6 +246,28 @@ TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, AVehicleWithNoPtoOutputsOrHo
     EXPECT_EQ(Warnings(), 0);
 }
 
+TEST_F(VirtualGamepadManualAttachTest, AClickPointAndThePtoStubBothInTheConeTheNearerTheRaysCentreWinsEitherWayRoundAndTheOtherSelectsNothing) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(kTractorWithAttachedImplement);
+    Lua(kStubInteractiveControl);
+    Lua("StubIC.install('ok'); StubIC.addPoint('lever', -0.37, 0.2, 1.0)");  // 3 cm off the PTO stub's line, 0.7 m ahead: about 2.5 degrees
+    POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);                            // the PTO stub is on the ray's centre
+
+    EXPECT_EQ(DrawnEnd(), kRearPtoStub) << "the PTO stub is nearer the centre";
+    EXPECT_EQ(EvalLua(L, "tostring(StubIC.selected())"), "nil") << "the Click Point is not clickable";
+    PullTrigger(kRight);
+    EXPECT_EQ(Performs("pto"), 1);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0");
+    ReleaseTrigger(kRight);
+
+    POINT_HAND(kRight, kHandX - 0.06f, kPtoHandY, kHandZ);  // now the Click Point is nearer the centre
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "lever");
+    EXPECT_EQ(DrawnEnd(), "-0.37 0.20 1.00");
+    PullTrigger(kRight);
+    EXPECT_EQ(EvalLua(L, "StubIC.executed[1]"), "lever");
+    EXPECT_EQ(Performs("pto"), 1) << "the PTO stub works nothing then";
+}
+
 // ---- The diagnostics ------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadManualAttachTest, ThePointerDiagnosticsNameWhichOfTheThreeCouplingPointsIsSelected) {
