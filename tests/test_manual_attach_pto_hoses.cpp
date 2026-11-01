@@ -193,6 +193,132 @@ TEST_F(VirtualGamepadManualAttachTest, EachPullRunsExactlyOneOfManualAttachsPath
     EXPECT_EQ(BlinkingWarnings(), 1);
 }
 
+// ---- The pulses -----------------------------------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadManualAttachTest, MovingFromOneOfAHitchsCouplingPointsToAnotherPulsesAgainButMovingBetweenItsHoseCouplersDoesNot) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(kTractorWithAttachedImplement);
+    POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
+    ASSERT_EQ(DrawnEnd(), kRearPtoStub);
+    EXPECT_EQ(PulsesTo(kRight), 1) << "one light pulse as the ray lands on the PTO stub";
+    FRAMES(10);
+    EXPECT_EQ(PulsesTo(kRight), 1) << "and none while it stays";
+
+    POINT_HAND(kRight, kHoseHandX, kHoseHandY, kHandZ);
+    ASSERT_EQ(DrawnEnd(), kRearHoseCoupler);
+    EXPECT_EQ(PulsesTo(kRight), 2) << "another as it moves onto the hose couplers of the same hitch";
+
+    POINT_HAND(kRight, kCustomHoseHandX, kHoseHandY, kHandZ);
+    ASSERT_EQ(DrawnEnd(), kRearCustomHoseCoupler);
+    EXPECT_EQ(PulsesTo(kRight), 2) << "the hose couplers are one Coupling Point: none between them";
+
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    ASSERT_EQ(DrawnEnd(), kRearHitch);
+    EXPECT_EQ(PulsesTo(kRight), 3) << "one more on the hitch";
+}
+
+TEST_F(VirtualGamepadManualAttachTest, ThePullThatRanManualAttachsPtoOrHosePathGivesTheFirmerPulse) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(kTractorWithAttachedImplement);
+    POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
+    ASSERT_EQ(PulsesTo(kRight), 1);
+    PullTrigger(kRight);
+    ASSERT_EQ(Performs("pto"), 1);
+    EXPECT_EQ(PulsesTo(kRight), 2) << "the pull that connected the PTO is felt";
+    FRAMES(3);
+    EXPECT_EQ(PulsesTo(kRight), 2) << "once";
+    ReleaseTrigger(kRight);
+
+    POINT_HAND(kRight, kHoseHandX, kHoseHandY, kHandZ);
+    ASSERT_EQ(PulsesTo(kRight), 3);
+    PullTrigger(kRight);
+    ASSERT_EQ(Performs("hoses"), 1);
+    EXPECT_EQ(PulsesTo(kRight), 4) << "and the one that connected the hoses";
+    EXPECT_EQ(PulsesTo(kLeft), 0) << "the other hand feels nothing";
+}
+
+// ---- The Virtual Gamepad --------------------------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadManualAttachTest, WhileTheRayIsOnThePtoStubOrAHoseCouplerThePointerHandsTriggerReadsReleasedOnThePad) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(kTractorWithAttachedImplement);
+    POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
+    PullTrigger(kRight);
+    ASSERT_EQ(Performs("pto"), 1);
+    EXPECT_EQ(Pad().bRightTrigger, 0) << "the pull that works the PTO stub is not also a binding";
+    FRAMES(3);
+    EXPECT_EQ(Pad().bRightTrigger, 0);
+    EXPECT_EQ(Performs(), 1) << "and it works it once";
+    ReleaseTrigger(kRight);
+
+    POINT_HAND(kRight, kHoseHandX, kHoseHandY, kHandZ);
+    PullTrigger(kRight);
+    ASSERT_EQ(Performs("hoses"), 1);
+    EXPECT_EQ(Pad().bRightTrigger, 0) << "likewise for a hose coupler";
+    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
+    EXPECT_EQ(Pad().bRightTrigger, 0) << "and stays off the pad until let go, even if the ray leaves the coupler";
+    ReleaseTrigger(kRight);
+    PullTrigger(kRight);
+    EXPECT_EQ(Pad().bRightTrigger, 255) << "pulled afresh away from every Coupling Point it is the pad's";
+    EXPECT_EQ(Performs(), 2);
+}
+
+TEST_F(VirtualGamepadManualAttachTest, ATriggerHeldWhenTheRayLandsOnThePtoStubKeepsItsBindingAndWorksNothing) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(kTractorWithAttachedImplement);
+    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
+    PullTrigger(kRight);
+    ASSERT_EQ(Pad().bRightTrigger, 255);
+
+    POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
+    ASSERT_EQ(DrawnEnd(), kRearPtoStub);
+    FRAMES(3);
+    EXPECT_EQ(Pad().bRightTrigger, 255) << "the trigger keeps its binding";
+    EXPECT_EQ(Performs(), 0) << "and works nothing";
+    ReleaseTrigger(kRight);
+    PullTrigger(kRight);
+    EXPECT_EQ(Performs("pto"), 1) << "pulled afresh it works the PTO stub";
+}
+
+TEST_F(VirtualGamepadManualAttachTest, ThePtoStubAndTheHoseCouplersFollowTheDeskMouseAMenuAndTheMotionControllerSwitchLikeTheHitch) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(kTractorWithAttachedImplement);
+    POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
+    ASSERT_EQ(DrawnEnd(), kRearPtoStub);
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:notePointerMouseMoved()", "=mouseMoved"), 0);
+    FRAMES(1);
+    EXPECT_EQ(DrawnEnd(), "none") << "the Desk Mouse has the pointer";
+    PullTrigger(kRight);
+    EXPECT_EQ(Performs(), 0);
+    POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
+    FRAMES(2);
+    EXPECT_EQ(Performs(), 0) << "a pull that began under the mouse works nothing once the hand moves";
+    ReleaseTrigger(kRight);
+
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = true", "=menu"), 0);
+    FRAMES(2);
+    EXPECT_EQ(DrawnEnd(), "none");
+    PullTrigger(kRight);
+    EXPECT_EQ(Performs(), 0);
+    ReleaseTrigger(kRight);
+    ASSERT_EQ(RunLuauChunk(L, "g_gui.visible = false", "=closeMenu"), 0);
+
+    POINT_HAND(kRight, kHoseHandX, kHoseHandY, kHandZ);
+    ASSERT_EQ(DrawnEnd(), kRearHoseCoupler);
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrMotionControllers', 'off')", "=off"), 0);
+    FRAMES(2);
+    EXPECT_EQ(DrawnEnd(), "none");
+    PullTrigger(kRight);
+    EXPECT_EQ(Performs(), 0);
+    ReleaseTrigger(kRight);
+    ASSERT_EQ(RunLuauChunk(L, "runCommand('vrMotionControllers', 'on')", "=on"), 0);
+
+    POINT_HAND(kRight, kHoseHandX, kHoseHandY, kHandZ);
+    PullTrigger(kRight);
+    EXPECT_EQ(Performs("hoses"), 1) << "back to normal, it works";
+}
+
 TEST_F(VirtualGamepadManualAttachTest, ACustomHoseTargetIsAHoseCouplerToo) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(kTractorWithAttachedImplement);
