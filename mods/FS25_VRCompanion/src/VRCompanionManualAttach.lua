@@ -280,8 +280,28 @@ local function considerPtoStubs(hitch, ray, getWorldTranslation)
     end
 end
 
+-- The hitch's hose couplers: each of the vehicle's hose target nodes for the joint and each of its custom hose targets for it.
+local function considerHoseCouplers(hitch, ray, getWorldTranslation)
+    local spec = hitch.vehicle.spec_connectionHoses
+    if type(spec) ~= "table" then return end
+    if type(spec.targetNodes) == "table" then
+        for _, target in ipairs(spec.targetNodes) do
+            local joints = target.attacherJointIndices
+            if target.node ~= nil and type(joints) == "table" and joints[hitch.jointIndex] ~= nil then
+                consider(hitch, "hoses", target.node, ray, getWorldTranslation)
+            end
+        end
+    end
+    local custom = type(spec.customHoseTargetsByAttacher) == "table" and spec.customHoseTargetsByAttacher[hitch.jointIndex] or nil
+    if type(custom) == "table" then
+        for _, target in ipairs(custom) do
+            if target.node ~= nil then consider(hitch, "hoses", target.node, ray, getWorldTranslation) end
+        end
+    end
+end
+
 -- The Coupling Point of the hitch nearest the centre of the ray within the pointer cone, or nil. Returns the hitch and which of its Coupling
--- Points ("hitch", "pto") it is; the world position is in x, y, z of the hitch.
+-- Points ("hitch", "pto", "hoses") it is; the world position is in x, y, z of the hitch.
 local function selectFromRay(self, ray, canPerform)
     local getWorldTranslation = engine("getWorldTranslation")
     pick.cos, pick.hitch, pick.kind = math.cos(math.rad(self.pointerConeDegrees)), nil, nil
@@ -291,9 +311,10 @@ local function selectFromRay(self, ray, canPerform)
             hitch.pointable = true
             consider(hitch, "hitch", hitch.joint.jointTransform, ray, getWorldTranslation)
         end
-        -- The PTO acts on the Implement on the hitch: with nothing attached there is nothing to connect.
-        if hitch.implement ~= nil and isPointable(state.handler.powerTakeOffAttachment, hitch, canPerform) then
-            considerPtoStubs(hitch, ray, getWorldTranslation)
+        -- The PTO and the hoses act on the Implement on the hitch: with nothing attached there is nothing to connect.
+        if hitch.implement ~= nil then
+            if isPointable(state.handler.powerTakeOffAttachment, hitch, canPerform) then considerPtoStubs(hitch, ray, getWorldTranslation) end
+            if isPointable(state.handler.connectionHosesAttachment, hitch, canPerform) then considerHoseCouplers(hitch, ray, getWorldTranslation) end
         end
     end
     local best = pick.hitch
@@ -310,7 +331,9 @@ local function work(hitch, kind)
     local handler = state.handler
     handler.attacherVehicle, handler.attacherVehicleJointDescIndex = hitch.vehicle, hitch.jointIndex
     handler.attachable, handler.attachableJointDescIndex, handler.attachedImplement = hitch.attachable, hitch.attachableJointIndex, hitch.implement
-    local attachment = kind == "pto" and handler.powerTakeOffAttachment or handler.vehicleJointAttachment
+    local attachment = handler.vehicleJointAttachment
+    if kind == "pto" then attachment = handler.powerTakeOffAttachment
+    elseif kind == "hoses" then attachment = handler.connectionHosesAttachment end
     return (pcall(handler.executeAttachment, handler, attachment))
 end
 

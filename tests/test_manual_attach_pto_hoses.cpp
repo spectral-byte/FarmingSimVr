@@ -33,3 +33,32 @@ TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnThePtoStubCo
     EXPECT_EQ(Performs("pto"), 2);
     EXPECT_EQ(PtoConnected("plow"), "false") << "the second pull disconnects it";
 }
+
+// ---- The hose couplers ----------------------------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnAHoseCouplerConnectsAllTheHosesAndASecondPullDisconnectsThem) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(kTractorWithAttachedImplement);
+    POINT_HAND(kRight, kHoseHandX, kHoseHandY, kHandZ);
+    EXPECT_EQ(DrawnEnd(), kRearHoseCoupler) << "the ray ends on the vehicle's hose coupler";
+
+    PullTrigger(kRight);
+    EXPECT_EQ(Performs("hoses"), 1) << "one pull runs Manual Attach's hoses attachment once";
+    EXPECT_EQ(HosesConnected("plow"), "true");
+    ReleaseTrigger(kRight);
+
+    PullTrigger(kRight);
+    EXPECT_EQ(Performs("hoses"), 2);
+    EXPECT_EQ(HosesConnected("plow"), "false") << "the second pull disconnects them";
+}
+
+TEST_F(VirtualGamepadManualAttachTest, ACustomHoseTargetIsAHoseCouplerToo) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(kTractorWithAttachedImplement);
+    POINT_HAND(kRight, kCustomHoseHandX, kHoseHandY, kHandZ);
+    EXPECT_EQ(DrawnEnd(), kRearCustomHoseCoupler);
+
+    PullTrigger(kRight);
+    EXPECT_EQ(Performs("hoses"), 1) << "the same path as any other coupler: all the hoses";
+    EXPECT_EQ(HosesConnected("plow"), "true");
+}
