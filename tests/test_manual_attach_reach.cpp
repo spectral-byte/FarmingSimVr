@@ -12,17 +12,6 @@ namespace {
 using namespace hand_tools_test;
 using namespace manual_attach_test;
 
-// A tractor with an Implement lined up at each hitch: the rear one 2 m ahead (where the ray of kHandX runs), the front one nearer to the player and
-// to the side (where the ray of a hand 0.8 m to the side runs), so Manual Attach's own nearest candidate is the front one.
-constexpr const char* kFrontAndRear = R"luau(
-    _G.tractor = StubManualAttach.tractor({ rear = { -0.4, -0.2, 2.0 }, front = { -1.2, -0.2, 1.0 } })
-    _G.rearPlow = StubManualAttach.implement('rearPlow')
-    _G.frontLoader = StubManualAttach.implement('frontLoader')
-    StubManualAttach.lineUp(rearPlow, tractor, 1)
-    StubManualAttach.lineUp(frontLoader, tractor, 2)
-    StubManualAttach.detectAll()
-)luau";
-
 // A tractor whose rear hitch is 3 m ahead of the player (Manual Attach's reach is about 2.8 m) with a plow lined up there.
 constexpr const char* kTractorOutOfReach = R"luau(
     _G.tractor = StubManualAttach.tractor({ rear = { -0.4, -0.2, 3.0 }, front = { 5, -0.2, 5 } })
