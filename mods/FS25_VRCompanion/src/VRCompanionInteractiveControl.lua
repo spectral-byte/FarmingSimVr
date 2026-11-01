@@ -21,6 +21,12 @@
 -- blink, action text and its own execute path, which one trigger pull runs once (and every frame while
 -- the trigger is held on an analog Click Point).
 --
+-- Interactive Control updates the Click Points in a cab every frame, from the vehicle's draw, but those on a vehicle's
+-- exterior only on the vehicle's update tick, every few frames; in between it does not look at them, and its execute
+-- path runs the controller it took as clickable on that last update. So a Click Point stays active until Interactive
+-- Control has not updated it for STALE_MS (counting updates instead made one outside the cab drop out and come back on
+-- every tick), and a pull that comes before Interactive Control has taken the selected Click Point waits for it.
+--
 -- The Pointer Ray controls selection only while it has control of the pointer (whichever of the desk
 -- mouse and the Pointer Hand moved last; VRCompanion:isPointerRayInControl). While the mouse has
 -- control Interactive Control selects by its own mouse test exactly as without Motion Controllers, the
@@ -46,9 +52,11 @@ local CLICK_POINT_FUNCTIONS = {
     "update", "updateClickable", "updateScreenPosition", "setClickable", "isClickable", "isExecutable", "setActivated",
 }
 local MANAGER_FUNCTIONS = { "getActiveInteractiveController", "onActionEventExecute" }
--- A Click Point that Interactive Control has not updated for this many Companion Mod updates is gone
--- (its vehicle left, or it was deleted) and no longer counts as active.
-local STALE_UPDATES = 2
+-- A Click Point that Interactive Control has not updated for this long (ms, summed over the Companion Mod's updates) is
+-- gone (its vehicle left, or it was deleted) and no longer counts as active. It is longer than the vehicle's update tick,
+-- on which Interactive Control updates the Click Points outside the cab. A pull waits at most as long for Interactive
+-- Control to take the Click Point it was aimed at.
+local STALE_MS = 500
 -- Where the mouse test is pointed for a Click Point the ray did not select: nowhere on screen.
 local OFF_SCREEN = -1000
 
@@ -59,12 +67,15 @@ local function newState()
         class = nil,
         originals = {},
         wrappers = {},
-        points = setmetatable({}, { __mode = "k" }),  -- [clickPoint] = update count when last seen active
-        refused = setmetatable({}, { __mode = "k" }), -- [clickPoint] = update count when Interactive Control last refused it a mouse test
+        points = setmetatable({}, { __mode = "k" }),  -- [clickPoint] = clockMs when last seen active
+        refused = setmetatable({}, { __mode = "k" }), -- [clickPoint] = clockMs when Interactive Control last refused it a mouse test
         updates = 0,
+        clockMs = 0,          -- the dt of every update, summed
         selected = nil,
         autoOn = nil,         -- see "Interactive Control switches on while the Pointer Hand is in use"
         pullArmed = false,    -- the trigger went down while the ray had control and is still down
+        pullPoint = nil,      -- the Click Point a pull was aimed at that Interactive Control has not executed yet
+        pullAtMs = 0,         -- clockMs of that pull
     }
 end
 
@@ -115,7 +126,7 @@ end
 -- Remembers a Click Point Interactive Control just updated while it is active; forgets it otherwise.
 local function trackPoint(point)
     if isPointActive(point) then
-        state.points[point] = state.updates
+        state.points[point] = state.clockMs
     else
         state.points[point] = nil
     end
@@ -148,7 +159,7 @@ local function installWrappers(self, class)
         -- a Click Point can be executed (its folding / animation / forced-state conditions and the
         -- indoor or outdoor mode) is isActivated, which selection already requires.
         if mx == nil or my == nil then
-            state.refused[point] = state.updates
+            state.refused[point] = state.clockMs
             return originals.updateClickable(point, mx, my, ...)
         end
         state.refused[point] = nil
@@ -232,9 +243,9 @@ local function selectFromRay(self, ray)
     local cosCone = math.cos(math.rad(self.pointerConeDegrees))
     local live, best, bestCos, bx, by, bz = 0, nil, cosCone, nil, nil, nil
     for point, seen in pairs(state.points) do
-        if state.updates - seen > STALE_UPDATES or not isPointActive(point) then
+        if state.clockMs - seen > STALE_MS or not isPointActive(point) then
             state.points[point] = nil
-        elseif state.refused[point] ~= nil and state.updates - state.refused[point] <= STALE_UPDATES then
+        elseif state.refused[point] ~= nil and state.clockMs - state.refused[point] <= STALE_MS then
             -- Interactive Control will not let the pointer have this Click Point right now.
         else
             live = live + 1
@@ -269,16 +280,28 @@ local function clickSelected(self, mayUseTrigger)
         state.pullArmed = false
     end
     local selected = state.selected
-    if selected == nil or not (pressed or held) then return end
+    -- Interactive Control executes the controller it took as clickable on its last update of the Click Point (outside the
+    -- cab, the vehicle's last tick). A pull it has not taken yet waits for that, even once the trigger is let go, but only
+    -- while the ray stays on the Click Point it was aimed at, and at most STALE_MS.
+    if pressed and selected ~= nil then
+        state.pullPoint, state.pullAtMs = selected, state.clockMs
+    elseif state.pullPoint ~= nil and (state.pullPoint ~= selected or state.clockMs - state.pullAtMs > STALE_MS) then
+        state.pullPoint = nil
+    end
+    local pulled = selected ~= nil and state.pullPoint == selected
+    if selected == nil or not (pulled or held) then return end
     local manager = currentManager()
     if manager == nil then return end
     local controller = manager:getActiveInteractiveController()
     if controller == nil then return end
     if selected.interactiveController ~= nil and controller ~= selected.interactiveController then return end
     local analog = type(controller.isAnalog) == "function" and controller:isAnalog() == true
-    if pressed or (analog and state.pullArmed) then
+    if pulled or (analog and state.pullArmed) then
         pcall(manager.onActionEventExecute, manager)
-        if pressed then notify(self, "clicked", selected) end
+        if pulled then
+            state.pullPoint = nil
+            notify(self, "clicked", selected)
+        end
     end
 end
 
@@ -399,6 +422,7 @@ function VRCompanion:updateInteractiveControl(dt, selectNone)
         if not state.installed then return false end
     end
     state.updates = state.updates + 1
+    if type(dt) == "number" and dt > 0 then state.clockMs = state.clockMs + dt end
     updateAutoOn(self)
 
     -- A Stereo Dialog takes the input and is answered with the pad's buttons: the Pointer Ray hits no Click Point behind it and
@@ -424,7 +448,7 @@ function VRCompanion:updateInteractiveControl(dt, selectNone)
         end
         clickSelected(self, mayUseTrigger)
     else
-        state.pullArmed = false
+        state.pullArmed, state.pullPoint = false, nil
     end
     -- With the mouse in control there is nothing for the ray to hit: it is not drawn.
     return ray ~= nil and live > 0, hx, hy, hz
