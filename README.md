@@ -30,6 +30,7 @@ Two parts work together:
 - **Virtual Hands**: a gloved hand drawn where each Motion Controller is held. The trigger curls the index finger and the grip the other three. The Pointer Ray starts at the index fingertip and runs along the finger.
 - **Hand Tools** (on foot): the pressure washer lance, the flashlight, the chainsaw, the spray can, the horse brush and the fishing rod (Highlands Fishing DLC) sit in your Tool Hand, the right Motion Controller. Switch it off with `vrHandTools off`.
 - **Animated Objects** (on foot): standing in the zone around a building's door or gate, or a barrier placed on the map, point the Pointer Ray at one of its moving parts (or touch it up close) and pull the trigger: it opens, closes, or turns back while it moves.
+- **Manual Attach** (on foot, with the Manual Attach mod): standing within its reach of a tractor's hitch, point the Pointer Ray at the hitch and pull the trigger to attach the Implement lined up there or detach the one on it. Point at the PTO stub to connect or disconnect the PTO, or at a hose coupler to connect or disconnect all the hoses. Manual Attach's own rules, warnings and sounds apply, and its prompts follow the hitch you point at.
 
 ## Installation
 
