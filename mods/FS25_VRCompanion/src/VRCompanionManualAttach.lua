@@ -5,8 +5,12 @@
 -- Implement). Manual Attach makes the player attach and detach Implements by hand, but picks the hitch by distance, not by aim, and puts the
 -- action on a key. Here the player stands within Manual Attach's own reach of a hitch, points the Pointer Ray at it and pulls the trigger: the
 -- Implement lined up there is attached, or the one on it is detached, by Manual Attach's own code (its reach, rules, warnings, sounds and
--- multiplayer events are unchanged). The hitch is the first of the three Coupling Points of the spec; the PTO stub and the hose couplers are a
--- later ticket.
+-- multiplayer events are unchanged). The hitch is the first of the three Coupling Points of the spec. The other two are on the same vehicle for
+-- the Implement on the hitch: its PTO stub (each of its own PTO outputs for that joint that has an output node: a pass-through output, which
+-- resolves to another vehicle, has none) and its hose couplers (each hose target node and custom hose target for that joint). A pull on the PTO
+-- stub runs the handler's execute path for the PTO attachment, on any hose coupler for the hoses attachment (all the hoses together); each
+-- is pointable when that attachment would show its prompt for the Implement, and the one of all of them nearest the centre of the ray is
+-- selected. Pointing at a PTO stub never reaches the hoses or the hitch and the other way round: one pull, one of Manual Attach's paths.
 --
 -- How it works. Manual Attach keeps the vehicles its detection has found (handler.detectedVehicles). Each update the module lists, from those
 -- and with Manual Attach's own helpers and constants, every hitch within its reach of the player: a free hitch with an Implement lined up
@@ -26,8 +30,13 @@
 --   the handler   detectedVehicles, executeAttachment(attachment), vehicleJointAttachment, playerCanPerformManualAttachment, and the candidate fields attacherVehicle,
 --       attacherVehicleJointDescIndex, attachable, attachableJointDescIndex, attachedImplement
 --   the joint attachment   getActionEventInfo(attacherVehicle, attachable, attachedImplement, jointDescIndex, playerCanPerform), performAttachment
+--   the PTO attachment (powerTakeOffAttachment) and the hoses attachment (connectionHosesAttachment)   the same getActionEventInfo and
+--       performAttachment (they act on the attached Implement alone)
 --   g_currentMission.vehicleSystem, g_localPlayer.rootNode, localToLocal, getWorldTranslation
 --   on a vehicle   spec_attacherJoints.attacherJoints[i].jointTransform, getAttachedImplements() ({ object, jointDescIndex })
+--   the game's vehicle side of the PTO and hoses, when a vehicle has the specialization (else it has no such Coupling Point; a specialization
+--       with another shape turns the support off): getOutputPowerTakeOffs() ({ outputNode, attacherJointIndices = { [jointIndex] = true } }),
+--       spec_connectionHoses.targetNodes ({ node, attacherJointIndices }) and .customHoseTargetsByAttacher[jointIndex] ({ node })
 -- Prompts and keys follow the hitch (ticket #230). The module wraps ONE function of Manual Attach, VehicleAttachmentHandler.updateCandidates
 -- (the candidate update, at the class level so the handler instance finds it), original first: after Manual Attach has picked its nearest
 -- candidate, while the ray is on a hitch (and the player can attach by hand), the five candidate fields are set to that hitch's. Manual
@@ -87,9 +96,11 @@ local function newState()
         class = nil,          -- the VehicleAttachmentHandler class
         hitches = {},         -- scratch, reused each update: the hitches in reach
         count = 0,            -- how many of them are in reach
-        selected = nil,       -- the hitch the ray is on (one of hitches)
+        selected = nil,       -- the hitch the ray is on a Coupling Point of (one of hitches)
+        selectedKind = nil,   -- which of its Coupling Points: "hitch" or "pto"
         landedVehicle = nil,  -- the hitch the ray is on and has pulsed for
         landedJoint = nil,
+        landedKind = nil,
         candidateUpdate = nil,        -- the class's candidate update as found, while the module has it wrapped
         candidateUpdateWrap = nil,    -- and what the module put there
     }
@@ -158,6 +169,13 @@ local function findManualAttach()
     if type(joint) ~= "table" then return nil, nil, nil, "the attachment handler has no vehicleJointAttachment" end
     problem = shapeProblem(joint, "the joint attachment", ACTION_INFO) or shapeProblem(joint, "the joint attachment", PERFORM)
     if problem ~= nil then return nil, nil, nil, problem end
+    -- The PTO and hoses attachments (the PTO stub and the hose couplers act through them) have the same two functions.
+    for _, entry in ipairs({ { "powerTakeOffAttachment", "the PTO attachment" }, { "connectionHosesAttachment", "the hoses attachment" } }) do
+        local attachment = handler[entry[1]]
+        if type(attachment) ~= "table" then return nil, nil, nil, "the attachment handler has no " .. entry[1] end
+        problem = shapeProblem(attachment, entry[2], ACTION_INFO) or shapeProblem(attachment, entry[2], PERFORM)
+        if problem ~= nil then return nil, nil, nil, problem end
+    end
     return instance, handler, class, nil
 end
 
@@ -203,10 +221,14 @@ end
 
 -- Map unload (and the end of a session): the class's candidate update is handed back as found (unless something else wrapped it since, which
 -- cannot be taken out from under it), and the module forgets.
-function VRCompanion:resetManualAttachSupport()
+local function unwrapCandidateUpdate()
     if state.class ~= nil and state.candidateUpdateWrap ~= nil and state.class.updateCandidates == state.candidateUpdateWrap then
         state.class.updateCandidates = state.candidateUpdate
     end
+end
+
+function VRCompanion:resetManualAttachSupport()
+    unwrapCandidateUpdate()
     state = newState()
 end
 
@@ -243,8 +265,22 @@ local function isInReach(joint, playerRoot)
     return x * x + y * y + z * z < state.class.PLAYER_MIN_DISTANCE_SQ
 end
 
+-- Why the game's PTO output or hose target lookup on a vehicle is not what the module expects, or nil when it is (or the vehicle has none).
+-- The vehicle side of the PTO stub and the hose couplers is read from the game's PowerTakeOffs and ConnectionHoses specializations.
+local function vehicleLookupProblem(vehicle)
+    if type(vehicle.spec_powerTakeOffs) == "table" and type(vehicle.getOutputPowerTakeOffs) ~= "function" then
+        return "the game's getOutputPowerTakeOffs is missing on a vehicle"
+    end
+    local hoses = vehicle.spec_connectionHoses
+    if type(hoses) == "table" and (type(hoses.targetNodes) ~= "table" or type(hoses.customHoseTargetsByAttacher) ~= "table") then
+        return "the game's hose targets (spec_connectionHoses.targetNodes, customHoseTargetsByAttacher) are missing on a vehicle"
+    end
+    return nil
+end
+
 -- Lists every hitch within Manual Attach's reach of the player, from the vehicles its detection has found: a free hitch with an Implement
--- lined up (through its own helper and constants) and a hitch with an Implement on it, as its nearest-candidate search walks them.
+-- lined up (through its own helper and constants) and a hitch with an Implement on it, as its nearest-candidate search walks them. Returns why
+-- the support cannot go on when the game's side of a vehicle has another shape than expected.
 local function collectHitches(player)
     state.count = 0
     local playerRoot = player.rootNode
@@ -255,6 +291,8 @@ local function collectHitches(player)
     for _, vehicle in ipairs(state.handler.detectedVehicles) do
         local spec = vehicle.spec_attacherJoints
         if class.isVehicleValid(vehicle) and type(spec) == "table" and type(spec.attacherJoints) == "table" then
+            local problem = vehicleLookupProblem(vehicle)
+            if problem ~= nil then return problem end
             if type(vehicle.getAttachedImplements) == "function" then
                 for _, implement in ipairs(vehicle:getAttachedImplements()) do
                     local joint = spec.attacherJoints[implement.jointDescIndex]
@@ -276,47 +314,98 @@ local function collectHitches(player)
     end
 end
 
--- Whether Manual Attach's joint attachment would show its attach or detach prompt for the hitch's candidate. What it refuses in its perform
--- path is not asked here: a refused hitch is pointed at and the pull shows Manual Attach's warning.
-local function isPointable(hitch, canPerform)
-    local attachment = state.handler.vehicleJointAttachment
+-- Whether one of Manual Attach's attachments (the joint, PTO or hoses attachment) would show its prompt for the hitch's candidate. What it
+-- refuses in its perform path is not asked here: a refused hitch is pointed at and the pull shows Manual Attach's warning.
+local function isPointable(attachment, hitch, canPerform)
     local ok, info = pcall(attachment.getActionEventInfo, attachment, hitch.vehicle, hitch.attachable, hitch.implement, hitch.jointIndex, canPerform)
     return ok and type(info) == "table" and info.visibility == true
 end
 
--- The hitch nearest the centre of the ray within the pointer cone, or nil; its world position is in x, y, z of the result.
-local function selectFromRay(self, ray, canPerform)
-    local getWorldTranslation = engine("getWorldTranslation")
-    local bestCos = math.cos(math.rad(self.pointerConeDegrees))
-    local best = nil
-    for i = 1, state.count do
-        local hitch = state.hitches[i]
-        if isPointable(hitch, canPerform) then
-            hitch.pointable = true
-            local px, py, pz = getWorldTranslation(hitch.joint.jointTransform)
-            local vx, vy, vz = px - ray.ox, py - ray.oy, pz - ray.oz
-            local distance = math.sqrt(vx * vx + vy * vy + vz * vz)
-            if distance > 0.01 then
-                local cos = (vx * ray.dx + vy * ray.dy + vz * ray.dz) / distance
-                if cos >= bestCos then
-                    best, bestCos = hitch, cos
-                    hitch.x, hitch.y, hitch.z, hitch.cos = px, py, pz, cos
-                end
+-- The Coupling Point nearest the centre of the ray so far in this update (its angle's cosine, the hitch it belongs to, which of the three it
+-- is, and its world position), reused each update.
+local pick = { cos = 0, hitch = nil, kind = nil, x = 0, y = 0, z = 0 }
+
+-- Takes a node (a hitch, a PTO stub or a hose coupler) as the pick when it is within the pointer cone and nearer the centre than the pick so far.
+local function consider(hitch, kind, node, ray, getWorldTranslation)
+    local px, py, pz = getWorldTranslation(node)
+    local vx, vy, vz = px - ray.ox, py - ray.oy, pz - ray.oz
+    local distance = math.sqrt(vx * vx + vy * vy + vz * vz)
+    if distance <= 0.01 then return end
+    local cos = (vx * ray.dx + vy * ray.dy + vz * ray.dz) / distance
+    if cos >= pick.cos then
+        pick.cos, pick.hitch, pick.kind = cos, hitch, kind
+        pick.x, pick.y, pick.z = px, py, pz
+    end
+end
+
+-- The hitch's Coupling Points on the vehicle's side that are not the hitch: its own PTO outputs for the joint that have an output node (a
+-- pass-through output, which resolves to another vehicle, has none of its own).
+local function considerPtoStubs(hitch, ray, getWorldTranslation)
+    local vehicle = hitch.vehicle
+    if type(vehicle.getOutputPowerTakeOffs) ~= "function" then return end
+    for _, output in ipairs(vehicle:getOutputPowerTakeOffs() or {}) do
+        local joints = output.attacherJointIndices
+        if output.outputNode ~= nil and type(joints) == "table" and joints[hitch.jointIndex] ~= nil then
+            consider(hitch, "pto", output.outputNode, ray, getWorldTranslation)
+        end
+    end
+end
+
+-- The hitch's hose couplers: each of the vehicle's hose target nodes for the joint and each of its custom hose targets for it.
+local function considerHoseCouplers(hitch, ray, getWorldTranslation)
+    local spec = hitch.vehicle.spec_connectionHoses
+    if type(spec) ~= "table" then return end
+    if type(spec.targetNodes) == "table" then
+        for _, target in ipairs(spec.targetNodes) do
+            local joints = target.attacherJointIndices
+            if target.node ~= nil and type(joints) == "table" and joints[hitch.jointIndex] ~= nil then
+                consider(hitch, "hoses", target.node, ray, getWorldTranslation)
             end
         end
     end
-    return best
+    local custom = type(spec.customHoseTargetsByAttacher) == "table" and spec.customHoseTargetsByAttacher[hitch.jointIndex] or nil
+    if type(custom) == "table" then
+        for _, target in ipairs(custom) do
+            if target.node ~= nil then consider(hitch, "hoses", target.node, ray, getWorldTranslation) end
+        end
+    end
+end
+
+-- The Coupling Point of the hitch nearest the centre of the ray within the pointer cone, or nil. Returns the hitch and which of its Coupling
+-- Points ("hitch", "pto", "hoses") it is; the world position is in x, y, z of the hitch.
+local function selectFromRay(self, ray, canPerform)
+    local getWorldTranslation = engine("getWorldTranslation")
+    pick.cos, pick.hitch, pick.kind = math.cos(math.rad(self.pointerConeDegrees)), nil, nil
+    for i = 1, state.count do
+        local hitch = state.hitches[i]
+        if isPointable(state.handler.vehicleJointAttachment, hitch, canPerform) then
+            hitch.pointable = true
+            consider(hitch, "hitch", hitch.joint.jointTransform, ray, getWorldTranslation)
+        end
+        -- The PTO and the hoses act on the Implement on the hitch: with nothing attached there is nothing to connect.
+        if hitch.implement ~= nil then
+            if isPointable(state.handler.powerTakeOffAttachment, hitch, canPerform) then considerPtoStubs(hitch, ray, getWorldTranslation) end
+            if isPointable(state.handler.connectionHosesAttachment, hitch, canPerform) then considerHoseCouplers(hitch, ray, getWorldTranslation) end
+        end
+    end
+    local best = pick.hitch
+    if best == nil then return nil, nil end
+    best.x, best.y, best.z, best.cos = pick.x, pick.y, pick.z, pick.cos
+    return best, pick.kind
 end
 
 -- ---- Working a hitch ----------------------------------------------------------------------------------------------------------
 
--- A pull sets the handler's candidate to the hitch and runs its own execute path for the joint attachment. Guarded: nothing reaches the game.
--- Returns whether the path ran without an error.
-local function work(hitch)
+-- A pull sets the handler's candidate to the hitch and runs its own execute path for the attachment of the Coupling Point (the joint attachment
+-- for the hitch, the PTO attachment for the PTO stub). Guarded: nothing reaches the game. Returns whether the path ran without an error.
+local function work(hitch, kind)
     local handler = state.handler
     handler.attacherVehicle, handler.attacherVehicleJointDescIndex = hitch.vehicle, hitch.jointIndex
     handler.attachable, handler.attachableJointDescIndex, handler.attachedImplement = hitch.attachable, hitch.attachableJointIndex, hitch.implement
-    return (pcall(handler.executeAttachment, handler, handler.vehicleJointAttachment))
+    local attachment = handler.vehicleJointAttachment
+    if kind == "pto" then attachment = handler.powerTakeOffAttachment
+    elseif kind == "hoses" then attachment = handler.connectionHosesAttachment end
+    return (pcall(handler.executeAttachment, handler, attachment))
 end
 
 -- The pulses of a Click Point, on the Pointer Hand only: "selected" as the ray lands, "clicked" for a pull that ran Manual Attach's path.
@@ -346,19 +435,28 @@ function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
     local player = localPlayer()
     local canPerform = state.instance.canPlayerPerformManualAttachment == true
     if suppressed or not canPerform or type(player) ~= "table" or not rayMayWork(self) then
-        state.landedVehicle, state.landedJoint = nil, nil
+        state.landedVehicle, state.landedJoint, state.landedKind = nil, nil, nil
         return false
     end
 
-    local selected = nil
-    if pcall(collectHitches, player) then selected = selectFromRay(self, self:getPointerRay(), canPerform) end
+    local selected, kind = nil, nil
+    local collected, problem = pcall(collectHitches, player)
+    if collected and problem ~= nil then
+        -- The game's side of a vehicle is not what the support expects: it switches itself off, with one warning, for good.
+        state.installed, state.selected, state.selectedKind, state.count = false, nil, nil, 0
+        state.landedVehicle, state.landedJoint, state.landedKind = nil, nil, nil
+        unwrapCandidateUpdate()
+        giveUp(problem)
+        return false
+    end
+    if collected then selected, kind = selectFromRay(self, self:getPointerRay(), canPerform) end
     -- (Within TIE_COSINE of each other, floating point noise included, they are equally near: the Click Point's.)
-    if selected ~= nil and clickCos ~= nil and clickCos >= selected.cos - TIE_COSINE then selected = nil end
-    state.selected = selected
+    if selected ~= nil and clickCos ~= nil and clickCos >= selected.cos - TIE_COSINE then selected, kind = nil, nil end
+    state.selected, state.selectedKind = selected, kind
     -- The select pulse of a Click Point: one on the Pointer Hand as the ray lands on a hitch it was not on.
     local vehicle, joint = selected and selected.vehicle or nil, selected and selected.jointIndex or nil
-    if vehicle ~= state.landedVehicle or joint ~= state.landedJoint then
-        state.landedVehicle, state.landedJoint = vehicle, joint
+    if vehicle ~= state.landedVehicle or joint ~= state.landedJoint or kind ~= state.landedKind then
+        state.landedVehicle, state.landedJoint, state.landedKind = vehicle, joint, kind
         if selected ~= nil then feel(self, "selected", selected) end
     end
     if selected == nil then return false end
@@ -372,7 +470,7 @@ function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
     end
     if mayUseTrigger then
         local pressed = self:getPointerTrigger()
-        if pressed and work(selected) then feel(self, "clicked", selected) end
+        if pressed and work(selected, kind) then feel(self, "clicked", selected) end
     end
     return true, selected.x, selected.y, selected.z
 end
@@ -389,7 +487,8 @@ function VRCompanion:getManualAttachDiagnostics()
             local ok, result = pcall(selected.vehicle.getName, selected.vehicle)
             if ok and type(result) == "string" then name = result end
         end
-        text = string.format("hitch %s of %s", tostring(selected.jointIndex), name or "a vehicle")
+        local which = state.selectedKind == "pto" and "PTO stub" or state.selectedKind == "hoses" and "hose coupler" or "hitch"
+        text = string.format("hitch %s of %s (%s)", tostring(selected.jointIndex), name or "a vehicle", which)
     end
     return string.format("Manual Attach support: installed | hitches in reach: %d | selected: %s", state.count, text)
 end
