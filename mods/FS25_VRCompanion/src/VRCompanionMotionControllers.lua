@@ -394,6 +394,8 @@ local function settleInteractiveControl(self, dt)
     if type(self.updateInteractiveControl) == "function" then self:updateInteractiveControl(dt) end
     -- No Animated Object stays selected either (suppressed: nothing is selected, the trigger is not taken).
     if type(self.updateAnimatedObjects) == "function" then self:updateAnimatedObjects(dt, true) end
+    -- Nor a hitch of Manual Attach.
+    if type(self.updateManualAttach) == "function" then self:updateManualAttach(dt, true) end
 end
 
 -- What reads the pointer after the hands were polled (menus); a single guarded call.
@@ -783,6 +785,15 @@ function VRCompanion:updatePointerRay(dt)
     if not hasTarget and type(self.peekObjectGrabRayTarget) == "function" then
         grabbable, grabX, grabY, grabZ, grabDistance = self:peekObjectGrabRayTarget()
     end
+    -- Manual Attach: the ray is on a hitch of a vehicle in reach (ADR-0035). Of what the ray can be on, a Click Point within the cone wins, then a
+    -- hitch; the hitch the ray is on also suppresses Animated Objects and what Object Grab can pick up, as a Click Point does.
+    if type(self.updateManualAttach) == "function" then
+        local onHitch, hitchX, hitchY, hitchZ = self:updateManualAttach(dt, hitX ~= nil)
+        if onHitch then
+            hasTarget, hitX, hitY, hitZ = true, hitchX, hitchY, hitchZ
+            grabbable = false
+        end
+    end
     -- Animated Objects: the ray is on a door or gate in whose zone the player stands. Of the two the ray meets first, the nearer wins.
     if type(self.updateAnimatedObjects) == "function" then
         local onAnimatedObject, animatedX, animatedY, animatedZ = self:updateAnimatedObjects(dt, hitX ~= nil, grabbable and grabDistance or nil)
@@ -1066,6 +1077,9 @@ function VRCompanion:getPointerDiagnostics()
     if type(self.getAnimatedObjectsDiagnostics) == "function" then
         virtualHandsText = virtualHandsText .. " | " .. self:getAnimatedObjectsDiagnostics()
     end
+    if type(self.getManualAttachDiagnostics) == "function" then
+        virtualHandsText = virtualHandsText .. " | " .. self:getManualAttachDiagnostics()
+    end
     local pointer = state.pointerHand
     local trigger = pointer ~= nil and state.hands[pointer].trigger or 0
     return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s | Left hand: %s | Right hand: %s%s",
@@ -1120,6 +1134,7 @@ function VRCompanion:resetMotionControllers()
     end
     if type(self.resetInteractiveControlSupport) == "function" then self:resetInteractiveControlSupport() end
     if type(self.resetAnimatedObjectsSupport) == "function" then self:resetAnimatedObjectsSupport() end
+    if type(self.resetManualAttachSupport) == "function" then self:resetManualAttachSupport() end
     state = newState()
     initHands()
     self.pointerHand = nil
