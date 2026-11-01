@@ -26,7 +26,8 @@
 --   FS25_manualAttach.VehicleAttachmentHandler (the global table is the fallback)   the constants MAX_ATTACH_DISTANCE_SQ, MAX_ATTACH_ANGLE and
 --       PLAYER_MIN_DISTANCE_SQ; the static getAttachableInJointRange(vehicleSystem, vehicle, attacherJoint, maxDistanceSq, maxAngle, isPlayerBased)
 --       and isVehicleValid(vehicle)
---   the handler   detectedVehicles, executeAttachment(attachment), vehicleJointAttachment, and the candidate fields attacherVehicle,
+--   VehicleAttachmentHandler.updateCandidates(handler) (wrapped, see below)
+--   the handler   detectedVehicles, executeAttachment(attachment), vehicleJointAttachment, playerCanPerformManualAttachment, and the candidate fields attacherVehicle,
 --       attacherVehicleJointDescIndex, attachable, attachableJointDescIndex, attachedImplement
 --   the joint attachment   getActionEventInfo(attacherVehicle, attachable, attachedImplement, jointDescIndex, playerCanPerform), performAttachment
 --   the PTO attachment (powerTakeOffAttachment) and the hoses attachment (connectionHosesAttachment)   the same getActionEventInfo and
@@ -36,27 +37,34 @@
 --   the game's vehicle side of the PTO and hoses, when a vehicle has the specialization (else it has no such Coupling Point; a specialization
 --       with another shape turns the support off): getOutputPowerTakeOffs() ({ outputNode, attacherJointIndices = { [jointIndex] = true } }),
 --       spec_connectionHoses.targetNodes ({ node, attacherJointIndices }) and .customHoseTargetsByAttacher[jointIndex] ({ node })
--- Nothing of Manual Attach is wrapped or rewritten, its bindings included; the module only reads, and sets the candidate fields before it runs
--- the execute path. When what it relies on is missing or has another shape, the Companion Mod logs ONE warning when Motion Controllers are in
--- use and leaves Manual Attach, and every other feature, alone.
+-- Prompts and keys follow the hitch (ticket #230). The module wraps ONE function of Manual Attach, VehicleAttachmentHandler.updateCandidates
+-- (the candidate update, at the class level so the handler instance finds it), original first: after Manual Attach has picked its nearest
+-- candidate, while the ray is on a hitch (and the player can attach by hand), the five candidate fields are set to that hitch's. Manual
+-- Attach's own draw (the input help prompts, the context box) and its own keys read those fields, so the text, the keys and the pull never
+-- disagree; with the ray on no hitch the wrap changes nothing. Map unload hands the function back as found. Nothing else of Manual Attach is
+-- wrapped or rewritten, its bindings included; the module otherwise only reads, and sets the candidate fields before it runs the execute path.
+-- When what it relies on (updateCandidates included, one parameter: the handler) is missing or has another shape, the Companion Mod logs ONE
+-- warning when Motion Controllers are in use, wraps nothing and leaves Manual Attach, and every other feature, alone.
 --
 -- When the ray can work a hitch. Only while Manual Attach says the player can attach by hand (canPlayerPerformManualAttachment: on foot, no Hand
 -- Tool in hand, no Held Object), only while the Pointer Ray has control of the pointer (not the desk mouse), the head is placed in the world,
--- no menu or Stereo Dialog takes the input, and Motion Controllers are on. A Click Point within the cone wins over a hitch, and a hitch the ray
--- is on over an Animated Object and over an object Object Grab can pick up.
+-- no menu or Stereo Dialog takes the input, and Motion Controllers are on. Of a Click Point and a hitch both within the cone, the one nearer the
+-- ray's centre wins (a tie is the Click Point's) and the other selects nothing; either one over an Animated Object and over an object Object Grab
+-- can pick up.
 --
 -- PUBLIC SURFACE
---   VRCompanion:updateManualAttach(dt, suppressed) -> hasTarget, hitX, hitY, hitZ   once per update after the Pointer Ray is placed
---       (VRCompanion:updatePointerRay), after Interactive Control; suppressed: a Click Point has the ray, so nothing is selected.
+--   VRCompanion:updateManualAttach(dt, suppressed, clickCos) -> hasTarget, hitX, hitY, hitZ   once per update after the Pointer Ray is placed
+--       (VRCompanion:updatePointerRay), after Interactive Control has reported its best Click Point (peekInteractiveControlTarget) and before it
+--       commits; suppressed: nothing is selected; clickCos: the cosine of that Click Point's angle from the ray's centre, or nil without one.
 --       While the ray is on a hitch the Pointer Hand's trigger is taken off the Virtual Gamepad (VRCompanion:takeVirtualGamepadInput(hand,
 --       "trigger")). The Pointer Hand feels it as a Click Point (VRCompanion:onClickPointEvent): a light pulse as the ray lands on a hitch
 --       it was not on, a firmer one for each pull that ran Manual Attach's path.
 --   VRCompanion:getManualAttachDiagnostics() -> string   one line for vrPointerDiagnostics
---   VRCompanion:resetManualAttachSupport()               map unload (hands back anything it set up: nothing is wrapped)
+--   VRCompanion:resetManualAttachSupport()               map unload (hands the wrapped candidate update back as found)
 --
 -- Hooks into the rest of the mod
---   MotionControllers   updatePointerRay -> updateManualAttach(dt, hitX ~= nil) after Interactive Control, before Animated Objects and Object
---       Grab; settleInteractiveControl (the paths where Motion Controller input is ignored) -> updateManualAttach(dt, true) so the selection
+--   MotionControllers   updatePointerRay -> peekInteractiveControlTarget(), updateManualAttach(dt, false, clickCos), updateInteractiveControl(dt,
+--       selectNone), before Animated Objects and Object Grab; settleInteractiveControl (the paths where Motion Controller input is ignored) -> updateManualAttach(dt, true) so the selection
 --       clears; getPointerDiagnostics -> getManualAttachDiagnostics(); resetMotionControllers -> resetManualAttachSupport()
 -- ====================================================================
 
@@ -66,6 +74,8 @@ local engine = VRCompanion.getEngineGlobal
 
 local MOD_NAME = "FS25_manualAttach"
 local CONSTANTS = { "MAX_ATTACH_DISTANCE_SQ", "MAX_ATTACH_ANGLE", "PLAYER_MIN_DISTANCE_SQ" }
+-- How near in cosine (about 0.08 degrees at the ray's centre) a Click Point and a hitch must be to count as equally near the ray's centre.
+local TIE_COSINE = 1e-6
 
 -- The functions the module relies on: how many parameters the function must declare at least (a reshaped function declares fewer, self counts
 -- in a method) and what they are, for the warning.
@@ -74,6 +84,8 @@ local VALID_HELPER = { name = "isVehicleValid", parameters = 1, describe = "(veh
 local EXECUTE = { name = "executeAttachment", parameters = 2, describe = "(handler, attachment)" }
 local ACTION_INFO = { name = "getActionEventInfo", parameters = 6, describe = "(attachment, attacherVehicle, attachable, attachedImplement, jointDescIndex, playerCanPerform)" }
 local PERFORM = { name = "performAttachment", parameters = 7, describe = "(attachment, attacherVehicle, attachable, attachedImplement, attacherJointDescIndex, attachableJointDescIndex, playerCanPerform)" }
+
+local CANDIDATE_UPDATE = { name = "updateCandidates", parameters = 1, describe = "(handler)" }
 
 local function newState()
     return {
@@ -89,6 +101,8 @@ local function newState()
         landedVehicle = nil,  -- the hitch the ray is on and has pulsed for
         landedJoint = nil,
         landedKind = nil,
+        candidateUpdate = nil,        -- the class's candidate update as found, while the module has it wrapped
+        candidateUpdateWrap = nil,    -- and what the module put there
     }
 end
 
@@ -149,7 +163,7 @@ local function findManualAttach()
     if type(instance.canPlayerPerformManualAttachment) ~= "boolean" then
         return nil, nil, nil, "g_manualAttach has no canPlayerPerformManualAttachment"
     end
-    problem = shapeProblem(handler, "the attachment handler", EXECUTE)
+    problem = shapeProblem(handler, "the attachment handler", EXECUTE) or shapeProblem(class, "VehicleAttachmentHandler", CANDIDATE_UPDATE)
     if problem ~= nil then return nil, nil, nil, problem end
     local joint = handler.vehicleJointAttachment
     if type(joint) ~= "table" then return nil, nil, nil, "the attachment handler has no vehicleJointAttachment" end
@@ -176,7 +190,23 @@ local function anyHandTracked(self)
         or self:getHandState(self.MOTION_HAND_RIGHT).tracked == true
 end
 
--- Looks for Manual Attach when a Motion Controller is in use. Nothing of it is wrapped, so there is nothing to hand back at map unload.
+-- Wraps the class's candidate update, original first: after Manual Attach has picked its nearest candidate, while the ray is on a hitch, the
+-- five candidate fields are that hitch's, so Manual Attach's prompts, context box and keys describe and act on the pointed hitch.
+local function wrapCandidateUpdate(class)
+    local original = class.updateCandidates
+    local function updateCandidates(handler, ...)
+        original(handler, ...)
+        local selected = state.selected
+        if selected ~= nil and handler == state.handler and handler.playerCanPerformManualAttachment == true then
+            handler.attacherVehicle, handler.attacherVehicleJointDescIndex = selected.vehicle, selected.jointIndex
+            handler.attachable, handler.attachableJointDescIndex, handler.attachedImplement = selected.attachable, selected.attachableJointIndex, selected.implement
+        end
+    end
+    state.candidateUpdate, state.candidateUpdateWrap = original, updateCandidates
+    class.updateCandidates = updateCandidates
+end
+
+-- Looks for Manual Attach when a Motion Controller is in use.
 local function tryInstall()
     local instance, handler, class, problem = findManualAttach()
     if problem ~= nil then
@@ -184,12 +214,21 @@ local function tryInstall()
         return
     end
     state.instance, state.handler, state.class = instance, handler, class
+    wrapCandidateUpdate(class)
     state.installed = true
     print("[FS25_VR] Manual Attach support: installed")
 end
 
--- Map unload (and the end of a session): the module wrapped nothing, so it only forgets.
+-- Map unload (and the end of a session): the class's candidate update is handed back as found (unless something else wrapped it since, which
+-- cannot be taken out from under it), and the module forgets.
+local function unwrapCandidateUpdate()
+    if state.class ~= nil and state.candidateUpdateWrap ~= nil and state.class.updateCandidates == state.candidateUpdateWrap then
+        state.class.updateCandidates = state.candidateUpdate
+    end
+end
+
 function VRCompanion:resetManualAttachSupport()
+    unwrapCandidateUpdate()
     state = newState()
 end
 
@@ -351,7 +390,7 @@ local function selectFromRay(self, ray, canPerform)
     end
     local best = pick.hitch
     if best == nil then return nil, nil end
-    best.x, best.y, best.z = pick.x, pick.y, pick.z
+    best.x, best.y, best.z, best.cos = pick.x, pick.y, pick.z, pick.cos
     return best, pick.kind
 end
 
@@ -383,8 +422,9 @@ local function rayMayWork(self)
 end
 
 -- Called by the Pointer Ray code once per Companion Mod update, after the ray is placed. Returns whether the ray is on a hitch that can be
--- worked and, then, where it ends. `suppressed`: a Click Point has the ray.
-function VRCompanion:updateManualAttach(dt, suppressed)
+-- worked and, then, where it ends. `suppressed`: nothing is selected. `clickCos`: the cosine of the angle from the ray's centre of the Click Point
+-- Interactive Control would select; it keeps the ray when it is as near the centre as the hitch or nearer.
+function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
     if not state.installed then
         -- Looked for once, when a Motion Controller is in use: a player without them is never told.
         if state.gaveUp or self.motionControllersEnabled == false or not anyHandTracked(self) then return false end
@@ -405,10 +445,13 @@ function VRCompanion:updateManualAttach(dt, suppressed)
         -- The game's side of a vehicle is not what the support expects: it switches itself off, with one warning, for good.
         state.installed, state.selected, state.selectedKind, state.count = false, nil, nil, 0
         state.landedVehicle, state.landedJoint, state.landedKind = nil, nil, nil
+        unwrapCandidateUpdate()
         giveUp(problem)
         return false
     end
     if collected then selected, kind = selectFromRay(self, self:getPointerRay(), canPerform) end
+    -- (Within TIE_COSINE of each other, floating point noise included, they are equally near: the Click Point's.)
+    if selected ~= nil and clickCos ~= nil and clickCos >= selected.cos - TIE_COSINE then selected, kind = nil, nil end
     state.selected, state.selectedKind = selected, kind
     -- The select pulse of a Click Point: one on the Pointer Hand as the ray lands on a hitch it was not on.
     local vehicle, joint = selected and selected.vehicle or nil, selected and selected.jointIndex or nil
@@ -444,7 +487,6 @@ function VRCompanion:getManualAttachDiagnostics()
             local ok, result = pcall(selected.vehicle.getName, selected.vehicle)
             if ok and type(result) == "string" then name = result end
         end
-        local which = state.selectedKind == "pto" and "PTO stub" or state.selectedKind == "hoses" and "hose coupler" or "hitch"
         local which = state.selectedKind == "pto" and "PTO stub" or state.selectedKind == "hoses" and "hose coupler" or "hitch"
         text = string.format("hitch %s of %s (%s)", tostring(selected.jointIndex), name or "a vehicle", which)
     end

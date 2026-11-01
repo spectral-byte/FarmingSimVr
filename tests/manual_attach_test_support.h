@@ -119,6 +119,12 @@ inline constexpr const char* kStubManualAttach = R"luau(
             end
             return info
         end
+        -- getContextInfo: the text of the context box, the name of the Implement the prompts are about
+        function Joint:getContextInfo(attacherVehicle, attachable, attachedImplement, jointIndex, playerCan)
+            local target = attachable or attachedImplement
+            if target == nil then return nil, nil end
+            return target:getName(), 1
+        end
         if variant == "performMissing" then Joint.perform = performJoint else Joint.performAttachment = performJoint end
         if variant == "actionInfoMissing" then Joint.getActionInfo = actionInfo
         elseif variant == "actionInfoReshaped" then Joint.getActionEventInfo = function(self) return { visibility = true } end
@@ -195,7 +201,7 @@ inline constexpr const char* kStubManualAttach = R"luau(
         else Handler.getAttachableInJointRange = inJointRange end
 
         -- getCandidatesInAttachRange for the player: the nearest hitch with an Implement lined up, or the nearest attached Implement
-        function Handler:updateCandidates()
+        local function updateCandidates(self)
             if #S.detectedList == 0 then return end
             local player = self.playerCanPerformManualAttachment and _G.g_localPlayer or nil
             if player == nil then
@@ -227,6 +233,10 @@ inline constexpr const char* kStubManualAttach = R"luau(
             end
             self.attacherVehicle, self.attacherVehicleJointDescIndex, self.attachable, self.attachableJointDescIndex, self.attachedImplement = av, aji, at, atji, impl
         end
+        if variant == "candidateUpdateMissing" then Handler.updateNearest = updateCandidates
+        elseif variant == "candidateUpdateReshaped" then Handler.updateCandidates = function() end
+        else Handler.updateCandidates = updateCandidates end
+        S.originalCandidateUpdate = Handler.updateCandidates
         function Handler:getTargetImplement() return self.attachedImplement end
         local function execute(self, attachment)
             attachment:performAttachment(self.attacherVehicle, self.attachable, self:getTargetImplement(), self.attacherVehicleJointDescIndex,
@@ -281,7 +291,34 @@ inline constexpr const char* kStubManualAttach = R"luau(
             local x, y, z = getWorldTranslation(joint.node)
             joint.translation[1], joint.translation[2], joint.translation[3] = x, y, z
         end
-        handler:updateCandidates()
+        if handler.updateCandidates ~= nil then handler:updateCandidates() end
+        S.drawPrompts()
+    end
+
+    -- VehicleAttachmentHandler:draw: the input help prompt of each attachment ({ text, visible } by kind: joint, pto, hoses) and the context box
+    -- (the text of the last attachment that has one), for the candidate fields as the update left them.
+    function S.drawPrompts()
+        local handler = S.handler
+        S.prompts, S.contextBox = {}, nil
+        for kind, attachment in pairs({ joint = handler.vehicleJointAttachment, pto = handler.powerTakeOffAttachment, hoses = handler.connectionHosesAttachment }) do
+            local args = { handler.attacherVehicle, handler.attachable, handler:getTargetImplement(), handler.attacherVehicleJointDescIndex,
+                handler.playerCanPerformManualAttachment }
+            if type(attachment.getActionEventInfo) == "function" then
+                local ok, info = pcall(attachment.getActionEventInfo, attachment, table.unpack(args, 1, 5))
+                if ok and type(info) == "table" then S.prompts[kind] = { text = info.text, visible = info.visibility == true } end
+            end
+            if handler.playerCanPerformManualAttachment and type(attachment.getContextInfo) == "function" then
+                local ok, text = pcall(attachment.getContextInfo, attachment, table.unpack(args, 1, 5))
+                if ok and text ~= nil then S.contextBox = text end
+            end
+        end
+    end
+
+    -- Manual Attach's own key: the handler's execute path for an attachment (joint, pto, hoses), on whatever its candidate fields are now
+    function S.pressKey(kind)
+        local handler = S.handler
+        local attachment = ({ joint = handler.vehicleJointAttachment, pto = handler.powerTakeOffAttachment, hoses = handler.connectionHosesAttachment })[kind]
+        handler:executeAttachment(attachment)
     end
 
     function S.detect(...)
@@ -531,13 +568,20 @@ protected:
                 for _, owner in ipairs({ StubManualAttach.Handler, StubManualAttach.instance, handler, handler.vehicleJointAttachment,
                         getmetatable(handler.vehicleJointAttachment), handler.powerTakeOffAttachment, handler.connectionHosesAttachment }) do
                     for key, value in pairs(owner) do
-                        if type(value) == "function" then list[tostring(owner) .. key] = value end
+                        -- the candidate update is the one thing the module wraps (CandidateUpdateIsAsFound)
+                        if type(value) == "function" and not (owner == StubManualAttach.Handler and key == "updateCandidates") then
+                            list[tostring(owner) .. key] = value
+                        end
                     end
                 end
                 return list
             end
             _G.functionsBefore = manualAttachFunctions()
         )luau");
+    }
+    // Whether the handler class's candidate update is the one Manual Attach's release came with (not wrapped by the module).
+    bool CandidateUpdateIsAsFound() {
+        return EvalLua(L, "tostring(StubManualAttach.Handler.updateCandidates == StubManualAttach.originalCandidateUpdate)") == "true";
     }
     bool ManualAttachFunctionsAreAsFound() {
         return EvalLua(L, R"luau((function()
