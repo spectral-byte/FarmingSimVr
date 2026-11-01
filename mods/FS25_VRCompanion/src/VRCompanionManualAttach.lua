@@ -5,8 +5,12 @@
 -- Implement). Manual Attach makes the player attach and detach Implements by hand, but picks the hitch by distance, not by aim, and puts the
 -- action on a key. Here the player stands within Manual Attach's own reach of a hitch, points the Pointer Ray at it and pulls the trigger: the
 -- Implement lined up there is attached, or the one on it is detached, by Manual Attach's own code (its reach, rules, warnings, sounds and
--- multiplayer events are unchanged). The hitch is the first of the three Coupling Points of the spec; the PTO stub and the hose couplers are a
--- later ticket.
+-- multiplayer events are unchanged). The hitch is the first of the three Coupling Points of the spec. The other two are on the same vehicle for
+-- the Implement on the hitch: its PTO stub (each of its own PTO outputs for that joint that has an output node: a pass-through output, which
+-- resolves to another vehicle, has none) and its hose couplers (each hose target node and custom hose target for that joint). A pull on the PTO
+-- stub runs the handler's execute path for the PTO attachment, on any hose coupler for the hoses attachment (all the hoses together); each
+-- is pointable when that attachment would show its prompt for the Implement, and the one of all of them nearest the centre of the ray is
+-- selected. Pointing at a PTO stub never reaches the hoses or the hitch and the other way round: one pull, one of Manual Attach's paths.
 --
 -- How it works. Manual Attach keeps the vehicles its detection has found (handler.detectedVehicles). Each update the module lists, from those
 -- and with Manual Attach's own helpers and constants, every hitch within its reach of the player: a free hitch with an Implement lined up
@@ -25,8 +29,13 @@
 --   the handler   detectedVehicles, executeAttachment(attachment), vehicleJointAttachment, and the candidate fields attacherVehicle,
 --       attacherVehicleJointDescIndex, attachable, attachableJointDescIndex, attachedImplement
 --   the joint attachment   getActionEventInfo(attacherVehicle, attachable, attachedImplement, jointDescIndex, playerCanPerform), performAttachment
+--   the PTO attachment (powerTakeOffAttachment) and the hoses attachment (connectionHosesAttachment)   the same getActionEventInfo and
+--       performAttachment (they act on the attached Implement alone)
 --   g_currentMission.vehicleSystem, g_localPlayer.rootNode, localToLocal, getWorldTranslation
 --   on a vehicle   spec_attacherJoints.attacherJoints[i].jointTransform, getAttachedImplements() ({ object, jointDescIndex })
+--   the game's vehicle side of the PTO and hoses, when a vehicle has the specialization (else it has no such Coupling Point; a specialization
+--       with another shape turns the support off): getOutputPowerTakeOffs() ({ outputNode, attacherJointIndices = { [jointIndex] = true } }),
+--       spec_connectionHoses.targetNodes ({ node, attacherJointIndices }) and .customHoseTargetsByAttacher[jointIndex] ({ node })
 -- Nothing of Manual Attach is wrapped or rewritten, its bindings included; the module only reads, and sets the candidate fields before it runs
 -- the execute path. When what it relies on is missing or has another shape, the Companion Mod logs ONE warning when Motion Controllers are in
 -- use and leaves Manual Attach, and every other feature, alone.
@@ -435,7 +444,9 @@ function VRCompanion:getManualAttachDiagnostics()
             local ok, result = pcall(selected.vehicle.getName, selected.vehicle)
             if ok and type(result) == "string" then name = result end
         end
-        text = string.format("hitch %s of %s", tostring(selected.jointIndex), name or "a vehicle")
+        local which = state.selectedKind == "pto" and "PTO stub" or state.selectedKind == "hoses" and "hose coupler" or "hitch"
+        local which = state.selectedKind == "pto" and "PTO stub" or state.selectedKind == "hoses" and "hose coupler" or "hitch"
+        text = string.format("hitch %s of %s (%s)", tostring(selected.jointIndex), name or "a vehicle", which)
     end
     return string.format("Manual Attach support: installed | hitches in reach: %d | selected: %s", state.count, text)
 end

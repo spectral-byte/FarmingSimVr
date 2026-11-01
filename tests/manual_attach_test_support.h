@@ -20,7 +20,10 @@
 //   "classMissing" (no VehicleAttachmentHandler class), "rangeHelperMissing" / "rangeHelperReshaped" (getAttachableInJointRange renamed / taking
 //   fewer parameters), "validHelperMissing" / "validHelperReshaped" (isVehicleValid), "constantsMissing" (PLAYER_MIN_DISTANCE_SQ gone),
 //   "actionInfoMissing" / "actionInfoReshaped" (the joint attachment's getActionEventInfo), "executeMissing" / "executeReshaped"
-//   (executeAttachment), "performMissing" (the joint attachment's performAttachment), "detectedMissing" (the handler has no detectedVehicles).
+//   (executeAttachment), "performMissing" (the joint attachment's performAttachment), "detectedMissing" (the handler has no detectedVehicles),
+//   "ptoActionInfoMissing" / "ptoActionInfoReshaped" / "ptoPerformMissing" and "hoseActionInfoMissing" / "hoseActionInfoReshaped" /
+//   "hosePerformMissing" (the same of the PTO and the hoses attachments), "ptoLookupReshaped" (the game's vehicles have the PTO specialization
+//   without getOutputPowerTakeOffs), "hoseTargetsReshaped" (the game's vehicles have spec_connectionHoses without targetNodes).
 // StubManualAttach.tick()   Manual Attach's update for one game frame: the flag is true when the player is on foot, has no Hand Tool in hand and
 //   the hands hold nothing; the handler's candidate update then picks its nearest candidates (as its own does).
 // StubManualAttach.detect(...) / detectAll()   the vehicles Manual Attach's detection has found (the handler's detectedVehicles).
@@ -306,9 +309,15 @@ inline constexpr const char* kStubManualAttach = R"luau(
 //   getAttacherJointByJointDescIndex(i), getAttacherJointDescFromObject(object), getActiveFarm(), isDetachAllowed(), getFullName(). It is also an
 //   Implement: its own input attacher joint is at its root (a trailer is one: StubManualAttach.trailer).
 // StubManualAttach.tractor(options) -> vehicle   joint 1 is the rear hitch at options.rear (default -0.4, -0.2, 2.0), joint 2 the front one at
-//   options.front (default 0.8, -0.2, 2.0).
+//   options.front (default 0.8, -0.2, 2.0). It has the vehicle side of the PTO and the hoses for each joint (options.pto, options.hoses, both
+//   on by default; options.passThroughPto: PTO outputs with no node of their own instead): a PTO output with an output node 0.4 m above the
+//   joint and 0.3 m behind it (getOutputPowerTakeOffs(), spec_powerTakeOffs.outputPowerTakeOffs), a hose target node 0.35 m to the joint's +X
+//   and a custom hose target 0.35 m to its -X, both 0.15 m above and 0.3 m behind (spec_connectionHoses.targetNodes,
+//   customHoseTargetsByAttacher). Any vehicle() takes these options too.
 // StubManualAttach.implement(name, options) -> vehicle   an Implement with no hitch of its own, 20 m away from everything until lined up.
-//   options: farmId, allowsLowering (default true).
+//   options: farmId, allowsLowering (default true), hasPto, hasHoses (the Implement has a PTO / hoses; default no). The PTO and hoses attachments
+//   connect or disconnect them (implement.ptoConnected, implement.hosesConnected) when the Implement is attached and its vehicle has the
+//   outputs or targets, and Manual Attach refuses to detach while they are connected.
 // StubManualAttach.trailer(name, hitch, options) -> vehicle   an Implement with a hitch of its own at the world position `hitch`.
 // StubManualAttach.lineUp(implement, vehicle, jointIndex)   the Implement's input joint is at the hitch, lined up. misalign(implement): turned across it.
 // StubManualAttach.attach(vehicle, implement, inputJointIndex, jointIndex) / detach(vehicle, implement)   Manual Attach's own attach and detach of the

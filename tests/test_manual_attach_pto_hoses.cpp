@@ -246,6 +246,23 @@ TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, AVehicleWithNoPtoOutputsOrHo
     EXPECT_EQ(Warnings(), 0);
 }
 
+// ---- The diagnostics ------------------------------------------------------------------------------------------------------------
+
+TEST_F(VirtualGamepadManualAttachTest, ThePointerDiagnosticsNameWhichOfTheThreeCouplingPointsIsSelected) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
+    Lua(kTractorWithAttachedImplement);
+    auto diagnostics = [&]() { return EvalLua(L, "runCommand('vrPointerDiagnostics')"); };
+
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    EXPECT_NE(diagnostics().find("hitches in reach: 1 | selected: hitch 1 of tractor (hitch)"), std::string::npos) << diagnostics();
+    POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
+    EXPECT_NE(diagnostics().find("selected: hitch 1 of tractor (PTO stub)"), std::string::npos) << diagnostics();
+    POINT_HAND(kRight, kHoseHandX, kHoseHandY, kHandZ);
+    EXPECT_NE(diagnostics().find("selected: hitch 1 of tractor (hose coupler)"), std::string::npos) << diagnostics();
+    POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
+    EXPECT_NE(diagnostics().find("selected: none"), std::string::npos) << diagnostics();
+}
+
 // ---- The pulses -----------------------------------------------------------------------------------------------------------------
 
 TEST_F(VirtualGamepadManualAttachTest, MovingFromOneOfAHitchsCouplingPointsToAnotherPulsesAgainButMovingBetweenItsHoseCouplersDoesNot) {
