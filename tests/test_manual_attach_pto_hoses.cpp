@@ -276,11 +276,13 @@ TEST_F(VirtualGamepadManualAttachTest, ThePointerDiagnosticsNameWhichOfTheThreeC
     auto diagnostics = [&]() { return EvalLua(L, "runCommand('vrPointerDiagnostics')"); };
 
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
-    EXPECT_NE(diagnostics().find("hitches in reach: 1 | selected: hitch 1 of tractor (hitch)"), std::string::npos) << diagnostics();
+    // Only the hitch is called a hitch: the PTO stub and the hose coupler are Coupling Points of a hitch, not hitches.
+    EXPECT_NE(diagnostics().find("hitches in reach: 1 | selected: hitch 1 of tractor"), std::string::npos) << diagnostics();
+    EXPECT_EQ(diagnostics().find("selected: hitch 1 of tractor ("), std::string::npos) << "no second name for the hitch: " << diagnostics();
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
-    EXPECT_NE(diagnostics().find("selected: hitch 1 of tractor (PTO stub)"), std::string::npos) << diagnostics();
+    EXPECT_NE(diagnostics().find("selected: PTO stub of hitch 1 of tractor"), std::string::npos) << diagnostics();
     POINT_HAND(kRight, kHoseHandX, kHoseHandY, kHandZ);
-    EXPECT_NE(diagnostics().find("selected: hitch 1 of tractor (hose coupler)"), std::string::npos) << diagnostics();
+    EXPECT_NE(diagnostics().find("selected: hose coupler of hitch 1 of tractor"), std::string::npos) << diagnostics();
     POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
     EXPECT_NE(diagnostics().find("selected: none"), std::string::npos) << diagnostics();
 }

@@ -508,7 +508,7 @@ function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
     return true, selected.x, selected.y, selected.z
 end
 
--- One line for vrPointerDiagnostics: whether the support is installed, how many hitches are in reach and which one is selected.
+-- One line for vrPointerDiagnostics: whether the support is installed, how many hitches are in reach and which Coupling Point is selected.
 function VRCompanion:getManualAttachDiagnostics()
     if state.gaveUp then return "Manual Attach support: gave up (" .. tostring(state.gaveUpBecause) .. ")" end
     if not state.installed then
@@ -525,8 +525,9 @@ function VRCompanion:getManualAttachDiagnostics()
             local ok, result = pcall(selected.vehicle.getName, selected.vehicle)
             if ok and type(result) == "string" then name = result end
         end
-        local which = state.selectedKind == "pto" and "PTO stub" or state.selectedKind == "hoses" and "hose coupler" or "hitch"
-        text = string.format("hitch %s of %s (%s)", tostring(selected.jointIndex), name or "a vehicle", which)
+        -- Only the hitch is called a hitch: the PTO stub and the hose coupler are Coupling Points of one, on the same vehicle.
+        local which = state.selectedKind == "pto" and "PTO stub of " or state.selectedKind == "hoses" and "hose coupler of " or ""
+        text = string.format("%shitch %s of %s", which, tostring(selected.jointIndex), name or "a vehicle")
     end
     return string.format("Manual Attach support: installed | hitches in reach: %d | selected: %s", state.count, text)
 end
