@@ -111,6 +111,11 @@ void PreFrame(lua_State* L) {
     )luau", "=preFrame"), 0);
 }
 
+// How many frames apart the vehicle's update ticks come, on which Interactive Control updates its outdoor Click Points.
+int OutdoorTickFrames(lua_State* L) {
+    return std::stoi(EvalLua(L, "StubIC.outdoorTickFrames"));
+}
+
 } // namespace
 
 #define FRAMES(count) \
@@ -670,10 +675,11 @@ TEST_F(CompanionModTest, ClickPointsOnAVehicleExteriorAndOnAPlacedObjectCanBeCli
         local length = math.sqrt((line.x1 - line.x0)^2 + (line.y1 - line.y0)^2 + (line.z1 - line.z0)^2)
         local dx, dy, dz = (line.x1 - line.x0) / length, (line.y1 - line.y0) / length, (line.z1 - line.z0) / length
         StubIC.points[1].inRange = false
-        local door = StubIC.addPoint('doorHandle', line.x0 + dx * 2, line.y0 + dy * 2, line.z0 + dz * 2)
-        door.outdoor = true
+        StubIC.addPoint('doorHandle', line.x0 + dx * 2, line.y0 + dy * 2, line.z0 + dz * 2, { outdoor = true })
     )luau", "=addExterior"), 0);
-    FRAMES(2);
+    // Interactive Control looks at the door handle on the vehicle's update tick only: the first tick activates it, the next
+    // treats it as clickable.
+    FRAMES(2 * OutdoorTickFrames(L));
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "doorHandle");
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(1);
@@ -689,7 +695,8 @@ TEST_F(CompanionModTest, ClickPointsOnAVehicleExteriorAndOnAPlacedObjectCanBeCli
         StubIC.points[2].inRange = false
         StubIC.addPoint('gateControl', line.x0 + dx * 5, line.y0 + dy * 5, line.z0 + dz * 5)
     )luau", "=addPlaced"), 0);
-    FRAMES(2);
+    // The door handle goes out of range on the vehicle's next tick.
+    FRAMES(2 * OutdoorTickFrames(L));
     EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "gateControl");
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(1);
@@ -850,13 +857,120 @@ TEST_F(CompanionModTest, AClickPointInteractiveControlStoppedUpdatingIsNoLongerS
     FRAMES(3);
     ASSERT_EQ(RunLuauChunk(L, "drawPass(); assert(#debugLines == 1, 'drawn while it updates')", "=whileUpdating"), 0);
 
-    // The player climbs out: Interactive Control no longer updates the vehicle's Click Points, and
-    // they stay marked active, but nobody can click them any more.
+    // The vehicle is gone: Interactive Control no longer updates its Click Points, and they stay marked
+    // active, but nobody can click them any more. Interactive Control updates every Click Point it has at
+    // least every half second (those outside the cab only on the vehicle's tick), so one it has not updated
+    // for longer is gone.
     ASSERT_EQ(RunLuauChunk(L, "StubIC.points = {}", "=vehicleGone"), 0);
-    FRAMES(5);
+    FRAMES(40);
     headset.SetHandInputs(kRight, Trigger(1.0f));
     FRAMES(2);
     ASSERT_EQ(RunLuauChunk(L, "drawPass(); assert(#debugLines == 0, 'hidden once nothing updates it'); assert(#StubIC.executed == 0)", "=afterwards"), 0);
+}
+
+// ---- Click Points outside the cab ----
+//
+// Interactive Control updates the Click Points in a cab every frame, from the vehicle's draw, but those on a vehicle's
+// exterior only on the vehicle's update tick, every few frames (StubIC.outdoorTickFrames). Between two ticks it does not
+// look at them, and the controller a pull executes is the one it took as clickable on the last tick.
+
+TEST_F(CompanionModTest, AClickPointOutsideTheCabStaysSelectedBetweenTheVehiclesTicksAndEveryPullClicksIt) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('doorHandle', -0.3, 1.5, 2.3, { outdoor = true })", "=addPoint"), 0);
+    const int tick = OutdoorTickFrames(L);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2 * tick);
+    for (int frame = 0; frame < 3 * tick; ++frame) {
+        FRAMES(1);
+        ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "doorHandle") << "frame " << frame << ": the ray stays on it";
+    }
+
+    // Each pull clicks it once, whichever frame between two ticks it comes on.
+    for (int pull = 1; pull <= tick; ++pull) {
+        headset.SetHandInputs(kRight, Trigger(1.0f));
+        FRAMES(1);
+        EXPECT_EQ(EvalLua(L, "#StubIC.executed"), std::to_string(pull)) << "pull " << pull;
+        headset.SetHandInputs(kRight, Trigger(0.0f));
+        FRAMES(tick);
+    }
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), std::to_string(tick));
+}
+
+TEST_F(CompanionModTest, APullTheMomentTheRayLandsOnAClickPointOutsideTheCabClicksItOnTheVehiclesNextTick) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    const int tick = OutdoorTickFrames(L);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2);
+    // The door handle comes into range on the next frame's tick, where the ray points: Interactive Control activates it
+    // before the ray selects it, so it takes it as clickable only on its next tick.
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('doorHandle', -0.3, 1.5, 2.3, { outdoor = true }); StubIC.framesToOutdoorTick = 1", "=comesIntoRange"), 0);
+    FRAMES(1);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0") << "Interactive Control has nothing to execute before its next tick";
+
+    FRAMES(tick);
+    EXPECT_EQ(EvalLua(L, "table.concat(StubIC.executed, ',')"), "doorHandle") << "the pull clicks it on that tick";
+    FRAMES(3 * tick);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1") << "once";
+}
+
+TEST_F(CompanionModTest, APullWaitingForTheVehiclesTickIsDroppedWhenTheRayLeavesThatClickPoint) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    const int tick = OutdoorTickFrames(L);
+    // A switch in the cab 3 degrees off the ray's centre, which Interactive Control updates every frame.
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('cabSwitch', -0.3 + 0.1048, 1.5, 2.3)", "=addSwitch"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2);
+    ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "cabSwitch");
+
+    // The door handle comes into range on the ray's centre, and the pull comes before the vehicle's next tick.
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('doorHandle', -0.3, 1.5, 2.3, { outdoor = true }); StubIC.framesToOutdoorTick = 1", "=comesIntoRange"), 0);
+    FRAMES(1);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    // The ray moves onto the switch and back before that tick: the pull was for the door handle, and it is not kept.
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    headset.SetHandPointing(kRight, HandAt(0.3f - 0.1048f, 0.0f, -0.3f));
+    FRAMES(1);
+    headset.SetHandPointing(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    FRAMES(2 * tick);
+    EXPECT_EQ(EvalLua(L, "StubIC.selected()"), "doorHandle");
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0") << "neither the door handle nor the switch was clicked";
+}
+
+TEST_F(CompanionModTest, APullInteractiveControlCouldNotTakeForHalfASecondIsNotClickedLater) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    const int tick = OutdoorTickFrames(L);
+    // Interactive Control keeps the door handle active but runs no mouse test on it while it projects off the screen, so
+    // it never takes it as clickable.
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('doorHandle', -0.3, 1.5, 2.3, { outdoor = true, offScreen = true })", "=addPoint"), 0);
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(2 * tick);
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    headset.SetHandInputs(kRight, Trigger(0.0f));
+    FRAMES(40);
+    ASSERT_EQ(EvalLua(L, "#StubIC.executed"), "0");
+
+    // On the screen again, Interactive Control takes it as clickable on a tick; the pull from earlier is not clicked then.
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.points[1].offScreen = false", "=onScreen"), 0);
+    FRAMES(2 * tick);
+    ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "doorHandle");
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "0") << "a pull from more than half a second ago";
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1") << "a new pull clicks it";
 }
 
 // ---- The Pointer Ray starts at the index fingertip of the Virtual Hand and runs along the finger ----
