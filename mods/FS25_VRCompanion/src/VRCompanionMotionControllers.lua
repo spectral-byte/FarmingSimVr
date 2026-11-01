@@ -118,8 +118,8 @@
 --                 resetMotionControllers -> resetAnimatedObjectsSupport() (VRCompanionAnimatedObjects.lua, ADR-0034). While the
 --                 ray is on one, the Pointer Hand's trigger is taken off the Virtual Gamepad and a pull runs the game's own toggle.
 --     ManualAttach updatePointerRay -> peekInteractiveControlTarget() (the angle of the best Click Point), updateManualAttach(dt, suppressed,
---                 clickCos) (the hitch nearer the ray's centre than that Click Point is the target), then updateInteractiveControl(dt,
---                 selectNone) (told to select none when the hitch won), all before Animated Objects and Object Grab (either one selected
+--                 clickCos) (the Coupling Point nearer the ray's centre than that Click Point is the target), then updateInteractiveControl(dt,
+--                 selectNone) (told to select none when the Coupling Point won), all before Animated Objects and Object Grab (either one selected
 --                 suppresses both; also, as suppressed, on the paths where input is ignored, so the selection clears), getPointerDiagnostics -> getManualAttachDiagnostics(), resetMotionControllers ->
 --                 resetManualAttachSupport() (VRCompanionManualAttach.lua, ADR-0035). The one thing of Manual Attach it wraps is the handler class's candidate update.
 --     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
@@ -399,7 +399,7 @@ local function settleInteractiveControl(self, dt)
     if type(self.updateInteractiveControl) == "function" then self:updateInteractiveControl(dt) end
     -- No Animated Object stays selected either (suppressed: nothing is selected, the trigger is not taken).
     if type(self.updateAnimatedObjects) == "function" then self:updateAnimatedObjects(dt, true) end
-    -- Nor a hitch of Manual Attach.
+    -- Nor a Coupling Point of Manual Attach.
     if type(self.updateManualAttach) == "function" then self:updateManualAttach(dt, true) end
 end
 
@@ -780,21 +780,22 @@ function VRCompanion:updatePointerRay(dt)
                 or "keeps the aim direction (POINTER_RAY_FOLLOWS_FINGER_DIRECTION is false)"))
     end
     local hasTarget, hitX, hitY, hitZ = false, nil, nil, nil
-    -- Click Points and hitches (Coupling Points) share the cone (ADR-0035): of the Click Point and the hitch within it, the one nearer the ray's
-    -- centre is the target and the other selects nothing (a tie is the Click Point's). Interactive Control reports its best Click Point before it
-    -- commits, Manual Attach support ranks its hitch against it, and Interactive Control is then told to select none when the hitch won.
+    -- Click Points and Coupling Points (the hitch, its PTO stub, its hose couplers) share the cone (ADR-0035): of the Click Point and the Coupling
+    -- Point within it, the one nearer the ray's centre is the target and the other selects nothing (a tie is the Click Point's). Interactive Control
+    -- reports its best Click Point before it commits, Manual Attach support ranks its Coupling Point against it, and Interactive Control is then
+    -- told to select none when the Coupling Point won.
     local clickCos = nil
     if type(self.peekInteractiveControlTarget) == "function" then clickCos = self:peekInteractiveControlTarget() end
-    local onHitch, hitchX, hitchY, hitchZ = false, nil, nil, nil
+    local onCouplingPoint, couplingX, couplingY, couplingZ = false, nil, nil, nil
     if type(self.updateManualAttach) == "function" then
-        onHitch, hitchX, hitchY, hitchZ = self:updateManualAttach(dt, false, clickCos)
+        onCouplingPoint, couplingX, couplingY, couplingZ = self:updateManualAttach(dt, false, clickCos)
     end
     if type(self.updateInteractiveControl) == "function" then
-        hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt, onHitch)
+        hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt, onCouplingPoint)
     end
     -- Either of them selected wins over everything else (Animated Objects and Object Grab): Interactive Control answers a hit point only when it
     -- selected one (it answers hasTarget, with no hit point, merely for "Click Points exist", which an Animated Object may replace).
-    if onHitch then hasTarget, hitX, hitY, hitZ = true, hitchX, hitchY, hitchZ end
+    if onCouplingPoint then hasTarget, hitX, hitY, hitZ = true, couplingX, couplingY, couplingZ end
     -- Object Grab: the ray is on an object the empty hands can pick up. Only looked at here: it pulses and grabs once it is the target.
     local grabbable, grabX, grabY, grabZ, grabDistance = false, nil, nil, nil, nil
     if not hasTarget and type(self.peekObjectGrabRayTarget) == "function" then
