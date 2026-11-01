@@ -131,5 +131,6 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, ThePointerDiagnosticsSayTheSupportIs
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach("constantsMissing"));
     EXPECT_NE(EvalLua(L, "runCommand('vrPointerDiagnostics')").find("Manual Attach support: not installed yet"), std::string::npos);
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
-    EXPECT_NE(EvalLua(L, "runCommand('vrPointerDiagnostics')").find("Manual Attach support: gave up (see the warning in the log)"), std::string::npos);
+    EXPECT_NE(EvalLua(L, "runCommand('vrPointerDiagnostics')").find("Manual Attach support: gave up (VehicleAttachmentHandler.PLAYER_MIN_DISTANCE_SQ is missing)"), std::string::npos)
+        << "the line says why, as the warning does: " << EvalLua(L, "runCommand('vrPointerDiagnostics')");
 }

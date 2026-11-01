@@ -91,6 +91,7 @@ local function newState()
     return {
         installed = false,
         gaveUp = false,       -- the support was found unusable (warned once); do not look again
+        gaveUpBecause = nil,  -- why (the warning's problem), for the diagnostics
         instance = nil,       -- g_manualAttach
         handler = nil,        -- its vehicle attachment handler
         class = nil,          -- the VehicleAttachmentHandler class
@@ -180,7 +181,7 @@ local function findManualAttach()
 end
 
 local function giveUp(problem)
-    state.gaveUp = true
+    state.gaveUp, state.gaveUpBecause = true, problem
     print("[FS25_VR] [Warning] Manual Attach support disabled: " .. problem
         .. ". Motion Controllers cannot work hitches; Manual Attach is unchanged.")
 end
@@ -477,7 +478,7 @@ end
 
 -- One line for vrPointerDiagnostics: whether the support is installed, how many hitches are in reach and which one is selected.
 function VRCompanion:getManualAttachDiagnostics()
-    if state.gaveUp then return "Manual Attach support: gave up (see the warning in the log)" end
+    if state.gaveUp then return "Manual Attach support: gave up (" .. tostring(state.gaveUpBecause) .. ")" end
     if not state.installed then return "Manual Attach support: not installed yet (waiting for a tracked Motion Controller)" end
     local selected = state.selected
     local text = "none"
