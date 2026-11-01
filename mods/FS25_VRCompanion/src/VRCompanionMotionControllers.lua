@@ -117,6 +117,11 @@
 --                 where input is ignored, so the selection clears), getPointerDiagnostics -> getAnimatedObjectsDiagnostics(),
 --                 resetMotionControllers -> resetAnimatedObjectsSupport() (VRCompanionAnimatedObjects.lua, ADR-0034). While the
 --                 ray is on one, the Pointer Hand's trigger is taken off the Virtual Gamepad and a pull runs the game's own toggle.
+--     ManualAttach updatePointerRay -> peekInteractiveControlTarget() (the angle of the best Click Point), updateManualAttach(dt, suppressed,
+--                 clickCos) (the Coupling Point nearer the ray's centre than that Click Point is the target), then updateInteractiveControl(dt,
+--                 selectNone) (told to select none when the Coupling Point won), all before Animated Objects and Object Grab (either one selected
+--                 suppresses both; also, as suppressed, on the paths where input is ignored, so the selection clears), getPointerDiagnostics -> getManualAttachDiagnostics(), resetMotionControllers ->
+--                 resetManualAttachSupport() (VRCompanionManualAttach.lua, ADR-0035). The one thing of Manual Attach it wraps is the handler class's candidate update.
 --     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
 --                 setting rides on save/loadMotionControllerSettings, the status command ends with the pad's state and
 --                 the console command registers next to the others (VRCompanionVirtualGamepad.lua, ADR-0028)
@@ -394,6 +399,8 @@ local function settleInteractiveControl(self, dt)
     if type(self.updateInteractiveControl) == "function" then self:updateInteractiveControl(dt) end
     -- No Animated Object stays selected either (suppressed: nothing is selected, the trigger is not taken).
     if type(self.updateAnimatedObjects) == "function" then self:updateAnimatedObjects(dt, true) end
+    -- Nor a Coupling Point of Manual Attach.
+    if type(self.updateManualAttach) == "function" then self:updateManualAttach(dt, true) end
 end
 
 -- What reads the pointer after the hands were polled (menus); a single guarded call.
@@ -773,11 +780,22 @@ function VRCompanion:updatePointerRay(dt)
                 or "keeps the aim direction (POINTER_RAY_FOLLOWS_FINGER_DIRECTION is false)"))
     end
     local hasTarget, hitX, hitY, hitZ = false, nil, nil, nil
-    if type(self.updateInteractiveControl) == "function" then
-        hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt)
+    -- Click Points and Coupling Points (the hitch, its PTO stub, its hose couplers) share the cone (ADR-0035): of the Click Point and the Coupling
+    -- Point within it, the one nearer the ray's centre is the target and the other selects nothing (a tie is the Click Point's). Interactive Control
+    -- reports its best Click Point before it commits, Manual Attach support ranks its Coupling Point against it, and Interactive Control is then
+    -- told to select none when the Coupling Point won.
+    local clickCos = nil
+    if type(self.peekInteractiveControlTarget) == "function" then clickCos = self:peekInteractiveControlTarget() end
+    local onCouplingPoint, couplingX, couplingY, couplingZ = false, nil, nil, nil
+    if type(self.updateManualAttach) == "function" then
+        onCouplingPoint, couplingX, couplingY, couplingZ = self:updateManualAttach(dt, false, clickCos)
     end
-    -- A Click Point within the cone wins over everything: Interactive Control answers a hit point only when it selected one (it answers
-    -- hasTarget, with no hit point, merely for "Click Points exist", which an Animated Object may replace).
+    if type(self.updateInteractiveControl) == "function" then
+        hasTarget, hitX, hitY, hitZ = self:updateInteractiveControl(dt, onCouplingPoint)
+    end
+    -- Either of them selected wins over everything else (Animated Objects and Object Grab): Interactive Control answers a hit point only when it
+    -- selected one (it answers hasTarget, with no hit point, merely for "Click Points exist", which an Animated Object may replace).
+    if onCouplingPoint then hasTarget, hitX, hitY, hitZ = true, couplingX, couplingY, couplingZ end
     -- Object Grab: the ray is on an object the empty hands can pick up. Only looked at here: it pulses and grabs once it is the target.
     local grabbable, grabX, grabY, grabZ, grabDistance = false, nil, nil, nil, nil
     if not hasTarget and type(self.peekObjectGrabRayTarget) == "function" then
@@ -1066,6 +1084,9 @@ function VRCompanion:getPointerDiagnostics()
     if type(self.getAnimatedObjectsDiagnostics) == "function" then
         virtualHandsText = virtualHandsText .. " | " .. self:getAnimatedObjectsDiagnostics()
     end
+    if type(self.getManualAttachDiagnostics) == "function" then
+        virtualHandsText = virtualHandsText .. " | " .. self:getManualAttachDiagnostics()
+    end
     local pointer = state.pointerHand
     local trigger = pointer ~= nil and state.hands[pointer].trigger or 0
     return string.format("Pointer Ray: %s | Pointer Hand: %s | trigger: %.2f | pointer controlled by: %s | %s | Left hand: %s | Right hand: %s%s",
@@ -1120,6 +1141,7 @@ function VRCompanion:resetMotionControllers()
     end
     if type(self.resetInteractiveControlSupport) == "function" then self:resetInteractiveControlSupport() end
     if type(self.resetAnimatedObjectsSupport) == "function" then self:resetAnimatedObjectsSupport() end
+    if type(self.resetManualAttachSupport) == "function" then self:resetManualAttachSupport() end
     state = newState()
     initHands()
     self.pointerHand = nil

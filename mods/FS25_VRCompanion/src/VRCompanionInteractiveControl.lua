@@ -27,6 +27,10 @@
 -- Pointer Ray is not drawn and the trigger clicks nothing; a trigger pulled in that time does not click
 -- (or keep an analog Click Point acting) once the hand moves, only a new pull does.
 --
+-- A Click Point shares the cone with a Coupling Point of Manual Attach (VRCompanionManualAttach.lua, ADR-0035): the one nearer the ray's centre is the
+-- target. peekInteractiveControlTarget() reports the best Click Point's angle (as a cosine) before it is committed, and
+-- updateInteractiveControl(dt, selectNone) selects no Click Point for that update when the Coupling Point is nearer.
+--
 -- Other modules build on:
 --   VRCompanion:onClickPointEvent(kind, clickPoint)   optional hook, called with "selected" (the
 --       selected Click Point changed, clickPoint may be nil) and "clicked" (a trigger pull was executed:
@@ -222,7 +226,7 @@ local function anyHandTracked(self)
 end
 
 -- Picks the Click Point nearest the centre of the ray within the cone; counts the live Click Points.
--- Returns the number of live Click Points and the selected one with its world position.
+-- Returns the number of live Click Points and the selected one with its world position and the cosine of its angle from the ray's centre.
 local function selectFromRay(self, ray)
     local getWorldTranslationFn = getWorldTranslation or (_G and _G.getWorldTranslation)
     local cosCone = math.cos(math.rad(self.pointerConeDegrees))
@@ -247,7 +251,7 @@ local function selectFromRay(self, ray)
             end
         end
     end
-    return live, best, bx, by, bz
+    return live, best, bx, by, bz, bestCos
 end
 
 -- One trigger pull runs Interactive Control's own execute path once; an analog Click Point keeps
@@ -372,10 +376,21 @@ local function updateAutoOn(self)
     end
 end
 
+-- The Click Point the ray would select now, before updateInteractiveControl commits: the cosine of its angle from the ray's centre
+-- (larger is nearer the centre), or nil when none is within the cone. The Pointer Ray code ranks it against a Coupling Point
+-- (VRCompanionManualAttach.lua) and then tells updateInteractiveControl whether to select none.
+function VRCompanion:peekInteractiveControlTarget()
+    if not state.installed or not rayControlsSelection(self) then return nil end
+    if self:doesMenuTakeInput() and self:isStereoDialogShowing() then return nil end
+    local _, best, _, _, _, cos = selectFromRay(self, self:getPointerRay())
+    return best ~= nil and cos or nil
+end
+
 -- Called by the Pointer Ray code once per Companion Mod update, after the ray is placed. Returns
 -- whether there are active Click Points (something the ray could hit) and, when one is selected, its
--- world position (where the ray ends).
-function VRCompanion:updateInteractiveControl(dt)
+-- world position (where the ray ends). selectNone: a Coupling Point is nearer the ray's centre, so no
+-- Click Point is selected for this update (none is clickable, and Interactive Control's hover state follows).
+function VRCompanion:updateInteractiveControl(dt, selectNone)
     if not state.installed then
         if state.gaveUp or self.motionControllersEnabled == false or not anyHandTracked(self) then
             return false
@@ -393,6 +408,7 @@ function VRCompanion:updateInteractiveControl(dt)
         ray = self:getPointerRay()
     end
     local live, selected, hx, hy, hz = selectFromRay(self, ray)
+    if selectNone then selected, hx, hy, hz = nil, nil, nil, nil end
     local previous = state.selected
     state.selected = selected
     if selected ~= previous then
