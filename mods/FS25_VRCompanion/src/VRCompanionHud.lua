@@ -99,9 +99,25 @@ function VRCompanion:getHudBaseUiScale()
     return 1.0
 end
 
--- The scale a group is drawn at: the game's UI scale setting times the group's own scale
+-- FOV Overscan widens the view by (1 + percent / 100) in tangent, so the same normalized screen position and size would
+-- sit further out, look bigger and read nearer. The HUD shrinks toward the screen centre by this factor instead, which
+-- keeps its angular position and size (and, with the convergence disparity, its depth) as without the overscan.
+function VRCompanion:getHudFovCompensation()
+    local percent = self.fovOverscan or 0
+    if percent <= 0 or self.is2DViewActive then return 1.0 end
+    return 1.0 / (1.0 + percent / 100.0)
+end
+
+-- A normalized distance from a screen edge, pulled in toward the centre by the FOV Overscan compensation
+function VRCompanion:compensateHudEdgeDistance(distance)
+    local compensation = self:getHudFovCompensation()
+    if compensation == 1.0 then return distance end
+    return 0.5 - (0.5 - distance) * compensation
+end
+
+-- The scale a group is drawn at: the game's UI scale setting times the group's own scale, shrunk by the FOV Overscan
 function VRCompanion:getHudGroupScale(groupName)
-    return self:getHudBaseUiScale() * self:getHudGroupLayout(groupName).scale
+    return self:getHudBaseUiScale() * self:getHudGroupLayout(groupName).scale * self:getHudFovCompensation()
 end
 
 -- Width and height of a display, 0 where it does not say
@@ -137,17 +153,19 @@ function VRCompanion:getHudDisplayPosition(display, displayName, convergenceOffs
     local offset = convergenceOffset or 0.0
     local group, groupName = findHudGroup(displayName)
     if group == nil then
-        return 0.5 + offset, self:getHudGroupLayout(CONTEXT_ACTION_ANCHOR_GROUP).marginY
+        return 0.5 + offset, self:compensateHudEdgeDistance(self:getHudGroupLayout(CONTEXT_ACTION_ANCHOR_GROUP).marginY)
     end
     local layout = self:getHudGroupLayout(groupName)
+    local marginX = self:compensateHudEdgeDistance(layout.marginX)
+    local marginY = self:compensateHudEdgeDistance(layout.marginY)
     local w, h
     if displayName == "FillLevelsDisplay" then
         w, h = self:getFillLevelsBlockSize(display)
     else
         w, h = getDisplaySize(display)
     end
-    local x = (group.alignX == "right") and (1.0 - layout.marginX - w) or layout.marginX
-    local y = (group.alignY == "top") and (1.0 - layout.marginY - h) or layout.marginY
+    local x = (group.alignX == "right") and (1.0 - marginX - w) or marginX
+    local y = (group.alignY == "top") and (1.0 - marginY - h) or marginY
     if displayName == "SpeedMeterDisplay" then
         local fillLevels = self:getFillLevelsDisplay()
         if fillLevels ~= nil then
@@ -211,14 +229,16 @@ function VRCompanion:computeConvergenceDisparity(ipd, depth)
         end
     end
 
+    -- The disparity is a share of the screen width, which the FOV Overscan widens
+    local compensation = self:getHudFovCompensation()
     if targetIpd == nil or targetIpd <= 0.001 then
-        return self.DEFAULT_CONVERGENCE_DISPARITY
+        return self.DEFAULT_CONVERGENCE_DISPARITY * compensation
     end
 
     local clampedIpd = self:clamp(targetIpd, self.MIN_IPD, self.MAX_IPD)
     local disparity = (clampedIpd / targetDepth) * self.CONVERGENCE_PARALLAX_FACTOR
 
-    return self:clamp(disparity, self.MIN_CONVERGENCE_DISPARITY, self.MAX_CONVERGENCE_DISPARITY)
+    return self:clamp(disparity, self.MIN_CONVERGENCE_DISPARITY, self.MAX_CONVERGENCE_DISPARITY) * compensation
 end
 
 function VRCompanion:getConvergenceDisparity()
@@ -479,10 +499,10 @@ function VRCompanion:updateHudConvergence(dt)
 
     self.currentConvergenceOffset = offset
 
-    local baseLeft = self.hudAnchorLeftBase or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL
-    local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL)
-    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_SAFE_AREA_VERTICAL
-    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
+    local baseLeft = self:compensateHudEdgeDistance(self.hudAnchorLeftBase or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL)
+    local baseRight = 1.0 - self:compensateHudEdgeDistance(1.0 - (self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL)))
+    local baseBottom = self:compensateHudEdgeDistance(self.hudAnchorBottomBase or self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
+    local baseTop = 1.0 - self:compensateHudEdgeDistance(1.0 - (self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_VERTICAL)))
 
     local shiftedLeft = self:clamp(baseLeft + offset, 0.0, 1.0)
     local shiftedRight = self:clamp(baseRight + offset, 0.0, 1.0)

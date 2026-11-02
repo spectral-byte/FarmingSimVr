@@ -174,6 +174,7 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
     self->Set2DViewActive(false);
     self->SetDesktopMirrorEnabled(true);
     self->SetMouseConfinementEnabled(true);
+    self->SetFovOverscan(0.0f);
     LogInfo("[VRBridge] Companion Mod map unloaded; reverted to Menu Quad layer mode.");
     return 0;
 }
@@ -744,9 +745,16 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
     return 1;
 }
 
+void VRBridge::UpdateFovOverscanSuspension() {
+    if (m_openXrManager) {
+        m_openXrManager->SetFovOverscanSuspended(m_menuVisible || m_2dViewActive);
+    }
+}
+
 void VRBridge::SetMenuVisible(bool visible) {
     if (m_menuVisible != visible) {
         m_menuVisible = visible;
+        UpdateFovOverscanSuspension();
         SetMenuCursor(false, 0.0f, 0.0f);  // a ray cursor from the previous panel must not linger
         SetFrameParity(0);
         ResetSubPass();
@@ -884,6 +892,7 @@ int VRBridge::Lua_GetIsMenuVisible(lua_State* L) {
 void VRBridge::Set2DViewActive(bool active) {
     if (m_2dViewActive != active) {
         m_2dViewActive = active;
+        UpdateFovOverscanSuspension();
         SetMenuCursor(false, 0.0f, 0.0f);
         SetFrameParity(0);
         ResetSubPass();
@@ -930,6 +939,29 @@ int VRBridge::Lua_GetDesktopMirror(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     lua_pushboolean(L, self->IsDesktopMirrorEnabled() ? 1 : 0);
+    return 1;
+}
+
+void VRBridge::SetFovOverscan(float percent) {
+    percent = OpenXrManager::ClampFovOverscan(percent);
+    m_fovOverscan = percent;
+    if (m_openXrManager) {
+        m_openXrManager->SetFovOverscan(percent);
+    }
+}
+
+int VRBridge::Lua_SetFovOverscan(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setFovOverscan");
+    self->SetFovOverscan(lua_gettop(L) >= 1 ? static_cast<float>(lua_tonumber(L, 1)) : 0.0f);
+    return 0;
+}
+
+int VRBridge::Lua_GetFovOverscan(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    lua_pushnumber(L, self->GetFovOverscan());
     return 1;
 }
 

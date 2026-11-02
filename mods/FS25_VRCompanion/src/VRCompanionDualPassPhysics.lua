@@ -17,8 +17,14 @@
 -- scale (about 2.4). The physics time owed (real dt the steps have not simulated) keeps physics with real time: a fraction of
 -- what is left over is added each pair, so a missed prediction is made up over a few pairs instead of swinging the next one.
 --
+-- In multiplayer the pause stands aside whatever its setting. The game predicts the player's movement on foot and, on each
+-- server update, puts the character back where the server has it and replays the moves the server has not confirmed yet;
+-- those land in the next physics step, so a paused step shows the player pulled back and the view rubber-bands. On a client
+-- the controlled vehicle is placed by the game's Lua interpolation, which already stands still for the second sub-pass.
+--
 -- PUBLIC SURFACE
---   VRCompanion:setDualPassPhysicsPause(mode)                       "on" (the default) or "off"; session only
+--   VRCompanion:setDualPassPhysicsPause(mode)                       "on" (the default) or "off"; session only; held off in
+--                                                                   multiplayer
 --   VRCompanion:applyDualPassPhysicsPause(subPass, frameDt)         called by runMissionUpdate at the end of each sub-pass's
 --                                                                   update, with the frame's real dt
 --   VRCompanion:releaseDualPassPhysicsPause()                       physics running at normal speed again; outside Sequential
@@ -54,6 +60,11 @@ end
 local function gameHoldsPhysics()
     local mission = g_currentMission or (_G and _G.g_currentMission)
     return mission ~= nil and mission.vehicleSystem ~= nil and mission.vehicleSystem.isReloadRunning == true
+end
+
+local function isMultiplayer()
+    local mission = g_currentMission or (_G and _G.g_currentMission)
+    return mission ~= nil and mission.missionDynamicInfo ~= nil and mission.missionDynamicInfo.isMultiplayer == true
 end
 
 local function setPhysicsRunning(self, running, timeScale)
@@ -106,6 +117,10 @@ end
 function VRCompanion:applyDualPassPhysicsPause(subPass, frameDt)
     if self.dualPassPhysicsPause ~= "on" then return end
     if gameHoldsPhysics() then return end
+    if isMultiplayer() then
+        self:releaseDualPassPhysicsPause()
+        return
+    end
     frameDt = math.max(0.0, frameDt or 0.0)
     -- This frame's step ran with what the previous update left, which is still applied
     local stepPaused = self.physicsPauseApplied == true
@@ -224,19 +239,24 @@ function VRCompanion:consoleCommandEyePairTrace(arg)
     return string.format("Tracing %d eye frames into the log", frames)
 end
 
+local function describePause(self)
+    local held = (self.dualPassPhysicsPause == "on" and isMultiplayer()) and " (held off in multiplayer)" or ""
+    return string.format("Dual-Pass Physics Pause is %s%s", self.dualPassPhysicsPause, held)
+end
+
 function VRCompanion:consoleCommandDualPassPhysicsPause(arg)
     if arg == nil or arg == "" then
-        return string.format("Dual-Pass Physics Pause is %s", self.dualPassPhysicsPause)
+        return describePause(self)
     end
     if not self:setDualPassPhysicsPause(string.lower(arg)) then
         return "Usage: vrDualPassPhysicsPause [off|on]"
     end
-    return string.format("Dual-Pass Physics Pause is %s", self.dualPassPhysicsPause)
+    return describePause(self)
 end
 
 function VRCompanion:registerDualPassPhysicsConsoleCommands()
     if addConsoleCommand == nil then return end
-    addConsoleCommand("vrDualPassPhysicsPause", "Pause physics for one frame of each Sequential Dual-Pass pair, so a moving vehicle is still between the eyes (this session only; on by default): vrDualPassPhysicsPause [off|on]", "consoleCommandDualPassPhysicsPause", self)
+    addConsoleCommand("vrDualPassPhysicsPause", "Pause physics for one frame of each Sequential Dual-Pass pair, so a moving vehicle is still between the eyes (this session only; on by default; held off in multiplayer): vrDualPassPhysicsPause [off|on]", "consoleCommandDualPassPhysicsPause", self)
     addConsoleCommand("vrEyePairTrace", "Log how far the vehicle and the eye camera moved between rendered eye frames, for some frames: vrEyePairTrace [frames]", "consoleCommandEyePairTrace", self)
 end
 

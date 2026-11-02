@@ -200,6 +200,8 @@ add_executable(fs25_vr_tests
     tests/test_perf_trace.cpp
     tests/test_openxr_cursor_overlay.cpp
     tests/test_openxr_manager.cpp
+    tests/test_fov_coverage.cpp
+    tests/test_fov_overscan.cpp
     tests/test_openxr_eye_copy_d3d12.cpp
     tests/test_openxr_motion_controllers.cpp
     tests/test_mirror_window_controller.cpp
@@ -274,6 +276,13 @@ add_executable(fs25_vr_tests
     tests/test_animated_objects_nearer.cpp
     tests/test_animated_objects_pointer.cpp
     tests/test_animated_objects_wraps.cpp
+    tests/test_manual_attach_shared_cone.cpp
+    tests/test_manual_attach_hitch.cpp
+    tests/test_manual_attach_reach.cpp
+    tests/test_manual_attach_pointer.cpp
+    tests/test_manual_attach_wraps.cpp
+    tests/test_manual_attach_pto_hoses.cpp
+    tests/test_manual_attach_prompts.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE

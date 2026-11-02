@@ -40,10 +40,10 @@ constexpr const char* kStubs = R"luau(
     _G.drawDebugPoint = function(x, y, z, r, g, b, a, solid)
         table.insert(_G.debugPoints, { x = x, y = y, z = z })
     end
-    -- How many lines and dots the Pointer Ray draws in one pass.
+    -- How many lines and dots the Pointer Ray draws in one pass (the camera path the game runs before a frame is rendered).
     _G.rayDrawn = function()
         _G.debugLines, _G.debugPoints = {}, {}
-        VRCompanion:draw()
+        StubScene.updateCamera()
         return #_G.debugLines + #_G.debugPoints
     end
 )luau";

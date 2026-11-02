@@ -997,9 +997,13 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
         if type(setAudioListenerFn) == "function" then
             setAudioListenerFn(self.cyclopeanAudioListenerNode)
         end
-        -- The Virtual Hands follow the head for this rendered frame (a frame may be rendered with no update before it).
+        -- The Virtual Hands and the Pointer Ray follow the head for this rendered frame (a frame may be rendered with no
+        -- update before it).
         if type(self.placeVirtualHandsForRender) == "function" then
             self:placeVirtualHandsForRender()
+        end
+        if type(self.placePointerRayForRender) == "function" then
+            self:placePointerRayForRender()
         end
     end
 

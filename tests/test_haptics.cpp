@@ -200,6 +200,25 @@ TEST_F(CompanionModTest, AimingAtADifferentClickPointPulsesAgainButLosingTheSele
     EXPECT_EQ(PulsesTo(headset, 0), 0u);
 }
 
+TEST_F(CompanionModTest, TheRayStayingOnAClickPointOutsideTheCabPulsesOnceThoughItUpdatesOnlyOnTheVehiclesTick) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    // Interactive Control updates a Click Point on a vehicle's exterior only on the vehicle's update tick, every few frames.
+    ASSERT_EQ(RunLuauChunk(L, "StubIC.addPoint('doorHandle', -0.3, 1.5, 2.3, { outdoor = true })", "=addPoint"), 0);
+    const int tick = std::stoi(EvalLua(L, "StubIC.outdoorTickFrames"));
+
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(10 * tick);
+    ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "doorHandle");
+    EXPECT_EQ(headset.HapticPulses().size(), 1u) << "one landing, not one on every tick";
+
+    headset.SetHandInputs(kRight, Trigger(1.0f));
+    FRAMES(1);
+    EXPECT_EQ(EvalLua(L, "#StubIC.executed"), "1");
+    EXPECT_EQ(headset.HapticPulses().size(), 2u) << "and the click";
+}
+
 TEST_F(CompanionModTest, EachClickPulsesThePointerHandAndHoldingTheTriggerOnAButtonDoesNot) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);
