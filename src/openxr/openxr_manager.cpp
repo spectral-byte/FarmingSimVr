@@ -1,6 +1,7 @@
 #include "openxr_manager.h"
 #include "core/logger.h"
 #include "core/dll_lifecycle.h"
+#include "core/perf_trace.h"
 #include <vector>
 #include <cstring>
 #include <sstream>
@@ -9,25 +10,6 @@
 
 
 namespace fs25vr {
-
-// The performance counter frequency is fixed at boot, so it is queried once.
-static int64_t QpcFrequency() {
-    static const int64_t freq = [] {
-        LARGE_INTEGER f;
-        QueryPerformanceFrequency(&f);
-        return static_cast<int64_t>(f.QuadPart);
-    }();
-    return freq;
-}
-
-int64_t OpenXrManager::PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency) {
-    if (frequency <= 0) return 0;
-    // Split into whole seconds and a sub-second remainder: counter * 1e9 overflows int64 after
-    // ~15 minutes of uptime at a 10 MHz counter.
-    const int64_t seconds = counter / frequency;
-    const int64_t remainder = counter % frequency;
-    return seconds * 1000000000LL + (remainder * 1000000000LL) / frequency;
-}
 
 void OpenXrManager::SetPerformanceCounterSource(PerformanceCounterSource source) {
     m_counterSource = std::move(source);
@@ -65,7 +47,7 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
     if (m_lastPredictedDisplayTime != 0) {
         int64_t elapsedQpc = now.counter - m_lastPredictedQpc;
         if (elapsedQpc > 0 && now.frequency > 0) {
-            return m_lastPredictedDisplayTime + PerformanceCounterToNanoseconds(elapsedQpc, now.frequency);
+            return m_lastPredictedDisplayTime + QpcTicksToNanoseconds(elapsedQpc, now.frequency);
         }
         return m_lastPredictedDisplayTime;
     }
@@ -83,7 +65,7 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
 
     // No runtime conversion: the counter in nanoseconds, computed without overflow. Runtimes that
     // back XrTime with the performance counter share this time base, and the counter is monotonic.
-    return PerformanceCounterToNanoseconds(now.counter, now.frequency);
+    return QpcTicksToNanoseconds(now.counter, now.frequency);
 }
 
 OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
@@ -304,6 +286,12 @@ void OpenXrManager::Shutdown() {
     m_eyeProjections[1] = {};
     m_viewConfigViews.clear();
     m_submittedQuadFrameCount = 0;
+    m_lastLoggedIpd = 0.0f;
+    m_loggedHeadsetFovValid = false;
+    m_loggedRenderedFovValid = false;
+    m_fovOverscan = m_fovOverscanSuspended.load() ? 0.0f : m_requestedFovOverscan.load();
+    m_loggedEyeCopySizeMismatch = false;
+    m_headPoseLocateFailures = 0;
     m_hasCustomMenuQuadSize = false;
     m_menuQuadDistance = 1.5f;
     m_lastSubmittedQuadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
@@ -616,8 +604,7 @@ HeadPose OpenXrManager::PollHeadPose(XrTime time) {
     XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
     XrResult res = m_dispatch->LocateSpace(m_viewSpace, m_localSpace, time, &location);
     if (XR_FAILED(res)) {
-        static uint32_t s_locateFailCount = 0;
-        if (++s_locateFailCount % 300 == 1) {
+        if (++m_headPoseLocateFailures % 300 == 1) {
             LogWarn("OpenXrManager::PollHeadPose: LocateSpace failed (result " + std::to_string(res) + ")");
         }
         return m_lastPose;
@@ -730,7 +717,17 @@ void OpenXrManager::Recenter() {
     LogInfo("OpenXrManager: Head pose recentered.");
 }
 
-EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov) {
+float OpenXrManager::ClampFovOverscan(float percent) {
+    if (!(percent >= 0.0f)) return 0.0f;
+    return std::min(percent, kMaxFovOverscanPercent);
+}
+
+void OpenXrManager::SetFovOverscan(float percent) {
+    // The bridge clamps too, this keeps the manager safe on its own.
+    m_requestedFovOverscan.store(ClampFovOverscan(percent));
+}
+
+EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov, float swapchainAspect, float fovOverscanPercent) {
     EyeProjection proj;
     proj.angleLeft = fov.angleLeft;
     proj.angleRight = fov.angleRight;
@@ -755,12 +752,21 @@ EyeProjection OpenXrManager::ComputeProjectionFromFov(const XrFovf& fov) {
         proj.yOffsetNorm = proj.yOffset / tanHeight;
     }
 
-    proj.fovY = 2.0f * std::atan(tanHeight * 0.5f);
-    proj.fovX = 2.0f * std::atan(tanWidth * 0.5f);
-
     if (std::abs(tanHeight) > 1e-6f) {
         proj.aspectRatio = tanWidth / tanHeight;
     }
+
+    // The rendered FOV (ADR-0005): symmetric, and wide enough to cover every edge of the headset FOV. Its vertical
+    // half-angle tangent is the largest of the up tangent, the down tangent and the wider horizontal tangent divided
+    // by the aspect of the image it is rendered into (the eye swapchain; the headset FOV's own aspect before the
+    // swapchains exist). The horizontal half-angle follows from the aspect. FOV Overscan multiplies that tangent, so
+    // both axes widen by the same factor and the pixels stay square.
+    const float aspect = (swapchainAspect > 1e-6f) ? swapchainAspect : proj.aspectRatio;
+    const float widerTanX = std::max(std::abs(proj.tanLeft), std::abs(proj.tanRight));
+    const float coveringTanHalfY = std::max({ std::abs(proj.tanUp), std::abs(proj.tanDown), widerTanX / aspect });
+    const float tanHalfY = coveringTanHalfY * (1.0f + fovOverscanPercent / 100.0f);
+    proj.fovY = 2.0f * std::atan(tanHalfY);
+    proj.fovX = 2.0f * std::atan(aspect * tanHalfY);
 
     proj.isValid = true;
     return proj;
@@ -779,6 +785,11 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
         }
     }
 
+    // With no frame in flight there is no pair to keep on its FOV, so a new overscan shows at once.
+    if (!m_frameBegun) {
+        LatchFovOverscan();
+    }
+
     if (time != 0 && time == m_lastLocatedViewsTime && m_eyeProjections[0].isValid) {
         return true;
     }
@@ -794,8 +805,9 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
 
     XrResult res = m_dispatch->LocateViews(m_session, &locateInfo, &viewState, 2, &viewCount, views);
     if (XR_SUCCEEDED(res) && viewCount >= 2) {
-        m_eyeProjections[0] = ComputeProjectionFromFov(views[0].fov);
-        m_eyeProjections[1] = ComputeProjectionFromFov(views[1].fov);
+        m_eyeProjections[0] = ComputeProjectionFromFov(views[0].fov, SwapchainAspect(0), m_fovOverscan);
+        m_eyeProjections[1] = ComputeProjectionFromFov(views[1].fov, SwapchainAspect(1), m_fovOverscan);
+        LogFovIfChanged();
         float dx = views[1].pose.position.x - views[0].pose.position.x;
         float dy = views[1].pose.position.y - views[0].pose.position.y;
         float dz = views[1].pose.position.z - views[0].pose.position.z;
@@ -804,9 +816,8 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
             m_ipd = measuredIpd;
         }
 
-        static float s_lastLoggedIpd = 0.0f;
-        if (std::abs(m_ipd - s_lastLoggedIpd) > 0.002f) {
-            s_lastLoggedIpd = m_ipd;
+        if (std::abs(m_ipd - m_lastLoggedIpd) > 0.002f) {
+            m_lastLoggedIpd = m_ipd;
             std::stringstream ss;
             ss << "OpenXrManager: Calibrated hardware IPD = " << (m_ipd * 1000.0f) << " mm"
                << " (View0 pos: " << views[0].pose.position.x << ", " << views[0].pose.position.y << ", " << views[0].pose.position.z << ")"
@@ -817,6 +828,84 @@ bool OpenXrManager::LocateActiveViews(XrTime time) {
         return true;
     }
     return false;
+}
+
+void OpenXrManager::LatchFovOverscan() {
+    const float wanted = m_fovOverscanSuspended.load() ? 0.0f : m_requestedFovOverscan.load();
+    if (wanted != m_fovOverscan) {
+        m_fovOverscan = wanted;
+        m_lastLocatedViewsTime = 0;  // the views already located were computed with the old overscan
+    }
+}
+
+float OpenXrManager::SwapchainAspect(uint32_t eyeIndex) const {
+    if (!m_hasEyeSwapchains || eyeIndex >= 2 || m_eyeSwapchains[eyeIndex].height == 0) {
+        return 0.0f;
+    }
+    return static_cast<float>(m_eyeSwapchains[eyeIndex].width) / static_cast<float>(m_eyeSwapchains[eyeIndex].height);
+}
+
+void OpenXrManager::RefreshRenderedFov() {
+    for (uint32_t i = 0; i < 2; ++i) {
+        const EyeProjection& current = m_eyeProjections[i];
+        if (!current.isValid) {
+            continue;
+        }
+        const XrFovf headsetFov{ current.angleLeft, current.angleRight, current.angleUp, current.angleDown };
+        m_eyeProjections[i] = ComputeProjectionFromFov(headsetFov, SwapchainAspect(i), m_fovOverscan);
+    }
+    LogFovIfChanged();
+}
+
+void OpenXrManager::LogFovIfChanged() {
+    if (!m_eyeProjections[0].isValid || !m_eyeProjections[1].isValid) {
+        return;
+    }
+    const float radToDeg = 180.0f / 3.14159265358979f;
+
+    HeadsetFov headset[2];
+    RenderedFov rendered[2];
+    for (int eye = 0; eye < 2; ++eye) {
+        const EyeProjection& proj = m_eyeProjections[eye];
+        headset[eye] = { proj.angleLeft, proj.angleRight, proj.angleUp, proj.angleDown };
+        rendered[eye] = { proj.fovY, proj.fovX };
+    }
+
+    const bool headsetChanged = !m_loggedHeadsetFovValid || !(headset[0] == m_loggedHeadsetFov[0]) ||
+                                !(headset[1] == m_loggedHeadsetFov[1]);
+    if (headsetChanged) {
+        std::copy(headset, headset + 2, m_loggedHeadsetFov);
+        m_loggedHeadsetFovValid = true;
+        std::stringstream ss;
+        ss.setf(std::ios::fixed);
+        ss.precision(1);
+        ss << "OpenXrManager: Headset FOV (degrees, left/right/up/down)";
+        for (int eye = 0; eye < 2; ++eye) {
+            const HeadsetFov& fov = headset[eye];
+            ss << " - Eye" << eye << ": [" << fov.left * radToDeg << ", " << fov.right * radToDeg << ", "
+               << fov.up * radToDeg << ", " << fov.down * radToDeg << "]";
+        }
+        LogInfo(ss.str());
+    }
+
+    const bool renderedChanged = !m_loggedRenderedFovValid || !(rendered[0] == m_loggedRenderedFov[0]) ||
+                                 !(rendered[1] == m_loggedRenderedFov[1]) ||
+                                 std::abs(m_loggedFovOverscan - m_fovOverscan) > 1e-4f;
+    if (renderedChanged) {
+        std::copy(rendered, rendered + 2, m_loggedRenderedFov);
+        m_loggedRenderedFovValid = true;
+        m_loggedFovOverscan = m_fovOverscan;
+        std::stringstream ss;
+        ss.setf(std::ios::fixed);
+        ss.precision(1);
+        ss << "OpenXrManager: Rendered FOV (degrees, vertical x horizontal)";
+        for (int eye = 0; eye < 2; ++eye) {
+            ss << " - Eye" << eye << ": " << rendered[eye].vertical * radToDeg << " x "
+               << rendered[eye].horizontal * radToDeg;
+        }
+        ss << " - Overscan " << m_fovOverscan << "%";
+        LogInfo(ss.str());
+    }
 }
 
 EyeProjection OpenXrManager::PollEyeProjection(uint32_t eyeIndex, XrTime time) {
@@ -981,6 +1070,7 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
     }
 
     m_hasEyeSwapchains = true;
+    RefreshRenderedFov();  // the coverage now uses the swapchain aspect
     LogInfo("OpenXrManager: Created stereoscopic eye swapchains (" + std::to_string(m_eyeSwapchains[0].width) + "x" + std::to_string(m_eyeSwapchains[0].height) + ").");
     return true;
 }
@@ -996,11 +1086,18 @@ void OpenXrManager::DestroyEyeSwapchains() {
     }
     m_copyFence.Reset();
     m_currentFenceValue = 0;
+    m_clearFenceValue = 0;
+    m_clearCommandList.Reset();
+    m_clearAllocator.Reset();
+    m_clearRtvHeap.Reset();
     for (uint32_t r = 0; r < kCopyRingSize; ++r) {
         m_copyFenceValues[r] = 0;
         m_copyCommandLists[r].Reset();
         m_copyAllocators[r].Reset();
+        m_copyTimestampPending[r] = false;
     }
+    m_copyTimestampHeap.Reset();
+    m_copyTimestampReadback.Reset();
     m_copyRingIndex = 0;
     m_copyFenceEvent.Close();
     for (uint32_t i = 0; i < 2; ++i) {
@@ -1016,6 +1113,7 @@ void OpenXrManager::DestroyEyeSwapchains() {
         EndFrame();
     }
     m_hasEyeSwapchains = false;
+    RefreshRenderedFov();  // back to the headset FOV's own aspect
 }
 
 const EyeSwapchain& OpenXrManager::GetEyeSwapchain(uint32_t eyeIndex) const {
@@ -1086,12 +1184,18 @@ bool OpenXrManager::BeginFrame() {
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
     m_frameState = {XR_TYPE_FRAME_STATE};
     m_frameState.shouldRender = XR_TRUE;
-    XrResult res = m_dispatch->WaitFrame(m_session, &waitInfo, &m_frameState);
+    XrResult res;
+    {
+        PerfScope waitTiming(PerfSection::XrWaitFrame);
+        res = m_dispatch->WaitFrame(m_session, &waitInfo, &m_frameState);
+    }
     if (XR_FAILED(res)) {
         LogError("OpenXrManager::BeginFrame: WaitFrame failed (result " + std::to_string(res) + ")");
         EnterPassThroughIfLost(res);
         return false;
     }
+    // The rest of the frame begin, up to whichever return ends it.
+    PerfScope beginTiming(PerfSection::FrameBegin);
 
     if (m_frameState.predictedDisplayTime != 0) {
         m_lastPredictedDisplayTime = m_frameState.predictedDisplayTime;
@@ -1106,6 +1210,8 @@ bool OpenXrManager::BeginFrame() {
         return false;
     }
 
+    // A FOV Overscan set meanwhile takes effect with this frame; the views located below use it for the whole pair.
+    LatchFovOverscan();
     m_frameBegun = true;
     ++m_frameSerial;
     // Motion Controllers: one sync per frame, located at the predicted display time like the head.
@@ -1147,7 +1253,7 @@ bool OpenXrManager::EndFrame() {
     endInfo.layerCount = 0;
     endInfo.layers = nullptr;
 
-    XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
+    XrResult res = DispatchEndFrame(endInfo);
     m_frameBegun = false;
     ClearRenderPoses();
     m_lastPolledTime = 0;
@@ -1158,6 +1264,102 @@ bool OpenXrManager::EndFrame() {
         return false;
     }
     return true;
+}
+
+void OpenXrManager::EnsureCopyFence() {
+    if (m_copyFence || !m_device) return;
+    m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_copyFence));
+    m_currentFenceValue = 0;
+    m_clearFenceValue = 0;
+    for (uint32_t r = 0; r < kCopyRingSize; ++r) {
+        m_copyFenceValues[r] = 0;
+    }
+    if (!m_copyFenceEvent.IsValid()) {
+        m_copyFenceEvent = ScopedEventHandle::Create(nullptr, FALSE, FALSE, nullptr);
+    }
+}
+
+XrResult OpenXrManager::DispatchEndFrame(const XrFrameEndInfo& endInfo) {
+    PerfScope timing(PerfSection::XrEndFrame);
+    return m_dispatch->EndFrame(m_session, &endInfo);
+}
+
+bool OpenXrManager::EnsureCopyTimestamps() {
+    if (m_copyTimestampHeap && m_copyTimestampReadback) return true;
+    if (m_copyTimestampsFailed || !m_device || !m_queue || !m_copyFence) return false;
+
+    D3D12_QUERY_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    heapDesc.Count = kCopyRingSize * 2;
+    D3D12_HEAP_PROPERTIES props{};
+    props.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = kCopyRingSize * 2 * sizeof(uint64_t);
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    UINT64 frequency = 0;
+    if (FAILED(m_device->CreateQueryHeap(&heapDesc, IID_PPV_ARGS(&m_copyTimestampHeap))) ||
+        FAILED(m_device->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                 nullptr, IID_PPV_ARGS(&m_copyTimestampReadback))) ||
+        FAILED(m_queue->GetTimestampFrequency(&frequency)) || frequency == 0) {
+        // The trace still has its CPU timings; only the GPU eye copy lines are missing.
+        LogWarn("OpenXrManager: GPU timestamps unavailable; vrPerfTrace logs no GPU eye copy timing");
+        m_copyTimestampHeap.Reset();
+        m_copyTimestampReadback.Reset();
+        m_copyTimestampsFailed = true;
+        return false;
+    }
+    m_gpuTimestampFrequency = frequency;
+    m_copiesSinceCalibration = 0;
+    PerfTrace::Instance().SetGpuTimestampFrequency(frequency);
+    return true;
+}
+
+void OpenXrManager::ReadCopyTimestamps(uint32_t ringSlot) {
+    if (!m_copyTimestampPending[ringSlot]) return;
+    m_copyTimestampPending[ringSlot] = false;
+    if (!m_copyTimestampReadback || !PerfTrace::Instance().IsActive()) return;
+
+    const D3D12_RANGE readRange{ringSlot * 2 * sizeof(uint64_t), (ringSlot * 2 + 2) * sizeof(uint64_t)};
+    void* mapped = nullptr;
+    if (FAILED(m_copyTimestampReadback->Map(0, &readRange, &mapped)) || !mapped) return;
+    const uint64_t* stamps = static_cast<const uint64_t*>(mapped) + ringSlot * 2;
+    const uint64_t start = stamps[0];
+    const uint64_t end = stamps[1];
+    const D3D12_RANGE written{0, 0};
+    m_copyTimestampReadback->Unmap(0, &written);
+    if (end < start) return;
+
+    // The GPU and CPU clocks drift apart slowly; recalibrating every few dozen copies keeps the lag exact.
+    if (m_copiesSinceCalibration++ % 64 == 0) {
+        UINT64 gpuTicks = 0;
+        UINT64 cpuQpc = 0;
+        if (SUCCEEDED(m_queue->GetClockCalibration(&gpuTicks, &cpuQpc))) {
+            m_gpuCalibrationTicks = gpuTicks;
+            m_gpuCalibrationCpuNs = QpcTicksToNanoseconds(static_cast<int64_t>(cpuQpc), QpcFrequency());
+        }
+    }
+    PerfTrace& trace = PerfTrace::Instance();
+    trace.AddSample(PerfSection::GpuEyeCopy, GpuTicksToNanoseconds(end - start, m_gpuTimestampFrequency));
+    if (m_gpuCalibrationTicks != 0) {
+        const int64_t startNs = GpuTimestampToCpuNanoseconds(start, m_gpuTimestampFrequency, m_gpuCalibrationTicks,
+                                                             m_gpuCalibrationCpuNs);
+        trace.AddSample(PerfSection::GpuQueueLag, startNs - m_copySubmitNs[ringSlot]);
+    }
+}
+
+void OpenXrManager::LogEyeCopySizeMismatchOnce(uint64_t srcWidth, uint32_t srcHeight, uint64_t dstWidth, uint32_t dstHeight) {
+    if (m_loggedEyeCopySizeMismatch) {
+        return;
+    }
+    m_loggedEyeCopySizeMismatch = true;
+    LogWarn("OpenXrManager::CopyBackBufferToEye: Dimension mismatch! BackBuffer: " +
+            std::to_string(srcWidth) + "x" + std::to_string(srcHeight) +
+            ", OpenXR swapchain: " + std::to_string(dstWidth) + "x" + std::to_string(dstHeight));
 }
 
 bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backBuffer) {
@@ -1196,34 +1398,31 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
     XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     uint32_t imageIndex = 0;
-    XrResult res = m_dispatch->AcquireSwapchainImage(swapchain, &acquireInfo, &imageIndex);
+    XrResult res;
+    {
+        // Acquire and wait together: the image the compositor still holds can block either.
+        PerfScope swapchainTiming(PerfSection::SwapchainWait);
+        res = m_dispatch->AcquireSwapchainImage(swapchain, &acquireInfo, &imageIndex);
+        if (XR_SUCCEEDED(res)) {
+            XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+            waitInfo.timeout = XR_INFINITE_DURATION;
+            res = m_dispatch->WaitSwapchainImage(swapchain, &waitInfo);
+            if (XR_FAILED(res)) {
+                LogError("OpenXrManager::CopyBackBufferToEye: WaitSwapchainImage failed (result " + std::to_string(res) + ")");
+                XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+                m_dispatch->ReleaseSwapchainImage(swapchain, &releaseInfo);
+                return false;
+            }
+        }
+    }
     if (XR_FAILED(res)) {
         LogError("OpenXrManager::CopyBackBufferToEye: AcquireSwapchainImage failed (result " + std::to_string(res) + ")");
         return false;
     }
 
-    XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-    waitInfo.timeout = XR_INFINITE_DURATION;
-    res = m_dispatch->WaitSwapchainImage(swapchain, &waitInfo);
-    if (XR_FAILED(res)) {
-        LogError("OpenXrManager::CopyBackBufferToEye: WaitSwapchainImage failed (result " + std::to_string(res) + ")");
-        XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-        m_dispatch->ReleaseSwapchainImage(swapchain, &releaseInfo);
-        return false;
-    }
-
     // If backBuffer, device, and queue are present, perform D3D12 command list recording & execution
     if (backBuffer && m_device && m_queue) {
-        if (!m_copyFence) {
-            m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_copyFence));
-            m_currentFenceValue = 0;
-            for (uint32_t r = 0; r < kCopyRingSize; ++r) {
-                m_copyFenceValues[r] = 0;
-            }
-            if (!m_copyFenceEvent.IsValid()) {
-                m_copyFenceEvent = ScopedEventHandle::Create(nullptr, FALSE, FALSE, nullptr);
-            }
-        }
+        EnsureCopyFence();
 
         uint32_t ringSlot = m_copyRingIndex;
         m_copyRingIndex = (m_copyRingIndex + 1) % kCopyRingSize;
@@ -1232,99 +1431,115 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
             m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_copyAllocators[ringSlot]));
         }
         if (!m_copyCommandLists[ringSlot] && m_copyAllocators[ringSlot]) {
-            m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_copyAllocators[ringSlot].Get(), nullptr, IID_PPV_ARGS(&m_copyCommandLists[ringSlot]));
+            // A new list is created open. Close it so every use starts from a closed list that can be reset.
+            if (SUCCEEDED(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_copyAllocators[ringSlot].Get(), nullptr, IID_PPV_ARGS(&m_copyCommandLists[ringSlot])))) {
+                m_copyCommandLists[ringSlot]->Close();
+            }
         }
 
         auto& curAllocator = m_copyAllocators[ringSlot];
         auto& curCommandList = m_copyCommandLists[ringSlot];
 
-        if (curCommandList && curAllocator) {
+        // A copy with no destination texture records nothing: the slot's list stays closed, nothing is
+        // executed and its fence value is not advanced.
+        ID3D12Resource* destTexture = nullptr;
+        if (imageIndex < m_eyeSwapchains[eyeIndex].images.size()) {
+            destTexture = m_eyeSwapchains[eyeIndex].images[imageIndex].texture;
+        }
+
+        if (curCommandList && curAllocator && destTexture) {
             // Synchronize with previous execution on this specific ring slot if GPU has not finished it
             uint64_t waitVal = m_copyFenceValues[ringSlot];
-            if (m_copyFence && waitVal > 0) {
-                if (m_copyFence->GetCompletedValue() < waitVal) {
-                    if (m_copyFenceEvent.IsValid()) {
-                        m_copyFence->SetEventOnCompletion(waitVal, m_copyFenceEvent.Get());
-                        WaitForSingleObject(m_copyFenceEvent.Get(), INFINITE);
+            {
+                PerfScope fenceTiming(PerfSection::CopyFenceWait);
+                if (m_copyFence && waitVal > 0) {
+                    if (m_copyFence->GetCompletedValue() < waitVal) {
+                        if (m_copyFenceEvent.IsValid()) {
+                            m_copyFence->SetEventOnCompletion(waitVal, m_copyFenceEvent.Get());
+                            WaitForSingleObject(m_copyFenceEvent.Get(), INFINITE);
+                        }
                     }
                 }
             }
+            // The slot's earlier copy has run, so its timestamps are written.
+            ReadCopyTimestamps(ringSlot);
+            const bool timed = PerfTrace::Instance().IsActive() && EnsureCopyTimestamps();
 
+            // The slot's fence has passed, so the allocator is idle; its list is closed, so it can be reset.
             curAllocator->Reset();
             curCommandList->Reset(curAllocator.Get(), nullptr);
 
-            ID3D12Resource* destTexture = nullptr;
-            if (imageIndex < m_eyeSwapchains[eyeIndex].images.size()) {
-                destTexture = m_eyeSwapchains[eyeIndex].images[imageIndex].texture;
+            D3D12_RESOURCE_BARRIER barriers[2]{};
+            barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barriers[0].Transition.pResource = backBuffer;
+            barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+            barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barriers[1].Transition.pResource = destTexture;
+            // OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be
+            // returned to RENDER_TARGET before release.
+            barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+            if (timed) {
+                curCommandList->EndQuery(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2);
+            }
+            curCommandList->ResourceBarrier(2, barriers);
+
+            uint32_t scWidth = m_eyeSwapchains[eyeIndex].width;
+            uint32_t scHeight = m_eyeSwapchains[eyeIndex].height;
+
+            D3D12_RESOURCE_DESC srcDesc = backBuffer->GetDesc();
+            if (srcDesc.Width == scWidth && srcDesc.Height == scHeight) {
+                curCommandList->CopyResource(destTexture, backBuffer);
+            } else {
+                D3D12_RESOURCE_DESC dstDesc = destTexture->GetDesc();
+                LogEyeCopySizeMismatchOnce(srcDesc.Width, srcDesc.Height, dstDesc.Width, dstDesc.Height);
+                D3D12_TEXTURE_COPY_LOCATION dstLoc{};
+                dstLoc.pResource = destTexture;
+                dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                dstLoc.SubresourceIndex = 0;
+
+                D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+                srcLoc.pResource = backBuffer;
+                srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                srcLoc.SubresourceIndex = 0;
+
+                D3D12_BOX box{};
+                box.left = 0;
+                box.top = 0;
+                box.front = 0;
+                box.right = static_cast<UINT>(std::min(srcDesc.Width, static_cast<UINT64>(dstDesc.Width)));
+                box.bottom = static_cast<UINT>(std::min(srcDesc.Height, dstDesc.Height));
+                box.back = 1;
+
+                curCommandList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &box);
             }
 
-            if (destTexture) {
-                D3D12_RESOURCE_BARRIER barriers[2]{};
-                barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                barriers[0].Transition.pResource = backBuffer;
-                barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-                barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-                barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            std::swap(barriers[0].Transition.StateBefore, barriers[0].Transition.StateAfter);
+            std::swap(barriers[1].Transition.StateBefore, barriers[1].Transition.StateAfter);
+            curCommandList->ResourceBarrier(2, barriers);
+            if (timed) {
+                curCommandList->EndQuery(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2 + 1);
+                curCommandList->ResolveQueryData(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2, 2,
+                                                 m_copyTimestampReadback.Get(), ringSlot * 2 * sizeof(uint64_t));
+            }
 
-                barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                barriers[1].Transition.pResource = destTexture;
-                // OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be
-                // returned to RENDER_TARGET before release.
-                barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-                barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-                barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            curCommandList->Close();
+            ID3D12CommandList* lists[] = { curCommandList.Get() };
+            if (timed) {
+                m_copySubmitNs[ringSlot] = PerfTrace::Instance().Now();
+            }
+            m_queue->ExecuteCommandLists(1, lists);
 
-                curCommandList->ResourceBarrier(2, barriers);
-
-                uint32_t scWidth = m_eyeSwapchains[eyeIndex].width;
-                uint32_t scHeight = m_eyeSwapchains[eyeIndex].height;
-
-                D3D12_RESOURCE_DESC srcDesc = backBuffer->GetDesc();
-                if (srcDesc.Width == scWidth && srcDesc.Height == scHeight) {
-                    curCommandList->CopyResource(destTexture, backBuffer);
-                } else {
-                    D3D12_RESOURCE_DESC dstDesc = destTexture->GetDesc();
-                    static bool loggedMismatch = false;
-                    if (!loggedMismatch) {
-                        LogWarn("OpenXrManager::CopyBackBufferToEye: Dimension mismatch! BackBuffer: " +
-                                std::to_string(srcDesc.Width) + "x" + std::to_string(srcDesc.Height) +
-                                ", OpenXR swapchain: " + std::to_string(dstDesc.Width) + "x" + std::to_string(dstDesc.Height));
-                        loggedMismatch = true;
-                    }
-                    D3D12_TEXTURE_COPY_LOCATION dstLoc{};
-                    dstLoc.pResource = destTexture;
-                    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                    dstLoc.SubresourceIndex = 0;
-
-                    D3D12_TEXTURE_COPY_LOCATION srcLoc{};
-                    srcLoc.pResource = backBuffer;
-                    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                    srcLoc.SubresourceIndex = 0;
-
-                    D3D12_BOX box{};
-                    box.left = 0;
-                    box.top = 0;
-                    box.front = 0;
-                    box.right = static_cast<UINT>(std::min(srcDesc.Width, static_cast<UINT64>(dstDesc.Width)));
-                    box.bottom = static_cast<UINT>(std::min(srcDesc.Height, dstDesc.Height));
-                    box.back = 1;
-
-                    curCommandList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &box);
-                }
-
-                std::swap(barriers[0].Transition.StateBefore, barriers[0].Transition.StateAfter);
-                std::swap(barriers[1].Transition.StateBefore, barriers[1].Transition.StateAfter);
-                curCommandList->ResourceBarrier(2, barriers);
-
-                curCommandList->Close();
-                ID3D12CommandList* lists[] = { curCommandList.Get() };
-                m_queue->ExecuteCommandLists(1, lists);
-
-                if (m_copyFence) {
-                    m_currentFenceValue++;
-                    m_copyFenceValues[ringSlot] = m_currentFenceValue;
-                    m_queue->Signal(m_copyFence.Get(), m_currentFenceValue);
-                }
+            if (m_copyFence) {
+                m_currentFenceValue++;
+                m_copyFenceValues[ringSlot] = m_currentFenceValue;
+                m_queue->Signal(m_copyFence.Get(), m_currentFenceValue);
+                m_copyTimestampPending[ringSlot] = timed;
             }
         }
     }
@@ -1338,6 +1553,68 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
 
     m_eyeSwapchains[eyeIndex].lastCopiedIndex = imageIndex;
     m_eyeSwapchains[eyeIndex].hasCopiedFrame = true;
+    return true;
+}
+
+bool OpenXrManager::ClearBackBufferToBlack(ID3D12Resource* backBuffer) {
+    if (!backBuffer || !m_device || !m_queue) {
+        return false;
+    }
+    EnsureCopyFence();
+    if (!m_copyFence) {
+        return false;
+    }
+
+    if (!m_clearAllocator) {
+        m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_clearAllocator));
+    }
+    if (!m_clearCommandList && m_clearAllocator) {
+        if (SUCCEEDED(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_clearAllocator.Get(), nullptr, IID_PPV_ARGS(&m_clearCommandList)))) {
+            m_clearCommandList->Close();
+        }
+    }
+    if (!m_clearRtvHeap) {
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+        heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        heapDesc.NumDescriptors = 1;
+        heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_clearRtvHeap));
+    }
+    if (!m_clearAllocator || !m_clearCommandList || !m_clearRtvHeap) {
+        return false;
+    }
+
+    // The previous clear's allocator is reusable only once the GPU has finished with it.
+    if (m_clearFenceValue > 0 && m_copyFence->GetCompletedValue() < m_clearFenceValue && m_copyFenceEvent.IsValid()) {
+        m_copyFence->SetEventOnCompletion(m_clearFenceValue, m_copyFenceEvent.Get());
+        WaitForSingleObject(m_copyFenceEvent.Get(), INFINITE);
+    }
+    m_clearAllocator->Reset();
+    m_clearCommandList->Reset(m_clearAllocator.Get(), nullptr);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_clearRtvHeap->GetCPUDescriptorHandleForHeapStart();
+    m_device->CreateRenderTargetView(backBuffer, nullptr, rtv);
+
+    // The game hands the back buffer to Present in the PRESENT state (as CopyBackBufferToEye assumes);
+    // it goes back to that state after the clear.
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = backBuffer;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_clearCommandList->ResourceBarrier(1, &barrier);
+    const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    m_clearCommandList->ClearRenderTargetView(rtv, black, 0, nullptr);
+    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+    m_clearCommandList->ResourceBarrier(1, &barrier);
+    m_clearCommandList->Close();
+
+    ID3D12CommandList* lists[] = { m_clearCommandList.Get() };
+    m_queue->ExecuteCommandLists(1, lists);
+    m_currentFenceValue++;
+    m_clearFenceValue = m_currentFenceValue;
+    m_queue->Signal(m_copyFence.Get(), m_currentFenceValue);
     return true;
 }
 
@@ -1361,21 +1638,20 @@ bool OpenXrManager::SubmitFramePair() {
         projViews[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
         projViews[i].next = nullptr;
 
-        // Compute aspect-ratio matched FOV for the eye swapchain:
-        // GIANTS Engine renders using vertical FOV (fovY) and scales horizontal FOV by backbuffer aspect ratio (W / H).
-        // To preserve exact 1:1 square pixel geometry and eliminate horizontal squashing and cross-eyed distortion:
+        // The submitted FOV is the rendered FOV the eye projection publishes, which is also the vertical FOV the
+        // Companion Mod gives the engine camera: the engine renders with that vertical FOV and scales the horizontal
+        // one by the backbuffer aspect (W / H), so the submitted frustum matches the rendered one exactly and keeps
+        // square pixels (ADR-0005).
         float halfFovY = m_eyeProjections[i].fovY * 0.5f;
-        if (halfFovY <= 0.01f) {
-            halfFovY = 0.785398f; // safe ~90 deg fallback
+        float halfFovX = m_eyeProjections[i].fovX * 0.5f;
+        if (halfFovY <= 0.01f || halfFovX <= 0.01f) {
+            // No usable headset FOV yet: a safe ~90 degree vertical FOV at the swapchain aspect.
+            halfFovY = 0.785398f;
+            const float swapchainAspect = SwapchainAspect(i);
+            const float aspect = (swapchainAspect > 0.0f) ? swapchainAspect : 1.0f;
+            halfFovX = std::atan(aspect * std::tan(halfFovY));
         }
-        float tanHalfY = std::tan(halfFovY);
-        float aspect = (m_eyeSwapchains[i].height > 0)
-            ? static_cast<float>(m_eyeSwapchains[i].width) / static_cast<float>(m_eyeSwapchains[i].height)
-            : 1.0f;
-        float tanHalfX = aspect * tanHalfY;
-        float halfFovX = std::atan(tanHalfX);
 
-        // Aspect-ratio matched symmetric FOV prevents horizontal squashing and aligns optical centers
         projViews[i].fov.angleLeft = -halfFovX;
         projViews[i].fov.angleRight = halfFovX;
         projViews[i].fov.angleUp = halfFovY;
@@ -1429,7 +1705,7 @@ bool OpenXrManager::SubmitFramePair() {
     endInfo.layerCount = m_frameState.shouldRender ? 1 : 0;
     endInfo.layers = m_frameState.shouldRender ? layers : nullptr;
 
-    XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
+    XrResult res = DispatchEndFrame(endInfo);
     m_frameBegun = false;
     ClearRenderPoses();
     m_lastPolledTime = 0;
@@ -1638,7 +1914,7 @@ bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df*
     endInfo.layerCount = m_frameState.shouldRender ? (showCursor ? 2 : 1) : 0;
     endInfo.layers = m_frameState.shouldRender ? layers : nullptr;
 
-    XrResult res = m_dispatch->EndFrame(m_session, &endInfo);
+    XrResult res = DispatchEndFrame(endInfo);
     m_frameBegun = false;
     ClearRenderPoses();
     m_lastPolledTime = 0;

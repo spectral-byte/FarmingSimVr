@@ -861,6 +861,92 @@ test("EnteringANewVehicleGuardsItWithoutWaitingForTheRetry", function()
     _G.g_currentMission = nil
 end)
 
+test("AGlobalClassAddedAfterLoadIsNotHookedByTheRetryOrATransition", function()
+    _G.Vehicle = { updateVehicleSpeed = function(self, dt) return 1 end }
+    _G.Ferry = nil
+    VRCompanion:unhookVehicleSpeed()
+    _G.g_currentMission = { vehicles = {} }
+    for _ = 1, 3 do VRCompanion:update(16.6) end
+
+    local lateClassFn = function(self, dt) return 1 end
+    _G.LateVehicleClass = { updateVehicleSpeed = lateClassFn }
+    for _ = 1, 600 do VRCompanion:update(16.6) end
+    assert(_G.LateVehicleClass.updateVehicleSpeed == lateClassFn, "the retry cadence must not scan globals")
+
+    local veh = { updateVehicleSpeed = function(self, dt) return 1 end }
+    _G.g_currentMission.vehicles[1] = veh
+    _G.g_currentMission.controlledVehicle = veh
+    VRCompanion:update(16.6)
+    assert(_G.LateVehicleClass.updateVehicleSpeed == lateClassFn, "a vehicle transition must not scan globals")
+
+    VRCompanion:unhookVehicleSpeed()
+    VRCompanion.lastControlledVehicle = nil
+    _G.LateVehicleClass = nil
+    _G.Vehicle = nil
+    _G.g_currentMission = nil
+end)
+
+test("TheLoadTimeScanStillGuardsAnyGlobalClassWithUpdateVehicleSpeed", function()
+    local calls = 0
+    _G.CustomVehicleClass = { updateVehicleSpeed = function(self, dt) calls = calls + 1 end }
+    local orig = _G.CustomVehicleClass.updateVehicleSpeed
+    VRCompanion:unhookVehicleSpeed()
+    VRCompanion:hookVehicleSpeed()
+    assert(_G.CustomVehicleClass.updateVehicleSpeed ~= orig, "the map load scan must guard custom classes")
+    _G.CustomVehicleClass:updateVehicleSpeed(0.0)
+    assert(calls == 0)
+    VRCompanion:unhookVehicleSpeed()
+    assert(_G.CustomVehicleClass.updateVehicleSpeed == orig, "unload must restore the custom class")
+    _G.CustomVehicleClass = nil
+end)
+
+test("AVehicleDroppedFromTheMissionIsCollected", function()
+    _G.Vehicle = { updateVehicleSpeed = function(self, dt) return 1 end }
+    _G.Ferry = nil
+    VRCompanion:unhookVehicleSpeed()
+    local probe = setmetatable({}, { __mode = "k" })
+    _G.g_currentMission = { vehicles = {} }
+    local function addVehicle()
+        local veh = { updateVehicleSpeed = function(self, dt) return 1 end }
+        probe[veh] = true
+        _G.g_currentMission.vehicles[1] = veh
+    end
+    addVehicle()
+    for _ = 1, 600 do VRCompanion:update(16.6) end
+
+    _G.g_currentMission.vehicles[1] = nil
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(next(probe) == nil, "a vehicle that is gone from the mission must be collectable")
+
+    VRCompanion:unhookVehicleSpeed()
+    _G.Vehicle = nil
+    _G.g_currentMission = nil
+end)
+
+test("UnloadRestoresTheClassesAndTheVehiclesStillAlive", function()
+    local vehicleClassFn = function(self, dt) return 1 end
+    local ferryFn = function(self, dt) end
+    local vehFn = function(self, dt) end
+    _G.Vehicle = { updateVehicleSpeed = vehicleClassFn }
+    _G.Ferry = { updatePosition = ferryFn }
+    local veh = { updateVehicleSpeed = vehFn }
+    _G.g_currentMission = { vehicles = { veh } }
+    VRCompanion:unhookVehicleSpeed()
+    VRCompanion:hookVehicleSpeed()
+    assert(_G.Vehicle.updateVehicleSpeed ~= vehicleClassFn and veh.updateVehicleSpeed ~= vehFn
+        and _G.Ferry.updatePosition ~= ferryFn, "everything must be guarded first")
+
+    VRCompanion:unhookVehicleSpeed()
+    assert(_G.Vehicle.updateVehicleSpeed == vehicleClassFn, "Vehicle class must be restored")
+    assert(_G.Ferry.updatePosition == ferryFn, "Ferry must be restored")
+    assert(veh.updateVehicleSpeed == vehFn, "vehicle must be restored")
+
+    _G.Vehicle = nil
+    _G.Ferry = nil
+    _G.g_currentMission = nil
+end)
+
 -- Slice 13: Base Camera Stereoscopic Translation in Dual-Pass and AFR Modes
 test("BaseCameraTranslatesStereoscopicallyInDualPassMode", function()
     local setTransCalls = {}
@@ -1466,6 +1552,62 @@ test("DualPassPhysicsPauseLeavesTheGamesOwnVehicleReloadPauseAlone", function()
         assert(table.concat(calls, ", ") == "simulate false",
             "while the game reloads vehicles with physics paused the mod must not resume it, got " .. table.concat(calls, ", "))
     end)
+end)
+
+-- In multiplayer the game corrects the player's predicted movement against the server's through physics steps, and a
+-- paused step makes the view rubber-band, so the pause stands aside there whatever its setting.
+test("DualPassPhysicsPauseNeverTouchesPhysicsInMultiplayer", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        _G.g_currentMission = { missionDynamicInfo = { isMultiplayer = true } }
+        local ok, err = pcall(function()
+            subPass(0, 11); subPass(1, 11); subPass(0, 11); subPass(1, 11)
+        end)
+        _G.g_currentMission = nil
+        if not ok then error(err, 0) end
+        assert(#calls == 0, "in multiplayer the physics natives must not be called, got " .. table.concat(calls, ", "))
+        assert(VRCompanion.dualPassPhysicsPause == "on", "multiplayer must not change the player's setting")
+    end)
+end)
+
+test("DualPassPhysicsPauseStillPausesInASinglePlayerMission", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        _G.g_currentMission = { missionDynamicInfo = { isMultiplayer = false } }
+        local ok, err = pcall(function()
+            subPass(0, 11); subPass(1, 11)
+        end)
+        _G.g_currentMission = nil
+        if not ok then error(err, 0) end
+        assert(table.concat(calls, ", ") == "simulate false",
+            "a single-player mission must still pause physics, got " .. table.concat(calls, ", "))
+    end)
+end)
+
+test("DualPassPhysicsPauseAppliedWhenAMultiplayerMissionStartsIsReleased", function()
+    withPhysicsRecorder(function(calls, subPass)
+        VRCompanion:setDualPassPhysicsPause("on")
+        subPass(0, 11); subPass(1, 11)
+        _G.g_currentMission = { missionDynamicInfo = { isMultiplayer = true } }
+        local ok, err = pcall(function()
+            subPass(0, 11); subPass(1, 11)
+        end)
+        _G.g_currentMission = nil
+        if not ok then error(err, 0) end
+        assert(table.concat(calls, ", ") == "simulate false, simulate true",
+            "a pause left from before must be resumed at normal speed in multiplayer, got " .. table.concat(calls, ", "))
+    end)
+end)
+
+test("DualPassPhysicsPauseConsoleCommandSaysItIsHeldOffInMultiplayer", function()
+    _G.g_currentMission = { missionDynamicInfo = { isMultiplayer = true } }
+    local ok, reply = pcall(function() return VRCompanion:consoleCommandDualPassPhysicsPause() end)
+    _G.g_currentMission = nil
+    if not ok then error(reply, 0) end
+    assert(type(reply) == "string" and reply:find("multiplayer", 1, true),
+        "in multiplayer the reply must say the pause is held off, got " .. tostring(reply))
+    reply = VRCompanion:consoleCommandDualPassPhysicsPause()
+    assert(not reply:find("multiplayer", 1, true), "outside multiplayer the reply must not mention it, got " .. reply)
 end)
 
 test("DualPassPhysicsPauseConsoleCommand", function()

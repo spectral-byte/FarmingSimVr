@@ -27,7 +27,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.FishCatch = VRCompanion.FishCatch or {}
 
 VRCompanion.DEFAULT_FISH_CATCH_ANSWER = "ask"
 VRCompanion.fishCatchAnswer = VRCompanion.fishCatchAnswer or VRCompanion.DEFAULT_FISH_CATCH_ANSWER
@@ -196,8 +195,3 @@ function VRCompanion:resetFishCatch()
         removeConsoleCommand("vrFishCatch")
     end
 end
-
-VRCompanion.FishCatch.updateFishCatch = function(self, ...) return VRCompanion.updateFishCatch(VRCompanion, ...) end
-VRCompanion.FishCatch.consoleCommandSetFishCatch = function(self, ...) return VRCompanion.consoleCommandSetFishCatch(VRCompanion, ...) end
-
-return VRCompanion.FishCatch

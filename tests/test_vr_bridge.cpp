@@ -239,7 +239,7 @@ TEST_F(VrBridgeTest, ExposesEyeProjectionAndPrunesAliasesInLuauScript) {
         assert(left.eye == 0, "left eye index must be 0")
         assert(math.abs(left.xOffset - (-0.23052)) < 0.005, "left xOffset mismatch")
         assert(math.abs(left.yOffset) < 0.005, "left yOffset mismatch")
-        assert(math.abs(left.fovY - 1.70) < 0.01, "left fovY mismatch")
+        assert(math.abs(left.fovY - 1.80) < 0.01, "left fovY mismatch (rendered FOV covering the outer side)")
 
         -- Verify redundant aliases are pruned from projection table
         assert(left.offsetX == nil, "offsetX alias must be pruned")
@@ -256,7 +256,7 @@ TEST_F(VrBridgeTest, ExposesEyeProjectionAndPrunesAliasesInLuauScript) {
         assert(right.eye == 1, "right eye index must be 1")
         assert(math.abs(right.xOffset - 0.23052) < 0.005, "right xOffset mismatch")
         assert(math.abs(right.yOffset) < 0.005, "right yOffset mismatch")
-        assert(math.abs(right.fovY - 1.70) < 0.01, "right fovY mismatch")
+        assert(math.abs(right.fovY - 1.80) < 0.01, "right fovY mismatch (rendered FOV covering the outer side)")
 
         -- Asymmetry verify
         assert(left.xOffset < 0.0, "left xOffset must be negative (nasal/temporal)")
@@ -863,6 +863,86 @@ TEST_F(VrBridgeTest, Exposes2DViewActiveMethodsAndPropertyToLuauScript) {
     )luau"), 0);
 }
 
+TEST_F(VrBridgeTest, DesktopMirrorFlagDefaultsToOnIsSetFromLuauAndResetsOnMapUnload) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getDesktopMirror() == true, "the desktop mirror is on by default")
+        VRBridge.setDesktopMirror(false)
+        assert(VRBridge.getDesktopMirror() == false, "setDesktopMirror(false) turns it off")
+    )luau"), 0);
+    EXPECT_FALSE(bridge.IsDesktopMirrorEnabled());
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        VRBridge.onMapUnload()
+        assert(VRBridge.getDesktopMirror() == true, "a map unload puts the mirror back on")
+        VRBridge.setDesktopMirror(false)
+        VRBridge.setDesktopMirror(true)
+        assert(VRBridge.getDesktopMirror() == true, "setDesktopMirror(true) turns it on")
+    )luau"), 0);
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
+}
+
+TEST_F(VrBridgeTest, FovOverscanDefaultsToZeroIsClampedToZeroToTwentyAndResetsOnMapUnload) {
+    fs25vr::FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getFovOverscan() == 0, "the overscan is 0 by default")
+        VRBridge.setFovOverscan(8)
+        assert(VRBridge.getFovOverscan() == 8, "setFovOverscan(8) is read back")
+        VRBridge.setFovOverscan(7.5)
+        assert(VRBridge.getFovOverscan() == 7.5, "decimals are kept")
+        VRBridge.setFovOverscan(35)
+        assert(VRBridge.getFovOverscan() == 20, "the bridge clamps above 20")
+        VRBridge.setFovOverscan(-4)
+        assert(VRBridge.getFovOverscan() == 0, "the bridge clamps below 0")
+        VRBridge.setFovOverscan(12)
+        VRBridge.onMapUnload()
+        assert(VRBridge.getFovOverscan() == 0, "a map unload puts the overscan back to 0")
+    )luau"), 0);
+}
+
+TEST_F(VrBridgeTest, FovOverscanWithoutAnOpenXrManagerIsAcceptedAndHasNoEffect) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        VRBridge.setFovOverscan(10)
+        assert(type(VRBridge.getFovOverscan()) == "number")
+        local projection = VRBridge.getEyeProjection(0)
+        assert(projection == nil or projection.isValid ~= true, "Pass-Through Mode has no projection to widen")
+        VRBridge.onMapUnload()
+        assert(VRBridge.getFovOverscan() == 0)
+    )luau"), 0);
+}
+
+TEST_F(VrBridgeTest, MouseConfinementFlagDefaultsToOnIsSetFromLuauAndResetsOnMapUnload) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    EXPECT_TRUE(bridge.IsMouseConfinementEnabled());
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getMouseConfinement() == true, "Mouse Confinement is on by default")
+        VRBridge.setMouseConfinement(false)
+        assert(VRBridge.getMouseConfinement() == false, "setMouseConfinement(false) turns it off")
+    )luau"), 0);
+    EXPECT_FALSE(bridge.IsMouseConfinementEnabled());
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled()) << "the two flags are independent";
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        VRBridge.onMapUnload()
+        assert(VRBridge.getMouseConfinement() == true, "a map unload puts Mouse Confinement back on")
+        VRBridge.setMouseConfinement(false)
+        VRBridge.setMouseConfinement(true)
+        assert(VRBridge.getMouseConfinement() == true, "setMouseConfinement(true) turns it on")
+    )luau"), 0);
+    EXPECT_TRUE(bridge.IsMouseConfinementEnabled());
+}
+
 TEST_F(VrBridgeTest, MapUnloadResets2DViewActiveToFalse) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -1345,6 +1425,12 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "setMenuCursor",
         "set2DViewActive",
         "getIs2DViewActive",
+        "setDesktopMirror",
+        "getDesktopMirror",
+        "setMouseConfinement",
+        "getMouseConfinement",
+        "setFovOverscan",
+        "getFovOverscan",
         "getRenderingMode",
         "setRenderingMode",
         "getSubPassIndex",
@@ -1361,7 +1447,12 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "reportCameraRecord",
         "setDlssMvFix",
         "setDlssDepthModel",
-        "setDlssNearClip"
+        "setDlssNearClip",
+        "startPerfTrace",
+        "stopPerfTrace",
+        "isPerfTracing",
+        "perfTraceBegin",
+        "perfTraceEnd"
     };
 
     lua_getglobal(L, "VRBridge");

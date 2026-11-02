@@ -361,7 +361,7 @@ inline void HoldHands(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldHands, "=ho
 //   pointerRay()       the Pointer Ray the Companion Mod placed (VRCompanion:getPointerRay), nil without one
 //   pulledBack(r, m)   the ray r with its origin moved back along it by m metres
 //   sameRay(a, b), apart(a, b), rayText(r)
-//   drawnRayEnd()      runs VRCompanion:draw() and answers the end point (x, y, z) of the line it drew for the Pointer Ray, or nil
+//   drawnRayEnd()      runs the camera path (which draws the Pointer Ray for a frame) and answers the end point (x, y, z) of the line it drew for the Pointer Ray, or nil
 inline constexpr const char* kObjectGrabHelpers = R"luau(
     function _G.targeterRay() return { StubHandTool.lastRay() } end
     function _G.headRay() return { StubHandTool.originalGetLookRay(foot.player) } end
@@ -385,7 +385,7 @@ inline constexpr const char* kObjectGrabHelpers = R"luau(
     _G.drawDebugPoint = function() end
     function _G.drawnRayEnd()
         _G.drawnLines = {}
-        VRCompanion:draw()
+        StubScene.updateCamera()
         local line = _G.drawnLines[#_G.drawnLines]
         if line == nil then return nil end
         return line[1], line[2], line[3]

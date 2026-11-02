@@ -77,6 +77,10 @@ protected:
     }
 };
 
+TEST_F(LuauTestSuiteTest, TestActionEvents) {
+    RunSuite("tests/test_action_events.luau");
+}
+
 TEST_F(LuauTestSuiteTest, Test2dViewMode) {
     RunSuite("tests/test_2d_view_mode.luau");
 }
@@ -113,6 +117,10 @@ TEST_F(LuauTestSuiteTest, TestRenderingCamera) {
     RunSuite("tests/test_rendering_camera.luau");
 }
 
+TEST_F(LuauTestSuiteTest, TestPerUpdateAllocations) {
+    RunSuite("tests/test_per_update_allocations.luau");
+}
+
 TEST_F(LuauTestSuiteTest, TestReusableTables) {
     RunSuite("tests/test_reusable_tables.luau");
 }
@@ -141,4 +149,6 @@ TEST_F(LuauTestSuiteTest, TestVehicleCameraYaw) {
     RunSuite("tests/test_vehicle_camera_yaw.luau");
 }
 
-
+TEST_F(LuauTestSuiteTest, TestPerfTrace) {
+    RunSuite("tests/test_perf_trace.luau");
+}

@@ -6,6 +6,7 @@
 #include "openxr_types.h"
 #include "core/math_utils.h"
 #include "core/raii_utils.h"
+#include <atomic>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -109,8 +110,6 @@ public:
     using PerformanceCounterSource = std::function<PerformanceCounterSample()>;
     // Replaces the QueryPerformanceCounter/Frequency reads (tests drive a fake clock).
     void SetPerformanceCounterSource(PerformanceCounterSource source);
-    // counter / frequency in nanoseconds without overflowing for any int64 counter.
-    static int64_t PerformanceCounterToNanoseconds(int64_t counter, int64_t frequency);
 
     // `observer` runs at the end of every BeginFrame that began a frame, after the hand state is synced. One
     // observer per `owner` (the Virtual Gamepad publishes its snapshot and plays its rumble from here); clearing is by the same
@@ -119,7 +118,22 @@ public:
     void SetFrameBeginObserver(const void* owner, FrameBeginObserver observer);
     void ClearFrameBeginObserver(const void* owner);
     const EyeProjection& GetEyeProjection(uint32_t eyeIndex = 0) const;
-    static EyeProjection ComputeProjectionFromFov(const XrFovf& fov);
+    // `fovY`/`fovX` of the result are the rendered FOV (ADR-0005): symmetric, covering every edge of `fov`, at the
+    // aspect of the eye swapchain (`swapchainAspect`; 0 uses the headset FOV's own aspect). The tangents, angles and
+    // offsets keep describing the headset's own FOV.
+    // `fovOverscanPercent` widens the rendered FOV's tangents by (1 + percent / 100) (FOV Overscan).
+    static EyeProjection ComputeProjectionFromFov(const XrFovf& fov, float swapchainAspect = 0.0f, float fovOverscanPercent = 0.0f);
+
+    // FOV Overscan, in percent (0 to 20; clamped). A new value is stored here and takes effect when the next frame
+    // begins, so the pair in progress keeps the FOV it began with.
+    void SetFovOverscan(float percent);
+    float GetFovOverscan() const { return m_requestedFovOverscan.load(); }
+    static constexpr float kMaxFovOverscanPercent = 20.0f;
+    // Clamps a percent to 0..kMaxFovOverscanPercent; a number that is not 0 or more (NaN included) counts as 0.
+    static float ClampFovOverscan(float percent);
+    // The overscan only touches the stereoscopic view: while a menu or 2D Floating Window Mode is shown the eyes are
+    // rendered without it (it shows again, with the next frame, when the stereoscopic view is back).
+    void SetFovOverscanSuspended(bool suspended) { m_fovOverscanSuspended.store(suspended); }
 
     uint32_t GetRecommendedEyeWidth(uint32_t eyeIndex = 0) const;
     uint32_t GetRecommendedEyeHeight(uint32_t eyeIndex = 0) const;
@@ -144,6 +158,11 @@ public:
     const EyeSwapchain& GetEyeSwapchain(uint32_t eyeIndex = 0) const;
 
     bool CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backBuffer);
+    // Clears the game's back buffer to black on the game's queue and leaves it in the PRESENT state
+    // the game expects, so the next Present puts a black frame on the Desktop Mirror Window. Call it
+    // after the frame's eye copy, which has already taken what the headset needs. Returns false and
+    // does nothing when there is no back buffer, device or queue (unit tests, Pass-Through).
+    bool ClearBackBufferToBlack(ID3D12Resource* backBuffer);
     bool BeginFrame();
     bool EndFrame();
     bool IsFrameBegun() const { return m_frameBegun; }
@@ -189,15 +208,12 @@ public:
     const PointerCursorOverride& GetPointerCursorOverride() const { return m_pointerCursor; }
 
     uint64_t GetSubmittedQuadFrameCount() const { return m_submittedQuadFrameCount; }
-    void ResetSubmittedQuadFrameCount() { m_submittedQuadFrameCount = 0; }
     const XrCompositionLayerQuad& GetLastSubmittedQuadLayer() const { return m_lastSubmittedQuadLayer; }
 
     bool CreateCursorSwapchain(uint32_t width = 64, uint32_t height = 64, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
     void DestroyCursorSwapchain();
     bool HasCursorSwapchain() const { return m_cursorOverlay.HasSwapchain(); }
     const EyeSwapchain& GetCursorSwapchain() const { return m_cursorOverlay.GetSwapchain(); }
-    OpenXrCursorOverlay& GetCursorOverlay() { return m_cursorOverlay; }
-    const OpenXrCursorOverlay& GetCursorOverlay() const { return m_cursorOverlay; }
 
     void SetMenuCursorState(const MenuCursorState& cursorState) { m_menuCursorState = cursorState; }
     const MenuCursorState& GetMenuCursorState() const { return m_menuCursorState; }
@@ -210,24 +226,28 @@ public:
     const XrCompositionLayerQuad& GetLastSubmittedCursorQuadLayer() const { return m_cursorOverlay.GetLastSubmittedCursorQuadLayer(); }
     bool HasLastSubmittedCursorQuadLayer() const { return m_cursorOverlay.HasLastSubmittedCursorQuadLayer(); }
 
+    // Logs a back buffer that is not the eye swapchain size, once per session (Shutdown clears the guard).
+    void LogEyeCopySizeMismatchOnce(uint64_t srcWidth, uint32_t srcHeight, uint64_t dstWidth, uint32_t dstHeight);
+
     float GetIpd() const { return m_ipd; }
     void SetIpd(float ipd) { m_ipd = ipd; }
 
     uint64_t GetSubmittedFramePairCount() const { return m_submittedFramePairCount; }
-    void ResetSubmittedFramePairCount() { m_submittedFramePairCount = 0; }
 
     OpenXrState GetState() const { return m_state; }
     bool IsPassThrough() const { return m_state == OpenXrState::PassThrough; }
     bool IsActive() const { return m_state == OpenXrState::Active; }
 
     const OpenXrRuntimeInfo& GetRuntimeInfo() const { return m_runtimeInfo; }
-    XrInstance GetInstance() const { return m_instance; }
     XrSession GetSession() const { return m_session; }
     XrSpace GetLocalSpace() const { return m_localSpace; }
     XrSpace GetBaseLocalSpace() const { return m_baseLocalSpace; }
     XrSpace GetViewSpace() const { return m_viewSpace; }
     bool HasSession() const { return m_session != XR_NULL_HANDLE; }
     bool IsSessionRunning() const { return m_sessionRunning; }
+    // The headset is on and the game has the focus. A sleeping headset drops to SYNCHRONIZED and the dashboard to
+    // VISIBLE; neither ends the running session.
+    bool IsSessionFocused() const { return m_sessionState == XR_SESSION_STATE_FOCUSED; }
     XrSessionState GetSessionState() const { return m_sessionState; }
 
     // Drains the runtime event queue and drives the session lifecycle: begin on READY,
@@ -283,6 +303,26 @@ private:
     uint64_t m_currentFenceValue = 0;
     uint32_t m_copyRingIndex = 0;
     ScopedEventHandle m_copyFenceEvent;
+    void EnsureCopyFence();
+    // ClearBackBufferToBlack's own recording objects; it signals m_copyFence with m_clearFenceValue.
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_clearAllocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_clearCommandList;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_clearRtvHeap;
+    uint64_t m_clearFenceValue = 0;
+    // `vrPerfTrace`: GPU timestamps before and after each eye copy, two per ring slot, read back when the
+    // slot is reused (its fence has passed by then). Created on the first copy a trace times.
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> m_copyTimestampHeap;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_copyTimestampReadback;
+    bool m_copyTimestampsFailed = false;
+    bool m_copyTimestampPending[kCopyRingSize] = {false, false};
+    int64_t m_copySubmitNs[kCopyRingSize] = {0, 0};
+    uint64_t m_gpuTimestampFrequency = 0;
+    uint64_t m_gpuCalibrationTicks = 0;
+    int64_t m_gpuCalibrationCpuNs = 0;
+    uint32_t m_copiesSinceCalibration = 0;
+    bool EnsureCopyTimestamps();
+    void ReadCopyTimestamps(uint32_t ringSlot);
+    XrResult DispatchEndFrame(const XrFrameEndInfo& endInfo);
 
     EyeSwapchain m_eyeSwapchains[2];
     bool m_hasEyeSwapchains = false;
@@ -296,6 +336,10 @@ private:
     MenuCursorState m_menuCursorState;
     PointerCursorOverride m_pointerCursor;
     float m_ipd = 0.064f;
+    // One-time log guards. Per instance and cleared by Shutdown, so each OpenXR session logs these again.
+    float m_lastLoggedIpd = 0.0f;
+    bool m_loggedEyeCopySizeMismatch = false;
+    uint32_t m_headPoseLocateFailures = 0;
     uint64_t m_submittedFramePairCount = 0;
     uint64_t m_submittedQuadFrameCount = 0;
     float m_menuQuadDistance = 1.5f;
@@ -333,6 +377,39 @@ private:
     void ClearRenderPoses();
 
     EyeProjection m_eyeProjections[2];
+    // The eye swapchain's width / height, or 0 while the swapchains do not exist.
+    float SwapchainAspect(uint32_t eyeIndex) const;
+    // Makes the requested FOV Overscan the one the views are located with.
+    void LatchFovOverscan();
+    // Recomputes the rendered FOV of the located projections (the swapchains were created or destroyed).
+    void RefreshRenderedFov();
+    // Logs the headset's own per-eye FOV and the rendered FOV, each only when it differs from what was last logged.
+    void LogFovIfChanged();
+    // What LogFovIfChanged last logged. Two FOVs are the same when every angle is within 1e-4 radians.
+    static bool NearlyEqualAngle(float a, float b) { return !(std::abs(a - b) > 1e-4f); }
+    struct HeadsetFov {
+        float left = 0.0f, right = 0.0f, up = 0.0f, down = 0.0f;  // radians
+        bool operator==(const HeadsetFov& other) const {
+            return NearlyEqualAngle(left, other.left) && NearlyEqualAngle(right, other.right) &&
+                   NearlyEqualAngle(up, other.up) && NearlyEqualAngle(down, other.down);
+        }
+    };
+    struct RenderedFov {
+        float vertical = 0.0f, horizontal = 0.0f;  // radians
+        bool operator==(const RenderedFov& other) const {
+            return NearlyEqualAngle(vertical, other.vertical) && NearlyEqualAngle(horizontal, other.horizontal);
+        }
+    };
+    HeadsetFov m_loggedHeadsetFov[2]{};
+    RenderedFov m_loggedRenderedFov[2]{};
+    bool m_loggedHeadsetFovValid = false;
+    bool m_loggedRenderedFovValid = false;
+    float m_loggedFovOverscan = 0.0f;
+    // The overscan last set, and the one the located projections are rendered with: it is taken over from the requested
+    // one when a frame begins (or while no frame is in flight).
+    std::atomic<float> m_requestedFovOverscan{0.0f};
+    std::atomic<bool> m_fovOverscanSuspended{false};
+    float m_fovOverscan = 0.0f;
 
     std::vector<XrViewConfigurationView> m_viewConfigViews;
 

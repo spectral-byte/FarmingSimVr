@@ -1,10 +1,14 @@
 #include <gtest/gtest.h>
 #include "openxr/openxr_manager.h"
 #include "core/dll_lifecycle.h"
+#include "core/logger.h"
+#include "core/perf_trace.h"
 #include "fake_openxr_tracking.h"
 #include "luau/vr_bridge.h"
 #include "fake_openxr_events.h"
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <unordered_set>
 #include <unordered_map>
 
@@ -577,14 +581,6 @@ bool Contains(const std::vector<std::string>& v, const char* name) {
 }
 }  // namespace
 
-TEST(OpenXrManagerTest, PerformanceCounterToNanosecondsDoesNotOverflowForDaysOfUptime) {
-    // counter * 1e9 would be ~4.3e22 here, far beyond int64.
-    EXPECT_EQ(OpenXrManager::PerformanceCounterToNanoseconds(kDaysOfUptimeCounter, kTenMhz),
-              5LL * 24 * 3600 * 1000000000LL);
-    EXPECT_EQ(OpenXrManager::PerformanceCounterToNanoseconds(kDaysOfUptimeCounter + 5, kTenMhz),
-              5LL * 24 * 3600 * 1000000000LL + 500);
-}
-
 TEST(OpenXrManagerTest, EnablesTimeConversionExtensionWhenRuntimeOffersIt) {
     auto dispatch = std::make_shared<MockOpenXrDispatch>();
     dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME,
@@ -617,7 +613,7 @@ TEST(OpenXrManagerTest, InitializeSucceedsWithoutTimeConversionExtensionAndFallb
 
     // The counter in nanoseconds, the time base of runtimes that back XrTime with it.
     XrTime t0 = manager.GetCurrentXrTime();
-    EXPECT_EQ(t0, OpenXrManager::PerformanceCounterToNanoseconds(kDaysOfUptimeCounter, kTenMhz));
+    EXPECT_EQ(t0, QpcTicksToNanoseconds(kDaysOfUptimeCounter, kTenMhz));
     EXPECT_GT(t0, 0);
     counter += kTenMhz / 2;  // half a second later
     XrTime t1 = manager.GetCurrentXrTime();
@@ -964,7 +960,8 @@ TEST(OpenXrManagerTest, LocatesViewsAndExtractsAsymmetricFovTangents) {
     EXPECT_NEAR(leftProj.tanRight, 1.02964f, 0.005f);
     EXPECT_NEAR(leftProj.xOffset, -0.23052f, 0.005f);
     EXPECT_NEAR(leftProj.yOffset, 0.0f, 0.005f);
-    EXPECT_NEAR(leftProj.fovY, 1.70f, 0.01f);
+    // fovY is the rendered FOV: the outer side (tan 0.90) at the headset FOV's own aspect (no swapchains yet).
+    EXPECT_NEAR(leftProj.fovY, 1.80f, 0.01f);
 
     EyeProjection rightProj = manager.PollEyeProjection(1);
     EXPECT_TRUE(rightProj.isValid);
@@ -974,7 +971,7 @@ TEST(OpenXrManagerTest, LocatesViewsAndExtractsAsymmetricFovTangents) {
     EXPECT_NEAR(rightProj.tanRight, 1.26016f, 0.005f);
     EXPECT_NEAR(rightProj.xOffset, 0.23052f, 0.005f);
     EXPECT_NEAR(rightProj.yOffset, 0.0f, 0.005f);
-    EXPECT_NEAR(rightProj.fovY, 1.70f, 0.01f);
+    EXPECT_NEAR(rightProj.fovY, 1.80f, 0.01f);
 
     // Asymmetry verify: opposite signs for nasal/temporal convergence
     EXPECT_LT(leftProj.xOffset, 0.0f);
@@ -1204,6 +1201,20 @@ TEST(OpenXrManagerTest, CopiesBackBufferAndPerformsImageAcquireWaitRelease) {
     EXPECT_FALSE(manager.CopyBackBufferToEye(2, nullptr));
 }
 
+TEST(OpenXrManagerTest, ClearingANullBackBufferToBlackDoesNothing) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    EXPECT_FALSE(manager.ClearBackBufferToBlack(nullptr));
+    EXPECT_EQ(mockDispatch->acquireSwapchainImageCalls, 0u);
+}
+
 TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
@@ -1214,8 +1225,9 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     ASSERT_TRUE(manager.CreateTrackingSpaces());
     ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
 
-    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.85f };
+    // Vertically asymmetric: the lower side (0.65) is shallower than the upper one (0.85).
+    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.65f };
+    XrFovf rightFov{ -0.80f, 0.90f, 0.85f, -0.65f };
     mockDispatch->tracking.SetEyeFov(0, leftFov);
     mockDispatch->tracking.SetEyeFov(1, rightFov);
 
@@ -1246,7 +1258,9 @@ TEST(OpenXrManagerTest, SubmitsPairedLayersToOpenXrCompositor) {
     const auto& leftView = mockDispatch->lastSubmittedProjectionViews[0];
     const auto& rightView = mockDispatch->lastSubmittedProjectionViews[1];
 
-    // Verify aspect-ratio matched symmetric FOV (preserving 1:1 square pixel geometry for 1920x1080)
+    // Verify the covering symmetric FOV at the swapchain aspect (1:1 square pixels for 1920x1080): the widest side
+    // is the upper one (0.85; the average of the vertical span would be 0.759 and leave the top uncovered), and
+    // the horizontal half-angle is atan(16/9 * tan 0.85) = 1.112.
     EXPECT_NEAR(leftView.fov.angleLeft, -1.112f, 0.01f);
     EXPECT_NEAR(leftView.fov.angleRight, 1.112f, 0.01f);
     EXPECT_NEAR(leftView.fov.angleUp, 0.85f, 0.001f);
@@ -2769,6 +2783,107 @@ TEST(OpenXrManagerTest, DispatchWithoutInputSupportKeepsTheSessionAndReportsUntr
     EXPECT_FALSE(manager.GetHandState(1).tracked);
     EXPECT_EQ(mockDispatch->ApplyHapticFeedback(XR_NULL_HANDLE, nullptr, nullptr), XR_ERROR_FUNCTION_UNSUPPORTED);
     EXPECT_EQ(mockDispatch->StopHapticFeedback(XR_NULL_HANDLE, nullptr), XR_ERROR_FUNCTION_UNSUPPORTED);
+}
+
+// Redirects the game log (Logger) to a temp file while a test runs and counts lines in it.
+namespace {
+class OpenXrLogCapture {
+public:
+    explicit OpenXrLogCapture(const char* fileName) : m_path(std::filesystem::temp_directory_path() / fileName) {
+        Logger::Instance().SetLogFile(m_path);
+    }
+    ~OpenXrLogCapture() {
+        Logger::Instance().SetLogFile(Logger::DefaultLogPath());
+        std::filesystem::remove(m_path);
+    }
+    size_t Count(const std::string& needle) const {
+        Logger::Instance().Flush();
+        std::ifstream file(m_path);
+        const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        size_t count = 0;
+        for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) {
+            ++count;
+        }
+        return count;
+    }
+private:
+    std::filesystem::path m_path;
+};
+
+// An active manager with a session and tracking spaces, the eyes 64 mm apart.
+struct IpdRig {
+    std::shared_ptr<MockOpenXrDispatch> dispatch = std::make_shared<MockOpenXrDispatch>();
+    OpenXrManager manager{dispatch};
+    IpdRig() {
+        dispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+        XrView left{ XR_TYPE_VIEW, nullptr };
+        left.fov = { -0.8f, 0.8f, 0.8f, -0.8f };
+        left.pose.position = { -0.032f, 0.0f, 0.0f };
+        left.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };
+        XrView right = left;
+        right.pose.position = { 0.032f, 0.0f, 0.0f };
+        dispatch->tracking.views = { left, right };
+    }
+    bool Start() { return manager.Initialize() && manager.CreateSession() && manager.CreateTrackingSpaces(); }
+};
+} // namespace
+
+TEST(OpenXrManagerTest, TwoManagersInOneProcessEachLogTheirFirstIpdCalibration) {
+    OpenXrLogCapture capture("fs25vr_openxr_ipd_log_test.log");
+    const std::string calibrated = "OpenXrManager: Calibrated hardware IPD";
+
+    IpdRig first;
+    ASSERT_TRUE(first.Start());
+    ASSERT_TRUE(first.manager.LocateActiveViews());
+    EXPECT_EQ(capture.Count(calibrated), 1u);
+    ASSERT_TRUE(first.manager.LocateActiveViews());
+    EXPECT_EQ(capture.Count(calibrated), 1u) << "an unchanged IPD is not logged again";
+
+    IpdRig second;
+    ASSERT_TRUE(second.Start());
+    ASSERT_TRUE(second.manager.LocateActiveViews());
+    EXPECT_EQ(capture.Count(calibrated), 2u);
+}
+
+TEST(OpenXrManagerTest, EyeCopySizeMismatchIsLoggedOncePerSessionAndAgainAfterShutdown) {
+    OpenXrLogCapture capture("fs25vr_openxr_mismatch_log_test.log");
+    const std::string mismatch = "Dimension mismatch! BackBuffer: 1920x1080, OpenXR swapchain: 2064x2208";
+
+    IpdRig rig;
+    ASSERT_TRUE(rig.Start());
+    rig.manager.LogEyeCopySizeMismatchOnce(1920, 1080, 2064, 2208);
+    rig.manager.LogEyeCopySizeMismatchOnce(1920, 1080, 2064, 2208);
+    EXPECT_EQ(capture.Count(mismatch), 1u);
+
+    rig.manager.Shutdown();
+    ASSERT_TRUE(rig.Start());
+    rig.manager.LogEyeCopySizeMismatchOnce(1920, 1080, 2064, 2208);
+    EXPECT_EQ(capture.Count(mismatch), 2u);
+}
+
+TEST(OpenXrManagerTest, HeadPoseLocateFailuresAreLoggedAgainInANewManagerAndAfterShutdown) {
+    OpenXrLogCapture capture("fs25vr_openxr_locate_fail_log_test.log");
+    const std::string failed = "PollHeadPose: LocateSpace failed";
+
+    auto failOnce = [&](IpdRig& rig) {
+        rig.dispatch->tracking.locateSpaceResult = XR_ERROR_RUNTIME_FAILURE;
+        rig.manager.PollHeadPose(1);
+    };
+    {
+        IpdRig rig;
+        ASSERT_TRUE(rig.Start());
+        failOnce(rig);
+        failOnce(rig);
+        EXPECT_EQ(capture.Count(failed), 1u) << "only every 300th failure is logged";
+        rig.manager.Shutdown();
+        ASSERT_TRUE(rig.Start());
+        failOnce(rig);
+        EXPECT_EQ(capture.Count(failed), 2u);
+    }
+    IpdRig other;
+    ASSERT_TRUE(other.Start());
+    failOnce(other);
+    EXPECT_EQ(capture.Count(failed), 3u);
 }
 
 } // namespace fs25vr

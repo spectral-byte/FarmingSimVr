@@ -113,6 +113,22 @@ public:
     bool Is2DViewActive() const { return m_2dViewActive; }
     void Set2DViewActive(bool active);
 
+    // Whether the game presents to the Desktop Mirror Window while the headset session runs. On by
+    // default; the Companion Mod sets it (`vrDesktopMirror`) and the DXGI proxy reads it every present.
+    bool IsDesktopMirrorEnabled() const { return m_desktopMirrorEnabled; }
+    void SetDesktopMirrorEnabled(bool enabled) { m_desktopMirrorEnabled = enabled; }
+
+    // FOV Overscan in percent, 0 to 20 (0 by default; the Companion Mod sets it with `vrFovOverscan`). The bridge clamps and
+    // forwards it to the OpenXR manager, which applies it when the next frame begins. Without a manager (Pass-Through Mode)
+    // it is accepted and has no effect. A map unload puts it back to 0.
+    float GetFovOverscan() const { return m_fovOverscan; }
+    void SetFovOverscan(float percent);
+
+    // Whether Mouse Confinement may keep the Desk Mouse on the game picture while the headset is in use.
+    // On by default; the Companion Mod sets it (`vrMouseConfinement`) and the DXGI proxy reads it every present.
+    bool IsMouseConfinementEnabled() const { return m_mouseConfinementEnabled; }
+    void SetMouseConfinementEnabled(bool enabled) { m_mouseConfinementEnabled = enabled; }
+
     void SignalDiscontinuity();
     bool HasPendingDiscontinuity(uint32_t contextIndex = 0) const;
     bool ConsumeDiscontinuity(uint32_t contextIndex = 0);
@@ -140,6 +156,12 @@ public:
     static int Lua_GetIsMenuVisible(lua_State* L);
     static int Lua_Set2DViewActive(lua_State* L);
     static int Lua_GetIs2DViewActive(lua_State* L);
+    static int Lua_SetDesktopMirror(lua_State* L);
+    static int Lua_GetDesktopMirror(lua_State* L);
+    static int Lua_SetFovOverscan(lua_State* L);
+    static int Lua_GetFovOverscan(lua_State* L);
+    static int Lua_SetMouseConfinement(lua_State* L);
+    static int Lua_GetMouseConfinement(lua_State* L);
     static int Lua_ResetTemporalHistory(lua_State* L);
     static int Lua_SignalDiscontinuity(lua_State* L);
     static int Lua_SetDlssMvScale(lua_State* L);
@@ -150,6 +172,13 @@ public:
     static int Lua_SetDlssDepthModel(lua_State* L);
     static int Lua_SetDlssNearClip(lua_State* L);
     static int Lua_SetDlssSdpMvScale(lua_State* L);
+    // `vrPerfTrace` (core/perf_trace.h): startPerfTrace([seconds]), stopPerfTrace(), isPerfTracing(), and
+    // perfTraceBegin(name) / perfTraceEnd(name) around a Companion Mod section ("gameUpdate", "modUpdate", ...).
+    static int Lua_StartPerfTrace(lua_State* L);
+    static int Lua_StopPerfTrace(lua_State* L);
+    static int Lua_IsPerfTracing(lua_State* L);
+    static int Lua_PerfTraceBegin(lua_State* L);
+    static int Lua_PerfTraceEnd(lua_State* L);
     // reportCameraRecord(eye, x, y, z, qx, qy, qz, qw, fovY, nearClip, farClip, projOffsetX, projOffsetY)
     static int Lua_ReportCameraRecord(lua_State* L);
 
@@ -209,6 +238,12 @@ public:
         {"setMenuCursor", &Lua_SetMenuCursor},
         {"set2DViewActive", &Lua_Set2DViewActive},
         {"getIs2DViewActive", &Lua_GetIs2DViewActive},
+        {"setDesktopMirror", &Lua_SetDesktopMirror},
+        {"getDesktopMirror", &Lua_GetDesktopMirror},
+        {"setMouseConfinement", &Lua_SetMouseConfinement},
+        {"getMouseConfinement", &Lua_GetMouseConfinement},
+        {"setFovOverscan", &Lua_SetFovOverscan},
+        {"getFovOverscan", &Lua_GetFovOverscan},
         {"getRenderingMode", &Lua_GetRenderingMode},
         {"setRenderingMode", &Lua_SetRenderingMode},
         {"getSubPassIndex", &Lua_GetSubPassIndex},
@@ -226,6 +261,11 @@ public:
         {"setDlssMvFix", &Lua_SetDlssMvFix},
         {"setDlssDepthModel", &Lua_SetDlssDepthModel},
         {"setDlssNearClip", &Lua_SetDlssNearClip},
+        {"startPerfTrace", &Lua_StartPerfTrace},
+        {"stopPerfTrace", &Lua_StopPerfTrace},
+        {"isPerfTracing", &Lua_IsPerfTracing},
+        {"perfTraceBegin", &Lua_PerfTraceBegin},
+        {"perfTraceEnd", &Lua_PerfTraceEnd},
     };
 
     // 1 version property + one field per table entry.
@@ -244,6 +284,11 @@ private:
     bool m_handshakeCompleted = false;
     bool m_menuVisible = false;
     bool m_2dViewActive = false;
+    bool m_desktopMirrorEnabled = true;
+    bool m_mouseConfinementEnabled = true;
+    float m_fovOverscan = 0.0f;
+    // The OpenXR manager renders without the overscan while a menu or 2D Floating Window Mode is shown.
+    void UpdateFovOverscanSuspension();
 
     std::atomic<VRRenderingMode> m_renderingMode{VRRenderingMode::SequentialDualPass};
     static constexpr int kNoPendingMode = -1;

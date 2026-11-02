@@ -12,7 +12,7 @@ TEST_F(CompanionModTest, MetadataDescriptorIsValid) {
 
     EXPECT_NE(modDescContent.find("<modDesc descVersion=\"105\">"), std::string::npos);
     EXPECT_NE(modDescContent.find("<title>"), std::string::npos);
-    EXPECT_NE(modDescContent.find("<version>1.1.3.0</version>"), std::string::npos);
+    EXPECT_NE(modDescContent.find("<version>1.1.7.0</version>"), std::string::npos);
     EXPECT_NE(modDescContent.find("<extraSourceFiles>"), std::string::npos);
     EXPECT_NE(modDescContent.find("VRCompanion.lua"), std::string::npos);
 }
@@ -579,7 +579,7 @@ TEST_F(CompanionModTest, RecenterActionZeroesTranslationalOffsetsAndLogsConfirma
     EXPECT_TRUE(foundPlayerRealignLog);
 }
 
-TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCamera) {
+TEST_F(CompanionModTest, AppliesVerticalFovAndKeepsVehicleCameraCenteredWhateverTheSettingsSay) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
@@ -597,7 +597,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCame
     // Setup engine camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion.allowObliqueProjection = true
+        VRCompanion.allowObliqueProjection = true -- a leftover from an older version must change nothing
         _G.mockVehicleCam = {
             isInside = true,
             cameraNode = 301,
@@ -608,18 +608,18 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToVehicleCame
     // Run vehicle camera update
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCam"), 0);
 
-    // Verify FOV and oblique frustum offsets applied
+    // The headset FOV is applied; the projection stays on the optical axis although the eye's tan offset is -0.23
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraFovY[301] ~= nil, "setFovY must be called on vehicle cameraNode")
-        assert(math.abs(_G.cameraFovY[301] - 1.70) < 0.02, "vehicle vertical fov must match VR headset FOV")
+        assert(math.abs(_G.cameraFovY[301] - 1.80) < 0.02, "vehicle vertical fov must be the rendered FOV covering the headset FOV (outer side 0.90 at the headset aspect)")
 
         assert(_G.cameraProjectionOffsets[301] ~= nil, "setProjectionOffset must be called on vehicle cameraNode")
-        assert(math.abs(_G.cameraProjectionOffsets[301].x - (-0.23052)) < 0.01, "vehicle horizontal offset mismatch")
-        assert(math.abs(_G.cameraProjectionOffsets[301].y) < 0.01, "vehicle vertical offset mismatch")
+        assert(_G.cameraProjectionOffsets[301].x == 0, "vehicle horizontal offset must be zero")
+        assert(_G.cameraProjectionOffsets[301].y == 0, "vehicle vertical offset must be zero")
     )luau", "=verifyVehicleCamProjection"), 0);
 }
 
-TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamera) {
+TEST_F(CompanionModTest, AppliesVerticalFovAndKeepsPlayerCameraCenteredWhateverTheSettingsSay) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
@@ -637,7 +637,7 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamer
     // Setup player camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion.allowObliqueProjection = true
+        VRCompanion.allowObliqueProjection = true -- a leftover from an older version must change nothing
         _G.mockPlayerCam = {
             isFirstPerson = true,
             firstPersonCamera = 401
@@ -647,18 +647,18 @@ TEST_F(CompanionModTest, AppliesVerticalFovAndObliqueFrustumOffsetsToPlayerCamer
     // Run player camera update
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCam"), 0);
 
-    // Verify FOV and oblique frustum offsets applied
+    // The headset FOV is applied; the projection stays on the optical axis although the eye's tan offset is -0.23
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraFovY[401] ~= nil, "setFovY must be called on player firstPersonCamera")
-        assert(math.abs(_G.cameraFovY[401] - 1.70) < 0.02, "player vertical fov must match VR headset FOV")
+        assert(math.abs(_G.cameraFovY[401] - 1.80) < 0.02, "player vertical fov must be the rendered FOV covering the headset FOV (outer side 0.90 at the headset aspect)")
 
         assert(_G.cameraProjectionOffsets[401] ~= nil, "setProjectionOffset must be called on player firstPersonCamera")
-        assert(math.abs(_G.cameraProjectionOffsets[401].x - (-0.23052)) < 0.01, "player horizontal offset mismatch")
-        assert(math.abs(_G.cameraProjectionOffsets[401].y) < 0.01, "player vertical offset mismatch")
+        assert(_G.cameraProjectionOffsets[401].x == 0, "player horizontal offset must be zero")
+        assert(_G.cameraProjectionOffsets[401].y == 0, "player vertical offset must be zero")
     )luau", "=verifyPlayerCamProjection"), 0);
 }
 
-TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDisparity) {
+TEST_F(CompanionModTest, CentersCameraProjectionToPreventCrossEyedDisparity) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
@@ -682,85 +682,88 @@ TEST_F(CompanionModTest, CentersCameraProjectionByDefaultToPreventCrossEyedDispa
         }
     )luau", "=setupVehicleCamMock"), 0);
 
-    // Run vehicle camera update without allowObliqueProjection (default behavior)
+    // Run vehicle camera update
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCam"), 0);
 
     // Verify projection offset is explicitly 0, 0 to ensure zero disparity shear at infinity
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraProjectionOffsets[301] ~= nil, "setProjectionOffset must be called on vehicle cameraNode")
-        assert(math.abs(_G.cameraProjectionOffsets[301].x) < 0.0001, "vehicle horizontal offset must be zero by default")
-        assert(math.abs(_G.cameraProjectionOffsets[301].y) < 0.0001, "vehicle vertical offset must be zero by default")
+        assert(math.abs(_G.cameraProjectionOffsets[301].x) < 0.0001, "vehicle horizontal offset must be zero")
+        assert(math.abs(_G.cameraProjectionOffsets[301].y) < 0.0001, "vehicle vertical offset must be zero")
     )luau", "=verifyCenteredProjection"), 0);
 }
 
-TEST_F(CompanionModTest, ObliqueProjectionConsoleCommandTogglesPersistsAndAppliesOffsets) {
-    fs25vr::FakeTrackedHeadset headset;
-    auto oxr = headset.manager;
-    XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
-    headset.SetEyeFov(0, leftFov);
-
-    fs25vr::HeadPose simPose;
-    simPose.isValid = true;
-    headset.SetHeadPose(simPose);
-
-    fs25vr::VRBridge bridge(oxr, nullptr);
-    ASSERT_TRUE(bridge.Inject(L));
-
+TEST_F(CompanionModTest, ObliqueProjectionConsoleCommandIsNoLongerRegistered) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
 
-    SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registeredCommands = {}
-        local removedCommands = {}
         _G.addConsoleCommand = function(cmd, desc, funcName, target)
-            registeredCommands[cmd] = { desc = desc, funcName = funcName, target = target }
+            registeredCommands[cmd] = true
         end
-        _G.removeConsoleCommand = function(cmd)
-            removedCommands[cmd] = true
-        end
+        _G.removeConsoleCommand = function() end
 
-        local savedBools = {}
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrObliqueProjection"] == nil, "vrObliqueProjection must not be registered")
+        assert(registeredCommands["vrHudState"] == true, "the other core commands are still registered")
+        assert(VRCompanion.consoleCommandSetObliqueProjection == nil, "its handler is gone too")
+        VRCompanion:deleteMap()
+    )luau", "=testObliqueProjectionConsoleCommandGone"), 0);
+}
+
+TEST_F(CompanionModTest, EveryConsoleCommandIsRemovedOnUnloadSoASecondMapLoadsCleanly) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        -- Models the engine: a console command can only be added while its name is free
+        local present = {}
+        local handlers = {}
+        local duplicates = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            if present[cmd] then table.insert(duplicates, cmd) end
+            present[cmd] = true
+            handlers[cmd] = { funcName = funcName, target = target }
+        end
+        _G.removeConsoleCommand = function(cmd) present[cmd] = nil end
         _G.createXMLFile = function() return 1 end
         _G.setXMLFloat = function() end
-        _G.setXMLBool = function(xml, key, val) savedBools[key] = val end
+        _G.setXMLBool = function() end
         _G.setXMLString = function() end
         _G.saveXMLFile = function() return true end
         _G.delete = function() end
         _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
 
-        VRCompanion:loadMap("testMap")
-        assert(registeredCommands["vrObliqueProjection"] ~= nil, "vrObliqueProjection console command must be registered on map load")
-        assert(registeredCommands["vrObliqueProjection"].funcName == "consoleCommandSetObliqueProjection",
-            "registered callback must be consoleCommandSetObliqueProjection")
+        local function leftBehind()
+            local names = {}
+            for cmd in pairs(present) do table.insert(names, cmd) end
+            table.sort(names)
+            return table.concat(names, ", ")
+        end
 
-        -- Defaults to symmetric projection
-        assert(VRCompanion.allowObliqueProjection == false, "oblique projection must default to off")
-        local statusRes = VRCompanion:consoleCommandSetObliqueProjection("status")
-        assert(string.find(statusRes, "Disabled") ~= nil, "status must report disabled by default")
+        VRCompanion:loadMap("firstMap")
+        VRCompanion:deleteMap()
+        assert(leftBehind() == "", "map unload must remove every command it registered, left: " .. leftBehind())
 
-        local invalidRes = VRCompanion:consoleCommandSetObliqueProjection("maybe")
-        assert(string.find(invalidRes, "Usage: vrObliqueProjection") ~= nil, "invalid input must return usage")
-        assert(VRCompanion.allowObliqueProjection == false, "invalid input must not change the setting")
+        VRCompanion:loadMap("secondMap")
+        assert(#duplicates == 0, "no command may be registered while already present: " .. table.concat(duplicates, ", "))
 
-        local cam = { isInside = true, cameraNode = 301, origTransX = 0, origTransY = 1.5, origTransZ = 0 }
-
-        -- Enabling applies per-eye asymmetric offsets and persists to settings.xml
-        VRCompanion:consoleCommandSetObliqueProjection("true")
-        assert(VRCompanion.allowObliqueProjection == true, "true must enable oblique projection")
-        assert(savedBools["vrSettings.allowObliqueProjection"] == true, "enabled preference must persist to settings.xml")
-        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
-        assert(math.abs(_G.cameraProjectionOffsets[301].x) > 0.001, "enabled oblique projection must apply a horizontal offset")
-
-        -- Toggling back restores the centered projection and persists
-        VRCompanion:consoleCommandSetObliqueProjection("toggle")
-        assert(VRCompanion.allowObliqueProjection == false, "toggle must disable oblique projection")
-        assert(savedBools["vrSettings.allowObliqueProjection"] == false, "disabled preference must persist to settings.xml")
-        VRCompanion:onVehicleCameraUpdate(cam, 16.6)
-        assert(math.abs(_G.cameraProjectionOffsets[301].x) < 0.0001, "disabled oblique projection must center the projection")
+        local mustRun = {
+            "vrHudLoadNotification", "vrHudLoadAlert", "vrDlssMvScale", "vrDlssSharpness", "vrDlssPreset",
+            "vrDlssSdpMvScale", "vrDlssMvFix", "vrDlssDepthModel", "vrDlssNearClip", "vrDlssNearClipCab",
+            "vrDlssNearClipOutside", "vrDlssNearClipOnFoot", "vrDlssDiag",
+        }
+        for _, cmd in ipairs(mustRun) do
+            local entry = handlers[cmd]
+            assert(entry ~= nil and present[cmd], cmd .. " must be registered on the second map")
+            local ok, err = pcall(function() return entry.target[entry.funcName](entry.target) end)
+            assert(ok, cmd .. " must run on the second map: " .. tostring(err))
+        end
 
         VRCompanion:deleteMap()
-        assert(removedCommands["vrObliqueProjection"] == true, "deleteMap must unregister vrObliqueProjection")
-    )luau", "=testObliqueProjectionConsoleCommand"), 0);
+        assert(leftBehind() == "", "second map unload must remove every command, left: " .. leftBehind())
+    )luau", "=testEveryConsoleCommandRemovedOnUnload"), 0);
 }
 
 TEST_F(CompanionModTest, DlssMvFixConsoleCommandSwitchesTheMotionVectorPass) {
@@ -997,7 +1000,7 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     // Setup camera mocks via shared helper
     SetupCameraMockGlobals(L);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion.allowObliqueProjection = true
+        _G.cameraProjectionOffsets[505] = { x = 0.07, y = -0.03 } -- the game camera's own lens
         _G.mockCam = {
             isInside = true,
             cameraNode = 505,
@@ -1010,8 +1013,8 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
 
     // Ensure modified
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(math.abs(_G.cameraFovY[505] - 1.70) < 0.02, "must be set to VR fov")
-        assert(math.abs(_G.cameraProjectionOffsets[505].x) > 0.05, "must be non-zero offset")
+        assert(math.abs(_G.cameraFovY[505] - 1.80) < 0.02, "must be set to the rendered VR fov")
+        assert(_G.cameraProjectionOffsets[505].x == 0 and _G.cameraProjectionOffsets[505].y == 0, "must be centered while the mod owns the camera")
     )luau", "=checkModified"), 0);
 
     // Unload map
@@ -1020,12 +1023,12 @@ TEST_F(CompanionModTest, RestoresOriginalFovAndProjectionOffsetsOnMapUnload) {
     // Verify restored
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(math.abs(_G.cameraFovY[505] - 1.0472) < 0.001, "original FOV must be restored")
-        assert(math.abs(_G.cameraProjectionOffsets[505].x) < 0.001, "offset x must be reset to 0")
-        assert(math.abs(_G.cameraProjectionOffsets[505].y) < 0.001, "offset y must be reset to 0")
+        assert(math.abs(_G.cameraProjectionOffsets[505].x - 0.07) < 0.001, "offset x must be restored")
+        assert(math.abs(_G.cameraProjectionOffsets[505].y - (-0.03)) < 0.001, "offset y must be restored")
     )luau", "=checkRestored"), 0);
 }
 
-TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSequentialFramesInCab) {
+TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndKeepsBothEyesCenteredOnSequentialFramesInCab) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
@@ -1060,17 +1063,16 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
             cameraNode = 301,
             origTransX = 0, origTransY = 1.5, origTransZ = 0
         }
-        VRCompanion.allowObliqueProjection = true
     )luau", "=setupAFRVehicleMocks"), 0);
 
     // Frame 0 (even, left eye, parity = 0)
     ASSERT_EQ(bridge.GetFrameParity(), 0u);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCamFrame0"), 0);
 
-    // Check Frame 0: Left Eye projection (negative offset) and negative IPD offset (-0.032m)
+    // Check Frame 0: Left Eye projection centered although the eye's tan offset is -0.23, and negative IPD offset (-0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraProjectionOffsets[301] ~= nil, "projection offset must be set on vehicle camera")
-        assert(math.abs(_G.cameraProjectionOffsets[301].x - (-0.23052)) < 0.01, "frame 0 should have left eye projection offset")
+        assert(_G.cameraProjectionOffsets[301].x == 0 and _G.cameraProjectionOffsets[301].y == 0, "frame 0 should have a centered projection")
 
         assert(_G.cameraTranslations[301] ~= nil, "translation must be set on vehicle camera")
         assert(math.abs(_G.cameraTranslations[301].x - (-0.032)) < 0.001, "frame 0 should have -IPD/2 translation")
@@ -1085,16 +1087,16 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     // Frame 1 (odd, right eye, parity = 1)
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onVehicleCameraUpdate(_G.mockVehicleCam, 16.6)", "=updateVehicleCamFrame1"), 0);
 
-    // Check Frame 1: Right Eye projection (positive offset) and positive IPD offset (+0.032m)
+    // Check Frame 1: Right Eye projection centered although the eye's tan offset is +0.23, and positive IPD offset (+0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(math.abs(_G.cameraProjectionOffsets[301].x - (0.23052)) < 0.01, "frame 1 should have right eye projection offset")
+        assert(_G.cameraProjectionOffsets[301].x == 0 and _G.cameraProjectionOffsets[301].y == 0, "frame 1 should have a centered projection")
         assert(math.abs(_G.cameraTranslations[301].x - (0.032)) < 0.001, "frame 1 should have +IPD/2 translation")
         assert(math.abs(_G.cameraTranslations[301].y - 1.5) < 0.001, "y translation should match base height")
         assert(math.abs(_G.cameraTranslations[301].z) < 0.001, "z translation should be zero")
     )luau", "=verifyFrame1InCab"), 0);
 }
 
-TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSequentialFramesOnFoot) {
+TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndKeepsBothEyesCenteredOnSequentialFramesOnFoot) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
     XrFovf leftFov{ -0.90f, 0.80f, 0.85f, -0.85f };
@@ -1131,7 +1133,6 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
             isFirstPerson = true,
             firstPersonCamera = 401
         }
-        VRCompanion.allowObliqueProjection = true
     )luau", "=setupAFRPlayerMocks"), 0);
 
     // Frame 0 (even, left eye, parity = 0)
@@ -1139,10 +1140,10 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraMakeCurrent(_G.mockPlayerCam)", "=makeCurrentPlayer"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCamFrame0"), 0);
 
-    // Check Frame 0: Left Eye projection and negative IPD offset (-0.032m)
+    // Check Frame 0: Left Eye projection centered although the eye's tan offset is -0.23, and negative IPD offset (-0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         assert(_G.cameraProjectionOffsets[401] ~= nil, "projection offset must be set on player camera")
-        assert(math.abs(_G.cameraProjectionOffsets[401].x - (-0.23052)) < 0.01, "frame 0 should have left eye projection offset")
+        assert(_G.cameraProjectionOffsets[401].x == 0 and _G.cameraProjectionOffsets[401].y == 0, "frame 0 should have a centered projection")
 
         assert(_G.cameraTranslations[401] ~= nil, "translation must be set on player camera")
         assert(math.abs(_G.cameraTranslations[401].x - (-0.032)) < 0.001, "frame 0 should have -IPD/2 translation")
@@ -1156,9 +1157,9 @@ TEST_F(CompanionModTest, AlternatesCameraEyeTranslationAndObliqueFrustumsOnSeque
     // Frame 1 (odd, right eye, parity = 1)
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:onPlayerCameraUpdate(_G.mockPlayerCam, 16.6)", "=updatePlayerCamFrame1"), 0);
 
-    // Check Frame 1: Right Eye projection and positive IPD offset (+0.032m)
+    // Check Frame 1: Right Eye projection centered although the eye's tan offset is +0.23, and positive IPD offset (+0.032m)
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        assert(math.abs(_G.cameraProjectionOffsets[401].x - (0.23052)) < 0.01, "frame 1 should have right eye projection offset")
+        assert(_G.cameraProjectionOffsets[401].x == 0 and _G.cameraProjectionOffsets[401].y == 0, "frame 1 should have a centered projection")
         assert(math.abs(_G.cameraTranslations[401].x - (0.032)) < 0.001, "frame 1 should have +IPD/2 translation")
         assert(math.abs(_G.cameraTranslations[401].y - 1.8) < 0.001, "y translation should match base head height")
     )luau", "=verifyFrame1OnFoot"), 0);
@@ -3474,7 +3475,7 @@ TEST_F(CompanionModTest, CameraProjectionRestoresOriginalFovAndZeroOffsetsIn2DMo
         VRCompanion:set2DViewActive(false)
         VRCompanion:applyCameraProjection(camNode, 0)
         local vrFov = getFovY(camNode)
-        assert(math.abs(vrFov - 1.70) < 0.02, "3D VR mode must apply VR headset FOV")
+        assert(math.abs(vrFov - 1.80) < 0.02, "3D VR mode must apply the rendered VR FOV")
 
         -- 2. Switch to 2D mode (is2DViewActive == true)
         VRCompanion:set2DViewActive(true)
@@ -4569,6 +4570,440 @@ TEST_F(CompanionModTest, RenderingModeConsoleCommandAndNotificationAlert) {
     )luau", "=testRenderingModeConsoleCommand"), 0);
 }
 
+TEST_F(CompanionModTest, DesktopMirrorConsoleCommandSetsTheVRBridgeFlag) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        local removedCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName, target = target }
+        end
+        _G.removeConsoleCommand = function(cmd) removedCommands[cmd] = true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrDesktopMirror"] ~= nil, "vrDesktopMirror must be registered on map load")
+        assert(registeredCommands["vrDesktopMirror"].funcName == "consoleCommandSetDesktopMirror",
+            "registered callback must be consoleCommandSetDesktopMirror")
+        assert(VRCompanion.desktopMirror == true, "the mirror is on by default")
+        assert(VRBridge.getDesktopMirror() == true, "VRBridge flag is on by default")
+
+        -- No argument reports the state without changing it
+        local status = VRCompanion:consoleCommandSetDesktopMirror()
+        assert(type(status) == "string" and string.find(status, "on") ~= nil, "status must say the mirror is on: " .. tostring(status))
+        assert(VRBridge.getDesktopMirror() == true)
+
+        -- off / on set the VRBridge flag
+        VRCompanion:consoleCommandSetDesktopMirror("off")
+        assert(VRCompanion.desktopMirror == false)
+        assert(VRBridge.getDesktopMirror() == false, "vrDesktopMirror off must clear the VRBridge flag")
+        status = VRCompanion:consoleCommandSetDesktopMirror()
+        assert(string.find(status, "off") ~= nil, "status must say the mirror is off: " .. tostring(status))
+
+        VRCompanion:consoleCommandSetDesktopMirror("on")
+        assert(VRCompanion.desktopMirror == true)
+        assert(VRBridge.getDesktopMirror() == true, "vrDesktopMirror on must set the VRBridge flag")
+
+        -- Anything else is refused and changes nothing
+        VRCompanion:consoleCommandSetDesktopMirror("off")
+        local refused = VRCompanion:consoleCommandSetDesktopMirror("maybe")
+        assert(string.find(refused, "Usage: vrDesktopMirror") ~= nil, "an invalid argument returns the usage")
+        assert(VRBridge.getDesktopMirror() == false, "an invalid argument must not change the flag")
+
+        -- Map unload removes the command; the saved setting is read again by the next map load
+        VRCompanion:deleteMap()
+        assert(removedCommands["vrDesktopMirror"] == true, "deleteMap must unregister vrDesktopMirror")
+        assert(VRCompanion.desktopMirror == false, "deleteMap keeps the setting for the next map load")
+    )luau", "=testDesktopMirrorConsoleCommand"), 0);
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
+}
+
+TEST_F(CompanionModTest, DesktopMirrorCommandPersistsTheSettingToSettingsXml) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local savedBools = {}
+        local saves = 0
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLString = function() end
+        _G.setXMLBool = function(xml, key, val) savedBools[key] = val end
+        _G.saveXMLFile = function() saves = saves + 1; return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        -- The default is written as on
+        VRCompanion:saveConfiguration("dummy.xml")
+        assert(savedBools["vrSettings.desktopMirror"] == true, "the default is saved as on")
+
+        local savesBefore = saves
+        local response = VRCompanion:consoleCommandSetDesktopMirror("off")
+        assert(savedBools["vrSettings.desktopMirror"] == false, "vrDesktopMirror off must be saved to settings.xml")
+        assert(saves > savesBefore, "vrDesktopMirror off must write the file")
+        assert(string.find(response, "Saved") ~= nil, "the response says it was saved: " .. tostring(response))
+
+        VRCompanion:consoleCommandSetDesktopMirror("on")
+        assert(savedBools["vrSettings.desktopMirror"] == true, "vrDesktopMirror on must be saved to settings.xml")
+
+        -- An argument that changes nothing writes nothing
+        savesBefore = saves
+        VRCompanion:consoleCommandSetDesktopMirror("maybe")
+        VRCompanion:consoleCommandSetDesktopMirror()
+        assert(saves == savesBefore, "usage and status must not write the file")
+    )luau", "=testDesktopMirrorPersists"), 0);
+}
+
+TEST_F(CompanionModTest, DesktopMirrorMapLoadRestoresTheSavedValueAndSendsItToVRBridgeAfterTheHandshake) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        local store = { ["vrSettings.desktopMirror"] = false }
+        _G.loadXMLFile = function() return 2 end
+        _G.delete = function() end
+        _G.getXMLFloat = function() return nil end
+        _G.getXMLString = function() return nil end
+        _G.getXMLBool = function(xml, key) return store[key] end
+
+        -- Record the order in which the Companion Mod talks to VRBridge
+        local calls = {}
+        local realHandshake = VRBridge.handshake
+        local realSet = VRBridge.setDesktopMirror
+        VRBridge.handshake = function(...)
+            table.insert(calls, "handshake")
+            return realHandshake(...)
+        end
+        VRBridge.setDesktopMirror = function(enabled)
+            table.insert(calls, enabled and "mirror:on" or "mirror:off")
+            return realSet(enabled)
+        end
+
+        VRCompanion:loadMap("testMap")
+
+        assert(VRCompanion.desktopMirror == false, "the saved off must be restored on map load")
+        assert(VRBridge.getDesktopMirror() == false, "the saved off must reach VRBridge on map load")
+        local handshakeAt, lastMirrorAt = nil, nil
+        for i, c in ipairs(calls) do
+            if c == "handshake" and handshakeAt == nil then handshakeAt = i end
+            if string.sub(c, 1, 7) == "mirror:" then lastMirrorAt = i end
+        end
+        assert(handshakeAt ~= nil, "the handshake must run on map load")
+        assert(lastMirrorAt ~= nil, "the saved value must be sent to VRBridge")
+        assert(lastMirrorAt > handshakeAt, "the saved value is sent after the handshake: " .. table.concat(calls, ","))
+        assert(calls[lastMirrorAt] == "mirror:off", "the last value sent is the saved off: " .. table.concat(calls, ","))
+
+        -- A saved on is restored too, over a stale off
+        VRCompanion:deleteMap()
+        store["vrSettings.desktopMirror"] = true
+        VRBridge.setDesktopMirror(false)
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.desktopMirror == true)
+        assert(VRBridge.getDesktopMirror() == true, "the saved on must reach VRBridge on map load")
+    )luau", "=testDesktopMirrorRestore"), 0);
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
+}
+
+TEST_F(CompanionModTest, DesktopMirrorIsOnWhenNothingIsSaved) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    bridge.SetDesktopMirrorEnabled(false);  // a stale off in the bridge must not survive a map load
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        -- A settings file that has no desktop mirror key
+        _G.loadXMLFile = function() return 2 end
+        _G.getXMLFloat = function() return nil end
+        _G.getXMLBool = function() return nil end
+        _G.getXMLString = function() return nil end
+
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.desktopMirror == true, "the mirror is on when nothing is saved")
+        assert(VRBridge.getDesktopMirror() == true, "VRBridge gets on when nothing is saved")
+    )luau", "=testDesktopMirrorNothingSaved"), 0);
+    EXPECT_TRUE(bridge.IsDesktopMirrorEnabled());
+}
+
+TEST_F(CompanionModTest, DesktopMirrorHelpTextSaysSavedOnByDefaultAndUntestedWithFrameGeneration) {
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registered = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target) registered[cmd] = desc end
+        VRCompanion:registerDesktopMirrorConsoleCommands()
+        local help = string.lower(registered["vrDesktopMirror"] or "")
+        assert(help ~= "", "vrDesktopMirror must be registered")
+        assert(string.find(help, "saved", 1, true) ~= nil, "help must say the setting is saved: " .. help)
+        assert(string.find(help, "on by default", 1, true) ~= nil, "help must say it is on by default: " .. help)
+        assert(string.find(help, "untested with frame generation", 1, true) ~= nil,
+            "help must say it is untested with frame generation: " .. help)
+
+        -- The no-argument report names the state
+        local status = VRCompanion:consoleCommandSetDesktopMirror()
+        assert(string.find(status, "Desktop Mirror is on", 1, true) ~= nil, status)
+        VRCompanion:consoleCommandSetDesktopMirror("off")
+        status = VRCompanion:consoleCommandSetDesktopMirror()
+        assert(string.find(status, "Desktop Mirror is off", 1, true) ~= nil, status)
+    )luau", "=testDesktopMirrorHelpText"), 0);
+}
+
+TEST_F(CompanionModTest, DesktopMirrorCommandIsHarmlessWithoutTheNativeBridgeFunction) {
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRBridge = { version = "1.0.0", handshake = function() return true end }
+        local result = VRCompanion:consoleCommandSetDesktopMirror("off")
+        assert(type(result) == "string")
+        assert(VRCompanion.desktopMirror == false)
+    )luau", "=testDesktopMirrorWithoutBridgeFunction"), 0);
+}
+
+TEST_F(CompanionModTest, MouseConfinementConsoleCommandSetsTheVRBridgeFlag) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registeredCommands = {}
+        local removedCommands = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target)
+            registeredCommands[cmd] = { desc = desc, funcName = funcName, target = target }
+        end
+        _G.removeConsoleCommand = function(cmd) removedCommands[cmd] = true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        VRCompanion:loadMap("testMap")
+        assert(registeredCommands["vrMouseConfinement"] ~= nil, "vrMouseConfinement must be registered on map load")
+        assert(registeredCommands["vrMouseConfinement"].funcName == "consoleCommandSetMouseConfinement",
+            "registered callback must be consoleCommandSetMouseConfinement")
+        assert(registeredCommands["vrMouseConfinement"].target == VRCompanion)
+        assert(VRCompanion.mouseConfinement == true, "Mouse Confinement is on by default")
+        assert(VRBridge.getMouseConfinement() == true, "VRBridge flag is on by default")
+
+        -- No argument reports the state without changing it
+        local status = VRCompanion:consoleCommandSetMouseConfinement()
+        assert(string.find(status, "Mouse Confinement is on", 1, true) ~= nil, "status must say it is on: " .. tostring(status))
+        assert(VRBridge.getMouseConfinement() == true)
+
+        -- off / on set the VRBridge flag
+        VRCompanion:consoleCommandSetMouseConfinement("off")
+        assert(VRCompanion.mouseConfinement == false)
+        assert(VRBridge.getMouseConfinement() == false, "vrMouseConfinement off must clear the VRBridge flag")
+        status = VRCompanion:consoleCommandSetMouseConfinement()
+        assert(string.find(status, "Mouse Confinement is off", 1, true) ~= nil, "status must say it is off: " .. tostring(status))
+        assert(VRBridge.getDesktopMirror() == true, "the Desktop Mirror flag is not touched")
+
+        VRCompanion:consoleCommandSetMouseConfinement("on")
+        assert(VRCompanion.mouseConfinement == true)
+        assert(VRBridge.getMouseConfinement() == true, "vrMouseConfinement on must set the VRBridge flag")
+
+        -- Anything else is refused and changes nothing
+        VRCompanion:consoleCommandSetMouseConfinement("off")
+        local refused = VRCompanion:consoleCommandSetMouseConfinement("maybe")
+        assert(string.find(refused, "Usage: vrMouseConfinement", 1, true) ~= nil, "an invalid argument returns the usage")
+        assert(VRCompanion.mouseConfinement == false)
+        assert(VRBridge.getMouseConfinement() == false, "an invalid argument must not change the flag")
+
+        -- Map unload removes the command; the saved setting is read again by the next map load
+        VRCompanion:deleteMap()
+        assert(removedCommands["vrMouseConfinement"] == true, "deleteMap must unregister vrMouseConfinement")
+        assert(VRCompanion.mouseConfinement == false, "deleteMap keeps the setting for the next map load")
+    )luau", "=testMouseConfinementConsoleCommand"), 0);
+    EXPECT_TRUE(bridge.IsMouseConfinementEnabled());
+}
+
+TEST_F(CompanionModTest, MouseConfinementCommandPersistsTheSettingToSettingsXml) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local savedBools = {}
+        local saves = 0
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLString = function() end
+        _G.setXMLBool = function(xml, key, val) savedBools[key] = val end
+        _G.saveXMLFile = function() saves = saves + 1; return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        -- The default is written as on
+        VRCompanion:saveConfiguration("dummy.xml")
+        assert(savedBools["vrSettings.mouseConfinement"] == true, "the default is saved as on")
+
+        local savesBefore = saves
+        local response = VRCompanion:consoleCommandSetMouseConfinement("off")
+        assert(savedBools["vrSettings.mouseConfinement"] == false, "vrMouseConfinement off must be saved to settings.xml")
+        assert(saves > savesBefore, "vrMouseConfinement off must write the file")
+        assert(string.find(response, "Saved") ~= nil, "the response says it was saved: " .. tostring(response))
+
+        VRCompanion:consoleCommandSetMouseConfinement("on")
+        assert(savedBools["vrSettings.mouseConfinement"] == true, "vrMouseConfinement on must be saved to settings.xml")
+
+        -- An argument that changes nothing writes nothing
+        savesBefore = saves
+        VRCompanion:consoleCommandSetMouseConfinement("maybe")
+        VRCompanion:consoleCommandSetMouseConfinement()
+        assert(saves == savesBefore, "usage and status must not write the file")
+    )luau", "=testMouseConfinementPersists"), 0);
+}
+
+TEST_F(CompanionModTest, MouseConfinementMapLoadRestoresTheSavedValueAndSendsItToVRBridgeAfterTheHandshake) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        local store = { ["vrSettings.mouseConfinement"] = false }
+        _G.loadXMLFile = function() return 2 end
+        _G.delete = function() end
+        _G.getXMLFloat = function() return nil end
+        _G.getXMLString = function() return nil end
+        _G.getXMLBool = function(xml, key) return store[key] end
+
+        -- Record the order in which the Companion Mod talks to VRBridge
+        local calls = {}
+        local realHandshake = VRBridge.handshake
+        local realSet = VRBridge.setMouseConfinement
+        VRBridge.handshake = function(...)
+            table.insert(calls, "handshake")
+            return realHandshake(...)
+        end
+        VRBridge.setMouseConfinement = function(enabled)
+            table.insert(calls, enabled and "confinement:on" or "confinement:off")
+            return realSet(enabled)
+        end
+
+        VRCompanion:loadMap("testMap")
+
+        assert(VRCompanion.mouseConfinement == false, "the saved off must be restored on map load")
+        assert(VRBridge.getMouseConfinement() == false, "the saved off must reach VRBridge on map load")
+        local handshakeAt, lastAt = nil, nil
+        for i, c in ipairs(calls) do
+            if c == "handshake" and handshakeAt == nil then handshakeAt = i end
+            if string.sub(c, 1, 12) == "confinement:" then lastAt = i end
+        end
+        assert(handshakeAt ~= nil, "the handshake must run on map load")
+        assert(lastAt ~= nil, "the saved value must be sent to VRBridge")
+        assert(lastAt > handshakeAt, "the saved value is sent after the handshake: " .. table.concat(calls, ","))
+        assert(calls[lastAt] == "confinement:off", "the last value sent is the saved off: " .. table.concat(calls, ","))
+
+        -- A saved on is restored too, over a stale off
+        VRCompanion:deleteMap()
+        store["vrSettings.mouseConfinement"] = true
+        VRBridge.setMouseConfinement(false)
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.mouseConfinement == true)
+        assert(VRBridge.getMouseConfinement() == true, "the saved on must reach VRBridge on map load")
+    )luau", "=testMouseConfinementRestore"), 0);
+    EXPECT_TRUE(bridge.IsMouseConfinementEnabled());
+}
+
+TEST_F(CompanionModTest, MouseConfinementIsOnWhenNothingIsSaved) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    bridge.SetMouseConfinementEnabled(false);  // a stale off in the bridge must not survive a map load
+
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.addConsoleCommand = function() end
+        _G.removeConsoleCommand = function() end
+        _G.createFolder = function() return true end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+
+        -- A settings file that has no Mouse Confinement key
+        _G.loadXMLFile = function() return 2 end
+        _G.getXMLFloat = function() return nil end
+        _G.getXMLBool = function() return nil end
+        _G.getXMLString = function() return nil end
+
+        VRCompanion:loadMap("testMap")
+        assert(VRCompanion.mouseConfinement == true, "Mouse Confinement is on when nothing is saved")
+        assert(VRBridge.getMouseConfinement() == true, "VRBridge gets on when nothing is saved")
+    )luau", "=testMouseConfinementNothingSaved"), 0);
+    EXPECT_TRUE(bridge.IsMouseConfinementEnabled());
+}
+
+TEST_F(CompanionModTest, MouseConfinementHelpTextSaysWhatItDoesAndThatItIsSavedAndOnByDefault) {
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local registered = {}
+        _G.addConsoleCommand = function(cmd, desc, funcName, target) registered[cmd] = desc end
+        VRCompanion:registerMouseConfinementConsoleCommands()
+        assert(registered["vrMouseConfinement"] == "Keep the Desk Mouse on the game picture while the headset is in use (saved; on by default): vrMouseConfinement [on|off]",
+            "help text: " .. tostring(registered["vrMouseConfinement"]))
+    )luau", "=testMouseConfinementHelpText"), 0);
+}
+
+TEST_F(CompanionModTest, MouseConfinementCommandIsHarmlessWithoutTheNativeBridgeFunction) {
+    ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRBridge = { version = "1.0.0", handshake = function() return true end }
+        local result = VRCompanion:consoleCommandSetMouseConfinement("off")
+        assert(type(result) == "string")
+        assert(VRCompanion.mouseConfinement == false)
+    )luau", "=testMouseConfinementWithoutBridgeFunction"), 0);
+}
+
 TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDrivingAndOnFoot) {
     SetupCameraMockGlobals(L);
     fs25vr::FakeTrackedHeadset headset;
@@ -4654,12 +5089,12 @@ TEST_F(CompanionModTest, LiveModeSwitchingMaintainsCleanCameraAlignmentDuringDri
         assert(math.abs(offX0) < 0.0001, "Camera projection X offset must remain centered in DualPass")
         assert(math.abs(offY0) < 0.0001, "Camera projection Y offset must remain centered in DualPass")
 
-        -- When allowObliqueProjection is explicitly enabled in DualPass, asymmetric offsets are applied
+        -- A leftover allowObliqueProjection from an older version changes nothing
         VRCompanion.allowObliqueProjection = true
         VRCompanion:applyCameraProjection(leftCam, 0)
-        local oblX, _ = getProjectionOffset(leftCam)
-        assert(math.abs(oblX) > 0.001, "Oblique frustum offset must be applied when allowObliqueProjection is true")
-        VRCompanion.allowObliqueProjection = false
+        local legacyX, legacyY = getProjectionOffset(leftCam)
+        assert(legacyX == 0 and legacyY == 0, "the projection must stay centered whatever the settings say")
+        VRCompanion.allowObliqueProjection = nil
 
         -- SubPass 1 (Right Eye)
         VRBridge.setSubPassIndex(1)

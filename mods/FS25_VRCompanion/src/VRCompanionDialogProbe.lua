@@ -24,7 +24,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.DialogProbe = VRCompanion.DialogProbe or {}
 
 local engine = VRCompanion.getEngineGlobal  -- VRCompanionCore.lua, loaded before this file
 local readers = VRCompanion.HandTools.probeReaders  -- VRCompanionHandTools.lua, loaded before this file
@@ -296,9 +295,3 @@ end
 function VRCompanion:resetDialogDiagnostics()
     if removeConsoleCommand ~= nil then removeConsoleCommand("vrDialogDiagnostics") end
 end
-
-VRCompanion.DialogProbe.getDialogDiagnostics = function(self, ...) return VRCompanion.getDialogDiagnostics(VRCompanion, ...) end
-VRCompanion.DialogProbe.consoleCommandDialogDiagnostics = function(self, ...) return VRCompanion.consoleCommandDialogDiagnostics(VRCompanion, ...) end
-
-return VRCompanion.DialogProbe
-

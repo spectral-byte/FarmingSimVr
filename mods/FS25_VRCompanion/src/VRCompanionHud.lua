@@ -6,7 +6,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.Hud = VRCompanion.Hud or {}
 
 -- VR HUD Three-Stage State Machine Constants
 VRCompanion.HUD_STATE_HIDDEN = 0
@@ -100,9 +99,25 @@ function VRCompanion:getHudBaseUiScale()
     return 1.0
 end
 
--- The scale a group is drawn at: the game's UI scale setting times the group's own scale
+-- FOV Overscan widens the view by (1 + percent / 100) in tangent, so the same normalized screen position and size would
+-- sit further out, look bigger and read nearer. The HUD shrinks toward the screen centre by this factor instead, which
+-- keeps its angular position and size (and, with the convergence disparity, its depth) as without the overscan.
+function VRCompanion:getHudFovCompensation()
+    local percent = self.fovOverscan or 0
+    if percent <= 0 or self.is2DViewActive then return 1.0 end
+    return 1.0 / (1.0 + percent / 100.0)
+end
+
+-- A normalized distance from a screen edge, pulled in toward the centre by the FOV Overscan compensation
+function VRCompanion:compensateHudEdgeDistance(distance)
+    local compensation = self:getHudFovCompensation()
+    if compensation == 1.0 then return distance end
+    return 0.5 - (0.5 - distance) * compensation
+end
+
+-- The scale a group is drawn at: the game's UI scale setting times the group's own scale, shrunk by the FOV Overscan
 function VRCompanion:getHudGroupScale(groupName)
-    return self:getHudBaseUiScale() * self:getHudGroupLayout(groupName).scale
+    return self:getHudBaseUiScale() * self:getHudGroupLayout(groupName).scale * self:getHudFovCompensation()
 end
 
 -- Width and height of a display, 0 where it does not say
@@ -138,17 +153,19 @@ function VRCompanion:getHudDisplayPosition(display, displayName, convergenceOffs
     local offset = convergenceOffset or 0.0
     local group, groupName = findHudGroup(displayName)
     if group == nil then
-        return 0.5 + offset, self:getHudGroupLayout(CONTEXT_ACTION_ANCHOR_GROUP).marginY
+        return 0.5 + offset, self:compensateHudEdgeDistance(self:getHudGroupLayout(CONTEXT_ACTION_ANCHOR_GROUP).marginY)
     end
     local layout = self:getHudGroupLayout(groupName)
+    local marginX = self:compensateHudEdgeDistance(layout.marginX)
+    local marginY = self:compensateHudEdgeDistance(layout.marginY)
     local w, h
     if displayName == "FillLevelsDisplay" then
         w, h = self:getFillLevelsBlockSize(display)
     else
         w, h = getDisplaySize(display)
     end
-    local x = (group.alignX == "right") and (1.0 - layout.marginX - w) or layout.marginX
-    local y = (group.alignY == "top") and (1.0 - layout.marginY - h) or layout.marginY
+    local x = (group.alignX == "right") and (1.0 - marginX - w) or marginX
+    local y = (group.alignY == "top") and (1.0 - marginY - h) or marginY
     if displayName == "SpeedMeterDisplay" then
         local fillLevels = self:getFillLevelsDisplay()
         if fillLevels ~= nil then
@@ -212,14 +229,16 @@ function VRCompanion:computeConvergenceDisparity(ipd, depth)
         end
     end
 
+    -- The disparity is a share of the screen width, which the FOV Overscan widens
+    local compensation = self:getHudFovCompensation()
     if targetIpd == nil or targetIpd <= 0.001 then
-        return self.DEFAULT_CONVERGENCE_DISPARITY
+        return self.DEFAULT_CONVERGENCE_DISPARITY * compensation
     end
 
     local clampedIpd = self:clamp(targetIpd, self.MIN_IPD, self.MAX_IPD)
     local disparity = (clampedIpd / targetDepth) * self.CONVERGENCE_PARALLAX_FACTOR
 
-    return self:clamp(disparity, self.MIN_CONVERGENCE_DISPARITY, self.MAX_CONVERGENCE_DISPARITY)
+    return self:clamp(disparity, self.MIN_CONVERGENCE_DISPARITY, self.MAX_CONVERGENCE_DISPARITY) * compensation
 end
 
 function VRCompanion:getConvergenceDisparity()
@@ -480,10 +499,10 @@ function VRCompanion:updateHudConvergence(dt)
 
     self.currentConvergenceOffset = offset
 
-    local baseLeft = self.hudAnchorLeftBase or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL
-    local baseRight = self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL)
-    local baseBottom = self.hudAnchorBottomBase or self.DEFAULT_HUD_SAFE_AREA_VERTICAL
-    local baseTop = self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
+    local baseLeft = self:compensateHudEdgeDistance(self.hudAnchorLeftBase or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL)
+    local baseRight = 1.0 - self:compensateHudEdgeDistance(1.0 - (self.hudAnchorRightBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL)))
+    local baseBottom = self:compensateHudEdgeDistance(self.hudAnchorBottomBase or self.DEFAULT_HUD_SAFE_AREA_VERTICAL)
+    local baseTop = 1.0 - self:compensateHudEdgeDistance(1.0 - (self.hudAnchorTopBase or (1.0 - self.DEFAULT_HUD_SAFE_AREA_VERTICAL)))
 
     local shiftedLeft = self:clamp(baseLeft + offset, 0.0, 1.0)
     local shiftedRight = self:clamp(baseRight + offset, 0.0, 1.0)
@@ -1343,41 +1362,3 @@ function VRCompanion:unhookGuiDraw()
     if hook ~= nil and hook.class.draw == hook.wrapper then hook.class.draw = hook.original end
     self.guiDrawHook = nil
 end
--- Export to Hud subsystem table
-VRCompanion.Hud.getHudGroupLayout = function(self, ...) return VRCompanion.getHudGroupLayout(VRCompanion, ...) end
-VRCompanion.Hud.setHudGroupLayout = function(self, ...) return VRCompanion.setHudGroupLayout(VRCompanion, ...) end
-VRCompanion.Hud.getHudBaseUiScale = function(self, ...) return VRCompanion.getHudBaseUiScale(VRCompanion, ...) end
-VRCompanion.Hud.getHudGroupScale = function(self, ...) return VRCompanion.getHudGroupScale(VRCompanion, ...) end
-VRCompanion.Hud.getHudDisplayScale = function(self, ...) return VRCompanion.getHudDisplayScale(VRCompanion, ...) end
-VRCompanion.Hud.getHudDisplayPosition = function(self, ...) return VRCompanion.getHudDisplayPosition(VRCompanion, ...) end
-VRCompanion.Hud.getFillLevelsBlockSize = function(self, ...) return VRCompanion.getFillLevelsBlockSize(VRCompanion, ...) end
-VRCompanion.Hud.getHudGroupLabel = function(self, ...) return VRCompanion.getHudGroupLabel(VRCompanion, ...) end
-VRCompanion.Hud.computeConvergenceDisparity = function(self, ...) return VRCompanion.computeConvergenceDisparity(VRCompanion, ...) end
-VRCompanion.Hud.getConvergenceDisparity = function(self, ...) return VRCompanion.getConvergenceDisparity(VRCompanion, ...) end
-VRCompanion.Hud.getConvergenceOffset = function(self, ...) return VRCompanion.getConvergenceOffset(VRCompanion, ...) end
-VRCompanion.Hud.getFillLevelsDisplay = function(self, ...) return VRCompanion.getFillLevelsDisplay(VRCompanion, ...) end
-VRCompanion.Hud.positionFillLevelsUnderSpeedometer = function(self, ...) return VRCompanion.positionFillLevelsUnderSpeedometer(VRCompanion, ...) end
-VRCompanion.Hud.updateHudConvergence = function(self, ...) return VRCompanion.updateHudConvergence(VRCompanion, ...) end
-VRCompanion.Hud.repositionHudForConvergence = function(self, ...) return VRCompanion.repositionHudForConvergence(VRCompanion, ...) end
-VRCompanion.Hud.getHudState =function(self, ...) return VRCompanion.getHudState(VRCompanion, ...) end
-VRCompanion.Hud.isDisplayVisible = function(self, ...) return VRCompanion.isDisplayVisible(VRCompanion, ...) end
-VRCompanion.Hud.applyHudState = function(self, ...) return VRCompanion.applyHudState(VRCompanion, ...) end
-VRCompanion.Hud.setHudState = function(self, ...) return VRCompanion.setHudState(VRCompanion, ...) end
-VRCompanion.Hud.getEnabledHudGroups = function(self, ...) return VRCompanion.getEnabledHudGroups(VRCompanion, ...) end
-VRCompanion.Hud.setHudGroupVisibility = function(self, ...) return VRCompanion.setHudGroupVisibility(VRCompanion, ...) end
-VRCompanion.Hud.rememberControlsExpanded = function(self, ...) return VRCompanion.rememberControlsExpanded(VRCompanion, ...) end
-VRCompanion.Hud.cycleHudState = function(self, ...) return VRCompanion.cycleHudState(VRCompanion, ...) end
-VRCompanion.Hud.onHudToggleAction = function(self, ...) return VRCompanion.onHudToggleAction(VRCompanion, ...) end
-VRCompanion.Hud.calculateHudAnchors = function(self, ...) return VRCompanion.calculateHudAnchors(VRCompanion, ...) end
-VRCompanion.Hud.configureHudSafeArea = function(self, ...) return VRCompanion.configureHudSafeArea(VRCompanion, ...) end
-VRCompanion.Hud.getHudSafeArea = function(self, ...) return VRCompanion.getHudSafeArea(VRCompanion, ...) end
-VRCompanion.Hud.positionHudDisplay = function(self, ...) return VRCompanion.positionHudDisplay(VRCompanion, ...) end
-VRCompanion.Hud.repositionAllHudDisplays = function(self, ...) return VRCompanion.repositionAllHudDisplays(VRCompanion, ...) end
-VRCompanion.Hud.applyHudSafeArea = function(self, ...) return VRCompanion.applyHudSafeArea(VRCompanion, ...) end
-VRCompanion.Hud.restoreHudSafeArea = function(self, ...) return VRCompanion.restoreHudSafeArea(VRCompanion, ...) end
-VRCompanion.Hud.hookHud = function(self, ...) return VRCompanion.hookHud(VRCompanion, ...) end
-VRCompanion.Hud.unhookHud = function(self, ...) return VRCompanion.unhookHud(VRCompanion, ...) end
-VRCompanion.Hud.hookGuiDraw = function(self, ...) return VRCompanion.hookGuiDraw(VRCompanion, ...) end
-VRCompanion.Hud.unhookGuiDraw = function(self, ...) return VRCompanion.unhookGuiDraw(VRCompanion, ...) end
-
-return VRCompanion.Hud

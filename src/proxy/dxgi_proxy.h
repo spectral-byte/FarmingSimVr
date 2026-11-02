@@ -116,13 +116,19 @@ public:
     static HRESULT STDMETHODCALLTYPE Intercept_SetColorSpace1(IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE colorSpace);
     static HRESULT STDMETHODCALLTYPE Intercept_OutputGetDesc1(IDXGIOutput6* self, DXGI_OUTPUT_DESC1* pDesc);
     bool IsDetourResizeBuffersInstalled() const { return m_detourResizeBuffers.IsInstalled(); }
-    bool IsDetourResizeBuffers1Installed() const { return m_detourResizeBuffers1.IsInstalled(); }
     bool IsDetourColorSpaceInstalled() const { return m_detourCheckColorSpaceSupport.IsInstalled() && m_detourSetColorSpace1.IsInstalled(); }
 
 private:
     void EnsureVrInitialized();
     // Attaches the first output of any adapter the factory enumerates.
     void AttachFirstOutput(IDXGIFactory* factory);
+
+    // The part of both ResizeBuffers hooks that precedes the call to the original: forgets the cached
+    // back buffers, marks the window clamp dirty and, in Active VR Mode, replaces the requested size
+    // with the Render Resolution.
+    static void PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height);
+    // Hooks the factory a successful CreateDXGIFactory* call returned, in Active VR Mode.
+    void AttachCreatedFactory(HRESULT hr, void** ppFactory);
 
     // The proxy a hook entry point acts for: the one in a live runtime that installed `detour`, else
     // the current runtime's; null when no runtime is alive.
@@ -169,6 +175,31 @@ private:
     // advances the rendered-frame counter for it and discards camera records for any other Present.
     bool m_presentWasStereo = false;
     bool OnPresentImpl(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
+    // True while the Desktop Mirror Window is off right now: the player turned it off (VRBridge flag), the
+    // Companion Mod's handshake has completed, and the headset session runs with eye swapchains. Everywhere
+    // else (Pass-Through Mode, session not running, before the handshake) the mirror shows by itself.
+    bool IsDesktopMirrorOffNow() const;
+    // The decision at each Present that would reach DXGI: records it in m_lastPresentSuppressed and returns
+    // whether the game's real Present is called (false with the mirror off).
+    // A frame that goes from showing to off is the one exception: it presents once, black (see below).
+    bool ShouldCallRealPresent(ID3D12Resource* backBuffer);
+    // True while the Desktop Mirror Window showed at the last Present (on, or shown by itself); false once it switched off.
+    bool m_desktopMirrorWasShowing = false;
+    // If the mirror just went from showing to off: changes that state (it is now off), clears the back buffer to
+    // black (after the eye copy that already ran) and returns true so the real Present is called once. Else false.
+    bool ConsumeSwitchToOff(ID3D12Resource* backBuffer);
+    // After each Present: logs each change of IsDesktopMirrorOffNow() once, and keeps the game window's title
+    // matching it (off note whenever the mirror is off and the title is not shown, the kept title when it shows
+    // again). Leaves the title alone otherwise.
+    void UpdateDesktopMirrorTitle();
+    bool m_desktopMirrorOffAnnounced = false;
+    // At each Present, on every Present path: tells the Mirror Window Controller whether Mouse
+    // Confinement holds the Desk Mouse to the game picture, so that it can also let go on every path.
+    // The menu quad path does it before it reads the Desk Mouse for the drawn cursor, so the frame
+    // where holding starts already draws the cursor where it was brought to; every other path does it
+    // after the Present's work. It runs once per Present (m_mouseConfinementUpdated).
+    void UpdateMouseConfinement();
+    bool m_mouseConfinementUpdated = false;
 
     IDXGISwapChain* m_cachedSwapChain = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;

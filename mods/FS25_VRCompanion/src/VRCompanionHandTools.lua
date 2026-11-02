@@ -2723,18 +2723,9 @@ end
 
 wrapAll()  -- the game's HandTool is there as the files load
 
-VRCompanion.HandTools.updateHandTools = function(self, ...) return VRCompanion.updateHandTools(VRCompanion, ...) end
-VRCompanion.HandTools.isHandHoldingHandTool = function(self, ...) return VRCompanion.isHandHoldingHandTool(VRCompanion, ...) end
-VRCompanion.HandTools.getToolHand = function(self, ...) return VRCompanion.getToolHand(VRCompanion, ...) end
-VRCompanion.HandTools.consoleCommandSetToolHand = function(self, ...) return VRCompanion.consoleCommandSetToolHand(VRCompanion, ...) end
-VRCompanion.HandTools.consoleCommandSetChainsawReach = function(self, ...) return VRCompanion.consoleCommandSetChainsawReach(VRCompanion, ...) end
-VRCompanion.HandTools.consoleCommandSetHandTools =function(self, ...) return VRCompanion.consoleCommandSetHandTools(VRCompanion, ...) end
-VRCompanion.HandTools.consoleCommandHandToolsDiagnostics = function(self, ...) return VRCompanion.consoleCommandHandToolsDiagnostics(VRCompanion, ...) end
 
 -- The probe's readers of an unknown table (the dialog probe, VRCompanionDialogProbe.lua, dumps with them): a short text for a value,
 -- the sorted keys, the function names of a table and the global name a table is kept under.
 VRCompanion.HandTools.probeReaders = {
     shortValue = shortValue, sortedKeys = sortedKeys, functionNames = functionNames, globalNameOf = globalNameOf,
 }
-
-return VRCompanion.HandTools

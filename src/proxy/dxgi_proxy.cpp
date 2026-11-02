@@ -3,11 +3,13 @@
 #include "core/thread_trace.h"
 #include "core/injector_runtime.h"
 #include "core/dll_lifecycle.h"
+#include "core/perf_trace.h"
 #include "ngx/ngx_interceptor.h"
 #include <utility>
 #include <windowsx.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace fs25vr {
 
@@ -40,6 +42,64 @@ struct VrInitScope {
     VrInitScope(const VrInitScope&) = delete;
     VrInitScope& operator=(const VrInitScope&) = delete;
 };
+
+// The swapchain fields shared by both descriptor structs, in one log-friendly string. Flags are hex with
+// the bits worth reading off (tearing, frame-latency waitable object) named, so a log shows at a glance
+// whether the game's swapchain can present without vsync or paces itself on a waitable handle.
+std::string FormatSwapChainFields(UINT width, UINT height, DXGI_FORMAT format, UINT bufferCount,
+                                  DXGI_SWAP_EFFECT swapEffect, UINT flags, UINT sampleCount) {
+    const char* effect = "UNKNOWN";
+    switch (swapEffect) {
+        case DXGI_SWAP_EFFECT_DISCARD: effect = "DISCARD"; break;
+        case DXGI_SWAP_EFFECT_SEQUENTIAL: effect = "SEQUENTIAL"; break;
+        case DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL: effect = "FLIP_SEQUENTIAL"; break;
+        case DXGI_SWAP_EFFECT_FLIP_DISCARD: effect = "FLIP_DISCARD"; break;
+        default: break;
+    }
+    char hexFlags[16];
+    std::snprintf(hexFlags, sizeof(hexFlags), "0x%X", flags);
+    std::string flagNames;
+    const auto addFlag = [&](UINT bit, const char* name) {
+        if (!(flags & bit)) return;
+        if (!flagNames.empty()) flagNames += "|";
+        flagNames += name;
+    };
+    addFlag(DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING, "ALLOW_TEARING");
+    addFlag(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, "FRAME_LATENCY_WAITABLE_OBJECT");
+
+    std::string text = std::to_string(width) + "x" + std::to_string(height) +
+        " format=" + std::to_string(static_cast<int>(format)) +
+        " buffers=" + std::to_string(bufferCount) +
+        " swapEffect=" + effect + "(" + std::to_string(static_cast<int>(swapEffect)) + ")" +
+        " flags=" + hexFlags;
+    if (!flagNames.empty()) text += " (" + flagNames + ")";
+    text += " samples=" + std::to_string(sampleCount);
+    return text;
+}
+
+std::string FormatSwapChainDesc(const DXGI_SWAP_CHAIN_DESC& desc) {
+    return FormatSwapChainFields(desc.BufferDesc.Width, desc.BufferDesc.Height, desc.BufferDesc.Format,
+                                 desc.BufferCount, desc.SwapEffect, desc.Flags, desc.SampleDesc.Count) +
+        " modeScaling=" + std::to_string(static_cast<int>(desc.BufferDesc.Scaling)) +
+        " windowed=" + (desc.Windowed ? "1" : "0");
+}
+
+std::string FormatSwapChainDesc1(const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreenDesc) {
+    const char* scaling = "UNKNOWN";
+    switch (desc->Scaling) {
+        case DXGI_SCALING_STRETCH: scaling = "STRETCH"; break;
+        case DXGI_SCALING_NONE: scaling = "NONE"; break;
+        case DXGI_SCALING_ASPECT_RATIO_STRETCH: scaling = "ASPECT_RATIO_STRETCH"; break;
+        default: break;
+    }
+    // No fullscreen descriptor means the swapchain is windowed.
+    const bool windowed = !fullscreenDesc || fullscreenDesc->Windowed;
+    return FormatSwapChainFields(desc->Width, desc->Height, desc->Format, desc->BufferCount, desc->SwapEffect,
+                                 desc->Flags, desc->SampleDesc.Count) +
+        " scaling=" + scaling + "(" + std::to_string(static_cast<int>(desc->Scaling)) + ")" +
+        " alphaMode=" + std::to_string(static_cast<int>(desc->AlphaMode)) +
+        " windowed=" + (windowed ? "1" : "0");
+}
 
 } // anonymous namespace
 
@@ -372,6 +432,8 @@ void DxgiProxy::DetachAll() {
     m_cachedSwapChain3.Reset();
     m_cachedBackBuffers.clear();
     m_lastPresentSuppressed = false;
+    m_desktopMirrorOffAnnounced = false;
+    m_desktopMirrorWasShowing = false;
     if (m_vrBridge) {
         m_vrBridge->ClearPendingRenderingMode();
     }
@@ -385,7 +447,16 @@ void DxgiProxy::LatchPendingRenderingMode() {
 
 bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
     m_presentWasStereo = false;
-    bool shouldPresent = OnPresentImpl(swapChain, syncInterval, flags);
+    m_mouseConfinementUpdated = false;
+    bool shouldPresent;
+    {
+        PerfScope timing(PerfSection::InjectorPresent);
+        shouldPresent = OnPresentImpl(swapChain, syncInterval, flags);
+        UpdateDesktopMirrorTitle();
+        if (!m_mouseConfinementUpdated) UpdateMouseConfinement();
+    }
+    PerfTrace::Instance().MarkFrame(m_presentWasStereo,
+                                    m_vrBridge && m_vrBridge->GetRenderingMode() == VRRenderingMode::SequentialDualPass);
     // The rendered-frame counter stamps the Companion Mod's camera records and resolves them for DLSS
     // evaluations. It advances per stereo Present only; a Present outside stereo presentation (menu,
     // 2D Floating Window Mode, Pass-Through) renders no eye camera, so its records are dropped
@@ -407,6 +478,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
         // Not Active: no eye pair can be in flight, so a queued mode change must not be lost.
         LatchPendingRenderingMode();
+        m_desktopMirrorWasShowing = true;
         return true;
     }
 
@@ -417,6 +489,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
         // Dropped to Pass-Through after a mode was queued; the released eye pair is abandoned.
         LatchPendingRenderingMode();
         m_lastPresentSuppressed = false;
+        m_desktopMirrorWasShowing = true;
         return true;
     }
 
@@ -509,6 +582,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
         LatchPendingRenderingMode();
         m_wasInQuadMode = false;
         m_lastPresentSuppressed = false;
+        m_desktopMirrorWasShowing = true;  // the mirror shows by itself: a resume with it off re-triggers the black frame
         return true;
     }
 
@@ -527,6 +601,9 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
             if (!m_openXrManager->HasCursorSwapchain()) {
                 m_openXrManager->CreateCursorSwapchain();
             }
+            // Mouse Confinement first: when it starts holding it brings the Desk Mouse to the middle of
+            // the picture, and this frame's drawn cursor reads where the Desk Mouse is.
+            UpdateMouseConfinement();
             m_windowController->UpdateMenuCursorState(swapChain, m_openXrManager.get());
 
             // Floating quad layer mode:
@@ -537,8 +614,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
             m_openXrManager->SubmitMenuQuad();
             // The quad frame is a completed compositor frame and no eye pair is in flight.
             LatchPendingRenderingMode();
-            m_lastPresentSuppressed = false;
-            return true;
+            return ShouldCallRealPresent(pBackBuffer);
         } else {
             if (m_wasInQuadMode) {
                 // Seamlessly returning to stereoscopic 3D VR view: reset AFR frame parity and subPassIndex
@@ -571,8 +647,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
                         m_vrBridge->AdvanceFrame();
                     }
                     LatchPendingRenderingMode();
-                    m_lastPresentSuppressed = false;
-                    return true;
+                    return ShouldCallRealPresent(pBackBuffer);
                 }
             } else {
                 // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
@@ -590,14 +665,99 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
                 if (parity == 1) {
                     LatchPendingRenderingMode();
                 }
-                m_lastPresentSuppressed = false;
-                return true;
+                return ShouldCallRealPresent(pBackBuffer);
             }
         }
     }
     // No eye swapchains (creation failed or Pass-Through): no eye pair can be in flight.
     LatchPendingRenderingMode();
     m_lastPresentSuppressed = false;
+    m_desktopMirrorWasShowing = true;
+    return true;
+}
+
+bool DxgiProxy::IsDesktopMirrorOffNow() const {
+    return m_vrBridge && m_vrBridge->IsCompanionActive() && !m_vrBridge->IsDesktopMirrorEnabled() &&
+           m_openXrManager && m_openXrManager->IsActive() && m_openXrManager->IsSessionRunning() &&
+           m_openXrManager->IsSessionFocused() && m_openXrManager->HasEyeSwapchains();
+}
+
+void DxgiProxy::UpdateDesktopMirrorTitle() {
+    const bool off = IsDesktopMirrorOffNow();
+    if (off) {
+        // The transition is logged once. The title is applied whenever it is not shown, because it can be
+        // missing while the mirror stays off: the game window may be unknown yet, or may have changed.
+        if (!m_desktopMirrorOffAnnounced) {
+            m_desktopMirrorOffAnnounced = true;
+            LogInfo("DxgiProxy: Desktop mirror off; window title says so until it shows again.");
+        }
+        if (m_windowController && !m_windowController->IsDesktopMirrorOffTitleShown()) {
+            m_windowController->ShowDesktopMirrorOffTitle();
+        }
+        return;
+    }
+    if (!m_desktopMirrorOffAnnounced) return;
+    m_desktopMirrorOffAnnounced = false;
+
+    // The handshake and Pass-Through checks come first: a savegame unload also resets the flag to on.
+    const char* reason = "by command (vrDesktopMirror on)";
+    if (!m_openXrManager || !m_openXrManager->IsActive()) {
+        reason = "by itself (Pass-Through Mode)";
+    } else if (!m_vrBridge || !m_vrBridge->IsCompanionActive()) {
+        reason = "by itself (Companion Mod handshake lost)";
+    } else if (!m_openXrManager->HasEyeSwapchains() || !m_openXrManager->IsSessionRunning()) {
+        reason = "by itself (session not running)";
+    } else if (!m_openXrManager->IsSessionFocused()) {
+        reason = "by itself (headset not in use)";
+    }
+    LogInfo(std::string("DxgiProxy: Desktop mirror on ") + reason + "; window title restored.");
+    if (m_windowController) m_windowController->RestoreTitle();
+}
+
+void DxgiProxy::UpdateMouseConfinement() {
+    if (!m_windowController) return;
+    using State = MirrorWindowController::MouseConfinementState;
+    // The Injector is inert in Pass-Through Mode; "session running" is the one that decides whether the
+    // Desktop Mirror Window shows by itself (a running session that is not focused still counts).
+    // The vrMouseConfinement setting only counts once a savegame has loaded (the Companion Mod's handshake):
+    // before that, in the main menu, it always holds. It is tested before the focus so that a setting turned
+    // off while the game window is not in front is the reason that is logged when it is turned on again.
+    State state = State::Holding;
+    if (!m_openXrManager || !m_openXrManager->IsActive()) {
+        state = State::PassThroughMode;
+    } else if (!m_openXrManager->HasEyeSwapchains() || !m_openXrManager->IsSessionRunning()) {
+        state = State::SessionNotRunning;
+    } else if (m_vrBridge && m_vrBridge->IsCompanionActive() && !m_vrBridge->IsMouseConfinementEnabled()) {
+        state = State::TurnedOffByCommand;
+    } else if (!m_windowController->IsGameWindowForeground()) {
+        state = State::FocusLost;
+    }
+    m_mouseConfinementUpdated = true;
+    m_windowController->UpdateMouseConfinement(state);
+}
+
+bool DxgiProxy::ShouldCallRealPresent(ID3D12Resource* backBuffer) {
+    if (!IsDesktopMirrorOffNow()) {
+        m_desktopMirrorWasShowing = true;
+        m_lastPresentSuppressed = false;
+        return true;
+    }
+    if (ConsumeSwitchToOff(backBuffer)) {
+        m_lastPresentSuppressed = false;
+        return true;
+    }
+    m_lastPresentSuppressed = true;
+    return false;
+}
+
+bool DxgiProxy::ConsumeSwitchToOff(ID3D12Resource* backBuffer) {
+    if (!m_desktopMirrorWasShowing) return false;
+    m_desktopMirrorWasShowing = false;
+    // Called after this frame's eye copy, so the headset has the game's frame; only the Desktop
+    // Mirror Window gets the black one. A null back buffer (unit tests) leaves nothing to clear.
+    if (m_openXrManager) {
+        m_openXrManager->ClearBackBufferToBlack(backBuffer);
+    }
     return true;
 }
 
@@ -635,7 +795,11 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UIN
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(
         proxy->m_detourPresent.GetOriginal()
     );
-    HRESULT hr = orig ? orig(self, proxy->EffectiveSyncInterval(syncInterval), flags) : S_OK;
+    HRESULT hr = S_OK;
+    if (orig) {
+        PerfScope timing(PerfSection::DriverPresent);
+        hr = orig(self, proxy->EffectiveSyncInterval(syncInterval), flags);
+    }
     proxy->OnPresentReturned(hr);
     return hr;
 }
@@ -651,29 +815,38 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*)>(
         proxy->m_detourPresent1.GetOriginal()
     );
-    HRESULT hr = orig ? orig(self, proxy->EffectiveSyncInterval(syncInterval), flags, params) : S_OK;
+    HRESULT hr = S_OK;
+    if (orig) {
+        PerfScope timing(PerfSection::DriverPresent);
+        hr = orig(self, proxy->EffectiveSyncInterval(syncInterval), flags, params);
+    }
     proxy->OnPresentReturned(hr);
     return hr;
+}
+
+void DxgiProxy::PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height) {
+    if (!proxy) return;
+    proxy->m_cachedSwapChain = nullptr;
+    proxy->m_cachedSwapChain3.Reset();
+    proxy->m_cachedBackBuffers.clear();
+    proxy->m_windowController->SetWindowClampDirty(true);
+    if (proxy->IsActive() && proxy->m_windowController->GetTargetRenderWidth() > 0 && proxy->m_windowController->GetTargetRenderHeight() > 0) {
+        const UINT requestedWidth = width;
+        const UINT requestedHeight = height;
+        width = proxy->m_windowController->GetTargetRenderWidth();
+        height = proxy->m_windowController->GetTargetRenderHeight();
+        LogInfo(std::string("DxgiProxy::") + hookName + ": Overriding dimensions from (" +
+                std::to_string(requestedWidth) + "x" + std::to_string(requestedHeight) + ") to target render resolution (" +
+                std::to_string(width) + "x" + std::to_string(height) + ")");
+    }
 }
 
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers(
     IDXGISwapChain* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags) {
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourResizeBuffers);
-    if (proxy) {
-        proxy->m_cachedSwapChain = nullptr;
-        proxy->m_cachedSwapChain3.Reset();
-        proxy->m_cachedBackBuffers.clear();
-        proxy->m_windowController->SetWindowClampDirty(true);
-    }
     UINT effectiveWidth = Width;
     UINT effectiveHeight = Height;
-    if (proxy && proxy->IsActive() && proxy->m_windowController->GetTargetRenderWidth() > 0 && proxy->m_windowController->GetTargetRenderHeight() > 0) {
-        effectiveWidth = proxy->m_windowController->GetTargetRenderWidth();
-        effectiveHeight = proxy->m_windowController->GetTargetRenderHeight();
-        LogInfo("DxgiProxy::Intercept_ResizeBuffers: Overriding dimensions from (" +
-                std::to_string(Width) + "x" + std::to_string(Height) + ") to target render resolution (" +
-                std::to_string(effectiveWidth) + "x" + std::to_string(effectiveHeight) + ")");
-    }
+    PrepareResize(proxy, "Intercept_ResizeBuffers", effectiveWidth, effectiveHeight);
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT)>(
         proxy ? proxy->m_detourResizeBuffers.GetOriginal() : nullptr
     );
@@ -687,21 +860,9 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers1(
     IDXGISwapChain3* self, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags,
     const UINT* pCreationNodeMask, IUnknown* const* ppPresentQueue) {
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourResizeBuffers1);
-    if (proxy) {
-        proxy->m_cachedSwapChain = nullptr;
-        proxy->m_cachedSwapChain3.Reset();
-        proxy->m_cachedBackBuffers.clear();
-        proxy->m_windowController->SetWindowClampDirty(true);
-    }
     UINT effectiveWidth = Width;
     UINT effectiveHeight = Height;
-    if (proxy && proxy->IsActive() && proxy->m_windowController->GetTargetRenderWidth() > 0 && proxy->m_windowController->GetTargetRenderHeight() > 0) {
-        effectiveWidth = proxy->m_windowController->GetTargetRenderWidth();
-        effectiveHeight = proxy->m_windowController->GetTargetRenderHeight();
-        LogInfo("DxgiProxy::Intercept_ResizeBuffers1: Overriding dimensions from (" +
-                std::to_string(Width) + "x" + std::to_string(Height) + ") to target render resolution (" +
-                std::to_string(effectiveWidth) + "x" + std::to_string(effectiveHeight) + ")");
-    }
+    PrepareResize(proxy, "Intercept_ResizeBuffers1", effectiveWidth, effectiveHeight);
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*)>(
         proxy ? proxy->m_detourResizeBuffers1.GetOriginal() : nullptr
     );
@@ -777,6 +938,9 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
+    if (pDesc) {
+        LogInfo("DxgiProxy: CreateSwapChain requested: " + FormatSwapChainDesc(*pDesc));
+    }
     if (pDesc && proxy->IsActive()) {
         // Before any override below: an unusable format must leave the swap chain untouched.
         proxy->m_openXrManager->EnsureBackBufferFormatSupported(pDesc->BufferDesc.Format);
@@ -789,6 +953,9 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
     }
     if (pDesc && pDesc->OutputWindow) {
         proxy->m_windowController->SetGameHwnd(pDesc->OutputWindow);
+    }
+    if (pDesc) {
+        LogInfo("DxgiProxy: CreateSwapChain passed on: " + FormatSwapChainDesc(*pDesc));
     }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**)>(
         proxy->m_detourCreateSwapChain.GetOriginal()
@@ -813,6 +980,10 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     if (!proxy) return E_FAIL;
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
+    }
+    if (pDesc) {
+        // Before the overrides below, which also write through to the caller's descriptors.
+        LogInfo("DxgiProxy: CreateSwapChainForHwnd requested: " + FormatSwapChainDesc1(pDesc, pFullscreenDesc));
     }
     if (pDesc && proxy->IsActive()) {
         // Before any override below: an unusable format must leave the swap chain untouched.
@@ -847,10 +1018,14 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
         LogInfo("DxgiProxy: Enforced Windowed = TRUE on swapchain descriptor for resolution decoupling.");
     }
 
+    if (pEffectiveDesc) {
+        LogInfo("DxgiProxy: CreateSwapChainForHwnd passed on: " +
+                FormatSwapChainDesc1(pEffectiveDesc, pEffectiveFullscreenDesc));
+    }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
         proxy->m_detourCreateSwapChainForHwnd.GetOriginal()
     );
-    HRESULT hr = orig ? orig(self, pDevice, hWnd, pEffectiveDesc, pEffectiveFullscreenDesc, pRestrictToOutput, ppSwapChain) : S_OK;
+    HRESULT hr = orig ? orig(self, pDevice, hWnd, pEffectiveDesc, pEffectiveFullscreenDesc, pRestrictToOutput, ppSwapChain) : E_FAIL;
     if (SUCCEEDED(hr)) {
         if (hWnd && proxy->IsActive()) {
             proxy->m_windowController->ApplyInitialWindowClamp(hWnd);
@@ -862,39 +1037,32 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     return hr;
 }
 
+void DxgiProxy::AttachCreatedFactory(HRESULT hr, void** ppFactory) {
+    if (!SUCCEEDED(hr) || !ppFactory || !*ppFactory || !m_openXrManager || !m_openXrManager->IsActive()) return;
+    Microsoft::WRL::ComPtr<IDXGIFactory> factory;
+    if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
+        AttachFactory(factory.Get());
+    }
+}
+
 HRESULT DxgiProxy::CreateDXGIFactory(REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
     HRESULT hr = ForwardFactoryCall("CreateDXGIFactory", SystemPfn(&ISystemDxgi::GetCreateDXGIFactory), riid, ppFactory);
-    if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
-        Microsoft::WRL::ComPtr<IDXGIFactory> factory;
-        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
-            AttachFactory(factory.Get());
-        }
-    }
+    AttachCreatedFactory(hr, ppFactory);
     return hr;
 }
 
 HRESULT DxgiProxy::CreateDXGIFactory1(REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
     HRESULT hr = ForwardFactoryCall("CreateDXGIFactory1", SystemPfn(&ISystemDxgi::GetCreateDXGIFactory1), riid, ppFactory);
-    if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
-        Microsoft::WRL::ComPtr<IDXGIFactory> factory;
-        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
-            AttachFactory(factory.Get());
-        }
-    }
+    AttachCreatedFactory(hr, ppFactory);
     return hr;
 }
 
 HRESULT DxgiProxy::CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory) {
     EnsureVrInitialized();
     HRESULT hr = ForwardFactoryCall("CreateDXGIFactory2", SystemPfn(&ISystemDxgi::GetCreateDXGIFactory2), Flags, riid, ppFactory);
-    if (SUCCEEDED(hr) && ppFactory && *ppFactory && m_openXrManager && m_openXrManager->IsActive()) {
-        Microsoft::WRL::ComPtr<IDXGIFactory> factory;
-        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppFactory)->QueryInterface(IID_PPV_ARGS(&factory)))) {
-            AttachFactory(factory.Get());
-        }
-    }
+    AttachCreatedFactory(hr, ppFactory);
     return hr;
 }
 

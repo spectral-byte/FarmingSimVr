@@ -4,7 +4,7 @@
 GIANTS Engine 10 executes game scripts inside a heavily sandboxed Luau runtime where standard C module loading (`package.loadlib`), file I/O, and raw memory access are stripped. Because the Injector (`dxgi.dll`) executes within the same process address space as the game engine, we decided to intercept the active `lua_State*` pointer on engine startup by installing a lightweight C-function detour on a known global engine export (`isHeadTrackingAvailable`). Once intercepted, the Injector registers a native `VRBridge` table directly into the global Luau environment.
 
 ## Status
-Accepted
+Accepted, amended: the Oblique Frustum was removed and projection is always symmetric, see [ADR-0005](0005-oblique-frustum-projection-via-vrbridge.md).
 
 ## Considered Options
 - Shared memory / memory-mapped file with custom disk reading (rejected: Luau sandbox lacks raw memory access, and disk polling causes frame stutters).

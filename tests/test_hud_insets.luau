@@ -545,7 +545,7 @@ test("DefaultsMatchTheValuesPreviouslyYieldedByModDesc", function()
     assert(VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE == true, "recenter tracking default")
     assert(math.abs(VRCompanion.DEFAULT_SNAP_TURN_ANGLE - math.rad(90)) < 0.0001, "snap turn default")
     assert(VRCompanion.DEFAULT_RENDERING_MODE == VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, "stereo presentation mode default")
-    assert(VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION == false, "oblique projection default")
+    assert(VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION == nil, "the Oblique Frustum setting is gone")
 end)
 
 test("ModDescDoesNotDefineSettingDefaults", function()
@@ -581,7 +581,6 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion.hudConvergenceDepth = 2.4
     VRCompanion.showHudLoadNotification = true
     VRCompanion.recenterVrTrackingSpace = false
-    VRCompanion.allowObliqueProjection = true
     VRCompanion.snapTurnAngle = math.rad(45)
     VRCompanion.dlssNearClipCab = 0.1
     VRCompanion.dlssNearClipOutside = 0.3
@@ -595,7 +594,6 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion.hudConvergenceDepth = nil
     VRCompanion.showHudLoadNotification = nil
     VRCompanion.recenterVrTrackingSpace = nil
-    VRCompanion.allowObliqueProjection = nil
     VRCompanion.snapTurnAngle = nil
     VRCompanion.dlssNearClipCab = nil
     VRCompanion.dlssNearClipOutside = nil
@@ -616,7 +614,6 @@ test("SavedSettingsRoundTripThroughLoader", function()
     assert(math.abs(VRCompanion.hudConvergenceDepth - 2.4) < 0.0001, "convergence depth must round-trip")
     assert(VRCompanion.showHudLoadNotification == true, "load notification must round-trip")
     assert(VRCompanion.recenterVrTrackingSpace == false, "recenter tracking must round-trip")
-    assert(VRCompanion.allowObliqueProjection == true, "oblique projection must round-trip")
     assert(math.abs(VRCompanion:getSnapTurnAngle() - math.rad(45)) < 0.0001, "snap turn angle must round-trip")
     assert(VRCompanion:getRenderingMode() == VRCompanion.RENDERING_MODE_AFR, "stereo presentation mode must round-trip")
     assert(math.abs(VRCompanion.dlssNearClipCab - 0.1) < 0.0001, "cab DLSS near plane must round-trip")
@@ -627,7 +624,6 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion.dlssNearClipCab = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_CAB
     VRCompanion.dlssNearClipOutside = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE
     VRCompanion.dlssNearClipOnFoot = VRCompanion.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT
-    VRCompanion.allowObliqueProjection = VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION
     VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
     VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
     VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
@@ -676,6 +672,26 @@ local function resetGroupVisibilityToDefaults()
         group.full = VRCompanion.DEFAULT_HUD_GROUP_FULL[name]
     end
 end
+
+test("ASettingsFileStillHoldingAllowObliqueProjectionLoadsWithoutErrorIgnoresItAndDoesNotWriteItBack", function()
+    local store = { ["vrSettings.allowObliqueProjection"] = true, ["vrSettings.hudConvergenceDepth"] = 2.2 }
+    withMockedSettingsFile(store, function()
+        local ok, err = pcall(function() VRCompanion:loadConfiguration("settings.xml") end)
+        assert(ok, "loading must not error: " .. tostring(err))
+        assert(math.abs(VRCompanion.hudConvergenceDepth - 2.2) < 0.0001, "the rest of the file still loads")
+        assert(VRCompanion.allowObliqueProjection == nil, "the old entry must be ignored")
+
+        store = {}
+        _G.setXMLFloat = function(_, key, val) store[key] = val end
+        _G.setXMLBool = function(_, key, val) store[key] = val end
+        _G.setXMLString = function(_, key, val) store[key] = val end
+        assert(VRCompanion:saveConfiguration("settings.xml") == true, "save must succeed")
+        assert(store["vrSettings.allowObliqueProjection"] == nil, "the old entry must not be written back")
+        assert(store["vrSettings.hudConvergenceDepth"] ~= nil, "other settings are still written")
+    end)
+    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    VRCompanion:configureHudSafeArea()
+end)
 
 test("GroupVisibilitySettingsRoundTripThroughSaveAndLoad", function()
     local store = {}
@@ -868,7 +884,6 @@ test("RuntimeStateStartsFromDefaultConstants", function()
         assert(fresh.recenterVrTrackingSpace == fresh.DEFAULT_RECENTER_VR_TRACKING_SPACE, "recenter tracking starts at its default")
         assert(fresh.snapTurnAngle == fresh.DEFAULT_SNAP_TURN_ANGLE, "snap turn angle starts at its default")
         assert(fresh.renderingMode == fresh.DEFAULT_RENDERING_MODE, "stereo presentation mode starts at its default")
-        assert(fresh.allowObliqueProjection == fresh.DEFAULT_ALLOW_OBLIQUE_PROJECTION, "oblique projection starts at its default")
         assert(fresh.DEFAULT_DLSS_NEAR_CLIP_CAB == 0.1, "cab DLSS near plane defaults to 0.1 m")
         assert(fresh.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE == 0, "outside camera DLSS near plane defaults to auto")
         assert(fresh.DEFAULT_DLSS_NEAR_CLIP_ON_FOOT == 0.15, "on-foot DLSS near plane defaults to 0.15 m")
@@ -882,7 +897,7 @@ test("RuntimeStateStartsFromDefaultConstants", function()
     -- The runtime values are assigned from the constants, not from a second copy of the literal
     local fs = require("@lune/fs")
     local configSource = fs.readFile("mods/FS25_VRCompanion/src/VRCompanionConfig.lua")
-    for _, field in ipairs({ "showHudLoadNotification", "recenterVrTrackingSpace", "allowObliqueProjection" }) do
+    for _, field in ipairs({ "showHudLoadNotification", "recenterVrTrackingSpace" }) do
         local literal = string.match(configSource, "\nVRCompanion%." .. field .. " = ([%w%.]+)\n")
         assert(literal == nil or string.find(literal, "DEFAULT_", 1, true) ~= nil,
             string.format("VRCompanion.%s must be initialised from its DEFAULT_* constant, got %s", field, tostring(literal)))
@@ -914,7 +929,6 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     VRCompanion.hudConvergenceDepth = nil
     VRCompanion.showHudLoadNotification = nil
     VRCompanion.recenterVrTrackingSpace = nil
-    VRCompanion.allowObliqueProjection = nil
     VRCompanion.snapTurnAngle = nil
     VRCompanion.renderingMode = VRCompanion.RENDERING_MODE_AFR
     VRCompanion.renderingModeExplicit = nil
@@ -930,7 +944,6 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     assert(VRCompanion.hudConvergenceDepth == VRCompanion.DEFAULT_CONVERGENCE_DEPTH, "convergence depth default applied")
     assert(VRCompanion.showHudLoadNotification == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "load notification default applied")
     assert(VRCompanion.recenterVrTrackingSpace == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "recenter tracking default applied")
-    assert(VRCompanion.allowObliqueProjection == VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION, "oblique projection default applied")
     assert(VRCompanion:getSnapTurnAngle() == VRCompanion.DEFAULT_SNAP_TURN_ANGLE, "snap turn default applied")
     assert(VRCompanion:getRenderingMode() == VRCompanion.DEFAULT_RENDERING_MODE, "stereo presentation mode default applied")
     assert(VRCompanion.renderingModeExplicit == true, "default mode is applied through setRenderingMode")
@@ -951,7 +964,7 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     assert(math.abs(store["vrSettings.hudConvergenceDepth"] - VRCompanion.DEFAULT_CONVERGENCE_DEPTH) < 0.0001, "saved convergence depth")
     assert(store["vrSettings.showHudLoadNotification"] == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "saved load notification")
     assert(store["vrSettings.recenterVrTrackingSpace"] == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "saved recenter tracking")
-    assert(store["vrSettings.allowObliqueProjection"] == VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION, "saved oblique projection")
+    assert(store["vrSettings.allowObliqueProjection"] == nil, "the removed Oblique Frustum key is not written")
     assert(math.abs(store["vrSettings.snapTurnAngle"] - math.deg(VRCompanion.DEFAULT_SNAP_TURN_ANGLE)) < 0.0001, "saved snap turn angle")
     assert(store["vrSettings.dlssNearClipCab"] == VRCompanion.DEFAULT_DLSS_NEAR_CLIP_CAB, "saved cab DLSS near plane")
     assert(store["vrSettings.dlssNearClipOutside"] == VRCompanion.DEFAULT_DLSS_NEAR_CLIP_OUTSIDE, "saved outside camera DLSS near plane")
@@ -1597,6 +1610,68 @@ test("TwoDFloatingWindowModeUsesTheFullScreenAnchorsAndTheSafeAreaReturnsWithVr"
 
     VRCompanion:set2DViewActive(false)
     assert(anchorsAre(0.20, 0.80, 0.12, 0.88), "returning to VR applies the Safe Area")
+    unloadMap()
+end)
+
+-- FOV Overscan widens the view by (1 + percent / 100) in tangent, so a screen-space HUD placed as before would grow and sit
+-- nearer. HUD placement, scale and convergence disparity shrink toward the screen centre by the same factor instead.
+local OVERSCAN_COMPENSATION = 1.0 / 1.2
+
+local function withOverscan(percent, fn)
+    VRCompanion.fovOverscan = percent
+    local ok, err = pcall(fn)
+    VRCompanion.fovOverscan = 0
+    if not ok then error(err, 0) end
+end
+
+test("FovOverscanPullsEveryGroupInTowardTheCentreAndShrinksIt", function()
+    local hud = makeHud()
+    loadMapWith(hud)
+    withOverscan(20, function()
+        VRCompanion:repositionAllHudDisplays(hud)
+        local m = 0.5 - (0.5 - 0.30) * OVERSCAN_COMPENSATION
+        -- Map group, bottom-left: both margins measured from the corner, pulled in toward the centre
+        local mapY = 0.5 - (0.5 - 0.22) * OVERSCAN_COMPENSATION
+        assert(near(hud.ingameMap.position.x, m) and near(hud.ingameMap.position.y, mapY), "map margins are pulled in by the overscan")
+        -- Info group, top-right: the display's size is subtracted from the pulled-in margin
+        assert(near(hud.gameInfo.position.x, 1.0 - m - 0.20) and near(hud.gameInfo.position.y, 1.0 - m - 0.12), "info margins are pulled in by the overscan")
+        for _, name in ipairs(DISPLAY_NAMES) do
+            assert(near(hud[name].scale, 0.82 * OVERSCAN_COMPENSATION), name .. " is drawn smaller by the overscan")
+        end
+    end)
+    unloadMap()
+end)
+
+test("FovOverscanShrinksTheConvergenceDisparityToKeepTheHudsDepth", function()
+    withOverscan(20, function()
+        local disparity = VRCompanion:computeConvergenceDisparity(0.064, 1.8)
+        assert(near(disparity, 0.012 * OVERSCAN_COMPENSATION), string.format("disparity must shrink with the overscan, got %f", disparity))
+    end)
+    assert(near(VRCompanion:computeConvergenceDisparity(0.064, 1.8), 0.012), "no overscan leaves the disparity alone")
+end)
+
+test("FovOverscanPullsTheSafeAreaAnchorsInTowardTheCentre", function()
+    local hud = makeHud()
+    loadMapWith(hud)
+    withOverscan(20, function()
+        VRCompanion:updateHudConvergence(0.016)
+        assert(near(_G.g_hudAnchorLeft, 0.5 - 0.20 * OVERSCAN_COMPENSATION), "left anchor is pulled in")
+        assert(near(_G.g_hudAnchorRight, 0.5 + 0.20 * OVERSCAN_COMPENSATION), "right anchor is pulled in")
+        assert(near(_G.g_hudAnchorBottom, 0.5 - 0.28 * OVERSCAN_COMPENSATION), "bottom anchor is pulled in")
+        assert(near(_G.g_hudAnchorTop, 0.5 + 0.28 * OVERSCAN_COMPENSATION), "top anchor is pulled in")
+    end)
+    unloadMap()
+end)
+
+test("ChangingTheFovOverscanReplacesTheHudAtOnce", function()
+    local hud = makeHud()
+    loadMapWith(hud)
+    assert(near(hud.ingameMap.position.x, 0.30), "no overscan places the map at its margin")
+    VRCompanion:setFovOverscan(20, false)
+    assert(near(hud.ingameMap.position.x, 0.5 - 0.20 * OVERSCAN_COMPENSATION), "the HUD moves when the overscan is set")
+    assert(near(hud.ingameMap.scale, 0.82 * OVERSCAN_COMPENSATION), "the HUD shrinks when the overscan is set")
+    VRCompanion:setFovOverscan(0, false)
+    assert(near(hud.ingameMap.position.x, 0.30) and near(hud.ingameMap.scale, 0.82), "the HUD returns with the overscan")
     unloadMap()
 end)
 

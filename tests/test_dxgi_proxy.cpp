@@ -2,8 +2,11 @@
 #include "proxy/dxgi_proxy.h"
 #include "core/dll_lifecycle.h"
 #include "core/injector_runtime.h"
+#include "core/logger.h"
+#include "core/perf_trace.h"
 #include "proxy/system_dxgi.h"
 #include "openxr/openxr_manager.h"
+#include "fake_desktop_cursor_port.h"
 #include "fake_openxr_events.h"
 #include "fake_openxr_tracking.h"
 #include "fake_openxr_runtime.h"
@@ -14,7 +17,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <future>
+#include <iterator>
+#include <string>
 #include <thread>
 #include <unordered_set>
 
@@ -30,10 +37,12 @@ namespace fs25vr {
 // runtime gets its own window controller and Luau interceptor.
 static std::unique_ptr<InjectorRuntime> MakeRuntime(
     std::shared_ptr<OpenXrManager> openXrManager,
-    std::shared_ptr<VRBridge> vrBridge = nullptr) {
+    std::shared_ptr<VRBridge> vrBridge = nullptr,
+    std::shared_ptr<IDesktopCursorPort> cursorPort = nullptr) {
     InjectorRuntime::Dependencies deps;
     deps.openXrManager = std::move(openXrManager);
     deps.vrBridge = std::move(vrBridge);
+    deps.cursorPort = std::move(cursorPort);
     return std::make_unique<InjectorRuntime>(std::move(deps));
 }
 
@@ -600,6 +609,41 @@ TEST(DxgiProxyTest, OnPresentCopiesLeftEyeOnFrame0AndRightEyeOnFrame1WithPairSub
     EXPECT_EQ(vrBridge->GetFrameParity(), 0u); // parity advanced back to 0
 }
 
+TEST(DxgiProxyTest, PerfTraceTimesTheInjectorsPresentPathPerStereoFrame) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    ASSERT_TRUE(openXrManager->CreateTrackingSpaces());
+    ASSERT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+    auto vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+    vrBridge->PerformHandshake();
+    vrBridge->SetRenderingMode(VRRenderingMode::AFR);
+    DxgiProxy proxy(nullptr, openXrManager, nullptr, vrBridge, std::make_shared<MirrorWindowController>(), nullptr);
+
+    int64_t nowNs = 0;
+    std::vector<std::string> lines;
+    PerfTrace& trace = PerfTrace::Instance();
+    trace.SetClock([&nowNs] { return nowNs += 100000; });  // every read is 0.1 ms later
+    trace.SetSink([&lines](const std::string& line) { lines.push_back(line); });
+    trace.Start(10);
+    for (int i = 0; i < 4; ++i) proxy.OnPresent(nullptr, 0, 0);
+    trace.Stop();
+    trace.SetClock(nullptr);
+    trace.SetSink(nullptr);
+
+    ASSERT_FALSE(lines.empty());
+    const std::string& summary = lines.back();
+    ASSERT_EQ(summary.rfind("[PerfTrace] Summary", 0), 0u) << summary;
+    EXPECT_NE(summary.find("(AFR)"), std::string::npos) << summary;
+    for (const char* section : {"| frame ", "| injector present ", "| swapchain wait ", "| xrEndFrame ", "| xrWaitFrame ",
+                                "| frame begin "}) {
+        EXPECT_NE(summary.find(section), std::string::npos) << section << " missing from: " << summary;
+    }
+    // Four eye frames are two headset frames: the frame begins once per pair
+    EXPECT_EQ(mockDispatch->endFrameCalls, 2u);
+}
+
 TEST(InjectorRuntimeTest, WiresSubsystemsWithFakesAndDrivesPresentEndToEnd) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
@@ -986,6 +1030,426 @@ TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
     proxy.DetachAll();
 }
 
+// The game's swapchain Present as the Desktop Mirror Window tests drive it: an active OpenXR mock, a real
+// VRBridge and a mock swapchain whose real Present calls are counted in s_mockPresentCalls.
+// The game has a window (an on-screen test window of 800x600, whose client area in screen coordinates is
+// clientArea), and the runtime reaches the desktop's cursor and focus through cursorPort, a fake: the test
+// chooses the foreground window and reads the clip and the cursor position. Tests never touch the real
+// cursor.
+struct MirrorPresentRig {
+    std::shared_ptr<MockActiveOpenXrDispatch> dispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    std::shared_ptr<OpenXrManager> openXrManager = std::make_shared<OpenXrManager>(dispatch);
+    std::shared_ptr<VRBridge> vrBridge;
+    std::shared_ptr<FakeDesktopCursorPort> cursorPort = std::make_shared<FakeDesktopCursorPort>();
+    HWND gameWindow = nullptr;
+    RECT clientArea{};
+    std::unique_ptr<InjectorRuntime> runtime;
+    std::vector<void*> vtable = std::vector<void*>(30, nullptr);
+    MockComObject mockSwapChain{ vtable.data() };
+    IDXGISwapChain* swapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
+    HRESULT(STDMETHODCALLTYPE* pfnPresent)(IDXGISwapChain*, UINT, UINT) = nullptr;
+
+    explicit MirrorPresentRig(VRRenderingMode mode, bool companionHandshake = true) {
+        s_mockPresentCalls = 0;
+        gameWindow = CreateWindowA("STATIC", "MirrorPresentRigGameWnd", WS_OVERLAPPEDWINDOW,
+            GetSystemMetrics(SM_XVIRTUALSCREEN) + 50, GetSystemMetrics(SM_YVIRTUALSCREEN) + 50, 800, 600,
+            nullptr, nullptr, nullptr, nullptr);
+        EXPECT_TRUE(gameWindow != nullptr);
+        GetClientRect(gameWindow, &clientArea);
+        POINT origin{ 0, 0 };
+        ClientToScreen(gameWindow, &origin);
+        OffsetRect(&clientArea, origin.x, origin.y);
+        EXPECT_TRUE(openXrManager->Initialize());
+        EXPECT_TRUE(openXrManager->CreateSession());
+        EXPECT_TRUE(openXrManager->CreateTrackingSpaces());
+        EXPECT_TRUE(openXrManager->CreateEyeSwapchains(1920, 1080));
+        vrBridge = std::make_shared<VRBridge>(openXrManager, nullptr);
+        if (companionHandshake) {
+            vrBridge->PerformHandshake();
+        }
+        vrBridge->SetRenderingMode(mode);
+        dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);  // the headset is on, as in play
+        runtime = MakeRuntime(openXrManager, vrBridge, cursorPort);
+        runtime->GetWindowController().SetGameHwnd(gameWindow);
+        vtable[0] = reinterpret_cast<void*>(&MockQueryInterface);
+        vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+        vtable[2] = reinterpret_cast<void*>(&MockRelease);
+        vtable[7] = reinterpret_cast<void*>(&MockGetDevice);
+        vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
+        vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
+        vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+        EXPECT_TRUE(runtime->GetDxgiProxy().AttachSwapChain(swapChain));
+        void** hookedVTable = *reinterpret_cast<void***>(swapChain);
+        pfnPresent = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(hookedVTable[kPresentVTableSlot]);
+    }
+    ~MirrorPresentRig() {
+        runtime->GetDxgiProxy().DetachAll();
+        if (gameWindow) DestroyWindow(gameWindow);
+    }
+
+    // The game presents one frame; returns how many real Present calls reached DXGI for it.
+    int Present() {
+        int before = s_mockPresentCalls;
+        EXPECT_EQ(pfnPresent(swapChain, 1, 0), S_OK);
+        return (s_mockPresentCalls - before) / kMockPresentIncrement;
+    }
+};
+
+TEST(DxgiProxyTest, DesktopMirrorIsOnByDefaultAndEveryAfrPresentReachesDxgi) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_TRUE(rig.vrBridge->IsDesktopMirrorEnabled());
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(rig.Present(), 1);
+    }
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesEveryAfrPresentAndKeepsTheEyePairsFlowing) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+        EXPECT_TRUE(rig.runtime->GetDxgiProxy().IsPresentSuppressed());
+    }
+    EXPECT_EQ(s_mockPresentCalls, 0);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 2u);
+    EXPECT_EQ(rig.vrBridge->GetFrameIndex(), 4u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesBothSequentialDualPassSubPasses) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int pair = 0; pair < 2; ++pair) {
+        EXPECT_EQ(rig.Present(), 0);  // sub-pass 0
+        EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 1u);
+        EXPECT_EQ(rig.Present(), 0);  // sub-pass 1
+        EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 0u);
+    }
+    EXPECT_EQ(s_mockPresentCalls, 0);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 2u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesMenuQuadFramesAndKeepsSubmittingTheQuad) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+    }
+    EXPECT_EQ(rig.openXrManager->GetSubmittedQuadFrameCount(), 3u);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 0u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffSuppressesPresentsInTwoDFloatingWindowMode) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    rig.vrBridge->Set2DViewActive(true);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+    }
+    EXPECT_EQ(rig.openXrManager->GetSubmittedQuadFrameCount(), 3u);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTurnedOnAgainPresentsEveryFrameAgain) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_FALSE(rig.runtime->GetDxgiProxy().IsPresentSuppressed());
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsWhileTheSessionIsNotRunning) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+    ASSERT_TRUE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // headset asleep, dashboard
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_FALSE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // headset back on: dark again
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    EXPECT_EQ(rig.Present(), 1);  // after the one black frame (#195)
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_TRUE(rig.openXrManager->IsSessionRunning());
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffShowsAgainWhileTheHeadsetIsAsleepEvenThoughTheSessionKeepsRunning) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+
+    // Real runtimes drop to SYNCHRONIZED when the headset sleeps; the session is not stopped.
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_TRUE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);  // headset back on: dark again
+    EXPECT_EQ(rig.Present(), 1);  // after the one black frame (#195)
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffShowsAgainWhileTheDashboardHasFocus) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);  // the dashboard took the focus
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    EXPECT_EQ(rig.Present(), 1);  // the one black frame
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsInPassThroughMode) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_EQ(rig.Present(), 1);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorOffStillPresentsBeforeTheCompanionModHandshake) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+
+    rig.vrBridge->PerformHandshake();  // a savegame loaded: the mirror goes dark
+    EXPECT_EQ(rig.Present(), 1);  // the one black frame (#195)
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, DesktopMirrorSettingDoesNotChangeWhatTheHeadsetReceives) {
+    for (VRRenderingMode mode : { VRRenderingMode::AFR, VRRenderingMode::SequentialDualPass }) {
+        uint64_t pairs[2] = {};
+        uint64_t quads[2] = {};
+        uint64_t frames[2] = {};
+        uint64_t beginFrames[2] = {};
+        for (int mirrorOff = 0; mirrorOff < 2; ++mirrorOff) {
+            MirrorPresentRig rig(mode);
+            rig.vrBridge->SetDesktopMirrorEnabled(mirrorOff == 0);
+            for (int i = 0; i < 6; ++i) rig.Present();
+            rig.vrBridge->SetMenuVisible(true);
+            for (int i = 0; i < 2; ++i) rig.Present();
+            rig.vrBridge->SetMenuVisible(false);
+            for (int i = 0; i < 4; ++i) rig.Present();
+            pairs[mirrorOff] = rig.openXrManager->GetSubmittedFramePairCount();
+            quads[mirrorOff] = rig.openXrManager->GetSubmittedQuadFrameCount();
+            frames[mirrorOff] = rig.vrBridge->GetFrameIndex();
+            beginFrames[mirrorOff] = rig.dispatch->beginFrameCalls;
+        }
+        EXPECT_EQ(pairs[0], pairs[1]);
+        EXPECT_EQ(quads[0], quads[1]);
+        EXPECT_EQ(frames[0], frames[1]);
+        EXPECT_EQ(beginFrames[0], beginFrames[1]);
+        EXPECT_GT(pairs[0], 0u);
+        EXPECT_EQ(quads[0], 2u);
+    }
+}
+
+// Desktop Mirror Window black frame: each time the mirror goes from showing to off, one real Present reaches
+// DXGI (the backbuffer cleared black after the eye copy), then none until the mirror shows again.
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffWhileTheSessionRunsPresentsExactlyOnceInAfr) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_EQ(rig.Present(), 1);  // the mirror shows
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);  // the one black frame
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+    }
+}
+
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffPresentsExactlyOnceInSequentialDualPass) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    EXPECT_EQ(rig.Present(), 0);  // sub-pass 0 is always suppressed
+    EXPECT_EQ(rig.Present(), 1);  // sub-pass 1, mirror showing
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 0);  // sub-pass 0
+    EXPECT_EQ(rig.Present(), 1);  // sub-pass 1: the one black frame
+    for (int pair = 0; pair < 3; ++pair) {
+        EXPECT_EQ(rig.Present(), 0);
+        EXPECT_EQ(rig.Present(), 0);
+    }
+}
+
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffOnAMenuQuadFramePresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    EXPECT_EQ(rig.Present(), 1);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedQuadFrameCount(), 4u);
+}
+
+TEST(DxgiProxyTest, BlackFrameTurningTheMirrorOffInTwoDFloatingWindowModePresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    rig.vrBridge->Set2DViewActive(true);
+    EXPECT_EQ(rig.Present(), 1);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, BlackFrameTheSessionResumingWithTheMirrorOffPresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_EQ(rig.Present(), 1);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 0);
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // headset asleep
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+    ASSERT_FALSE(rig.openXrManager->IsSessionRunning());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // headset back on, mirror still off
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    EXPECT_EQ(rig.Present(), 1);  // one black frame
+    EXPECT_EQ(rig.Present(), 0);
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, BlackFrameTheCompanionHandshakeArrivingWithTheMirrorOffPresentsExactlyOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(rig.Present(), 1);
+
+    rig.vrBridge->PerformHandshake();  // a savegame loaded: the mirror goes dark
+    EXPECT_EQ(rig.Present(), 1);  // one black frame
+    EXPECT_EQ(rig.Present(), 0);
+}
+
+TEST(DxgiProxyTest, BlackFrameEachTimeTheMirrorGoesFromShowingToOffPresentsOnce) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    EXPECT_EQ(rig.Present(), 1);
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        EXPECT_EQ(rig.Present(), 1);
+        EXPECT_EQ(rig.Present(), 0);
+        EXPECT_EQ(rig.Present(), 0);
+        rig.vrBridge->SetDesktopMirrorEnabled(true);
+        EXPECT_EQ(rig.Present(), 1);
+        EXPECT_EQ(rig.Present(), 1);
+    }
+}
+
+TEST(DxgiProxyTest, BlackFrameDoesNotChangeWhatTheHeadsetReceives) {
+    for (VRRenderingMode mode : { VRRenderingMode::AFR, VRRenderingMode::SequentialDualPass }) {
+        uint64_t pairs[2] = {};
+        uint64_t quads[2] = {};
+        uint64_t frames[2] = {};
+        uint64_t beginFrames[2] = {};
+        for (int mirrorOff = 0; mirrorOff < 2; ++mirrorOff) {
+            MirrorPresentRig rig(mode);
+            for (int i = 0; i < 4; ++i) rig.Present();
+            rig.vrBridge->SetDesktopMirrorEnabled(mirrorOff == 0);  // switch-off lands mid-run
+            for (int i = 0; i < 6; ++i) rig.Present();
+            pairs[mirrorOff] = rig.openXrManager->GetSubmittedFramePairCount();
+            quads[mirrorOff] = rig.openXrManager->GetSubmittedQuadFrameCount();
+            frames[mirrorOff] = rig.vrBridge->GetFrameIndex();
+            beginFrames[mirrorOff] = rig.dispatch->beginFrameCalls;
+        }
+        EXPECT_EQ(pairs[0], pairs[1]);
+        EXPECT_EQ(quads[0], quads[1]);
+        EXPECT_EQ(frames[0], frames[1]);
+        EXPECT_EQ(beginFrames[0], beginFrames[1]);
+        EXPECT_GT(pairs[0], 0u);
+    }
+}
+
+// Whether the clip the fake desktop holds is exactly `expected`.
+static ::testing::AssertionResult ClipIs(const std::optional<RECT>& actual, const RECT& expected) {
+    if (!actual) {
+        return ::testing::AssertionFailure() << "the cursor is not clipped";
+    }
+    if (actual->left != expected.left || actual->top != expected.top ||
+        actual->right != expected.right || actual->bottom != expected.bottom) {
+        return ::testing::AssertionFailure() << "clip is [" << actual->left << "," << actual->top << " - " << actual->right
+                                             << "," << actual->bottom << "], expected [" << expected.left << "," << expected.top
+                                             << " - " << expected.right << "," << expected.bottom << "]";
+    }
+    return ::testing::AssertionSuccess();
+}
+
+TEST(DxgiProxyTest, TheGamesGameplayClipReachesTheDesktopAsThePhysicalClientAreaUnderResolutionDecoupling) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.runtime->GetWindowController().SetTargetRenderResolution(3840, 2160);
+    // The game's call is hooked: it must reach the fake desktop, never the real cursor.
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+
+    RECT gameplayClip{ 0, 0, 3840, 2160 };  // the whole render-size picture, as mouse-look asks for it
+    EXPECT_TRUE(ClipCursor(&gameplayClip));
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, TheGamesMouseLookWarpReachesTheDesktopAsThePhysicalCenterUnderResolutionDecoupling) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.runtime->GetWindowController().SetTargetRenderResolution(3840, 2160);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourSetCursorPosInstalled());
+
+    // The game centres the cursor for mouse-look at the middle of the render-size picture.
+    EXPECT_TRUE(SetCursorPos(rig.clientArea.left + 1920, rig.clientArea.top + 1080));
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+    EXPECT_NEAR(rig.cursorPort->cursor.x, (rig.clientArea.left + rig.clientArea.right) / 2, 1);
+    EXPECT_NEAR(rig.cursorPort->cursor.y, (rig.clientArea.top + rig.clientArea.bottom) / 2, 1);
+}
+
+// The menu quad shows the drawn cursor where the Desk Mouse is, while the game window has focus.
+TEST(DxgiProxyTest, TheDrawnCursorFollowsTheDesktopCursorWhileTheGameWindowIsInTheForeground) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);  // no handshake: the menu quad shows
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = { rig.clientArea.left + (rig.clientArea.right - rig.clientArea.left) / 4,
+                               rig.clientArea.top + (rig.clientArea.bottom - rig.clientArea.top) / 2 };
+
+    rig.Present();
+
+    const MenuCursorState& cursor = rig.openXrManager->GetMenuCursorState();
+    EXPECT_TRUE(cursor.visible);
+    EXPECT_NEAR(cursor.normX, 0.25f, 0.01f);
+    EXPECT_NEAR(cursor.normY, 0.5f, 0.01f);
+}
+
+TEST(DxgiProxyTest, TheDrawnCursorIsHiddenWhileAnotherWindowIsInTheForeground) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.cursorPort->cursor = { (rig.clientArea.left + rig.clientArea.right) / 2, (rig.clientArea.top + rig.clientArea.bottom) / 2 };
+    rig.cursorPort->foreground = GetDesktopWindow();
+
+    rig.Present();
+
+    EXPECT_FALSE(rig.openXrManager->GetMenuCursorState().visible);
+}
+
+TEST(DxgiProxyTest, TheDrawnCursorIsHiddenWhileTheSystemCursorIsHidden) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = { (rig.clientArea.left + rig.clientArea.right) / 2, (rig.clientArea.top + rig.clientArea.bottom) / 2 };
+    rig.cursorPort->cursorShowing = false;
+
+    rig.Present();
+
+    EXPECT_FALSE(rig.openXrManager->GetMenuCursorState().visible);
+}
+
 TEST(DxgiProxyTest, PendingRenderingModeLatchedStrictlyOnCompletedFrameBoundaryFromSequentialDualPassToAfr) {
     auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
     auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
@@ -1291,6 +1755,17 @@ static int PassthroughExportsLeaveNoRuntimeChild() {
     return failures;
 }
 
+// Takes the place of user32's ClipCursor in the child process below (hooked with a FunctionDetour that never
+// calls the original), so the no-runtime fallback of the ClipCursor hook is covered without a call that could
+// trap the developer's own mouse.
+static int s_childClipCalls = 0;
+static bool s_childClipWasRelease = false;
+__declspec(noinline) static BOOL WINAPI ChildClipCursorStandIn(const RECT* rect) {
+    ++s_childClipCalls;
+    s_childClipWasRelease = (rect == nullptr);
+    return TRUE;
+}
+
 static int HookEntryPointsFailSafeChild() {
     int failures = 0;
     FS25VR_CHILD_CHECK(InjectorRuntime::Current() == nullptr);
@@ -1313,8 +1788,22 @@ static int HookEntryPointsFailSafeChild() {
         FS25VR_CHILD_CHECK(MirrorWindowController::Intercept_GetClientRect(wnd, &rc));
         POINT pt{ 100, 100 };
         FS25VR_CHILD_CHECK(MirrorWindowController::Intercept_ScreenToClient(wnd, &pt));
-        FS25VR_CHILD_CHECK(MirrorWindowController::Intercept_ClipCursor(nullptr));
         DestroyWindow(wnd);
+    }
+
+    // ClipCursor too, with user32's own replaced by a stand-in: the fall-through must reach it, and only it.
+    FunctionDetour clipCursor;
+    void* pfnClipCursor = reinterpret_cast<void*>(GetProcAddress(GetModuleHandleA("user32.dll"), "ClipCursor"));
+    FS25VR_CHILD_CHECK(pfnClipCursor != nullptr);
+    if (pfnClipCursor && clipCursor.Install(pfnClipCursor, reinterpret_cast<void*>(&ChildClipCursorStandIn))) {
+        const RECT clip{ 1, 2, 3, 4 };
+        FS25VR_CHILD_CHECK(MirrorWindowController::Intercept_ClipCursor(&clip));
+        FS25VR_CHILD_CHECK(s_childClipCalls == 1 && !s_childClipWasRelease);
+        FS25VR_CHILD_CHECK(MirrorWindowController::Intercept_ClipCursor(nullptr));
+        FS25VR_CHILD_CHECK(s_childClipCalls == 2 && s_childClipWasRelease);
+        clipCursor.Uninstall();
+    } else {
+        FS25VR_CHILD_CHECK(false && "could not stand in for ClipCursor");
     }
     return failures;
 }
@@ -2887,6 +3376,41 @@ TEST(DxgiProxyTest, SubclassInterceptsWindowPosChangingAndClampsDimensions) {
     DestroyWindow(testWnd);
 }
 
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockFactory2QI(IUnknown* self, REFIID riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    if (riid == __uuidof(IDXGIFactory) || riid == __uuidof(IDXGIFactory2) || riid == __uuidof(IUnknown)) {
+        *ppv = self;
+        return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+}
+
+static int s_mockCreateSwapChainForHwndCalls = 0;
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockCreateSwapChainForHwnd(
+    IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*,
+    IDXGIOutput*, IDXGISwapChain1**) {
+    volatile int a = 5;
+    volatile int b = 6;
+    volatile int c = a + b;
+    s_mockCreateSwapChainForHwndCalls += c;
+    return S_OK;
+}
+
+// A factory whose CreateSwapChainForHwnd succeeds, so the hook has an original to call.
+struct MockFactory2 {
+    std::vector<void*> vtable;
+    MockComObject object;
+    MockFactory2() : vtable(30, nullptr), object{ vtable.data() } {
+        vtable[0] = reinterpret_cast<void*>(&MockFactory2QI);
+        vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+        vtable[2] = reinterpret_cast<void*>(&MockRelease);
+        vtable[kCreateSwapChainVTableSlot] = reinterpret_cast<void*>(&MockCreateSwapChain);
+        vtable[kCreateSwapChainForHwndVTableSlot] = reinterpret_cast<void*>(&MockCreateSwapChainForHwnd);
+    }
+    IDXGIFactory* Get() { return reinterpret_cast<IDXGIFactory*>(&object); }
+};
+
 TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndAppliesInitialPrePresentationClamp) {
     HWND testWnd = CreateWindowA("STATIC", "InitialClampTestWnd", WS_OVERLAPPEDWINDOW, 50, 50, 4000, 3000, nullptr, nullptr, nullptr, nullptr);
     ASSERT_TRUE(testWnd != nullptr);
@@ -2900,6 +3424,8 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndAppliesInitialPrePresentation
 
         auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
         DxgiProxy& activeProxy = activeProxyRuntime->GetDxgiProxy();
+        MockFactory2 factory;
+        ASSERT_TRUE(activeProxy.AttachFactory(factory.Get()));
 
         RECT expectedClamped = MirrorWindowController::ComputeClampedMirrorWindowRect(testWnd);
         int expectedW = expectedClamped.right - expectedClamped.left;
@@ -3089,6 +3615,102 @@ TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndEnforcesStretchScalingInActiv
         auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
         EXPECT_NO_THROW(DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr));
     }
+}
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndReportsFailureWhenNoOriginalIsAvailable) {
+    auto mockDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+
+    IDXGISwapChain1* swapChain = nullptr;
+    EXPECT_EQ(DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &swapChain), E_FAIL);
+    EXPECT_EQ(swapChain, nullptr);
+}
+
+// Redirects the game log (Logger) to a temp file while a test runs and reads it back.
+namespace {
+class LogCapture {
+public:
+    explicit LogCapture(const char* fileName) : m_path(std::filesystem::temp_directory_path() / fileName) {
+        Logger::Instance().SetLogFile(m_path);
+    }
+    ~LogCapture() {
+        Logger::Instance().SetLogFile(Logger::DefaultLogPath());
+        std::filesystem::remove(m_path);
+    }
+    std::string Text() const {
+        Logger::Instance().Flush();
+        std::ifstream file(m_path);
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    }
+private:
+    std::filesystem::path m_path;
+};
+} // namespace
+
+// Swapchain descriptor logging: the log is the only record of how the game asked for its swapchain.
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainLogsRequestedAndPassedOnDescriptor) {
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+    LogCapture capture("fs25vr_swapchain_desc_test.log");
+
+    DXGI_SWAP_CHAIN_DESC desc{};
+    desc.BufferDesc.Width = 3840;
+    desc.BufferDesc.Height = 2160;
+    desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.BufferCount = 3;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    desc.Windowed = FALSE;
+
+    DxgiProxy::Intercept_CreateSwapChain(nullptr, nullptr, &desc, nullptr);
+
+    const std::string log = capture.Text();
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChain requested: 3840x2160 format=28 buffers=3 "
+                       "swapEffect=FLIP_DISCARD(4) flags=0x840 (ALLOW_TEARING|FRAME_LATENCY_WAITABLE_OBJECT) "
+                       "samples=1 modeScaling=0 windowed=0"), std::string::npos) << log;
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChain passed on: 3840x2160 format=28 buffers=3 "
+                       "swapEffect=FLIP_DISCARD(4) flags=0x840 (ALLOW_TEARING|FRAME_LATENCY_WAITABLE_OBJECT) "
+                       "samples=1 modeScaling=0 windowed=1"), std::string::npos) << log;
+}
+
+TEST(DxgiProxyTest, InterceptCreateSwapChainForHwndLogsRequestedAndPassedOnDescriptor) {
+    auto mockActiveDispatch = std::make_shared<MockActiveOpenXrDispatch>();
+    auto openXrManager = std::make_shared<OpenXrManager>(mockActiveDispatch);
+    ASSERT_TRUE(openXrManager->Initialize());
+    ASSERT_TRUE(openXrManager->CreateSession());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+    LogCapture capture("fs25vr_swapchain_desc_test.log");
+
+    DXGI_SWAP_CHAIN_DESC1 desc{};
+    desc.Width = 2560;
+    desc.Height = 1440;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.BufferCount = 2;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    desc.Scaling = DXGI_SCALING_NONE;
+    desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
+    fullscreenDesc.Windowed = FALSE;
+
+    DxgiProxy::Intercept_CreateSwapChainForHwnd(nullptr, nullptr, nullptr, &desc, &fullscreenDesc, nullptr, nullptr);
+
+    const std::string log = capture.Text();
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChainForHwnd requested: 2560x1440 format=28 buffers=2 "
+                       "swapEffect=FLIP_SEQUENTIAL(3) flags=0x800 (ALLOW_TEARING) samples=1 "
+                       "scaling=NONE(1) alphaMode=3 windowed=0"), std::string::npos) << log;
+    EXPECT_NE(log.find("DxgiProxy: CreateSwapChainForHwnd passed on: 2560x1440 format=28 buffers=2 "
+                       "swapEffect=FLIP_SEQUENTIAL(3) flags=0x800 (ALLOW_TEARING) samples=1 "
+                       "scaling=STRETCH(0) alphaMode=3 windowed=1"), std::string::npos) << log;
 }
 
 TEST(DxgiProxyTest, ClampedWindowRestoresFullNormalizedMouseRangeAcrossEdges) {
@@ -3534,12 +4156,14 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     ASSERT_TRUE(activeOpenXrManager->Initialize());
     ASSERT_TRUE(activeOpenXrManager->CreateSession());
 
-    auto activeProxyRuntime = MakeRuntime(activeOpenXrManager);
+    // The hooked calls below reach a fake desktop: the real cursor is never moved or clipped.
+    auto cursorPort = std::make_shared<FakeDesktopCursorPort>();
+    auto activeProxyRuntime = MakeRuntime(activeOpenXrManager, nullptr, cursorPort);
     DxgiProxy& activeProxy = activeProxyRuntime->GetDxgiProxy();
     activeProxy.GetWindowController().SetTargetRenderResolution(3840, 2160);
     EXPECT_TRUE(activeProxy.GetWindowController().AttachWindowSubclass(testWnd));
-    EXPECT_TRUE(activeProxy.GetWindowController().IsDetourSetCursorPosInstalled());
-    EXPECT_TRUE(activeProxy.GetWindowController().IsDetourClipCursorInstalled());
+    ASSERT_TRUE(activeProxy.GetWindowController().IsDetourSetCursorPosInstalled());
+    ASSERT_TRUE(activeProxy.GetWindowController().IsDetourClipCursorInstalled());
 
     // Query physical client rect using InternalWindowQueryScope
     RECT physRc{};
@@ -3580,33 +4204,19 @@ TEST(DxgiProxyTest, SetCursorPosCentersCursorAndEnablesBidirectionalLookParity) 
     EXPECT_EQ(constrainedClipRc.right, physTopLeft.x + physW);
     EXPECT_EQ(constrainedClipRc.bottom, physTopLeft.y + physH);
 
-    // 3. Verify hooked Win32 API invocations (handles interactive desktop or headless/CI ERROR_INVALID_ADDRESS / ERROR_ACCESS_DENIED)
-    BOOL setPosRes = SetCursorPos(warpVirtualCenter.x, warpVirtualCenter.y);
-    if (setPosRes) {
-        POINT actualCursorPos{};
-        if (GetCursorPos(&actualCursorPos)) {
-            EXPECT_NEAR(actualCursorPos.x, expectedPhysCenterX, 1);
-            EXPECT_NEAR(actualCursorPos.y, expectedPhysCenterY, 1);
-        }
-    } else {
-        DWORD err = GetLastError();
-        EXPECT_TRUE(err == ERROR_INVALID_ADDRESS || err == ERROR_ACCESS_DENIED);
-    }
+    // 3. Verify hooked Win32 API invocations, as the fake desktop received them
+    EXPECT_TRUE(SetCursorPos(warpVirtualCenter.x, warpVirtualCenter.y));
+    EXPECT_NEAR(cursorPort->cursor.x, expectedPhysCenterX, 1);
+    EXPECT_NEAR(cursorPort->cursor.y, expectedPhysCenterY, 1);
 
-    BOOL clipRes = ClipCursor(&virtualClipRc);
-    if (clipRes) {
-        RECT actualClipRc{};
-        if (GetClipCursor(&actualClipRc)) {
-            EXPECT_NEAR(actualClipRc.left, physTopLeft.x, 1);
-            EXPECT_NEAR(actualClipRc.top, physTopLeft.y, 1);
-            EXPECT_NEAR(actualClipRc.right, physTopLeft.x + physW, 1);
-            EXPECT_NEAR(actualClipRc.bottom, physTopLeft.y + physH, 1);
-        }
-        ClipCursor(nullptr);
-    } else {
-        DWORD err = GetLastError();
-        EXPECT_TRUE(err == ERROR_INVALID_ADDRESS || err == ERROR_ACCESS_DENIED);
-    }
+    EXPECT_TRUE(ClipCursor(&virtualClipRc));
+    ASSERT_TRUE(cursorPort->clip.has_value());
+    EXPECT_NEAR(cursorPort->clip->left, physTopLeft.x, 1);
+    EXPECT_NEAR(cursorPort->clip->top, physTopLeft.y, 1);
+    EXPECT_NEAR(cursorPort->clip->right, physTopLeft.x + physW, 1);
+    EXPECT_NEAR(cursorPort->clip->bottom, physTopLeft.y + physH, 1);
+    EXPECT_TRUE(ClipCursor(nullptr));
+    EXPECT_FALSE(cursorPort->clip.has_value());
 
     // 4. Bidirectional delta parity:
     // When the mouse is at physical center and user moves delta right or left,
@@ -3717,6 +4327,1068 @@ TEST(DxgiProxyTest, AttachSwapChainDetoursResizeBuffersAndOverridesTargetResolut
 
     activeProxy.DetachAll();
     EXPECT_FALSE(activeProxy.IsDetourResizeBuffersInstalled());
+}
+
+// Desktop Mirror Window title (#196): while the mirror is off the game window's title says so and names
+// the command that restores it. These tests use a real window and read the title back.
+namespace {
+std::wstring WindowTitle(HWND hWnd) {
+    int length = GetWindowTextLengthW(hWnd);
+    std::wstring title(static_cast<size_t>(length) + 1, L'\0');
+    int copied = GetWindowTextW(hWnd, title.data(), length + 1);
+    title.resize(static_cast<size_t>(copied));
+    return title;
+}
+
+// A real top-level test window with a known title, handed to the proxy as the game window.
+struct MirrorTitleWindow {
+    explicit MirrorTitleWindow(MirrorPresentRig& rig, const char* title = "Farming Simulator 25") {
+        hWnd = CreateWindowA("STATIC", title, WS_OVERLAPPEDWINDOW, 0, 0, 640, 360, nullptr, nullptr, nullptr, nullptr);
+        EXPECT_NE(hWnd, nullptr);
+        rig.runtime->GetDxgiProxy().GetWindowController().SetGameHwnd(hWnd);
+    }
+    ~MirrorTitleWindow() {
+        if (hWnd) DestroyWindow(hWnd);
+    }
+    std::wstring Title() const { return WindowTitle(hWnd); }
+    HWND hWnd = nullptr;
+};
+
+bool TitleSaysMirrorIsOff(const std::wstring& title) {
+    return title.find(L"desktop mirror is off") != std::wstring::npos &&
+           title.find(L"vrDesktopMirror on") != std::wstring::npos;
+}
+} // namespace
+
+TEST(DxgiProxyTest, DesktopMirrorOffSetsATitleThatNamesTheCommandToRestoreIt) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title())) << "title was a different text";
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+}
+
+// #195 and #196 together: the frame that switches the mirror off sets the title and is also the one black
+// real Present; every Present after it is suppressed and the title stays.
+TEST(DxgiProxyTest, DesktopMirrorGoingOffSetsTheTitleAndPresentsExactlyOnceThenNone) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    EXPECT_EQ(rig.Present(), 1);
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    EXPECT_EQ(rig.Present(), 1);  // the one black frame
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title())) << "title not set on the black frame";
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_EQ(rig.Present(), 0);
+        EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+    }
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsUntouchedWhileTheMirrorIsOn) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    for (int i = 0; i < 4; ++i) {
+        rig.Present();
+        EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+    }
+    // The game changes its own title while the mirror shows: the Injector leaves that alone.
+    SetWindowTextA(window.hWnd, "Farming Simulator 25 - map");
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25 - map");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTurnedOnRestoresTheKeptTitle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleKeepsTheFullLengthOfALongTitle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    const std::string longTitle = "Farming Simulator 25 - " + std::string(700, 'x') + " - end";
+    MirrorTitleWindow window(rig, longTitle.c_str());
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), std::wstring(longTitle.begin(), longTitle.end()));
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleBehavesTheSameInSequentialDualPassAndMenuFrames) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();  // sub-pass 0
+    rig.Present();  // sub-pass 1
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+    rig.vrBridge->SetMenuVisible(true);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheSessionStopsRunningAndSetAgainOnResume) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhileTheHeadsetIsAsleepAndLogsWhy) {
+    LogCapture capture("fs25vr_desktop_mirror_title_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_SYNCHRONIZED);  // asleep: the session keeps running
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+    EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (headset not in use)"), std::string::npos)
+        << capture.Text();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredOnPassThroughDrop) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    rig.Present();
+    ASSERT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheHandshakeIsLost) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    // The savegame unloads: the Companion Mod's handshake is gone.
+    rig.vrBridge->SetCompanionActive(false);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsRestoredWhenTheInjectorDetaches) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(window.Title()));
+
+    rig.runtime->GetDxgiProxy().DetachAll();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+TEST(DxgiProxyTest, DesktopMirrorTitleIsNotChangedWhileTheMirrorShowsByItself) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    MirrorTitleWindow window(rig);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    rig.Present();
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+// The game window can be unknown when the mirror goes off (it arrives with a later swapchain).
+TEST(DxgiProxyTest, DesktopMirrorOffTitleIsSetWhenTheGameWindowIsKnownOnlyAfterTheMirrorWentOff) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    rig.Present();
+
+    MirrorTitleWindow window(rig);
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(window.Title())) << "title never applied to the late window";
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(window.Title(), L"Farming Simulator 25");
+}
+
+// The controller restores the old window's title when the game window changes; the mirror is still off.
+TEST(DxgiProxyTest, DesktopMirrorOffTitleMovesToTheNewGameWindowWhenTheWindowChangesWhileOff) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow oldWindow(rig, "Old Window");
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    rig.Present();
+    ASSERT_TRUE(TitleSaysMirrorIsOff(oldWindow.Title()));
+
+    MirrorTitleWindow newWindow(rig, "New Window");
+    EXPECT_EQ(oldWindow.Title(), L"Old Window");
+    rig.Present();
+    EXPECT_TRUE(TitleSaysMirrorIsOff(newWindow.Title())) << "title never applied to the new window";
+    EXPECT_EQ(oldWindow.Title(), L"Old Window");
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    rig.Present();
+    EXPECT_EQ(newWindow.Title(), L"New Window");
+    EXPECT_EQ(oldWindow.Title(), L"Old Window");
+}
+
+namespace {
+size_t CountOf(const std::string& text, const std::string& needle) {
+    size_t count = 0;
+    for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) ++count;
+    return count;
+}
+} // namespace
+
+TEST(DxgiProxyTest, DesktopMirrorTransitionsAreLoggedOncePerChange) {
+    LogCapture capture("fs25vr_desktop_mirror_title_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    MirrorTitleWindow window(rig);
+
+    rig.Present();
+    EXPECT_EQ(capture.Text().find("DxgiProxy: Desktop mirror"), std::string::npos) << capture.Text();
+
+    rig.vrBridge->SetDesktopMirrorEnabled(false);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), "DxgiProxy: Desktop mirror off"), 1u) << capture.Text();
+
+    rig.vrBridge->SetDesktopMirrorEnabled(true);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    const std::string log = capture.Text();
+    EXPECT_EQ(CountOf(log, "DxgiProxy: Desktop mirror on by command (vrDesktopMirror on)"), 1u) << log;
+    EXPECT_EQ(CountOf(log, "DxgiProxy: Desktop mirror off"), 1u) << log;
+}
+
+TEST(DxgiProxyTest, DesktopMirrorComingBackByItselfLogsTheReason) {
+    LogCapture capture("fs25vr_desktop_mirror_title_test.log");
+    {
+        MirrorPresentRig rig(VRRenderingMode::AFR);
+        MirrorTitleWindow window(rig);
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        rig.Present();
+        rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+        rig.Present();
+        EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (session not running)"), std::string::npos)
+            << capture.Text();
+    }
+    {
+        MirrorPresentRig rig(VRRenderingMode::AFR);
+        MirrorTitleWindow window(rig);
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        rig.Present();
+        rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+        rig.Present();
+        EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (Pass-Through Mode)"), std::string::npos)
+            << capture.Text();
+    }
+    {
+        MirrorPresentRig rig(VRRenderingMode::AFR);
+        MirrorTitleWindow window(rig);
+        rig.vrBridge->SetDesktopMirrorEnabled(false);
+        rig.Present();
+        rig.vrBridge->SetCompanionActive(false);
+        rig.Present();
+        EXPECT_NE(capture.Text().find("DxgiProxy: Desktop mirror on by itself (Companion Mod handshake lost)"), std::string::npos)
+            << capture.Text();
+    }
+}
+
+// Mouse Confinement (#214, #216): while the headset is in use and the game window has focus, the Desk Mouse
+// is kept on the game picture. These tests drive the game's Present and the game's own ClipCursor calls and
+// assert the clip and the cursor the fake desktop holds.
+namespace {
+// The game window has focus and the Desk Mouse is on the picture, as in a headset session at the desk.
+void GiveTheGameWindowFocus(MirrorPresentRig& rig) {
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = { (rig.clientArea.left + rig.clientArea.right) / 2, (rig.clientArea.top + rig.clientArea.bottom) / 2 };
+}
+} // namespace
+
+TEST(DxgiProxyTest, MouseConfinementHoldsToTheClientAreaInTheMainMenu) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);  // no handshake: the main menu
+    GiveTheGameWindowFocus(rig);
+
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+// What is showing makes no difference, nor does the Present path the frame takes.
+TEST(DxgiProxyTest, MouseConfinementHoldsWhateverIsShowingOnEveryPresentPath) {
+    struct Scenario {
+        const char* name;
+        VRRenderingMode mode;
+        bool handshake;
+        bool menuVisible;
+        bool twoDView;
+    };
+    const Scenario scenarios[] = {
+        { "main menu (no handshake)", VRRenderingMode::AFR, false, false, false },
+        { "in-game menu", VRRenderingMode::AFR, true, true, false },
+        { "dialog on the menu quad", VRRenderingMode::SequentialDualPass, true, true, false },
+        { "2D Floating Window Mode", VRRenderingMode::SequentialDualPass, true, false, true },
+        { "gameplay, AFR", VRRenderingMode::AFR, true, false, false },
+        { "gameplay, Sequential Dual Pass", VRRenderingMode::SequentialDualPass, true, false, false },
+    };
+    for (const Scenario& scenario : scenarios) {
+        SCOPED_TRACE(scenario.name);
+        MirrorPresentRig rig(scenario.mode, scenario.handshake);
+        rig.vrBridge->SetMenuVisible(scenario.menuVisible);
+        rig.vrBridge->Set2DViewActive(scenario.twoDView);
+        GiveTheGameWindowFocus(rig);
+
+        rig.Present();
+        EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+        rig.cursorPort->clip.reset();
+        rig.Present();  // both sub-passes of a Sequential Dual Pass frame count
+        EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    }
+}
+
+TEST(DxgiProxyTest, MouseConfinementKeepsTheDeskMouseOnThePictureWhenTheGameReleasesItsClipInAMenu) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+
+    EXPECT_TRUE(ClipCursor(nullptr));  // the game lets go in a menu
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementRestoresAClipClearedFromOutsideAndDoesNotSetARightClipAgain) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    const int setClipCalls = rig.cursorPort->setClipCalls;
+
+    rig.Present();
+    rig.Present();
+    EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls) << "a clip that is already right was set again";
+
+    rig.cursorPort->clip.reset();  // Windows or another program clears it
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls + 1);
+}
+
+TEST(DxgiProxyTest, MouseConfinementLetsGoWhileAnotherWindowIsInTheForegroundAndHoldsAgainWhenTheGameWindowIsBack) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.cursorPort->foreground = GetDesktopWindow();  // Alt+Tab, the Win key, a UAC prompt
+    rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementHoldsWhileAChildOfTheGameWindowHasFocus) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    HWND child = CreateWindowA("STATIC", "child", WS_CHILD | WS_VISIBLE, 0, 0, 50, 50, rig.gameWindow, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(child != nullptr);
+    rig.cursorPort->foreground = child;
+
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    DestroyWindow(child);
+}
+
+TEST(DxgiProxyTest, MouseConfinementNeverSetsAnythingWhileTheGameWindowDoesNotHaveFocus) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.cursorPort->foreground = GetDesktopWindow();
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+    EXPECT_EQ(rig.cursorPort->setClipCalls, 0);
+}
+
+TEST(DxgiProxyTest, MouseConfinementLeavesNoClipOnceTheGameHasReleasedItsOwnAfterFocusIsLostInGameplay) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    EXPECT_TRUE(ClipCursor(&rig.clientArea));  // mouse-look
+    rig.Present();
+    const int setClipCalls = rig.cursorPort->setClipCalls;
+
+    rig.cursorPort->foreground = GetDesktopWindow();
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea)) << "the game's own clip is not the Injector's to release";
+    EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls);
+
+    EXPECT_TRUE(ClipCursor(nullptr));  // the game lets go on focus loss, as it does itself
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+}
+
+TEST(DxgiProxyTest, MouseConfinementLettingGoDuringGameplayPutsBackTheGamesOwnRectangle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);  // no Resolution Decoupling: the rectangle is the game's own
+    RECT gameRect = rig.clientArea;
+    InflateRect(&gameRect, -100, -100);
+    EXPECT_TRUE(ClipCursor(&gameRect));
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // the headset goes to sleep
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, gameRect));
+}
+
+TEST(DxgiProxyTest, MouseConfinementLettingGoInAMenuLeavesNoClip) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    EXPECT_TRUE(ClipCursor(nullptr));
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    rig.Present();
+
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+}
+
+TEST(DxgiProxyTest, MouseConfinementLetsGoWhileTheSessionIsNotRunningAndHoldsAgainWhenItRunsAgain) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // the headset is off or asleep
+    rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+    rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // the headset is back on
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementKeepsHoldingWhileTheRuntimeDashboardHasTheFocus) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_VISIBLE);  // running, but not focused
+    rig.cursorPort->clip.reset();
+    rig.Present();
+    ASSERT_FALSE(rig.openXrManager->IsSessionFocused());
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementFollowsTheWindowWhenItMovesOrResizes) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    RECT windowRect{};
+    ASSERT_TRUE(GetWindowRect(rig.gameWindow, &windowRect));
+    ASSERT_TRUE(SetWindowPos(rig.gameWindow, nullptr, windowRect.left + 30, windowRect.top + 20, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE));
+    RECT movedArea = rig.clientArea;
+    OffsetRect(&movedArea, 30, 20);
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, movedArea));
+
+    // Resized to a client area of 640x480 (the frame stays the same).
+    RECT frame{ 0, 0, 640, 480 };
+    AdjustWindowRectEx(&frame, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    ASSERT_TRUE(SetWindowPos(rig.gameWindow, nullptr, 0, 0, frame.right - frame.left, frame.bottom - frame.top,
+                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE));
+    POINT origin{ 0, 0 };
+    ClientToScreen(rig.gameWindow, &origin);
+    const RECT resizedArea{ origin.x, origin.y, origin.x + 640, origin.y + 480 };
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, resizedArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementHoldsToThePhysicalClientAreaWhenTheRenderSizeIsLargerThanTheWindow) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.runtime->GetWindowController().SetTargetRenderResolution(3840, 2160);
+    GiveTheGameWindowFocus(rig);
+
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementSetsNothingInPassThroughMode) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+
+    for (int i = 0; i < 3; ++i) rig.Present();
+
+    ASSERT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+    EXPECT_EQ(rig.cursorPort->setClipCalls, 0);
+}
+
+TEST(DxgiProxyTest, MouseConfinementLetsGoWhenTheInjectorDropsToPassThroughMode) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    rig.Present();
+
+    ASSERT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+}
+
+TEST(DxgiProxyTest, MouseConfinementIsReleasedWhenTheControllerDetaches) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.runtime->GetDxgiProxy().DetachAll();  // leaving VR
+
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+}
+
+TEST(DxgiProxyTest, MouseConfinementLogsEachStartAndStopOnceWithItsReason) {
+    LogCapture capture("fs25vr_mouse_confinement_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    const std::string holds = "Mouse Confinement holds the Desk Mouse to the game picture (";
+    const std::string releases = "Mouse Confinement released the Desk Mouse (";
+
+    rig.Present();  // the game window does not have focus yet
+    EXPECT_EQ(capture.Text().find("Mouse Confinement"), std::string::npos) << capture.Text();
+
+    GiveTheGameWindowFocus(rig);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), holds + "headset in use)"), 1u) << capture.Text();
+
+    rig.cursorPort->foreground = GetDesktopWindow();
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), releases + "focus lost)"), 1u) << capture.Text();
+
+    rig.cursorPort->foreground = rig.gameWindow;
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), holds + "focus regained)"), 1u) << capture.Text();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), releases + "session not running)"), 1u) << capture.Text();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), holds + "session running again)"), 1u) << capture.Text();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_LOSS_PENDING);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), releases + "Pass-Through Mode)"), 1u) << capture.Text();
+    EXPECT_EQ(CountOf(capture.Text(), "Mouse Confinement"), 6u) << capture.Text();
+}
+
+// Centre the Desk Mouse (#217): holding starts with the cursor off the picture, it comes to the middle.
+namespace {
+POINT PictureCentre(const RECT& picture) {
+    return { (picture.left + picture.right) / 2, (picture.top + picture.bottom) / 2 };
+}
+// A spot on the desktop that is not on the game picture (the test window is inset from the top left).
+POINT OffThePicture(const RECT& picture) {
+    return { picture.left - 20, picture.top - 20 };
+}
+} // namespace
+
+TEST(DxgiProxyTest, MouseConfinementStartingToHoldWithTheDeskMouseOffThePictureBringsItToTheMiddle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
+
+    rig.Present();
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+    EXPECT_EQ(rig.cursorPort->cursor.x, PictureCentre(rig.clientArea).x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, PictureCentre(rig.clientArea).y);
+}
+
+TEST(DxgiProxyTest, MouseConfinementStartingToHoldWithTheDeskMouseOnThePictureLeavesItWhereItIs) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.cursorPort->foreground = rig.gameWindow;
+    const POINT spot{ rig.clientArea.left + 10, rig.clientArea.bottom - 10 };  // on the picture, near its corner
+    rig.cursorPort->cursor = spot;
+
+    rig.Present();
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 0);
+    EXPECT_EQ(rig.cursorPort->cursor.x, spot.x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, spot.y);
+}
+
+TEST(DxgiProxyTest, MouseConfinementNeverMovesTheDeskMouseWhileItKeepsHolding) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    // Something puts the cursor off the picture and clears the clip mid-hold: the clip is set again,
+    // the cursor is left alone.
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
+    rig.cursorPort->clip.reset();
+    for (int i = 0; i < 3; ++i) rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 0);
+    EXPECT_EQ(rig.cursorPort->cursor.x, OffThePicture(rig.clientArea).x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, OffThePicture(rig.clientArea).y);
+}
+
+TEST(DxgiProxyTest, MouseConfinementBringsAnOutsideDeskMouseToTheMiddleWhenTheGameWindowRegainsFocus) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    rig.cursorPort->foreground = GetDesktopWindow();  // Alt+Tab away
+    rig.Present();
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);  // the player works on another monitor
+    rig.Present();
+    ASSERT_EQ(rig.cursorPort->setCursorPosCalls, 0) << "moved while the game window had no focus";
+
+    rig.cursorPort->foreground = rig.gameWindow;  // Alt+Tab back
+    rig.Present();
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+    EXPECT_EQ(rig.cursorPort->cursor.x, PictureCentre(rig.clientArea).x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, PictureCentre(rig.clientArea).y);
+}
+
+TEST(DxgiProxyTest, MouseConfinementBringsAnOutsideDeskMouseToTheMiddleWhenTheSessionRunsAgain) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // the headset goes to sleep
+    rig.Present();
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
+    rig.Present();
+    ASSERT_EQ(rig.cursorPort->setCursorPosCalls, 0) << "moved while the session was not running";
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // the headset wakes up
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    rig.Present();
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+    EXPECT_EQ(rig.cursorPort->cursor.x, PictureCentre(rig.clientArea).x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, PictureCentre(rig.clientArea).y);
+}
+
+TEST(DxgiProxyTest, MouseConfinementMovesTheDeskMouseOnlyOncePerStartAcrossFramesAndPresentPaths) {
+    MirrorPresentRig rig(VRRenderingMode::SequentialDualPass);
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
+
+    for (int i = 0; i < 4; ++i) rig.Present();
+
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+}
+
+TEST(DxgiProxyTest, MouseConfinementBringsTheDeskMouseToThePhysicalMiddleWhenTheRenderSizeIsLargerThanTheWindow) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.runtime->GetWindowController().SetTargetRenderResolution(3840, 2160);
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
+
+    rig.Present();
+
+    // The port is the original SetCursorPos: the point is the window's real middle, not the render-size one.
+    EXPECT_EQ(rig.cursorPort->setCursorPosCalls, 1);
+    EXPECT_EQ(rig.cursorPort->cursor.x, PictureCentre(rig.clientArea).x);
+    EXPECT_EQ(rig.cursorPort->cursor.y, PictureCentre(rig.clientArea).y);
+}
+
+// The vrMouseConfinement setting (#218): the VRBridge flag, read on every Present once the Companion Mod
+// has done its handshake (a savegame has loaded).
+TEST(DxgiProxyTest, MouseConfinementLetsGoWhileTheFlagIsOffAndHoldsAgainWhenItIsBackOn) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+    rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+
+    rig.vrBridge->SetMouseConfinementEnabled(true);
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementNeverSetsAnythingWhileTheFlagIsOffEvenWithoutAHeldClip) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+    EXPECT_EQ(rig.cursorPort->setClipCalls, 0);
+}
+
+TEST(DxgiProxyTest, MouseConfinementFlagOffDoesNotTurnTheGamesReleaseInAMenuIntoTheirPicture) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+
+    EXPECT_TRUE(ClipCursor(nullptr));  // the game lets go in a menu
+
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+}
+
+// Before a savegame has loaded there is no Companion Mod to have turned it off: it always holds.
+TEST(DxgiProxyTest, MouseConfinementHoldsWithTheFlagOffWhileThereIsNoCompanionHandshake) {
+    MirrorPresentRig rig(VRRenderingMode::AFR, /*companionHandshake=*/false);
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    GiveTheGameWindowFocus(rig);
+
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+// Leaving to the main menu is a map unload: the Companion Mod is gone and the flag goes back on.
+TEST(DxgiProxyTest, MouseConfinementHoldsAgainAfterTheMapUnloadsWithTheFlagOff) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_FALSE(rig.cursorPort->clip.has_value());
+
+    rig.vrBridge->SetCompanionActive(false);
+    rig.vrBridge->SetMouseConfinementEnabled(true);  // what VRBridge.onMapUnload does
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+}
+
+TEST(DxgiProxyTest, MouseConfinementFlagOffStillAppliesTheGamesOwnGameplayRectangle) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);  // no Resolution Decoupling: the rectangle is the game's own
+    RECT gameRect = rig.clientArea;
+    InflateRect(&gameRect, -100, -100);
+
+    EXPECT_TRUE(ClipCursor(&gameRect));
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, gameRect));
+}
+
+TEST(DxgiProxyTest, MouseConfinementTurnedOffDuringGameplayLeavesTheGamesRectangleInPlace) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);
+    RECT gameRect = rig.clientArea;
+    InflateRect(&gameRect, -100, -100);
+    EXPECT_TRUE(ClipCursor(&gameRect));
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));  // holding replaced it with the picture
+
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, gameRect)) << "mouse-look must keep the game's own capture";
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, gameRect));
+}
+
+TEST(DxgiProxyTest, MouseConfinementTurnedOffDuringGameplayWithTheGamesRectangleEqualToThePictureKeepsIt) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    ASSERT_TRUE(rig.runtime->GetWindowController().IsDetourClipCursorInstalled());
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);
+    RECT gameRect = rig.clientArea;
+    EXPECT_TRUE(ClipCursor(&gameRect));
+    rig.Present();
+
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, gameRect));
+}
+
+TEST(DxgiProxyTest, MouseConfinementLogsStartsAndStopsCausedByTheSettingAsByCommand) {
+    LogCapture capture("fs25vr_mouse_confinement_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    const std::string holds = "Mouse Confinement holds the Desk Mouse to the game picture (";
+    const std::string releases = "Mouse Confinement released the Desk Mouse (";
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), holds + "headset in use)"), 1u) << capture.Text();
+
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), releases + "turned off by command (vrMouseConfinement off))"), 1u) << capture.Text();
+
+    rig.vrBridge->SetMouseConfinementEnabled(true);
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_EQ(CountOf(capture.Text(), holds + "turned on by command)"), 1u) << capture.Text();
+    EXPECT_EQ(CountOf(capture.Text(), "Mouse Confinement"), 3u) << capture.Text();
+}
+
+// Focus lost and the flag off together: the log names the setting, and turning it back on while the game
+// window is still not in front says nothing until the focus is back.
+TEST(DxgiProxyTest, MouseConfinementLogsTheSettingWhenTheFlagIsTurnedOffWhileFocusIsAlreadyLost) {
+    LogCapture capture("fs25vr_mouse_confinement_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+
+    rig.cursorPort->foreground = GetDesktopWindow();
+    rig.Present();
+    rig.vrBridge->SetMouseConfinementEnabled(false);
+    rig.cursorPort->foreground = rig.gameWindow;
+    for (int i = 0; i < 3; ++i) rig.Present();
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+
+    rig.vrBridge->SetMouseConfinementEnabled(true);
+    rig.Present();
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+    EXPECT_NE(capture.Text().find("Mouse Confinement holds the Desk Mouse to the game picture (turned on by command)"), std::string::npos)
+        << capture.Text();
+}
+
+// The game's clip put back when Mouse Confinement lets go follows the window (review of #216): the game asked
+// for it where the window was, and the window has moved since.
+namespace {
+void MoveGameWindowBy(MirrorPresentRig& rig, int dx, int dy) {
+    RECT windowRect{};
+    ASSERT_TRUE(GetWindowRect(rig.gameWindow, &windowRect));
+    ASSERT_TRUE(SetWindowPos(rig.gameWindow, nullptr, windowRect.left + dx, windowRect.top + dy, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE));
+}
+} // namespace
+
+TEST(DxgiProxyTest, MouseConfinementLettingGoAfterTheWindowMovedPutsBackTheGamesRectangleWhereTheWindowIsNow) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);
+    RECT gameRect = rig.clientArea;
+    InflateRect(&gameRect, -100, -100);
+    EXPECT_TRUE(ClipCursor(&gameRect));
+    rig.Present();
+
+    MoveGameWindowBy(rig, 30, 20);
+    rig.Present();  // holding follows the window
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    rig.Present();
+
+    RECT movedGameRect = gameRect;
+    OffsetRect(&movedGameRect, 30, 20);
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, movedGameRect));
+}
+
+TEST(DxgiProxyTest, MouseConfinementLettingGoInTheFrameTheWindowMovedPutsBackTheGamesRectangleWhereTheWindowIsNow) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    GiveTheGameWindowFocus(rig);
+    rig.runtime->GetWindowController().SetTargetRenderResolution(0, 0);
+    RECT gameRect = rig.clientArea;
+    InflateRect(&gameRect, -100, -100);
+    EXPECT_TRUE(ClipCursor(&gameRect));
+    rig.Present();
+
+    MoveGameWindowBy(rig, -40, 25);
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    rig.Present();
+
+    RECT movedGameRect = gameRect;
+    OffsetRect(&movedGameRect, -40, 25);
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, movedGameRect));
+}
+
+// Mouse Confinement only releases a clip it still holds (review of #216).
+TEST(DxgiProxyTest, MouseConfinementLeavesAClipAnotherProgramSetInPlaceWhenItLetsGo) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    RECT other = rig.clientArea;
+    InflateRect(&other, -50, -50);
+    rig.cursorPort->clip = other;  // another program takes the clip
+    const int setClipCalls = rig.cursorPort->setClipCalls;
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    rig.Present();
+
+    EXPECT_TRUE(ClipIs(rig.cursorPort->clip, other));
+    EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls);
+}
+
+TEST(DxgiProxyTest, MouseConfinementLetsGoOfNothingWhenTheClipWasClearedFromOutside) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+    ASSERT_TRUE(ClipIs(rig.cursorPort->clip, rig.clientArea));
+
+    rig.cursorPort->clip.reset();
+    const int setClipCalls = rig.cursorPort->setClipCalls;
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);
+    rig.Present();
+
+    EXPECT_FALSE(rig.cursorPort->clip.has_value());
+    EXPECT_EQ(rig.cursorPort->setClipCalls, setClipCalls);
+}
+
+// The start line names the cause that actually ended the last non-holding stretch (review of #216).
+TEST(DxgiProxyTest, MouseConfinementLogsFocusRegainedWhenTheFlagIsTurnedOnWhileFocusIsLost) {
+    LogCapture capture("fs25vr_mouse_confinement_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+
+    rig.vrBridge->SetMouseConfinementEnabled(false);  // turned off while focused
+    rig.Present();
+    rig.cursorPort->foreground = GetDesktopWindow();  // focus lost
+    rig.Present();
+    rig.vrBridge->SetMouseConfinementEnabled(true);  // turned on again while unfocused
+    rig.Present();
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.Present();
+
+    const std::string log = capture.Text();
+    EXPECT_NE(log.find("Mouse Confinement holds the Desk Mouse to the game picture (focus regained)"), std::string::npos) << log;
+    EXPECT_EQ(log.find("(turned on by command)"), std::string::npos) << log;
+}
+
+TEST(DxgiProxyTest, MouseConfinementLogsFocusRegainedWhenTheSessionRunsAgainWhileFocusIsLost) {
+    LogCapture capture("fs25vr_mouse_confinement_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // the headset sleeps while focused
+    rig.Present();
+    rig.cursorPort->foreground = GetDesktopWindow();  // focus lost
+    rig.Present();
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // wakes up while unfocused
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    rig.Present();
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.Present();
+
+    const std::string log = capture.Text();
+    EXPECT_NE(log.find("Mouse Confinement holds the Desk Mouse to the game picture (focus regained)"), std::string::npos) << log;
+    EXPECT_EQ(log.find("(session running again)"), std::string::npos) << log;
+}
+
+TEST(DxgiProxyTest, MouseConfinementLogsSessionRunningAgainWhenTheSessionIsTheLastThingToComeBack) {
+    LogCapture capture("fs25vr_mouse_confinement_test.log");
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    GiveTheGameWindowFocus(rig);
+    rig.Present();
+
+    rig.cursorPort->foreground = GetDesktopWindow();  // focus lost first
+    rig.Present();
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_STOPPING);  // then the session stops, still unfocused
+    rig.Present();
+    rig.cursorPort->foreground = rig.gameWindow;  // focus is back while the session is stopped
+    rig.Present();
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_READY);  // and the session runs last
+    rig.dispatch->events.PushSessionState(XR_SESSION_STATE_FOCUSED);
+    rig.Present();
+
+    const std::string log = capture.Text();
+    EXPECT_NE(log.find("Mouse Confinement holds the Desk Mouse to the game picture (session running again)"), std::string::npos) << log;
+}
+
+// The Present that starts holding draws the Desk Mouse at the middle of the picture, not where it was (review of #217).
+TEST(DxgiProxyTest, MouseConfinementCentresTheDrawnCursorInTheFrameHoldingStarts) {
+    MirrorPresentRig rig(VRRenderingMode::AFR);
+    rig.vrBridge->SetMenuVisible(true);
+    rig.cursorPort->foreground = rig.gameWindow;
+    rig.cursorPort->cursor = OffThePicture(rig.clientArea);
+
+    rig.Present();
+
+    const MenuCursorState& cursor = rig.openXrManager->GetMenuCursorState();
+    EXPECT_TRUE(cursor.visible);
+    EXPECT_NEAR(cursor.normX, 0.5f, 0.01f);
+    EXPECT_NEAR(cursor.normY, 0.5f, 0.01f);
 }
 
 } // namespace fs25vr

@@ -28,7 +28,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.SeatOffset = VRCompanion.SeatOffset or {}
 
 VRCompanion.SEAT_OFFSET_LIMIT = 0.5  -- metres, each axis, either way
 
@@ -298,9 +297,3 @@ function VRCompanion:unregisterSeatOffsetConsoleCommands()
         removeConsoleCommand("vrSeatOffset")
     end
 end
-
-VRCompanion.SeatOffset.getCabSeatOffset = function(self, ...) return VRCompanion.getCabSeatOffset(VRCompanion, ...) end
-VRCompanion.SeatOffset.onSeatSetAction = function(self, ...) return VRCompanion.onSeatSetAction(VRCompanion, ...) end
-VRCompanion.SeatOffset.consoleCommandSeatOffset = function(self, ...) return VRCompanion.consoleCommandSeatOffset(VRCompanion, ...) end
-
-return VRCompanion.SeatOffset

@@ -1,8 +1,10 @@
 #include "vr_bridge.h"
 #include "core/logger.h"
+#include "core/perf_trace.h"
 #include "core/thread_trace.h"
 #include "ngx/ngx_interceptor.h"
 #include "fidelityfx/fidelityfx_interceptor.h"
+#include <algorithm>
 
 namespace fs25vr {
 
@@ -170,6 +172,9 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
     self->ResetSubPass();
     self->SetMenuVisible(false);
     self->Set2DViewActive(false);
+    self->SetDesktopMirrorEnabled(true);
+    self->SetMouseConfinementEnabled(true);
+    self->SetFovOverscan(0.0f);
     LogInfo("[VRBridge] Companion Mod map unloaded; reverted to Menu Quad layer mode.");
     return 0;
 }
@@ -740,9 +745,16 @@ int VRBridge::Lua_GetEyePose(lua_State* L) {
     return 1;
 }
 
+void VRBridge::UpdateFovOverscanSuspension() {
+    if (m_openXrManager) {
+        m_openXrManager->SetFovOverscanSuspended(m_menuVisible || m_2dViewActive);
+    }
+}
+
 void VRBridge::SetMenuVisible(bool visible) {
     if (m_menuVisible != visible) {
         m_menuVisible = visible;
+        UpdateFovOverscanSuspension();
         SetMenuCursor(false, 0.0f, 0.0f);  // a ray cursor from the previous panel must not linger
         SetFrameParity(0);
         ResetSubPass();
@@ -880,6 +892,7 @@ int VRBridge::Lua_GetIsMenuVisible(lua_State* L) {
 void VRBridge::Set2DViewActive(bool active) {
     if (m_2dViewActive != active) {
         m_2dViewActive = active;
+        UpdateFovOverscanSuspension();
         SetMenuCursor(false, 0.0f, 0.0f);
         SetFrameParity(0);
         ResetSubPass();
@@ -911,6 +924,59 @@ int VRBridge::Lua_GetIs2DViewActive(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     lua_pushboolean(L, self->Is2DViewActive() ? 1 : 0);
+    return 1;
+}
+
+int VRBridge::Lua_SetDesktopMirror(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setDesktopMirror");
+    self->SetDesktopMirrorEnabled(lua_gettop(L) < 1 || lua_toboolean(L, 1) != 0);
+    return 0;
+}
+
+int VRBridge::Lua_GetDesktopMirror(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    lua_pushboolean(L, self->IsDesktopMirrorEnabled() ? 1 : 0);
+    return 1;
+}
+
+void VRBridge::SetFovOverscan(float percent) {
+    percent = OpenXrManager::ClampFovOverscan(percent);
+    m_fovOverscan = percent;
+    if (m_openXrManager) {
+        m_openXrManager->SetFovOverscan(percent);
+    }
+}
+
+int VRBridge::Lua_SetFovOverscan(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setFovOverscan");
+    self->SetFovOverscan(lua_gettop(L) >= 1 ? static_cast<float>(lua_tonumber(L, 1)) : 0.0f);
+    return 0;
+}
+
+int VRBridge::Lua_GetFovOverscan(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    lua_pushnumber(L, self->GetFovOverscan());
+    return 1;
+}
+
+int VRBridge::Lua_SetMouseConfinement(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setMouseConfinement");
+    self->SetMouseConfinementEnabled(lua_gettop(L) < 1 || lua_toboolean(L, 1) != 0);
+    return 0;
+}
+
+int VRBridge::Lua_GetMouseConfinement(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    lua_pushboolean(L, self->IsMouseConfinementEnabled() ? 1 : 0);
     return 1;
 }
 
@@ -1216,6 +1282,41 @@ int VRBridge::Lua_DlssDiag(lua_State* L) {
     }
     lua_pushboolean(L, 1);
     return 1;
+}
+
+int VRBridge::Lua_StartPerfTrace(lua_State* L) {
+    FromUpvalue(L);
+    FS25VR_TRACE_THREAD("VRBridge.startPerfTrace");
+    const lua_Integer seconds = lua_isnumber(L, 1) ? lua_tointeger(L, 1) : PerfTrace::kDefaultSeconds;
+    PerfTrace::Instance().Start(static_cast<uint32_t>(std::clamp<lua_Integer>(seconds, 1, PerfTrace::kMaxSeconds)));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int VRBridge::Lua_StopPerfTrace(lua_State* L) {
+    FromUpvalue(L);
+    PerfTrace::Instance().Stop();
+    return 0;
+}
+
+int VRBridge::Lua_IsPerfTracing(lua_State* L) {
+    FromUpvalue(L);
+    lua_pushboolean(L, PerfTrace::Instance().IsActive() ? 1 : 0);
+    return 1;
+}
+
+int VRBridge::Lua_PerfTraceBegin(lua_State* L) {
+    FromUpvalue(L);
+    PerfSection section;
+    if (PerfSectionFromLuaName(lua_tostring(L, 1), section)) PerfTrace::Instance().Begin(section);
+    return 0;
+}
+
+int VRBridge::Lua_PerfTraceEnd(lua_State* L) {
+    FromUpvalue(L);
+    PerfSection section;
+    if (PerfSectionFromLuaName(lua_tostring(L, 1), section)) PerfTrace::Instance().End(section);
+    return 0;
 }
 
 } // namespace fs25vr

@@ -4,7 +4,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.Config = VRCompanion.Config or {}
 
 -- HUD Safe Area constants (the engine's global HUD anchors, ADR-0022)
 VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL = 0.30
@@ -77,10 +76,6 @@ VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICA
 -- Recenter VR Tracking Space Configuration
 VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE = true
 VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
-
--- Oblique Frustum (ADR-0005): symmetric projection by default; per-eye asymmetric offsets are opt-in
-VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION = false
-VRCompanion.allowObliqueProjection = VRCompanion.DEFAULT_ALLOW_OBLIQUE_PROJECTION
 
 -- DLSS near plane per camera mode (vrDlssNearClipCab / Outside / OnFoot), in metres; 0 = auto, which the
 -- Injector estimates from the engine's motion vectors. The renderer's near differs between a vehicle's
@@ -232,7 +227,6 @@ function VRCompanion:saveConfiguration(xmlPath)
         if type(setXmlBoolFn) == "function" then
             setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
             setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
-            setXmlBoolFn(xmlFile, "vrSettings.allowObliqueProjection", self.allowObliqueProjection == true)
             for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
                 local group = (self.HUD_GROUPS or {})[groupName] or {}
                 local streamlined, full = group.streamlined, group.full
@@ -245,6 +239,9 @@ function VRCompanion:saveConfiguration(xmlPath)
         end
         if type(self.saveMotionControllerSettings) == "function" then self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn }) end
         if type(self.saveFishCatchSetting) == "function" then self:saveFishCatchSetting(xmlFile, { setString = setXmlStringFn }) end
+        if type(self.saveDesktopMirrorSetting) == "function" then self:saveDesktopMirrorSetting(xmlFile, { setBool = setXmlBoolFn }) end
+        if type(self.saveFovOverscanSetting) == "function" then self:saveFovOverscanSetting(xmlFile, { setFloat = setXmlFloatFn }) end
+        if type(self.saveMouseConfinementSetting) == "function" then self:saveMouseConfinementSetting(xmlFile, { setBool = setXmlBoolFn }) end
         if type(self.saveStereoDialogDepthSetting) == "function" then self:saveStereoDialogDepthSetting(xmlFile, { setFloat = setXmlFloatFn }) end
         if type(self.saveSeatOffsetSettings) == "function" then self:saveSeatOffsetSettings(xmlFile, { setString = setXmlStringFn, setInt = setXmlIntFn,setFloat = setXmlFloatFn }) end
         if type(setXmlStringFn) == "function" then
@@ -336,12 +333,6 @@ function VRCompanion:loadConfiguration(xmlPath)
                     self.recenterVrTrackingSpace = loadedRecenterTracking
                 end
 
-                local loadedAllowOblique = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
-                    "vrSettings.allowObliqueProjection")
-                if loadedAllowOblique ~= nil then
-                    self.allowObliqueProjection = loadedAllowOblique
-                end
-
                 for _, groupName in ipairs(self.HUD_GROUP_NAMES) do
                     local group = (self.HUD_GROUPS or {})[groupName]
                     if group ~= nil then
@@ -359,6 +350,9 @@ function VRCompanion:loadConfiguration(xmlPath)
 
                 if type(self.loadMotionControllerSettings) == "function" then self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn }) end
                 if type(self.loadFishCatchSetting) == "function" then self:loadFishCatchSetting(xmlFile, { getString = getXmlStringFn }) end
+                if type(self.loadDesktopMirrorSetting) == "function" then self:loadDesktopMirrorSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn }) end
+                if type(self.loadFovOverscanSetting) == "function" then self:loadFovOverscanSetting(xmlFile, { getFloat = getXmlFloatFn }) end
+                if type(self.loadMouseConfinementSetting) == "function" then self:loadMouseConfinementSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn }) end
                 if type(self.loadStereoDialogDepthSetting) == "function" then self:loadStereoDialogDepthSetting(xmlFile, { getFloat = getXmlFloatFn }) end
                 if type(self.loadSeatOffsetSettings) == "function" then self:loadSeatOffsetSettings(xmlFile, { has = hasXmlPropertyFn, getString = getXmlStringFn, getInt = getXmlIntFn,getFloat = getXmlFloatFn }) end
 
@@ -434,9 +428,6 @@ function VRCompanion:loadConfiguration(xmlPath)
     if self.recenterVrTrackingSpace == nil then
         self.recenterVrTrackingSpace = self.DEFAULT_RECENTER_VR_TRACKING_SPACE
     end
-    if self.allowObliqueProjection == nil then
-        self.allowObliqueProjection = self.DEFAULT_ALLOW_OBLIQUE_PROJECTION
-    end
     if self.snapTurnAngle == nil then
         self.snapTurnAngle = self.DEFAULT_SNAP_TURN_ANGLE
     end
@@ -458,11 +449,3 @@ function VRCompanion:loadConfiguration(xmlPath)
 
     return self:getHudSafeArea()
 end
-
--- Export to Config subsystem table
-VRCompanion.Config.clamp = function(self, ...) return VRCompanion.clamp(VRCompanion, ...) end
-VRCompanion.Config.getUserSettingsPath = function(self, ...) return VRCompanion.getUserSettingsPath(VRCompanion, ...) end
-VRCompanion.Config.saveConfiguration = function(self, ...) return VRCompanion.saveConfiguration(VRCompanion, ...) end
-VRCompanion.Config.loadConfiguration = function(self, ...) return VRCompanion.loadConfiguration(VRCompanion, ...) end
-
-return VRCompanion.Config

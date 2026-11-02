@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "proxy/desktop_cursor_port.h"
 #include "proxy/mirror_window_controller.h"
 #include "core/detour.h"
 #include "core/injector_runtime.h"
@@ -96,6 +97,63 @@ TEST(MirrorWindowControllerTest, StandaloneControllerSubclassesButInstallsNoWin3
 
     controller.DetachAll();
     DestroyWindow(testWnd);
+}
+
+// Stand-ins for user32's ClipCursor and SetCursorPos, so the production port can be exercised without
+// touching the developer's real cursor: the "original" records what reached it, the detour what re-entered.
+static int s_standInClipCalls = 0;
+static bool s_standInClipWasRelease = false;
+static RECT s_standInClip{};
+static int s_standInMoveCalls = 0;
+static POINT s_standInMove{};
+static int s_detourClipCalls = 0;
+static int s_detourMoveCalls = 0;
+__declspec(noinline) static BOOL WINAPI StandInClipCursor(const RECT* rect) {
+    ++s_standInClipCalls;
+    s_standInClipWasRelease = (rect == nullptr);
+    if (rect) s_standInClip = *rect;
+    return TRUE;
+}
+__declspec(noinline) static BOOL WINAPI StandInSetCursorPos(int x, int y) {
+    ++s_standInMoveCalls;
+    s_standInMove = { x, y };
+    return TRUE;
+}
+static BOOL WINAPI StandInClipCursorDetour(const RECT*) { ++s_detourClipCalls; return FALSE; }
+static BOOL WINAPI StandInSetCursorPosDetour(int, int) { ++s_detourMoveCalls; return FALSE; }
+
+TEST(MirrorWindowControllerTest, TheProductionPortSetsTheClipAndMovesTheCursorThroughTheDetoursOriginals) {
+    FunctionDetour clipDetour;
+    FunctionDetour moveDetour;
+    ASSERT_TRUE(clipDetour.Install(reinterpret_cast<void*>(&StandInClipCursor), reinterpret_cast<void*>(&StandInClipCursorDetour)));
+    ASSERT_TRUE(moveDetour.Install(reinterpret_cast<void*>(&StandInSetCursorPos), reinterpret_cast<void*>(&StandInSetCursorPosDetour)));
+    s_standInClipCalls = s_standInMoveCalls = s_detourClipCalls = s_detourMoveCalls = 0;
+
+    Win32DesktopCursorPort port(clipDetour, moveDetour);
+    const RECT clip{ 10, 20, 810, 620 };
+    EXPECT_TRUE(port.SetClip(&clip));
+    EXPECT_EQ(s_standInClipCalls, 1);
+    EXPECT_EQ(s_standInClip.left, 10);
+    EXPECT_EQ(s_standInClip.top, 20);
+    EXPECT_EQ(s_standInClip.right, 810);
+    EXPECT_EQ(s_standInClip.bottom, 620);
+    EXPECT_FALSE(s_standInClipWasRelease);
+
+    EXPECT_TRUE(port.SetClip(nullptr));
+    EXPECT_EQ(s_standInClipCalls, 2);
+    EXPECT_TRUE(s_standInClipWasRelease);
+
+    EXPECT_TRUE(port.SetCursorPos(300, 400));
+    EXPECT_EQ(s_standInMoveCalls, 1);
+    EXPECT_EQ(s_standInMove.x, 300);
+    EXPECT_EQ(s_standInMove.y, 400);
+
+    // The port went round the detours: nothing re-entered the Injector's own hooks.
+    EXPECT_EQ(s_detourClipCalls, 0);
+    EXPECT_EQ(s_detourMoveCalls, 0);
+
+    moveDetour.Uninstall();
+    clipDetour.Uninstall();
 }
 
 // Counts GetAncestor calls on this thread: the GetClientRect hook's walk to the root window.

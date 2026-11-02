@@ -1202,7 +1202,6 @@ end)
 -- A keyEvent on the mod listener would act on raw keys and ignore rebinding in the Controls menu.
 test("ModHasNoRawKeyEventHandlerSoBindingsComeOnlyFromInputBinding", function()
     assert(VRCompanion.keyEvent == nil, "VRCompanion must not define keyEvent")
-    assert(VRCompanion.Input.keyEvent == nil, "VRCompanion.Input must not export keyEvent")
 end)
 
 test("RegisterActionEventsReArmsOnVehicleTransitionsAndPeriodicUpdate", function()

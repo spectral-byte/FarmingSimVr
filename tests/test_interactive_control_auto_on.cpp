@@ -279,3 +279,81 @@ TEST_F(CompanionModTest, ControlledVehicleWithoutInteractiveControlClickPointsOr
     PICK_UP(kRight);
     EXPECT_EQ(EvalLua(L, "#StubIC.stateWrites"), "0") << "on foot there is no cab";
 }
+
+// When the ray finds nothing in a cab, the game log says what Interactive Control reports for the vehicle being driven: its
+// state, its indoor check, whether the vehicle is active for input and AI-driven, and how many of its indoor Click Points are
+// active and were updated lately. A line is logged when that changes, not on every update.
+TEST_F(CompanionModTest, TheGameLogSaysWhatInteractiveControlReportsForTheDrivenVehicle) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, true));
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local vehicle = g_currentMission.controlledVehicle
+        function vehicle:isIndoorActive() return true end
+        function vehicle:getIsActiveForInput(ignoreSelection) return ignoreSelection == true end
+        function vehicle:getIsAIActive() return false end
+        local door = StubIC.addPoint("door", 0, 0, -1)
+        local light = StubIC.addPoint("light", 0.2, 0, -1, { inRange = false })
+        local hood = StubIC.addPoint("hood", 0, 0, -3, { outdoor = true })
+        door.type, light.type, hood.type = 1, 1, 2
+        door.interactiveController.target, light.interactiveController.target = vehicle, vehicle
+        vehicle.spec_interactiveControl.interactiveControllers = { { interactiveActions = { door, light, hood } } }
+    )luau", "=points"), 0);
+    SetGameTime(10000);
+    headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    FRAMES(70);
+
+    std::vector<std::string> reports;
+    for (const auto& line : s_capturedLogs) {
+        if (line.find("[FS25_VR] Interactive Control in the driven vehicle: ") != std::string::npos) reports.push_back(line);
+    }
+    ASSERT_EQ(reports.size(), 2u) << "the wrap's first look, then once Interactive Control has updated its Click Points";
+    EXPECT_NE(reports[1].find("state on: true, indoor check: true, active for input: true, AI driving: false"
+                              " | indoor Click Points: 2 (active 1, updated lately 1)"), std::string::npos) << reports[1];
+}
+
+// The game draws the vehicle being driven as part of the HUD, and Interactive Control updates a cab's Click Points from that
+// draw. With the VR HUD hidden the draw does not run, so the Companion Mod runs Interactive Control's indoor update itself and
+// the cab's Click Points become active; with the HUD shown, or while a menu takes the input, it leaves them alone.
+TEST_F(CompanionModTest, WithTheHudHiddenTheCabClickPointsAreUpdatedWithoutTheVehiclesDraw) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, true));
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        StubIC.noVehicleDraw = true
+        StubIC.cabUpdates = {}
+        local vehicle = g_currentMission.controlledVehicle
+        function vehicle:isIndoorActive() return true end
+        function vehicle:getIsActiveForInput(ignoreSelection) return ignoreSelection == true end
+        function vehicle:updateInteractiveController(isIndoor, isOutdoor, hasInput)
+            table.insert(StubIC.cabUpdates, string.format("%s %s %s", tostring(isIndoor), tostring(isOutdoor), tostring(hasInput)))
+            for _, point in ipairs(StubIC.points) do
+                if not point.outdoor then point:update(isIndoor, isOutdoor, hasInput) end
+            end
+        end
+        StubIC.addPoint("ignition", 0.3, 0, -1.3)
+    )luau", "=cab"), 0);
+    ASSERT_EQ(EvalLua(L, "VRCompanion:getHudState() == VRCompanion.HUD_STATE_HIDDEN"), "true") << "the HUD starts hidden";
+    SetGameTime(10000);
+    headset.SetHandPose(kRight, HandAt(0.3f, 0.0f, -0.3f));
+    FRAMES(5);
+    EXPECT_NE(EvalLua(L, "#StubIC.cabUpdates"), "0") << "Interactive Control's indoor update runs without the draw";
+    EXPECT_EQ(EvalLua(L, "StubIC.cabUpdates[#StubIC.cabUpdates]"), "true false true") << "indoor, with the vehicle's input";
+    EXPECT_EQ(EvalLua(L, "tostring(StubIC.points[1]:isActivated())"), "true") << "the cab's Click Point is active";
+    EXPECT_NE(EvalLua(L, "VRCompanion:getInteractiveControlDiagnostics()").find("Click Points seen: 1 (active 1)"), std::string::npos)
+        << "and the ray can find it: " << EvalLua(L, "VRCompanion:getInteractiveControlDiagnostics()");
+
+    // With the HUD shown the game draws the vehicle, and the draw updates the Click Points.
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:setHudState(VRCompanion.HUD_STATE_FULL); StubIC.cabUpdates = {}", "=hudShown"), 0);
+    FRAMES(5);
+    EXPECT_EQ(EvalLua(L, "#StubIC.cabUpdates"), "0") << "left to the vehicle's draw";
+
+    // A menu takes the input: nothing is updated behind it.
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:setHudState(VRCompanion.HUD_STATE_HIDDEN)
+        _G.g_gui = { currentGuiName = "InGameMenu", currentDialogName = "", dialogs = {}, getIsGuiVisible = function() return true end }
+    )luau", "=menu"), 0);
+    FRAMES(5);
+    ASSERT_EQ(EvalLua(L, "tostring(VRCompanion:doesMenuTakeInput())"), "true") << "the menu is open";
+    EXPECT_EQ(EvalLua(L, "#StubIC.cabUpdates"), "0") << "not while a menu takes the input";
+}

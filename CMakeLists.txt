@@ -89,7 +89,10 @@ set(CORE_SOURCES
     src/core/logger.h
     src/core/thread_trace.cpp
     src/core/thread_trace.h
+    src/core/perf_trace.cpp
+    src/core/perf_trace.h
     src/core/math_utils.h
+    src/core/raii_utils.h
     src/core/camera_records.cpp
     src/core/camera_records.h
     src/core/detour.cpp
@@ -111,8 +114,11 @@ set(CORE_SOURCES
     src/openxr/openxr_input.cpp
     src/openxr/openxr_manager.cpp
     src/openxr/openxr_manager.h
+    src/openxr/openxr_types.h
     src/proxy/system_dxgi.h
     src/proxy/system_dxgi.cpp
+    src/proxy/desktop_cursor_port.h
+    src/proxy/desktop_cursor_port.cpp
     src/proxy/mirror_window_controller.h
     src/proxy/mirror_window_controller.cpp
     src/proxy/dxgi_proxy.cpp
@@ -128,6 +134,7 @@ set(CORE_SOURCES
     src/ngx/near_estimator.h
     src/ngx/near_estimator.cpp
     src/fidelityfx/ffx_defs.h
+    src/fidelityfx/ffx_mv_conventions.h
     src/fidelityfx/fidelityfx_interceptor.h
     src/fidelityfx/fidelityfx_interceptor.cpp
 )
@@ -190,11 +197,16 @@ add_executable(fs25_vr_tests
     tests/test_near_estimator.cpp
     tests/test_logger.cpp
     tests/test_thread_trace.cpp
+    tests/test_perf_trace.cpp
     tests/test_openxr_cursor_overlay.cpp
     tests/test_openxr_manager.cpp
+    tests/test_fov_coverage.cpp
+    tests/test_fov_overscan.cpp
+    tests/test_openxr_eye_copy_d3d12.cpp
     tests/test_openxr_motion_controllers.cpp
     tests/test_mirror_window_controller.cpp
     tests/test_dxgi_proxy.cpp
+    tests/test_process_isolation.cpp
     tests/test_detour.cpp
     tests/test_vr_bridge.cpp
     tests/test_luau_interceptor.cpp
@@ -264,6 +276,13 @@ add_executable(fs25_vr_tests
     tests/test_animated_objects_nearer.cpp
     tests/test_animated_objects_pointer.cpp
     tests/test_animated_objects_wraps.cpp
+    tests/test_manual_attach_shared_cone.cpp
+    tests/test_manual_attach_hitch.cpp
+    tests/test_manual_attach_reach.cpp
+    tests/test_manual_attach_pointer.cpp
+    tests/test_manual_attach_wraps.cpp
+    tests/test_manual_attach_pto_hoses.cpp
+    tests/test_manual_attach_prompts.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE

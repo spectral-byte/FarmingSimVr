@@ -51,7 +51,6 @@
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
-VRCompanion.AnimatedObjects = VRCompanion.AnimatedObjects or {}
 
 local engine = VRCompanion.getEngineGlobal
 
@@ -374,8 +373,3 @@ function VRCompanion:getAnimatedObjectsDiagnostics()
     return string.format("Animated Objects support: installed | in zone: %d | selected: %s", inZone,
         selected ~= nil and describeObject(selected) or "none")
 end
-
-VRCompanion.AnimatedObjects.updateAnimatedObjects = function(self, ...) return VRCompanion.updateAnimatedObjects(VRCompanion, ...) end
-VRCompanion.AnimatedObjects.resetAnimatedObjectsSupport = function(self, ...) return VRCompanion.resetAnimatedObjectsSupport(VRCompanion, ...) end
-
-return VRCompanion.AnimatedObjects
