@@ -176,22 +176,28 @@ TEST(OpenXrManagerTest, AGivenRayHitsThePanelOnlyForATrackedHandAndFollowsTheLoc
 
 TEST(OpenXrManagerTest, PanelHitFollowsTheLocalSpaceThePanelIsSubmittedIn) {
     FakeTrackedHeadset headset;
-    PlaceHeadAndAlignPanel(headset);
-    headset.manager->Recenter();  // the local space now has its origin at the head, 1.6 m up
-    headset.NextFrame();
+    PlaceHeadAndAlignPanel(headset);  // panel 1.5 m ahead of (0, 1.6, 0)
 
-    // Hands are located in the re-based local space, and so is the submitted panel, which stays where
-    // it was aligned (1.6 m up in that space). Ray and panel are tested in that one space, so the
-    // hit lands where the panel is actually drawn, not where it was before the recentre.
+    // The player shifts 2 m to the side and recentres: the local space now has its origin at the head,
+    // and the panel is placed 1.5 m in front of it in that space.
+    headset.SetHeadPose(HandPoseAt(2.0f, 1.6f, 0.0f));
+    headset.manager->Recenter();
+    headset.NextFrame();
     const XrPosef quad = headset.manager->ComputeMenuQuadPose();
-    headset.SetHandPose(1, HandPoseAt(quad.position.x, quad.position.y + 1.6f, 0.0f));
+    EXPECT_NEAR(quad.position.x, 0.0f, 1e-4f);
+    EXPECT_NEAR(quad.position.y, 0.0f, 1e-4f);
+    EXPECT_NEAR(quad.position.z, -1.5f, 1e-4f);
+
+    // Hands are located in the re-based local space, as the panel is submitted, so a hand at the head
+    // aiming ahead hits where the panel is drawn.
+    headset.SetHandPose(1, HandPoseAt(2.0f, 1.6f, 0.0f));
     headset.NextFrame();
     const PanelHit atDrawnPanel = headset.manager->GetPanelHit(1);
     EXPECT_TRUE(atDrawnPanel.hit);
     EXPECT_NEAR(atDrawnPanel.u, 0.5f, 1e-4f);
     EXPECT_NEAR(atDrawnPanel.v, 0.5f, 1e-4f);
 
-    headset.SetHandPose(1, HandPoseAt(0.0f, 1.6f, 0.0f));  // where the panel was drawn before the recentre
+    headset.SetHandPose(1, HandPoseAt(0.0f, 1.6f, 0.0f));  // aimed at where the panel was before the recentre
     headset.NextFrame();
     EXPECT_FALSE(headset.manager->GetPanelHit(1).hit);
 }

@@ -671,9 +671,9 @@ void OpenXrManager::Recenter() {
     ClearRenderPoses();
     Vector3 recenterPos = m_rawPose.position;
     float recenterYaw = m_rawPose.rotation.yaw;  // every poll derives rotation from the quaternion
+    const XrTime time = (m_frameState.predictedDisplayTime != 0) ? m_frameState.predictedDisplayTime : GetCurrentXrTime();
 
     if (m_session != XR_NULL_HANDLE && m_baseLocalSpace != XR_NULL_HANDLE && m_viewSpace != XR_NULL_HANDLE) {
-        XrTime time = (m_frameState.predictedDisplayTime != 0) ? m_frameState.predictedDisplayTime : GetCurrentXrTime();
         XrSpaceLocation baseLoc{XR_TYPE_SPACE_LOCATION};
         XrResult res = m_dispatch->LocateSpace(m_viewSpace, m_baseLocalSpace, time, &baseLoc);
         if (XR_SUCCEEDED(res) &&
@@ -713,6 +713,7 @@ void OpenXrManager::Recenter() {
 
     m_lastPolledTime = 0;
     m_handPosesStale = true;  // the hands are located against the local space that was just re-created
+    PollHeadPose(time);       // the head in the re-created local space, which the menu quad is placed from
     AlignMenuQuadToHeadPose();
     LogInfo("OpenXrManager: Head pose recentered.");
 }
@@ -1224,7 +1225,7 @@ bool OpenXrManager::BeginFrame() {
     if (m_frameState.shouldRender) {
         LocateActiveViews(m_frameState.predictedDisplayTime);
         PollHeadPose(m_frameState.predictedDisplayTime);
-        if (m_menuQuadAwaitsHead && m_hasMenuQuadPose && m_rawPose.isValid &&
+        if (m_menuQuadAwaitsHead && m_hasMenuQuadPose && m_lastPose.isValid &&
             m_frameState.predictedDisplayTime >= m_menuQuadAwaitsHeadAfter) {
             AlignMenuQuadToHeadPose();
             LogInfo("OpenXrManager: Menu quad placed in front of the tracked head.");
@@ -1763,7 +1764,10 @@ XrPosef OpenXrManager::ComputeMenuQuadPoseFromHeadPose(const HeadPose& headPose,
 }
 
 void OpenXrManager::AlignMenuQuadToHeadPose(const HeadPose* customPose) {
-    const HeadPose& pose = customPose ? *customPose : m_rawPose;
+    // The head as located in m_localSpace, the space SubmitMenuQuad() submits the quad in. The raw
+    // pose is in the runtime's own local space, which after a Recenter Action is offset by wherever
+    // the head was in it: about 24 m on Pimax OpenXR, enough to put the menu out of sight (issue 238).
+    const HeadPose& pose = customPose ? *customPose : m_lastPose;
     m_menuQuadPose = ComputeMenuQuadPoseFromHeadPose(pose, m_menuQuadDistance);
     m_hasMenuQuadPose = true;
     // The first menu frame of a session usually has no head pose yet (the frame is not rendered, or
