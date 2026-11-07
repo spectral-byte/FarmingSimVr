@@ -2072,10 +2072,11 @@ TEST(OpenXrManagerTest, SubmitMenuQuadRespectsRecenterOffset) {
     ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 1u);
     const auto& quad = mockDispatch->lastSubmittedQuadLayers[0];
 
-    // Quad position should be offset 1.5m in front (-Z) from recenter origin (1.0, 0.5, -2.0 - 1.5 = -3.5)
-    EXPECT_NEAR(quad.pose.position.x, 1.0f, 0.001f);
-    EXPECT_NEAR(quad.pose.position.y, 0.5f, 0.001f);
-    EXPECT_NEAR(quad.pose.position.z, -3.5f, 0.001f);
+    // The quad is submitted in the recentered local space, whose origin is now the head at
+    // (1.0, 0.5, -2.0): 1.5 m in front (-Z) of that origin, at its eye level.
+    EXPECT_NEAR(quad.pose.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(quad.pose.position.y, 0.0f, 0.001f);
+    EXPECT_NEAR(quad.pose.position.z, -1.5f, 0.001f);
 }
 
 TEST(OpenXrManagerTest, CustomMenuQuadDistanceAndSize) {
@@ -2201,16 +2202,16 @@ TEST(OpenXrManagerTest, SubmitMenuQuadAlignsToHeadPoseOnRecenter) {
     ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 1u);
     const auto& quad = mockDispatch->lastSubmittedQuadLayers[0];
 
-    // Distance ~1.5m along 45 degrees gaze
-    // deltaX = -1.5 * sin(0.785398) = -1.06066
-    // deltaZ = -1.5 * cos(0.785398) = -1.06066
-    EXPECT_NEAR(quad.pose.position.x, 3.0f - 1.06066f, 0.02f);
-    EXPECT_NEAR(quad.pose.position.y, 1.0f, 0.001f);
-    EXPECT_NEAR(quad.pose.position.z, -1.0f - 1.06066f, 0.02f);
+    // The recentered local space has its origin at the head and its forward along the 45 degree gaze,
+    // and the quad is submitted in it: straight ahead of the origin, facing it. In the runtime's own
+    // local space that is 1.5 m along the gaze from (3.0, 1.0, -1.0), as before the recenter.
+    EXPECT_NEAR(quad.pose.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(quad.pose.position.y, 0.0f, 0.001f);
+    EXPECT_NEAR(quad.pose.position.z, -1.5f, 0.001f);
 
     Quaternion qQuad(quad.pose.orientation.x, quad.pose.orientation.y, quad.pose.orientation.z, quad.pose.orientation.w);
     EulerAngles angles = OpenXrManager::QuaternionToEuler(qQuad);
-    EXPECT_NEAR(angles.yaw, 0.785398f, 0.01f);
+    EXPECT_NEAR(angles.yaw, 0.0f, 0.001f);
     EXPECT_NEAR(angles.pitch, 0.0f, 0.001f);
     EXPECT_NEAR(angles.roll, 0.0f, 0.001f);
 }
@@ -2410,6 +2411,28 @@ TEST(OpenXrManagerTest, MenuQuadMovesToTheHeadTheFirstTimeTheSessionIsFocused) {
     EXPECT_NEAR(resumed.position.x, -0.2f, 0.001f);
     EXPECT_NEAR(resumed.position.y, 0.2f, 0.001f);
     EXPECT_NEAR(resumed.position.z, 0.1f - 1.5f, 0.001f);
+}
+
+// A runtime whose local space origin is far from the head, as Pimax OpenXR's is (issue 238: the head
+// read about 24 m above it). After a Recenter Action a menu opens in front of the head in the
+// recentered space the quad is submitted in, not offset by where the head sits in the runtime's own
+// local space.
+TEST(OpenXrManagerTest, MenuOpenedAfterARecenterIsPlacedInFrontOfTheHeadInTheRecenteredSpace) {
+    MenuQuadSession s;
+    s.SetHead(5.3f, 23.7f, 5.0f, 0.8f, /*valid=*/true);
+    s.manager.Recenter();
+
+    // The player sits up 10 cm and turns their head a little, then opens the menu.
+    const float turn = 0.3f;
+    s.SetHead(5.3f, 23.8f, 5.0f, 0.8f + turn, /*valid=*/true);
+    XrPosef opened = s.PresentQuadFrame(/*entersQuadMode=*/true);
+
+    EXPECT_NEAR(opened.position.x, -1.5f * std::sin(turn), 0.001f);
+    EXPECT_NEAR(opened.position.y, 0.1f, 0.001f);
+    EXPECT_NEAR(opened.position.z, -1.5f * std::cos(turn), 0.001f);
+    EXPECT_NEAR(OpenXrManager::QuaternionToEuler(Quaternion(opened.orientation.x, opened.orientation.y,
+                                                            opened.orientation.z, opened.orientation.w)).yaw,
+                turn, 0.001f);
 }
 
 TEST(OpenXrManagerTest, ChangeOfAnotherReferenceSpaceLeavesMenuQuadInPlace) {
