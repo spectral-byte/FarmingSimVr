@@ -37,15 +37,19 @@ VRCompanion.DEFAULT_CONTROLS_EXPANDED = true
 VRCompanion.controlsExpanded = VRCompanion.DEFAULT_CONTROLS_EXPANDED
 
 -- VR HUD Convergence Parity Constants
-VRCompanion.DEFAULT_CONVERGENCE_DEPTH = 1.8
+-- The HUD Depth the HUD Groups' layouts are set for: there they are drawn at their layout size, and at another HUD Depth
+-- smaller or bigger as a panel moved back or forward (ADR-0037).
+VRCompanion.HUD_LAYOUT_DEPTH = 1.8
+-- The HUD Depth a new install starts at, until vrHudDepth saves another.
+VRCompanion.DEFAULT_HUD_DEPTH = 2.5
 VRCompanion.DEFAULT_CONVERGENCE_DISPARITY = 0.012
 VRCompanion.DEFAULT_IPD = 0.064
 VRCompanion.MIN_IPD = 0.040
 VRCompanion.MAX_IPD = 0.085
 VRCompanion.MIN_CONVERGENCE_DEPTH = 0.5
 VRCompanion.MAX_CONVERGENCE_DEPTH = 5.0
--- The HUD Depth range vrHudDepth takes. The HUD Groups grow as the depth comes nearer than the default their layouts are set
--- for, so the range stops at 1 m, where the default layout, drawn 1.8 times its size, reaches the screen's edges.
+-- The HUD Depth range vrHudDepth takes. The HUD Groups grow as the depth comes nearer than the one their layouts are set for,
+-- so the range stops at 1 m, where the default layout, drawn 1.8 times its size, reaches the screen's edges.
 VRCompanion.MIN_HUD_DEPTH = 1.0
 VRCompanion.MAX_HUD_DEPTH = 5.0
 VRCompanion.MIN_CONVERGENCE_DISPARITY = 0.0
@@ -227,7 +231,7 @@ function VRCompanion:saveConfiguration(xmlPath)
             setXmlFloatFn(xmlFile, key .. "MarginVertical", layout.marginY)
             setXmlFloatFn(xmlFile, key .. "Scale", layout.scale)
         end
-        setXmlFloatFn(xmlFile, "vrSettings.hudConvergenceDepth", self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH)
+        setXmlFloatFn(xmlFile, "vrSettings.hudConvergenceDepth", self.hudConvergenceDepth or self.DEFAULT_HUD_DEPTH)
         if type(setXmlBoolFn) == "function" then
             setXmlBoolFn(xmlFile, "vrSettings.showHudLoadNotification", self.showHudLoadNotification == true)
             setXmlBoolFn(xmlFile, "vrSettings.recenterVrTrackingSpace", self.recenterVrTrackingSpace ~= false)
@@ -324,7 +328,7 @@ function VRCompanion:loadConfiguration(xmlPath)
                 if loadedDepth ~= nil and loadedDepth == loadedDepth then
                     self.hudConvergenceDepth = self:clamp(loadedDepth, self.MIN_HUD_DEPTH, self.MAX_HUD_DEPTH)
                 else
-                    self.hudConvergenceDepth = self.DEFAULT_CONVERGENCE_DEPTH
+                    self.hudConvergenceDepth = self.DEFAULT_HUD_DEPTH
                 end
 
                 local loadedShowNotification = readXmlBool(getXmlBoolFn, getXmlStringFn, xmlFile,
@@ -427,7 +431,7 @@ function VRCompanion:loadConfiguration(xmlPath)
     end
 
     if self.hudConvergenceDepth == nil then
-        self.hudConvergenceDepth = self.DEFAULT_CONVERGENCE_DEPTH
+        self.hudConvergenceDepth = self.DEFAULT_HUD_DEPTH
     end
     if self.showHudLoadNotification == nil then
         self.showHudLoadNotification = self.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION

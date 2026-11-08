@@ -192,7 +192,7 @@ PERFORMANCE & SETTINGS
                                           info 0.30 0.30 0.82, controls 0.30 0.30 0.82)
   * vrHudSafeArea <horizontal> <vertical>      (HUD Safe Area, default: 0.30 0.22)
   * vrHudDepth [1.0-5.0]                 (how far away the HUD is, in metres; further away it looks smaller and nearer
-                                          the middle of the view; saved, 1.8 by default)
+                                          the middle of the view; saved, 2.5 by default)
   * vrMenuDistance [1.0-5.0]             (how far away menus, the main menu included, and 2D Floating Window Mode
                                           are shown, in metres; saved, 1.5 by default)
   * vrSnapTurnAngle <degrees>            (default: 90)

@@ -90,6 +90,8 @@ local function closeDialog()
 end
 
 loadCompanionMod()
+-- These tests place the HUD at the depth its layouts are set for (1.8 m), not at the HUD Depth a new install starts at
+VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
 
 local passed = 0
 local failed = 0

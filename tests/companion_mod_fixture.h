@@ -217,6 +217,13 @@ protected:
         }
     }
 
+    // Puts the HUD at the depth its layouts are set for (HUD_LAYOUT_DEPTH, 1.8 m): drawn at layout size, with the 0.012
+    // disparity of the default IPD. Tests of HUD placement and disparity are written for it, not for the HUD Depth a new
+    // install starts at.
+    void PlaceHudAtLayoutDepth() {
+        ASSERT_EQ(RunLuauChunk(L, "VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH", "=placeHudAtLayoutDepth"), 0);
+    }
+
     // ---- Driving time and frames --------------------------------------------------------------
     // The mod reads the game clock through VRCompanion:getCurrentTimeMs(), which is the global
     // g_time (milliseconds) and falls back to the real clock when g_time is nil. g_time is not

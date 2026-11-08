@@ -10,12 +10,13 @@ ADR-0010 put the HUD at a reading depth of about 1.8 m through the HUD Convergen
 
 **The HUD Depth moves all the HUD Groups back or forward as one panel straight ahead.**
 
-- Each group's layout (its HUD Group Margins and scale) is set for the default depth of 1.8 m. At depth `d`, every group is drawn `1.8 / d` times its size and placed `1.8 / d` times as far from the screen centre, and the HUD Convergence Offset gives the same depth. Size, place and disparity all agree.
+- Each group's layout (its HUD Group Margins and scale) is set for a depth of 1.8 m (`HUD_LAYOUT_DEPTH`). At depth `d`, every group is drawn `1.8 / d` times its size and placed `1.8 / d` times as far from the screen centre, and the HUD Convergence Offset gives the same depth. Size, place and disparity all agree.
+- From 1.2, a new install starts at 2.5 m (`DEFAULT_HUD_DEPTH`): the groups are drawn 0.72 times their layout size, nearer the middle of the view. An existing install keeps the depth its settings file holds, since every save writes it. The layouts stay set for 1.8 m, so their margins and scales are unchanged.
 - This is the same shrink toward the centre that the FOV Overscan compensation already applied, and the two multiply.
-- `vrHudDepth` takes 1.0 to 5.0 m (it took 0.5 to 5.0). Nearer than the default the groups grow toward their corners; at 1 m the default layout, drawn 1.8 times its size, reaches the screen's edges. A group is never pushed past the edge. A saved depth out of range, such as 0.5 m from an older version, loads as the nearest one allowed.
+- `vrHudDepth` takes 1.0 to 5.0 m (it took 0.5 to 5.0). Nearer than 1.8 m the groups grow toward their corners; at 1 m the default layout, drawn 1.8 times its size, reaches the screen's edges. A group is never pushed past the edge. A saved depth out of range, such as 0.5 m from an older version, loads as the nearest one allowed.
 - The HUD Safe Area does not move with the HUD Depth. Warnings, notifications and other mods' HUDs are not drawn at the groups' scale, so pulling their anchors in would only crowd them into the middle of the view. They keep the overscan compensation as before.
 - Setting the depth places the groups again at once. 2D Floating Window Mode keeps the engine's layout, as it does for every other HUD setting.
-- At the default depth nothing moves or changes size. The corrected disparity alone puts the default HUD at the 1.8 m it was always meant to read at.
+- At 1.8 m nothing moves or changes size. The corrected disparity alone puts the HUD at the 1.8 m it was always meant to read at.
 
 ## Status
 Accepted.
