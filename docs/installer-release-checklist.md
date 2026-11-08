@@ -25,7 +25,7 @@ Use a machine or VM where you can install the game from each store, and uninstal
 - [ ] In Steam: Settings > Storage, add a library on another drive, then move FS25 there (right-click the game > Properties > Installed Files > Move install folder). The default library must no longer hold the game.
 - [ ] `<Steam>\steamapps\libraryfolders.vdf` lists the second drive (`"path"` entry).
 - [ ] Run the Installer. The folder page is pre-filled with the folder on the second drive.
-- [ ] Finish the install and confirm `dxgi.dll` landed in that folder's `x64`, then uninstall.
+- [ ] Finish the install and confirm `version.dll` landed in that folder's `x64`, then uninstall.
 
 ## 3. Epic Games
 
@@ -67,7 +67,7 @@ Use a machine or VM where you can install the game from each store, and uninstal
 - [ ] With FS25 VR installed, run the Installer (double-click). Before any wizard page, a dialog says FS25 VR is already installed and offers **Upgrade or reinstall**, **Uninstall** and **Cancel**.
 - [ ] **Cancel** (and the window's close button) ends Setup; FS25 VR is still installed and nothing changed.
 - [ ] **Upgrade or reinstall** continues with the normal wizard (item 7: the previous folder is pre-selected).
-- [ ] **Uninstall** opens the normal uninstaller (its own confirmation and "uninstall complete" message), and Setup shows no wizard. Afterwards `dxgi.dll` and the Companion Mod zip are gone. With the game running, the uninstaller asks you to close it.
+- [ ] **Uninstall** opens the normal uninstaller (its own confirmation and "uninstall complete" message), and Setup shows no wizard. Afterwards `version.dll` and the Companion Mod zip are gone. With the game running, the uninstaller asks you to close it.
 - [ ] With FS25 VR not installed, the dialog does not appear.
 - [ ] `FS25_VR_v<version>_Setup.exe /VERYSILENT` over an existing install upgrades without any dialog.
 
@@ -84,6 +84,15 @@ Use a machine or VM where you can install the game from each store, and uninstal
 - [ ] The log has `Documents folder: <the standard user's Documents>`, not the administrator's.
 - [ ] Finish the install with the Render Resolution ticked: `FS25_VRCompanion.zip` is in the standard user's `mods` folder and their `game.xml` has the new width and height. Nothing was added to the administrator's `Documents\My Games`.
 - [ ] Uninstall: the zip is gone from the standard user's `mods` folder and their `game.xml` has its original values again.
+
+## 12. Upgrade from the dxgi.dll Injector with ReShade
+
+FS25 VR up to 1.1.9 was `dxgi.dll` (ADR-0038). `scripts\test_installer.ps1` fakes the files such an install leaves, but not its uninstall log, which still names `x64\dxgi.dll`.
+
+- [ ] Install ReShade for the game (it writes `x64\dxgi.dll`), then install FS25 VR 1.1.9 with its Setup: ReShade is moved to `dxgi.dll.fs25vr-backup`.
+- [ ] Run this Installer over it. Afterwards `x64\version.dll` is ours, `x64\dxgi.dll` is ReShade's again (its file properties name ReShade), and there is no `dxgi.dll.fs25vr-backup`.
+- [ ] Launch the game with the headset: `fs25_vr.log` has `Hooked the system's dxgi.dll as it loaded`, ReShade's effects show in the headset, and its overlay opens with Home.
+- [ ] Uninstall FS25 VR: `version.dll` is gone and ReShade's `dxgi.dll` is still there.
 
 ## After the checklist
 

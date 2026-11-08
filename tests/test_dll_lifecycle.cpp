@@ -43,8 +43,6 @@ public:
     PFN_CreateDXGIFactory GetCreateDXGIFactory() override { return &ImmediateCreateFactory; }
     PFN_CreateDXGIFactory1 GetCreateDXGIFactory1() override { return &ImmediateCreateFactory; }
     PFN_CreateDXGIFactory2 GetCreateDXGIFactory2() override { return nullptr; }
-    PFN_DXGIDeclareAdapterRemovalSupport GetDXGIDeclareAdapterRemovalSupport() override { return nullptr; }
-    PFN_DXGIGetDebugInterface1 GetDXGIGetDebugInterface1() override { return nullptr; }
 };
 
 class FailingOpenXrDispatch : public IOpenXrDispatch {

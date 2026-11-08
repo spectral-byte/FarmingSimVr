@@ -5,7 +5,7 @@ A high-performance virtual reality modding architecture for Farming Simulator 25
 ## Language
 
 **Injector**:
-The native Direct3D 12 proxy library loaded by the game process that interacts with the OpenXR runtime and intercepts swapchain presentation.
+The native library, loaded by the game process as its `version.dll`, that hooks DXGI in the system's `dxgi.dll`, interacts with the OpenXR runtime and intercepts swapchain presentation.
 _Avoid_: Wrapper, loader, hook DLL
 
 **Companion Mod**:

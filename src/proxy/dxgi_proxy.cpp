@@ -6,7 +6,9 @@
 #include "core/perf_trace.h"
 #include "core/texture_snapshot.h"
 #include "ngx/ngx_interceptor.h"
+#include <cwchar>
 #include <filesystem>
+#include <iterator>
 #include <sstream>
 #include <utility>
 #include <windowsx.h>
@@ -27,17 +29,42 @@ HRESULT ForwardFactoryCall(const char* funcName, PFN pfn, Args&&... args) {
     return pfn(std::forward<Args>(args)...);
 }
 
-// The passthrough exports touch no Injector subsystem, so they reach the system dxgi.dll through a
-// loader of their own: a PIX or app-compat call should not construct and wire every subsystem.
-FARPROC SystemExport(const char* name) {
-    static SystemDxgi passthrough;
-    return passthrough.GetExport(name);
+// The proxy whose VR initialization is running on this thread. A runtime that creates a DXGI factory during setup
+// (VDXR's xrGetSystem does) does it on this thread. In the game, DxgiExportHooks passes such a call straight to
+// the system; a caller that reaches the proxy itself (tests do) calls back into EnsureVrInitialized.
+thread_local const DxgiProxy* t_initializingProxy = nullptr;
+
+std::string ModuleNameAt(const void* address) {
+    HMODULE module = nullptr;
+    wchar_t path[MAX_PATH * 2] = {};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            static_cast<LPCWSTR>(address), &module) ||
+        GetModuleFileNameW(module, path, static_cast<DWORD>(std::size(path))) == 0) {
+        return "an unknown module";
+    }
+    const wchar_t* name = std::wcsrchr(path, L'\\');
+    name = name ? name + 1 : path;
+    char narrow[MAX_PATH * 2] = {};
+    WideCharToMultiByte(CP_UTF8, 0, name, -1, narrow, static_cast<int>(sizeof(narrow)), nullptr, nullptr);
+    return narrow;
 }
 
-// The proxy whose VR initialization is running on this thread. The OpenXR runtime is loaded into the
-// game process and its dxgi.dll import binds to this proxy, so a runtime that creates a DXGI factory
-// during setup (VDXR's xrGetSystem does) calls back into EnsureVrInitialized on the same thread.
-thread_local const DxgiProxy* t_initializingProxy = nullptr;
+// The system's factory behind `factory` when `factory` is a wrapper whose methods are not the system's, as a
+// dxgi.dll in the game folder (ReShade's) hands out; null when `factory` is the system's own or none is found.
+// An adapter is the system's even when the factory is wrapped, and its parent is the system's factory.
+Microsoft::WRL::ComPtr<IDXGIFactory> SystemFactoryBehind(IDXGIFactory* factory) {
+    void** vtable = *reinterpret_cast<void***>(factory);
+    if (!vtable || IsInSystemDxgi(vtable[kCreateSwapChainVTableSlot])) return nullptr;
+    Microsoft::WRL::ComPtr<IDXGIFactory1> factory1;
+    if (FAILED(factory->QueryInterface(IID_PPV_ARGS(&factory1))) || !factory1) return nullptr;
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    if (FAILED(factory1->EnumAdapters1(0, &adapter)) || !adapter) return nullptr;
+    Microsoft::WRL::ComPtr<IDXGIFactory> parent;
+    if (FAILED(adapter->GetParent(IID_PPV_ARGS(&parent))) || !parent) return nullptr;
+    void** parentVtable = *reinterpret_cast<void***>(parent.Get());
+    if (!parentVtable || !IsInSystemDxgi(parentVtable[kCreateSwapChainVTableSlot])) return nullptr;
+    return parent;
+}
 
 struct VrInitScope {
     explicit VrInitScope(const DxgiProxy* proxy) { t_initializingProxy = proxy; }
@@ -349,6 +376,17 @@ bool DxgiProxy::AttachFactory(IDXGIFactory* factory) {
     if (!m_ownedByRuntime) {
         LogWarn("DxgiProxy::AttachFactory: Not owned by a live InjectorRuntime; detours not installed.");
         return false;
+    }
+
+    // Hooking a wrapper's methods would put the swap chain hooks outside it: the eye copy would run before what the
+    // wrapper draws on Present (ReShade's effects), and the swap chain and queue seen would be its wrappers.
+    // The system's factory inside it is hooked instead, so whatever wraps DXGI runs first.
+    Microsoft::WRL::ComPtr<IDXGIFactory> systemFactory = SystemFactoryBehind(factory);
+    if (systemFactory) {
+        LogInfo("DxgiProxy: The DXGI factory is a wrapper from " +
+                ModuleNameAt((*reinterpret_cast<void***>(factory))[kCreateSwapChainVTableSlot]) +
+                "; hooking the system's factory behind it.");
+        factory = systemFactory.Get();
     }
 
     void** vtable = *reinterpret_cast<void***>(factory);
@@ -1092,129 +1130,4 @@ HRESULT DxgiProxy::CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory)
     return hr;
 }
 
-HRESULT DxgiProxy::DXGIDeclareAdapterRemovalSupport() {
-    auto pfn = SystemPfn(&ISystemDxgi::GetDXGIDeclareAdapterRemovalSupport);
-    return pfn ? pfn() : E_FAIL;
-}
-
-HRESULT DxgiProxy::DXGIGetDebugInterface1(UINT Flags, REFIID riid, void** pDebug) {
-    auto pfn = SystemPfn(&ISystemDxgi::GetDXGIGetDebugInterface1);
-    return pfn ? pfn(Flags, riid, pDebug) : E_FAIL;
-}
-
 } // namespace fs25vr
-
-extern "C" {
-
-HRESULT WINAPI Proxy_CreateDXGIFactory(REFIID riid, void** ppFactory) {
-    return fs25vr::InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory(riid, ppFactory);
-}
-
-HRESULT WINAPI Proxy_CreateDXGIFactory1(REFIID riid, void** ppFactory) {
-    return fs25vr::InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory1(riid, ppFactory);
-}
-
-HRESULT WINAPI Proxy_CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory) {
-    return fs25vr::InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory2(Flags, riid, ppFactory);
-}
-
-HRESULT WINAPI Proxy_DXGIDeclareAdapterRemovalSupport() {
-    return fs25vr::InjectorRuntime::Instance().GetDxgiProxy().DXGIDeclareAdapterRemovalSupport();
-}
-
-HRESULT WINAPI Proxy_DXGIGetDebugInterface1(UINT Flags, REFIID riid, void** pDebug) {
-    return fs25vr::InjectorRuntime::Instance().GetDxgiProxy().DXGIGetDebugInterface1(Flags, riid, pDebug);
-}
-
-// The remaining exports forward to the system dxgi.dll and bypass the runtime (see SystemExport).
-HRESULT WINAPI Proxy_DXGID3D10CreateDevice(HMODULE hModule, IDXGIAdapter* pAdapter, UINT Flags, DWORD RuntimeVersion, void* pOutputs) {
-    auto pfn = reinterpret_cast<HRESULT(WINAPI*)(HMODULE, IDXGIAdapter*, UINT, DWORD, void*)>(
-        fs25vr::SystemExport("DXGID3D10CreateDevice"));
-    return pfn ? pfn(hModule, pAdapter, Flags, RuntimeVersion, pOutputs) : E_FAIL;
-}
-
-HRESULT WINAPI Proxy_DXGID3D10CreateLayeredDevice(void* a, void* b, void* c, void* d, void* e) {
-    auto pfn = reinterpret_cast<HRESULT(WINAPI*)(void*, void*, void*, void*, void*)>(
-        fs25vr::SystemExport("DXGID3D10CreateLayeredDevice"));
-    return pfn ? pfn(a, b, c, d, e) : E_FAIL;
-}
-
-SIZE_T WINAPI Proxy_DXGID3D10GetLayeredDeviceSize(const void* pConfiguration, UINT Size) {
-    auto pfn = reinterpret_cast<SIZE_T(WINAPI*)(const void*, UINT)>(
-        fs25vr::SystemExport("DXGID3D10GetLayeredDeviceSize"));
-    return pfn ? pfn(pConfiguration, Size) : 0;
-}
-
-HRESULT WINAPI Proxy_DXGID3D10RegisterLayers(const void* pLayers, UINT NumLayers) {
-    auto pfn = reinterpret_cast<HRESULT(WINAPI*)(const void*, UINT)>(
-        fs25vr::SystemExport("DXGID3D10RegisterLayers"));
-    return pfn ? pfn(pLayers, NumLayers) : E_FAIL;
-}
-
-HRESULT WINAPI Proxy_DXGIDisableVBlankVirtualization() {
-    auto pfn = reinterpret_cast<HRESULT(WINAPI*)()>(
-        fs25vr::SystemExport("DXGIDisableVBlankVirtualization"));
-    return pfn ? pfn() : E_FAIL;
-}
-
-HRESULT WINAPI Proxy_DXGIReportAdapterConfiguration(void* pConf) {
-    auto pfn = reinterpret_cast<HRESULT(WINAPI*)(void*)>(
-        fs25vr::SystemExport("DXGIReportAdapterConfiguration"));
-    return pfn ? pfn(pConf) : E_FAIL;
-}
-
-void WINAPI Proxy_DXGIDumpJournal(void* pJournal) {
-    auto pfn = reinterpret_cast<void(WINAPI*)(void*)>(
-        fs25vr::SystemExport("DXGIDumpJournal"));
-    if (pfn) pfn(pJournal);
-}
-
-void WINAPI Proxy_PIXBeginCapture(DWORD captureFlags, const void* captureArgs) {
-    auto pfn = reinterpret_cast<void(WINAPI*)(DWORD, const void*)>(
-        fs25vr::SystemExport("PIXBeginCapture"));
-    if (pfn) pfn(captureFlags, captureArgs);
-}
-
-void WINAPI Proxy_PIXEndCapture() {
-    auto pfn = reinterpret_cast<void(WINAPI*)()>(
-        fs25vr::SystemExport("PIXEndCapture"));
-    if (pfn) pfn();
-}
-
-DWORD WINAPI Proxy_PIXGetCaptureState() {
-    auto pfn = reinterpret_cast<DWORD(WINAPI*)()>(
-        fs25vr::SystemExport("PIXGetCaptureState"));
-    return pfn ? pfn() : 0;
-}
-
-HRESULT WINAPI Proxy_SetAppCompatStringPointer(DWORD unknown, const char* str) {
-    auto pfn = reinterpret_cast<HRESULT(WINAPI*)(DWORD, const char*)>(
-        fs25vr::SystemExport("SetAppCompatStringPointer"));
-    return pfn ? pfn(unknown, str) : E_FAIL;
-}
-
-void WINAPI Proxy_UpdateHMDEmulationStatus(BOOL status) {
-    auto pfn = reinterpret_cast<void(WINAPI*)(BOOL)>(
-        fs25vr::SystemExport("UpdateHMDEmulationStatus"));
-    if (pfn) pfn(status);
-}
-
-void WINAPI Proxy_ApplyCompatResolutionQuirking(void* a, void* b, void* c, void* d) {
-    auto pfn = reinterpret_cast<void(WINAPI*)(void*, void*, void*, void*)>(
-        fs25vr::SystemExport("ApplyCompatResolutionQuirking"));
-    if (pfn) pfn(a, b, c, d);
-}
-
-void WINAPI Proxy_CompatString(void* a, void* b, void* c, void* d) {
-    auto pfn = reinterpret_cast<void(WINAPI*)(void*, void*, void*, void*)>(
-        fs25vr::SystemExport("CompatString"));
-    if (pfn) pfn(a, b, c, d);
-}
-
-void WINAPI Proxy_CompatValue(void* a, void* b, void* c, void* d) {
-    auto pfn = reinterpret_cast<void(WINAPI*)(void*, void*, void*, void*)>(
-        fs25vr::SystemExport("CompatValue"));
-    if (pfn) pfn(a, b, c, d);
-}
-
-} // extern "C"

@@ -2,7 +2,7 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$builtDll = Join-Path $repoRoot "build\dxgi.dll"
+$builtDll = Join-Path $repoRoot "build\version.dll"
 $companionDir = Join-Path $repoRoot "mods\FS25_VRCompanion"
 $releaseDir = Join-Path $repoRoot "build\release"
 $modDescPath = Join-Path $companionDir "modDesc.xml"
@@ -14,7 +14,7 @@ Write-Host "Packaging FS25 VR Release..."
 & (Join-Path $PSScriptRoot "check_build_config.ps1") (Join-Path $repoRoot "build")
 
 if (-not (Test-Path $builtDll)) {
-    Write-Error "build\dxgi.dll not found. Build project first (ninja -C build dxgi)."
+    Write-Error "build\version.dll not found. Build project first (ninja -C build injector)."
 }
 
 # Only ship an Injector that needs no VC++ redistributable (static C runtime).
@@ -36,14 +36,14 @@ if (Test-Path $releaseDir) {
 New-Item -ItemType Directory -Path "$bundleDir\x64" -Force | Out-Null
 New-Item -ItemType Directory -Path "$bundleDir\mods" -Force | Out-Null
 
-# Copy Injector DLL
-Copy-Item $builtDll "$bundleDir\x64\dxgi.dll" -Force
-Copy-Item $builtDll "$releaseDir\dxgi.dll" -Force
-$builtPdb = Join-Path $repoRoot "build\dxgi.pdb"
-if (Test-Path $builtPdb) { Copy-Item $builtPdb "$releaseDir\dxgi.pdb" -Force }
-Write-Host "[Package] Staged dxgi.dll"
+# Copy Injector DLL (the game loads it as its version.dll, ADR-0038)
+Copy-Item $builtDll "$bundleDir\x64\version.dll" -Force
+Copy-Item $builtDll "$releaseDir\version.dll" -Force
+$builtPdb = Join-Path $repoRoot "build\version.pdb"
+if (Test-Path $builtPdb) { Copy-Item $builtPdb "$releaseDir\version.pdb" -Force }
+Write-Host "[Package] Staged version.dll"
 
-# dxgi.dll statically links these dependencies; their licenses require shipping the notices.
+# version.dll statically links these dependencies; their licenses require shipping the notices.
 # Fetched sources live wherever the build was configured to put them (CI uses -DFETCHCONTENT_BASE_DIR=.deps).
 $depsDir = Join-Path $repoRoot "build\_deps"
 $cmakeCache = Join-Path $repoRoot "build\CMakeCache.txt"
@@ -122,8 +122,11 @@ Close the game first.
   If game.xml can't be edited (for example it is read-only), FS25 VR stays
   installed and Setup exits with code 20.
   A silent run over an existing install upgrades it and never asks anything.
-- A dxgi.dll that is not part of FS25 VR (for example ReShade) is moved to
-  dxgi.dll.fs25vr-backup before FS25 VR is installed.
+- FS25 VR is version.dll, so a dxgi.dll in the game folder (ReShade, for one)
+  stays where it is and keeps working. A version.dll that is not part of
+  FS25 VR is moved to version.dll.fs25vr-backup before FS25 VR is installed.
+- Upgrading from FS25 VR 1.1.9 or earlier (which was dxgi.dll) removes that
+  dxgi.dll and puts back a dxgi.dll it had moved aside for it, such as ReShade.
 
 Windows may show "Windows protected your PC" because the Installer is not
 code-signed yet. This is expected: click "More info", then "Run anyway".
@@ -132,7 +135,9 @@ MANUAL INSTALLATION INSTRUCTIONS
 --------------------------------------------------------------------------------
 
 1. INSTALL INJECTOR DLL:
-   Copy 'dxgi.dll' from the 'x64' folder into your Farming Simulator 25 'x64' directory:
+   Copy 'version.dll' from the 'x64' folder into your Farming Simulator 25 'x64' directory.
+   If that folder has a 'dxgi.dll' from FS25 VR 1.1.9 or earlier, delete it: FS25 VR stays
+   inactive while it is there. Keep a 'dxgi.dll' that belongs to something else, such as ReShade.
    
    - Steam Default Path:
      C:\Program Files (x86)\Steam\steamapps\common\Farming Simulator 25\x64\
@@ -204,13 +209,14 @@ UNINSTALLATION
   FS25_VR_v${version}_Setup.exe /FS25VR_UNINSTALL runs the uninstaller unattended
   and exits with its exit code (non-zero if FS25 VR is not installed or the game
   is running).
-  Uninstalling removes dxgi.dll, FS25_VRCompanion.zip and fs25_vr.log, and keeps
-  your VR settings in modSettings. It puts back the dxgi.dll it moved aside (or
-  keeps a dxgi.dll you installed over FS25 VR's since), and
+  Uninstalling removes version.dll, FS25_VRCompanion.zip and fs25_vr.log, and
+  keeps your VR settings in modSettings. It puts back the version.dll it moved
+  aside (or keeps a version.dll you installed over FS25 VR's since), leaves a
+  dxgi.dll such as ReShade's alone, and
   restores your original Render Resolution unless you changed the width, height
   or fullscreen mode in the game since. game.xml.fs25vr-backup stays.
 - Installed manually:
-  Delete 'dxgi.dll' from the game's 'x64' folder, and
+  Delete 'version.dll' from the game's 'x64' folder, and
   delete 'FS25_VRCompanion.zip' from your 'mods' folder.
 
 LICENSE
@@ -229,7 +235,7 @@ Set-Content -Path "$bundleDir\README.txt" -Value $readmeContent -Encoding utf8
 $zipBundle = Join-Path $releaseDir "$bundleName.zip"
 Push-Location $bundleDir
 try {
-    tar.exe -a -cf $zipBundle x64/dxgi.dll mods/FS25_VRCompanion.zip README.txt LICENSE THIRD_PARTY_NOTICES.txt
+    tar.exe -a -cf $zipBundle x64/version.dll mods/FS25_VRCompanion.zip README.txt LICENSE THIRD_PARTY_NOTICES.txt
     Write-Host "[Package] Created $zipBundle"
 } finally {
     Pop-Location

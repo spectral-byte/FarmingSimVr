@@ -16,7 +16,7 @@ namespace {
 constexpr GUID kDocumentsFolderId = { 0xFDD39AD0, 0x238F, 0x46AF, { 0xAD, 0xB4, 0x6C, 0x85, 0x48, 0x03, 0x69, 0xC7 } };
 
 // SHGetKnownFolderPath and CoTaskMemFree are looked up when they are needed, so the Injector, which the game loads early
-// as its dxgi.dll, keeps shell32 and ole32 out of its import table. Both are loaded in the game process anyway.
+// as its version.dll, keeps shell32 and ole32 out of its import table. Both are loaded in the game process anyway.
 std::filesystem::path KnownDocumentsFolder() {
     using GetKnownFolderPathFn = HRESULT(WINAPI*)(const GUID&, DWORD, HANDLE, PWSTR*);
     using TaskMemFreeFn = void(WINAPI*)(LPVOID);

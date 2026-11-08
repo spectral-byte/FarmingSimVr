@@ -47,13 +47,15 @@ public:
               std::shared_ptr<NgxInterceptor> ngxInterceptor);
     ~DxgiProxy();
 
+    // The game's factory calls, caught by DxgiExportHooks in the system's dxgi.dll (ADR-0038). Each starts VR on the
+    // first call, passes the call on to the system and hooks the factory it returns.
     HRESULT CreateDXGIFactory(REFIID riid, void** ppFactory);
     HRESULT CreateDXGIFactory1(REFIID riid, void** ppFactory);
     HRESULT CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory);
-    HRESULT DXGIDeclareAdapterRemovalSupport();
-    HRESULT DXGIGetDebugInterface1(UINT Flags, REFIID riid, void** pDebug);
 
     bool AttachSwapChain(IDXGISwapChain* swapChain);
+    // Hooks swap chain creation on the factory. When the factory is another tool's wrapper (ReShade's), the system's
+    // factory behind it is hooked instead, so the wrapper runs before the hooks.
     bool AttachFactory(IDXGIFactory* factory);
     // Hooks IDXGIOutput6::GetDesc1 (shared by every output) so the display reads as SDR while VR is
     // active. AttachFactory calls it with the first output it finds.

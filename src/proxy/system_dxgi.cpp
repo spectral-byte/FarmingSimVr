@@ -1,9 +1,38 @@
 #include "system_dxgi.h"
 #include "core/logger.h"
-#include <vector>
+#include <iterator>
 
 namespace fs25vr {
 
+const std::wstring& SystemDxgiPath() {
+    static const std::wstring path = [] {
+        wchar_t systemDir[MAX_PATH];
+        const UINT length = GetSystemDirectoryW(systemDir, MAX_PATH);
+        if (length == 0 || length >= MAX_PATH) return std::wstring();
+        return std::wstring(systemDir, length) + L"\\dxgi.dll";
+    }();
+    return path;
+}
+
+bool IsSystemDxgiModule(HMODULE module) {
+    if (!module) return false;
+    const std::wstring& expected = SystemDxgiPath();
+    if (expected.empty()) return false;
+    wchar_t path[MAX_PATH * 2];
+    const DWORD length = GetModuleFileNameW(module, path, static_cast<DWORD>(std::size(path)));
+    if (length == 0 || length >= std::size(path)) return false;
+    return CompareStringOrdinal(path, static_cast<int>(length), expected.c_str(), static_cast<int>(expected.size()),
+                                TRUE) == CSTR_EQUAL;
+}
+
+bool IsInSystemDxgi(const void* address) {
+    HMODULE module = nullptr;
+    if (!address || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                        static_cast<LPCWSTR>(address), &module)) {
+        return false;
+    }
+    return IsSystemDxgiModule(module);
+}
 
 SystemDxgi::SystemDxgi() {
     LoadSystemDxgi();
@@ -21,14 +50,12 @@ bool SystemDxgi::LoadSystemDxgi() {
         return true;
     }
 
-    wchar_t systemPath[MAX_PATH];
-    UINT len = GetSystemDirectoryW(systemPath, MAX_PATH);
-    if (len == 0 || len >= MAX_PATH) {
+    const std::wstring& dxgiPath = SystemDxgiPath();
+    if (dxgiPath.empty()) {
         LogError("Failed to retrieve system directory.");
         return false;
     }
 
-    std::wstring dxgiPath = std::wstring(systemPath) + L"\\dxgi.dll";
     m_hModule = LoadLibraryW(dxgiPath.c_str());
     if (!m_hModule) {
         char pathA[MAX_PATH];
@@ -42,8 +69,6 @@ bool SystemDxgi::LoadSystemDxgi() {
     m_pfnCreateDXGIFactory = reinterpret_cast<PFN_CreateDXGIFactory>(GetProcAddress(m_hModule, "CreateDXGIFactory"));
     m_pfnCreateDXGIFactory1 = reinterpret_cast<PFN_CreateDXGIFactory1>(GetProcAddress(m_hModule, "CreateDXGIFactory1"));
     m_pfnCreateDXGIFactory2 = reinterpret_cast<PFN_CreateDXGIFactory2>(GetProcAddress(m_hModule, "CreateDXGIFactory2"));
-    m_pfnDXGIDeclareAdapterRemovalSupport = reinterpret_cast<PFN_DXGIDeclareAdapterRemovalSupport>(GetProcAddress(m_hModule, "DXGIDeclareAdapterRemovalSupport"));
-    m_pfnDXGIGetDebugInterface1 = reinterpret_cast<PFN_DXGIGetDebugInterface1>(GetProcAddress(m_hModule, "DXGIGetDebugInterface1"));
 
     return true;
 }

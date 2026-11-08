@@ -1,0 +1,20 @@
+; The exports of the system's version.dll, with its names and ordinals (see version_exports.cpp).
+LIBRARY "version"
+EXPORTS
+    GetFileVersionInfoA = Fs25Vr_GetFileVersionInfoA @1
+    GetFileVersionInfoByHandle = Fs25Vr_GetFileVersionInfoByHandle @2
+    GetFileVersionInfoExA = Fs25Vr_GetFileVersionInfoExA @3
+    GetFileVersionInfoExW = Fs25Vr_GetFileVersionInfoExW @4
+    GetFileVersionInfoSizeA = Fs25Vr_GetFileVersionInfoSizeA @5
+    GetFileVersionInfoSizeExA = Fs25Vr_GetFileVersionInfoSizeExA @6
+    GetFileVersionInfoSizeExW = Fs25Vr_GetFileVersionInfoSizeExW @7
+    GetFileVersionInfoSizeW = Fs25Vr_GetFileVersionInfoSizeW @8
+    GetFileVersionInfoW = Fs25Vr_GetFileVersionInfoW @9
+    VerFindFileA = Fs25Vr_VerFindFileA @10
+    VerFindFileW = Fs25Vr_VerFindFileW @11
+    VerInstallFileA = Fs25Vr_VerInstallFileA @12
+    VerInstallFileW = Fs25Vr_VerInstallFileW @13
+    VerLanguageNameA = KERNEL32.VerLanguageNameA @14
+    VerLanguageNameW = KERNEL32.VerLanguageNameW @15
+    VerQueryValueA = Fs25Vr_VerQueryValueA @16
+    VerQueryValueW = Fs25Vr_VerQueryValueW @17
