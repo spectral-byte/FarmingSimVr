@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <memory>
 
 namespace fs25vr {
@@ -40,6 +41,9 @@ public:
         std::shared_ptr<IDesktopCursorPort> cursorPort;
         std::shared_ptr<NgxInterceptor> ngxInterceptor;
         std::shared_ptr<FidelityFxInterceptor> ffxInterceptor;
+        // The Companion Mod's settings.xml, read once on construction for the settings the main menu needs before a
+        // savegame has loaded (the Menu Distance). Empty: nothing is read. Instance() passes the player's file.
+        std::filesystem::path companionSettingsFile;
     };
 
     // Process-wide runtime, created on first use.

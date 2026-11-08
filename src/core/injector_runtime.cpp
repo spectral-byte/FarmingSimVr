@@ -1,6 +1,8 @@
 #include "core/injector_runtime.h"
 
+#include "core/companion_settings.h"
 #include "core/dll_lifecycle.h"
+#include "core/logger.h"
 #include "luau/luau_interceptor.h"
 #include "luau/vr_bridge.h"
 #include "ngx/ngx_interceptor.h"
@@ -13,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <shared_mutex>
+#include <sstream>
 #include <vector>
 
 namespace fs25vr {
@@ -47,10 +50,31 @@ void Unregister(InjectorRuntime* runtime, bool mayBlock) {
     g_current.store(live.runtimes.empty() ? nullptr : live.runtimes.back());
 }
 
+// The saved Menu Distance, so the main menu is shown at it before the Companion Mod runs. A value the Companion Mod
+// would refuse (out of range) is not used, as the mod does not use it either.
+void ApplySavedMenuDistance(VRBridge& bridge, const std::filesystem::path& settingsFile) {
+    const std::optional<float> saved = ReadCompanionSettingFloat(settingsFile, "menuDistance");
+    std::ostringstream ss;
+    if (!saved) {
+        ss << "[InjectorRuntime] No saved Menu Distance; menus are shown at " << bridge.GetMenuDistance() << " m.";
+    } else if (*saved < OpenXrManager::kMinMenuQuadDistance || *saved > OpenXrManager::kMaxMenuQuadDistance) {
+        ss << "[InjectorRuntime] Saved Menu Distance " << *saved << " m is out of range; menus are shown at "
+           << bridge.GetMenuDistance() << " m.";
+    } else {
+        bridge.SetMenuDistance(*saved);
+        ss << "[InjectorRuntime] Menus are shown at the saved Menu Distance of " << bridge.GetMenuDistance() << " m.";
+    }
+    LogInfo(ss.str());
+}
+
 } // namespace
 
 InjectorRuntime& InjectorRuntime::Instance() {
-    static InjectorRuntime runtime;
+    static InjectorRuntime runtime([] {
+        Dependencies deps;
+        deps.companionSettingsFile = DefaultCompanionSettingsPath();
+        return deps;
+    }());
     return runtime;
 }
 
@@ -83,6 +107,9 @@ InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
     if (!m_deps.ffxInterceptor) m_deps.ffxInterceptor = std::make_shared<FidelityFxInterceptor>();
     if (!m_deps.vrBridge) {
         m_deps.vrBridge = std::make_shared<VRBridge>(m_deps.openXrManager, m_deps.ngxInterceptor);
+    }
+    if (!m_deps.companionSettingsFile.empty()) {
+        ApplySavedMenuDistance(*m_deps.vrBridge, m_deps.companionSettingsFile);
     }
     if (!m_deps.luauInterceptor) m_deps.luauInterceptor = std::make_shared<LuauInterceptor>(m_deps.vrBridge);
     if (!m_deps.windowController) m_deps.windowController = std::make_shared<MirrorWindowController>(nullptr, m_deps.cursorPort);

@@ -174,11 +174,19 @@ public:
     void AlignMenuQuadToHeadPose(const HeadPose* customPose = nullptr);
     bool HasMenuQuadPose() const { return m_hasMenuQuadPose; }
     XrExtent2Df ComputeMenuQuadSize() const;
-    void SetMenuQuadDistance(float distance) { m_menuQuadDistance = distance; }
+    // Menu Distance: how far in front of the head the menu quad (menus and 2D Floating Window Mode) is placed, in metres.
+    // The quad keeps its size, so further away it fills less of the view. A quad already placed moves straight back or
+    // forward along the way it faces, so it stays in front of the head that placed it. Clamped to kMinMenuQuadDistance..
+    // kMaxMenuQuadDistance; NaN counts as the default. The setting outlives Shutdown, like the FOV Overscan.
+    static constexpr float kDefaultMenuQuadDistance = 1.5f;
+    static constexpr float kMinMenuQuadDistance = 1.0f;
+    static constexpr float kMaxMenuQuadDistance = 5.0f;
+    static float ClampMenuQuadDistance(float distance);
+    void SetMenuQuadDistance(float distance);
     float GetMenuQuadDistance() const { return m_menuQuadDistance; }
     void SetMenuQuadSize(float width, float height) { m_customMenuQuadSize = { width, height }; m_hasCustomMenuQuadSize = true; }
     XrExtent2Df GetMenuQuadSize() const { return ComputeMenuQuadSize(); }
-    void ResetMenuQuadSettings() { m_menuQuadDistance = 1.5f; m_hasCustomMenuQuadSize = false; m_hasMenuQuadPose = false; }
+    void ResetMenuQuadSettings() { m_menuQuadDistance = kDefaultMenuQuadDistance; m_hasCustomMenuQuadSize = false; m_hasMenuQuadPose = false; }
 
     // Where the ray of `hand` (0 = left, 1 = right) lands on the panel the next SubmitMenuQuad()
     // submits, in normalized panel coordinates (see PanelHit). The hand's aim pose and the layer are
@@ -342,7 +350,7 @@ private:
     uint32_t m_headPoseLocateFailures = 0;
     uint64_t m_submittedFramePairCount = 0;
     uint64_t m_submittedQuadFrameCount = 0;
-    float m_menuQuadDistance = 1.5f;
+    float m_menuQuadDistance = kDefaultMenuQuadDistance;
     XrExtent2Df m_customMenuQuadSize{ 1.6f, 0.9f };
     bool m_hasCustomMenuQuadSize = false;
     XrCompositionLayerQuad m_lastSubmittedQuadLayer{ XR_TYPE_COMPOSITION_LAYER_QUAD };

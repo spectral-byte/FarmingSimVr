@@ -293,7 +293,6 @@ void OpenXrManager::Shutdown() {
     m_loggedEyeCopySizeMismatch = false;
     m_headPoseLocateFailures = 0;
     m_hasCustomMenuQuadSize = false;
-    m_menuQuadDistance = 1.5f;
     m_lastSubmittedQuadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
     m_lastPolledTime = 0;
     m_lastLocatedViewsTime = 0;
@@ -1775,6 +1774,25 @@ void OpenXrManager::AlignMenuQuadToHeadPose(const HeadPose* customPose) {
     // below the eyes, until the head is tracked.
     m_menuQuadAwaitsHead = !pose.isValid;
     m_menuQuadAwaitsHeadAfter = 0;
+}
+
+float OpenXrManager::ClampMenuQuadDistance(float distance) {
+    if (std::isnan(distance)) return kDefaultMenuQuadDistance;
+    return std::clamp(distance, kMinMenuQuadDistance, kMaxMenuQuadDistance);
+}
+
+void OpenXrManager::SetMenuQuadDistance(float distance) {
+    distance = ClampMenuQuadDistance(distance);
+    if (m_hasMenuQuadPose) {
+        // Along the quad's own -Z, the way the player looks at it, by the change in distance.
+        const Quaternion facing(m_menuQuadPose.orientation.x, m_menuQuadPose.orientation.y,
+                                m_menuQuadPose.orientation.z, m_menuQuadPose.orientation.w);
+        const Vector3 shift = RotateVectorByQuaternion(facing, Vector3(0.0f, 0.0f, m_menuQuadDistance - distance));
+        m_menuQuadPose.position.x += shift.x;
+        m_menuQuadPose.position.y += shift.y;
+        m_menuQuadPose.position.z += shift.z;
+    }
+    m_menuQuadDistance = distance;
 }
 
 XrPosef OpenXrManager::ComputeMenuQuadPose() const {

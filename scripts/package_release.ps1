@@ -186,7 +186,9 @@ PERFORMANCE & SETTINGS
                                          (defaults: speedometer 0.30 0.20 0.82, map 0.30 0.22 0.82,
                                           info 0.30 0.30 0.82, controls 0.30 0.30 0.82)
   * vrHudSafeArea <horizontal> <vertical>      (HUD Safe Area, default: 0.30 0.22)
-  * vrHudConvergence <depth_in_meters>   (default: 1.8)
+  * vrHudDepth [0.5-5.0]                 (how far away the HUD reads, in metres; saved, 1.8 by default)
+  * vrMenuDistance [1.0-5.0]             (how far away menus, the main menu included, and 2D Floating Window Mode
+                                          are shown, in metres; saved, 1.5 by default)
   * vrSnapTurnAngle <degrees>            (default: 90)
 
 Settings are automatically saved in:

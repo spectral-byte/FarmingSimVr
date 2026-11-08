@@ -130,6 +130,7 @@ end
 VRCompanion.CORE_CONSOLE_COMMANDS = {
     { name = "vrHudSafeArea", description = "Set the VR HUD Safe Area, the margin that keeps warnings, notifications and other mods' HUDs inside the lens: vrHudSafeArea <horizontal> <vertical>", method = "consoleCommandSetHudSafeArea" },
     { name = "vrHudGroup", description = "Set a VR HUD Group Margin and scale: vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]", method = "consoleCommandSetHudGroup" },
+    { name = "vrHudDepth", description = "How far away the HUD reads in the headset, in metres (saved; 1.8 by default): vrHudDepth [0.5-5.0]", method = "consoleCommandSetHudDepth" },
     { name = "vrHudState", description = "Set VR HUD state: vrHudState <0=Hidden | 1=Streamlined | 2=Full>", method = "consoleCommandSetHudState" },
     { name = "vrHudLoadNotification", description = "Toggle HUD alert on map load: vrHudLoadNotification <true|false>", method = "consoleCommandSetHudLoadNotification" },
     { name = "vrHudLoadAlert", description = "Toggle HUD alert on map load: vrHudLoadAlert <true|false>", method = "consoleCommandSetHudLoadNotification" },
@@ -281,6 +282,10 @@ function VRCompanion:loadMap(name)
     if type(self.applyFovOverscan) == "function" then
         self:applyFovOverscan()
     end
+    -- 7-. And the saved Menu Distance: the Injector read settings.xml at launch, and this sends what it holds now
+    if type(self.applyMenuDistance) == "function" then
+        self:applyMenuDistance()
+    end
     if type(self.applyMouseConfinement) == "function" then
         self:applyMouseConfinement()
     end
@@ -309,6 +314,7 @@ function VRCompanion:loadMap(name)
     if type(self.registerDualPassPhysicsConsoleCommands) == "function" then self:registerDualPassPhysicsConsoleCommands() end
     if type(self.registerDesktopMirrorConsoleCommands) == "function" then self:registerDesktopMirrorConsoleCommands() end
     if type(self.registerFovOverscanConsoleCommands) == "function" then self:registerFovOverscanConsoleCommands() end
+    if type(self.registerMenuDistanceConsoleCommands) == "function" then self:registerMenuDistanceConsoleCommands() end
     if type(self.registerMouseConfinementConsoleCommands) == "function" then self:registerMouseConfinementConsoleCommands() end
     if type(self.registerPerfTraceConsoleCommands) == "function" then self:registerPerfTraceConsoleCommands() end
 
@@ -1261,6 +1267,7 @@ function VRCompanion:deleteMap()
     if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
     if type(self.resetDesktopMirror) == "function" then self:resetDesktopMirror() end
     if type(self.resetFovOverscan) == "function" then self:resetFovOverscan() end
+    if type(self.resetMenuDistance) == "function" then self:resetMenuDistance() end
     if type(self.resetMouseConfinement) == "function" then self:resetMouseConfinement() end
     if type(self.unregisterPerfTraceConsoleCommands) == "function" then self:unregisterPerfTraceConsoleCommands() end
     if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end

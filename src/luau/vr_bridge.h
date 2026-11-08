@@ -124,6 +124,13 @@ public:
     float GetFovOverscan() const { return m_fovOverscan; }
     void SetFovOverscan(float percent);
 
+    // Menu Distance in metres, 1.0 to 5.0 (1.5 by default; the Companion Mod sets it with `vrMenuDistance`): how far in front
+    // of the head menus and 2D Floating Window Mode are shown. The bridge clamps and forwards it to the OpenXR manager, which
+    // moves a quad already shown at once. Without a manager (Pass-Through Mode) it is accepted and has no effect. The Injector
+    // sets the saved value at launch (InjectorRuntime), and a map unload leaves it, so the main menu is shown at it too.
+    float GetMenuDistance() const { return m_menuDistance; }
+    void SetMenuDistance(float metres);
+
     // Whether Mouse Confinement may keep the Desk Mouse on the game picture while the headset is in use.
     // On by default; the Companion Mod sets it (`vrMouseConfinement`) and the DXGI proxy reads it every present.
     bool IsMouseConfinementEnabled() const { return m_mouseConfinementEnabled; }
@@ -160,6 +167,8 @@ public:
     static int Lua_GetDesktopMirror(lua_State* L);
     static int Lua_SetFovOverscan(lua_State* L);
     static int Lua_GetFovOverscan(lua_State* L);
+    static int Lua_SetMenuDistance(lua_State* L);
+    static int Lua_GetMenuDistance(lua_State* L);
     static int Lua_SetMouseConfinement(lua_State* L);
     static int Lua_GetMouseConfinement(lua_State* L);
     static int Lua_ResetTemporalHistory(lua_State* L);
@@ -244,6 +253,8 @@ public:
         {"getMouseConfinement", &Lua_GetMouseConfinement},
         {"setFovOverscan", &Lua_SetFovOverscan},
         {"getFovOverscan", &Lua_GetFovOverscan},
+        {"setMenuDistance", &Lua_SetMenuDistance},
+        {"getMenuDistance", &Lua_GetMenuDistance},
         {"getRenderingMode", &Lua_GetRenderingMode},
         {"setRenderingMode", &Lua_SetRenderingMode},
         {"getSubPassIndex", &Lua_GetSubPassIndex},
@@ -287,6 +298,7 @@ private:
     bool m_desktopMirrorEnabled = true;
     bool m_mouseConfinementEnabled = true;
     float m_fovOverscan = 0.0f;
+    float m_menuDistance = OpenXrManager::kDefaultMenuQuadDistance;
     // The OpenXR manager renders without the overscan while a menu or 2D Floating Window Mode is shown.
     void UpdateFovOverscanSuspension();
 

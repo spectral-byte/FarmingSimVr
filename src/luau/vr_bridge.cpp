@@ -175,6 +175,7 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
     self->SetDesktopMirrorEnabled(true);
     self->SetMouseConfinementEnabled(true);
     self->SetFovOverscan(0.0f);
+    // The Menu Distance stays: the main menu is a menu too, and the Injector shows it at the saved distance from launch.
     LogInfo("[VRBridge] Companion Mod map unloaded; reverted to Menu Quad layer mode.");
     return 0;
 }
@@ -962,6 +963,30 @@ int VRBridge::Lua_GetFovOverscan(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     lua_pushnumber(L, self->GetFovOverscan());
+    return 1;
+}
+
+void VRBridge::SetMenuDistance(float metres) {
+    metres = OpenXrManager::ClampMenuQuadDistance(metres);
+    m_menuDistance = metres;
+    if (m_openXrManager) {
+        m_openXrManager->SetMenuQuadDistance(metres);
+    }
+}
+
+int VRBridge::Lua_SetMenuDistance(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.setMenuDistance");
+    // Anything that is not a number is the default (lua_tonumber would make it 0, which clamps to the nearest distance)
+    self->SetMenuDistance(lua_isnumber(L, 1) ? static_cast<float>(lua_tonumber(L, 1)) : OpenXrManager::kDefaultMenuQuadDistance);
+    return 0;
+}
+
+int VRBridge::Lua_GetMenuDistance(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    lua_pushnumber(L, self->GetMenuDistance());
     return 1;
 }
 

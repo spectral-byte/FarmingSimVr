@@ -241,6 +241,30 @@ function VRCompanion:computeConvergenceDisparity(ipd, depth)
     return self:clamp(disparity, self.MIN_CONVERGENCE_DISPARITY, self.MAX_CONVERGENCE_DISPARITY) * compensation
 end
 
+-- `vrHudDepth [0.5-5.0]` sets how far away the HUD Groups read in the headset, in metres (1.8 by default, saved as
+-- vrSettings.hudConvergenceDepth): the depth the HUD Convergence Offset is computed for. Further away, the HUD is shifted less
+-- between the eyes; it keeps its size and its place on the screen. The next updates ease the offset to the new depth.
+function VRCompanion:setHudConvergenceDepth(depth, save)
+    if type(depth) ~= "number" or depth ~= depth or depth < self.MIN_CONVERGENCE_DEPTH or depth > self.MAX_CONVERGENCE_DEPTH then
+        return false
+    end
+    self.hudConvergenceDepth = depth
+    if save and type(self.saveConfiguration) == "function" then self:saveConfiguration() end
+    return true
+end
+
+function VRCompanion:consoleCommandSetHudDepth(arg)
+    local usage = string.format("Usage: vrHudDepth [%.1f-%.1f] (metres, saved, %.1f by default)",
+        self.MIN_CONVERGENCE_DEPTH, self.MAX_CONVERGENCE_DEPTH, self.DEFAULT_CONVERGENCE_DEPTH)
+    if arg == nil or arg == "" then
+        return string.format("HUD depth: %g m. %s", self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH, usage)
+    end
+    local depth = tonumber(arg)
+    if not self:setHudConvergenceDepth(depth, true) then return usage end
+    print(string.format("[FS25_VR] HUD depth set to: %g m", depth))
+    return string.format("HUD depth set to: %g m (Saved)", depth)
+end
+
 function VRCompanion:getConvergenceDisparity()
     if self.currentConvergenceDisparity ~= nil then
         return self.currentConvergenceDisparity

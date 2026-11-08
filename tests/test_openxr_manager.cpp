@@ -6,9 +6,11 @@
 #include "fake_openxr_tracking.h"
 #include "luau/vr_bridge.h"
 #include "fake_openxr_events.h"
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <unordered_set>
 #include <unordered_map>
 
@@ -2111,6 +2113,77 @@ TEST(OpenXrManagerTest, CustomMenuQuadDistanceAndSize) {
     auto defaultSize = manager.GetMenuQuadSize();
     EXPECT_NEAR(defaultSize.width, 1.6f, 0.001f);
     EXPECT_NEAR(defaultSize.height, 0.9f, 0.001f);
+}
+
+TEST(OpenXrManagerTest, MenuQuadDistanceIsClampedToOneToFiveMetresAndOutlivesShutdown) {
+    EXPECT_FLOAT_EQ(OpenXrManager::ClampMenuQuadDistance(2.5f), 2.5f);
+    EXPECT_FLOAT_EQ(OpenXrManager::ClampMenuQuadDistance(1.0f), 1.0f);
+    EXPECT_FLOAT_EQ(OpenXrManager::ClampMenuQuadDistance(5.0f), 5.0f);
+    EXPECT_FLOAT_EQ(OpenXrManager::ClampMenuQuadDistance(0.2f), 1.0f);
+    EXPECT_FLOAT_EQ(OpenXrManager::ClampMenuQuadDistance(-3.0f), 1.0f);
+    EXPECT_FLOAT_EQ(OpenXrManager::ClampMenuQuadDistance(12.0f), 5.0f);
+    EXPECT_FLOAT_EQ(OpenXrManager::ClampMenuQuadDistance(std::numeric_limits<float>::infinity()), 5.0f);
+    EXPECT_FLOAT_EQ(OpenXrManager::ClampMenuQuadDistance(std::nanf("")), 1.5f) << "NaN is the default";
+
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    EXPECT_FLOAT_EQ(manager.GetMenuQuadDistance(), 1.5f) << "1.5 m by default";
+    manager.SetMenuQuadDistance(9.0f);
+    EXPECT_FLOAT_EQ(manager.GetMenuQuadDistance(), 5.0f) << "the manager clamps on its own";
+
+    ASSERT_TRUE(manager.Initialize());
+    manager.SetMenuQuadDistance(3.0f);
+    manager.Shutdown();
+    EXPECT_FLOAT_EQ(manager.GetMenuQuadDistance(), 3.0f) << "the player's setting is not session state";
+}
+
+TEST(OpenXrManagerTest, ChangingTheMenuDistanceMovesAPlacedQuadAlongTheWayItFacesAndKeepsItsSize) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    // Head at (2.0, 1.7, 3.0) looking along +X (yaw -pi/2): the quad is placed 1.5 m along +X
+    HeadPose head;
+    head.position = Vector3(2.0f, 1.7f, 3.0f);
+    head.rotation = EulerAngles(0.0f, -1.5707963f, 0.0f);
+    head.isValid = true;
+    manager.AlignMenuQuadToHeadPose(&head);
+    const XrPosef placed = manager.ComputeMenuQuadPose();
+    ASSERT_NEAR(placed.position.x, 3.5f, 0.01f);
+    const XrExtent2Df sizeBefore = manager.ComputeMenuQuadSize();
+
+    manager.SetMenuQuadDistance(3.0f);
+
+    ASSERT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    ASSERT_TRUE(manager.SubmitMenuQuad());
+    ASSERT_EQ(mockDispatch->lastSubmittedQuadLayers.size(), 1u);
+    const auto& quad = mockDispatch->lastSubmittedQuadLayers[0];
+    EXPECT_NEAR(quad.pose.position.x, 5.0f, 0.01f) << "3 m along the same gaze from the same head";
+    EXPECT_NEAR(quad.pose.position.y, 1.7f, 0.001f);
+    EXPECT_NEAR(quad.pose.position.z, 3.0f, 0.01f);
+    EXPECT_FLOAT_EQ(quad.pose.orientation.x, placed.orientation.x);
+    EXPECT_FLOAT_EQ(quad.pose.orientation.y, placed.orientation.y);
+    EXPECT_FLOAT_EQ(quad.pose.orientation.z, placed.orientation.z);
+    EXPECT_FLOAT_EQ(quad.pose.orientation.w, placed.orientation.w);
+    EXPECT_FLOAT_EQ(quad.size.width, sizeBefore.width) << "the quad keeps its size, so it fills less of the view";
+    EXPECT_FLOAT_EQ(quad.size.height, sizeBefore.height);
+
+    // Nearer again, and the next placement uses the distance too
+    manager.SetMenuQuadDistance(1.0f);
+    EXPECT_NEAR(manager.ComputeMenuQuadPose().position.x, 3.0f, 0.01f);
+    HeadPose ahead;
+    ahead.position = Vector3(0.0f, 1.6f, 0.0f);
+    ahead.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
+    ahead.isValid = true;
+    manager.SetMenuQuadDistance(4.0f);
+    manager.AlignMenuQuadToHeadPose(&ahead);
+    EXPECT_NEAR(manager.ComputeMenuQuadPose().position.z, -4.0f, 0.001f);
+    EXPECT_NEAR(manager.ComputeMenuQuadPose().position.x, 0.0f, 0.001f);
 }
 
 TEST(OpenXrManagerTest, SubmitMenuQuadResetsCopiedFlagsForBothSwapchains) {

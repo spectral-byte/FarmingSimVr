@@ -920,6 +920,44 @@ TEST_F(VrBridgeTest, FovOverscanWithoutAnOpenXrManagerIsAcceptedAndHasNoEffect) 
     )luau"), 0);
 }
 
+TEST_F(VrBridgeTest, MenuDistanceDefaultsToOneAndAHalfIsClampedReachesTheManagerAndOutlivesAMapUnload) {
+    fs25vr::FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        assert(VRBridge.getMenuDistance() == 1.5, "the menu distance is 1.5 m by default")
+        VRBridge.setMenuDistance(3)
+        assert(VRBridge.getMenuDistance() == 3, "setMenuDistance(3) is read back")
+        VRBridge.setMenuDistance(2.25)
+        assert(VRBridge.getMenuDistance() == 2.25, "decimals are kept")
+        VRBridge.setMenuDistance(40)
+        assert(VRBridge.getMenuDistance() == 5, "the bridge clamps above 5")
+        VRBridge.setMenuDistance(0)
+        assert(VRBridge.getMenuDistance() == 1, "the bridge clamps below 1")
+        VRBridge.setMenuDistance("far")
+        assert(VRBridge.getMenuDistance() == 1.5, "anything that is not a number is the default")
+        VRBridge.setMenuDistance(2.5)
+    )luau"), 0);
+    EXPECT_FLOAT_EQ(headset.manager->GetMenuQuadDistance(), 2.5f) << "the distance reaches the OpenXR manager";
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        VRBridge.onMapUnload()
+        assert(VRBridge.getMenuDistance() == 2.5, "a map unload leaves the distance for the main menu")
+    )luau"), 0);
+    EXPECT_FLOAT_EQ(headset.manager->GetMenuQuadDistance(), 2.5f);
+}
+
+TEST_F(VrBridgeTest, MenuDistanceWithoutAnOpenXrManagerIsAcceptedAndHasNoEffect) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    ASSERT_EQ(RunLuauString(L, R"luau(
+        VRBridge.setMenuDistance(3)
+        assert(VRBridge.getMenuDistance() == 3)
+    )luau"), 0);
+}
+
 TEST_F(VrBridgeTest, MouseConfinementFlagDefaultsToOnIsSetFromLuauAndResetsOnMapUnload) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -1431,6 +1469,8 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "getMouseConfinement",
         "setFovOverscan",
         "getFovOverscan",
+        "setMenuDistance",
+        "getMenuDistance",
         "getRenderingMode",
         "setRenderingMode",
         "getSubPassIndex",

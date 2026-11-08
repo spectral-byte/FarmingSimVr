@@ -99,6 +99,8 @@ set(CORE_SOURCES
     src/core/detour.h
     src/core/injector_runtime.cpp
     src/core/injector_runtime.h
+    src/core/companion_settings.cpp
+    src/core/companion_settings.h
     src/core/dll_lifecycle.cpp
     src/core/dll_lifecycle.h
     src/input/virtual_gamepad.cpp
@@ -202,6 +204,7 @@ add_executable(fs25_vr_tests
     tests/test_openxr_manager.cpp
     tests/test_fov_coverage.cpp
     tests/test_fov_overscan.cpp
+    tests/test_menu_distance.cpp
     tests/test_openxr_eye_copy_d3d12.cpp
     tests/test_openxr_motion_controllers.cpp
     tests/test_mirror_window_controller.cpp

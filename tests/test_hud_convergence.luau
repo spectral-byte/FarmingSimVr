@@ -1035,6 +1035,91 @@ test("AnErrorInANestedUpdateKeepsItsRaiseSiteAndClosesEveryScope", function()
     assert(depth == 0, "an error in a nested scope must not leave a scope open, depth=" .. tostring(depth))
 end)
 
+-- vrHudDepth: the console command that sets the depth the HUD reads at
+test("VrHudDepthIsACoreConsoleCommand", function()
+    local found = nil
+    for _, command in ipairs(VRCompanion.CORE_CONSOLE_COMMANDS) do
+        if command.name == "vrHudDepth" then found = command end
+    end
+    assert(found ~= nil, "vrHudDepth must be registered with the other core commands on map load")
+    assert(found.method == "consoleCommandSetHudDepth", "registered callback: " .. tostring(found.method))
+    assert(string.find(found.description, "vrHudDepth [0.5-5.0]", 1, true) ~= nil, "help names the usage: " .. found.description)
+end)
+
+test("VrHudDepthEasesTheHudToTheNewDepthSavesItAndRefusesBadValues", function()
+    useSafeArea(0.20, 0.16)
+    local curParity = 0
+    _G.VRBridge = {
+        getFrameParity = function() return curParity end,
+        getIpd = function() return 0.064 end,
+        isReady = function() return true end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+    local saves = 0
+    local realSave = VRCompanion.saveConfiguration
+    VRCompanion.saveConfiguration = function() saves = saves + 1; return true end
+
+    VRCompanion:updateHudConvergence()
+    assert(math.abs(VRCompanion.currentConvergenceOffset - 0.012) < 0.0001, "1.8 m by default")
+    local report = VRCompanion:consoleCommandSetHudDepth()
+    assert(string.find(report, "HUD depth: 1.8 m", 1, true) ~= nil, report)
+    assert(string.find(report, "Usage: vrHudDepth [0.5-5.0] (metres, saved, 1.8 by default)", 1, true) ~= nil, report)
+
+    local reply = VRCompanion:consoleCommandSetHudDepth("3")
+    assert(string.find(reply, "HUD depth set to: 3 m (Saved)", 1, true) ~= nil, reply)
+    assert(saves == 1, "the command saves settings.xml")
+    for f = 1, 30 do
+        curParity = f % 2
+        VRCompanion:updateHudConvergence(16)
+    end
+    -- (0.064 / 3) * 0.3375 = 0.0072: further away, the HUD is shifted less between the eyes
+    assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.0072) < 0.00001,
+        "the disparity eases to the new depth: " .. VRCompanion.currentConvergenceDisparity)
+    curParity = 0
+    VRCompanion:updateHudConvergence(16)
+    assert(math.abs(_G.g_hudAnchorLeft - 0.2072) < 0.0001, "the HUD moves by the new offset: " .. _G.g_hudAnchorLeft)
+
+    for _, bad in ipairs({ "0.4", "5.5", "0", "-1", "far", "3m", "nan", "inf", " " }) do
+        local refused = VRCompanion:consoleCommandSetHudDepth(bad)
+        assert(string.find(refused, "Usage: vrHudDepth", 1, true) ~= nil, "'" .. bad .. "' returns the usage: " .. refused)
+        assert(VRCompanion.hudConvergenceDepth == 3, "'" .. bad .. "' leaves the depth alone")
+    end
+    VRCompanion:consoleCommandSetHudDepth("")
+    assert(saves == 1, "reporting and refusing write nothing")
+
+    VRCompanion.saveConfiguration = realSave
+    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    _G.VRBridge = nil
+end)
+
+test("TheHudDepthTheCommandSetsIsWhatSettingsXmlGetsAndGivesBack", function()
+    local store = {}
+    _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+    _G.createXMLFile = function() return 1 end
+    _G.setXMLFloat = function(_, key, value) store[key] = value end
+    _G.saveXMLFile = function() return true end
+    _G.loadXMLFile = function() return 2 end
+    _G.getXMLFloat = function(_, key) return store[key] end
+    _G.delete = function() end
+
+    VRCompanion:consoleCommandSetHudDepth("4.25")
+    assert(store["vrSettings.hudConvergenceDepth"] == 4.25, "saved under vrSettings.hudConvergenceDepth")
+    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    VRCompanion:loadConfiguration("settings.xml")
+    assert(VRCompanion.hudConvergenceDepth == 4.25, "and loaded back: " .. tostring(VRCompanion.hudConvergenceDepth))
+
+    _G.getUserProfileAppPath = nil
+    _G.createXMLFile = nil
+    _G.setXMLFloat = nil
+    _G.saveXMLFile = nil
+    _G.loadXMLFile = nil
+    _G.getXMLFloat = nil
+    _G.delete = nil
+    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 if failed > 0 then
     error(string.format("%d tests failed", failed))
