@@ -92,6 +92,7 @@ FS25 VR up to 1.1.9 was `dxgi.dll` (ADR-0038). `scripts\test_installer.ps1` fake
 - [ ] Install ReShade for the game (it writes `x64\dxgi.dll`), then install FS25 VR 1.1.9 with its Setup: ReShade is moved to `dxgi.dll.fs25vr-backup`.
 - [ ] Run this Installer over it. Afterwards `x64\version.dll` is ours, `x64\dxgi.dll` is ReShade's again (its file properties name ReShade), and there is no `dxgi.dll.fs25vr-backup`.
 - [ ] Launch the game with the headset: `fs25_vr.log` has `Hooked the system's dxgi.dll as it loaded`, ReShade's effects show in the headset, and its overlay opens with Home.
+- [ ] The menu shows in the headset and the game keeps running. Under SteamVR, `fs25_vr.log` has `D3D11On12CreateDevice with device ... (dxgi.dll) -> real ... (D3D12Core.dll)`, and `ReShade.log` has no `Device was lost`.
 - [ ] Uninstall FS25 VR: `version.dll` is gone and ReShade's `dxgi.dll` is still there.
 
 ## After the checklist

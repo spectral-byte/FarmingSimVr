@@ -218,6 +218,7 @@ add_executable(fs25_vr_tests
     tests/test_openxr_motion_controllers.cpp
     tests/test_mirror_window_controller.cpp
     tests/test_dxgi_proxy.cpp
+    tests/test_d3d11on12_unwrap.cpp
     tests/test_dxgi_export_hooks.cpp
     tests/test_injector_binary.cpp
     tests/test_process_isolation.cpp

@@ -11,6 +11,7 @@
 #include <iterator>
 #include <sstream>
 #include <utility>
+#include <vector>
 #include <windowsx.h>
 #include <algorithm>
 #include <cmath>
@@ -47,6 +48,56 @@ std::string ModuleNameAt(const void* address) {
     char narrow[MAX_PATH * 2] = {};
     WideCharToMultiByte(CP_UTF8, 0, name, -1, narrow, static_cast<int>(sizeof(narrow)), nullptr, nullptr);
     return narrow;
+}
+
+// "module+0xoffset" for each caller on this thread's stack, innermost first, skipping `skip` frames.
+std::string DescribeCallers(unsigned long skip, unsigned long maxFrames = 32) {
+    void* frames[32] = {};
+    const USHORT count = RtlCaptureStackBackTrace(
+        skip + 1, static_cast<DWORD>((std::min)(maxFrames, static_cast<unsigned long>(std::size(frames)))), frames, nullptr);
+    std::ostringstream ss;
+    for (USHORT i = 0; i < count; ++i) {
+        HMODULE module = nullptr;
+        if (i) ss << " <- ";
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               static_cast<LPCWSTR>(frames[i]), &module)) {
+            ss << ModuleNameAt(frames[i]) << "+0x" << std::hex
+               << (reinterpret_cast<uintptr_t>(frames[i]) - reinterpret_cast<uintptr_t>(module)) << std::dec;
+        } else {
+            ss << frames[i];
+        }
+    }
+    return ss.str();
+}
+
+// The proxy whose D3D11On12CreateDevice hook is installed.
+DxgiProxy* g_d3d11On12Owner = nullptr;
+using PFN_D3D11On12CreateDevice = HRESULT(WINAPI*)(IUnknown*, UINT, const D3D_FEATURE_LEVEL*, UINT, IUnknown* const*,
+                                                   UINT, UINT, void**, void**, D3D_FEATURE_LEVEL*);
+
+HMODULE ModuleOf(const void* address) {
+    HMODULE module = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       static_cast<LPCWSTR>(address), &module);
+    return module;
+}
+
+// The module that implements a COM object, from its vtable.
+HMODULE ImplementingModule(const void* object) {
+    return object ? ModuleOf(*reinterpret_cast<void* const*>(object)) : nullptr;
+}
+
+std::string DescribeObject(const void* object) {
+    if (!object) return "null";
+    std::ostringstream ss;
+    ss << object << " (" << ModuleNameAt(*reinterpret_cast<void* const*>(object)) << ")";
+    return ss.str();
+}
+
+bool SameAdapter(ID3D12Device* a, ID3D12Device* b) {
+    const LUID la = a->GetAdapterLuid();
+    const LUID lb = b->GetAdapterLuid();
+    return la.LowPart == lb.LowPart && la.HighPart == lb.HighPart;
 }
 
 // The system's factory behind `factory` when `factory` is a wrapper whose methods are not the system's, as a
@@ -214,9 +265,85 @@ void DxgiProxy::EnsureVrInitialized() {
 void DxgiProxy::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue) {
     m_d3d12Device = device;
     m_d3d12Queue = queue;
+    if (device && queue) {
+        // A device or queue whose vtable is outside D3D12Core.dll is a wrapper (ReShade's are in its dxgi.dll).
+        std::ostringstream ss;
+        ss << "DxgiProxy: D3D12 device " << static_cast<const void*>(device) << " (vtable in "
+           << ModuleNameAt(*reinterpret_cast<void* const*>(device)) << "), queue " << static_cast<const void*>(queue)
+           << " (vtable in " << ModuleNameAt(*reinterpret_cast<void* const*>(queue)) << ").";
+        LogInfo(ss.str());
+        // SteamVR draws quad layers through a D3D11On12 device it creates during Present. With ReShade it passes
+        // ReShade's wrapped device and queue, which ReShade passes on unwrapped while inside Present, and D3D11On12 on
+        // wrapped D3D12 objects gets the device removed (DXGI_ERROR_INVALID_CALL). The hook hands it the real ones.
+        if (m_ownedByRuntime && !m_detourD3D11On12CreateDevice.IsInstalled()) {
+            HMODULE d3d11 = LoadLibraryExW(L"d3d11.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+            void* target = d3d11 ? reinterpret_cast<void*>(GetProcAddress(d3d11, "D3D11On12CreateDevice")) : nullptr;
+            if (target) {
+                g_d3d11On12Owner = this;
+                if (!m_detourD3D11On12CreateDevice.Install(
+                        target, reinterpret_cast<void*>(&DxgiProxy::Intercept_D3D11On12CreateDevice))) {
+                    g_d3d11On12Owner = nullptr;
+                    LogWarn("DxgiProxy: Could not hook D3D11On12CreateDevice; quad layers may fail under a D3D12 wrapper.");
+                }
+            }
+        }
+    }
     if (m_openXrManager && device && queue) {
         m_openXrManager->SetD3D12DeviceAndQueue(device, queue);
     }
+}
+
+std::string DxgiProxy::UnwrapForD3D11On12(IUnknown*& device, IUnknown** queues, UINT numQueues) {
+    std::ostringstream ss;
+    ss << "device " << DescribeObject(device);
+    ID3D12Device* realDevice = m_d3d12Device.Get();
+    // A wrapper's methods live in another module than the real object's (ReShade's in its dxgi.dll).
+    const HMODULE realModule = ImplementingModule(realDevice);
+    Microsoft::WRL::ComPtr<ID3D12Device> passedDevice;
+    if (realDevice && device && SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&passedDevice))) &&
+        passedDevice.Get() != realDevice && ImplementingModule(passedDevice.Get()) != realModule &&
+        SameAdapter(passedDevice.Get(), realDevice)) {
+        // D3D12 keeps one device per adapter, so a device wrapper on the game's adapter wraps the game's device.
+        device = realDevice;
+        ss << " -> real " << DescribeObject(realDevice);
+    }
+    ID3D12CommandQueue* realQueue = m_d3d12Queue.Get();
+    for (UINT i = 0; i < numQueues; ++i) {
+        ss << ", queue " << DescribeObject(queues[i]);
+        Microsoft::WRL::ComPtr<ID3D12CommandQueue> passedQueue;
+        Microsoft::WRL::ComPtr<ID3D12Device> queueDevice;
+        if (realQueue && realDevice && queues[i] && SUCCEEDED(queues[i]->QueryInterface(IID_PPV_ARGS(&passedQueue))) &&
+            passedQueue.Get() != realQueue && ImplementingModule(passedQueue.Get()) != ImplementingModule(realQueue) &&
+            passedQueue->GetDesc().Type == realQueue->GetDesc().Type &&
+            SUCCEEDED(passedQueue->GetDevice(IID_PPV_ARGS(&queueDevice))) && SameAdapter(queueDevice.Get(), realDevice)) {
+            // The game makes one queue of each type, so a wrapper of the swap chain queue's type wraps that queue.
+            queues[i] = realQueue;
+            ss << " -> real " << DescribeObject(realQueue);
+        }
+    }
+    return ss.str();
+}
+
+HRESULT WINAPI DxgiProxy::Intercept_D3D11On12CreateDevice(IUnknown* pDevice, UINT flags,
+    const D3D_FEATURE_LEVEL* pFeatureLevels, UINT featureLevels, IUnknown* const* ppCommandQueues, UINT numQueues,
+    UINT nodeMask, void** ppDevice, void** ppImmediateContext, D3D_FEATURE_LEVEL* pChosenFeatureLevel) {
+    DxgiProxy* proxy = g_d3d11On12Owner;
+    auto original = proxy ? reinterpret_cast<PFN_D3D11On12CreateDevice>(proxy->m_detourD3D11On12CreateDevice.GetOriginal())
+                          : nullptr;
+    if (!original) return E_FAIL;
+    std::vector<IUnknown*> queues;
+    if (ppCommandQueues && numQueues) queues.assign(ppCommandQueues, ppCommandQueues + numQueues);
+    IUnknown* device = pDevice;
+    const std::string passed = proxy->UnwrapForD3D11On12(device, queues.data(), static_cast<UINT>(queues.size()));
+    LogInfo("DxgiProxy: D3D11On12CreateDevice with " + passed + "; called from " + DescribeCallers(0, 4) + ".");
+    const HRESULT hr = original(device, flags, pFeatureLevels, featureLevels, queues.empty() ? ppCommandQueues : queues.data(),
+                                numQueues, nodeMask, ppDevice, ppImmediateContext, pChosenFeatureLevel);
+    if (FAILED(hr)) {
+        std::ostringstream ss;
+        ss << "DxgiProxy: D3D11On12CreateDevice failed with 0x" << std::hex << static_cast<unsigned long>(hr) << ".";
+        LogWarn(ss.str());
+    }
+    return hr;
 }
 
 bool DxgiProxy::ExtractD3D12DeviceAndQueue(
@@ -463,6 +590,8 @@ void DxgiProxy::DetachAll() {
     if (m_detourCheckColorSpaceSupport.IsInstalled()) m_detourCheckColorSpaceSupport.Uninstall();
     if (m_detourSetColorSpace1.IsInstalled()) m_detourSetColorSpace1.Uninstall();
     if (m_detourOutputGetDesc1.IsInstalled()) m_detourOutputGetDesc1.Uninstall();
+    if (m_detourD3D11On12CreateDevice.IsInstalled()) m_detourD3D11On12CreateDevice.Uninstall();
+    if (g_d3d11On12Owner == this) g_d3d11On12Owner = nullptr;
     m_swapChainAttached = false;
     m_factoryAttached = false;
     m_outputAttached = false;
