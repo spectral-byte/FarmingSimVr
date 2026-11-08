@@ -722,6 +722,8 @@ function VRCompanion:fetchEyeProjection(eyeIndex)
         if type(fetched) == "table" then scratch[eyeIndex] = fetched end
         if fetched and fetched.isValid then
             proj = fetched
+            -- The horizontal FOV the eyes are rendered with, for the HUD's depth (computeConvergenceDisparity)
+            if type(fetched.fovX) == "number" then self.renderedFovX = fetched.fovX end
         end
     end
     -- Only a valid projection is reused, so one that becomes valid mid sub-pass is picked up.

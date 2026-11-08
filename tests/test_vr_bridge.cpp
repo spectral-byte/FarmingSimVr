@@ -958,6 +958,19 @@ TEST_F(VrBridgeTest, MenuDistanceWithoutAnOpenXrManagerIsAcceptedAndHasNoEffect)
     )luau"), 0);
 }
 
+TEST_F(VrBridgeTest, AnEyeSnapshotRequestFromLuauIsConsumedOnceForEachEye) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+    EXPECT_FALSE(bridge.ConsumeEyeSnapshotRequest(0)) << "nothing is requested at first";
+    EXPECT_FALSE(bridge.ConsumeEyeSnapshotRequest(1));
+
+    ASSERT_EQ(RunLuauString(L, "VRBridge.snapshotEyes()"), 0);
+    EXPECT_TRUE(bridge.ConsumeEyeSnapshotRequest(1)) << "either eye may come first";
+    EXPECT_FALSE(bridge.ConsumeEyeSnapshotRequest(1)) << "each eye once";
+    EXPECT_TRUE(bridge.ConsumeEyeSnapshotRequest(0));
+    EXPECT_FALSE(bridge.ConsumeEyeSnapshotRequest(0));
+}
+
 TEST_F(VrBridgeTest, MouseConfinementFlagDefaultsToOnIsSetFromLuauAndResetsOnMapUnload) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
@@ -1471,6 +1484,7 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "getFovOverscan",
         "setMenuDistance",
         "getMenuDistance",
+        "snapshotEyes",
         "getRenderingMode",
         "setRenderingMode",
         "getSubPassIndex",

@@ -4,7 +4,10 @@
 #include "core/injector_runtime.h"
 #include "core/dll_lifecycle.h"
 #include "core/perf_trace.h"
+#include "core/texture_snapshot.h"
 #include "ngx/ngx_interceptor.h"
+#include <filesystem>
+#include <sstream>
 #include <utility>
 #include <windowsx.h>
 #include <algorithm>
@@ -634,6 +637,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
                 if (subPass == 0) {
                     // Sub-Pass 0: copies the left eye, suppresses the physical present, advances subPassIndex to 1
                     m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
+                    SnapshotEyeIfRequested(0, pBackBuffer);
                     if (m_vrBridge) {
                         m_vrBridge->SetSubPassIndex(1);
                     }
@@ -642,6 +646,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
                 } else {
                     // Sub-Pass 1: copies the right eye, submits the pair, executes the physical present, resets subPassIndex to 0
                     m_openXrManager->CopyBackBufferToEye(1, pBackBuffer);
+                    SnapshotEyeIfRequested(1, pBackBuffer);
                     m_openXrManager->SubmitFramePair();
                     if (m_vrBridge) {
                         m_vrBridge->AdvanceFrame();
@@ -653,6 +658,7 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
                 // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
                 uint32_t parity = m_vrBridge ? m_vrBridge->GetFrameParity() : 0;
                 m_openXrManager->CopyBackBufferToEye(parity, pBackBuffer);
+                SnapshotEyeIfRequested(parity, pBackBuffer);
 
                 if (parity == 1) {
                     m_openXrManager->SubmitFramePair();
@@ -674,6 +680,26 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
     m_lastPresentSuppressed = false;
     m_desktopMirrorWasShowing = true;
     return true;
+}
+
+void DxgiProxy::SnapshotEyeIfRequested(uint32_t eyeIndex, ID3D12Resource* backBuffer) {
+    if (!m_vrBridge || !m_vrBridge->ConsumeEyeSnapshotRequest(eyeIndex)) return;
+    const std::string name = "fs25_vr_eye" + std::to_string(eyeIndex) + ".bmp";
+    const std::filesystem::path file = Logger::DefaultLogPath().parent_path() / name;
+    std::ostringstream ss;
+    ss << "[DxgiProxy] Eye snapshot: eye " << eyeIndex << " ("
+       << (m_vrBridge->IsSequentialDualPass() ? "Sequential Dual-Pass sub-pass " : "AFR parity ")
+       << (m_vrBridge->IsSequentialDualPass() ? m_vrBridge->GetSubPassIndex() : m_vrBridge->GetFrameParity())
+       << ", frame " << m_vrBridge->GetFrameIndex() << ") ";
+    const std::string error = SnapshotTextureToBmp(m_d3d12Device.Get(), m_d3d12Queue.Get(), backBuffer,
+                                                   D3D12_RESOURCE_STATE_PRESENT, file, 2);
+    if (error.empty()) {
+        ss << "written to " << name;
+        LogInfo(ss.str());
+    } else {
+        ss << "not written: " << error;
+        LogError(ss.str());
+    }
 }
 
 bool DxgiProxy::IsDesktopMirrorOffNow() const {

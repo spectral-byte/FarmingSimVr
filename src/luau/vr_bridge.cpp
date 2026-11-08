@@ -990,6 +990,15 @@ int VRBridge::Lua_GetMenuDistance(lua_State* L) {
     return 1;
 }
 
+int VRBridge::Lua_SnapshotEyes(lua_State* L) {
+    VRBridge* self = &FromUpvalue(L);
+
+    FS25VR_TRACE_THREAD("VRBridge.snapshotEyes");
+    self->RequestEyeSnapshot();
+    LogInfo("[VRBridge] Eye snapshot requested: the next stereo frame of each eye is written next to fs25_vr.log.");
+    return 0;
+}
+
 int VRBridge::Lua_SetMouseConfinement(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 

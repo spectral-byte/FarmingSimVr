@@ -175,6 +175,9 @@ private:
     // advances the rendered-frame counter for it and discards camera records for any other Present.
     bool m_presentWasStereo = false;
     bool OnPresentImpl(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
+    // `vrEyeSnapshot`: after an eye copy, writes the back buffer just copied to that eye to fs25_vr_eye<N>.bmp next to the
+    // log when VRBridge has a request for that eye. Blocks until the GPU has read it back.
+    void SnapshotEyeIfRequested(uint32_t eyeIndex, ID3D12Resource* backBuffer);
     // True while the Desktop Mirror Window is off right now: the player turned it off (VRBridge flag), the
     // Companion Mod's handshake has completed, and the headset session runs with eye swapchains. Everywhere
     // else (Pass-Through Mode, session not running, before the handshake) the mirror shows by itself.

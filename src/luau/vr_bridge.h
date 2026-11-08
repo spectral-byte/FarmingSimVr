@@ -131,6 +131,14 @@ public:
     float GetMenuDistance() const { return m_menuDistance; }
     void SetMenuDistance(float metres);
 
+    // `vrEyeSnapshot` (diagnostics): the next stereo frame the DXGI proxy copies to each eye is also written to a picture
+    // file next to the log, once per eye. Consume returns true once for each eye of a request.
+    void RequestEyeSnapshot() { m_eyeSnapshotRequests.store(0b11u); }
+    bool ConsumeEyeSnapshotRequest(uint32_t eyeIndex) {
+        const uint32_t bit = 1u << (eyeIndex & 1u);
+        return (m_eyeSnapshotRequests.fetch_and(~bit) & bit) != 0;
+    }
+
     // Whether Mouse Confinement may keep the Desk Mouse on the game picture while the headset is in use.
     // On by default; the Companion Mod sets it (`vrMouseConfinement`) and the DXGI proxy reads it every present.
     bool IsMouseConfinementEnabled() const { return m_mouseConfinementEnabled; }
@@ -169,6 +177,7 @@ public:
     static int Lua_GetFovOverscan(lua_State* L);
     static int Lua_SetMenuDistance(lua_State* L);
     static int Lua_GetMenuDistance(lua_State* L);
+    static int Lua_SnapshotEyes(lua_State* L);
     static int Lua_SetMouseConfinement(lua_State* L);
     static int Lua_GetMouseConfinement(lua_State* L);
     static int Lua_ResetTemporalHistory(lua_State* L);
@@ -255,6 +264,7 @@ public:
         {"getFovOverscan", &Lua_GetFovOverscan},
         {"setMenuDistance", &Lua_SetMenuDistance},
         {"getMenuDistance", &Lua_GetMenuDistance},
+        {"snapshotEyes", &Lua_SnapshotEyes},
         {"getRenderingMode", &Lua_GetRenderingMode},
         {"setRenderingMode", &Lua_SetRenderingMode},
         {"getSubPassIndex", &Lua_GetSubPassIndex},
@@ -299,6 +309,7 @@ private:
     bool m_mouseConfinementEnabled = true;
     float m_fovOverscan = 0.0f;
     float m_menuDistance = OpenXrManager::kDefaultMenuQuadDistance;
+    std::atomic<uint32_t> m_eyeSnapshotRequests{0};
     // The OpenXR manager renders without the overscan while a menu or 2D Floating Window Mode is shown.
     void UpdateFovOverscanSuspension();
 

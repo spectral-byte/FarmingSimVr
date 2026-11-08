@@ -645,6 +645,45 @@ test("DisabledHeadTrackingRevertsConvergenceOffsetSmoothlyToZero", function()
     VRCompanion.headTrackingEnabled = true
 end)
 
+-- In the game the engine's own head-tracking setting reads off (no TrackIR) while the mod places the head itself (as found for
+-- the Pointer Ray, 2b334b7): the HUD must keep the depth it is set to, or vrHudDepth and vrDialogDepth do nothing.
+test("TheHudKeepsItsDepthWhileTheEnginesHeadTrackingSettingIsOff", function()
+    useSafeArea(0.20, 0.16)
+    local curParity = 0
+    _G.VRBridge = {
+        getFrameParity = function() return curParity end,
+        getIpd = function() return 0.064 end,
+        isReady = function() return true end
+    }
+    _G.GameSettings = { SETTING = { IS_HEAD_TRACKING_ENABLED = 42 } }
+    _G.g_gameSettings = { getValue = function(self, setting) if setting == 42 then return false end return nil end }
+    _G.isHeadTrackingAvailable = function() return false end
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+    local ok, err = pcall(function()
+        assert(VRCompanion:isHeadTrackingActive() == false, "the engine's setting reads off, as in the game")
+
+        local left, _, offset = VRCompanion:updateHudConvergence()
+        assert(math.abs(offset - 0.012) < 0.0001, "the HUD is drawn at its 1.8 m depth: offset " .. offset)
+        assert(math.abs(left - 0.212) < 0.0001, "and the HUD moves with it: " .. left)
+
+        VRCompanion.hudConvergenceDepth = 3.0
+        for f = 1, 30 do
+            curParity = f % 2
+            VRCompanion:updateHudConvergence(16)
+        end
+        assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.0072) < 0.00001,
+            "a new depth reaches the HUD: " .. VRCompanion.currentConvergenceDisparity)
+    end)
+    _G.GameSettings = nil
+    _G.g_gameSettings = nil
+    _G.isHeadTrackingAvailable = nil
+    _G.VRBridge = nil
+    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    assert(ok, tostring(err))
+end)
+
 test("PassThroughModeDetectionAndGameSettingsIntegration", function()
     -- When VRBridge is nil -> pass through is true
     _G.VRBridge = nil
@@ -1035,6 +1074,44 @@ test("AnErrorInANestedUpdateKeepsItsRaiseSiteAndClosesEveryScope", function()
     assert(depth == 0, "an error in a nested scope must not leave a scope open, depth=" .. tostring(depth))
 end)
 
+-- The shift that puts the HUD at a depth comes from the view the eyes are rendered with: a point `depth` metres ahead is
+-- seen half the IPD to the side by each eye, which is (ipd / 2) / depth in tangent, over a screen 2 tan(fovX / 2) wide.
+-- (Headset check: with a fixed factor the HUD read at about half the depth set on a 109 degree view.)
+test("TheHudShiftIsTheDisparityOfItsDepthInTheRenderedView", function()
+    local fovX = math.rad(109.0)
+    _G.VRBridge = {
+        getIpd = function() return 0.064 end,
+        isReady = function() return true end,
+        getEyeProjection = function(eye, target)
+            local projection = target or {}
+            projection.isValid, projection.fovX, projection.fovY = true, fovX, fovX
+            return projection
+        end,
+    }
+    VRCompanion.is2DViewActive = false
+    local ok, err = pcall(function()
+        local function expected(depth, view) return 0.064 / (4.0 * depth * math.tan(view / 2.0)) end
+        -- The camera path fetches the eye projection every sub-pass; the HUD takes the FOV from that fetch
+        assert(VRCompanion:fetchEyeProjection(0), "the projection is fetched")
+        local atDefault = VRCompanion:computeConvergenceDisparity(0.064, 1.8)
+        assert(math.abs(atDefault - expected(1.8, fovX)) < 1e-6, string.format("1.8 m in a 109 degree view: %.6f", atDefault))
+        local atFive = VRCompanion:computeConvergenceDisparity(0.064, 5.0)
+        assert(math.abs(atFive - expected(5.0, fovX)) < 1e-6, string.format("5 m: %.6f", atFive))
+
+        -- The FOV Overscan widens the rendered view, which the projection already says: it is not taken off a second time
+        VRCompanion.fovOverscan = 20
+        fovX = 2.0 * math.atan(math.tan(math.rad(109.0) / 2.0) * 1.2)
+        VRCompanion:fetchEyeProjection(0)
+        local overscanned = VRCompanion:computeConvergenceDisparity(0.064, 1.8)
+        assert(math.abs(overscanned - expected(1.8, fovX)) < 1e-6, string.format("with 20%% overscan: %.6f", overscanned))
+        assert(math.abs(overscanned - atDefault / 1.2) < 1e-6, "the same depth, in a view 1.2 times wider")
+    end)
+    VRCompanion.fovOverscan = 0
+    VRCompanion.renderedFovX = nil
+    _G.VRBridge = nil
+    assert(ok, tostring(err))
+end)
+
 -- vrHudDepth: the console command that sets the depth the HUD reads at
 test("VrHudDepthIsACoreConsoleCommand", function()
     local found = nil
@@ -1043,7 +1120,7 @@ test("VrHudDepthIsACoreConsoleCommand", function()
     end
     assert(found ~= nil, "vrHudDepth must be registered with the other core commands on map load")
     assert(found.method == "consoleCommandSetHudDepth", "registered callback: " .. tostring(found.method))
-    assert(string.find(found.description, "vrHudDepth [0.5-5.0]", 1, true) ~= nil, "help names the usage: " .. found.description)
+    assert(string.find(found.description, "vrHudDepth [1.0-5.0]", 1, true) ~= nil, "help names the usage: " .. found.description)
 end)
 
 test("VrHudDepthEasesTheHudToTheNewDepthSavesItAndRefusesBadValues", function()
@@ -1065,7 +1142,7 @@ test("VrHudDepthEasesTheHudToTheNewDepthSavesItAndRefusesBadValues", function()
     assert(math.abs(VRCompanion.currentConvergenceOffset - 0.012) < 0.0001, "1.8 m by default")
     local report = VRCompanion:consoleCommandSetHudDepth()
     assert(string.find(report, "HUD depth: 1.8 m", 1, true) ~= nil, report)
-    assert(string.find(report, "Usage: vrHudDepth [0.5-5.0] (metres, saved, 1.8 by default)", 1, true) ~= nil, report)
+    assert(string.find(report, "Usage: vrHudDepth [1.0-5.0] (metres, saved, 1.8 by default)", 1, true) ~= nil, report)
 
     local reply = VRCompanion:consoleCommandSetHudDepth("3")
     assert(string.find(reply, "HUD depth set to: 3 m (Saved)", 1, true) ~= nil, reply)
@@ -1081,7 +1158,7 @@ test("VrHudDepthEasesTheHudToTheNewDepthSavesItAndRefusesBadValues", function()
     VRCompanion:updateHudConvergence(16)
     assert(math.abs(_G.g_hudAnchorLeft - 0.2072) < 0.0001, "the HUD moves by the new offset: " .. _G.g_hudAnchorLeft)
 
-    for _, bad in ipairs({ "0.4", "5.5", "0", "-1", "far", "3m", "nan", "inf", " " }) do
+    for _, bad in ipairs({ "0.5", "0.9", "5.5", "0", "-1", "far", "3m", "nan", "inf", " " }) do
         local refused = VRCompanion:consoleCommandSetHudDepth(bad)
         assert(string.find(refused, "Usage: vrHudDepth", 1, true) ~= nil, "'" .. bad .. "' returns the usage: " .. refused)
         assert(VRCompanion.hudConvergenceDepth == 3, "'" .. bad .. "' leaves the depth alone")
@@ -1110,6 +1187,17 @@ test("TheHudDepthTheCommandSetsIsWhatSettingsXmlGetsAndGivesBack", function()
     VRCompanion:loadConfiguration("settings.xml")
     assert(VRCompanion.hudConvergenceDepth == 4.25, "and loaded back: " .. tostring(VRCompanion.hudConvergenceDepth))
 
+    -- Older versions allowed 0.5 m, and the file can be edited by hand: a depth out of range loads as the nearest one allowed
+    store["vrSettings.hudConvergenceDepth"] = 0.5
+    VRCompanion:loadConfiguration("settings.xml")
+    assert(VRCompanion.hudConvergenceDepth == 1.0, "0.5 m loads as 1 m: " .. tostring(VRCompanion.hudConvergenceDepth))
+    store["vrSettings.hudConvergenceDepth"] = 9
+    VRCompanion:loadConfiguration("settings.xml")
+    assert(VRCompanion.hudConvergenceDepth == 5.0, "9 m loads as 5 m: " .. tostring(VRCompanion.hudConvergenceDepth))
+    store["vrSettings.hudConvergenceDepth"] = 0 / 0
+    VRCompanion:loadConfiguration("settings.xml")
+    assert(VRCompanion.hudConvergenceDepth == VRCompanion.DEFAULT_CONVERGENCE_DEPTH, "not a number loads the default")
+
     _G.getUserProfileAppPath = nil
     _G.createXMLFile = nil
     _G.setXMLFloat = nil
@@ -1118,6 +1206,190 @@ test("TheHudDepthTheCommandSetsIsWhatSettingsXmlGetsAndGivesBack", function()
     _G.getXMLFloat = nil
     _G.delete = nil
     VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+end)
+
+-- vrHudTrace: logs, for a few rendered frames, the eye each HUD convergence update placed the HUD for and how far the
+-- overlays drawn on each side reach in each rendered frame
+test("VrHudTraceLogsThePlacementAndTheDrawnReachOfEachEyeAndThenRestoresOverlayRender", function()
+    useSafeArea(0.20, 0.16)
+    local frameIndex, subPass = 7, 0
+    _G.VRBridge = {
+        getActiveEye = function() return subPass end,
+        getSubPassIndex = function() return subPass end,
+        getFrameIndex = function() return frameIndex end,
+        getRenderingMode = function() return "SequentialDualPass" end,
+        getIpd = function() return 0.064 end,
+        isReady = function() return true end,
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+    local drawn = 0
+    local realRender = function() drawn = drawn + 1 end
+    _G.Overlay = { render = realRender }
+    -- A speedometer that draws at the position it was given, and a map that draws at a place of its own whatever it is given
+    local function newDisplay(name, drawAt)
+        local class = {}
+        class.__index = class
+        function class.setPosition(self, x, y) self.x, self.y = x, y end
+        function class.getPosition(self) return self.x, self.y end
+        function class.draw(self) Overlay.render({ x = drawAt(self), width = 0.1 }) end
+        return setmetatable({ name = name }, class)
+    end
+    local speedMeter = newDisplay("SpeedMeterDisplay", function(self) return self.x - 0.1 end)
+    local map = newDisplay("IngameMap", function() return 0.0156 end)
+    -- The map draws through the mod's runMapDraw, whose own Overlay.render hook (inside the trace's) moves each overlay by
+    -- the map shift; here the shift is the eye's offset, so the trace must report the map moving with the eye
+    local mapClassDraw = getmetatable(map).draw
+    getmetatable(map).draw = function(self)
+        return VRCompanion:runMapDraw(function()
+            VRCompanion.mapDrawShiftX = VRCompanion.currentConvergenceOffset
+            mapClassDraw(self)
+        end)
+    end
+    _G.g_currentMission = { hud = { speedMeter = speedMeter, ingameMap = map } }
+    VRCompanion.hudState = VRCompanion.HUD_STATE_FULL
+    local lines = {}
+    local realPrint = print
+    print = function(...)
+        local parts = {}
+        for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+        lines[#lines + 1] = table.concat(parts, "\t")
+    end
+    local function linesWith(needle)
+        local found = {}
+        for _, line in ipairs(lines) do
+            if string.find(line, needle, 1, true) then found[#found + 1] = line end
+        end
+        return found
+    end
+    -- One rendered frame: the HUD placed for the eye, then the displays drawn and a crosshair drawn outside them
+    local function renderFrame()
+        VRCompanion:updateHudConvergence()
+        speedMeter:draw()
+        map:draw()
+        Overlay.render({ x = 0.49, width = 0.02 })
+    end
+
+    local ok, err = pcall(function()
+        local reply = VRCompanion:consoleCommandHudTrace("2")
+        assert(string.find(reply, "HUD trace started for 2 rendered frames", 1, true) ~= nil, reply)
+        assert(#linesWith("HUD trace: start, 2 frames; mode Sequential Dual-Pass") == 1, table.concat(lines, "\n"))
+
+        renderFrame()
+        subPass = 1
+        renderFrame()
+        subPass, frameIndex = 0, 8
+        renderFrame()
+
+        -- The second frame's line is written when the third frame's first overlay is drawn, so its update is logged too
+        local updates = linesWith("HUD trace: update")
+        assert(#updates == 3, "one update line per update until the trace ends: " .. table.concat(updates, "\n"))
+        assert(string.find(updates[1], "frame 7 sub-pass 0 active eye 0, placed for eye 0 at offset +0.0120: speedometer x=0.7120", 1, true) ~= nil, updates[1])
+        assert(string.find(updates[2], "frame 7 sub-pass 1 active eye 1, placed for eye 1 at offset -0.0120: speedometer x=0.6880", 1, true) ~= nil, updates[2])
+        assert(string.find(updates[3], "frame 8 sub-pass 0 active eye 0", 1, true) ~= nil, updates[3])
+        -- Each display's own range, the map's where the mod's shift puts it: both move with the eye
+        local rendered = linesWith("HUD trace: rendered")
+        assert(#rendered == 2, "one line per rendered frame: " .. table.concat(rendered, "\n"))
+        assert(string.find(rendered[1], "rendered frame 7 sub-pass 0 eye 0: speedometer 0.6120..0.7120 (1), map 0.0276..0.1276 (1), other 0.4900..0.5100 (1)", 1, true) ~= nil, rendered[1])
+        assert(string.find(rendered[2], "rendered frame 7 sub-pass 1 eye 1: speedometer 0.5880..0.6880 (1), map 0.0036..0.1036 (1), other 0.4900..0.5100 (1)", 1, true) ~= nil, rendered[2])
+        assert(#linesWith("HUD trace: end") == 1, "the trace ends by itself")
+        assert(Overlay.render == realRender, "Overlay.render is the game's own again")
+        assert(rawget(speedMeter, "draw") == nil and rawget(map, "draw") == nil, "the displays draw with their own class again")
+        assert(drawn == 9, "every overlay was still drawn: " .. drawn)
+
+        local refused = VRCompanion:consoleCommandHudTrace("0")
+        assert(string.find(refused, "Usage: vrHudTrace", 1, true) ~= nil, refused)
+        assert(Overlay.render == realRender, "a refused trace wraps nothing")
+    end)
+    print = realPrint
+    VRCompanion:stopHudTrace()
+    VRCompanion.mapDrawShiftX = 0.0
+    _G.Overlay = nil
+    _G.VRBridge = nil
+    _G.g_currentMission = nil
+    assert(ok, tostring(err))
+end)
+
+-- vrHudEyeTest: the HUD moved far right in the frames of one eye only, to see in the headset which eye shows those frames
+test("VrHudEyeTestMovesTheHudInTheNamedEyesFramesOnly", function()
+    useSafeArea(0.20, 0.16)
+    local curParity = 0
+    _G.VRBridge = {
+        getFrameParity = function() return curParity end,
+        getIpd = function() return 0.064 end,
+        isReady = function() return true end
+    }
+    VRCompanion.handshakeComplete = true
+    VRCompanion.passThroughMode = false
+    VRCompanion.headTrackingEnabled = true
+    local ok, err = pcall(function()
+        local reply = VRCompanion:consoleCommandHudEyeTest("left")
+        assert(string.find(reply, "only the left eye should show the HUD moved right", 1, true) ~= nil, reply)
+        curParity = 0
+        local left0, _, off0 = VRCompanion:updateHudConvergence()
+        assert(math.abs(off0 - 0.162) < 0.0001, "the left eye's frames get the test shift on top: " .. off0)
+        assert(math.abs(left0 - 0.362) < 0.0001, "and the HUD moves with it: " .. left0)
+        curParity = 1
+        local _, _, off1 = VRCompanion:updateHudConvergence()
+        assert(math.abs(off1 + 0.012) < 0.0001, "the right eye's frames are as always: " .. off1)
+
+        VRCompanion:consoleCommandHudEyeTest("right")
+        curParity = 1
+        _, _, off1 = VRCompanion:updateHudConvergence()
+        assert(math.abs(off1 - 0.138) < 0.0001, "now the right eye's frames get it: " .. off1)
+        curParity = 0
+        _, _, off0 = VRCompanion:updateHudConvergence()
+        assert(math.abs(off0 - 0.012) < 0.0001, off0)
+        assert(string.find(VRCompanion:consoleCommandHudEyeTest(), "HUD eye test: right", 1, true) ~= nil)
+
+        assert(string.find(VRCompanion:consoleCommandHudEyeTest("both"), "Usage: vrHudEyeTest", 1, true) ~= nil)
+        assert(VRCompanion.hudEyeTestEye == 1, "a refused argument leaves the test as it was")
+        VRCompanion:consoleCommandHudEyeTest("off")
+        curParity = 1
+        _, _, off1 = VRCompanion:updateHudConvergence()
+        assert(math.abs(off1 + 0.012) < 0.0001, "off: no test shift: " .. off1)
+    end)
+    VRCompanion.hudEyeTestEye = nil
+    _G.VRBridge = nil
+    assert(ok, tostring(err))
+end)
+
+test("VrEyeSnapshotAsksTheInjectorForASnapshotOfEachEye", function()
+    local requests = 0
+    _G.VRBridge = { snapshotEyes = function() requests = requests + 1 end }
+    local ok, err = pcall(function()
+        local reply = VRCompanion:consoleCommandEyeSnapshot()
+        assert(requests == 1, "the request reaches VRBridge")
+        assert(string.find(reply, "fs25_vr_eye0.bmp (left) and fs25_vr_eye1.bmp (right)", 1, true) ~= nil, reply)
+        _G.VRBridge = {}
+        reply = VRCompanion:consoleCommandEyeSnapshot()
+        assert(string.find(reply, "Eye snapshot unavailable", 1, true) ~= nil, "an older Injector: " .. reply)
+    end)
+    _G.VRBridge = nil
+    assert(ok, tostring(err))
+end)
+
+test("VrHudTraceEndsWhenNothingIsDrawnThroughOverlays", function()
+    useSafeArea(0.20, 0.16)
+    _G.VRBridge = { getIpd = function() return 0.064 end, isReady = function() return true end }
+    local realRender = function() end
+    _G.Overlay = { render = realRender }
+    local realPrint = print
+    local ended = false
+    print = function(line) if string.find(tostring(line), "no overlays were rendered", 1, true) then ended = true end end
+    local ok, err = pcall(function()
+        VRCompanion:consoleCommandHudTrace("1")
+        for _ = 1, 10 do VRCompanion:updateHudConvergence() end
+        assert(ended, "the trace says nothing was drawn and ends")
+        assert(not VRCompanion:isHudTracing())
+        assert(Overlay.render == realRender)
+    end)
+    print = realPrint
+    VRCompanion:stopHudTrace()
+    _G.Overlay = nil
+    _G.VRBridge = nil
+    assert(ok, tostring(err))
 end)
 
 print(string.format("Summary: %d passed, %d failed", passed, failed))

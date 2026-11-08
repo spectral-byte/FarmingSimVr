@@ -115,9 +115,33 @@ function VRCompanion:compensateHudEdgeDistance(distance)
     return 0.5 - (0.5 - distance) * compensation
 end
 
--- The scale a group is drawn at: the game's UI scale setting times the group's own scale, shrunk by the FOV Overscan
+-- The HUD Depth moves the HUD Groups back or forward as one panel straight ahead. Their layouts are set for the default depth
+-- (1.8 m), so at `depth` a group looks default / depth times its size and sits that much nearer to the screen centre, as a
+-- panel does from further away; the convergence disparity puts it at the same depth. 2D Floating Window Mode has no depth.
+function VRCompanion:getHudDepthScale()
+    local depth = self.hudConvergenceDepth
+    if self.is2DViewActive or type(depth) ~= "number" or depth ~= depth then return 1.0 end
+    return self.DEFAULT_CONVERGENCE_DEPTH / self:clamp(depth, self.MIN_HUD_DEPTH, self.MAX_HUD_DEPTH)
+end
+
+-- How much the HUD Groups are shrunk toward the screen centre: the FOV Overscan compensation and the HUD Depth together.
+-- The HUD Safe Area takes only the overscan: warnings, notifications and other mods' HUDs are not drawn at the groups' scale.
+function VRCompanion:getHudGroupViewScale()
+    return self:getHudFovCompensation() * self:getHudDepthScale()
+end
+
+-- A HUD Group Margin, as the normalized distance from the screen edge the group is placed at: pulled in toward the centre, or
+-- pushed out toward the edge by a HUD Depth nearer than the default, but never past the edge
+function VRCompanion:placeHudGroupEdgeDistance(margin)
+    local viewScale = self:getHudGroupViewScale()
+    if viewScale == 1.0 then return margin end
+    return self:clamp(0.5 - (0.5 - margin) * viewScale, 0.0, 0.5)
+end
+
+-- The scale a group is drawn at: the game's UI scale setting times the group's own scale, shrunk by the FOV Overscan and
+-- scaled by the HUD Depth
 function VRCompanion:getHudGroupScale(groupName)
-    return self:getHudBaseUiScale() * self:getHudGroupLayout(groupName).scale * self:getHudFovCompensation()
+    return self:getHudBaseUiScale() * self:getHudGroupLayout(groupName).scale * self:getHudGroupViewScale()
 end
 
 -- Width and height of a display, 0 where it does not say
@@ -153,11 +177,11 @@ function VRCompanion:getHudDisplayPosition(display, displayName, convergenceOffs
     local offset = convergenceOffset or 0.0
     local group, groupName = findHudGroup(displayName)
     if group == nil then
-        return 0.5 + offset, self:compensateHudEdgeDistance(self:getHudGroupLayout(CONTEXT_ACTION_ANCHOR_GROUP).marginY)
+        return 0.5 + offset, self:placeHudGroupEdgeDistance(self:getHudGroupLayout(CONTEXT_ACTION_ANCHOR_GROUP).marginY)
     end
     local layout = self:getHudGroupLayout(groupName)
-    local marginX = self:compensateHudEdgeDistance(layout.marginX)
-    local marginY = self:compensateHudEdgeDistance(layout.marginY)
+    local marginX = self:placeHudGroupEdgeDistance(layout.marginX)
+    local marginY = self:placeHudGroupEdgeDistance(layout.marginY)
     local w, h
     if displayName == "FillLevelsDisplay" then
         w, h = self:getFillLevelsBlockSize(display)
@@ -210,6 +234,18 @@ local function setDisplayVisible(display, isVisible)
     end
 end
 
+-- tan(fovX / 2) of the view the eyes are rendered with, or nil before the camera path has fetched a headset projection. The
+-- FOV is the one fetchEyeProjection last read (both eyes are rendered with the same symmetric FOV, which already holds the
+-- FOV Overscan), so the HUD asks VRBridge nothing more per update.
+local function renderedTanHalfFovX(self)
+    local fovX = self.renderedFovX
+    if type(fovX) ~= "number" or not (fovX > 0.01 and fovX < math.pi - 0.01) then return nil end
+    return math.tan(fovX * 0.5)
+end
+
+-- The share of the screen width each eye's HUD is shifted by so that it reads `depth` metres away: each eye sees a point that
+-- far straight ahead half the IPD to the side, (ipd / 2) / depth in tangent, on a screen 2 tan(fovX / 2) wide. Without a
+-- headset projection, the old fixed factor (right for a 73 degree view) stands in, shrunk by the FOV Overscan.
 function VRCompanion:computeConvergenceDisparity(ipd, depth)
     local targetDepth = depth or self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH
     if targetDepth == nil or targetDepth <= 0.001 then
@@ -236,26 +272,33 @@ function VRCompanion:computeConvergenceDisparity(ipd, depth)
     end
 
     local clampedIpd = self:clamp(targetIpd, self.MIN_IPD, self.MAX_IPD)
+    local tanHalfFovX = renderedTanHalfFovX(self)
+    if tanHalfFovX ~= nil then
+        return self:clamp(clampedIpd / (4.0 * targetDepth * tanHalfFovX), self.MIN_CONVERGENCE_DISPARITY, self.MAX_CONVERGENCE_DISPARITY)
+    end
     local disparity = (clampedIpd / targetDepth) * self.CONVERGENCE_PARALLAX_FACTOR
 
     return self:clamp(disparity, self.MIN_CONVERGENCE_DISPARITY, self.MAX_CONVERGENCE_DISPARITY) * compensation
 end
 
--- `vrHudDepth [0.5-5.0]` sets how far away the HUD Groups read in the headset, in metres (1.8 by default, saved as
--- vrSettings.hudConvergenceDepth): the depth the HUD Convergence Offset is computed for. Further away, the HUD is shifted less
--- between the eyes; it keeps its size and its place on the screen. The next updates ease the offset to the new depth.
+-- `vrHudDepth [1.0-5.0]` sets the HUD Depth, how far away the HUD Groups are in the headset, in metres (1.8 by default,
+-- saved as vrSettings.hudConvergenceDepth). The groups move back or forward as one panel: further away they are drawn smaller
+-- and nearer to the screen centre (getHudDepthScale) and shifted less between the eyes (the HUD Convergence Offset, which the
+-- next updates ease to the new depth). They are placed again at once.
 function VRCompanion:setHudConvergenceDepth(depth, save)
-    if type(depth) ~= "number" or depth ~= depth or depth < self.MIN_CONVERGENCE_DEPTH or depth > self.MAX_CONVERGENCE_DEPTH then
+    if type(depth) ~= "number" or depth ~= depth or depth < self.MIN_HUD_DEPTH or depth > self.MAX_HUD_DEPTH then
         return false
     end
     self.hudConvergenceDepth = depth
+    -- 2D Floating Window Mode keeps the engine's layout; the depth applies on returning to VR
+    if not self.is2DViewActive then self:repositionAllHudDisplays() end
     if save and type(self.saveConfiguration) == "function" then self:saveConfiguration() end
     return true
 end
 
 function VRCompanion:consoleCommandSetHudDepth(arg)
     local usage = string.format("Usage: vrHudDepth [%.1f-%.1f] (metres, saved, %.1f by default)",
-        self.MIN_CONVERGENCE_DEPTH, self.MAX_CONVERGENCE_DEPTH, self.DEFAULT_CONVERGENCE_DEPTH)
+        self.MIN_HUD_DEPTH, self.MAX_HUD_DEPTH, self.DEFAULT_CONVERGENCE_DEPTH)
     if arg == nil or arg == "" then
         return string.format("HUD depth: %g m. %s", self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH, usage)
     end
@@ -263,6 +306,257 @@ function VRCompanion:consoleCommandSetHudDepth(arg)
     if not self:setHudConvergenceDepth(depth, true) then return usage end
     print(string.format("[FS25_VR] HUD depth set to: %g m", depth))
     return string.format("HUD depth set to: %g m (Saved)", depth)
+end
+
+-- `vrHudTrace [frames]` (diagnostics, not saved): for the next rendered frames (12 by default, up to 120) logs to log.txt
+-- where the HUD is placed for each eye, to find out in the headset why the HUD only shifts sideways instead of taking its depth.
+--   update lines: every HUD convergence update, with the frame and eye it ran for, the offset it placed the HUD Groups at and
+--                 where each group's display says it is.
+--   rendered lines: one per rendered frame, keyed by VRBridge's frame and sub-pass, with the eye that frame goes to and, for
+--                 each HUD display, the x range its overlays were drawn over in that frame ("other": overlays drawn outside
+--                 the displays' own draw).
+-- Under Sequential Dual-Pass a display's range should differ by twice the offset between the two frames of a pair: the same
+-- range in both eyes is a display drawn with one layout for both. Overlay.render, and the draw of each display instance, are
+-- wrapped only while the trace runs.
+local HUD_TRACE_DEFAULT_FRAMES = 12
+local HUD_TRACE_MAX_FRAMES = 120
+local HUD_TRACE_UPDATES_PER_FRAME = 4
+local HUD_TRACE_DISPLAYS = { "speedometer", "fillLevels", "info", "controls", "map", "context", "other" }
+local hudTrace = { frames = 0, updates = 0, wrappedDraws = {} }
+
+-- The HUD's displays by trace name
+local function hudTraceDisplays(self)
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    if hud == nil then return {} end
+    return {
+        speedometer = hud.speedMeter or hud.speedMeterDisplay,
+        fillLevels = self:getFillLevelsDisplay(hud),
+        info = hud.gameInfo or hud.gameInfoDisplay,
+        controls = hud.inputHelp or hud.inputHelpDisplay,
+        map = hud.ingameMap or hud.ingameMapDisplay,
+        context = hud.contextAction or hud.contextActionDisplay,
+    }
+end
+
+-- Restores the display being drawn and passes on the draw's results, or rethrows its error
+local function endTracedDraw(previous, ok, ...)
+    hudTrace.current = previous
+    if not ok then error((...), 0) end
+    return ...
+end
+
+-- While the trace runs, each display's draw names the display its overlays belong to
+local function wrapHudTraceDraws(self)
+    for name, display in pairs(hudTraceDisplays(self)) do
+        if type(display) == "table" and type(display.draw) == "function" then
+            local own = rawget(display, "draw")
+            local original = display.draw
+            local wrapper = function(instance, ...)
+                local previous = hudTrace.current
+                hudTrace.current = name
+                return endTracedDraw(previous, pcall(original, instance, ...))
+            end
+            display.draw = wrapper
+            table.insert(hudTrace.wrappedDraws, { display = display, own = own, wrapper = wrapper })
+        end
+    end
+end
+
+local function unwrapHudTraceDraws()
+    for _, wrapped in ipairs(hudTrace.wrappedDraws) do
+        if rawget(wrapped.display, "draw") == wrapped.wrapper then
+            wrapped.display.draw = wrapped.own
+        end
+    end
+    hudTrace.wrappedDraws = {}
+    hudTrace.current = nil
+end
+
+local function hudTraceFrame()
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    local function read(name)
+        if bridge ~= nil and type(bridge[name]) == "function" then
+            local ok, value = pcall(bridge[name])
+            if ok and type(value) == "number" then return value end
+        end
+        return 0
+    end
+    local frame, subPass, eye = read("getFrameIndex"), read("getSubPassIndex"), read("getActiveEye")
+    return frame * 2 + subPass, frame, subPass, eye
+end
+
+local function describeX(x)
+    return (type(x) == "number") and string.format("%.4f", x) or "-"
+end
+
+local function flushHudTraceFrame()
+    local f = hudTrace.rendered
+    if f == nil then return end
+    hudTrace.rendered = nil
+    local parts = {}
+    for _, name in ipairs(HUD_TRACE_DISPLAYS) do
+        local range = f.byDisplay[name]
+        if range ~= nil then
+            table.insert(parts, string.format("%s %s..%s (%d)", name, describeX(range.min), describeX(range.max), range.count))
+        end
+    end
+    print(string.format("[FS25_VR] HUD trace: rendered frame %d sub-pass %d eye %d: %s",
+        f.frame, f.subPass, f.eye, (#parts > 0) and table.concat(parts, ", ") or "no overlays"))
+    hudTrace.frames = hudTrace.frames - 1
+    if hudTrace.frames <= 0 then VRCompanion:stopHudTrace() end
+end
+
+local function recordHudTraceOverlay(overlay)
+    local key, frame, subPass, eye = hudTraceFrame()
+    if hudTrace.rendered ~= nil and hudTrace.rendered.key ~= key then
+        flushHudTraceFrame()
+        if hudTrace.frames <= 0 then return end
+    end
+    local f = hudTrace.rendered
+    if f == nil then
+        f = { key = key, frame = frame, subPass = subPass, eye = eye, byDisplay = {} }
+        hudTrace.rendered = f
+    end
+    local x, width = tonumber(overlay.x), tonumber(overlay.width) or 0
+    if x == nil then return end
+    -- The mod's own Overlay.render hook, which this one wraps, moves the map's overlays to the Map group as they are drawn
+    -- (runMapDraw): log where they land, not where the engine put them
+    if VRCompanion.mapDrawDepth > 0 and VRCompanion.mapHotspotDepth == 0 then
+        x = x + (VRCompanion.mapDrawShiftX or 0.0)
+    end
+    local name = hudTrace.current or "other"
+    local range = f.byDisplay[name]
+    if range == nil then
+        range = { min = x, max = x + width, count = 0 }
+        f.byDisplay[name] = range
+    end
+    range.min = math.min(range.min, x)
+    range.max = math.max(range.max, x + width)
+    range.count = range.count + 1
+end
+
+function VRCompanion:isHudTracing()
+    return hudTrace.frames > 0
+end
+
+function VRCompanion:startHudTrace(frames)
+    local overlayClass = Overlay or (_G and _G.Overlay)
+    if type(overlayClass) ~= "table" or type(overlayClass.render) ~= "function" then return false end
+    self:stopHudTrace()
+    hudTrace.frames = frames
+    hudTrace.updates = frames * HUD_TRACE_UPDATES_PER_FRAME
+    hudTrace.overlayClass = overlayClass
+    local original = overlayClass.render
+    hudTrace.originalRender = original
+    hudTrace.wrapper = function(overlay, ...)
+        if hudTrace.frames > 0 then pcall(recordHudTraceOverlay, overlay) end
+        return original(overlay, ...)
+    end
+    overlayClass.render = hudTrace.wrapper
+    wrapHudTraceDraws(self)
+    local _, frame, subPass, eye = hudTraceFrame()
+    print(string.format("[FS25_VR] HUD trace: start, %d frames; mode %s, HUD state %s, depth %g m, disparity %.4f, frame %d sub-pass %d eye %d",
+        frames, (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "Sequential Dual-Pass" or "AFR",
+        tostring(self.HUD_STATE_NAMES[self:getHudState()]), self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH,
+        self.currentConvergenceDisparity or 0.0, frame, subPass, eye))
+    return true
+end
+
+function VRCompanion:stopHudTrace()
+    local overlayClass = hudTrace.overlayClass
+    if overlayClass ~= nil and overlayClass.render == hudTrace.wrapper then
+        overlayClass.render = hudTrace.originalRender
+    end
+    unwrapHudTraceDraws()
+    local wasTracing = hudTrace.overlayClass ~= nil
+    hudTrace.frames, hudTrace.updates = 0, 0
+    hudTrace.overlayClass, hudTrace.originalRender, hudTrace.wrapper, hudTrace.rendered = nil, nil, nil, nil
+    if wasTracing then print("[FS25_VR] HUD trace: end") end
+end
+
+-- One update line: the frame and eye this convergence update ran for, and where it left each group's display
+function VRCompanion:traceHudConvergenceUpdate(eye, offset)
+    if hudTrace.frames <= 0 or hudTrace.updates <= 0 then return end
+    hudTrace.updates = hudTrace.updates - 1
+    local _, frame, subPass, activeEye = hudTraceFrame()
+    local mission = g_currentMission or _G.g_currentMission
+    local hud = (mission ~= nil) and mission.hud or nil
+    local function displayX(display)
+        if display == nil or type(display.getPosition) ~= "function" then return nil end
+        local ok, x = pcall(display.getPosition, display)
+        return ok and x or nil
+    end
+    local speedo, controls, info, map = nil, nil, nil, nil
+    if hud ~= nil then
+        speedo = displayX(hud.speedMeter or hud.speedMeterDisplay)
+        controls = displayX(hud.inputHelp or hud.inputHelpDisplay)
+        info = displayX(hud.gameInfo or hud.gameInfoDisplay)
+        map = displayX(hud.ingameMap or hud.ingameMapDisplay)
+    end
+    print(string.format("[FS25_VR] HUD trace: update frame %d sub-pass %d active eye %d, placed for eye %s at offset %+.4f: speedometer x=%s controls x=%s info x=%s map x=%s",
+        frame, subPass, activeEye, tostring(eye), offset or 0.0, describeX(speedo), describeX(controls), describeX(info), describeX(map)))
+    if hudTrace.updates <= 0 and hudTrace.rendered == nil then
+        -- Nothing was rendered through Overlay.render (the HUD hidden, or drawn some other way): end rather than log forever
+        print("[FS25_VR] HUD trace: no overlays were rendered during the trace")
+        self:stopHudTrace()
+    end
+end
+
+function VRCompanion:consoleCommandHudTrace(arg)
+    local usage = string.format("Usage: vrHudTrace [frames] (1-%d, %d by default): logs to log.txt where the HUD is drawn for each eye",
+        HUD_TRACE_MAX_FRAMES, HUD_TRACE_DEFAULT_FRAMES)
+    local frames = HUD_TRACE_DEFAULT_FRAMES
+    if arg ~= nil and arg ~= "" then
+        frames = tonumber(arg)
+        if frames == nil or frames ~= math.floor(frames) or frames < 1 or frames > HUD_TRACE_MAX_FRAMES then return usage end
+    end
+    if not self:startHudTrace(frames) then
+        return "HUD trace unavailable: the game's Overlay class was not found"
+    end
+    return string.format("HUD trace started for %d rendered frames; read log.txt", frames)
+end
+
+-- `vrHudEyeTest [left|right|off]` (diagnostics, not saved, off after a map unload): moves the whole HUD far to the right, by
+-- HUD_EYE_TEST_SHIFT of the screen width, in the frames rendered for the named eye only. Closing one eye at a time then shows
+-- which eye's image those frames' HUD actually reaches: only that eye (the per-eye HUD works), the other eye (the HUD reaches
+-- the eyes swapped), both eyes or neither (one frame's HUD is shown to both eyes).
+VRCompanion.HUD_EYE_TEST_SHIFT = 0.15
+local HUD_EYE_TEST_EYES = { left = 0, right = 1 }
+
+function VRCompanion:consoleCommandHudEyeTest(arg)
+    local usage = "Usage: vrHudEyeTest [left|right|off]: moves the HUD far right in the frames rendered for that eye only"
+    local name = (arg ~= nil) and string.lower(tostring(arg)) or ""
+    if name == "" then
+        local current = "off"
+        for eyeName, eye in pairs(HUD_EYE_TEST_EYES) do
+            if self.hudEyeTestEye == eye then current = eyeName end
+        end
+        return string.format("HUD eye test: %s. %s", current, usage)
+    end
+    if name == "off" then
+        self.hudEyeTestEye = nil
+        print("[FS25_VR] HUD eye test: off")
+        return "HUD eye test: off"
+    end
+    local eye = HUD_EYE_TEST_EYES[name]
+    if eye == nil then return usage end
+    self.hudEyeTestEye = eye
+    print(string.format("[FS25_VR] HUD eye test: the HUD is moved right by %.2f of the screen in the frames rendered for the %s eye (eye %d)",
+        self.HUD_EYE_TEST_SHIFT, name, eye))
+    return string.format("HUD eye test: %s. Close one eye at a time: only the %s eye should show the HUD moved right", name, name)
+end
+
+-- `vrEyeSnapshot` (diagnostics): asks the Injector to write the next stereo frame it copies to each eye as a picture,
+-- fs25_vr_eye0.bmp (left) and fs25_vr_eye1.bmp (right) next to fs25_vr.log, so what each eye is handed can be looked at.
+function VRCompanion:consoleCommandEyeSnapshot()
+    local bridge = VRBridge or (_G and _G.VRBridge)
+    if bridge == nil or type(bridge.snapshotEyes) ~= "function" then
+        return "Eye snapshot unavailable: this Injector cannot write eye snapshots"
+    end
+    bridge.snapshotEyes()
+    print("[FS25_VR] Eye snapshot requested")
+    return "Eye snapshot requested: fs25_vr_eye0.bmp (left) and fs25_vr_eye1.bmp (right) are written next to fs25_vr.log"
 end
 
 function VRCompanion:getConvergenceDisparity()
@@ -490,7 +784,9 @@ function VRCompanion:updateHudConvergence(dt)
     end
 
     local isPassThrough = self:isPassThroughMode()
-    local isTrackingActive = self:isHeadTrackingActive()
+    -- The mod's own head-tracking switch, not the engine's setting (isHeadTrackingActive): the mod places the head itself,
+    -- and in the game the engine's setting reads off, which kept the HUD at zero disparity whatever its depth.
+    local isTrackingActive = self.headTrackingEnabled ~= false
 
     local targetDisparity = 0.0
     if not isPassThrough and isTrackingActive and not self:isMenuQuadShown() and not self.is2DViewActive then
@@ -520,6 +816,9 @@ function VRCompanion:updateHudConvergence(dt)
         eyeOrParity = self:getFrameParity()
     end
     local offset = self:getConvergenceOffset(eyeOrParity, self.currentConvergenceDisparity)
+    if self.hudEyeTestEye ~= nil and eyeOrParity == self.hudEyeTestEye then
+        offset = offset + self.HUD_EYE_TEST_SHIFT
+    end
 
     self.currentConvergenceOffset = offset
 
@@ -546,6 +845,9 @@ function VRCompanion:updateHudConvergence(dt)
     -- them against this state when the HUD becomes visible.
     if self:getHudState() ~= self.HUD_STATE_HIDDEN then
         self:repositionHudForConvergence()
+    end
+    if self:isHudTracing() then
+        self:traceHudConvergenceUpdate(eyeOrParity, offset)
     end
 
     return shiftedLeft, shiftedRight, offset

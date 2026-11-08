@@ -130,7 +130,10 @@ end
 VRCompanion.CORE_CONSOLE_COMMANDS = {
     { name = "vrHudSafeArea", description = "Set the VR HUD Safe Area, the margin that keeps warnings, notifications and other mods' HUDs inside the lens: vrHudSafeArea <horizontal> <vertical>", method = "consoleCommandSetHudSafeArea" },
     { name = "vrHudGroup", description = "Set a VR HUD Group Margin and scale: vrHudGroup <map|speedometer|info|controls> <horizontal> <vertical> [scale]", method = "consoleCommandSetHudGroup" },
-    { name = "vrHudDepth", description = "How far away the HUD reads in the headset, in metres (saved; 1.8 by default): vrHudDepth [0.5-5.0]", method = "consoleCommandSetHudDepth" },
+    { name = "vrHudDepth", description = "How far away the HUD is in the headset, in metres: further away it looks smaller and nearer the middle of the view (saved; 1.8 by default): vrHudDepth [1.0-5.0]", method = "consoleCommandSetHudDepth" },
+    { name = "vrHudTrace", description = "Log to log.txt where the HUD is drawn for each eye, for the next rendered frames (diagnostics): vrHudTrace [frames]", method = "consoleCommandHudTrace" },
+    { name = "vrHudEyeTest", description = "Move the HUD far right in the frames rendered for one eye only, to check which eye shows them (diagnostics): vrHudEyeTest [left|right|off]", method = "consoleCommandHudEyeTest" },
+    { name = "vrEyeSnapshot", description = "Write the next frame handed to each eye as fs25_vr_eye0.bmp / fs25_vr_eye1.bmp next to fs25_vr.log (diagnostics): vrEyeSnapshot", method = "consoleCommandEyeSnapshot" },
     { name = "vrHudState", description = "Set VR HUD state: vrHudState <0=Hidden | 1=Streamlined | 2=Full>", method = "consoleCommandSetHudState" },
     { name = "vrHudLoadNotification", description = "Toggle HUD alert on map load: vrHudLoadNotification <true|false>", method = "consoleCommandSetHudLoadNotification" },
     { name = "vrHudLoadAlert", description = "Toggle HUD alert on map load: vrHudLoadAlert <true|false>", method = "consoleCommandSetHudLoadNotification" },
@@ -1268,6 +1271,8 @@ function VRCompanion:deleteMap()
     if type(self.resetDesktopMirror) == "function" then self:resetDesktopMirror() end
     if type(self.resetFovOverscan) == "function" then self:resetFovOverscan() end
     if type(self.resetMenuDistance) == "function" then self:resetMenuDistance() end
+    if type(self.stopHudTrace) == "function" then self:stopHudTrace() end
+    self.hudEyeTestEye = nil
     if type(self.resetMouseConfinement) == "function" then self:resetMouseConfinement() end
     if type(self.unregisterPerfTraceConsoleCommands) == "function" then self:unregisterPerfTraceConsoleCommands() end
     if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end

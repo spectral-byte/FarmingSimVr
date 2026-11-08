@@ -1675,6 +1675,107 @@ test("ChangingTheFovOverscanReplacesTheHudAtOnce", function()
     unloadMap()
 end)
 
+-- vrHudDepth moves the HUD Groups back or forward as one panel straight ahead. Their layouts are set for the default depth
+-- (1.8 m); at another depth each group is drawn default / depth times its size and that much nearer to (or further from) the
+-- screen centre, which is how a panel looks from further away, while the convergence disparity gives the same depth.
+local function withHudDepth(depth, fn)
+    VRCompanion.hudConvergenceDepth = depth
+    local ok, err = pcall(fn)
+    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    if not ok then error(err, 0) end
+end
+
+test("AFurtherHudDepthShrinksEveryGroupAndPullsItInTowardTheCentre", function()
+    local hud = makeHud()
+    VRCompanion.activeFillLevelsDisplay = nil
+    loadMapWith(hud)
+    withHudDepth(3.6, function()
+        VRCompanion:repositionAllHudDisplays(hud)
+        -- Twice the default depth: half the size, half as far from the centre
+        local function pulledIn(margin) return 0.5 - (0.5 - margin) * 0.5 end
+        assert(near(hud.ingameMap.position.x, pulledIn(0.30)) and near(hud.ingameMap.position.y, pulledIn(0.22)),
+            "the Map group is pulled in toward the centre")
+        assert(near(hud.speedMeter.position.x, 1.0 - pulledIn(0.30) - 0.15) and near(hud.speedMeter.position.y, pulledIn(0.20)),
+            "the Speedometer group is pulled in toward the centre")
+        assert(near(hud.gameInfo.position.x, 1.0 - pulledIn(0.30) - 0.20) and near(hud.gameInfo.position.y, 1.0 - pulledIn(0.30) - 0.12),
+            "the Info group is pulled in toward the centre")
+        assert(near(hud.inputHelp.position.x, pulledIn(0.30)) and near(hud.inputHelp.position.y, 1.0 - pulledIn(0.30) - 0.30),
+            "the Controls group is pulled in toward the centre")
+        assert(near(hud.contextAction.position.y, pulledIn(0.20)), "the context action stays on the Speedometer group's bottom margin")
+        for _, name in ipairs(DISPLAY_NAMES) do
+            assert(near(hud[name].scale, 0.82 * 0.5), name .. " is drawn at half its size, got " .. tostring(hud[name].scale))
+        end
+    end)
+    unloadMap()
+end)
+
+test("ANearerHudDepthGrowsTheGroupsButKeepsThemOnTheScreen", function()
+    local hud = makeHud()
+    VRCompanion.activeFillLevelsDisplay = nil
+    loadMapWith(hud)
+    withHudDepth(1.0, function()
+        VRCompanion:repositionAllHudDisplays(hud)
+        local grow = 1.8
+        assert(near(hud.ingameMap.position.x, 0.5 - 0.20 * grow), "the Map group is pushed out toward its corner")
+        -- 0.5 - 0.28 * 1.8 and 0.5 - 0.30 * 1.8 would be below the screen: the groups stop at its bottom edge
+        assert(near(hud.ingameMap.position.y, 0.0), "the Map group stops at the bottom edge, got " .. hud.ingameMap.position.y)
+        assert(near(hud.speedMeter.position.y, 0.0), "the Speedometer group stops at the bottom edge, got " .. hud.speedMeter.position.y)
+        for _, name in ipairs(DISPLAY_NAMES) do
+            assert(near(hud[name].scale, 0.82 * grow), name .. " is drawn bigger")
+        end
+    end)
+    unloadMap()
+end)
+
+test("SettingTheHudDepthMovesAndResizesTheHudAtOnce", function()
+    local hud = makeHud()
+    loadMapWith(hud)
+    local saved = installSaveMocks()
+    assert(near(hud.ingameMap.position.x, 0.30) and near(hud.ingameMap.scale, 0.82), "the default depth keeps each group's own layout")
+    VRCompanion:consoleCommandSetHudDepth("3.6")
+    assert(near(hud.ingameMap.position.x, 0.40), "the HUD moves when the depth is set, got " .. hud.ingameMap.position.x)
+    assert(near(hud.ingameMap.scale, 0.41), "the HUD shrinks when the depth is set, got " .. tostring(hud.ingameMap.scale))
+    assert(saved.count == 1, "the depth is saved")
+    VRCompanion:consoleCommandSetHudDepth("1.8")
+    assert(near(hud.ingameMap.position.x, 0.30) and near(hud.ingameMap.scale, 0.82), "the HUD returns with the default depth")
+    removeSaveMocks()
+    unloadMap()
+end)
+
+test("TheHudDepthLeavesTheHudSafeAreaWhereItIs", function()
+    local hud = makeHud()
+    loadMapWith(hud)
+    withHudDepth(3.6, function()
+        VRCompanion:updateHudConvergence(0.016)
+        assert(near(_G.g_hudAnchorBottom, 0.22) and near(_G.g_hudAnchorTop, 0.78),
+            "warnings, notifications and other mods' HUDs keep the Safe Area: " .. _G.g_hudAnchorBottom .. ", " .. _G.g_hudAnchorTop)
+    end)
+    unloadMap()
+end)
+
+test("TheHudDepthAndTheFovOverscanShrinkTheHudTogether", function()
+    local hud = makeHud()
+    loadMapWith(hud)
+    withOverscan(20, function()
+        withHudDepth(3.6, function()
+            VRCompanion:repositionAllHudDisplays(hud)
+            assert(near(hud.ingameMap.scale, 0.82 * OVERSCAN_COMPENSATION * 0.5), "both shrink the Map group")
+            assert(near(hud.ingameMap.position.x, 0.5 - 0.20 * OVERSCAN_COMPENSATION * 0.5), "both pull the Map group in")
+        end)
+    end)
+    unloadMap()
+end)
+
+test("TwoDFloatingWindowModeDrawsTheGroupsAtTheirOwnSizeWhateverTheHudDepth", function()
+    resetHudSettings()
+    withHudDepth(3.6, function()
+        VRCompanion.is2DViewActive = true
+        local scale = VRCompanion:getHudGroupScale("map")
+        VRCompanion.is2DViewActive = false
+        assert(near(scale, 0.82), "2D Floating Window Mode ignores the HUD depth, got " .. scale)
+    end)
+end)
+
 print(string.format("Summary: %d passed, %d failed", passed, failed))
 if failed > 0 then
     error(string.format("%d tests failed", failed))

@@ -44,6 +44,10 @@ VRCompanion.MIN_IPD = 0.040
 VRCompanion.MAX_IPD = 0.085
 VRCompanion.MIN_CONVERGENCE_DEPTH = 0.5
 VRCompanion.MAX_CONVERGENCE_DEPTH = 5.0
+-- The HUD Depth range vrHudDepth takes. The HUD Groups grow as the depth comes nearer than the default their layouts are set
+-- for, so the range stops at 1 m, where the default layout, drawn 1.8 times its size, reaches the screen's edges.
+VRCompanion.MIN_HUD_DEPTH = 1.0
+VRCompanion.MAX_HUD_DEPTH = 5.0
 VRCompanion.MIN_CONVERGENCE_DISPARITY = 0.0
 VRCompanion.MAX_CONVERGENCE_DISPARITY = 0.040
 VRCompanion.CONVERGENCE_PARALLAX_FACTOR = 0.3375
@@ -316,8 +320,9 @@ function VRCompanion:loadConfiguration(xmlPath)
 
                 local loadedDepth = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.hudConvergenceDepth")
-                if loadedDepth ~= nil then
-                    self.hudConvergenceDepth = loadedDepth
+                -- A depth out of vrHudDepth's range (older versions allowed 0.5 m) loads as the nearest one allowed
+                if loadedDepth ~= nil and loadedDepth == loadedDepth then
+                    self.hudConvergenceDepth = self:clamp(loadedDepth, self.MIN_HUD_DEPTH, self.MAX_HUD_DEPTH)
                 else
                     self.hudConvergenceDepth = self.DEFAULT_CONVERGENCE_DEPTH
                 end

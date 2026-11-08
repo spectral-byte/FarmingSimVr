@@ -60,6 +60,10 @@ _Avoid_: VR HUD Inset, UI padding, screen margin, HUD border
 The alternating horizontal screen-space displacement applied across Alternate Frame Rendering (AFR) frames to render 2D interface elements at a comfortable stereoscopic depth.
 _Avoid_: 3D HUD shift, eye disparity offset, stereo HUD hack
 
+**HUD Depth**:
+How far away, in metres, the HUD Groups are in the headset, 1.8 by default. The groups move back or forward together as one panel straight ahead: their layouts are set for the default depth, and at another depth they are drawn smaller or bigger and nearer to or further from the middle of the view by the same factor, while the HUD Convergence Offset gives them that depth. A nearer HUD Depth never pushes a group past the screen's edge. The HUD Safe Area does not move with it.
+_Avoid_: HUD distance, convergence depth, HUD scale
+
 **HUD Toggle Action**:
 The bindable in-engine input action that toggles or pulses the visibility of the in-game HUD between hidden and visible states.
 _Avoid_: Show HUD button, HUD keybind, UI switch
