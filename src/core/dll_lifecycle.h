@@ -5,7 +5,8 @@
 namespace fs25vr {
 
 // Work performed from DllMain. Must stay loader-lock safe: no LoadLibrary, no hook installation.
-// NGX module-load hooks are installed lazily on the first DXGI factory call instead.
+// NGX module-load hooks are installed lazily on the first DXGI factory call instead. The one exception is
+// StartInjector (injector_startup.h), which DllMain calls next to hook the system's DXGI factory exports.
 void OnProcessAttach(HMODULE selfModule);
 
 // lpReserved is non-null when the process is terminating. In that case other threads are already

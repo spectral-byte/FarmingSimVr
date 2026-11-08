@@ -68,13 +68,14 @@ jobs:
         run: scripts/check_build_config.ps1 build
 
       - name: Build (Injector DLL and tests)
-        run: cmake --build build --target dxgi fs25_vr_tests
+        run: cmake --build build --target injector fs25_vr_tests
 
-      # The Injector is built against the static C runtime; fail if the built dxgi.dll
-      # imports VCRUNTIME140/MSVCP140/api-ms-win-crt-* (players would need the VC++ redistributable).
-      - name: Verify Injector imports no VC++ runtime DLLs
+      # The Injector is built against the static C runtime; fail if the built version.dll
+      # imports VCRUNTIME140/MSVCP140/api-ms-win-crt-* (players would need the VC++ redistributable),
+      # or version.dll (the game loads the Injector as its version.dll).
+      - name: Verify Injector imports
         shell: pwsh
-        run: scripts/check_injector_imports.ps1 build\dxgi.dll
+        run: scripts/check_injector_imports.ps1 build\version.dll
 
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 120
@@ -98,13 +99,13 @@ jobs:
         shell: pwsh
         run: scripts/test_installer.ps1
 
-      - name: Upload dxgi.dll
+      - name: Upload version.dll
         uses: actions/upload-artifact@v7
         with:
-          name: dxgi-dll
+          name: injector-dll
           path: |
-            build/dxgi.dll
-            build/dxgi.pdb
+            build/version.dll
+            build/version.pdb
           if-no-files-found: error
 
       - name: Upload Installer

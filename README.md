@@ -12,7 +12,7 @@ A VR mod for **Farming Simulator 25** (Direct3D 12). It works with any OpenXR ru
 
 Two parts work together:
 
-- **`dxgi.dll`** is a Direct3D 12 proxy placed in the game folder. It hooks the swapchain, runs the OpenXR session, and shares head poses with the game through the `VRBridge` table.
+- **`version.dll`** is the Injector, placed in the game folder. The game loads it at startup. It hooks the swapchain through the system's `dxgi.dll`, runs the OpenXR session, and shares head poses with the game through the `VRBridge` table.
 - **`FS25_VRCompanion.zip`** is a Luau mod that runs inside the game. It reads `VRBridge` and drives the cameras, HUD, snap turn and view toggles.
 
 ## Features
@@ -43,19 +43,24 @@ Two parts work together:
 3. Optional: tick **Render Resolution** to set the game to your headset's per-eye resolution (windowed, 640 to 8192). Your `game.xml` is backed up first. If you've never launched the game, launch it once and run the Installer again.
 4. Finish the wizard. The game must be closed.
 
-The Installer copies `dxgi.dll` to the game's `x64` folder and `FS25_VRCompanion.zip` (not extracted) to your `mods` folder. An existing `dxgi.dll` such as ReShade is moved to `dxgi.dll.fs25vr-backup`.
+The Installer copies `version.dll` to the game's `x64` folder and `FS25_VRCompanion.zip` (not extracted) to your `mods` folder.
+
+- **ReShade stays where it is.** ReShade and other tools that install a `dxgi.dll` keep working alongside FS25 VR, in the headset too.
+- **Another `version.dll`** that isn't part of FS25 VR is moved to `version.dll.fs25vr-backup`.
+- **Upgrading from 1.1.9 or earlier**, when FS25 VR was `dxgi.dll`: the Installer deletes that old `dxgi.dll` and puts back the `dxgi.dll` it had moved aside, such as ReShade.
 
 > [!NOTE]
 > The Installer isn't code-signed, so Windows SmartScreen will warn you. Click **More info**, then **Run anyway**.
 
-**Uninstall**: run the Setup exe again and choose **Uninstall**, or use *Settings > Apps > Installed apps*. For scripts, use `/FS25VR_UNINSTALL`. This removes `dxgi.dll`, the mod zip and `fs25_vr.log`, restores your backed-up `dxgi.dll` and Render Resolution, and keeps your VR settings.
+**Uninstall**: run the Setup exe again and choose **Uninstall**, or use *Settings > Apps > Installed apps*. For scripts, use `/FS25VR_UNINSTALL`. This removes `version.dll`, the mod zip and `fs25_vr.log`, restores your backed-up `version.dll` and Render Resolution, leaves a `dxgi.dll` such as ReShade's alone, and keeps your VR settings.
 
 ### Manual install
 
-1. Copy `dxgi.dll` from the release zip into the game's `x64` folder (next to `FarmingSimulator2025Game.exe`).
-2. Copy `FS25_VRCompanion.zip` into `Documents\My Games\FarmingSimulator2025\mods\`. **Do not unzip it.**
+1. Copy `version.dll` from the release zip into the game's `x64` folder (next to `FarmingSimulator2025Game.exe`).
+2. If that folder has a `dxgi.dll` from FS25 VR 1.1.9 or earlier, delete it. FS25 VR stays inactive while it is there. Keep a `dxgi.dll` that belongs to something else, such as ReShade.
+3. Copy `FS25_VRCompanion.zip` into `Documents\My Games\FarmingSimulator2025\mods\`. **Do not unzip it.**
 
-To disable VR, rename or delete `dxgi.dll`.
+To disable VR, rename or delete `version.dll`.
 
 ### Launch
 
@@ -89,7 +94,7 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 | `vrMouseConfinement [on\|off]` | Keep the Mouse locked on the game window while the headset is in use and the game window has focus. Takes effect at once. It always holds in the main menu until a savegame has loaded, and again after you leave to the main menu. Saved, on by default. No arguments reports the current state |
 | `vrFovOverscan [0-20]` | Render the picture this many percent wider than the headset needs, so the black edges that can show at the borders during head movement stay covered. Takes effect at once. Saved, 0 by default. A higher value makes the picture slightly softer. No arguments reports the current value and the field of view being rendered |
 | `vrMenuDistance [1.0-5.0]` | How far in front of you, in metres, menus and 2D Floating Window Mode are shown. The panel keeps its size, so further away it fills less of the view. A menu that is showing moves at once, and the main menu uses it too, from the moment the game starts. Saved, 1.5 by default. No arguments reports the current value |
-| `vrHudDepth [1.0-5.0]` | How far away, in metres, the HUD is in the headset. The whole HUD moves back or forward like a panel in front of you: further away it looks smaller and sits nearer the middle of the view, nearer it grows toward the corners. Raise it if the HUD feels too close or too far out at the edges. Takes effect at once. Saved, 1.8 by default. No arguments reports the current value |
+| `vrHudDepth [1.0-5.0]` | How far away, in metres, the HUD is in the headset. The whole HUD moves back or forward like a panel in front of you: further away it looks smaller and sits nearer the middle of the view, nearer it grows toward the corners. Raise it if the HUD feels too close or too far out at the edges. Takes effect at once. Saved, 2.5 by default. No arguments reports the current value |
 | `vrSnapTurnAngle <degrees>` | Snap turn step (default `90`) |
 | `vrHudGroup <map\|speedometer\|info\|controls> <horizontal> <vertical> [scale]` | Place and scale a HUD group |
 | `vrHudGroupShow <group> <streamlined\|full> <on\|off>` | Choose which groups show in each HUD state |

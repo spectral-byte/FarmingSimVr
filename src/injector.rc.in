@@ -1,9 +1,11 @@
-// Version resource of the Injector (dxgi.dll). configure_file() fills in the version from the
+// Version resource of the Injector (version.dll). configure_file() fills in the version from the
 // Companion Mod's modDesc.xml, so the Injector and the release carry the same number.
 //
 // The Installer (installer/fs25_vr.iss) recognises an Injector of ours, to overwrite it without
-// treating it as a foreign dxgi.dll such as ReShade, by ProductName "FS25 VR" below. Do not change it
-// without changing IsOurInjector in the Installer script too.
+// treating it as a foreign version.dll, and to remove an earlier one that was the game's dxgi.dll, by
+// ProductName "FS25 VR" below. The Injector reads it too, to find an earlier Injector still loaded as
+// dxgi.dll (IsFs25VrModule). Do not change it without changing IsOurInjector in the Installer script
+// and IsFs25VrModule in src/core/injector_startup.cpp too.
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
@@ -22,8 +24,8 @@ BEGIN
             VALUE "CompanyName", "FS25 VR"
             VALUE "FileDescription", "FS25 VR Injector"
             VALUE "FileVersion", "@FS25VR_VERSION@"
-            VALUE "InternalName", "dxgi"
-            VALUE "OriginalFilename", "dxgi.dll"
+            VALUE "InternalName", "version"
+            VALUE "OriginalFilename", "version.dll"
             VALUE "ProductName", "FS25 VR"
             VALUE "ProductVersion", "@FS25VR_VERSION@"
         END

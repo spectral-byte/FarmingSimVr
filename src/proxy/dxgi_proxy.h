@@ -47,13 +47,15 @@ public:
               std::shared_ptr<NgxInterceptor> ngxInterceptor);
     ~DxgiProxy();
 
+    // The game's factory calls, caught by DxgiExportHooks in the system's dxgi.dll (ADR-0038). Each starts VR on the
+    // first call, passes the call on to the system and hooks the factory it returns.
     HRESULT CreateDXGIFactory(REFIID riid, void** ppFactory);
     HRESULT CreateDXGIFactory1(REFIID riid, void** ppFactory);
     HRESULT CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory);
-    HRESULT DXGIDeclareAdapterRemovalSupport();
-    HRESULT DXGIGetDebugInterface1(UINT Flags, REFIID riid, void** pDebug);
 
     bool AttachSwapChain(IDXGISwapChain* swapChain);
+    // Hooks swap chain creation on the factory. When the factory is another tool's wrapper (ReShade's), the system's
+    // factory behind it is hooked instead, so the wrapper runs before the hooks.
     bool AttachFactory(IDXGIFactory* factory);
     // Hooks IDXGIOutput6::GetDesc1 (shared by every output) so the display reads as SDR while VR is
     // active. AttachFactory calls it with the first output it finds.
@@ -115,6 +117,13 @@ public:
     static HRESULT STDMETHODCALLTYPE Intercept_CheckColorSpaceSupport(IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE colorSpace, UINT* pColorSpaceSupport);
     static HRESULT STDMETHODCALLTYPE Intercept_SetColorSpace1(IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE colorSpace);
     static HRESULT STDMETHODCALLTYPE Intercept_OutputGetDesc1(IDXGIOutput6* self, DXGI_OUTPUT_DESC1* pDesc);
+    // d3d11.dll's D3D11On12CreateDevice (ppDevice and ppImmediateContext are ID3D11Device** and ID3D11DeviceContext**).
+    static HRESULT WINAPI Intercept_D3D11On12CreateDevice(IUnknown* pDevice, UINT flags, const D3D_FEATURE_LEVEL* pFeatureLevels,
+        UINT featureLevels, IUnknown* const* ppCommandQueues, UINT numQueues, UINT nodeMask, void** ppDevice,
+        void** ppImmediateContext, D3D_FEATURE_LEVEL* pChosenFeatureLevel);
+    // Swaps a wrapper of the game's D3D12 device or queue (ReShade's) for the real object behind it. Returns a
+    // description of what was passed and what was swapped, for the log.
+    std::string UnwrapForD3D11On12(IUnknown*& device, IUnknown** queues, UINT numQueues);
     bool IsDetourResizeBuffersInstalled() const { return m_detourResizeBuffers.IsInstalled(); }
     bool IsDetourColorSpaceInstalled() const { return m_detourCheckColorSpaceSupport.IsInstalled() && m_detourSetColorSpace1.IsInstalled(); }
 
@@ -159,6 +168,7 @@ private:
     FunctionDetour m_detourCheckColorSpaceSupport;
     FunctionDetour m_detourSetColorSpace1;
     FunctionDetour m_detourOutputGetDesc1;
+    FunctionDetour m_detourD3D11On12CreateDevice;
 
     bool m_swapChainAttached = false;
     bool m_factoryAttached = false;

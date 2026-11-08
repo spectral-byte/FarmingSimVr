@@ -1,15 +1,17 @@
 # Verifies that the built Injector does not import the Microsoft C/C++ runtime DLLs
 # (VCRUNTIME140*.dll, MSVCP140*.dll, CONCRT140.dll, api-ms-win-crt-*.dll), i.e. that it is built
-# against the static runtime and needs no VC++ redistributable on the player's machine.
+# against the static runtime and needs no VC++ redistributable on the player's machine, and that it
+# does not import version.dll: the game loads the Injector as its version.dll (ADR-0038), so that
+# import would bind to the Injector itself.
 # Reads the PE import tables (regular and delay-load) directly, so it needs no
 # Visual Studio tools and checks the built artifact rather than a CMake flag.
 param(
-    [string]$Dll = "build\dxgi.dll"
+    [string]$Dll = "build\version.dll"
 )
 $ErrorActionPreference = "Stop"
 
 if (-not (Test-Path $Dll)) {
-    Write-Error "$Dll not found. Build the Injector first: cmake --build build --target dxgi"
+    Write-Error "$Dll not found. Build the Injector first: cmake --build build --target injector"
 }
 
 $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $Dll))
@@ -86,4 +88,8 @@ if ($forbidden.Count -gt 0) {
         ". Build the Injector against the static runtime (/MT)," +
         " otherwise players need the VC++ redistributable.")
 }
-Write-Host "Injector import check OK: no VC++ runtime DLL imports."
+if (@($imports | Where-Object { $_ -match '^version\.dll$' }).Count -gt 0) {
+    Write-Error ("$Dll imports version.dll. The game loads the Injector as its version.dll, so that import" +
+        " would bind to the Injector itself. Look the function up at run time instead.")
+}
+Write-Host "Injector import check OK: no VC++ runtime DLL imports, no version.dll import."

@@ -11,6 +11,8 @@ _G.g_hudAnchorTop = 1.0
 
 -- Load the Companion Mod module files in modDesc order, exactly as the engine does
 loadCompanionMod()
+-- These tests place the HUD at the depth its layouts are set for (1.8 m), not at the HUD Depth a new install starts at
+VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
 
 local passed = 0
 local failed = 0
@@ -36,7 +38,8 @@ end
 
 -- Slice 1: Mathematical scaling, target depth, fallback, and boundary clamping
 test("DefinesConvergenceConstantsAndDefaults", function()
-    assert(VRCompanion.DEFAULT_CONVERGENCE_DEPTH == 1.8, "DEFAULT_CONVERGENCE_DEPTH must be 1.8m")
+    assert(VRCompanion.HUD_LAYOUT_DEPTH == 1.8, "the HUD layouts are set for 1.8 m")
+    assert(VRCompanion.DEFAULT_HUD_DEPTH == 2.5, "a new install starts at a HUD Depth of 2.5 m")
     assert(VRCompanion.DEFAULT_CONVERGENCE_DISPARITY == 0.012, "DEFAULT_CONVERGENCE_DISPARITY must be 0.012")
     assert(VRCompanion.DEFAULT_IPD == 0.064, "DEFAULT_IPD must be 0.064m")
     assert(VRCompanion.MIN_IPD == 0.040, "MIN_IPD must be 0.040m")
@@ -680,7 +683,7 @@ test("TheHudKeepsItsDepthWhileTheEnginesHeadTrackingSettingIsOff", function()
     _G.g_gameSettings = nil
     _G.isHeadTrackingAvailable = nil
     _G.VRBridge = nil
-    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
     assert(ok, tostring(err))
 end)
 
@@ -765,8 +768,10 @@ test("MapLifecycleLoadsCustomDepthAndRestoresZeroOffsetOnUnload", function()
     assert(math.abs(VRCompanion.currentConvergenceDisparity - 0.0) < 0.00001, "deleteMap must reset currentConvergenceDisparity to 0")
     assert(math.abs(_G.g_hudAnchorLeft - 0.0) < 0.00001, "_G.g_hudAnchorLeft restored to 0.0")
     assert(math.abs(_G.g_hudAnchorRight - 1.0) < 0.00001, "_G.g_hudAnchorRight restored to 1.0")
+    assert(VRCompanion.hudConvergenceDepth == VRCompanion.DEFAULT_HUD_DEPTH, "deleteMap puts the HUD Depth back to its default")
 
     _G.VRBridge = nil
+    VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
 end)
 
 test("MenuTransitionsPreserveConvergenceParityState", function()
@@ -1139,10 +1144,10 @@ test("VrHudDepthEasesTheHudToTheNewDepthSavesItAndRefusesBadValues", function()
     VRCompanion.saveConfiguration = function() saves = saves + 1; return true end
 
     VRCompanion:updateHudConvergence()
-    assert(math.abs(VRCompanion.currentConvergenceOffset - 0.012) < 0.0001, "1.8 m by default")
+    assert(math.abs(VRCompanion.currentConvergenceOffset - 0.012) < 0.0001, "at the layouts' 1.8 m")
     local report = VRCompanion:consoleCommandSetHudDepth()
     assert(string.find(report, "HUD depth: 1.8 m", 1, true) ~= nil, report)
-    assert(string.find(report, "Usage: vrHudDepth [1.0-5.0] (metres, saved, 1.8 by default)", 1, true) ~= nil, report)
+    assert(string.find(report, "Usage: vrHudDepth [1.0-5.0] (metres, saved, 2.5 by default)", 1, true) ~= nil, report)
 
     local reply = VRCompanion:consoleCommandSetHudDepth("3")
     assert(string.find(reply, "HUD depth set to: 3 m (Saved)", 1, true) ~= nil, reply)
@@ -1167,7 +1172,7 @@ test("VrHudDepthEasesTheHudToTheNewDepthSavesItAndRefusesBadValues", function()
     assert(saves == 1, "reporting and refusing write nothing")
 
     VRCompanion.saveConfiguration = realSave
-    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
     _G.VRBridge = nil
 end)
 
@@ -1183,7 +1188,7 @@ test("TheHudDepthTheCommandSetsIsWhatSettingsXmlGetsAndGivesBack", function()
 
     VRCompanion:consoleCommandSetHudDepth("4.25")
     assert(store["vrSettings.hudConvergenceDepth"] == 4.25, "saved under vrSettings.hudConvergenceDepth")
-    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
     VRCompanion:loadConfiguration("settings.xml")
     assert(VRCompanion.hudConvergenceDepth == 4.25, "and loaded back: " .. tostring(VRCompanion.hudConvergenceDepth))
 
@@ -1196,7 +1201,7 @@ test("TheHudDepthTheCommandSetsIsWhatSettingsXmlGetsAndGivesBack", function()
     assert(VRCompanion.hudConvergenceDepth == 5.0, "9 m loads as 5 m: " .. tostring(VRCompanion.hudConvergenceDepth))
     store["vrSettings.hudConvergenceDepth"] = 0 / 0
     VRCompanion:loadConfiguration("settings.xml")
-    assert(VRCompanion.hudConvergenceDepth == VRCompanion.DEFAULT_CONVERGENCE_DEPTH, "not a number loads the default")
+    assert(VRCompanion.hudConvergenceDepth == VRCompanion.DEFAULT_HUD_DEPTH, "not a number loads the default")
 
     _G.getUserProfileAppPath = nil
     _G.createXMLFile = nil
@@ -1205,7 +1210,7 @@ test("TheHudDepthTheCommandSetsIsWhatSettingsXmlGetsAndGivesBack", function()
     _G.loadXMLFile = nil
     _G.getXMLFloat = nil
     _G.delete = nil
-    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
 end)
 
 -- vrHudTrace: logs, for a few rendered frames, the eye each HUD convergence update placed the HUD for and how far the

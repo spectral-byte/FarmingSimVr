@@ -27,9 +27,6 @@
 
 using Microsoft::WRL::ComPtr;
 
-// A passthrough export, defined in dxgi_proxy.cpp and exported through dxgi_exports.def.
-extern "C" DWORD WINAPI Proxy_PIXGetCaptureState();
-
 namespace fs25vr {
 
 // Detours are installed only by a proxy a live runtime owns, and hook entry points resolve their
@@ -146,7 +143,8 @@ TEST(DxgiProxyTest, ForwardsCreateDXGIFactory2SilentlyInPassThrough) {
     EXPECT_TRUE(openXrManager->IsPassThrough());
 }
 
-// Like VDXR: xrGetSystem creates a DXGI factory, and the runtime's dxgi.dll import binds to the proxy.
+// Like VDXR: xrGetSystem creates a DXGI factory on the thread that starts VR. In the game DxgiExportHooks passes
+// that call straight to the system; a runtime that reached the proxy itself must not deadlock either.
 class DxgiCallingOpenXrRuntime : public FakeOpenXrRuntime {
 public:
     DxgiProxy* proxy = nullptr;
@@ -222,31 +220,6 @@ TEST(DxgiProxyTest, SessionWaitsForTheGamesD3D12DeviceInsteadOfBeingCreatedAtSta
     EXPECT_EQ(runtime->createSessionCalls, 1u);
     EXPECT_TRUE(openXrManager->HasSession());
     EXPECT_TRUE(openXrManager->HasTrackingSpaces());
-}
-
-TEST(DxgiProxyTest, BinaryLoadsAndInterceptsStartupInPassThrough) {
-    HMODULE hProxy = LoadLibraryA("dxgi.dll");
-    if (!hProxy) {
-        hProxy = LoadLibraryA("build/dxgi.dll");
-    }
-    if (!hProxy) {
-        hProxy = LoadLibraryA("build/bin/dxgi.dll");
-    }
-    ASSERT_NE(hProxy, nullptr) << "Failed to LoadLibrary on dxgi.dll";
-
-    auto pfnCreateDXGIFactory1 = reinterpret_cast<PFN_CreateDXGIFactory1>(
-        GetProcAddress(hProxy, "CreateDXGIFactory1")
-    );
-    ASSERT_NE(pfnCreateDXGIFactory1, nullptr);
-
-    {
-        ComPtr<IDXGIFactory1> factory;
-        HRESULT hr = pfnCreateDXGIFactory1(IID_PPV_ARGS(&factory));
-        EXPECT_EQ(hr, S_OK);
-        EXPECT_NE(factory.Get(), nullptr);
-    }
-
-    FreeLibrary(hProxy);
 }
 
 class MockActiveOpenXrDispatch : public IOpenXrDispatch {
@@ -1747,14 +1720,6 @@ TEST(InjectorRuntimeTest, AdoptsTheCollaboratorsOfASuppliedVrBridge) {
 #define FS25VR_CHILD_CHECK(cond) \
     do { if (!(cond)) { std::fprintf(stderr, "check failed: %s\n", #cond); failures++; } } while (0)
 
-static int PassthroughExportsLeaveNoRuntimeChild() {
-    int failures = 0;
-    FS25VR_CHILD_CHECK(InjectorRuntime::Current() == nullptr);
-    Proxy_PIXGetCaptureState();
-    FS25VR_CHILD_CHECK(InjectorRuntime::Current() == nullptr);
-    return failures;
-}
-
 // Takes the place of user32's ClipCursor in the child process below (hooked with a FunctionDetour that never
 // calls the original), so the no-runtime fallback of the ClipCursor hook is covered without a call that could
 // trap the developer's own mouse.
@@ -1810,10 +1775,6 @@ static int HookEntryPointsFailSafeChild() {
 
 #undef FS25VR_CHILD_CHECK
 
-TEST(InjectorRuntimeTest, PassthroughExportsDoNotConstructTheRuntime) {
-    EXPECT_EXIT(std::exit(PassthroughExportsLeaveNoRuntimeChild()), ::testing::ExitedWithCode(0), "");
-}
-
 TEST(InjectorRuntimeTest, HookEntryPointsFailSafeWithNoLiveRuntime) {
     EXPECT_EXIT(std::exit(HookEntryPointsFailSafeChild()), ::testing::ExitedWithCode(0), "");
 }
@@ -1849,6 +1810,120 @@ TEST(DxgiProxyTest, AttachFactoryHooksCreateSwapChain) {
 
     proxy.DetachAll();
     EXPECT_FALSE(proxy.IsFactoryAttached());
+}
+
+// A factory that wraps the system's and passes every call on to it, the way a dxgi.dll in the game folder
+// (ReShade's) hands the game a factory of its own.
+class WrappingFactory final : public IDXGIFactory2 {
+public:
+    explicit WrappingFactory(ComPtr<IDXGIFactory2> inner) : m_inner(std::move(inner)) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IDXGIObject) || riid == __uuidof(IDXGIFactory) ||
+            riid == __uuidof(IDXGIFactory1) || riid == __uuidof(IDXGIFactory2)) {
+            *ppv = static_cast<IDXGIFactory2*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++m_refs; }
+    ULONG STDMETHODCALLTYPE Release() override { return --m_refs; }  // lives on the test's stack
+
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID n, UINT s, const void* d) override { return m_inner->SetPrivateData(n, s, d); }
+    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID n, const IUnknown* u) override { return m_inner->SetPrivateDataInterface(n, u); }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID n, UINT* s, void* d) override { return m_inner->GetPrivateData(n, s, d); }
+    HRESULT STDMETHODCALLTYPE GetParent(REFIID riid, void** p) override { return m_inner->GetParent(riid, p); }
+    HRESULT STDMETHODCALLTYPE EnumAdapters(UINT i, IDXGIAdapter** a) override { return m_inner->EnumAdapters(i, a); }
+    HRESULT STDMETHODCALLTYPE MakeWindowAssociation(HWND w, UINT f) override { return m_inner->MakeWindowAssociation(w, f); }
+    HRESULT STDMETHODCALLTYPE GetWindowAssociation(HWND* w) override { return m_inner->GetWindowAssociation(w); }
+    HRESULT STDMETHODCALLTYPE CreateSwapChain(IUnknown* d, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** s) override {
+        return m_inner->CreateSwapChain(d, desc, s);
+    }
+    HRESULT STDMETHODCALLTYPE CreateSoftwareAdapter(HMODULE m, IDXGIAdapter** a) override { return m_inner->CreateSoftwareAdapter(m, a); }
+    HRESULT STDMETHODCALLTYPE EnumAdapters1(UINT i, IDXGIAdapter1** a) override { return m_inner->EnumAdapters1(i, a); }
+    BOOL STDMETHODCALLTYPE IsCurrent() override { return m_inner->IsCurrent(); }
+    BOOL STDMETHODCALLTYPE IsWindowedStereoEnabled() override { return m_inner->IsWindowedStereoEnabled(); }
+    HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IUnknown* d, HWND w, const DXGI_SWAP_CHAIN_DESC1* desc,
+                                                     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fs, IDXGIOutput* o,
+                                                     IDXGISwapChain1** s) override {
+        return m_inner->CreateSwapChainForHwnd(d, w, desc, fs, o, s);
+    }
+    HRESULT STDMETHODCALLTYPE CreateSwapChainForCoreWindow(IUnknown* d, IUnknown* w, const DXGI_SWAP_CHAIN_DESC1* desc,
+                                                           IDXGIOutput* o, IDXGISwapChain1** s) override {
+        return m_inner->CreateSwapChainForCoreWindow(d, w, desc, o, s);
+    }
+    HRESULT STDMETHODCALLTYPE GetSharedResourceAdapterLuid(HANDLE h, LUID* l) override { return m_inner->GetSharedResourceAdapterLuid(h, l); }
+    HRESULT STDMETHODCALLTYPE RegisterStereoStatusWindow(HWND w, UINT m, DWORD* c) override { return m_inner->RegisterStereoStatusWindow(w, m, c); }
+    HRESULT STDMETHODCALLTYPE RegisterStereoStatusEvent(HANDLE e, DWORD* c) override { return m_inner->RegisterStereoStatusEvent(e, c); }
+    void STDMETHODCALLTYPE UnregisterStereoStatus(DWORD c) override { m_inner->UnregisterStereoStatus(c); }
+    HRESULT STDMETHODCALLTYPE RegisterOcclusionStatusWindow(HWND w, UINT m, DWORD* c) override { return m_inner->RegisterOcclusionStatusWindow(w, m, c); }
+    HRESULT STDMETHODCALLTYPE RegisterOcclusionStatusEvent(HANDLE e, DWORD* c) override { return m_inner->RegisterOcclusionStatusEvent(e, c); }
+    void STDMETHODCALLTYPE UnregisterOcclusionStatus(DWORD c) override { m_inner->UnregisterOcclusionStatus(c); }
+    HRESULT STDMETHODCALLTYPE CreateSwapChainForComposition(IUnknown* d, const DXGI_SWAP_CHAIN_DESC1* desc,
+                                                            IDXGIOutput* o, IDXGISwapChain1** s) override {
+        return m_inner->CreateSwapChainForComposition(d, desc, o, s);
+    }
+
+private:
+    ComPtr<IDXGIFactory2> m_inner;
+    ULONG m_refs = 1;
+};
+
+static std::array<uint8_t, 16> FirstBytes(const void* function) {
+    std::array<uint8_t, 16> bytes{};
+    std::memcpy(bytes.data(), function, bytes.size());
+    return bytes;
+}
+
+TEST(DxgiProxyTest, AttachFactoryHooksTheSystemFactoryBehindAWrapper) {
+    auto openXrManager = std::make_shared<OpenXrManager>(std::make_shared<MockActiveOpenXrDispatch>());
+    ASSERT_TRUE(openXrManager->Initialize());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+    DxgiProxy& proxy = proxyRuntime->GetDxgiProxy();
+
+    SystemDxgi systemDxgi;
+    ComPtr<IDXGIFactory2> systemFactory;
+    ASSERT_EQ(systemDxgi.GetCreateDXGIFactory2()(0, IID_PPV_ARGS(&systemFactory)), S_OK);
+    void** systemVTable = *reinterpret_cast<void***>(systemFactory.Get());
+    void* systemCreateForHwnd = systemVTable[kCreateSwapChainForHwndVTableSlot];
+    ASSERT_TRUE(IsInSystemDxgi(systemCreateForHwnd));
+
+    WrappingFactory wrapper(systemFactory);
+    void** wrapperVTable = *reinterpret_cast<void***>(static_cast<IDXGIFactory2*>(&wrapper));
+    void* wrapperCreateForHwnd = wrapperVTable[kCreateSwapChainForHwndVTableSlot];
+    ASSERT_FALSE(IsInSystemDxgi(wrapperCreateForHwnd));
+
+    const auto systemBefore = FirstBytes(systemCreateForHwnd);
+    const auto wrapperBefore = FirstBytes(wrapperCreateForHwnd);
+
+    ASSERT_TRUE(proxy.AttachFactory(&wrapper));
+    EXPECT_NE(FirstBytes(systemCreateForHwnd), systemBefore) << "The system's CreateSwapChainForHwnd was not hooked.";
+    EXPECT_EQ(FirstBytes(wrapperCreateForHwnd), wrapperBefore) << "The wrapper's CreateSwapChainForHwnd was hooked.";
+
+    proxy.DetachAll();
+    EXPECT_EQ(FirstBytes(systemCreateForHwnd), systemBefore);
+}
+
+TEST(DxgiProxyTest, AttachFactoryHooksTheSystemFactoryItselfWhenItIsNotWrapped) {
+    auto openXrManager = std::make_shared<OpenXrManager>(std::make_shared<MockActiveOpenXrDispatch>());
+    ASSERT_TRUE(openXrManager->Initialize());
+    auto proxyRuntime = MakeRuntime(openXrManager);
+    DxgiProxy& proxy = proxyRuntime->GetDxgiProxy();
+
+    SystemDxgi systemDxgi;
+    ComPtr<IDXGIFactory2> systemFactory;
+    ASSERT_EQ(systemDxgi.GetCreateDXGIFactory2()(0, IID_PPV_ARGS(&systemFactory)), S_OK);
+    void* systemCreateForHwnd = (*reinterpret_cast<void***>(systemFactory.Get()))[kCreateSwapChainForHwndVTableSlot];
+    const auto before = FirstBytes(systemCreateForHwnd);
+
+    ASSERT_TRUE(proxy.AttachFactory(systemFactory.Get()));
+    EXPECT_NE(FirstBytes(systemCreateForHwnd), before);
+
+    proxy.DetachAll();
+    EXPECT_EQ(FirstBytes(systemCreateForHwnd), before);
 }
 
 __declspec(noinline) HRESULT STDMETHODCALLTYPE MockSwapChain3QI(IUnknown* self, REFIID riid, void** ppv) {

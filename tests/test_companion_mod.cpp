@@ -12,7 +12,7 @@ TEST_F(CompanionModTest, MetadataDescriptorIsValid) {
 
     EXPECT_NE(modDescContent.find("<modDesc descVersion=\"105\">"), std::string::npos);
     EXPECT_NE(modDescContent.find("<title>"), std::string::npos);
-    EXPECT_NE(modDescContent.find("<version>1.1.9.0</version>"), std::string::npos);
+    EXPECT_NE(modDescContent.find("<version>1.2.0.0</version>"), std::string::npos);
     EXPECT_NE(modDescContent.find("<extraSourceFiles>"), std::string::npos);
     EXPECT_NE(modDescContent.find("VRCompanion.lua"), std::string::npos);
 }
@@ -1915,6 +1915,7 @@ TEST_F(CompanionModTest, ExposesConfigurationWithGracefulFallbackToDefaults) {
 
 TEST_F(CompanionModTest, AppliesVRHudSafeAreaAndGroupMarginsToStandardDisplaysUponMapLoad) {
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    PlaceHudAtLayoutDepth();
 
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         _G.g_hudAnchorLeft = 0.0
@@ -2450,6 +2451,7 @@ TEST_F(CompanionModTest, AlternatesPositiveDisparityOnLeftParityAndNegativeOnRig
     RegisterTestSetFrameParity(bridge);
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    PlaceHudAtLayoutDepth();
 
     // Set simulated IPD on native OpenXR manager: 64mm
     oxr->SetIpd(0.064f);
@@ -2487,6 +2489,7 @@ TEST_F(CompanionModTest, UpdatesConvergenceEveryFrameWithoutCoordinateDriftAcros
     RegisterTestSetFrameParity(bridge);
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    PlaceHudAtLayoutDepth();
 
     oxr->SetIpd(0.064f);
 
@@ -2519,6 +2522,7 @@ TEST_F(CompanionModTest, RevertsConvergenceOffsetSmoothlyToZeroInPassThroughOrDi
     RegisterTestSetFrameParity(bridge);
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    PlaceHudAtLayoutDepth();
 
     oxr->SetIpd(0.064f);
 
@@ -4052,6 +4056,7 @@ TEST_F(CompanionModTest, DualPassHudConvergenceLockedToSubPassEyeIndex) {
     ASSERT_TRUE(bridge.Inject(L));
 
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
+    PlaceHudAtLayoutDepth();
 
     oxr->SetIpd(0.064f);
 

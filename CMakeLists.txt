@@ -23,7 +23,7 @@ endif()
 # Static MSVC runtime (/MT): the Injector must not import VCRUNTIME140.dll, MSVCP140.dll or the
 # api-ms-win-crt-* DLLs, so players need no VC++ redistributable. Set before FetchContent so the
 # statically linked dependencies and the test executable use the same runtime as the Injector.
-# CI verifies the built dxgi.dll with scripts/check_injector_imports.ps1.
+# CI verifies the built version.dll with scripts/check_injector_imports.ps1.
 if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
@@ -105,6 +105,8 @@ set(CORE_SOURCES
     src/core/texture_snapshot.h
     src/core/dll_lifecycle.cpp
     src/core/dll_lifecycle.h
+    src/core/injector_startup.cpp
+    src/core/injector_startup.h
     src/input/virtual_gamepad.cpp
     src/input/virtual_gamepad.h
     src/luau/vr_bridge.cpp
@@ -121,6 +123,8 @@ set(CORE_SOURCES
     src/openxr/openxr_types.h
     src/proxy/system_dxgi.h
     src/proxy/system_dxgi.cpp
+    src/proxy/dxgi_export_hooks.h
+    src/proxy/dxgi_export_hooks.cpp
     src/proxy/desktop_cursor_port.h
     src/proxy/desktop_cursor_port.cpp
     src/proxy/mirror_window_controller.h
@@ -165,7 +169,7 @@ target_compile_definitions(fs25_vr_core PUBLIC
 )
 
 # Version resource of the Injector: "FS25 VR" product identity (the Installer uses it to tell our
-# dxgi.dll from a foreign one) and the Companion Mod's version from modDesc.xml.
+# version.dll from a foreign one, and an earlier dxgi.dll of ours) and the Companion Mod's version from modDesc.xml.
 set(FS25VR_MODDESC "${CMAKE_CURRENT_SOURCE_DIR}/mods/FS25_VRCompanion/modDesc.xml")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FS25VR_MODDESC}")
 file(READ "${FS25VR_MODDESC}" FS25VR_MODDESC_TEXT)
@@ -177,16 +181,18 @@ set(FS25VR_VERSION "${CMAKE_MATCH_1}")
 string(REPLACE "." ";" FS25VR_VERSION_PARTS "${FS25VR_VERSION}.0.0.0")
 list(SUBLIST FS25VR_VERSION_PARTS 0 4 FS25VR_VERSION_PARTS)
 string(REPLACE ";" "," FS25VR_VERSION_COMMA "${FS25VR_VERSION_PARTS}")
-configure_file(src/dxgi.rc.in "${CMAKE_CURRENT_BINARY_DIR}/dxgi.rc" @ONLY)
+configure_file(src/injector.rc.in "${CMAKE_CURRENT_BINARY_DIR}/injector.rc" @ONLY)
 
-# DXGI Proxy DLL target
-add_library(dxgi SHARED
+# The Injector DLL. The game loads it as its version.dll, and it hooks the system's dxgi.dll (ADR-0038).
+add_library(injector SHARED
     src/dllmain.cpp
-    src/proxy/dxgi_exports.def
-    "${CMAKE_CURRENT_BINARY_DIR}/dxgi.rc"
+    src/proxy/version_exports.cpp
+    src/proxy/version_exports.def
+    "${CMAKE_CURRENT_BINARY_DIR}/injector.rc"
 )
+set_target_properties(injector PROPERTIES OUTPUT_NAME version)
 
-target_link_libraries(dxgi PRIVATE fs25_vr_core)
+target_link_libraries(injector PRIVATE fs25_vr_core)
 
 # Stand-in nvngx.dll for tests (exports the NGX D3D12 entry points)
 add_library(fake_nvngx SHARED tests/fake_nvngx.cpp)
@@ -212,6 +218,9 @@ add_executable(fs25_vr_tests
     tests/test_openxr_motion_controllers.cpp
     tests/test_mirror_window_controller.cpp
     tests/test_dxgi_proxy.cpp
+    tests/test_d3d11on12_unwrap.cpp
+    tests/test_dxgi_export_hooks.cpp
+    tests/test_injector_binary.cpp
     tests/test_process_isolation.cpp
     tests/test_detour.cpp
     tests/test_vr_bridge.cpp
@@ -299,12 +308,13 @@ target_link_libraries(fs25_vr_tests PRIVATE
     xinput.lib
 )
 
-# The binary-load test loads the freshly built dxgi.dll next to the test executable
-add_dependencies(fs25_vr_tests dxgi)
+# The binary tests load the freshly built Injector (version.dll) by its full path
+add_dependencies(fs25_vr_tests injector)
 
 target_compile_definitions(fs25_vr_tests PRIVATE
     PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     FAKE_NVNGX_PATH="$<TARGET_FILE:fake_nvngx>"
+    INJECTOR_DLL_PATH="$<TARGET_FILE:injector>"
     FS25VR_LUAU_TAG="${FS25VR_LUAU_TAG}"
 )
 add_dependencies(fs25_vr_tests fake_nvngx)

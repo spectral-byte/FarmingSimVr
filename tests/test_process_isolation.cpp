@@ -11,8 +11,8 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 
-// The test process loads the freshly built Injector as its own dxgi.dll, and the tests build the
-// production Injector runtime too, so a DXGI factory call reaches the real OpenXR loader. On a machine
+// The tests build the production Injector runtime, and some load the freshly built Injector (version.dll), whose
+// hooks send the process's DXGI factory calls to it, so a DXGI factory call reaches the real OpenXR loader. On a machine
 // with a VR runtime installed that starts the runtime (SteamVR launches vrserver) and the test run hangs.
 // Pointing the loader's runtime override at a manifest that does not exist makes every such call enter
 // Pass-Through Mode instead. Tests that need an Active VR Mode inject the fake OpenXR runtime.

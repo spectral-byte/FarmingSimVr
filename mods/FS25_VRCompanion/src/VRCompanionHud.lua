@@ -28,7 +28,7 @@ VRCompanion.HUD_STATE_NAMES = {
 if VRCompanion.hudState == nil then VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN end
 if VRCompanion.hudSafeAreaHorizontal == nil then VRCompanion.hudSafeAreaHorizontal = VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL end
 if VRCompanion.hudSafeAreaVertical == nil then VRCompanion.hudSafeAreaVertical = VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL end
-if VRCompanion.hudConvergenceDepth == nil then VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH end
+if VRCompanion.hudConvergenceDepth == nil then VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_HUD_DEPTH end
 if VRCompanion.hudAnchorLeftBase == nil then VRCompanion.hudAnchorLeftBase = VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL end
 if VRCompanion.hudAnchorRightBase == nil then VRCompanion.hudAnchorRightBase = 1.0 - VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL end
 if VRCompanion.hudAnchorBottomBase == nil then VRCompanion.hudAnchorBottomBase = VRCompanion.DEFAULT_HUD_SAFE_AREA_VERTICAL end
@@ -115,13 +115,13 @@ function VRCompanion:compensateHudEdgeDistance(distance)
     return 0.5 - (0.5 - distance) * compensation
 end
 
--- The HUD Depth moves the HUD Groups back or forward as one panel straight ahead. Their layouts are set for the default depth
--- (1.8 m), so at `depth` a group looks default / depth times its size and sits that much nearer to the screen centre, as a
+-- The HUD Depth moves the HUD Groups back or forward as one panel straight ahead. Their layouts are set for HUD_LAYOUT_DEPTH
+-- (1.8 m), so at `depth` a group looks 1.8 / depth times its size and sits that much nearer to the screen centre, as a
 -- panel does from further away; the convergence disparity puts it at the same depth. 2D Floating Window Mode has no depth.
 function VRCompanion:getHudDepthScale()
     local depth = self.hudConvergenceDepth
     if self.is2DViewActive or type(depth) ~= "number" or depth ~= depth then return 1.0 end
-    return self.DEFAULT_CONVERGENCE_DEPTH / self:clamp(depth, self.MIN_HUD_DEPTH, self.MAX_HUD_DEPTH)
+    return self.HUD_LAYOUT_DEPTH / self:clamp(depth, self.MIN_HUD_DEPTH, self.MAX_HUD_DEPTH)
 end
 
 -- How much the HUD Groups are shrunk toward the screen centre: the FOV Overscan compensation and the HUD Depth together.
@@ -247,9 +247,9 @@ end
 -- far straight ahead half the IPD to the side, (ipd / 2) / depth in tangent, on a screen 2 tan(fovX / 2) wide. Without a
 -- headset projection, the old fixed factor (right for a 73 degree view) stands in, shrunk by the FOV Overscan.
 function VRCompanion:computeConvergenceDisparity(ipd, depth)
-    local targetDepth = depth or self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH
+    local targetDepth = depth or self.hudConvergenceDepth or self.DEFAULT_HUD_DEPTH
     if targetDepth == nil or targetDepth <= 0.001 then
-        targetDepth = self.DEFAULT_CONVERGENCE_DEPTH
+        targetDepth = self.DEFAULT_HUD_DEPTH
     end
     targetDepth = self:clamp(targetDepth, self.MIN_CONVERGENCE_DEPTH, self.MAX_CONVERGENCE_DEPTH)
 
@@ -281,7 +281,7 @@ function VRCompanion:computeConvergenceDisparity(ipd, depth)
     return self:clamp(disparity, self.MIN_CONVERGENCE_DISPARITY, self.MAX_CONVERGENCE_DISPARITY) * compensation
 end
 
--- `vrHudDepth [1.0-5.0]` sets the HUD Depth, how far away the HUD Groups are in the headset, in metres (1.8 by default,
+-- `vrHudDepth [1.0-5.0]` sets the HUD Depth, how far away the HUD Groups are in the headset, in metres (2.5 by default,
 -- saved as vrSettings.hudConvergenceDepth). The groups move back or forward as one panel: further away they are drawn smaller
 -- and nearer to the screen centre (getHudDepthScale) and shifted less between the eyes (the HUD Convergence Offset, which the
 -- next updates ease to the new depth). They are placed again at once.
@@ -298,9 +298,9 @@ end
 
 function VRCompanion:consoleCommandSetHudDepth(arg)
     local usage = string.format("Usage: vrHudDepth [%.1f-%.1f] (metres, saved, %.1f by default)",
-        self.MIN_HUD_DEPTH, self.MAX_HUD_DEPTH, self.DEFAULT_CONVERGENCE_DEPTH)
+        self.MIN_HUD_DEPTH, self.MAX_HUD_DEPTH, self.DEFAULT_HUD_DEPTH)
     if arg == nil or arg == "" then
-        return string.format("HUD depth: %g m. %s", self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH, usage)
+        return string.format("HUD depth: %g m. %s", self.hudConvergenceDepth or self.DEFAULT_HUD_DEPTH, usage)
     end
     local depth = tonumber(arg)
     if not self:setHudConvergenceDepth(depth, true) then return usage end
@@ -458,7 +458,7 @@ function VRCompanion:startHudTrace(frames)
     local _, frame, subPass, eye = hudTraceFrame()
     print(string.format("[FS25_VR] HUD trace: start, %d frames; mode %s, HUD state %s, depth %g m, disparity %.4f, frame %d sub-pass %d eye %d",
         frames, (self:getRenderingMode() == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "Sequential Dual-Pass" or "AFR",
-        tostring(self.HUD_STATE_NAMES[self:getHudState()]), self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH,
+        tostring(self.HUD_STATE_NAMES[self:getHudState()]), self.hudConvergenceDepth or self.DEFAULT_HUD_DEPTH,
         self.currentConvergenceDisparity or 0.0, frame, subPass, eye))
     return true
 end
@@ -1120,7 +1120,7 @@ function VRCompanion:getHudSafeArea()
         vertical = self.hudSafeAreaVertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL,
         convergenceOffset = self.currentConvergenceOffset or 0.0,
         convergenceDisparity = self.currentConvergenceDisparity or 0.0,
-        convergenceDepth = self.hudConvergenceDepth or self.DEFAULT_CONVERGENCE_DEPTH,
+        convergenceDepth = self.hudConvergenceDepth or self.DEFAULT_HUD_DEPTH,
         showHudLoadNotification = (self.showHudLoadNotification == true)
     }
 end
@@ -1602,8 +1602,8 @@ end
 -- the eye is the one being rendered, and what was moved is moved back by the same amount afterwards, from wherever the draw
 -- left it, so that nothing the game places from the dialog's own values drifts (the lesson of the rod minigame, #140). A dialog
 -- whose root cannot be moved this way is drawn where the game placed it: zero disparity.
--- The dialog has a depth of its own, `vrDialogDepth` (default 2.5 m, saved), set further back than the HUD's 1.8 m: it fills more of
--- the view than a HUD group and read too close at the HUD's depth in the headset. Its disparity is that of the depth, with the sign
+-- The dialog has a depth of its own, `vrDialogDepth` (default 2.5 m, saved), apart from the HUD Depth: it fills more of the view
+-- than a HUD group, and read too close at the HUD's former 1.8 m default in the headset. Its disparity is that of the depth, with the sign
 -- of the eye being rendered; like the HUD's it is nil (no shift) while the HUD's convergence is off (pass-through, no tracking).
 VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH = 2.5
 VRCompanion.stereoDialogDepth = VRCompanion.stereoDialogDepth or VRCompanion.DEFAULT_STEREO_DIALOG_DEPTH

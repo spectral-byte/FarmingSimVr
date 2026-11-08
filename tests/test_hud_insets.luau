@@ -11,6 +11,8 @@ _G.g_hudAnchorTop = 1.0
 
 -- Load the Companion Mod module files in modDesc order, exactly as the engine does
 loadCompanionMod()
+-- These tests place the HUD at the depth its layouts are set for (1.8 m), not at the HUD Depth a new install starts at
+VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
 
 local passed = 0
 local failed = 0
@@ -50,9 +52,11 @@ end
 local DISPLAY_NAMES = { "ingameMap", "speedMeter", "gameInfo", "inputHelp", "contextAction" }
 local function near(a, b) return a ~= nil and b ~= nil and math.abs(a - b) < 0.0001 end
 
--- Every setting back to its default (a missing settings file yields the defaults)
+-- Every setting back to its default (a missing settings file yields the defaults), with the HUD at the depth its layouts are
+-- set for, where the groups are placed at their layout size
 local function resetHudSettings()
     VRCompanion:loadConfiguration("non_existent_file.xml")
+    VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
 end
 
 local function setGroup(name, horizontal, vertical, scale)
@@ -540,7 +544,7 @@ test("DefaultsMatchTheValuesPreviouslyYieldedByModDesc", function()
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do
         assert(isDefaultGroupLayout(groupName, VRCompanion.DEFAULT_HUD_GROUP_LAYOUTS[groupName]), groupName .. " group layout default")
     end
-    assert(VRCompanion.DEFAULT_CONVERGENCE_DEPTH == 1.8, "convergence depth default")
+    assert(VRCompanion.DEFAULT_HUD_DEPTH == 2.5, "HUD Depth default")
     assert(VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION == false, "load notification default")
     assert(VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE == true, "recenter tracking default")
     assert(math.abs(VRCompanion.DEFAULT_SNAP_TURN_ANGLE - math.rad(90)) < 0.0001, "snap turn default")
@@ -627,7 +631,7 @@ test("SavedSettingsRoundTripThroughLoader", function()
     VRCompanion.snapTurnAngle = VRCompanion.DEFAULT_SNAP_TURN_ANGLE
     VRCompanion.showHudLoadNotification = VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION
     VRCompanion.recenterVrTrackingSpace = VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE
-    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
     VRCompanion:setRenderingMode(VRCompanion.RENDERING_MODE_SEQUENTIAL_DUAL_PASS, false)
     VRCompanion:configureHudSafeArea()
     _G.getUserProfileAppPath = nil
@@ -689,7 +693,7 @@ test("ASettingsFileStillHoldingAllowObliqueProjectionLoadsWithoutErrorIgnoresItA
         assert(store["vrSettings.allowObliqueProjection"] == nil, "the old entry must not be written back")
         assert(store["vrSettings.hudConvergenceDepth"] ~= nil, "other settings are still written")
     end)
-    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
     VRCompanion:configureHudSafeArea()
 end)
 
@@ -879,7 +883,7 @@ test("RuntimeStateStartsFromDefaultConstants", function()
             assert(layout.marginY == defaults.marginY, groupName .. " vertical margin starts at its default")
             assert(layout.scale == defaults.scale, groupName .. " scale starts at its default")
         end
-        assert(fresh.hudConvergenceDepth == fresh.DEFAULT_CONVERGENCE_DEPTH, "convergence depth starts at its default")
+        assert(fresh.hudConvergenceDepth == fresh.DEFAULT_HUD_DEPTH, "convergence depth starts at its default")
         assert(fresh.showHudLoadNotification == fresh.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "load notification starts at its default")
         assert(fresh.recenterVrTrackingSpace == fresh.DEFAULT_RECENTER_VR_TRACKING_SPACE, "recenter tracking starts at its default")
         assert(fresh.snapTurnAngle == fresh.DEFAULT_SNAP_TURN_ANGLE, "snap turn angle starts at its default")
@@ -941,7 +945,7 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
     for _, groupName in ipairs(VRCompanion.HUD_GROUP_NAMES) do
         assert(isDefaultGroupLayout(groupName, VRCompanion:getHudGroupLayout(groupName)), groupName .. " margins and scale default applied")
     end
-    assert(VRCompanion.hudConvergenceDepth == VRCompanion.DEFAULT_CONVERGENCE_DEPTH, "convergence depth default applied")
+    assert(VRCompanion.hudConvergenceDepth == VRCompanion.DEFAULT_HUD_DEPTH, "convergence depth default applied")
     assert(VRCompanion.showHudLoadNotification == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "load notification default applied")
     assert(VRCompanion.recenterVrTrackingSpace == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "recenter tracking default applied")
     assert(VRCompanion:getSnapTurnAngle() == VRCompanion.DEFAULT_SNAP_TURN_ANGLE, "snap turn default applied")
@@ -961,7 +965,7 @@ test("FirstRunWithoutSettingsFileAppliesAndSavesEveryDefault", function()
         local saved = { marginX = store[key .. "MarginHorizontal"], marginY = store[key .. "MarginVertical"], scale = store[key .. "Scale"] }
         assert(isDefaultGroupLayout(groupName, saved), "saved " .. groupName .. " margins and scale")
     end
-    assert(math.abs(store["vrSettings.hudConvergenceDepth"] - VRCompanion.DEFAULT_CONVERGENCE_DEPTH) < 0.0001, "saved convergence depth")
+    assert(math.abs(store["vrSettings.hudConvergenceDepth"] - VRCompanion.DEFAULT_HUD_DEPTH) < 0.0001, "saved convergence depth")
     assert(store["vrSettings.showHudLoadNotification"] == VRCompanion.DEFAULT_SHOW_HUD_LOAD_NOTIFICATION, "saved load notification")
     assert(store["vrSettings.recenterVrTrackingSpace"] == VRCompanion.DEFAULT_RECENTER_VR_TRACKING_SPACE, "saved recenter tracking")
     assert(store["vrSettings.allowObliqueProjection"] == nil, "the removed Oblique Frustum key is not written")
@@ -1681,7 +1685,7 @@ end)
 local function withHudDepth(depth, fn)
     VRCompanion.hudConvergenceDepth = depth
     local ok, err = pcall(fn)
-    VRCompanion.hudConvergenceDepth = VRCompanion.DEFAULT_CONVERGENCE_DEPTH
+    VRCompanion.hudConvergenceDepth = VRCompanion.HUD_LAYOUT_DEPTH
     if not ok then error(err, 0) end
 end
 

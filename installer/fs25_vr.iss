@@ -2,7 +2,11 @@
 ; Built by scripts\package_release.ps1, which passes:
 ;   /DAppVersion=<modDesc version>   /DStageDir=<staged bundle folder>   /DOutputDir=<where to write the Setup exe>
 ; The staged bundle folder is the one the zip bundle is made from, so both carry identical files:
-;   x64\dxgi.dll, mods\FS25_VRCompanion.zip, LICENSE, THIRD_PARTY_NOTICES.txt
+;   x64\version.dll, mods\FS25_VRCompanion.zip, LICENSE, THIRD_PARTY_NOTICES.txt
+;
+; The Injector is the game's version.dll (docs/adr/0038-the-injector-is-the-games-version-dll.md). FS25 VR up to
+; 1.1.9 was the game's dxgi.dll instead: an upgrade removes that one and puts back a dxgi.dll it had moved aside
+; (ReShade, for one). A dxgi.dll that is not ours is never touched.
 ;
 ; Command line (besides Inno's standard switches such as /VERYSILENT, /SUPPRESSMSGBOXES, /DIR=):
 ;   /FS25VR_DOCUMENTS=<folder>   hidden, test-only: replaces the user's Documents folder
@@ -12,6 +16,8 @@
 ;                                game.xml the install succeeds and the resolution is skipped (logged).
 ;                                If game.xml can't be edited once the files are placed (read-only, locked),
 ;                                the install is kept and Setup exits with code 20 (logged).
+;   Exit code 21: the files are placed, but the dxgi.dll of an earlier FS25 VR version could not be deleted
+;                                (logged); the new Injector stays inactive while it is there.
 ;                                In a wizard run it pre-ticks and pre-fills the Render Resolution page.
 ;   /FS25VR_UNINSTALL            runs the existing uninstaller unattended instead of installing (no /DIR needed),
 ;                                waits for it and exits with its exit code. With nothing installed it logs
@@ -113,7 +119,7 @@ FinishedLabelNoIcons=FS25 VR is installed.%n%nBefore you play:%n  1. Start your 
 
 [Files]
 ; Injector: into the game's x64 folder.
-Source: "{#StageDir}\x64\dxgi.dll"; DestDir: "{app}\x64"; Flags: ignoreversion
+Source: "{#StageDir}\x64\version.dll"; DestDir: "{app}\x64"; Flags: ignoreversion
 ; Companion Mod: the zip, unchanged (the game reads it as a zip), into the mods folder.
 Source: "{#StageDir}\mods\FS25_VRCompanion.zip"; DestDir: "{code:GetModsDir}"; Flags: ignoreversion
 ; Notices travel with the uninstaller.
@@ -285,7 +291,7 @@ const
   CloseGameMessage = 'Close Farming Simulator 25 to continue.';
 
 { True if a process whose image name is FarmingSimulator2025Game.exe is running (any installation,
-  any user: the Installer must not run while the game holds dxgi.dll or can rewrite game.xml). WMI
+  any user: the Installer must not run while the game holds the Injector or can rewrite game.xml). WMI
   gives the image name without needing process handles. If WMI cannot be queried we cannot tell, so
   we log it and carry on rather than block every install. }
 function IsGameRunning: Boolean;
@@ -326,25 +332,34 @@ begin
   end;
 end;
 
-{ ---- An existing dxgi.dll in the game's x64 folder ----
-  Ours (recognised by its version resource) is simply overwritten. Anything else, such as ReShade, is
-  moved to dxgi.dll.fs25vr-backup first and put back by the uninstaller. An existing backup is never
-  overwritten, so an upgrade can't replace the player's original DLL with an older copy of ours. }
+{ ---- The Injector's file in the game's x64 folder, and the one an earlier version used ----
+  The Injector is version.dll. Ours there (recognised by its version resource) is simply overwritten. Any
+  other version.dll is moved to version.dll.fs25vr-backup first and put back by the uninstaller. An
+  existing backup is never overwritten, so an upgrade can't replace the player's original DLL with an older
+  copy of ours.
+  FS25 VR up to 1.1.9 was dxgi.dll, and moved a foreign dxgi.dll (ReShade, ...) to dxgi.dll.fs25vr-backup
+  the same way. Once the files are placed, an upgrade deletes that dxgi.dll of ours (while it is there, the
+  new Injector stays inactive) and puts the backup back. A dxgi.dll that is not ours is left alone. }
 
 const
+  InjectorFileName = 'version.dll';
+  EarlierInjectorFileName = 'dxgi.dll';
   BackupSuffix = '.fs25vr-backup';
-  { A dxgi.dll the player put in place of ours after installing, kept from the uninstall's file removal. }
+  { A DLL the player put in place of ours after installing, kept from the uninstall's file removal. }
   KeepSuffix = '.fs25vr-keep';
-  OurProductName = 'FS25 VR';  { ProductName in the Injector's version resource: src\dxgi.rc.in }
+  OurProductName = 'FS25 VR';  { ProductName in the Injector's version resource: src\injector.rc.in }
   LegacyLogFileName = 'fs25_vr.log';
   LegacyLogFileNameUtf16 = 'f'#0's'#0'2'#0'5'#0'_'#0'v'#0'r'#0'.'#0'l'#0'o'#0'g'#0;
-  ForeignDxgiMessage =
-    'The game folder already contains a dxgi.dll that is not part of FS25 VR (for example ReShade).' + #13#10#13#10 +
-    'It is moved to dxgi.dll.fs25vr-backup before FS25 VR is installed, and restored when FS25 VR is uninstalled.';
-  ForeignDxgiBlockedMessage =
-    'The game folder contains a dxgi.dll that is not part of FS25 VR, and dxgi.dll.fs25vr-backup already exists, ' +
+  ForeignInjectorMessage =
+    'The game folder already contains a version.dll that is not part of FS25 VR.' + #13#10#13#10 +
+    'It is moved to version.dll.fs25vr-backup before FS25 VR is installed, and restored when FS25 VR is uninstalled.';
+  ForeignInjectorBlockedMessage =
+    'The game folder contains a version.dll that is not part of FS25 VR, and version.dll.fs25vr-backup already exists, ' +
     'so there is nowhere safe to move it.' + #13#10#13#10 +
     'Move or rename one of the two files in the x64 folder, then run the installer again.';
+  EarlierInjectorLeftMessage =
+    'FS25 VR is installed, but the dxgi.dll of an earlier FS25 VR version could not be deleted from the game''s x64 folder.' + #13#10#13#10 +
+    'Delete it: FS25 VR stays inactive while it is there.';
 
 function GetFileVersionInfoSizeW(FileName: String; var Handle: Cardinal): Cardinal;
   external 'GetFileVersionInfoSizeW@version.dll stdcall';
@@ -377,7 +392,7 @@ end;
 
 { An Injector from before the version resource (the v1.0.0 zip bundle and builds up to this Installer)
   has no ProductName. It carries the name of the log file it writes, fs25_vr.log, as text (ASCII in v1.0.0,
-  UTF-16 in later builds), which no other dxgi.dll does. }
+  UTF-16 in later builds), which no other DLL does. Those Injectors were all dxgi.dll. }
 function IsLegacyInjector(FileName: String): Boolean;
 var
   Raw: AnsiString;
@@ -398,80 +413,109 @@ begin
 end;
 
 var
-  MovedDxgiGameDir: String;  { the game folder whose foreign dxgi.dll PrepareExistingDxgi moved aside }
-  FilesPlaced: Boolean;      { set at ssPostInstall: from then on the uninstaller puts that dxgi.dll back }
+  MovedInjectorGameDir: String;  { the game folder whose foreign version.dll PrepareExistingInjector moved aside }
+  FilesPlaced: Boolean;          { set at ssPostInstall: from then on the uninstaller puts that version.dll back }
 
-{ Called from PrepareToInstall for the chosen game folder. Moves a foreign dxgi.dll aside (warning
+function GameDll(GameDir, FileName: String): String;
+begin
+  Result := AddBackslash(GameDir) + 'x64\' + FileName;
+end;
+
+{ Called from PrepareToInstall for the chosen game folder. Moves a foreign version.dll aside (warning
   the player) and returns '' on success; returns the reason when it can't be done safely. }
-function PrepareExistingDxgi(GameDir: String): String;
+function PrepareExistingInjector(GameDir: String): String;
 var
-  Dxgi, Backup: String;
+  Dll, Backup: String;
 begin
   Result := '';
-  Dxgi := AddBackslash(GameDir) + 'x64\dxgi.dll';
-  Backup := Dxgi + BackupSuffix;
-  if not FileExists(Dxgi) then Exit;
-  if IsOurInjector(Dxgi) then Exit;
+  Dll := GameDll(GameDir, InjectorFileName);
+  Backup := Dll + BackupSuffix;
+  if not FileExists(Dll) then Exit;
+  if IsOurInjector(Dll) then Exit;
   if FileExists(Backup) then
   begin
-    Result := ForeignDxgiBlockedMessage;
+    Result := ForeignInjectorBlockedMessage;
     Exit;
   end;
-  Log(ForeignDxgiMessage);
+  Log(ForeignInjectorMessage);
   if not WizardSilent then
-    MsgBox(ForeignDxgiMessage, mbInformation, MB_OK);
-  if RenameFile(Dxgi, Backup) then
-    MovedDxgiGameDir := GameDir
+    MsgBox(ForeignInjectorMessage, mbInformation, MB_OK);
+  if RenameFile(Dll, Backup) then
+    MovedInjectorGameDir := GameDir
   else
-    Result := 'Could not move ' + Dxgi + ' to ' + Backup + '. Close any program using it and try again.';
+    Result := 'Could not move ' + Dll + ' to ' + Backup + '. Close any program using it and try again.';
 end;
 
-{ Uninstall, before Inno removes the files: Inno deletes x64\dxgi.dll by name, whatever it is by then. If
-  the player has replaced our Injector since (for example by installing ReShade), move theirs out of the
-  way so it survives; RestoreForeignDxgi puts it back. }
-procedure SetAsideReplacedDxgi(GameDir: String);
+{ Uninstall, before Inno removes the files: Inno deletes x64\version.dll by name, whatever it is by then, and
+  x64\dxgi.dll too if an earlier FS25 VR version installed it. If the player has put a DLL of their own there
+  since (ReShade's dxgi.dll, for one), move it out of the way so it survives; RestoreForeignDll puts it back. }
+procedure SetAsideReplacedDll(GameDir, FileName: String);
 var
-  Dxgi, Keep: String;
+  Dll, Keep: String;
 begin
-  Dxgi := AddBackslash(GameDir) + 'x64\dxgi.dll';
-  Keep := Dxgi + KeepSuffix;
-  if not FileExists(Dxgi) or IsOurInjector(Dxgi) then Exit;
+  Dll := GameDll(GameDir, FileName);
+  Keep := Dll + KeepSuffix;
+  if not FileExists(Dll) or IsOurInjector(Dll) then Exit;
   if FileExists(Keep) then
-    Log(Dxgi + ' is no longer ours, but ' + Keep + ' already exists; the uninstall removes it.')
-  else if RenameFile(Dxgi, Keep) then
-    Log(Dxgi + ' is no longer ours (replaced since install); keeping it.')
+    Log(Dll + ' is not ours, but ' + Keep + ' already exists; the uninstall may remove it.')
+  else if RenameFile(Dll, Keep) then
+    Log(Dll + ' is not ours; keeping it.')
   else
-    Log('Could not move ' + Dxgi + ' to ' + Keep + '; the uninstall removes it.');
+    Log('Could not move ' + Dll + ' to ' + Keep + '; the uninstall may remove it.');
 end;
 
-{ Uninstall, and a rolled-back install: put the player's dxgi.dll back once ours is gone. One the player
-  put there after installing (set aside by SetAsideReplacedDxgi) wins over the older one moved aside at
-  install, which then stays under its backup name. }
-procedure RestoreForeignDxgi(GameDir: String);
+{ Uninstall, an upgrade from an earlier version, and a rolled-back install: put the player's DLL back once
+  ours is gone. One the player put there after installing (set aside by SetAsideReplacedDll) wins over the
+  older one moved aside at install, which then stays under its backup name. }
+procedure RestoreForeignDll(GameDir, FileName: String);
 var
-  Dxgi, Backup, Keep: String;
+  Dll, Backup, Keep: String;
 begin
-  Dxgi := AddBackslash(GameDir) + 'x64\dxgi.dll';
-  Backup := Dxgi + BackupSuffix;
-  Keep := Dxgi + KeepSuffix;
+  Dll := GameDll(GameDir, FileName);
+  Backup := Dll + BackupSuffix;
+  Keep := Dll + KeepSuffix;
   if FileExists(Keep) then
   begin
-    if FileExists(Dxgi) then
-      Log('dxgi.dll is still in place; leaving ' + Keep + ' where it is.')
-    else if not RenameFile(Keep, Dxgi) then
-      Log('Could not restore ' + Keep + ' as dxgi.dll.')
+    if FileExists(Dll) then
+      Log(FileName + ' is still in place; leaving ' + Keep + ' where it is.')
+    else if not RenameFile(Keep, Dll) then
+      Log('Could not restore ' + Keep + ' as ' + FileName + '.')
     else if FileExists(Backup) then
-      Log('Kept the dxgi.dll that replaced FS25 VR; the one moved aside at install stays as ' + Backup + '.');
+      Log('Kept the ' + FileName + ' that replaced FS25 VR; the one moved aside at install stays as ' + Backup + '.');
     Exit;
   end;
   if not FileExists(Backup) then Exit;
-  if FileExists(Dxgi) then
+  if FileExists(Dll) then
   begin
-    Log('dxgi.dll is still in place; leaving ' + Backup + ' where it is.');
+    Log(FileName + ' is still in place; leaving ' + Backup + ' where it is.');
     Exit;
   end;
-  if not RenameFile(Backup, Dxgi) then
-    Log('Could not restore ' + Backup + ' as dxgi.dll.');
+  if RenameFile(Backup, Dll) then
+    Log('Restored ' + Backup + ' as ' + FileName + '.')
+  else
+    Log('Could not restore ' + Backup + ' as ' + FileName + '.');
+end;
+
+{ Deletes the dxgi.dll of an earlier FS25 VR version, if there is one, and puts back the dxgi.dll it had moved
+  aside. A dxgi.dll that is not ours (ReShade's, ...) is left alone. False when ours is there and could not be
+  deleted. }
+function RemoveEarlierInjector(GameDir: String): Boolean;
+var
+  Dll: String;
+begin
+  Result := True;
+  Dll := GameDll(GameDir, EarlierInjectorFileName);
+  if FileExists(Dll) and IsOurInjector(Dll) then
+  begin
+    if not DeleteFile(Dll) then
+    begin
+      Log('Could not delete ' + Dll + ', the Injector of an earlier FS25 VR version.');
+      Result := False;
+      Exit;
+    end;
+    Log('Deleted ' + Dll + ', the Injector of an earlier FS25 VR version.');
+  end;
+  RestoreForeignDll(GameDir, EarlierInjectorFileName);
 end;
 
 procedure RestoreRenderResolution; forward;
@@ -479,14 +523,20 @@ procedure RestoreRenderResolution; forward;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   { Before Inno removes the files, so the record is gone and its folder (common appdata, FS25 VR)
-    is removed along with them, and so a dxgi.dll that is no longer ours is out of the way of the removal. }
+    is removed along with them, and so a DLL that is not ours is out of the way of the removal. }
   if CurUninstallStep = usUninstall then
   begin
     RestoreRenderResolution;
-    SetAsideReplacedDxgi(ExpandConstant('{app}'));
+    SetAsideReplacedDll(ExpandConstant('{app}'), InjectorFileName);
+    SetAsideReplacedDll(ExpandConstant('{app}'), EarlierInjectorFileName);
   end;
   if CurUninstallStep = usPostUninstall then
-    RestoreForeignDxgi(ExpandConstant('{app}'));
+  begin
+    RestoreForeignDll(ExpandConstant('{app}'), InjectorFileName);
+    { An earlier version's dxgi.dll that is still there (it was not in this install's file list, or could
+      not be deleted at upgrade) goes too, and what it had moved aside comes back. }
+    RemoveEarlierInjector(ExpandConstant('{app}'));
+  end;
 end;
 
 { ---- Render Resolution (file formats are described at the top of this script) ---- }
@@ -967,9 +1017,13 @@ end;
 
 const
   RenderResolutionFailedExitCode = 20;
+  { The files are placed, but the dxgi.dll of an earlier FS25 VR version could not be deleted, and the new
+    Injector stays inactive while it is there. }
+  EarlierInjectorLeftExitCode = 21;
 
 var
   RenderFailed: Boolean;
+  EarlierInjectorLeft: Boolean;
 
 { The Render Resolution is applied after the files are placed (PrepareToInstall has already checked
   everything that can be checked), so a failure while placing files, such as a full disk, never leaves
@@ -983,6 +1037,14 @@ begin
   if CurStep = ssPostInstall then
   begin
     FilesPlaced := True;
+    { Only now that the new Injector is in place: a failed install keeps the earlier one working. }
+    if not RemoveEarlierInjector(ExpandConstant('{app}')) then
+    begin
+      EarlierInjectorLeft := True;
+      Log(EarlierInjectorLeftMessage);
+      if not WizardSilent then
+        MsgBox(EarlierInjectorLeftMessage, mbError, MB_OK);
+    end;
     if RenderApply then
     begin
       Problem := ApplyRenderResolution(RenderWidth, RenderHeight);
@@ -1001,19 +1063,21 @@ function GetCustomSetupExitCode: Integer;
 begin
   if RenderFailed then
     Result := RenderResolutionFailedExitCode
+  else if EarlierInjectorLeft then
+    Result := EarlierInjectorLeftExitCode
   else
     Result := 0;
 end;
 
-{ A foreign dxgi.dll was moved aside but the files were never placed (the install was cancelled, or
+{ A foreign version.dll was moved aside but the files were never placed (the install was cancelled, or
   failed while placing files and was rolled back): no uninstaller is registered to put it back, so put
   it back now. }
 procedure DeinitializeSetup;
 begin
-  if (MovedDxgiGameDir <> '') and not FilesPlaced then
+  if (MovedInjectorGameDir <> '') and not FilesPlaced then
   begin
-    Log('The install did not finish; putting back the dxgi.dll that was moved aside.');
-    RestoreForeignDxgi(MovedDxgiGameDir);
+    Log('The install did not finish; putting back the version.dll that was moved aside.');
+    RestoreForeignDll(MovedInjectorGameDir, InjectorFileName);
   end;
 end;
 
@@ -1032,7 +1096,7 @@ end;
 
 { Also covers silent installs, where there is no directory page. Everything that can refuse the install
   runs first (game folder, game running, Render Resolution input and game.xml); only then is the player's
-  own dxgi.dll moved aside, so a refusal never leaves it moved.
+  own version.dll moved aside, so a refusal never leaves it moved.
   A refusal is returned, so a wizard run stops on the Preparing to Install page with the reason (Back
   and Cancel stay available). A silent run must not wait on a message box, but for a returned reason
   Inno shows one unless /SUPPRESSMSGBOXES is given; so a silent run logs the reason and raises Abort
@@ -1045,7 +1109,7 @@ begin
   if Result = '' then
     Result := PrepareRenderResolution;
   if Result = '' then
-    Result := PrepareExistingDxgi(WizardDirValue);
+    Result := PrepareExistingInjector(WizardDirValue);
   if Result <> '' then
   begin
     Log(Result);
@@ -1054,7 +1118,7 @@ begin
   end;
 end;
 
-{ Uninstall must not run over a live game either (it holds dxgi.dll and rewrites game.xml on exit). }
+{ Uninstall must not run over a live game either (it holds the Injector and rewrites game.xml on exit). }
 function InitializeUninstall: Boolean;
 begin
   Result := EnsureGameNotRunning(UninstallSilent);

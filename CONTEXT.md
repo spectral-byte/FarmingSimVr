@@ -5,7 +5,7 @@ A high-performance virtual reality modding architecture for Farming Simulator 25
 ## Language
 
 **Injector**:
-The native Direct3D 12 proxy library loaded by the game process that interacts with the OpenXR runtime and intercepts swapchain presentation.
+The native library, loaded by the game process as its `version.dll`, that hooks DXGI in the system's `dxgi.dll`, interacts with the OpenXR runtime and intercepts swapchain presentation.
 _Avoid_: Wrapper, loader, hook DLL
 
 **Companion Mod**:
@@ -61,7 +61,7 @@ The alternating horizontal screen-space displacement applied across Alternate Fr
 _Avoid_: 3D HUD shift, eye disparity offset, stereo HUD hack
 
 **HUD Depth**:
-How far away, in metres, the HUD Groups are in the headset, 1.8 by default. The groups move back or forward together as one panel straight ahead: their layouts are set for the default depth, and at another depth they are drawn smaller or bigger and nearer to or further from the middle of the view by the same factor, while the HUD Convergence Offset gives them that depth. A nearer HUD Depth never pushes a group past the screen's edge. The HUD Safe Area does not move with it.
+How far away, in metres, the HUD Groups are in the headset, 2.5 by default on a new install. The groups move back or forward together as one panel straight ahead: their layouts are set for 1.8 m, and at another depth they are drawn smaller or bigger and nearer to or further from the middle of the view by the same factor, while the HUD Convergence Offset gives them that depth. A nearer HUD Depth never pushes a group past the screen's edge. The HUD Safe Area does not move with it.
 _Avoid_: HUD distance, convergence depth, HUD scale
 
 **HUD Toggle Action**:
@@ -189,7 +189,7 @@ Keeping the Desk Mouse on the game picture while the headset is in use, so it ca
 _Avoid_: Mouse lock, cursor lock, pointer lock, mouse grab
 
 **Stereo Dialog**:
-A game dialog, named in a short list the Companion Mod keeps (for now only the fish catch dialog of the Highlands Fishing DLC), that stays in the stereoscopic view instead of getting the menu quad, so the player keeps the 3D world, head tracking, the Virtual Hands and the Tool Hand while it waits. It is a menu for the input: locomotion, Snap Turn and Wheel Grab are refused, and the Virtual Gamepad sends the Motion Controllers' buttons to it (or, without Motion Controllers, the player's own gamepad or keyboard answers it), so the dialog's own button hints answer it. The Pointer Ray does not reach it. It is drawn at a depth of its own, set by `vrDialogDepth` (2.5 m by default, a little further back than the HUD's 1.8 m): its root is shifted by the disparity of that depth on alternating eye frames, like the HUD Groups, and put back after each draw. In 2D Floating Window Mode, when it opens over another menu or dialog, and for any dialog not on the list, the menu quad is used as for any menu. See ADR-0032.
+A game dialog, named in a short list the Companion Mod keeps (for now only the fish catch dialog of the Highlands Fishing DLC), that stays in the stereoscopic view instead of getting the menu quad, so the player keeps the 3D world, head tracking, the Virtual Hands and the Tool Hand while it waits. It is a menu for the input: locomotion, Snap Turn and Wheel Grab are refused, and the Virtual Gamepad sends the Motion Controllers' buttons to it (or, without Motion Controllers, the player's own gamepad or keyboard answers it), so the dialog's own button hints answer it. The Pointer Ray does not reach it. It is drawn at a depth of its own, set by `vrDialogDepth` (2.5 m by default, apart from the HUD Depth): its root is shifted by the disparity of that depth on alternating eye frames, like the HUD Groups, and put back after each draw. In 2D Floating Window Mode, when it opens over another menu or dialog, and for any dialog not on the list, the menu quad is used as for any menu. See ADR-0032.
 _Avoid_: Stereo menu, 3D dialog, in-world dialog, VR dialog
 
 **Virtual Hand**:
