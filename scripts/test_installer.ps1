@@ -8,9 +8,13 @@
 #
 # Windows' own crash dumps for the game are a key under HKEY_LOCAL_MACHINE, which only an elevated Setup
 # can write. The cases that need that run only in an elevated shell and are reported as [SKIP], never as
-# [PASS], in a non-elevated one (Test-Case -Needs Elevated); the case for the per-user run is the reverse
-# (-Needs NotElevated). Every Setup run is given a throwaway game exe name (the hidden /FS25VR_GAMEEXE
-# switch, see New-TestWorld), so the key of the real FarmingSimulator2025Game.exe is never read or written.
+# [PASS], in a non-elevated one (Test-Case -Needs Elevated). The case for the per-user run passes /CURRENTUSER
+# itself, so it runs in both kinds of shell. Every Setup run is given a throwaway game exe name (the hidden
+# /FS25VR_GAMEEXE switch, see New-TestWorld), so the key of the real FarmingSimulator2025Game.exe is never read
+# or written.
+#
+# On GitHub Actions (GITHUB_ACTIONS is "true"), which is elevated, nothing may be skipped: a skipped case there
+# means the elevated cases are not running, and the script then fails instead of reporting success.
 #
 # Extending: add a Test-Case at the bottom. Build the world with New-FakeGame / New-FakeDocuments,
 # drive it with Install-Fs25Vr / Uninstall-Fs25Vr (both always clean up via Remove-TestWorld),
@@ -38,8 +42,13 @@ $appId = "{C85F7B59-39C3-48F5-94FB-38E291A376AE}"
 $uninstallKeyName = "${appId}_is1"
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
-$uninstallKeyPath = if ($isAdmin) { "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$uninstallKeyName" }
-                    else { "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$uninstallKeyName" }
+$machineUninstallKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$uninstallKeyName"
+$userUninstallKeyPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$uninstallKeyName"
+# Where an install of this run registers itself: machine-wide when elevated, per user otherwise.
+$uninstallKeyPath = if ($isAdmin) { $machineUninstallKeyPath } else { $userUninstallKeyPath }
+# Where an install can be found. An elevated run also makes per-user installs (/CURRENTUSER, see the per-user case),
+# which register under HKCU.
+$uninstallKeyPaths = if ($isAdmin) { @($machineUninstallKeyPath, $userUninstallKeyPath) } else { @($userUninstallKeyPath) }
 
 # What the Installer must have copied: the staged release files, the same ones the zip bundle holds.
 $stagedInjector = Join-Path $releaseDir "version.dll"
@@ -182,7 +191,12 @@ function Get-GamePaths($world) {
 # Installer drivers
 # ---------------------------------------------------------------------------------------------
 
-function Get-UninstallEntry { Get-ItemProperty -Path $uninstallKeyPath -ErrorAction SilentlyContinue }
+function Get-UninstallEntry {
+    foreach ($path in $uninstallKeyPaths) {
+        $entry = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
+        if ($entry) { return $entry }
+    }
+}
 
 # Waits for a process, but never forever: a stray dialog in a silent run must fail the case, not hang CI.
 function Wait-GuardedProcess($process, [string]$what, [int]$timeoutSeconds = 120) {
@@ -201,8 +215,9 @@ function Install-Fs25Vr($world, [string[]]$extraArgs = @()) {
               "/DIR=`"$($world.Game)`"",
               "/FS25VR_DOCUMENTS=`"$($world.Documents)`"",
               "/FS25VR_GAMEEXE=$($world.ExeName)")
-    if (-not $isAdmin) { $setupArgs += "/CURRENTUSER" }
     $setupArgs += $extraArgs
+    # A non-elevated run can only install per user; an elevated one does so when a case asks for /CURRENTUSER.
+    if (-not $isAdmin -and $setupArgs -notcontains "/CURRENTUSER") { $setupArgs += "/CURRENTUSER" }
     Wait-GuardedProcess (Start-Process -FilePath $SetupExe -ArgumentList $setupArgs -PassThru) "Setup"
 }
 
@@ -379,19 +394,13 @@ $failures = New-Object Collections.Generic.List[string]
 $passed = 0
 $skipped = 0
 # $data (optional) is handed to the body as its second argument, for cases generated in a loop.
-# -Needs says what the run has to be for the case to mean anything: 'Elevated' (the case writes or reads
-# machine-wide state only an elevated Setup can write) or 'NotElevated' (the case is about a per-user run,
-# which CI, being elevated, does not make). A case whose need is not met is reported as [SKIP], not [PASS],
-# and its body does not run.
-function Test-Case([string]$name, [scriptblock]$body, $data = $null, [ValidateSet('', 'Elevated', 'NotElevated')][string]$Needs = '') {
+# -Needs Elevated marks a case that writes or reads machine-wide state only an elevated Setup can write. In a
+# non-elevated run it is reported as [SKIP], not [PASS], and its body does not run. (Every other case runs in
+# both kinds of run; the per-user case drives /CURRENTUSER itself so that elevated CI runs it too.)
+function Test-Case([string]$name, [scriptblock]$body, $data = $null, [ValidateSet('', 'Elevated')][string]$Needs = '') {
     if ($Filter -and $name -notlike $Filter) { return }
     if ($Needs -eq 'Elevated' -and -not $isAdmin) {
         Write-Host "[SKIP] $name -- needs an elevated run"
-        $script:skipped++
-        return
-    }
-    if ($Needs -eq 'NotElevated' -and $isAdmin) {
-        Write-Host "[SKIP] $name -- needs a non-elevated run"
         $script:skipped++
         return
     }
@@ -414,6 +423,7 @@ if (Get-UninstallEntry) { Write-Error "FS25 VR is already installed on this mach
 # Whether Windows Error Reporting's LocalDumps key was there before this run. An install creates it when it
 # is not (and the uninstall takes it away again); if a failing case left it behind, the end of the run does.
 $localDumpsExistedAtStart = Test-MachineKeyExists $localDumpsKeyPath
+Write-Host "This run is $(if ($isAdmin) { 'elevated' } else { 'not elevated' }); the LocalDumps key is $(if ($localDumpsExistedAtStart) { 'there' } else { 'not there' }) before it."
 
 # ---------------------------------------------------------------------------------------------
 # Cases
@@ -1467,24 +1477,29 @@ foreach ($mode in @("/VERYSILENT", "/SILENT")) {
 # (/FS25VR_GAMEEXE), so the real game's key is never read or written; see the header of this script for
 # why some of these cases are skipped outside an elevated run.
 
+# Runs in an elevated shell too: /CURRENTUSER makes Setup install in the non administrative install mode there
+# as well (Inno Setup, "Setup Command Line Parameters"), which registers under HKCU and cannot write the key.
 Test-Case "A per-user install writes no Windows crash dump key, logs that the setting was skipped and still succeeds" {
     param($world)
     New-FakeGame $world
     New-FakeDocuments $world
     $p = Get-GamePaths $world
 
-    Assert-InstallSucceeds $world
+    Assert-InstallSucceeds $world @("/CURRENTUSER")
 
     Assert-SameFile $p.Injector $stagedInjector "Injector (version.dll in x64)"
     Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "A per-user run wrote the crash dump key for $($world.ExeName)."
     Assert-True ($null -eq (Get-CrashDumpRecord)) "A per-user run recorded a crash dump key it did not write."
     Assert-True ((Get-LastSetupLog $world) -match "Skipped the Windows crash dump setting") "Setup did not log that the Windows crash dump setting was skipped."
-} -Needs NotElevated
+    $entry = Get-ItemProperty -Path $userUninstallKeyPath -ErrorAction SilentlyContinue
+    Assert-True ($null -ne $entry) "The per-user install is not registered under HKCU."
+}
 
 # A silent run is answered by the command line alone: the wizard's Crash Dumps checkbox (ticked by default,
 # not offered at all in a per-user run) takes no part in it. With the switch, the log names the switch in an
-# elevated and in a per-user run alike, and no key and no record appear either way. This one runs in both.
-Test-Case "A silent install given /FS25VR_NOCRASHDUMPS logs that the switch left the Windows crash dump setting alone, writes no key and no record, and succeeds" {
+# elevated and in a per-user run alike, and no key and no record appear either way, not even by the uninstall.
+# This one runs in both.
+Test-Case "A silent install given /FS25VR_NOCRASHDUMPS logs that the switch left the Windows crash dump setting alone, writes no key and no record, succeeds, and the uninstall has nothing to remove" {
     param($world)
     New-FakeGame $world
     New-FakeDocuments $world
@@ -1498,6 +1513,11 @@ Test-Case "A silent install given /FS25VR_NOCRASHDUMPS logs that the switch left
     $log = Get-LastSetupLog $world
     Assert-True ($log -match "left alone because of /FS25VR_NOCRASHDUMPS") "Setup did not log that /FS25VR_NOCRASHDUMPS left the crash dump setting alone."
     Assert-True ($log -notmatch "Skipped the Windows crash dump setting") "Setup logged the per-user skip although the switch was given."
+
+    Uninstall-Fs25Vr
+
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "A crash dump key appeared by the uninstall."
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "A crash dump record appeared by the uninstall."
 }
 
 # What the Installer writes for the game's exe, spelled out here from the spec and not from the Installer:
@@ -1613,24 +1633,6 @@ foreach ($change in @(
         Assert-True ($null -eq (Get-CrashDumpRecord)) "The crash dump record was not deleted by the uninstall."
     } $change -Needs Elevated
 }
-
-Test-Case "/FS25VR_NOCRASHDUMPS leaves no crash dump key and no record, and the uninstall has nothing to remove" {
-    param($world)
-    New-FakeGame $world
-    New-FakeDocuments $world
-    $p = Get-GamePaths $world
-
-    Assert-InstallSucceeds $world @("/FS25VR_NOCRASHDUMPS")
-
-    Assert-SameFile $p.Injector $stagedInjector "Injector (version.dll in x64)"
-    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key was written although /FS25VR_NOCRASHDUMPS was given."
-    Assert-True ($null -eq (Get-CrashDumpRecord)) "A crash dump record was written although /FS25VR_NOCRASHDUMPS was given."
-    Assert-True ((Get-LastSetupLog $world) -match "FS25VR_NOCRASHDUMPS") "Setup did not log that the crash dump setting was left alone because of the switch."
-
-    Uninstall-Fs25Vr
-
-    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "A crash dump key appeared by the uninstall."
-} -Needs Elevated
 
 # An upgrade or reinstall applies the same rules: it keeps the key and its record while the key is still its
 # own, writes the key when there is none, and leaves a key the player changed alone (and forgets the record,
@@ -1758,6 +1760,11 @@ if ($failures.Count -gt 0) {
 }
 if ($skipped -gt 0) {
     Write-Host "No installer test failed, but $skipped case(s) did not run here (see [SKIP] above): a skipped case is not a passed one."
+    # CI is elevated, so nothing may be skipped there: a skip means the elevated cases are not running, and a green
+    # run that skipped them would say nothing about the Windows crash dump setting.
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        Write-Error "$skipped installer test case(s) were skipped on GitHub Actions, which runs elevated; none may be (see [SKIP] above)."
+    }
 } else {
     Write-Host "All installer tests passed."
 }
