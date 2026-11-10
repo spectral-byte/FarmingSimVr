@@ -4,52 +4,22 @@
 #include <gtest/gtest.h>
 #include "core/injector_version.h"
 #include "core/logger.h"
+#include "injector_binary.h"
 #include "proxy/dxgi_export_hooks.h"
 #include "proxy/system_dxgi.h"
 #include <windows.h>
 #include <winver.h>
 #include <wrl/client.h>
 #include <array>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
 
-#ifndef INJECTOR_DLL_PATH
-#error INJECTOR_DLL_PATH must be defined by the build
-#endif
-
 using Microsoft::WRL::ComPtr;
 
 namespace fs25vr {
 namespace {
-
-// CMake writes the path with forward slashes; Windows paths take backslashes.
-std::string InjectorPathA() {
-    std::string path = INJECTOR_DLL_PATH;
-    for (char& c : path) {
-        if (c == '/') c = '\\';
-    }
-    return path;
-}
-
-std::wstring InjectorPath() {
-    const std::string narrow = InjectorPathA();
-    return std::wstring(narrow.begin(), narrow.end());
-}
-
-HMODULE LoadedSystemDxgi() {
-    HMODULE module = nullptr;
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, SystemDxgiPath().c_str(), &module);
-    return module;
-}
-
-std::array<unsigned char, 16> FirstBytes(const void* function) {
-    std::array<unsigned char, 16> bytes{};
-    std::memcpy(bytes.data(), function, bytes.size());
-    return bytes;
-}
 
 // The names the system's version.dll exports (Windows 10 and 11).
 constexpr const char* kVersionExports[] = {
