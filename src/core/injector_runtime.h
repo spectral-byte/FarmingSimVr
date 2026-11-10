@@ -1,7 +1,9 @@
 #pragma once
 
+#include "core/injector_version.h"
 #include <filesystem>
 #include <memory>
+#include <string>
 
 namespace fs25vr {
 
@@ -44,6 +46,9 @@ public:
         // The Companion Mod's settings.xml, read once on construction for the settings the main menu needs before a
         // savegame has loaded (the Menu Distance). Empty: nothing is read. Instance() passes the player's file.
         std::filesystem::path companionSettingsFile;
+        // The Injector's release version, given to the VRBridge the runtime creates itself (a supplied VRBridge
+        // brings its own). The build's version unless a test supplies another.
+        std::string injectorVersion{kInjectorVersion};
     };
 
     // Process-wide runtime, created on first use.

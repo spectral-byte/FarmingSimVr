@@ -98,3 +98,13 @@ FS25 VR up to 1.1.9 was `dxgi.dll` (ADR-0038). `scripts\test_installer.ps1` fake
 ## After the checklist
 
 Record the Installer version and the date you ran it in the release notes draft, together with any item you could not run (for example "no Epic machine available").
+
+Attach all three files that `scripts\package_release.ps1` leaves in `build\release` to the GitHub release (`gh release create` takes them as arguments, `gh release upload <tag>` adds them to a release that exists). Published names drop the last `.0` of the four-part version:
+
+| In `build\release` | Attach as |
+|---|---|
+| `FS25_VR_v1.2.0.0.zip`, the zip bundle | `FS25_VR_v1.2.0.zip` |
+| `FS25_VR_v1.2.0.0_Setup.exe`, the Installer | `FS25_VR_v1.2.0_Setup.exe` |
+| `FS25_VR_v1.2.0.0_Symbols.zip`, the Injector's PDB | `FS25_VR_v1.2.0_Symbols.zip` |
+
+The symbols zip is easy to leave out because players never need it. It is what opens a crash dump from this release with full symbols, and it cannot be fetched later: the next local build overwrites the PDB. `scripts\package_release.ps1` stops when `build\version.pdb` is missing, so a release without symbols cannot be packaged by accident.

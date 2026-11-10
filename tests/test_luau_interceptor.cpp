@@ -1,11 +1,15 @@
 #include <gtest/gtest.h>
 #include "core/injector_runtime.h"
+#include "core/injector_version.h"
 #include "luau/luau_interceptor.h"
 #include "luau/vr_bridge.h"
 #include "luacode.h"
 #include <windows.h>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -79,7 +83,7 @@ TEST_F(LuauInterceptorTest, InterceptsActiveLuaStateAndInjectsVRBridge) {
         local available = isHeadTrackingAvailable()
         assert(available == true, "Query must return true")
         assert(VRBridge ~= nil, "VRBridge must now be injected and accessible")
-        assert(VRBridge.version == "1.0.0", "VRBridge.version must be accessible")
+        assert(type(VRBridge.version) == "string" and #VRBridge.version > 0, "VRBridge.version must be accessible")
     )";
 
     int status = RunLuauString(L, script);
@@ -395,4 +399,17 @@ TEST(LuauVersionGuardTest, EmptySectionIsAMismatch) {
 TEST(LuauVersionGuardTest, GuardVersionMatchesTheLinkedLuauTag) {
     // FS25VR_LUAU_TAG is CMakeLists.txt's GIT_TAG: bumping it without updating the guard fails here.
     EXPECT_STREQ(fs25vr::kExpectedLuauVersion, FS25VR_LUAU_TAG);
+}
+
+TEST(InjectorVersionPinTest, BuildVersionIsTheVersionInModDesc) {
+    // The Injector and the Companion Mod are released together, so the Companion Mod's modDesc.xml is where the
+    // release version lives. The build copies it to the Injector (its version resource and kInjectorVersion):
+    // a build whose copy differs from the file fails here.
+    std::ifstream modDescFile(std::filesystem::path(PROJECT_ROOT_DIR) / "mods" / "FS25_VRCompanion" / "modDesc.xml");
+    ASSERT_TRUE(modDescFile.is_open());
+    const std::string modDesc((std::istreambuf_iterator<char>(modDescFile)), std::istreambuf_iterator<char>());
+
+    std::smatch version;
+    ASSERT_TRUE(std::regex_search(modDesc, version, std::regex("<version>([^<]+)</version>")));
+    EXPECT_EQ(std::string(fs25vr::kInjectorVersion), version[1].str());
 }
