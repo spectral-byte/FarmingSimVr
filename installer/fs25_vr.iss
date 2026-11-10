@@ -1039,10 +1039,13 @@ function HasCommandLineSwitch(const Name: String): Boolean; forward;
 
 type
   { What the Installer recorded about the key it made. ExeName is empty when there is no record. The Written
-    values are the numbers it wrote, as text. }
+    values are the numbers it wrote, as text. CreatedLocalDumpsKey is '1' when the LocalDumps key itself was
+    not there and the Installer's write created it (Windows then counts it as the switch for crash dumps
+    with its defaults for every application, so the uninstall takes it away again when it is empty). }
   TCrashDumpRecord = record
     ExeName: String;
     WrittenDumpType, WrittenCustomDumpFlags, WrittenDumpCount: String;
+    CreatedLocalDumpsKey: String;
   end;
 
 { Where the key lives: the 64-bit view of HKEY_LOCAL_MACHINE, which is the one Windows Error Reporting reads. }
@@ -1100,6 +1103,7 @@ begin
   R.WrittenDumpType := '';
   R.WrittenCustomDumpFlags := '';
   R.WrittenDumpCount := '';
+  R.CreatedLocalDumpsKey := '';
   Result := False;
   if not LoadStringsFromFile(GetCrashDumpRecordPath, Lines) then Exit;
   for I := 0 to GetArrayLength(Lines) - 1 do
@@ -1112,7 +1116,8 @@ begin
       if Key = 'ExeName' then R.ExeName := Value
       else if Key = 'WrittenDumpType' then R.WrittenDumpType := Value
       else if Key = 'WrittenCustomDumpFlags' then R.WrittenCustomDumpFlags := Value
-      else if Key = 'WrittenDumpCount' then R.WrittenDumpCount := Value;
+      else if Key = 'WrittenDumpCount' then R.WrittenDumpCount := Value
+      else if Key = 'CreatedLocalDumpsKey' then R.CreatedLocalDumpsKey := Value;
     end;
   end;
   Result := R.ExeName <> '';
@@ -1122,12 +1127,13 @@ function SaveCrashDumpRecord(const R: TCrashDumpRecord): Boolean;
 var
   Lines: TArrayOfString;
 begin
-  SetArrayLength(Lines, 5);
+  SetArrayLength(Lines, 6);
   Lines[0] := '[CrashDumps]';
   Lines[1] := 'ExeName=' + R.ExeName;
   Lines[2] := 'WrittenDumpType=' + R.WrittenDumpType;
   Lines[3] := 'WrittenCustomDumpFlags=' + R.WrittenCustomDumpFlags;
   Lines[4] := 'WrittenDumpCount=' + R.WrittenDumpCount;
+  Lines[5] := 'CreatedLocalDumpsKey=' + R.CreatedLocalDumpsKey;
   ForceDirectories(ExtractFilePath(GetCrashDumpRecordPath));
   Result := SaveStringsToUTF8File(GetCrashDumpRecordPath, Lines, False);
 end;
@@ -1200,6 +1206,10 @@ begin
   R.WrittenDumpType := IntToStr(CrashDumpType);
   R.WrittenCustomDumpFlags := IntToStr(CrashDumpFlags);
   R.WrittenDumpCount := IntToStr(CrashDumpCount);
+  if RegKeyExists(CrashDumpsRoot, CrashDumpsBaseKey) then
+    R.CreatedLocalDumpsKey := '0'
+  else
+    R.CreatedLocalDumpsKey := '1';
   if not SaveCrashDumpRecord(R) then
   begin
     Log('Skipped the Windows crash dump setting: could not write ' + GetCrashDumpRecordPath + '.');
@@ -1211,6 +1221,8 @@ begin
   begin
     Log('The Windows crash dump setting was not set: could not write HKLM\' + Key + '.');
     RegDeleteKeyIncludingSubkeys(CrashDumpsRoot, Key);
+    if R.CreatedLocalDumpsKey = '1' then
+      RegDeleteKeyIfEmpty(CrashDumpsRoot, CrashDumpsBaseKey);
     DeleteFile(GetCrashDumpRecordPath);
     Exit;
   end;
@@ -1236,7 +1248,15 @@ begin
   else if not CrashDumpKeyIsUnchanged(R) then
     Log('Windows crash dump setting: HKLM\' + Key + ' was changed since install; leaving it alone.')
   else if RegDeleteKeyIncludingSubkeys(CrashDumpsRoot, Key) then
-    Log('Windows crash dump setting: removed HKLM\' + Key + '.')
+  begin
+    Log('Windows crash dump setting: removed HKLM\' + Key + '.');
+    { The LocalDumps key this Installer's write created goes too, unless something else has gone into it. }
+    if R.CreatedLocalDumpsKey = '1' then
+      if RegDeleteKeyIfEmpty(CrashDumpsRoot, CrashDumpsBaseKey) then
+        Log('Windows crash dump setting: removed HKLM\' + CrashDumpsBaseKey + ', which the install had created.')
+      else
+        Log('Windows crash dump setting: HKLM\' + CrashDumpsBaseKey + ' holds other entries now; leaving it.');
+  end
   else
     Log('Windows crash dump setting: could not remove HKLM\' + Key + '.');
 

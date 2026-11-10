@@ -276,6 +276,21 @@ function Open-MachineKey([string]$subKey, [bool]$writable = $false) {
     $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
     try { $base.OpenSubKey($subKey, $writable) } finally { $base.Dispose() }
 }
+function Test-MachineKeyExists([string]$subKey) {
+    $key = Open-MachineKey $subKey
+    if ($key) { $key.Dispose() }
+    $null -ne $key
+}
+# Removes a key only when it holds nothing (the test run's own tidying of a LocalDumps key it caused).
+function Remove-EmptyMachineKey([string]$subKey) {
+    $key = Open-MachineKey $subKey
+    if (-not $key) { return }
+    try { $empty = ($key.ValueCount -eq 0) -and ($key.SubKeyCount -eq 0) } finally { $key.Dispose() }
+    if ($empty) {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+        try { $base.DeleteSubKey($subKey, $false) } finally { $base.Dispose() }
+    }
+}
 # What the per-application key holds: @{ Values = name -> @{ Kind; Data }; SubKeys = names }, or $null when
 # there is no such key.
 function Get-CrashDumpKey([string]$exeName) {
@@ -393,6 +408,10 @@ function Test-Case([string]$name, [scriptblock]$body, $data = $null, [ValidateSe
 
 # Refuse to run over a real FS25 VR install: the fixed application ID means we would upgrade it.
 if (Get-UninstallEntry) { Write-Error "FS25 VR is already installed on this machine; uninstall it before running the installer tests." }
+
+# Whether Windows Error Reporting's LocalDumps key was there before this run. An install creates it when it
+# is not (and the uninstall takes it away again); if a failing case left it behind, the end of the run does.
+$localDumpsExistedAtStart = Test-MachineKeyExists $localDumpsKeyPath
 
 # ---------------------------------------------------------------------------------------------
 # Cases
@@ -1635,6 +1654,46 @@ Test-Case "An upgrade over a crash dump key the player changed leaves it alone, 
 
     Assert-SameCrashDumpKey $changed (Get-CrashDumpKey $world.ExeName) "The player's crash dump key after the uninstall"
 } -Needs Elevated
+
+# Windows creates the LocalDumps key itself when the game exe's key is the first thing written under it, and
+# it counts as the switch for crash dumps (with Windows' defaults) for the other applications too. So the
+# Installer records that it created it, and the uninstall takes it away again when it is still empty.
+Test-Case "An install and an uninstall leave the LocalDumps key as they found it" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $existedBefore = Test-MachineKeyExists $localDumpsKeyPath
+
+    Assert-InstallSucceeds $world
+    Assert-True (Test-MachineKeyExists $localDumpsKeyPath) "There is no LocalDumps key after the install."
+
+    Uninstall-Fs25Vr
+
+    Assert-True ((Test-MachineKeyExists $localDumpsKeyPath) -eq $existedBefore) `
+        "The LocalDumps key $(if ($existedBefore) { 'was there before the install and is gone' } else { 'was not there before the install and is still there' }) after the uninstall."
+} -Needs Elevated
+
+Test-Case "The uninstall leaves the LocalDumps key alone when another application's key has appeared under it" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $existedBefore = Test-MachineKeyExists $localDumpsKeyPath
+    $sibling = "fs25vr-test-sibling-" + [guid]::NewGuid().ToString("N").Substring(0, 8) + ".exe"
+    Assert-InstallSucceeds $world
+    try {
+        Set-CrashDumpKey $sibling @{ DumpCount = 5 }
+
+        Uninstall-Fs25Vr
+
+        Assert-True (Test-MachineKeyExists "$localDumpsKeyPath\$sibling") "The uninstall removed another application's key under LocalDumps."
+        Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key for the game is still there after the uninstall."
+    } finally {
+        Remove-CrashDumpKey $sibling
+        if (-not $existedBefore) { Remove-EmptyMachineKey $localDumpsKeyPath }
+    }
+} -Needs Elevated
+
+if ($isAdmin -and -not $localDumpsExistedAtStart) { try { Remove-EmptyMachineKey $localDumpsKeyPath } catch { Write-Warning "Cleanup of the LocalDumps key failed: $_" } }
 
 Write-Host "Installer tests: $passed passed, $skipped skipped, $($failures.Count) failed."
 if ($failures.Count -gt 0) {
