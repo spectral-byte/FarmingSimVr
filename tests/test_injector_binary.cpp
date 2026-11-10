@@ -154,4 +154,29 @@ TEST(InjectorLogTest, FirstLineNamesTheInjectorsVersion) {
     EXPECT_NE(firstLine.find(" " + std::string(kInjectorVersion) + " "), std::string::npos) << firstLine;
 }
 
+// Tests and tools that load and unload the Injector must find the process as they left it, the crash handling included.
+TEST(InjectorCrashFilterTest, FreeingTheInjectorLeavesTheProcessesPreviousFilterInPlace) {
+    RestoreTheUnhandledExceptionFilter restore;
+    SetUnhandledExceptionFilter(&PreviousFilter);
+
+    HMODULE injector = LoadLibraryW(InjectorPath().c_str());
+    ASSERT_NE(injector, nullptr) << INJECTOR_DLL_PATH << " (error " << GetLastError() << ")";
+    EXPECT_NE(TopUnhandledExceptionFilter(), &PreviousFilter) << "Loading the Injector did not install its filter.";
+
+    FreeLibrary(injector);
+    EXPECT_EQ(TopUnhandledExceptionFilter(), &PreviousFilter);
+}
+
+TEST(InjectorCrashFilterTest, FreeingTheInjectorLeavesAFilterInstalledAfterItOnTop) {
+    RestoreTheUnhandledExceptionFilter restore;
+    SetUnhandledExceptionFilter(&PreviousFilter);
+
+    HMODULE injector = LoadLibraryW(InjectorPath().c_str());
+    ASSERT_NE(injector, nullptr) << INJECTOR_DLL_PATH << " (error " << GetLastError() << ")";
+    SetUnhandledExceptionFilter(&LaterFilter);  // another module takes the place on top, and may have kept ours
+
+    FreeLibrary(injector);
+    EXPECT_EQ(TopUnhandledExceptionFilter(), &LaterFilter);
+}
+
 } // namespace fs25vr

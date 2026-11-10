@@ -40,4 +40,25 @@ inline std::array<unsigned char, 16> FirstBytes(const void* function) {
     return bytes;
 }
 
+// The process's top-level unhandled exception filter. The only way to read it is to replace it, so it is put back.
+inline LPTOP_LEVEL_EXCEPTION_FILTER TopUnhandledExceptionFilter() {
+    LPTOP_LEVEL_EXCEPTION_FILTER top = SetUnhandledExceptionFilter(nullptr);
+    SetUnhandledExceptionFilter(top);
+    return top;
+}
+
+// Puts the unhandled exception filter back as the test found it.
+class RestoreTheUnhandledExceptionFilter {
+public:
+    RestoreTheUnhandledExceptionFilter() : m_found(TopUnhandledExceptionFilter()) {}
+    ~RestoreTheUnhandledExceptionFilter() { SetUnhandledExceptionFilter(m_found); }
+
+private:
+    LPTOP_LEVEL_EXCEPTION_FILTER m_found;
+};
+
+// Two stand-in filters that differ in what they do, so that the linker cannot fold them into one function.
+inline LONG WINAPI PreviousFilter(EXCEPTION_POINTERS*) { return EXCEPTION_CONTINUE_SEARCH; }
+inline LONG WINAPI LaterFilter(EXCEPTION_POINTERS*) { return EXCEPTION_EXECUTE_HANDLER; }
+
 } // namespace fs25vr

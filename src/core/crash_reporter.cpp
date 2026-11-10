@@ -18,8 +18,7 @@ namespace {
 // Pieces of state the filter reads, which it cannot be handed: the OS calls it with the exception alone.
 std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> g_previousFilter{nullptr};
 std::atomic<bool> g_installed{false};
-// The log, found while installing so that the filter never constructs it inside a crashing process (the Injector's
-// first log line, written from DllMain, has already created it by then).
+// The log, looked up while installing so that the filter never has to construct it inside a crashing process.
 std::atomic<Logger*> g_log{nullptr};
 // Set by the first crash to reach the filter; every later one goes straight to the previous filter.
 std::atomic<bool> g_crashSeen{false};
@@ -123,6 +122,8 @@ void ReportCrash(const EXCEPTION_POINTERS* info) {
     log->TryLogWithoutWaiting(LogLevel::Error, line.text, line.length);
 }
 
+// The order of work: the crash line first, flushed, so that the log is complete whatever happens next; then (when
+// there is one) the dump; then the previous filter.
 LONG WINAPI CrashFilter(EXCEPTION_POINTERS* info) {
     if (!g_crashSeen.exchange(true)) {
         ReportCrash(info);
@@ -143,8 +144,8 @@ void InstallCrashReporter() {
 
 void RemoveCrashReporter() {
     if (!g_installed.exchange(false)) return;
-    // The only way to look at the top filter is to replace it: put ours' predecessor in its place, and the top one
-    // back if it was not ours.
+    // The only way to look at the top filter is to replace it: put the filter that was here before the reporter in its
+    // place, and the one that was on top back if it was not the reporter.
     LPTOP_LEVEL_EXCEPTION_FILTER top = SetUnhandledExceptionFilter(g_previousFilter.load());
     if (top != &CrashFilter) {
         SetUnhandledExceptionFilter(top);
