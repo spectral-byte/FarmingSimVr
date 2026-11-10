@@ -132,16 +132,8 @@ TEST_F(InjectorBinaryTest, HooksTheSystemsDxgiWhileLoadedAndAFactoryIsStillCreat
 
 // A log alone should tell the developer which Injector the player runs, so the Injector's first line names its version.
 TEST(InjectorLogTest, FirstLineNamesTheInjectorsVersion) {
-    // The Injector loaded from the build folder writes the same fs25_vr.log as the test process's own logger, which
-    // holds it open. Let go of it and clear the way, as a game start finds the folder, and put the test logger back
-    // afterwards.
-    struct RestoreTestLogger {
-        ~RestoreTestLogger() { Logger::Instance().SetLogFile(Logger::DefaultLogPath()); }
-    } restoreTestLogger;
-    Logger::Instance().Close();
-    const std::filesystem::path logPath = std::filesystem::path(InjectorPath()).parent_path() / L"fs25_vr.log";
-    std::filesystem::remove(logPath);
-    std::filesystem::remove(Logger::BackupPathFor(logPath));
+    LetTheInjectorHaveItsLog theLog;
+    const std::filesystem::path logPath = InjectorLogPath();
 
     HMODULE injector = LoadLibraryW(InjectorPath().c_str());
     ASSERT_NE(injector, nullptr) << INJECTOR_DLL_PATH << " (error " << GetLastError() << ")";
@@ -192,13 +184,8 @@ TEST(InjectorCrashFilterTest, TheFirstFactoryCallPutsTheInjectorsFilterOnTopOfOn
 // The dump is prepared with a thread that is ended when the Injector unloads, since its code goes with it. Tests and
 // tools that load the Injector again must find it working again.
 TEST(InjectorCrashFilterTest, TheInjectorPreparesItsCrashDumpAgainWhenItIsLoadedAgain) {
-    struct RestoreTestLogger {
-        ~RestoreTestLogger() { Logger::Instance().SetLogFile(Logger::DefaultLogPath()); }
-    } restoreTestLogger;
-    Logger::Instance().Close();
-    const std::filesystem::path logPath = std::filesystem::path(InjectorPath()).parent_path() / L"fs25_vr.log";
-    std::filesystem::remove(logPath);
-    std::filesystem::remove(Logger::BackupPathFor(logPath));
+    LetTheInjectorHaveItsLog theLog;
+    const std::filesystem::path logPath = InjectorLogPath();
     void* createFactory1 = DxgiExportHooks::FindExport(LoadedSystemDxgi(), "CreateDXGIFactory1");
     ASSERT_NE(createFactory1, nullptr);
 

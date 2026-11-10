@@ -37,6 +37,7 @@ namespace fs25vr {
 namespace {
 
 constexpr DWORD kAccessViolation = 0xC0000005;  // EXCEPTION_ACCESS_VIOLATION
+constexpr DWORD kStackOverflow = 0xC00000FD;    // EXCEPTION_STACK_OVERFLOW
 
 // ---- The child ----
 
@@ -101,9 +102,7 @@ enum class FirstCall {
 FirstCall g_firstCall = FirstCall::EndsTheProcess;
 std::atomic<int> g_filterCalls{0};
 
-// Stands for the filter the game or Windows already has when the Injector loads. It reports on stderr what the
-// Injector's filter handed it, then ends the process the way Windows Error Reporting does: with the exception's code
-// and without unloading any DLL (an unload would flush the Injector's log and hide a missing flush).
+// The modules this process has loaded, sorted by address.
 std::vector<HMODULE> LoadedModules() {
     std::vector<HMODULE> modules(256);
     DWORD needed = 0;
@@ -134,6 +133,9 @@ void ReportModulesLoadedSinceTheFault() {
     std::fprintf(stderr, "modules loaded since the fault: %d\n", loaded);
 }
 
+// Stands for the filter the game or Windows already has when the Injector loads. It reports on stderr what the
+// Injector's filter handed it, then ends the process the way Windows Error Reporting does: with the exception's code
+// and without unloading any DLL (an unload would flush the Injector's log and hide a missing flush).
 LONG WINAPI GamesFilter(EXCEPTION_POINTERS* info) {
     // After a stack overflow the thread has a few kilobytes of stack left, which the Injector's work has partly used:
     // stdio would run out of it. The process ends at once, as the filters of the game and of Windows do.
@@ -347,6 +349,25 @@ ChildSetup AfterTheFirstFactory(DumpWriter writer = DumpWriter::TheSystems) {
     ChildSetup setup;
     setup.createsAFactory = true;
     setup.dumpWriter = writer;
+    return setup;
+}
+
+ChildSetup AfterTheFirstFactoryWithoutDbghelp() {
+    ChildSetup setup = AfterTheFirstFactory();
+    setup.dbghelpCannotBeLoaded = true;
+    return setup;
+}
+
+// For Fault::OverflowTheStackWithGivenStackLeft, with the dump prepared (after the first factory call) or not.
+ChildSetup AfterTheFirstFactoryWithLittleStackLeft(size_t kilobytes) {
+    ChildSetup setup = AfterTheFirstFactory();
+    setup.stackToLeave = kilobytes * 1024;
+    return setup;
+}
+
+ChildSetup BeforeAnyFactoryWithLittleStackLeft(size_t kilobytes) {
+    ChildSetup setup;
+    setup.stackToLeave = kilobytes * 1024;
     return setup;
 }
 
@@ -607,21 +628,10 @@ int CrashLinesIn(const std::vector<std::string>& log) {
 
 class CrashReporterTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        // The Injector loaded from the build folder writes the same fs25_vr.log as this process's own logger, which
-        // holds it open. Let go of it and clear the way, as a game start finds the folder.
-        Logger::Instance().Close();
-        RemoveFilesOfTheChild();
-    }
+    void SetUp() override { RemoveFilesOfTheChild(); }
+    void TearDown() override { RemoveFilesOfTheChild(); }
 
-    void TearDown() override {
-        RemoveFilesOfTheChild();
-        Logger::Instance().SetLogFile(Logger::DefaultLogPath());
-    }
-
-    static std::filesystem::path LogPath() {
-        return std::filesystem::path(InjectorPath()).parent_path() / L"fs25_vr.log";
-    }
+    static std::filesystem::path LogPath() { return InjectorLogPath(); }
 
     // The dump has a fixed name (the Installer's uninstall removes the file by it), so the next crash replaces it.
     static std::filesystem::path DumpPath() {
@@ -630,12 +640,50 @@ protected:
 
     static void RemoveFilesOfTheChild() {
         std::error_code ignored;
-        std::filesystem::remove(LogPath(), ignored);
-        std::filesystem::remove(Logger::BackupPathFor(LogPath()), ignored);
+        RemoveTheInjectorsLogFiles();
         std::filesystem::remove(DumpPath(), ignored);
         std::filesystem::remove(DecoyDbghelpPath(), ignored);
     }
 
+    // Starts the child, which loads the Injector and crashes as asked, and checks that the process ended with the
+    // exception's code, as it does when a crash is passed on to the filter of the game or of Windows. What the child
+    // wrote to stderr is kept in m_childReport. The defaults are a crash before any DXGI factory call, with an access
+    // violation.
+    void RunCrash(Fault fault = Fault::WriteThroughANullPointer, FirstCall firstCall = FirstCall::EndsTheProcess,
+                  ChildSetup setup = {}, DWORD endsWith = kAccessViolation) {
+        EXPECT_EXIT(CrashLikeTheGame(fault, firstCall, setup), ::testing::ExitedWithCode(endsWith),
+                    KeepingStderrIn(&m_childReport));
+    }
+
+    // A line at the end of the log the child left, where the crash put its own: 1 is the last line, 2 the one before.
+    // Empty when the log has no such line.
+    std::string LogLineFromTheEnd(size_t fromTheEnd) const {
+        const std::vector<std::string> log = Lines(LogPath());
+        return log.size() < fromTheEnd ? std::string() : log[log.size() - fromTheEnd];
+    }
+    std::string LastLogLine() const { return LogLineFromTheEnd(1); }
+
+    ::testing::AssertionResult LastLogLineHas(const std::string& part) const { return LogLineFromTheEndHas(1, part); }
+    ::testing::AssertionResult NextToLastLogLineHas(const std::string& part) const { return LogLineFromTheEndHas(2, part); }
+
+    int CrashLinesInTheLog() const { return CrashLinesIn(Lines(LogPath())); }
+
+    ::testing::AssertionResult LogLineFromTheEndHas(size_t fromTheEnd, const std::string& part) const {
+        const std::string line = LogLineFromTheEnd(fromTheEnd);
+        if (line.empty()) {
+            return ::testing::AssertionFailure() << "The child left a log of fewer than " << fromTheEnd << " lines.\n"
+                                                 << m_childReport;
+        }
+        if (line.find(part) == std::string::npos) {
+            return ::testing::AssertionFailure() << "The log line " << fromTheEnd << " from the end, \"" << line
+                                                 << "\", has no \"" << part << "\".";
+        }
+        return ::testing::AssertionSuccess() << "The log line " << fromTheEnd << " from the end: " << line;
+    }
+
+    // Let go of the log the test process holds open and clear the way for the child's, as a game start finds the
+    // folder; the test process's logger is put back after the test.
+    LetTheInjectorHaveItsLog m_theLog;
     // What the child wrote to stderr.
     std::string m_childReport;
 };
@@ -643,47 +691,38 @@ protected:
 } // namespace
 
 TEST_F(CrashReporterTest, ACrashLeavesACrashLineAtTheEndOfTheLog) {
-    EXPECT_EXIT(CrashLikeTheGame(), ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash();
 
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find("0xC0000005"), std::string::npos) << log.back();
+    EXPECT_TRUE(LastLogLineHas("0xC0000005"));
 }
 
 TEST_F(CrashReporterTest, TheCrashLineNamesTheModuleAndOffsetOfTheFaultingAddress) {
-    EXPECT_EXIT(CrashLikeTheGame(), ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash();
 
     // The offset the operating system reported, as the child's own filter saw it.
     const std::string rva = ValueOf(m_childReport, "rva=");
     ASSERT_FALSE(rva.empty()) << m_childReport;
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find(NameOfThisExecutable() + "+0x" + rva), std::string::npos) << log.back();
+    EXPECT_TRUE(LastLogLineHas(NameOfThisExecutable() + "+0x" + rva));
 }
 
 TEST_F(CrashReporterTest, TheCrashLineNamesTheCrashingThread) {
-    EXPECT_EXIT(CrashLikeTheGame(), ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash();
 
     // The filter runs on the thread that faulted, so the child's filter reports that thread's id.
     const std::string thread = ValueOf(m_childReport, "thread=");
     ASSERT_FALSE(thread.empty()) << m_childReport;
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find("thread " + thread), std::string::npos) << log.back();
+    EXPECT_TRUE(LastLogLineHas("thread " + thread));
 }
 
 TEST_F(CrashReporterTest, TheCrashLineNamesTheInjectorsVersion) {
-    EXPECT_EXIT(CrashLikeTheGame(), ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash();
 
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find(" " + std::string(kInjectorVersion)), std::string::npos) << log.back();
+    EXPECT_TRUE(LastLogLineHas(" " + std::string(kInjectorVersion)));
 }
 
 // A player attaches the dump to a report, so it has to be a real minidump, next to the log it belongs to.
 TEST_F(CrashReporterTest, ACrashAfterTheFirstFactoryLeavesAMinidumpNextToTheInjector) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory());
 
     const Minidump dump(BytesOf(DumpPath()));
     ASSERT_GT(dump.Size(), 0u) << "No dump at " << DumpPath() << "\n" << m_childReport;
@@ -691,8 +730,7 @@ TEST_F(CrashReporterTest, ACrashAfterTheFirstFactoryLeavesAMinidumpNextToTheInje
 }
 
 TEST_F(CrashReporterTest, TheDumpsExceptionStreamNamesTheAccessViolationOnTheCrashingThread) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory());
 
     const Minidump dump(BytesOf(DumpPath()));
     const std::optional<MINIDUMP_EXCEPTION_STREAM> exception = dump.Exception();
@@ -703,38 +741,32 @@ TEST_F(CrashReporterTest, TheDumpsExceptionStreamNamesTheAccessViolationOnTheCra
 }
 
 TEST_F(CrashReporterTest, TheCrashLineNamesTheDumpFile) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory());
 
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find("Injector: Crash:"), std::string::npos) << log.back();
-    EXPECT_NE(log.back().find("fs25_vr_crash.dmp"), std::string::npos) << log.back();
-    EXPECT_EQ(log.back().find("no dump written"), std::string::npos) << log.back();
+    EXPECT_TRUE(LastLogLineHas("Injector: Crash:"));
+    EXPECT_TRUE(LastLogLineHas("fs25_vr_crash.dmp"));
+    EXPECT_FALSE(LastLogLineHas("no dump written"));
 }
 
 // The dump needs the system's dbghelp.dll and a helper thread, prepared at the first DXGI factory call. A crash before
 // that leaves the crash line, which says why there is no dump.
 TEST_F(CrashReporterTest, ACrashBeforeAnyFactoryCallLeavesTheCrashLineWithTheReasonAndNoDump) {
-    EXPECT_EXIT(CrashLikeTheGame(), ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash();
 
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find("no dump written: the crash came before the first DXGI factory call"), std::string::npos)
-        << log.back();
+    EXPECT_TRUE(LastLogLineHas("no dump written: the crash came before the first DXGI factory call"));
     EXPECT_FALSE(std::filesystem::exists(DumpPath()));
 }
 
 // Info lines are buffered and only warnings and errors are flushed, so the Injector's start-up lines, which the child
 // never flushed, reach the file only because the crash finishes the log.
 TEST_F(CrashReporterTest, LogLinesWrittenBeforeTheCrashAreInTheFile) {
-    EXPECT_EXIT(CrashLikeTheGame(), ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash();
 
     const std::vector<std::string> log = Lines(LogPath());
     ASSERT_GE(log.size(), 2u);
     EXPECT_NE(log.front().find("Injector " + std::string(kInjectorVersion) + " attached to process"), std::string::npos)
         << log.front();
-    EXPECT_NE(log.back().find("Crash"), std::string::npos) << log.back();
+    EXPECT_TRUE(LastLogLineHas("Crash"));
 }
 
 // The previous filter is called from inside the Injector's, so a crash in it is a crash inside the reporter. What the
@@ -743,66 +775,53 @@ TEST_F(CrashReporterTest, LogLinesWrittenBeforeTheCrashAreInTheFile) {
 // passes the crash on, the child's filter a second time). Both end the process, and a player finds the same afterwards:
 // the earlier filter ran, there is one crash line and one dump, and the process ended with the first crash's code.
 TEST_F(CrashReporterTest, ACrashInsideTheReporterAddsNoSecondLineOrDumpAndStillEndsTheProcess) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::CrashesItself,
-                                 AfterTheFirstFactory(DumpWriter::CountsTheCalls)),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::CrashesItself,
+             AfterTheFirstFactory(DumpWriter::CountsTheCalls));
 
     EXPECT_NE(m_childReport.find("previous filter ran: call=1 code=C0000005"), std::string::npos) << m_childReport;
-    EXPECT_EQ(CrashLinesIn(Lines(LogPath())), 1);
+    EXPECT_EQ(CrashLinesInTheLog(), 1);
     EXPECT_EQ(Occurrences(m_childReport, "MiniDumpWriteDump called"), 1) << m_childReport;
     EXPECT_TRUE(Minidump(BytesOf(DumpPath())).HasSignature());
 }
 
 // The second crash reaches the reporter while it is busy with the first one, and goes to the previous filter.
 TEST_F(CrashReporterTest, ASecondCrashGoesStraightToThePreviousFilterAndAddsNoSecondLine) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::CrashesAnotherThread),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::CrashesAnotherThread);
 
     EXPECT_NE(m_childReport.find("previous filter ran: call=2"), std::string::npos) << m_childReport;
-    EXPECT_EQ(CrashLinesIn(Lines(LogPath())), 1);
+    EXPECT_EQ(CrashLinesInTheLog(), 1);
 }
 
 // The worst crash: the thread has almost no stack left to run the filter on, so the helper thread writes the line.
 TEST_F(CrashReporterTest, AStackOverflowLeavesTheCrashLineToo) {
-    constexpr DWORD kStackOverflow = 0xC00000FD;  // EXCEPTION_STACK_OVERFLOW
-    EXPECT_EXIT(CrashLikeTheGame(Fault::OverflowTheStack, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kStackOverflow), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::OverflowTheStack, FirstCall::EndsTheProcess, AfterTheFirstFactory(), kStackOverflow);
 
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find("Injector: Crash: exception 0xC00000FD"), std::string::npos) << log.back();
+    EXPECT_TRUE(LastLogLineHas("Injector: Crash: exception 0xC00000FD"));
 }
 
 // Before the first DXGI factory call there is no helper thread, and the crashing thread has no stack for the line. The
 // crash must still end as the stack overflow it was, not as a fault of the Injector's filter in the little stack left.
 TEST_F(CrashReporterTest, AStackOverflowBeforeTheFirstFactoryCallStillEndsAsTheOverflow) {
-    constexpr DWORD kStackOverflow = 0xC00000FD;  // EXCEPTION_STACK_OVERFLOW
-    EXPECT_EXIT(CrashLikeTheGame(Fault::OverflowTheStack), ::testing::ExitedWithCode(kStackOverflow),
-                KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::OverflowTheStack, FirstCall::EndsTheProcess, {}, kStackOverflow);
     EXPECT_FALSE(std::filesystem::exists(DumpPath()));
 }
 
 // The reason the dump is written by a helper thread: the crashing thread has no stack left to run MiniDumpWriteDump on.
 TEST_F(CrashReporterTest, AStackOverflowLeavesADumpToo) {
-    constexpr DWORD kStackOverflow = 0xC00000FD;  // EXCEPTION_STACK_OVERFLOW
-    EXPECT_EXIT(CrashLikeTheGame(Fault::OverflowTheStack, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kStackOverflow), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::OverflowTheStack, FirstCall::EndsTheProcess, AfterTheFirstFactory(), kStackOverflow);
 
     const Minidump dump(BytesOf(DumpPath()));
     ASSERT_TRUE(dump.HasSignature()) << "No dump at " << DumpPath();
     const std::optional<MINIDUMP_EXCEPTION_STREAM> exception = dump.Exception();
     ASSERT_TRUE(exception.has_value());
     EXPECT_EQ(exception->ExceptionRecord.ExceptionCode, kStackOverflow);
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find("fs25_vr_crash.dmp"), std::string::npos) << log.back();
+    EXPECT_TRUE(LastLogLineHas("fs25_vr_crash.dmp"));
 }
 
 // One dump per process: the first crash is the one that matters, and the second one is usually its consequence.
 TEST_F(CrashReporterTest, ASecondFaultWritesNoSecondDump) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::CrashesAnotherThread,
-                                 AfterTheFirstFactory(DumpWriter::CountsTheCalls)),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::CrashesAnotherThread,
+             AfterTheFirstFactory(DumpWriter::CountsTheCalls));
 
     EXPECT_NE(m_childReport.find("previous filter ran: call=2"), std::string::npos) << m_childReport;
     EXPECT_EQ(Occurrences(m_childReport, "MiniDumpWriteDump called"), 1) << m_childReport;
@@ -820,8 +839,7 @@ TEST_F(CrashReporterTest, TheNextCrashingProcessReplacesTheDump) {
         stale << "STALE DUMP OF AN EARLIER CRASH";
     }
 
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory());
 
     const Minidump dump(BytesOf(DumpPath()));
     EXPECT_TRUE(dump.HasSignature()) << "The earlier dump is still there.";
@@ -844,30 +862,26 @@ ChildSetup AfterTheFirstFactoryWithALaterFilter(FilterInstalledLater later) {
 }
 
 TEST_F(CrashReporterTest, AFilterInstalledAfterTheInjectorDoesNotKeepTheCrashFromTheLogAndTheDump) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess,
-                                 AfterTheFirstFactoryWithALaterFilter(FilterInstalledLater::DoesNotChain)),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess,
+             AfterTheFirstFactoryWithALaterFilter(FilterInstalledLater::DoesNotChain));
 
     // The later filter is still called: it is the one the Injector passes the crash on to.
     EXPECT_NE(m_childReport.find("later filter ran, and does not chain"), std::string::npos) << m_childReport;
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find("Injector: Crash:"), std::string::npos) << log.back();
+    EXPECT_TRUE(LastLogLineHas("Injector: Crash:"));
     EXPECT_TRUE(Minidump(BytesOf(DumpPath())).HasSignature());
 }
 
 // A filter that chains calls the one it replaced, which is the Injector's. The Injector installs again over it and
 // passes the crash on to it, so each calls the other: the chain must end, and no filter may be left out of it.
 TEST_F(CrashReporterTest, AFilterThatChainedToTheReporterDoesNotMakeAChainThatLoops) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess,
-                                 AfterTheFirstFactoryWithALaterFilter(FilterInstalledLater::Chains)),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess,
+             AfterTheFirstFactoryWithALaterFilter(FilterInstalledLater::Chains));
 
     EXPECT_EQ(Occurrences(m_childReport, "later filter ran, and chains"), 1) << m_childReport;
     // The filter that was below the Injector's before the later one came is called too, once.
     EXPECT_EQ(Occurrences(m_childReport, "previous filter ran: call=1"), 1) << m_childReport;
     EXPECT_EQ(Occurrences(m_childReport, "previous filter ran: call=2"), 0) << m_childReport;
-    EXPECT_EQ(CrashLinesIn(Lines(LogPath())), 1);
+    EXPECT_EQ(CrashLinesInTheLog(), 1);
     EXPECT_TRUE(Minidump(BytesOf(DumpPath())).HasSignature());
 }
 
@@ -883,8 +897,7 @@ ChildSetup AfterTheFirstFactoryWithAnUnloadedModule() {
 }
 
 TEST_F(CrashReporterTest, TheDumpHoldsEveryThreadsStack) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory());
 
     const Minidump dump(BytesOf(DumpPath()));
     const auto threads = dump.ThreadsWithStackBytes();
@@ -901,9 +914,7 @@ TEST_F(CrashReporterTest, TheDumpHoldsEveryThreadsStack) {
 }
 
 TEST_F(CrashReporterTest, TheDumpHoldsTheModuleListWithTheUnloadedModulesAndTheThreadInformation) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess,
-                                 AfterTheFirstFactoryWithAnUnloadedModule()),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactoryWithAnUnloadedModule());
 
     const Minidump dump(BytesOf(DumpPath()));
     EXPECT_TRUE(dump.Has(ModuleListStream));
@@ -917,9 +928,7 @@ TEST_F(CrashReporterTest, TheDumpHoldsTheModuleListWithTheUnloadedModulesAndTheT
 }
 
 TEST_F(CrashReporterTest, TheDumpHoldsTheMemoryTheStacksPointAtAndNotTheWholeProcess) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointerWithMemoryOnItsStack, FirstCall::EndsTheProcess,
-                                 AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointerWithMemoryOnItsStack, FirstCall::EndsTheProcess, AfterTheFirstFactory());
 
     const Minidump dump(BytesOf(DumpPath()));
     ASSERT_TRUE(dump.HasSignature()) << m_childReport;
@@ -935,8 +944,7 @@ TEST_F(CrashReporterTest, TheDumpHoldsTheMemoryTheStacksPointAtAndNotTheWholePro
 // dbghelp.dll loads another library, and a library cannot be loaded from DllMain or from a crashing thread: it is
 // loaded at the first DXGI factory call, where the rest of the deferred start-up runs.
 TEST_F(CrashReporterTest, DbghelpIsLoadedAtTheFirstFactoryCallAndNotWhenTheInjectorLoads) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory());
 
     EXPECT_EQ(LineOf(m_childReport, "dbghelp after loading the Injector: "), "not loaded") << m_childReport;
     EXPECT_NE(LineOf(m_childReport, "dbghelp after the first factory call: "), "not loaded") << m_childReport;
@@ -947,8 +955,7 @@ TEST_F(CrashReporterTest, DbghelpIsTheSystemsEvenWhenAnotherOneSitsNextToTheExe)
     ASSERT_TRUE(std::filesystem::copy_file(FAKE_NVNGX_PATH, DecoyDbghelpPath(),
                                            std::filesystem::copy_options::overwrite_existing));
 
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory());
 
     const std::string loaded = LineOf(m_childReport, "dbghelp after the first factory call: ");
     EXPECT_EQ(_stricmp(loaded.c_str(), (SystemDirectory() / L"dbghelp.dll").string().c_str()), 0) << loaded;
@@ -957,25 +964,17 @@ TEST_F(CrashReporterTest, DbghelpIsTheSystemsEvenWhenAnotherOneSitsNextToTheExe)
 
 // Everything the crash needs is loaded and started before it: the crash itself loads no library.
 TEST_F(CrashReporterTest, TheCrashLoadsNoLibrary) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory());
 
     EXPECT_NE(m_childReport.find("modules loaded since the fault: 0"), std::string::npos) << m_childReport;
 }
 
 // With no dbghelp.dll there is no dump, but the helper thread still writes the crash line, and the line says why.
 TEST_F(CrashReporterTest, WithoutDbghelpTheCrashLineSaysWhyThereIsNoDump) {
-    ChildSetup setup = AfterTheFirstFactory();
-    setup.dbghelpCannotBeLoaded = true;
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, setup),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactoryWithoutDbghelp());
 
     EXPECT_NE(m_childReport.find("previous filter ran: call=1"), std::string::npos) << m_childReport;
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find("no dump written: the system's dbghelp.dll could not be loaded (error 126)"),
-              std::string::npos)
-        << log.back();
+    EXPECT_TRUE(LastLogLineHas("no dump written: the system's dbghelp.dll could not be loaded (error 126)"));
     EXPECT_FALSE(std::filesystem::exists(DumpPath()));
 }
 
@@ -985,36 +984,27 @@ TEST_F(CrashReporterTest, ADumpThatCannotBeCreatedIsToldInALineAfterTheCrashLine
     // Not a file that can be replaced: a folder in its place.
     ASSERT_TRUE(std::filesystem::create_directory(DumpPath()));
 
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory());
 
     EXPECT_NE(m_childReport.find("previous filter ran: call=1"), std::string::npos) << m_childReport;
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_GE(log.size(), 2u);
-    EXPECT_NE(log[log.size() - 2].find("Injector: Crash:"), std::string::npos) << log[log.size() - 2];
-    EXPECT_NE(log.back().find("Injector: Crash dump not written: could not create fs25_vr_crash.dmp (error "),
-              std::string::npos)
-        << log.back();
+    EXPECT_TRUE(NextToLastLogLineHas("Injector: Crash:"));
+    EXPECT_TRUE(LastLogLineHas("Injector: Crash dump not written: could not create fs25_vr_crash.dmp (error "));
 }
 
 // A helper that never finishes (a thread it needs is suspended, a lock is held) must not hang the game's exit: the
 // filter gives up after its time limit, says so in the log, and passes the crash on.
 TEST_F(CrashReporterTest, AStuckDumpHelperDoesNotHangTheExitAndTheLogSaysThereIsNoDump) {
     const DWORD started = GetTickCount();
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess,
-                                 AfterTheFirstFactory(DumpWriter::NeverReturns)),
-                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess,
+             AfterTheFirstFactory(DumpWriter::NeverReturns));
     const DWORD seconds = (GetTickCount() - started) / 1000;
 
     // Ended by the crash, passed on to the child's filter, not by the child's own watchdog (exit code 99 after 30 s).
     EXPECT_NE(m_childReport.find("MiniDumpWriteDump called and never returns"), std::string::npos) << m_childReport;
     EXPECT_NE(m_childReport.find("previous filter ran: call=1"), std::string::npos) << m_childReport;
     EXPECT_LT(seconds, 25u) << "The crash took " << seconds << " s to end the process.";
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_GE(log.size(), 2u);
-    EXPECT_NE(log.back().find("Injector: Crash dump not written: the helper thread did not finish in 10 seconds"),
-              std::string::npos)
-        << log.back();
+    EXPECT_TRUE(NextToLastLogLineHas("Injector: Crash:"));
+    EXPECT_TRUE(LastLogLineHas("Injector: Crash dump not written: the helper thread did not finish in 10 seconds"));
 }
 
 // After a stack overflow the filter has next to no stack, and what it finds depends on the operating system and the
@@ -1023,35 +1013,25 @@ TEST_F(CrashReporterTest, AStuckDumpHelperDoesNotHangTheExitAndTheLogSaysThereIs
 class CrashWithLittleStackLeftTest : public CrashReporterTest, public ::testing::WithParamInterface<size_t> {};
 
 TEST_P(CrashWithLittleStackLeftTest, ADumpIsWrittenAndTheOverflowIsTheCrashReported) {
-    constexpr DWORD kStackOverflow = 0xC00000FD;  // EXCEPTION_STACK_OVERFLOW
-    ChildSetup setup = AfterTheFirstFactory();
-    setup.stackToLeave = GetParam() * 1024;
-    EXPECT_EXIT(CrashLikeTheGame(Fault::OverflowTheStackWithGivenStackLeft, FirstCall::EndsTheProcess, setup),
-                ::testing::ExitedWithCode(kStackOverflow), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::OverflowTheStackWithGivenStackLeft, FirstCall::EndsTheProcess,
+             AfterTheFirstFactoryWithLittleStackLeft(GetParam()), kStackOverflow);
 
     const std::optional<MINIDUMP_EXCEPTION_STREAM> exception = Minidump(BytesOf(DumpPath())).Exception();
     ASSERT_TRUE(exception.has_value()) << m_childReport;
     EXPECT_EQ(exception->ExceptionRecord.ExceptionCode, kStackOverflow);
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find("Injector: Crash: exception 0xC00000FD"), std::string::npos) << log.back();
+    EXPECT_TRUE(LastLogLineHas("Injector: Crash: exception 0xC00000FD"));
 }
 
 // Before the first factory call there is no helper thread, and the crashing thread writes the line itself. With little
 // room it writes nothing, but it must end the crash as the overflow, not as a fault of its own; with room (the margin
 // is well over what the line needs) the line is there.
 TEST_P(CrashWithLittleStackLeftTest, ACrashBeforeTheFirstFactoryStillEndsAsTheOverflow) {
-    constexpr DWORD kStackOverflow = 0xC00000FD;  // EXCEPTION_STACK_OVERFLOW
     constexpr size_t kAmpleKilobytes = 48;
-    ChildSetup setup;
-    setup.stackToLeave = GetParam() * 1024;
-    EXPECT_EXIT(CrashLikeTheGame(Fault::OverflowTheStackWithGivenStackLeft, FirstCall::EndsTheProcess, setup),
-                ::testing::ExitedWithCode(kStackOverflow), KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::OverflowTheStackWithGivenStackLeft, FirstCall::EndsTheProcess,
+             BeforeAnyFactoryWithLittleStackLeft(GetParam()), kStackOverflow);
 
     if (GetParam() >= kAmpleKilobytes) {
-        const std::vector<std::string> log = Lines(LogPath());
-        ASSERT_FALSE(log.empty());
-        EXPECT_NE(log.back().find("Injector: Crash: exception 0xC00000FD"), std::string::npos) << log.back();
+        EXPECT_TRUE(LastLogLineHas("Injector: Crash: exception 0xC00000FD"));
     }
 }
 
@@ -1061,22 +1041,19 @@ INSTANTIATE_TEST_SUITE_P(KilobytesLeft, CrashWithLittleStackLeftTest,
 // The crashed thread may hold the log's lock (it crashed while writing a line), and then the filter must not wait for
 // it: the line is skipped and the crash is still passed on.
 TEST_F(CrashReporterTest, TheReporterNeverWaitsForTheLogsLockAndStillPassesTheCrashOn) {
-    EXPECT_EXIT(CrashLikeTheGame(Fault::WhileTheInjectorWritesItsLog), ::testing::ExitedWithCode(kAccessViolation),
-                KeepingStderrIn(&m_childReport));
+    RunCrash(Fault::WhileTheInjectorWritesItsLog);
 
     EXPECT_NE(m_childReport.find("faulting while the Injector holds its log lock"), std::string::npos) << m_childReport;
     EXPECT_NE(m_childReport.find("previous filter ran: call=1"), std::string::npos) << m_childReport;
-    EXPECT_EQ(CrashLinesIn(Lines(LogPath())), 0);
+    EXPECT_EQ(CrashLinesInTheLog(), 0);
 }
 
 TEST_F(CrashReporterTest, AFilterInstalledBeforeTheInjectorStillRunsAfterItsWork) {
-    EXPECT_EXIT(CrashLikeTheGame(), ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    RunCrash();
 
     // The child's filter ends the process, so a crash line in the log was written before it ran.
     EXPECT_NE(m_childReport.find("previous filter ran: call=1 code=C0000005"), std::string::npos) << m_childReport;
-    const std::vector<std::string> log = Lines(LogPath());
-    ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find("Crash"), std::string::npos) << log.back();
+    EXPECT_TRUE(LastLogLineHas("Crash"));
 }
 
 namespace {
