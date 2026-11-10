@@ -298,6 +298,9 @@ public:
         1 + static_cast<int>(sizeof(kFunctionTable) / sizeof(kFunctionTable[0]));
 
 private:
+    // Writes the handshake's line to fs25_vr.log: both versions, a warning when they differ or the Companion Mod passed none.
+    void LogVersions(const char* companionVersion) const;
+
     // The bridge bound as upvalue 1 of every registered function; raises a Lua error if it is missing.
     static VRBridge& FromUpvalue(lua_State* L);
 

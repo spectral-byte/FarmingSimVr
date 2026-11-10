@@ -111,6 +111,17 @@ bool VRBridge::PerformHandshake() {
     return true;
 }
 
+void VRBridge::LogVersions(const char* companionVersion) const {
+    if (companionVersion == nullptr) {
+        LogWarn("[VRBridge] Handshake: Injector " + m_version + "; the Companion Mod reported no version (one from before it passed it).");
+    } else if (m_version != companionVersion) {
+        LogWarn("[VRBridge] Handshake: Injector " + m_version + " and Companion Mod " + companionVersion +
+                " are from different releases; both files should come from the same release.");
+    } else {
+        LogInfo("[VRBridge] Handshake: Injector " + m_version + ", Companion Mod " + companionVersion + ".");
+    }
+}
+
 int VRBridge::Lua_IsReady(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
@@ -134,7 +145,12 @@ int VRBridge::Lua_Handshake(lua_State* L) {
         }
     }
 
+    // The Companion Mod passes its own version as the second argument (the first is the optional mode). One from before
+    // that passes none, and an Injector from before it ignores the argument.
+    const char* companionVersion = (lua_type(L, 2) == LUA_TSTRING) ? lua_tostring(L, 2) : nullptr;
+
     self->PerformHandshake();
+    self->LogVersions(companionVersion);
 
     lua_createtable(L, 0, 5);
 

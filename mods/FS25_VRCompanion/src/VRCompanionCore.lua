@@ -8,6 +8,17 @@ VRCompanion = VRCompanion or {}
 
 VRCompanion.name = VRCompanion.name or g_currentModName or "FS25_VRCompanion"
 
+-- The release this Companion Mod is: the <version> of modDesc.xml, which a test pins this constant to. The Injector is released
+-- with it, so the two are the same number; the handshake passes it to the Injector, and a map load compares it with the
+-- Injector's (see VRCompanion:describeVersionMismatch). Not read from the game's mod manager, so nothing depends on an engine API.
+VRCompanion.VERSION = "1.2.0.0"
+
+-- Every Injector up to release 1.2 reported this fixed text as its version, whatever release it was.
+VRCompanion.LEGACY_INJECTOR_VERSION = "1.0.0"
+
+-- How long the version warning blinks, in milliseconds: long enough to read in the headset.
+VRCompanion.VERSION_WARNING_MS = 8000
+
 -- Slow retry cadence (in update ticks) for re-running the dt=0 guard install so a late
 -- Ferry class or newly spawned vehicles are picked up without scanning _G every frame.
 VRCompanion.VEHICLE_SPEED_HOOK_RETRY_TICKS = 180
@@ -157,6 +168,16 @@ VRCompanion.CORE_CONSOLE_COMMANDS = {
     { name = "vrHudGroupShow", description = "Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", method = "consoleCommandHudGroupShow" },
 }
 
+-- Compares this Companion Mod's version with the Injector's. Returns nil when they are the same release (or the Injector reports
+-- none, which no release does), else the sentence for both the player and log.txt. An Injector that reports the fixed text of the releases up to 1.2
+-- is "an older version": the number would say nothing.
+function VRCompanion:describeVersionMismatch(injectorVersion)
+    if type(injectorVersion) ~= "string" or injectorVersion == self.VERSION then return nil end
+    local injectorText = (injectorVersion == self.LEGACY_INJECTOR_VERSION) and "an older version" or ("version " .. injectorVersion)
+    return string.format("The Companion Mod is version %s but the Injector is %s. Install both files from the same release.",
+        self.VERSION, injectorText)
+end
+
 function VRCompanion:loadMap(name)
     print(string.format("[FS25_VR] Initializing Companion Mod on map '%s'...", tostring(name)))
 
@@ -176,6 +197,7 @@ function VRCompanion:loadMap(name)
     end
 
     -- 1. Perform native-to-Luau handshake via VRBridge
+    local versionWarning = nil
     if VRBridge ~= nil then
         local version = VRBridge.version or "unknown"
         local ready = false
@@ -183,9 +205,20 @@ function VRCompanion:loadMap(name)
             ready = VRBridge.isReady()
         end
 
+        -- The first argument is the optional rendering mode, left to the Injector. The second is this mod's version: an Injector
+        -- from before it existed ignores it.
         local handshakeResult = nil
         if type(VRBridge.handshake) == "function" then
-            handshakeResult = VRBridge.handshake()
+            handshakeResult = VRBridge.handshake(nil, self.VERSION)
+        end
+
+        -- Both versions go to log.txt on every load, matching or not; a mismatch is a warning there and on the screen
+        -- (shown at the end of the load, so that the HUD notice does not replace it)
+        local injectorVersion = type(handshakeResult) == "table" and handshakeResult.version or VRBridge.version
+        print(string.format("[FS25_VR] Versions: Companion Mod %s, Injector %s.", self.VERSION, tostring(injectorVersion)))
+        versionWarning = self:describeVersionMismatch(injectorVersion)
+        if versionWarning ~= nil then
+            print("[FS25_VR] [Warning] " .. versionWarning)
         end
 
         if handshakeResult and handshakeResult.success == true then
@@ -326,6 +359,16 @@ function VRCompanion:loadMap(name)
         if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
             pcall(function()
                 mission:showBlinkingWarning("VR HUD: Hidden (Press RCtrl+H to cycle)", 4000)
+            end)
+        end
+    end
+
+    -- 10. The Injector is of another release: say so after the HUD notice, so that one does not replace it. Nothing else changes.
+    if versionWarning ~= nil then
+        local mission = g_currentMission or _G.g_currentMission
+        if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+            pcall(function()
+                mission:showBlinkingWarning("FS25 VR: " .. versionWarning, self.VERSION_WARNING_MS)
             end)
         end
     end

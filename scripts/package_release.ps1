@@ -219,6 +219,28 @@ Settings are automatically saved in:
 Documents\My Games\FarmingSimulator2025\modSettings\FS25_VRCompanion\settings.xml
 
 
+IF A WARNING SAYS THE INJECTOR AND THE COMPANION MOD ARE FROM DIFFERENT VERSIONS
+--------------------------------------------------------------------------------
+When a savegame loads, a blinking warning says the Companion Mod is one version
+and the Injector another, and ends with "Install both files from the same
+release." FS25 VR is two files that belong together: version.dll (the Injector)
+and FS25_VRCompanion.zip (the Companion Mod). If you updated one and not the
+other, features can be missing or behave oddly, with no other message. VR keeps
+running as well as it can.
+
+Copy both files from the same release: version.dll into the game's x64 folder and
+FS25_VRCompanion.zip into Documents\My Games\FarmingSimulator2025\mods\ (see
+MANUAL INSTALLATION INSTRUCTIONS), replacing the old ones. Do not unzip the mod.
+The Installer always places both.
+
+If the warning says the Injector is "an older version", it is from FS25 VR 1.2 or
+earlier, which did not report which release it was. Install version.dll from the
+same release as the mod.
+
+Both logs name the two versions every time a savegame loads, matching or not: the
+game's log.txt (in Documents\My Games\FarmingSimulator2025) and fs25_vr.log.
+Include them in a bug report.
+
 IF THE GAME CRASHES
 --------------------------------------------------------------------------------
 The log and the crash dumps show where the game crashed, so attach them to your
