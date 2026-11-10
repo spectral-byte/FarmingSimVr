@@ -48,7 +48,7 @@ The Installer copies `version.dll` to the game's `x64` folder and `FS25_VRCompan
 - **ReShade stays where it is.** ReShade and other tools that install a `dxgi.dll` keep working alongside FS25 VR, in the headset too.
 - **Another `version.dll`** that isn't part of FS25 VR is moved to `version.dll.fs25vr-backup`.
 - **Upgrading from 1.1.9 or earlier**, when FS25 VR was `dxgi.dll`: the Installer deletes that old `dxgi.dll` and puts back the `dxgi.dll` it had moved aside, such as ReShade.
-- **Crash dumps for the game.** The Installer turns on Windows' own crash dumps for `FarmingSimulator2025Game.exe`, a registry setting, so a crash leaves a file to attach to a bug report (see [The game crashed](#the-game-crashed)). A setting you already had for the game is left alone. For a silent install, `/FS25VR_NOCRASHDUMPS` leaves the setting alone.
+- **Crash dumps for the game.** The Installer turns on Windows' own crash dumps for `FarmingSimulator2025Game.exe`, a registry setting, so a crash leaves a file to attach to a bug report (see [The game crashed](#the-game-crashed)). A setting you already had for the game is left alone. The wizard has a *Crash Dumps* page with a ticked box that says what Windows will keep; untick it to leave the setting alone. For a silent install, `/FS25VR_NOCRASHDUMPS` leaves the setting alone (and unticks the box in a wizard run).
 
 > [!NOTE]
 > The Installer isn't code-signed, so Windows SmartScreen will warn you. Click **More info**, then **Run anyway**.
@@ -125,7 +125,7 @@ A crash dump shows where the game crashed, so attach one to your bug report. Zip
 
 - **Windows' crash dump for the game**: the newest `FarmingSimulator2025Game.exe.<number>.dmp` in `%LOCALAPPDATA%\CrashDumps` (paste that into the Explorer address bar). Windows keeps the last three.
 
-The Installer turns on Windows' crash dump for `FarmingSimulator2025Game.exe`, unless you ran it with `/FS25VR_NOCRASHDUMPS` or Windows already had a setting for the game, which the Installer leaves as it is. If you installed by hand, turn it on yourself: open a Command Prompt as administrator and run
+The Installer turns on Windows' crash dump for `FarmingSimulator2025Game.exe`, unless you unticked the box on its *Crash Dumps* page, ran it with `/FS25VR_NOCRASHDUMPS`, or Windows already had a setting for the game, which the Installer leaves as it is. If you installed by hand, turn it on yourself: open a Command Prompt as administrator and run
 
 ```
 powershell -NoProfile -Command "$k = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\FarmingSimulator2025Game.exe'; New-Item $k -Force | Out-Null; @{DumpType=0; CustomDumpFlags=0x1060; DumpCount=3}.GetEnumerator() | ForEach-Object { New-ItemProperty $k -Name $_.Key -Value $_.Value -PropertyType DWord -Force | Out-Null }"
