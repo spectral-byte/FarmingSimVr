@@ -3,6 +3,8 @@
 #include <fstream>
 #include <string>
 #include <filesystem>
+#include <regex>
+#include <vector>
 #include <windows.h>
 
 namespace {
@@ -179,5 +181,49 @@ TEST_F(LoggerTest, WritesMessagesToFile) {
     EXPECT_NE(content.find("Testing logger warning"), std::string::npos);
 
     fs25vr::Logger::Instance().Close();
+    RemoveLogAndBackup(testLogPath);
+}
+
+// The crash reporter puts its line together by hand (TryLogWithoutWaiting) because the Log function needs more stack
+// and heap than a crashing process may have. Whoever reads fs25_vr.log, a person or a script, finds one layout, so the
+// two must not drift apart: a timestamp, the level in brackets, then the message.
+TEST_F(LoggerTest, ALineWrittenWithoutWaitingHasTheLayoutOfALineFromLog) {
+    const std::string testLogPath = "test_line_layout.log";
+    RemoveLogAndBackup(testLogPath);
+    auto& logger = fs25vr::Logger::Instance();
+    logger.SetLogFile(testLogPath);
+    logger.SetMinLevel(fs25vr::LogLevel::Debug);
+
+    const std::string message = "the same words";
+    const fs25vr::LogLevel levels[] = {fs25vr::LogLevel::Debug, fs25vr::LogLevel::Info, fs25vr::LogLevel::Warning,
+                                       fs25vr::LogLevel::Error};
+    for (const fs25vr::LogLevel level : levels) {
+        logger.Log(level, message);
+        ASSERT_TRUE(logger.TryLogWithoutWaiting(level, message.c_str(), message.size()));
+    }
+    logger.Flush();
+
+    std::vector<std::string> lines;
+    {
+        std::ifstream file(testLogPath);
+        for (std::string line; std::getline(file, line);) lines.push_back(line);
+    }
+    ASSERT_EQ(lines.size(), 8u);
+
+    const std::regex layout(R"(^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \[(DEBUG|INFO|WARN|ERROR)\] +the same words$)");
+    // Down to the spacing: the same line once the digits of the clock are masked.
+    const auto masked = [](std::string line) {
+        for (char& c : line) {
+            if (c >= '0' && c <= '9') c = '#';
+        }
+        return line;
+    };
+    for (size_t i = 0; i < lines.size(); i += 2) {
+        EXPECT_TRUE(std::regex_match(lines[i], layout)) << "Log wrote: " << lines[i];
+        EXPECT_TRUE(std::regex_match(lines[i + 1], layout)) << "TryLogWithoutWaiting wrote: " << lines[i + 1];
+        EXPECT_EQ(masked(lines[i + 1]), masked(lines[i]));
+    }
+
+    logger.Close();
     RemoveLogAndBackup(testLogPath);
 }
