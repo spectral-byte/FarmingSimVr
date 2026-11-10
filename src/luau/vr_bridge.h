@@ -36,8 +36,6 @@ public:
     const std::string& GetVersion() const { return m_version; }
     bool IsReady() const;
     bool PerformHandshake();
-    // Writes the handshake's line to fs25_vr.log: both versions, a warning when they differ or the Companion Mod passed none.
-    void LogVersions(const char* companionVersion) const;
     bool IsCompanionActive() const { return m_handshakeCompleted; }
     void SetCompanionActive(bool active) { m_handshakeCompleted = active; }
     std::shared_ptr<OpenXrManager> GetOpenXrManager() const { return m_openXrManager; }
@@ -300,6 +298,9 @@ public:
         1 + static_cast<int>(sizeof(kFunctionTable) / sizeof(kFunctionTable[0]));
 
 private:
+    // Writes the handshake's line to fs25_vr.log: both versions, a warning when they differ or the Companion Mod passed none.
+    void LogVersions(const char* companionVersion) const;
+
     // The bridge bound as upvalue 1 of every registered function; raises a Lua error if it is missing.
     static VRBridge& FromUpvalue(lua_State* L);
 

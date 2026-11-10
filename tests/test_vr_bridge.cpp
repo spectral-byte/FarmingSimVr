@@ -118,6 +118,30 @@ TEST_F(VrBridgeTest, ExposesVersionAndIsReadyAndHandshakeToLuauScript) {
     }
 }
 
+TEST_F(VrBridgeTest, TheHandshakeAcceptsTheCompanionModsVersionAsAnExtraArgumentAndKeepsReportingItsOwn) {
+    fs25vr::VRBridge bridge(nullptr, nullptr, "7.8.9");
+    ASSERT_TRUE(bridge.Inject(L));
+
+    const int status = RunLuauString(L, R"(
+        -- No mode, the mod's version: what the Companion Mod passes
+        local hs = VRBridge.handshake(nil, "1.2.0.0")
+        assert(hs.success == true, "the handshake completes")
+        assert(hs.version == "7.8.9", "it still reports the Injector's version, not the one passed")
+        assert(VRBridge.version == "7.8.9")
+
+        -- A mode as before, with a version after it
+        local afr = VRBridge.handshake("AFR", "1.2.0.0")
+        assert(afr.success == true and afr.renderingMode == "AFR", "the mode is still negotiated")
+
+        -- A version that is not text is ignored
+        assert(VRBridge.handshake(nil, 42).success == true)
+    )");
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+}
+
 TEST_F(VrBridgeTest, ReportsTheInjectorsReleaseVersionWhenNoneIsSupplied) {
     fs25vr::VRBridge bridge(nullptr, nullptr);
     ASSERT_TRUE(bridge.Inject(L));

@@ -169,12 +169,12 @@ VRCompanion.CORE_CONSOLE_COMMANDS = {
 }
 
 -- Compares this Companion Mod's version with the Injector's. Returns nil when they are the same release (or the Injector reports
--- none, which no release does), else the text to show the player. An Injector that reports the fixed text of the releases up to 1.2
+-- none, which no release does), else the sentence for both the player and log.txt. An Injector that reports the fixed text of the releases up to 1.2
 -- is "an older version": the number would say nothing.
 function VRCompanion:describeVersionMismatch(injectorVersion)
     if type(injectorVersion) ~= "string" or injectorVersion == self.VERSION then return nil end
     local injectorText = (injectorVersion == self.LEGACY_INJECTOR_VERSION) and "an older version" or ("version " .. injectorVersion)
-    return string.format("FS25 VR: The Companion Mod is version %s but the Injector is %s. Install both files from the same release.",
+    return string.format("The Companion Mod is version %s but the Injector is %s. Install both files from the same release.",
         self.VERSION, injectorText)
 end
 
@@ -218,8 +218,7 @@ function VRCompanion:loadMap(name)
         print(string.format("[FS25_VR] Versions: Companion Mod %s, Injector %s.", self.VERSION, tostring(injectorVersion)))
         versionWarning = self:describeVersionMismatch(injectorVersion)
         if versionWarning ~= nil then
-            print(string.format("[FS25_VR] [Warning] Companion Mod %s and Injector %s are from different releases. Install both files from the same release.",
-                self.VERSION, tostring(injectorVersion)))
+            print("[FS25_VR] [Warning] " .. versionWarning)
         end
 
         if handshakeResult and handshakeResult.success == true then
@@ -369,7 +368,7 @@ function VRCompanion:loadMap(name)
         local mission = g_currentMission or _G.g_currentMission
         if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
             pcall(function()
-                mission:showBlinkingWarning(versionWarning, self.VERSION_WARNING_MS)
+                mission:showBlinkingWarning("FS25 VR: " .. versionWarning, self.VERSION_WARNING_MS)
             end)
         end
     end
