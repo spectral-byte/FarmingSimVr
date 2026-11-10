@@ -15,16 +15,20 @@
 #include <windows.h>
 #include <dxgi.h>
 #include <intrin.h>
+#include <minidumpapiset.h>
 #include <psapi.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs25vr {
@@ -133,8 +137,69 @@ LPTHREAD_START_ROUTINE ThreadThatFaults(Fault fault) {
     }
 }
 
+// The dump is written by the system's MiniDumpWriteDump, which the Injector looks up in the system's dbghelp.dll. The child
+// can take its place, as it does for OutputDebugStringA above: to count how often the Injector asks for a dump, or to
+// stand for a dump that never finishes (a thread it needs is suspended, a lock is held).
+enum class DumpWriter {
+    TheSystems,
+    CountsTheCalls,
+    NeverReturns,
+};
+
+using MiniDumpWriteDumpFn = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUMP_EXCEPTION_INFORMATION,
+                                          PMINIDUMP_USER_STREAM_INFORMATION, PMINIDUMP_CALLBACK_INFORMATION);
+FunctionDetour g_miniDumpWriteDump;
+
+BOOL WINAPI CountingMiniDumpWriteDump(HANDLE process, DWORD processId, HANDLE file, MINIDUMP_TYPE type,
+                                      PMINIDUMP_EXCEPTION_INFORMATION exception, PMINIDUMP_USER_STREAM_INFORMATION streams,
+                                      PMINIDUMP_CALLBACK_INFORMATION callback) {
+    std::fprintf(stderr, "MiniDumpWriteDump called\n");
+    return reinterpret_cast<MiniDumpWriteDumpFn>(g_miniDumpWriteDump.GetOriginal())(process, processId, file, type,
+                                                                                    exception, streams, callback);
+}
+
+BOOL WINAPI MiniDumpWriteDumpThatNeverReturns(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUMP_EXCEPTION_INFORMATION,
+                                              PMINIDUMP_USER_STREAM_INFORMATION, PMINIDUMP_CALLBACK_INFORMATION) {
+    std::fprintf(stderr, "MiniDumpWriteDump called and never returns\n");
+    Sleep(INFINITE);
+    return FALSE;
+}
+
+// The child loads the system's dbghelp.dll itself for this, so a test with a stand-in cannot tell where the Injector
+// loads it.
+void StandInForTheDumpWriter(DumpWriter writer) {
+    if (writer == DumpWriter::TheSystems) return;
+    wchar_t systemDirectory[MAX_PATH];
+    GetSystemDirectoryW(systemDirectory, static_cast<UINT>(std::size(systemDirectory)));
+    HMODULE dbghelp = LoadLibraryExW((std::wstring(systemDirectory) + L"\\dbghelp.dll").c_str(), nullptr,
+                                     LOAD_LIBRARY_SEARCH_SYSTEM32);
+    void* target = dbghelp ? reinterpret_cast<void*>(GetProcAddress(dbghelp, "MiniDumpWriteDump")) : nullptr;
+    void* standIn = writer == DumpWriter::CountsTheCalls ? reinterpret_cast<void*>(&CountingMiniDumpWriteDump)
+                                                         : reinterpret_cast<void*>(&MiniDumpWriteDumpThatNeverReturns);
+    if (!target || !g_miniDumpWriteDump.Install(target, standIn)) {
+        std::fprintf(stderr, "could not stand in for MiniDumpWriteDump\n");
+        ExitProcess(1);
+    }
+}
+
+// What else the child does between loading the Injector and faulting.
+struct ChildSetup {
+    // The game creates its DXGI factory at start-up. The Injector prepares its crash dump at the first factory call, so
+    // a child that never creates one stands for a crash before that point.
+    bool createsAFactory = false;
+    DumpWriter dumpWriter = DumpWriter::TheSystems;
+};
+
+ChildSetup AfterTheFirstFactory(DumpWriter writer = DumpWriter::TheSystems) {
+    ChildSetup setup;
+    setup.createsAFactory = true;
+    setup.dumpWriter = writer;
+    return setup;
+}
+
 // Never returns: the process ends in GamesFilter, or here when the fault did not reach it.
-void CrashLikeTheGame(Fault fault = Fault::WriteThroughANullPointer, FirstCall firstCall = FirstCall::EndsTheProcess) {
+void CrashLikeTheGame(Fault fault = Fault::WriteThroughANullPointer, FirstCall firstCall = FirstCall::EndsTheProcess,
+                      ChildSetup setup = {}) {
     g_firstCall = firstCall;
     SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS);
     CreateThread(nullptr, 0, &EndTheChildIfItHangs, nullptr, 0, nullptr);
@@ -143,6 +208,13 @@ void CrashLikeTheGame(Fault fault = Fault::WriteThroughANullPointer, FirstCall f
     if (!g_injector) {
         std::fprintf(stderr, "could not load the Injector (error %lu)\n", GetLastError());
         ExitProcess(1);
+    }
+    StandInForTheDumpWriter(setup.dumpWriter);
+    if (setup.createsAFactory) {
+        // Through the Injector's hook of the system's dxgi.dll.
+        IDXGIFactory1* factory = nullptr;
+        const HRESULT created = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
+        std::fprintf(stderr, "factory created: hr=%08lX\n", static_cast<unsigned long>(created));
     }
     FunctionDetour outputDebugString;
     if (fault == Fault::WhileTheInjectorWritesItsLog &&
@@ -203,6 +275,67 @@ std::vector<std::string> Lines(const std::filesystem::path& file) {
     return lines;
 }
 
+int Occurrences(const std::string& text, const std::string& part) {
+    int count = 0;
+    for (size_t at = text.find(part); at != std::string::npos; at = text.find(part, at + part.size())) ++count;
+    return count;
+}
+
+std::vector<unsigned char> BytesOf(const std::filesystem::path& file) {
+    std::ifstream in(file, std::ios::binary);
+    return std::vector<unsigned char>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+// Just enough of the minidump format to read what a dump holds. Not dbghelp.dll: loading it into this process would
+// hide whether the Injector loads it (and the tests that watch the loaded modules would depend on it).
+class Minidump {
+public:
+    explicit Minidump(std::vector<unsigned char> bytes) : m_bytes(std::move(bytes)) {}
+
+    bool HasSignature() const { return m_bytes.size() >= 4 && std::memcmp(m_bytes.data(), "MDMP", 4) == 0; }
+    size_t Size() const { return m_bytes.size(); }
+
+    // The stream's bytes, or an empty view when the dump has none of that type.
+    std::vector<unsigned char> Stream(MINIDUMP_STREAM_TYPE type) const {
+        for (const MINIDUMP_DIRECTORY& entry : Directory()) {
+            if (entry.StreamType == static_cast<ULONG32>(type) &&
+                static_cast<size_t>(entry.Location.Rva) + entry.Location.DataSize <= m_bytes.size()) {
+                return std::vector<unsigned char>(m_bytes.begin() + entry.Location.Rva,
+                                                  m_bytes.begin() + entry.Location.Rva + entry.Location.DataSize);
+            }
+        }
+        return {};
+    }
+    bool Has(MINIDUMP_STREAM_TYPE type) const { return !Stream(type).empty(); }
+
+    // The exception record in the exception stream.
+    std::optional<MINIDUMP_EXCEPTION_STREAM> Exception() const {
+        const std::vector<unsigned char> stream = Stream(ExceptionStream);
+        if (stream.size() < sizeof(MINIDUMP_EXCEPTION_STREAM)) return std::nullopt;
+        MINIDUMP_EXCEPTION_STREAM exception;
+        std::memcpy(&exception, stream.data(), sizeof(exception));
+        return exception;
+    }
+
+private:
+    std::vector<MINIDUMP_DIRECTORY> Directory() const {
+        std::vector<MINIDUMP_DIRECTORY> entries;
+        MINIDUMP_HEADER header;
+        if (!HasSignature() || m_bytes.size() < sizeof(header)) return entries;
+        std::memcpy(&header, m_bytes.data(), sizeof(header));
+        for (ULONG32 i = 0; i < header.NumberOfStreams; ++i) {
+            const size_t at = static_cast<size_t>(header.StreamDirectoryRva) + i * sizeof(MINIDUMP_DIRECTORY);
+            if (at + sizeof(MINIDUMP_DIRECTORY) > m_bytes.size()) break;
+            MINIDUMP_DIRECTORY entry;
+            std::memcpy(&entry, m_bytes.data() + at, sizeof(entry));
+            entries.push_back(entry);
+        }
+        return entries;
+    }
+
+    std::vector<unsigned char> m_bytes;
+};
+
 int CrashLinesIn(const std::vector<std::string>& log) {
     int count = 0;
     for (const std::string& line : log) {
@@ -229,10 +362,16 @@ protected:
         return std::filesystem::path(InjectorPath()).parent_path() / L"fs25_vr.log";
     }
 
+    // The dump has a fixed name (the Installer's uninstall removes the file by it), so the next crash replaces it.
+    static std::filesystem::path DumpPath() {
+        return std::filesystem::path(InjectorPath()).parent_path() / L"fs25_vr_crash.dmp";
+    }
+
     static void RemoveFilesOfTheChild() {
         std::error_code ignored;
         std::filesystem::remove(LogPath(), ignored);
         std::filesystem::remove(Logger::BackupPathFor(LogPath()), ignored);
+        std::filesystem::remove(DumpPath(), ignored);
     }
 
     // What the child wrote to stderr.
@@ -279,12 +418,49 @@ TEST_F(CrashReporterTest, TheCrashLineNamesTheInjectorsVersion) {
     EXPECT_NE(log.back().find(" " + std::string(kInjectorVersion)), std::string::npos) << log.back();
 }
 
-TEST_F(CrashReporterTest, TheCrashLineSaysThatNoDumpWasWritten) {
+// A player attaches the dump to a report, so it has to be a real minidump, next to the log it belongs to.
+TEST_F(CrashReporterTest, ACrashAfterTheFirstFactoryLeavesAMinidumpNextToTheInjector) {
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    const Minidump dump(BytesOf(DumpPath()));
+    ASSERT_GT(dump.Size(), 0u) << "No dump at " << DumpPath() << "\n" << m_childReport;
+    EXPECT_TRUE(dump.HasSignature()) << "The file does not start with the minidump signature.";
+}
+
+TEST_F(CrashReporterTest, TheDumpsExceptionStreamNamesTheAccessViolationOnTheCrashingThread) {
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    const Minidump dump(BytesOf(DumpPath()));
+    const std::optional<MINIDUMP_EXCEPTION_STREAM> exception = dump.Exception();
+    ASSERT_TRUE(exception.has_value()) << "The dump has no exception stream.\n" << m_childReport;
+    EXPECT_EQ(exception->ExceptionRecord.ExceptionCode, kAccessViolation);
+    // The child's own filter saw the exception on the thread that faulted.
+    EXPECT_EQ(std::to_string(exception->ThreadId), ValueOf(m_childReport, "thread=")) << m_childReport;
+}
+
+TEST_F(CrashReporterTest, TheCrashLineNamesTheDumpFile) {
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    const std::vector<std::string> log = Lines(LogPath());
+    ASSERT_FALSE(log.empty());
+    EXPECT_NE(log.back().find("Injector: Crash:"), std::string::npos) << log.back();
+    EXPECT_NE(log.back().find("fs25_vr_crash.dmp"), std::string::npos) << log.back();
+    EXPECT_EQ(log.back().find("no dump written"), std::string::npos) << log.back();
+}
+
+// The dump needs the system's dbghelp.dll and a helper thread, prepared at the first DXGI factory call. A crash before
+// that leaves the crash line, which says why there is no dump.
+TEST_F(CrashReporterTest, ACrashBeforeAnyFactoryCallLeavesTheCrashLineWithTheReasonAndNoDump) {
     EXPECT_EXIT(CrashLikeTheGame(), ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
 
     const std::vector<std::string> log = Lines(LogPath());
     ASSERT_FALSE(log.empty());
-    EXPECT_NE(log.back().find("no dump written"), std::string::npos) << log.back();
+    EXPECT_NE(log.back().find("no dump written: the crash came before the first DXGI factory call"), std::string::npos)
+        << log.back();
+    EXPECT_FALSE(std::filesystem::exists(DumpPath()));
 }
 
 // Info lines are buffered and only warnings and errors are flushed, so the Injector's start-up lines, which the child
@@ -328,6 +504,76 @@ TEST_F(CrashReporterTest, AStackOverflowLeavesTheCrashLineToo) {
     const std::vector<std::string> log = Lines(LogPath());
     ASSERT_FALSE(log.empty());
     EXPECT_NE(log.back().find("Injector: Crash: exception 0xC00000FD"), std::string::npos) << log.back();
+}
+
+// The reason the dump is written by a helper thread: the crashing thread has no stack left to run MiniDumpWriteDump on.
+TEST_F(CrashReporterTest, AStackOverflowLeavesADumpToo) {
+    constexpr DWORD kStackOverflow = 0xC00000FD;  // EXCEPTION_STACK_OVERFLOW
+    EXPECT_EXIT(CrashLikeTheGame(Fault::OverflowTheStack, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
+                ::testing::ExitedWithCode(kStackOverflow), KeepingStderrIn(&m_childReport));
+
+    const Minidump dump(BytesOf(DumpPath()));
+    ASSERT_TRUE(dump.HasSignature()) << "No dump at " << DumpPath();
+    const std::optional<MINIDUMP_EXCEPTION_STREAM> exception = dump.Exception();
+    ASSERT_TRUE(exception.has_value());
+    EXPECT_EQ(exception->ExceptionRecord.ExceptionCode, kStackOverflow);
+    const std::vector<std::string> log = Lines(LogPath());
+    ASSERT_FALSE(log.empty());
+    EXPECT_NE(log.back().find("fs25_vr_crash.dmp"), std::string::npos) << log.back();
+}
+
+// One dump per process: the first crash is the one that matters, and the second one is usually its consequence.
+TEST_F(CrashReporterTest, ASecondFaultWritesNoSecondDump) {
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::CrashesAnotherThread,
+                                 AfterTheFirstFactory(DumpWriter::CountsTheCalls)),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    EXPECT_NE(m_childReport.find("previous filter ran: call=2"), std::string::npos) << m_childReport;
+    EXPECT_EQ(Occurrences(m_childReport, "MiniDumpWriteDump called"), 1) << m_childReport;
+    // The dump is still the first crash's: the thread the child's filter saw it on first.
+    const std::optional<MINIDUMP_EXCEPTION_STREAM> exception = Minidump(BytesOf(DumpPath())).Exception();
+    ASSERT_TRUE(exception.has_value()) << m_childReport;
+    EXPECT_EQ(std::to_string(exception->ThreadId), ValueOf(m_childReport, "thread=")) << m_childReport;
+}
+
+// The file has a fixed name, so a dump never piles up next to the log, and the report is about the latest crash.
+TEST_F(CrashReporterTest, TheNextCrashingProcessReplacesTheDump) {
+    // What an earlier crash left behind.
+    {
+        std::ofstream stale(DumpPath(), std::ios::binary);
+        stale << "STALE DUMP OF AN EARLIER CRASH";
+    }
+
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    const Minidump dump(BytesOf(DumpPath()));
+    EXPECT_TRUE(dump.HasSignature()) << "The earlier dump is still there.";
+    int dumps = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(DumpPath().parent_path())) {
+        if (entry.path().extension() == L".dmp") ++dumps;
+    }
+    EXPECT_EQ(dumps, 1) << "The dump is one file with a fixed name.";
+}
+
+// A helper that never finishes (a thread it needs is suspended, a lock is held) must not hang the game's exit: the
+// filter gives up after its time limit, says so in the log, and passes the crash on.
+TEST_F(CrashReporterTest, AStuckDumpHelperDoesNotHangTheExitAndTheLogSaysThereIsNoDump) {
+    const DWORD started = GetTickCount();
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess,
+                                 AfterTheFirstFactory(DumpWriter::NeverReturns)),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+    const DWORD seconds = (GetTickCount() - started) / 1000;
+
+    // Ended by the crash, passed on to the child's filter, not by the child's own watchdog (exit code 99 after 30 s).
+    EXPECT_NE(m_childReport.find("MiniDumpWriteDump called and never returns"), std::string::npos) << m_childReport;
+    EXPECT_NE(m_childReport.find("previous filter ran: call=1"), std::string::npos) << m_childReport;
+    EXPECT_LT(seconds, 25u) << "The crash took " << seconds << " s to end the process.";
+    const std::vector<std::string> log = Lines(LogPath());
+    ASSERT_GE(log.size(), 2u);
+    EXPECT_NE(log.back().find("Injector: Crash dump not written: the helper thread did not finish in 10 seconds"),
+              std::string::npos)
+        << log.back();
 }
 
 // The crashed thread may hold the log's lock (it crashed while writing a line), and then the filter must not wait for

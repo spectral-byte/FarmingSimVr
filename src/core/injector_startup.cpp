@@ -31,16 +31,21 @@ using DllNotificationCallback = VOID(CALLBACK*)(ULONG reason, const DllLoadedNot
 using LdrRegisterDllNotificationFn = LONG(NTAPI*)(ULONG flags, DllNotificationCallback callback, PVOID context, PVOID* cookie);
 using LdrUnregisterDllNotificationFn = LONG(NTAPI*)(PVOID cookie);
 
-// Passes each caught factory call to the process's InjectorRuntime, which is created by the first one.
+// Passes each caught factory call to the process's InjectorRuntime, which is created by the first one. The first call
+// also prepares the crash dump, before the runtime starts: a crash while it initializes OpenXR is the likeliest one.
+// Here and not in the proxy, since this runs once per process however many proxies the tests create.
 class RuntimeFactoryEntry final : public IDxgiFactoryEntry {
 public:
     HRESULT CreateDXGIFactory(REFIID riid, void** ppFactory) override {
+        PrepareCrashDump();
         return InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory(riid, ppFactory);
     }
     HRESULT CreateDXGIFactory1(REFIID riid, void** ppFactory) override {
+        PrepareCrashDump();
         return InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory1(riid, ppFactory);
     }
     HRESULT CreateDXGIFactory2(UINT flags, REFIID riid, void** ppFactory) override {
+        PrepareCrashDump();
         return InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory2(flags, riid, ppFactory);
     }
 };
