@@ -149,8 +149,10 @@ end
 --       consoleCommands = { { name = "vrX", description = "...", method = "consoleCommandX" }, ... },
 --   })
 --
--- Every field but the name is optional; `self` is the Companion Mod (hooks are called as methods, with plain functions, so a hook
--- that calls `self:foo()` finds `foo` when it runs). Registering a name again replaces its hooks and keeps its place.
+-- Every field but the name is optional; `self` is the Companion Mod the run point was called on (hooks are called as methods, with
+-- plain functions, so a hook that calls `self:foo()` finds `foo` when it runs). Registering a name again replaces its hooks and
+-- keeps its place. A bad name, a hook that is not a function and a console command without a name, a description or a method
+-- raise when the file loads, not when the map does.
 --
 -- Order. Map-load and update hooks run in registration order, which is modDesc.xml order; map-unload hooks run in reverse. Where
 -- two subsystems need an order, their file order gives it and the registration says so in a comment. The core's own steps come
@@ -166,12 +168,54 @@ end
 --                                        the last step before it and are the update hook there now)
 --   deleteMap runSubsystemMapUnload      first of the subsystem resets: removes a subsystem's console commands, then runs its
 --                                        mapUnload, subsystems in reverse order, before the resets that have not moved over yet
+-- Three steps of the update stay direct calls of the core, at the places they always had, because a hook cannot run there: the
+-- Perf Trace refresh (the very top: the Injector may have ended the trace), the menu's background camera (right after the GUI
+-- poll) and the Input subsystem's check of the VR action events (between the HUD convergence and the vehicle transition: the
+-- transition registers them again, forced, so after it the events would have been registered once instead of twice).
 --
 -- A hook that raises is caught: it is logged once per subsystem and hook, as
---   [FS25_VR] [Error] Subsystem '<name>' <hook> hook raised: <error>
--- and the other hooks still run. The test harnesses fail a test in which that line was logged unless the test expects it.
-local subsystems = {}          -- { name = <string>, hooks = <table> } in registration order
-local hooksLoggedAsRaising = {}   -- "<name>/<hook>" -> true
+--   [FS25_VR] [Error] Subsystem '<name>' <mapLoad|updateEarly|update|mapUnload> hook raised: <error>
+-- and the other hooks still run. This is by design (spec #244: a fault in one subsystem does not cost the player the others), so a
+-- raise in a hook, the Motion Controllers' update included, no longer reaches the caller of update or of loadMap; the log line is
+-- how it is found, and the test harnesses fail a test in which that line was logged unless the test expects it. The log-once set
+-- is kept for the life of the Lua state and is not cleared at map unload (a hook that raised on one map is not logged again on
+-- the next: the same fault every time is one line, not one per map; test_subsystem_registry.cpp pins it).
+local subsystems = {}                -- { name = <string>, hooks = <table> } in registration order
+-- The subsystems with an updateEarly / update hook, in registration order, as { name = <string>, hook = <function> }: built when a
+-- subsystem registers, so that an update loops over the few that update and not over every subsystem (it runs every frame)
+local updateEarlyHooks = {}
+local updateHooks = {}
+local hooksLoggedAsRaising = {}      -- "<name>/<hook>" -> true
+
+local function checkConsoleCommands(name, commands)
+    if commands == nil then return end
+    if type(commands) ~= "table" then
+        error(string.format("registerSubsystem: the consoleCommands of '%s' are not a list", name), 3)
+    end
+    for index, command in ipairs(commands) do
+        if type(command) ~= "table" then
+            error(string.format("registerSubsystem: consoleCommands[%d] of '%s' is not a table", index, name), 3)
+        end
+        for _, field in ipairs({ "name", "description", "method" }) do
+            if type(command[field]) ~= "string" or command[field] == "" then
+                error(string.format("registerSubsystem: consoleCommands[%d] of '%s' has no %s", index, name, field), 3)
+            end
+        end
+    end
+end
+
+local function rebuildUpdateHooks()
+    updateEarlyHooks, updateHooks = {}, {}
+    for _, subsystem in ipairs(subsystems) do
+        local hooks = subsystem.hooks
+        if hooks.updateEarly ~= nil then
+            updateEarlyHooks[#updateEarlyHooks + 1] = { name = subsystem.name, hook = hooks.updateEarly }
+        end
+        if hooks.update ~= nil then
+            updateHooks[#updateHooks + 1] = { name = subsystem.name, hook = hooks.update }
+        end
+    end
+end
 
 function VRCompanion:registerSubsystem(name, hooks)
     if type(name) ~= "string" or name == "" then
@@ -183,31 +227,39 @@ function VRCompanion:registerSubsystem(name, hooks)
             error(string.format("registerSubsystem: the %s hook of '%s' is not a function", hookName, name), 2)
         end
     end
+    checkConsoleCommands(name, hooks.consoleCommands)
+    local replaced = false
     for _, subsystem in ipairs(subsystems) do
         if subsystem.name == name then
             subsystem.hooks = hooks
-            return
+            replaced = true
+            break
         end
     end
-    subsystems[#subsystems + 1] = { name = name, hooks = hooks }
+    if not replaced then
+        subsystems[#subsystems + 1] = { name = name, hooks = hooks }
+    end
+    rebuildUpdateHooks()
 end
 
-local function runSubsystemHook(subsystem, hookName, ...)
+local function logHookRaised(name, hookName, err)
+    local key = name .. "/" .. hookName
+    if not hooksLoggedAsRaising[key] then
+        hooksLoggedAsRaising[key] = true
+        print(string.format("[FS25_VR] [Error] Subsystem '%s' %s hook raised: %s", name, hookName, tostring(err)))
+    end
+end
+
+local function runSubsystemHook(self, subsystem, hookName)
     local hook = subsystem.hooks[hookName]
     if hook == nil then return end
-    local ok, err = pcall(hook, VRCompanion, ...)
-    if not ok then
-        local key = subsystem.name .. "/" .. hookName
-        if not hooksLoggedAsRaising[key] then
-            hooksLoggedAsRaising[key] = true
-            print(string.format("[FS25_VR] [Error] Subsystem '%s' %s hook raised: %s", subsystem.name, hookName, tostring(err)))
-        end
-    end
+    local ok, err = pcall(hook, self)
+    if not ok then logHookRaised(subsystem.name, hookName, err) end
 end
 
 function VRCompanion:runSubsystemMapLoad()
     for _, subsystem in ipairs(subsystems) do
-        runSubsystemHook(subsystem, "mapLoad")
+        runSubsystemHook(self, subsystem, "mapLoad")
     end
 end
 
@@ -220,15 +272,20 @@ function VRCompanion:addSubsystemConsoleCommands()
     end
 end
 
+-- The two update run points run every frame: plain loops over the flat lists, no allocation
 function VRCompanion:runSubsystemUpdateEarly(dt)
-    for _, subsystem in ipairs(subsystems) do
-        runSubsystemHook(subsystem, "updateEarly", dt)
+    for i = 1, #updateEarlyHooks do
+        local entry = updateEarlyHooks[i]
+        local ok, err = pcall(entry.hook, self, dt)
+        if not ok then logHookRaised(entry.name, "updateEarly", err) end
     end
 end
 
 function VRCompanion:runSubsystemUpdate(dt)
-    for _, subsystem in ipairs(subsystems) do
-        runSubsystemHook(subsystem, "update", dt)
+    for i = 1, #updateHooks do
+        local entry = updateHooks[i]
+        local ok, err = pcall(entry.hook, self, dt)
+        if not ok then logHookRaised(entry.name, "update", err) end
     end
 end
 
@@ -240,10 +297,9 @@ function VRCompanion:runSubsystemMapUnload()
                 removeConsoleCommand(command.name)
             end
         end
-        runSubsystemHook(subsystem, "mapUnload")
+        runSubsystemHook(self, subsystem, "mapUnload")
     end
 end
-
 -- Every console command the core registers on map load: map load adds them and map unload removes them, both from this one list.
 VRCompanion.CORE_CONSOLE_COMMANDS = {
     { name = "vrHudSafeArea", description = "Set the VR HUD Safe Area, the margin that keeps warnings, notifications and other mods' HUDs inside the lens: vrHudSafeArea <horizontal> <vertical>", method = "consoleCommandSetHudSafeArea" },
@@ -1098,6 +1154,8 @@ end
 
 function VRCompanion:runUpdate(dt)
     self.frameTicks = (self.frameTicks or 0) + 1
+    -- `vrPerfTrace`: the Injector ends a trace by itself
+    if self.perfTracing then self:refreshPerfTracing() end
 
     -- Synchronize 2D view active state with native VRBridge if changed externally
     if VRBridge ~= nil and type(VRBridge.getIs2DViewActive) == "function" then
@@ -1112,6 +1170,10 @@ function VRCompanion:runUpdate(dt)
 
     -- Poll in-game GUI visibility and synchronize with native VRBridge
     self:pollGuiVisibility()
+
+    if self:isMenuQuadShown() then
+        self:updateMenuBackgroundCamera(dt)
+    end
 
     if not self.vehicleCameraHooked then
         self:hookVehicleCamera()
@@ -1145,6 +1207,10 @@ function VRCompanion:runUpdate(dt)
     -- (A direct call, not an update hook: its errors reach the caller of update, which the tests rely on)
     self:updateHudConvergence(dt)
 
+    -- Keep in-engine action events active across context transitions, and register them all again after a binding change
+    -- (Input; before the vehicle transition below, which registers them again on its own)
+    self:updateActionEvents()
+
     -- Check for vehicle transitions (entering/exiting/switching vehicle)
     local curVehicle = self:getControlledVehicle()
     if self.lastControlledVehicle ~= curVehicle then
@@ -1155,10 +1221,7 @@ function VRCompanion:runUpdate(dt)
         self:onVehicleTransition(oldVeh, curVehicle)
     end
 
-    -- The registered subsystems update, after the core's own steps above. Two of them used to update earlier: Input kept the VR
-    -- action events registered between the HUD convergence and the vehicle transition above, and Stereo moved the menu's background
-    -- camera right after the GUI poll. Neither reads or writes anything the steps between touch (the events are registered into
-    -- the context of the vehicle being controlled, whichever frame it became so; the camera node is the menu's, not an eye's).
+    -- The registered subsystems update, after the core's own steps above
     self:runSubsystemUpdate(dt)
 
     -- Follow the camera mode with the DLSS near plane (cab, outside camera, on foot)
@@ -1253,8 +1316,26 @@ function VRCompanion:deleteMap()
     self.headTrackingEnabled = true
 
     -- (Stereo deletes its nodes and puts the cameras and the 2D view back, the HUD goes back to the full screen, Input lets go of
-    -- the VR action events and Locomotion forgets the vehicles' rotation states, in the mapUnload hooks below. Each of them
-    -- used to run here, in the middle of the core's teardown; the registry runs them after it, the HUD before Stereo as before.)
+    -- the VR action events and Locomotion forgets the vehicles' rotation states, in the mapUnload hooks below. They used to run
+    -- here, in the middle of the core's teardown: Stereo's nodes and menu camera before VRBridge.onMapUnload, then the HUD, Input
+    -- and the rest of Stereo's after it, all before the resets of the other subsystems. Now the registry runs them after the
+    -- core's teardown and, in reverse file order, after the subsystems registered later, and none of that is observable:
+    --  * Order that matters is kept: the HUD unloads before Stereo does (leaving 2D Floating Window Mode reapplies the HUD, which
+    --    must find it restored), Stereo deletes its nodes before it restores the camera settings (the restore skips deleted
+    --    nodes), and Hand Tools unload before the Virtual Hands (a tool hangs below a hand).
+    --  * Stereo's nodes against VRBridge.onMapUnload: the Injector never sees a node; onMapUnload only resets the Injector's own
+    --    flags (src/luau/vr_bridge.cpp, Lua_OnMapUnload), and Stereo only touches the scene. No state is shared, and nothing
+    --    runs between the two calls.
+    --  * Nothing that runs in teardown reads what the three change: the eye nodes and the listener are read by the camera and
+    --    hand placement of an update (Stereo, Locomotion, Motion Controllers, Virtual Hands), never by a reset; the HUD's
+    --    teardown reads the HUD and the HUD state, not a node; the action event ids are read by Input alone; the rotation
+    --    states by the camera hooks, which are lifted at the top of this function.
+    --  * Nothing the three do reaches a wrap a later reset lifts: the HUD's displays, the message center, the cameras' FOV and
+    --    projection and the game's menu camera are not among the classes the subsystems wrap (Player.getLookRay, HandTool,
+    --    Drivable's steering, the animated objects' trigger callback, the attachable candidates, Interactive Control's class).
+    --  * The other resets (Perf Trace, Fish Catch, Dual Pass Physics, the Motion Controllers' group) are described where the
+    --    Motion Controllers register; they touch only their own state, a wrap, the Injector's pad, cursor and trace, or the
+    --    hands' nodes.)
 
     -- Remove console commands
     if removeConsoleCommand ~= nil then

@@ -1115,6 +1115,25 @@ end
 --     Grab and Virtual Gamepad) is not the order they run in.
 --   mapUnload: runs last of the Motion Controller subsystems (it registered first, and unload runs in reverse), after the Virtual
 --     Gamepad, Wheel Grab, Virtual Hands and Menu Pointer and the subsystems of the fan-out have reset; nothing of theirs reads this state.
+--     The group's resets used to run in this order: Menu Pointer, Hand Tools, Object Grab, Virtual Hands, Wheel Grab, Virtual
+--     Gamepad, then Interactive Control, Animated Objects, Manual Attach, then this state. They run in reverse file order now
+--     (Manual Attach, Animated Objects, Interactive Control, Object Grab, Hand Tools, Virtual Gamepad, Wheel Grab, Virtual Hands,
+--     Menu Pointer, this state). Where order matters it is kept: Hand Tools reset before the Virtual Hands (a tool hangs below a
+--     hand), this state last. Everything else is independent, because each reset touches only its own state and:
+--       Menu Pointer      lets go of a held mouse button (g_gui) and of the drawn cursor (VRBridge.setMenuCursor)
+--       Hand Tools        ends a use in progress (the tool's own use handler, called with the trigger released), lifts the wraps of
+--                         HandTool and of Player.getLookRay (held through the core's count), gives the held tool back to the game
+--       Object Grab       lifts the wraps of its classes and its hold on Player.getLookRay
+--       Virtual Hands     gives a tool back, deletes the hands' nodes
+--       Wheel Grab        lifts the wrap of Drivable's steering input
+--       Virtual Gamepad   zeroes the Injector's pad (VRBridge.setVirtualGamepad, setVirtualGamepadUse)
+--       Interactive Control, Animated Objects, Manual Attach   put another mod's / the game's class function back
+--     None of them calls a function another one has wrapped (the tool's use handler is neither a trigger callback, nor a
+--     candidate update, nor Interactive Control's class; a look ray asked during it is answered first by Hand Tools, which are
+--     still in place at that point), none reads a field another one resets, and the three VRBridge calls are plain stores into
+--     independent Injector fields (src/luau/vr_bridge.cpp: Lua_SetMenuCursor, Lua_SetVirtualGamepad, Lua_SetVirtualGamepadUse)
+--     that its threads read later; neither side can see the order of two of them. The Perf Trace stop (Injector) and the Dual
+--     Pass Physics release (engine) of the other subsystems are likewise independent of the group.
 VRCompanion:registerSubsystem("motionControllers", {
     update = function(self, dt) self:updateMotionControllers(dt) end,
     mapUnload = function(self) self:resetMotionControllers() end,

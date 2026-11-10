@@ -156,6 +156,103 @@ TEST_F(SubsystemRegistryTest, ASubsystemThatIsRegisteredAgainKeepsItsPlaceAndThe
     )luau", "=reRegister"), 0);
 }
 
+TEST_F(SubsystemRegistryTest, ASubsystemRegisteredAgainWithoutAnUpdateHookStopsUpdatingAndOneWithAnEarlyHookGainsIt) {
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:registerSubsystem("first", { update = function() table.insert(events, "first:update") end })
+        VRCompanion:registerSubsystem("second", { update = function() table.insert(events, "second:update") end })
+        VRCompanion:registerSubsystem("first", { mapLoad = function() end })
+        VRCompanion:registerSubsystem("third", { updateEarly = function() table.insert(events, "third:early") end })
+        VRCompanion:registerSubsystem("second", {
+            updateEarly = function() table.insert(events, "second:early") end,
+            update = function() table.insert(events, "second:update") end,
+        })
+        VRCompanion:loadMap("testMap")
+        VRCompanion:update(16)
+        assert(table.concat(events, ",") == "second:early,third:early,second:update", table.concat(events, ","))
+    )luau", "=reRegisterUpdateHooks"), 0);
+}
+
+TEST_F(SubsystemRegistryTest, HooksAreCalledWithTheCompanionModTheRunPointWasCalledOn) {
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local other = setmetatable({}, { __index = VRCompanion })
+        local seen = {}
+        VRCompanion:registerSubsystem("probe", {
+            mapLoad = function(self) seen.mapLoad = self end,
+            updateEarly = function(self) seen.updateEarly = self end,
+            update = function(self) seen.update = self end,
+            mapUnload = function(self) seen.mapUnload = self end,
+            consoleCommands = { { name = "vrSelfProbe", description = "probe", method = "consoleCommandSelfProbe" } },
+        })
+        other:runSubsystemMapLoad()
+        other:runSubsystemUpdateEarly(1)
+        other:runSubsystemUpdate(1)
+        other:addSubsystemConsoleCommands()
+        other:runSubsystemMapUnload()
+        for _, hook in ipairs({ "mapLoad", "updateEarly", "update", "mapUnload" }) do
+            assert(seen[hook] == other, hook .. " is called with the table the run point was called on")
+        end
+        assert(handlers.vrSelfProbe.target == other, "and so are the console commands")
+    )luau", "=hookSelf"), 0);
+}
+
+TEST_F(SubsystemRegistryTest, ConsoleCommandsThatAreNotWellFormedRaiseWhenTheSubsystemRegistersNotWhenTheMapLoads) {
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local function failsWith(commands, expected)
+            local ok, err = pcall(function() VRCompanion:registerSubsystem("probe", { consoleCommands = commands }) end)
+            assert(not ok, "registering must raise")
+            assert(string.find(tostring(err), expected, 1, true), "the message names " .. expected .. ": " .. tostring(err))
+            assert(string.find(tostring(err), "probe", 1, true), "and the subsystem: " .. tostring(err))
+        end
+        failsWith("vrX", "consoleCommands")
+        failsWith({ "vrX" }, "consoleCommands")
+        failsWith({ { description = "d", method = "consoleCommandX" } }, "name")
+        failsWith({ { name = "", description = "d", method = "consoleCommandX" } }, "name")
+        failsWith({ { name = "vrX", description = "d" } }, "method")
+        failsWith({ { name = "vrX", description = "d", method = 5 } }, "method")
+        failsWith({ { name = "vrX", method = "consoleCommandX" } }, "description")
+        failsWith({ { name = "vrX", description = "d", method = "consoleCommandX" }, { name = "vrY", description = "d" } }, "method")
+        -- A well formed list is accepted, and a bad one left nothing behind: the map loads
+        VRCompanion:registerSubsystem("probe", { consoleCommands = { { name = "vrX", description = "d", method = "consoleCommandX" } } })
+        VRCompanion:loadMap("testMap")
+        assert(present.vrX and not present.vrY)
+    )luau", "=consoleCommandValidation"), 0);
+}
+
+// The order of a map's update: the registry moved the subsystems' updates into hooks, but the steps the core runs between them
+// keep their places (spec #244: the order of effects the game and the Injector observe stays).
+TEST_F(SubsystemRegistryTest, AnUpdateRunsTheCoresStepsAndTheSubsystemsInTheOrderTheyRanBeforeTheRegistry) {
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local order = {}
+        local function record(name)
+            local original = VRCompanion[name]
+            VRCompanion[name] = function(self, ...)
+                table.insert(order, name)
+                return original(self, ...)
+            end
+        end
+        for _, name in ipairs({ "refreshPerfTracing", "updateFishCatch", "pollGuiVisibility", "updateMenuBackgroundCamera",
+                "updateHudConvergence", "registerActionEvents", "onVehicleTransition", "updateMotionControllers",
+                "applyDlssNearClip" }) do
+            record(name)
+        end
+        -- The menu shows (so the background camera follows the head) and a trace is running
+        _G.g_gui = { getIsGuiVisible = function() return true end }
+        VRCompanion:loadMap("testMap")
+        VRCompanion.perfTracing = true
+        VRCompanion:update(16)
+        order = {}
+
+        -- The frame the controlled vehicle changes
+        _G.g_currentMission = { controlledVehicle = {} }
+        VRCompanion.perfTracing = true
+        VRCompanion:update(16)
+        _G.vehicleFrameOrder = table.concat(order, ",")
+    )luau", "=updateOrder"), 0);
+    EXPECT_EQ(EvalLua(L, "vehicleFrameOrder"),
+        "refreshPerfTracing,updateFishCatch,pollGuiVisibility,updateMenuBackgroundCamera,updateHudConvergence,"
+        "registerActionEvents,onVehicleTransition,registerActionEvents,updateMotionControllers,applyDlssNearClip");
+}
+
 TEST_F(SubsystemRegistryTest, AHookThatRaisesIsLoggedOnceWithTheSubsystemAndHookNamesAndTheOthersStillRun) {
     ExpectHookErrors();
     ASSERT_EQ(RunLuauChunk(L, R"luau(
