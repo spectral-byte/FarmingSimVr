@@ -7,6 +7,7 @@
 #include "lua.h"
 #include "lualib.h"
 #include "core/camera_records.h"
+#include "core/injector_version.h"
 #include "input/virtual_gamepad.h"
 #include "openxr/openxr_manager.h"
 
@@ -22,9 +23,12 @@ enum class VRRenderingMode : uint32_t {
 
 class VRBridge {
 public:
-    // The composition root (InjectorRuntime) supplies both subsystems; a null one is absent.
+    // The composition root (InjectorRuntime) supplies both subsystems; a null one is absent. It also supplies the
+    // Injector's release version, which VRBridge reports as VRBridge.version and in the handshake result; a test
+    // that does not care gets the build's version, one that does passes its own.
     VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
-             std::shared_ptr<NgxInterceptor> ngxInterceptor);
+             std::shared_ptr<NgxInterceptor> ngxInterceptor,
+             std::string version = std::string(kInjectorVersion));
 
     bool Inject(lua_State* L);
     bool IsInjected(lua_State* L);
@@ -301,7 +305,7 @@ private:
     std::shared_ptr<NgxInterceptor> m_ngxInterceptor;
     VirtualGamepad m_virtualGamepad{m_openXrManager};
     CameraRecordStore m_cameraRecords;
-    std::string m_version = "1.0.0";
+    std::string m_version;
     bool m_handshakeCompleted = false;
     bool m_menuVisible = false;
     bool m_2dViewActive = false;

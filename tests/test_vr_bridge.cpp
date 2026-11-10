@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "core/injector_version.h"
 #include "luau/vr_bridge.h"
 #include "fake_openxr_runtime.h"
 #include "ngx/ngx_interceptor.h"
@@ -90,12 +91,13 @@ TEST_F(VrBridgeTest, InjectingLeavesAStoppedCollectorStopped) {
 }
 
 TEST_F(VrBridgeTest, ExposesVersionAndIsReadyAndHandshakeToLuauScript) {
-    fs25vr::VRBridge bridge(nullptr, nullptr);
+    // The version is the one the composition root supplies (a test supplies its own), not a fixed text.
+    fs25vr::VRBridge bridge(nullptr, nullptr, "7.8.9");
     ASSERT_TRUE(bridge.Inject(L));
 
     std::string script = R"(
         assert(VRBridge ~= nil, "VRBridge global table must exist")
-        assert(VRBridge.version == "1.0.0", "VRBridge.version must be '1.0.0'")
+        assert(VRBridge.version == "7.8.9", "VRBridge.version must be the version it was given")
         assert(type(VRBridge.isReady) == "function", "VRBridge.isReady must be a function")
         assert(type(VRBridge.handshake) == "function", "VRBridge.handshake must be a function")
 
@@ -105,7 +107,7 @@ TEST_F(VrBridgeTest, ExposesVersionAndIsReadyAndHandshakeToLuauScript) {
         local hs = VRBridge.handshake()
         assert(type(hs) == "table", "handshake() must return a table")
         assert(hs.success == true, "hs.success must be true")
-        assert(hs.version == "1.0.0", "hs.version must match")
+        assert(hs.version == "7.8.9", "hs.version must match")
     )";
 
     int status = RunLuauString(L, script);
@@ -113,6 +115,28 @@ TEST_F(VrBridgeTest, ExposesVersionAndIsReadyAndHandshakeToLuauScript) {
         const char* err = lua_tostring(L, -1);
         FAIL() << "Luau script error: " << (err ? err : "unknown error");
     }
+}
+
+TEST_F(VrBridgeTest, ReportsTheInjectorsReleaseVersionWhenNoneIsSupplied) {
+    fs25vr::VRBridge bridge(nullptr, nullptr);
+    ASSERT_TRUE(bridge.Inject(L));
+
+    // The build's version (the pinning test ties it to modDesc.xml), not the fixed text of the releases up to 1.2.
+    const std::string expected(fs25vr::kInjectorVersion);
+    lua_pushstring(L, expected.c_str());
+    lua_setglobal(L, "expectedVersion");
+
+    std::string script = R"(
+        assert(VRBridge.version == expectedVersion, "VRBridge.version: " .. tostring(VRBridge.version))
+        assert(VRBridge.handshake().version == expectedVersion, "the handshake reports the same version")
+    )";
+
+    int status = RunLuauString(L, script);
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
+    EXPECT_EQ(bridge.GetVersion(), expected);
 }
 
 TEST_F(VrBridgeTest, ReportsFixedStereoTelemetryVerdictToLuauScript) {

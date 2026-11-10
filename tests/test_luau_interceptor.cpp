@@ -83,7 +83,7 @@ TEST_F(LuauInterceptorTest, InterceptsActiveLuaStateAndInjectsVRBridge) {
         local available = isHeadTrackingAvailable()
         assert(available == true, "Query must return true")
         assert(VRBridge ~= nil, "VRBridge must now be injected and accessible")
-        assert(VRBridge.version == "1.0.0", "VRBridge.version must be accessible")
+        assert(type(VRBridge.version) == "string" and #VRBridge.version > 0, "VRBridge.version must be accessible")
     )";
 
     int status = RunLuauString(L, script);
