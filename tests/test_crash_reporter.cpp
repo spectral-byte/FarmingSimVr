@@ -382,6 +382,10 @@ std::vector<std::array<unsigned char, 16>> StartsOfTheHookableFunctions() {
 TEST(CrashReporterInstallTest, InstallingTheReporterLoadsNoLibraryAndInstallsNoHook) {
     RestoreTheUnhandledExceptionFilter restore;
     SetUnhandledExceptionFilter(&PreviousFilter);
+    // The Injector's first log line, written before DllMain installs the reporter, has created the log by then. The
+    // CRT loads a library of its own the first time the log is created (kernel.appcore.dll), which is not the
+    // install's doing.
+    Logger::Instance();
     const auto modulesBefore = LoadedModules();
     const auto startsBefore = StartsOfTheHookableFunctions();
 
