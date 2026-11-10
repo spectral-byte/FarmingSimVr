@@ -2,7 +2,9 @@
 # (VCRUNTIME140*.dll, MSVCP140*.dll, CONCRT140.dll, api-ms-win-crt-*.dll), i.e. that it is built
 # against the static runtime and needs no VC++ redistributable on the player's machine, and that it
 # does not import version.dll: the game loads the Injector as its version.dll (ADR-0038), so that
-# import would bind to the Injector itself.
+# import would bind to the Injector itself. It does not import dbghelp.dll either: the crash reporter loads the
+# system's dbghelp.dll by its full path at the first DXGI factory call, and an import would load it (or a dbghelp.dll
+# next to the game's exe) from the loader, at process start, before the Injector ran a line.
 # Reads the PE import tables (regular and delay-load) directly, so it needs no
 # Visual Studio tools and checks the built artifact rather than a CMake flag.
 param(
@@ -92,4 +94,8 @@ if (@($imports | Where-Object { $_ -match '^version\.dll$' }).Count -gt 0) {
     Write-Error ("$Dll imports version.dll. The game loads the Injector as its version.dll, so that import" +
         " would bind to the Injector itself. Look the function up at run time instead.")
 }
-Write-Host "Injector import check OK: no VC++ runtime DLL imports, no version.dll import."
+if (@($imports | Where-Object { $_ -match '^dbghelp\.dll$' }).Count -gt 0) {
+    Write-Error ("$Dll imports dbghelp.dll. The crash reporter loads the system's dbghelp.dll by its full path at the" +
+        " first DXGI factory call, never at load time. Look MiniDumpWriteDump up at run time instead.")
+}
+Write-Host "Injector import check OK: no VC++ runtime DLL imports, no version.dll import, no dbghelp.dll import."
