@@ -99,6 +99,11 @@ std::atomic<int> g_filterCalls{0};
 // Injector's filter handed it, then ends the process the way Windows Error Reporting does: with the exception's code
 // and without unloading any DLL (an unload would flush the Injector's log and hide a missing flush).
 LONG WINAPI GamesFilter(EXCEPTION_POINTERS* info) {
+    // After a stack overflow the thread has a few kilobytes of stack left, which the Injector's work has partly used:
+    // stdio would run out of it. The process ends at once, as the filters of the game and of Windows do.
+    if (info->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {
+        TerminateProcess(GetCurrentProcess(), EXCEPTION_STACK_OVERFLOW);
+    }
     const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
     const auto address = reinterpret_cast<std::uintptr_t>(info->ExceptionRecord->ExceptionAddress);
     const int call = ++g_filterCalls;
