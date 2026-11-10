@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "core/injector_runtime.h"
 #include "core/injector_version.h"
 #include "luau/vr_bridge.h"
 #include "fake_openxr_runtime.h"
@@ -137,6 +138,24 @@ TEST_F(VrBridgeTest, ReportsTheInjectorsReleaseVersionWhenNoneIsSupplied) {
         FAIL() << "Luau script error: " << (err ? err : "unknown error");
     }
     EXPECT_EQ(bridge.GetVersion(), expected);
+}
+
+TEST_F(VrBridgeTest, TheRuntimeBuildsItsBridgeWithTheBuildsVersionOrOneATestSupplies) {
+    {
+        fs25vr::InjectorRuntime runtime;
+        EXPECT_EQ(runtime.GetVrBridge().GetVersion(), std::string(fs25vr::kInjectorVersion));
+    }
+
+    fs25vr::InjectorRuntime::Dependencies deps;
+    deps.injectorVersion = "7.8.9";
+    fs25vr::InjectorRuntime runtime(std::move(deps));
+    ASSERT_TRUE(runtime.GetVrBridge().Inject(L));
+
+    const int status = RunLuauString(L, R"(assert(VRBridge.version == "7.8.9", tostring(VRBridge.version)))");
+    if (status != 0) {
+        const char* err = lua_tostring(L, -1);
+        FAIL() << "Luau script error: " << (err ? err : "unknown error");
+    }
 }
 
 TEST_F(VrBridgeTest, ReportsFixedStereoTelemetryVerdictToLuauScript) {
