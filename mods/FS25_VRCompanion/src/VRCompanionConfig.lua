@@ -245,7 +245,7 @@ function VRCompanion:saveConfiguration(xmlPath)
             end
             setXmlBoolFn(xmlFile, "vrSettings.hudGroups.controls.expanded", self.controlsExpanded ~= false)
         end
-        if type(self.saveMotionControllerSettings) == "function" then self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn }) end
+        self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn })
         if type(self.saveFishCatchSetting) == "function" then self:saveFishCatchSetting(xmlFile, { setString = setXmlStringFn }) end
         self:saveDesktopMirrorSetting(xmlFile, { setBool = setXmlBoolFn })
         if type(self.saveFovOverscanSetting) == "function" then self:saveFovOverscanSetting(xmlFile, { setFloat = setXmlFloatFn }) end
@@ -358,7 +358,7 @@ function VRCompanion:loadConfiguration(xmlPath)
                     "vrSettings.hudGroups.controls.expanded")
                 if loadedControlsExpanded ~= nil then controlsExpanded = loadedControlsExpanded end
 
-                if type(self.loadMotionControllerSettings) == "function" then self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn }) end
+                self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn })
                 if type(self.loadFishCatchSetting) == "function" then self:loadFishCatchSetting(xmlFile, { getString = getXmlStringFn }) end
                 self:loadDesktopMirrorSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn })
                 if type(self.loadFovOverscanSetting) == "function" then self:loadFovOverscanSetting(xmlFile, { getFloat = getXmlFloatFn }) end

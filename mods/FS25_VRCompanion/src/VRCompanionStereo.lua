@@ -1001,12 +1001,8 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
         end
         -- The Virtual Hands and the Pointer Ray follow the head for this rendered frame (a frame may be rendered with no
         -- update before it).
-        if type(self.placeVirtualHandsForRender) == "function" then
-            self:placeVirtualHandsForRender()
-        end
-        if type(self.placePointerRayForRender) == "function" then
-            self:placePointerRayForRender()
-        end
+        self:placeVirtualHandsForRender()
+        self:placePointerRayForRender()
     end
 
     local isStereoActive = stereoRequested and not self:isMenuQuadShown() and not self.is2DViewActive

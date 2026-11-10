@@ -121,9 +121,7 @@ local function rayControlsSelection(self)
 end
 
 local function notify(self, kind, point)
-    if type(self.onClickPointEvent) == "function" then
-        self:onClickPointEvent(kind, point)
-    end
+    self:onClickPointEvent(kind, point)
 end
 
 -- Remembers a Click Point Interactive Control just updated while it is active; forgets it otherwise.
@@ -448,7 +446,7 @@ local function updateAutoOn(self)
     local vehicle = nil
     -- A hand holding the Steering Wheel is not the Pointer Hand, but grabbing it does not touch Interactive Control's
     -- state either: what was switched on stays on while a hand holds (Wheel Grab never starts it).
-    local holding = autoOn ~= nil and type(self.isSteeringWheelHeld) == "function" and self:isSteeringWheelHeld()
+    local holding = autoOn ~= nil and self:isSteeringWheelHeld()
     if (self:getPointerHand() ~= nil or holding) and self.motionControllersEnabled ~= false then
         vehicle = self:getControlledVehicle()
     end
@@ -527,7 +525,7 @@ function VRCompanion:updateInteractiveControl(dt, selectNone)
         -- Virtual Gamepad, unless it was already held when the ray landed.
         local mayUseTrigger = true
         local pointerHand = self:getPointerHand()
-        if selected ~= nil and pointerHand ~= nil and type(self.takeVirtualGamepadInput) == "function" then
+        if selected ~= nil and pointerHand ~= nil then
             mayUseTrigger = self:takeVirtualGamepadInput(pointerHand, "trigger")
         end
         clickSelected(self, mayUseTrigger)

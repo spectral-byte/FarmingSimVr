@@ -441,7 +441,7 @@ end
 
 -- The pulses of a Click Point, on the Pointer Hand only: "selected" as the ray lands, "clicked" for a pull that ran Manual Attach's path.
 local function feel(self, kind, hitch)
-    if type(self.onClickPointEvent) == "function" then self:onClickPointEvent(kind, hitch) end
+    self:onClickPointEvent(kind, hitch)
 end
 
 -- Whether the Pointer Ray may work Coupling Points now. Manual Attach's own on-foot check (its flag) covers the cab, Hand Tools and Held Objects.
@@ -506,7 +506,7 @@ function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
     -- already held when the ray landed (it then keeps its binding and works nothing). Only the update the trigger went down works the Coupling Point.
     local mayUseTrigger = true
     local pointerHand = self:getPointerHand()
-    if pointerHand ~= nil and type(self.takeVirtualGamepadInput) == "function" then
+    if pointerHand ~= nil then
         mayUseTrigger = self:takeVirtualGamepadInput(pointerHand, "trigger")
     end
     if mayUseTrigger then

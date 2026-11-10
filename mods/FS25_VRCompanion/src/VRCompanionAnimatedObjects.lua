@@ -294,7 +294,7 @@ end
 
 -- The pulses of a Click Point, on the Pointer Hand only: "selected" as the ray lands, "clicked" for a pull that toggled.
 local function feel(self, kind, object)
-    if type(self.onClickPointEvent) == "function" then self:onClickPointEvent(kind, object) end
+    self:onClickPointEvent(kind, object)
 end
 
 -- Called by the Pointer Ray code once per Companion Mod update, after the ray is placed. Returns whether the ray is on an Animated
@@ -333,7 +333,7 @@ function VRCompanion:updateAnimatedObjects(dt, suppressed, rivalDistance)
     -- already held when the ray landed (it then keeps its binding and toggles nothing). Only the update the trigger went down toggles.
     local mayUseTrigger = true
     local pointerHand = self:getPointerHand()
-    if pointerHand ~= nil and type(self.takeVirtualGamepadInput) == "function" then
+    if pointerHand ~= nil then
         mayUseTrigger = self:takeVirtualGamepadInput(pointerHand, "trigger")
     end
     if mayUseTrigger then

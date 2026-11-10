@@ -812,7 +812,7 @@ local function toolHandFor(self, tool)
     if not self:isHandInUse(hand) then return nil, "the Tool Hand is not in use" end
     if pose.gripPoseTracked ~= true then return nil, "the Tool Hand's grip pose is not tracked" end
     if not self:isHeadPlacedInTheWorld() then return nil, "the head is not placed in the world" end
-    if type(self.getVirtualHandHolder) ~= "function" or self:getVirtualHandHolder(hand) == nil then
+    if self:getVirtualHandHolder(hand) == nil then
         return nil, "the Virtual Hand is not there"
     end
     return hand, nil
@@ -950,8 +950,7 @@ local function updateTrigger(self)
     end
     local wasDown = use.down
     -- The trigger is ours unless it was already held when the tool came into the hand (the pad keeps it until it is let go).
-    local mine = true
-    if type(self.takeVirtualGamepadInput) == "function" then mine = self:takeVirtualGamepadInput(hand, "trigger") end
+    local mine = self:takeVirtualGamepadInput(hand, "trigger")
     if mine then
         local value = self:getHandState(hand).trigger or 0
         use.down = value >= (use.down and self.POINTER_TRIGGER_RELEASE or self.POINTER_TRIGGER_PRESS)

@@ -737,7 +737,7 @@ function VRCompanion:recenterView(alwaysRecenterTracking)
         if bridge ~= nil and type(bridge.recenter) == "function" then
             bridge.recenter()
         end
-        if type(self.resetMotionControllerMovement) == "function" then self:resetMotionControllerMovement() end
+        self:resetMotionControllerMovement()
         if self:isMenuQuadShown() then
             print("[FS25_VR] Menu Quad layer realigned directly in front of head pose.")
         end

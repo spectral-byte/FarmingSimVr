@@ -402,7 +402,6 @@ end
 
 -- Asks the Virtual Gamepad for the hand's grip (every update the use wants it). False: it was held first, and keeps its binding.
 local function takeGrip(self, hand)
-    if type(self.takeVirtualGamepadInput) ~= "function" then return true end
     return self:takeVirtualGamepadInput(hand, "grip")
 end
 
