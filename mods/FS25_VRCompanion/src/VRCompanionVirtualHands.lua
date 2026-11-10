@@ -689,7 +689,7 @@ function traceHands(self, moment)
     if state.anchor ~= nil then
         cameraInAnchor = string.format("(%.4f, %.4f, %.4f)", worldToLocal(state.anchor, getWorldTranslation(camera)))
     end
-    local parity = type(self.getFrameParity) == "function" and self:getFrameParity() or "?"
+    local parity = self:getFrameParity() or "?"
     print(string.format("[FS25_VR] Virtual Hands trace %s: frame %s eye %s | %s | camera in anchor %s",
         moment, tostring(self.frameTicks), tostring(parity), table.concat(parts, " | "), cameraInAnchor))
 end

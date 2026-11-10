@@ -207,7 +207,7 @@ function VRCompanion:getHeadLeanInCab(cam, pose)
     local getParentFn = getParent or (_G and _G.getParent)
     local camParent = 0
     if type(getParentFn) == "function" then camParent = getParentFn(cam.cameraNode) end
-    local lookYaw = (type(self.getVehicleLookYaw) == "function" and self:getVehicleLookYaw(cam)) or 0
+    local lookYaw = self:getVehicleLookYaw(cam) or 0
     -- As the cab camera update (VRCompanionStereo.lua) places the head, so a camera without a neutral yaw yet defaults to 0 here too
     local headYaw = self:normalizeAngle((cam.origRotY or 0) + lookYaw)
     local rest = self:getCabRestPose(cam, camParent, headYaw, lookYaw, 0)

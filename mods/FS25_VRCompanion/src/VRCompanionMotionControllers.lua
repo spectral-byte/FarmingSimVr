@@ -562,7 +562,7 @@ end
 -- the game it reads off while the head is in fact placed.)
 local function headIsPlacedInTheWorld(self)
     if self:isMenuQuadShown() or self.is2DViewActive or self.trackedCameraShown == false then return false end
-    if type(self.isPassThroughMode) == "function" and self:isPassThroughMode() then return false end
+    if self:isPassThroughMode() then return false end
     return true
 end
 
@@ -596,7 +596,7 @@ end
 function VRCompanion:describeHeadPlacement()
     return string.format("menu=%s, 2D=%s, trackedCameraShown=%s, passThrough=%s",
         tostring(self:isMenuQuadShown()), tostring(self.is2DViewActive), tostring(self.trackedCameraShown),
-        tostring(type(self.isPassThroughMode) == "function" and self:isPassThroughMode()))
+        tostring(self:isPassThroughMode()))
 end
 
 function VRCompanion:headRelativePoseToWorld(x, y, z, qx, qy, qz, qw, out)

@@ -68,7 +68,7 @@ function VRCompanion:setFovOverscan(percent, save)
     self.fovOverscan = percent
     self:applyFovOverscan()
     -- The HUD is placed against the overscan (VRCompanionHud.lua), so it moves with it. 2D Floating Window Mode keeps the engine's layout.
-    if not self.is2DViewActive and type(self.repositionAllHudDisplays) == "function" then
+    if not self.is2DViewActive then
         self:repositionAllHudDisplays()
     end
     if save and type(self.saveConfiguration) == "function" then
