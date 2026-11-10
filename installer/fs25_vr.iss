@@ -1015,6 +1015,23 @@ begin
   RenderHeight := H;
 end;
 
+{ ---- Windows' own crash dumps for the game (docs/adr/0039-...) ---- }
+
+const
+  CrashDumpsSkippedPerUserMessage =
+    'Skipped the Windows crash dump setting: it needs an administrator install and this is a per-user run.';
+
+{ Turns on Windows' own crash dumps for the game. Called once the files are placed. It never fails the
+  install: whatever it cannot do is logged. }
+procedure SetUpCrashDumps;
+begin
+  if not IsAdminInstallMode then
+  begin
+    Log(CrashDumpsSkippedPerUserMessage);
+    Exit;
+  end;
+end;
+
 const
   RenderResolutionFailedExitCode = 20;
   { The files are placed, but the dxgi.dll of an earlier FS25 VR version could not be deleted, and the new
@@ -1056,6 +1073,7 @@ begin
           MsgBox('FS25 VR is installed, but the Render Resolution was not set:' + #13#10#13#10 + Problem, mbError, MB_OK);
       end;
     end;
+    SetUpCrashDumps;
   end;
 end;
 
