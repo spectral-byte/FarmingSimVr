@@ -230,6 +230,7 @@ add_executable(fs25_vr_tests
     tests/test_detour.cpp
     tests/test_vr_bridge.cpp
     tests/test_vr_bridge_collector.cpp
+    tests/test_vr_bridge_per_frame_allocation.cpp
     tests/test_luau_interceptor.cpp
     tests/test_companion_mod.cpp
     tests/test_subsystem_registry.cpp

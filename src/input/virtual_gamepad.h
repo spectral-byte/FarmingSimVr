@@ -54,6 +54,9 @@ public:
     static constexpr uint32_t kInputMenuButton = 1u << 6;   // Start (left hand only)
     void SetInputsInUse(uint32_t hand, uint32_t inputs);
 
+    // Every reason GetStatus can give (the constants it assigns), for whoever hands them to Lua without allocating.
+    static const std::array<const char*, 6>& Reasons();
+
     struct Status {
         bool present = false;
         int slot = -1;                      // 0..3 while present
