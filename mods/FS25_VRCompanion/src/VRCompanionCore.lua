@@ -402,7 +402,6 @@ function VRCompanion:loadMap(name)
     -- player last chose). The HUD used to apply after the settings and before the DLSS near plane; it asks VRBridge for nothing, so the
     -- order between them is not observable.
     self:runSubsystemMapLoad()
-    end
     -- 7a. Send the loaded DLSS near plane for the starting camera
     self:applyDlssNearClip(true)
 
