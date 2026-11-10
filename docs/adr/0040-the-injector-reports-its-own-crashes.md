@@ -1,0 +1,36 @@
+# The Injector Reports Its Own Crashes: a Top-Level Filter, a Helper Thread and a Minidump
+
+Builds on [ADR-0038](0038-the-injector-is-the-games-version-dll.md), which sets what `DllMain` may do. [ADR-0039](0039-the-installer-turns-on-windows-crash-dumps-for-the-game.md) covers Windows' own dump of the same crash.
+
+## Context and Decision
+A player's report of a crash used to have nothing in it: `fs25_vr.log` stopped short, because Info lines are buffered, and no dump existed unless the player had set up Windows Error Reporting. **The Injector installs the process's top-level unhandled exception filter. When a crash reaches it, it finishes the log, adds one line that names the crash, writes a minidump next to the log, and passes the crash on.** Nothing it does may turn a crash into a hang, so the work is arranged around what a crashing process cannot do (`src/core/crash_reporter.cpp`).
+
+1. **The filter is installed from `DllMain`** (`StartInjector`), since that is loader-lock safe for it: it loads no library and installs no hook. It is a top-level filter, so it sees crashes only, never an exception the game handles. It is not installed when an earlier FS25 VR `dxgi.dll` keeps this Injector inactive (ADR-0038, item 5).
+2. **The crash goes on to the filter that was installed before it**, and with none to Windows' own handling, so the game's crash dialog and Windows Error Reporting run as before. The reporter handles one crash per process: a second crash, or one inside the reporter, goes straight on.
+3. **A filter that takes the top place later is found and kept.** The reporter installs itself again at the first DXGI factory call, which happens in every mode, and when the Injector attaches to the game's swap chain (Active VR Mode only, since that is the only mode that hooks it). The filter it finds on top is added to a list of up to four that a crash is passed on to, newest first. A filter that chains to the one it replaced would call the reporter again: a count kept per thread makes the reporter pass the crash to the next older filter instead, so each is called once and the chain ends.
+4. **The crash line and the dump are written by a helper thread.** After a stack overflow the crashing thread has a few kilobytes of stack, too little for a log write or for `MiniDumpWriteDump`. The filter hands the exception record to a helper thread created at the first DXGI factory call, and waits for it for ten seconds at most, so that a stuck helper (a thread it needs is suspended, a lock is held) cannot hang the game's exit. The order is the crash line, flushed, then the dump, then the previous filter. A dump that then fails is told in a second line, `Crash dump not written: ...`.
+5. **The line is written without waiting and without the heap.** `Logger::TryLogWithoutWaiting` takes the log's lock only if it is free, because the crashed thread may hold it. The line is then skipped and the dump is still written. The module and offset come from plain memory queries, not from calls that wait for the loader lock.
+6. **`dbghelp.dll` is loaded by its full system path at the first DXGI factory call**, with only the system directory searched for it and its own dependencies, so a `dbghelp.dll` next to the game's exe is never used. Not from `DllMain` (a library load under the loader lock), not from the filter (a crash must not load a library), and not imported: `scripts/check_injector_imports.ps1` fails on a `dbghelp.dll` import, as it does on `version.dll`. The system's `version.dll` is loaded at the same time: `dbgcore.dll` imports it, in the game that name is the Injector, and the Injector's stubs load the system's on first use, which would be a library load in the crash. A test checks that a crash loads no library.
+7. **The dump is one file, `fs25_vr_crash.dmp`, next to `fs25_vr.log`**, replaced by the next crash. The fixed name lets the Installer's uninstall remove it. It holds what ADR-0039 asks Windows for in its own dump (`kCrashDumpFlags`): every thread's stack, the module list with the unloaded modules, thread information and the memory the stacks point at, not the whole process, so it stays small enough to attach to an issue once zipped.
+8. **The crash line says what crashed and which symbols read it:** the exception code, the faulting address as `module+0xoffset`, the thread id, the Injector's version, and the dump's file name or the reason there is none.
+9. **A crash before the first DXGI factory call has no helper thread.** The crashing thread writes the line itself when it has 32 KB of stack, which a real stack overflow does not leave, and there is no dump. The line says so. Windows' dump of the game is what remains.
+10. **Pass-Through Mode gets the same files.** The first factory call prepares the dump in `RuntimeFactoryEntry`, before any mode is chosen.
+11. **Unloading with `FreeLibrary` takes the filter off only if it is still the top one**, since a filter installed later may have kept a pointer to it. At process termination it stays. The helper thread is ended with `TerminateThread`: its code goes with the Injector, and a thread cannot be asked to exit while `DllMain` holds the loader lock, which a thread's exit needs. It sits in a wait that holds nothing, and it is left alone while a crash is being handled.
+
+## Status
+Accepted.
+
+## Considered Options
+- **Write the dump on the crashing thread** (rejected: after a stack overflow there is no stack for it).
+- **A vectored exception handler** (rejected: it sees every exception the game handles, not only crashes).
+- **A watchdog process that writes the dump from outside** (rejected: a second program to install and for antivirus to flag; ADR-0039 gets Windows to do that for the crashes the Injector cannot see).
+- **Import `dbghelp.dll`, or load it from `DllMain` or from the filter** (rejected: a load under the loader lock can deadlock, and a crash must not load a library).
+- **A full-memory dump** (rejected: the whole process is far more than anyone can attach to an issue, and even the test child's full dump is about 77 MB).
+- **Let the helper thread leave on its own at unload** (rejected: its exit needs the loader lock that `DllMain` holds).
+- **Chosen option** (selected). A top-level filter that hands the crash to a prepared helper thread and passes it on.
+
+## Consequences
+- A crash leaves `fs25_vr.log` finished and, after the first factory call, `fs25_vr_crash.dmp`. For an ordinary crash both the Injector's dump and Windows' (ADR-0039) exist.
+- The dump holds file paths and the Windows user name, as any dump of the game does. The README tells players to zip it before sharing.
+- Microsoft's [Collecting User-Mode Dumps](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps) says applications that do their own custom crash reporting are not supported by the `LocalDumps` feature. The reporter does not end the process or claim the exception, it passes it on, but how the two dumps go together in the game has been tried with a child process that stands for the game, not in the game itself.
+- Release symbols (the symbols zip) are what open a dump from a release, and the crash line's Injector version says which ones.
