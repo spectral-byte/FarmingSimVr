@@ -8,7 +8,8 @@
 -- distance.
 --
 -- The setting is saved in settings.xml (1.5 by default), like FOV Overscan. When a savegame loads, Core's loadMap reads
--- settings.xml and then calls applyMenuDistance, which sends the value to VRBridge after the handshake. The main menu is shown
+-- settings.xml and then runs the map-load hook this file registers (see the registry in VRCompanionCore.lua), which sends the
+-- value to VRBridge after the handshake. The main menu is shown
 -- before the Companion Mod runs, so the Injector reads the saved value from settings.xml itself when the game starts, and a
 -- map unload leaves VRBridge's value as it is: the main menu after leaving a savegame keeps the distance too.
 --
@@ -20,7 +21,7 @@
 --   VRCompanion:saveMenuDistanceSetting(xmlFile, xml) / loadMenuDistanceSetting(xmlFile, xml)   hooks of saveConfiguration / loadConfiguration
 --   VRCompanion:consoleCommandSetMenuDistance(arg)    nil reports the distance, a number from 1.0 to 5.0 sets and saves it,
 --                                                     anything else returns the usage
---   VRCompanion:registerMenuDistanceConsoleCommands() / resetMenuDistance()   map load / unload
+--   Registered with the core: a map-load hook (applyMenuDistance) and the console command; the registry adds and removes the command
 --   Console: vrMenuDistance [1.0-5.0]
 -- ====================================================================
 
@@ -59,7 +60,7 @@ function VRCompanion:setMenuDistance(metres, save)
     if metres == nil then return false end
     self.menuDistance = metres
     self:applyMenuDistance()
-    if save and type(self.saveConfiguration) == "function" then
+    if save then
         self:saveConfiguration()
     end
     return true
@@ -92,15 +93,13 @@ function VRCompanion:consoleCommandSetMenuDistance(arg)
     return string.format("Menu distance set to: %s (Saved)", describe(self.menuDistance))
 end
 
-function VRCompanion:registerMenuDistanceConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrMenuDistance", "How far in front of you menus, the main menu included, and 2D Floating Window Mode are shown, in metres (saved; 1.5 by default; further away they fill less of the view): vrMenuDistance [1.0-5.0]", "consoleCommandSetMenuDistance", self)
-end
-
--- Map unload: the command goes. The saved setting stays as it is, and the next map load reads it again. VRBridge keeps its
--- value, so the main menu stays at the distance.
-function VRCompanion:resetMenuDistance()
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrMenuDistance")
-    end
-end
+-- Map load: the saved setting goes to the Injector (the Injector read settings.xml at launch, and this sends what it holds now).
+-- The core has done the handshake and read settings.xml by then. Map unload: the registry removes the command; the saved setting
+-- stays as it is, and the next map load reads it again. VRBridge keeps its value, so the main menu stays at the distance.
+-- Order: after FOV Overscan and before Mouse Confinement (file order), as the core sent them before the registry.
+VRCompanion:registerSubsystem("menuDistance", {
+    mapLoad = function(self) self:applyMenuDistance() end,
+    consoleCommands = {
+        { name = "vrMenuDistance", description = "How far in front of you menus, the main menu included, and 2D Floating Window Mode are shown, in metres (saved; 1.5 by default; further away they fill less of the view): vrMenuDistance [1.0-5.0]", method = "consoleCommandSetMenuDistance" },
+    },
+})
