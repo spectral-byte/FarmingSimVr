@@ -225,6 +225,54 @@ TEST_F(SubsystemRegistryTest, DesktopMirrorsCommandExistsAfterMapLoadIsGoneAfter
     )luau", "=desktopMirrorThroughTheRegistry"), 0);
 }
 
+// Every console command the mod adds, subsystem by subsystem and in the core: the whole set exists once a map has loaded and not
+// one is left once it has unloaded, so a subsystem that forgets to remove (or to add) a command fails here. The names are written
+// out on purpose: a command added or dropped is a decision, and this list is where it shows. Ticket #261.
+TEST_F(SubsystemRegistryTest, EveryConsoleCommandTheModAddsExistsAfterMapLoadAndNoneRemainsAfterMapUnload) {
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local expected = {
+            -- the core
+            "vrHudSafeArea", "vrHudGroup", "vrHudDepth", "vrHudTrace", "vrHudEyeTest", "vrEyeSnapshot", "vrHudState",
+            "vrHudLoadNotification", "vrHudLoadAlert", "vrRecenterMode", "vrRecenterTracking", "vrSnapTurnAngle", "vr2DView",
+            "vrToggleView", "vrDlssMvScale", "vrDlssSharpness", "vrDlssPreset", "vrDlssSdpMvScale", "vrDlssMvFix",
+            "vrDlssDepthModel", "vrDlssNearClip", "vrDlssNearClipCab", "vrDlssNearClipOutside", "vrDlssNearClipOnFoot",
+            "vrDlssDiag", "vrRenderingMode", "vrHudGroupShow",
+            -- the subsystems
+            "vrDesktopMirror", "vrFovOverscan", "vrMenuDistance", "vrMouseConfinement", "vrPerfTrace", "vrSeatOffset",
+            "vrFishCatch", "vrDialogDiagnostics", "vrDialogDepth", "vrDualPassPhysicsPause", "vrEyePairTrace",
+            "vrMotionControllers", "vrMotionControllerStatus", "vrPointerCone", "vrPointerDiagnostics",
+            "vrVirtualHandsGeometry", "vrVirtualHandsDiagnostics", "vrVirtualHandsTrace", "vrVirtualGamepad",
+            "vrHandTools", "vrHandToolsDiagnostics", "vrHandToolOffset", "vrToolHand", "vrChainsawReach",
+            "vrObjectGrab", "vrObjectGrabDiagnostics", "vrWheelGrab", "vrWheelGrabDiagnostics",
+        }
+        local function names()
+            local list = {}
+            for name in pairs(present) do table.insert(list, name) end
+            table.sort(list)
+            return table.concat(list, ",")
+        end
+        local sortedExpected = {}
+        for _, name in ipairs(expected) do table.insert(sortedExpected, name) end
+        table.sort(sortedExpected)
+        local expectedText = table.concat(sortedExpected, ",")
+
+        assert(names() == "", "no command before the map loads: " .. names())
+        for map = 1, 2 do
+            VRCompanion:loadMap("map" .. map)
+            assert(names() == expectedText, "after map load " .. map .. " the commands are not the expected ones:\n" .. names() .. "\n" .. expectedText)
+            for _, name in ipairs(expected) do
+                local entry = handlers[name]
+                assert(entry.target == VRCompanion, name .. " runs on the Companion Mod")
+                assert(type(entry.target[entry.funcName]) == "function", name .. " names a method that does not exist: " .. tostring(entry.funcName))
+                assert(type(entry.desc) == "string" and entry.desc ~= "", name .. " has a description")
+            end
+            VRCompanion:deleteMap()
+            assert(names() == "", "commands left after map unload " .. map .. ": " .. names())
+        end
+        assert(#duplicates == 0, "no command is added while it is present: " .. table.concat(duplicates, ","))
+    )luau", "=everyConsoleCommand"), 0);
+}
+
 // The standalone Luau runner has the same rule: a hook error in the log fails the run unless the chunk expects it.
 TEST(SubsystemRegistryLuauRunnerTest, ALoggedHookErrorFailsTheRunUnlessTheChunkExpectsIt) {
     LuauTestRunner runner;
