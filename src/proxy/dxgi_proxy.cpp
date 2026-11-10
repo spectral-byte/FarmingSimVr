@@ -420,6 +420,13 @@ bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
     } else if (gameHwnd && !m_windowController->IsWindowSubclassed() && m_openXrManager && m_openXrManager->IsActive()) {
         m_windowController->AttachWindowSubclass(gameHwnd);
     }
+    // Recorded after the inactive check on purpose: Pass-Through is final. Initialize runs once, before the game has a
+    // swap chain, and an Active session that is lost only ever falls back to Pass-Through; nothing makes the manager
+    // Active again. So a swap chain created while inactive can never become the one to act on, and leaving it
+    // unrecorded keeps every hook passing straight through, which is what Pass-Through means. (A replaced swap chain
+    // stays recorded until the next attach, and a new one at a recycled address would be taken for it: both narrow
+    // and harmless, as the old chain was the game's.)
+    m_gameSwapChain = swapChain;
     if (m_swapChainAttached) return true;
     if (!m_ownedByRuntime) {
         LogWarn("DxgiProxy::AttachSwapChain: Not owned by a live InjectorRuntime; detours not installed.");
@@ -602,15 +609,42 @@ void DxgiProxy::DetachAll() {
     m_lastSetColorSpace.reset();
     m_loggedHiddenColorSpaces = 0;
     m_loggedHiddenOutputHdr = false;
-    m_cachedSwapChain = nullptr;
-    m_cachedSwapChain3.Reset();
-    m_cachedBackBuffers.clear();
+    m_gameSwapChain = nullptr;
+    ReleaseCachedBackBuffers();
     m_lastPresentSuppressed = false;
     m_desktopMirrorOffAnnounced = false;
     m_desktopMirrorWasShowing = false;
     if (m_vrBridge) {
         m_vrBridge->ClearPendingRenderingMode();
     }
+}
+
+void DxgiProxy::ReleaseCachedBackBuffers() {
+    m_cachedSwapChain = nullptr;
+    m_cachedSwapChain3.Reset();
+    m_cachedBackBuffers.clear();
+}
+
+bool DxgiProxy::IsForGameWindow(HWND window) const {
+    // The game's window is first learnt from the first swap chain created through the hooked factory (the creation
+    // hooks, AttachSwapChain and the per-frame mouse update, which sees only the game's Present, are the only places
+    // that set it), so until then the first creation is taken as the game's, as before #264. An overlay creating its
+    // swap chain ahead of the game's would be taken for it: there is no earlier, sound source to tell them apart.
+    const HWND gameWindow = m_windowController->GetGameHwnd();
+    if (!window || !gameWindow) return true;
+    const HWND root = GetAncestor(window, GA_ROOT);
+    return (root ? root : window) == gameWindow;
+}
+
+bool DxgiProxy::PrepareGameSwapChainCreation(const char* hookName, HWND window) {
+    if (!IsForGameWindow(window)) {
+        // Not the game's window: its swap chain is never the game's, so it gets none of the game's treatment.
+        LogInfo(std::string("DxgiProxy: ") + hookName + " for a window other than the game's; passed on as requested.");
+        return false;
+    }
+    // The game's window gets a new swap chain: nothing of the old one may outlive the creation.
+    ReleaseCachedBackBuffers();
+    return true;
 }
 
 void DxgiProxy::LatchPendingRenderingMode() {
@@ -984,6 +1018,12 @@ bool DxgiProxy::OnPresent1(IDXGISwapChain1* swapChain, UINT syncInterval, UINT f
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UINT syncInterval, UINT flags) {
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourPresent);
     if (!proxy) return S_OK;
+    if (!proxy->IsGameSwapChain(self)) {
+        // Another swap chain in the process (an overlay, a capture tool): DXGI sees the call as its caller made it.
+        auto passThrough = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(
+            proxy->m_detourPresent.GetOriginal());
+        return passThrough ? passThrough(self, syncInterval, flags) : S_OK;
+    }
     bool shouldPresent = proxy->OnPresent(self, syncInterval, flags);
     if (!shouldPresent) {
         proxy->OnPresentReturned();
@@ -1004,6 +1044,11 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present(IDXGISwapChain* self, UIN
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourPresent1);
     if (!proxy) return S_OK;
+    if (!proxy->IsGameSwapChain(self)) {
+        auto passThrough = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*)>(
+            proxy->m_detourPresent1.GetOriginal());
+        return passThrough ? passThrough(self, syncInterval, flags, params) : S_OK;
+    }
     bool shouldPresent = proxy->OnPresent1(self, syncInterval, flags, params);
     if (!shouldPresent) {
         proxy->OnPresentReturned();
@@ -1023,9 +1068,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
 
 void DxgiProxy::PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height) {
     if (!proxy) return;
-    proxy->m_cachedSwapChain = nullptr;
-    proxy->m_cachedSwapChain3.Reset();
-    proxy->m_cachedBackBuffers.clear();
+    proxy->ReleaseCachedBackBuffers();
     proxy->m_windowController->SetWindowClampDirty(true);
     if (proxy->IsActive() && proxy->m_windowController->GetTargetRenderWidth() > 0 && proxy->m_windowController->GetTargetRenderHeight() > 0) {
         const UINT requestedWidth = width;
@@ -1043,7 +1086,10 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers(
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourResizeBuffers);
     UINT effectiveWidth = Width;
     UINT effectiveHeight = Height;
-    PrepareResize(proxy, "Intercept_ResizeBuffers", effectiveWidth, effectiveHeight);
+    // Another swap chain keeps the size it asked for and leaves the game's cached back buffers alone.
+    if (proxy && proxy->IsGameSwapChain(self)) {
+        PrepareResize(proxy, "Intercept_ResizeBuffers", effectiveWidth, effectiveHeight);
+    }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT)>(
         proxy ? proxy->m_detourResizeBuffers.GetOriginal() : nullptr
     );
@@ -1059,7 +1105,9 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_ResizeBuffers1(
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourResizeBuffers1);
     UINT effectiveWidth = Width;
     UINT effectiveHeight = Height;
-    PrepareResize(proxy, "Intercept_ResizeBuffers1", effectiveWidth, effectiveHeight);
+    if (proxy && proxy->IsGameSwapChain(self)) {
+        PrepareResize(proxy, "Intercept_ResizeBuffers1", effectiveWidth, effectiveHeight);
+    }
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*)>(
         proxy ? proxy->m_detourResizeBuffers1.GetOriginal() : nullptr
     );
@@ -1076,7 +1124,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CheckColorSpaceSupport(
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE, UINT*)>(
         proxy->m_detourCheckColorSpaceSupport.GetOriginal());
     HRESULT hr = orig ? orig(self, colorSpace, pColorSpaceSupport) : E_FAIL;
-    if (SUCCEEDED(hr) && pColorSpaceSupport && *pColorSpaceSupport != 0 &&
+    if (SUCCEEDED(hr) && pColorSpaceSupport && *pColorSpaceSupport != 0 && proxy->IsGameSwapChain(self) &&
         proxy->IsActive() && IsHdrColorSpace(colorSpace)) {
         *pColorSpaceSupport = 0;
         const uint32_t bit = static_cast<uint32_t>(colorSpace) < 32 ? 1u << colorSpace : 0u;
@@ -1092,7 +1140,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CheckColorSpaceSupport(
 HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_SetColorSpace1(IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE colorSpace) {
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourSetColorSpace1);
     if (!proxy) return E_FAIL;
-    if (proxy->m_lastSetColorSpace != colorSpace) {
+    if (proxy->IsGameSwapChain(self) && proxy->m_lastSetColorSpace != colorSpace) {
         proxy->m_lastSetColorSpace = colorSpace;
         const bool hdr = IsHdrColorSpace(colorSpace);
         LogInfo("DxgiProxy: Game set swap chain color space " + std::to_string(colorSpace) +
@@ -1132,6 +1180,12 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
     IDXGIFactory* self, IUnknown* pDevice, DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain) {
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourCreateSwapChain);
     if (!proxy) return E_FAIL;
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**)>(
+        proxy->m_detourCreateSwapChain.GetOriginal()
+    );
+    if (!proxy->PrepareGameSwapChainCreation("CreateSwapChain", pDesc ? pDesc->OutputWindow : nullptr)) {
+        return orig ? orig(self, pDevice, pDesc, ppSwapChain) : E_FAIL;
+    }
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
@@ -1154,9 +1208,6 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
     if (pDesc) {
         LogInfo("DxgiProxy: CreateSwapChain passed on: " + FormatSwapChainDesc(*pDesc));
     }
-    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**)>(
-        proxy->m_detourCreateSwapChain.GetOriginal()
-    );
     HRESULT hr = orig ? orig(self, pDevice, pDesc, ppSwapChain) : E_FAIL;
     if (SUCCEEDED(hr)) {
         if (pDesc && pDesc->OutputWindow && proxy->IsActive()) {
@@ -1175,6 +1226,12 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     IDXGISwapChain1** ppSwapChain) {
     DxgiProxy* proxy = ForHook(&DxgiProxy::m_detourCreateSwapChainForHwnd);
     if (!proxy) return E_FAIL;
+    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
+        proxy->m_detourCreateSwapChainForHwnd.GetOriginal()
+    );
+    if (!proxy->PrepareGameSwapChainCreation("CreateSwapChainForHwnd", hWnd)) {
+        return orig ? orig(self, pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain) : E_FAIL;
+    }
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
@@ -1219,9 +1276,6 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
         LogInfo("DxgiProxy: CreateSwapChainForHwnd passed on: " +
                 FormatSwapChainDesc1(pEffectiveDesc, pEffectiveFullscreenDesc));
     }
-    auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
-        proxy->m_detourCreateSwapChainForHwnd.GetOriginal()
-    );
     HRESULT hr = orig ? orig(self, pDevice, hWnd, pEffectiveDesc, pEffectiveFullscreenDesc, pRestrictToOutput, ppSwapChain) : E_FAIL;
     if (SUCCEEDED(hr)) {
         if (hWnd && proxy->IsActive()) {
