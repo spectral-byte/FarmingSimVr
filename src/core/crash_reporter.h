@@ -2,6 +2,13 @@
 
 namespace fs25vr {
 
+// What the Injector's crash dump holds, as the MINIDUMP_TYPE flags it passes to MiniDumpWriteDump: thread information
+// (0x1000), the memory the stacks point at (0x40) and the unloaded modules (0x20), on top of the stacks and the module
+// list every minidump holds. crash_reporter.cpp checks that the number is that combination. The Installer asks Windows
+// for the same contents in the game's own dump (CustomDumpFlags in installer/fs25_vr.iss), so both dumps of one crash
+// can be read the same way; tests/test_crash_dump_consistency.cpp checks that it, the README and ADR-0039 agree.
+inline constexpr unsigned long kCrashDumpFlags = 0x1060;
+
 // The Injector's crash reporter: the process's top-level unhandled exception filter, so it sees crashes only, never
 // the exceptions the game handles. When the process crashes it finishes fs25_vr.log (flushing the lines still
 // buffered), adds one line that names the crash, writes a small minidump next to the log, then passes the crash on to

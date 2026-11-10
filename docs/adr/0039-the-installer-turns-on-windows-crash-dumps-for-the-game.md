@@ -40,4 +40,4 @@ Accepted.
 - The test for the cases that write `HKEY_LOCAL_MACHINE` runs only in an elevated shell. `scripts/test_installer.ps1` reports them as skipped, not passed, anywhere else; CI runs elevated.
 - What Windows does with a `LocalDumps` key that has nothing in it (item 8) is not in Microsoft's documentation and has not been checked on a machine. The Installer's tidy-up of `LocalDumps` does not depend on the answer.
 - The wizard page cannot be driven by `scripts/test_installer.ps1`, which runs Setup silently. It is checked by hand, in item 13 of `docs/installer-release-checklist.md`.
-- Manual installs turn the setting on and off with `reg` commands in the README. The values there must stay equal to the ones the Installer writes.
+- Manual installs turn the setting on and off with commands in the README. The values there must stay equal to the ones the Installer writes.

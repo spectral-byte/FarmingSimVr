@@ -50,10 +50,11 @@ constexpr DWORD kDumpTimeoutMilliseconds = 10000;
 
 // What goes into the dump: the exception record, every thread's stack, the module list (unloaded modules included) and
 // the memory the stacks point at, but not the whole process. The Installer asks Windows for the same contents for the
-// game's own dump (CustomDumpFlags 0x1060 in installer/fs25_vr.iss).
-constexpr MINIDUMP_TYPE kDumpType = static_cast<MINIDUMP_TYPE>(MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory |
-                                                              MiniDumpWithUnloadedModules);
-static_assert(kDumpType == 0x1060, "The Installer's CustomDumpFlags for Windows' own dump must name the same contents.");
+// game's own dump (CustomDumpFlags in installer/fs25_vr.iss, see kCrashDumpFlags).
+constexpr MINIDUMP_TYPE kDumpType = static_cast<MINIDUMP_TYPE>(kCrashDumpFlags);
+static_assert(kCrashDumpFlags == (MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithUnloadedModules),
+              "kCrashDumpFlags, which the Installer's CustomDumpFlags must equal, names thread information, the memory the "
+              "stacks point at and the unloaded modules.");
 
 using MiniDumpWriteDumpFn = BOOL(WINAPI*)(HANDLE process, DWORD processId, HANDLE file, MINIDUMP_TYPE type,
                                           PMINIDUMP_EXCEPTION_INFORMATION exception,

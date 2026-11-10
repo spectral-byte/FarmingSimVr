@@ -304,6 +304,7 @@ add_executable(fs25_vr_tests
     tests/test_manual_attach_pto_hoses.cpp
     tests/test_manual_attach_prompts.cpp
     tests/test_crash_reporter.cpp
+    tests/test_crash_dump_consistency.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE
