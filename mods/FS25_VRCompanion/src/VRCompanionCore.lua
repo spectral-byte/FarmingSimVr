@@ -440,8 +440,13 @@ function VRCompanion:loadMap(name)
     self:hookMissionUpdate()
 
     -- (The Dual Eye Camera Nodes and the Cyclopean Audio Listener Node are made by the Stereo subsystem, and the VR action events
-    -- are registered by the Input subsystem, in their mapLoad hooks below. Both used to be made here, before the settings are
-    -- read; nothing between here and there uses them, and the settings only reach VRBridge and the HUD.)
+    -- are registered by the Input subsystem, in their mapLoad hooks below. Both used to be made here, before the GUI poll and
+    -- the settings were read. That is not observable: the poll below reads the GUI and tells VRBridge, and on a map that has just
+    -- loaded it restores no menu camera and applies no HUD state (no menu was shown before); loadConfiguration reads settings.xml
+    -- and sends the Stereo Presentation Mode to VRBridge (setRenderingMode, which touches no node), works out the HUD anchors
+    -- (configureHudSafeArea, fields only) and, on a first run, writes the file. None of the three reads an eye node, the listener, the
+    -- camera settings Stereo saves (origCamSettings) or an action event id, and the nodes are made from defaults no setting
+    -- changes. The game sees the same calls on its own objects and VRBridge the same calls, only interleaved differently.)
 
     -- 6. Synchronize initial GUI menu visibility state
     self.isMenuVisible = false
@@ -454,8 +459,12 @@ function VRCompanion:loadMap(name)
     self:loadConfiguration()
     -- 7-. The registered subsystems load: the handshake above is done and the settings are read (Desktop Mirror, FOV Overscan, Menu
     -- Distance and Mouse Confinement send their saved settings to VRBridge here, and the HUD applies its Safe Area and the HUD state the
-    -- player last chose). The HUD used to apply after the settings and before the DLSS near plane; it asks VRBridge for nothing, so the
-    -- order between them is not observable.
+    -- player last chose). The HUD's setHudState used to be the last step of the map load, after the DLSS near plane (and after
+    -- the Safe Area, which still comes after the settings the other subsystems send): the HUD hook writes the HUD (its displays,
+    -- the anchors, hudState) and asks VRBridge for nothing, and the near plane reads the camera mode (the controlled vehicle and
+    -- its camera) and the near plane settings, so neither reads what the other writes. The re-wraps of Hand Tools, Object Grab,
+    -- Wheel Grab and the Animated Objects trigger callback also run here now, not inside the console command registration after
+    -- the near plane: they wrap game classes the HUD, the near plane and the commands do not call into at map load.
     self:runSubsystemMapLoad()
     -- 7a. Send the loaded DLSS near plane for the starting camera
     self:applyDlssNearClip(true)
