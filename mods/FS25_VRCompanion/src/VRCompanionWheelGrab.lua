@@ -703,7 +703,7 @@ local SETTING_KEY_ENABLED = "vrSettings.wheelGrab"
 
 function VRCompanion:setWheelGrabEnabled(enabled, save)
     self.wheelGrabEnabled = (enabled ~= false)
-    if save and type(self.saveConfiguration) == "function" then
+    if save then
         self:saveConfiguration()
     end
 end

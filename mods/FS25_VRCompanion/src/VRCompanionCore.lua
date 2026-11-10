@@ -395,9 +395,7 @@ function VRCompanion:loadMap(name)
     self:pollGuiVisibility()
 
     -- 7. Read the settings (the HUD Safe Area, the HUD Groups and the saved HUD state are applied by the HUD's mapLoad hook)
-    if type(self.loadConfiguration) == "function" then
-        self:loadConfiguration()
-    end
+    self:loadConfiguration()
     -- 7-. The registered subsystems load: the handshake above is done and the settings are read (Desktop Mirror, FOV Overscan, Menu
     -- Distance and Mouse Confinement send their saved settings to VRBridge here, and the HUD applies its Safe Area and the HUD state the
     -- player last chose). The HUD used to apply after the settings and before the DLSS near plane; it asks VRBridge for nothing, so the

@@ -617,9 +617,7 @@ function VRCompanion:updateVirtualGamepadDefaults(dt, present, slot)
         self.virtualGamepadDefaultsWritten = true
         print(string.format("[FS25_VR] Virtual Gamepad default bindings written to %s (%d changes) and saved", deviceId, changes))
     end
-    if type(self.saveConfiguration) == "function" then
-        self:saveConfiguration()
-    end
+    self:saveConfiguration()
 end
 
 function VRCompanion:getVirtualGamepadStatus()
@@ -689,9 +687,7 @@ function VRCompanion:consoleCommandSetVirtualGamepad(arg)
     end
     self.virtualGamepadEnabled = enabled
     self:updateVirtualGamepad(0)
-    if type(self.saveConfiguration) == "function" then
-        self:saveConfiguration()
-    end
+    self:saveConfiguration()
     print(string.format("[FS25_VR] Virtual Gamepad set to: %s", enabled and "on" or "off"))
     return string.format("Virtual Gamepad set to: %s (Saved): %s", enabled and "on" or "off", self:getVirtualGamepadStatus())
 end

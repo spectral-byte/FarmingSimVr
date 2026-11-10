@@ -941,7 +941,7 @@ function VRCompanion:setMotionControllersEnabled(enabled, save)
     if self.motionControllersEnabled then
         state.ignoredCleared = false
     end
-    if save and type(self.saveConfiguration) == "function" then
+    if save then
         self:saveConfiguration()
     end
 end
@@ -1012,9 +1012,7 @@ function VRCompanion:consoleCommandSetPointerCone(arg)
         return usage
     end
     self.pointerConeDegrees = degrees
-    if type(self.saveConfiguration) == "function" then
-        self:saveConfiguration()
-    end
+    self:saveConfiguration()
     print(string.format("[FS25_VR] Pointer Ray cone set to: %s degrees", tostring(degrees)))
     return string.format("Pointer Ray cone set to: %s degrees (Saved)", tostring(degrees))
 end
