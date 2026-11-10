@@ -10,10 +10,12 @@ namespace fs25vr {
 //
 // It runs once per process. A second crash, or a crash inside the reporter, goes straight to the earlier filter.
 // Inside a crashing process it does nothing risky: it loads no library, creates no thread and never waits for a lock,
-// the log's lock included (the crashed thread may hold it, and then the line is skipped). The dump is written by a
-// helper thread that was prepared ahead of time with the system's dbghelp.dll (PrepareCrashDump); the filter hands the
-// exception to it and waits for it with a time limit, so that a stack overflow can still be dumped and a stuck helper
-// cannot hang the game's exit.
+// the log's lock included (the crashed thread may hold it, and then the line is skipped). The crashing thread itself
+// does next to nothing, because after a stack overflow it has next to no stack: it hands the exception to a helper
+// thread that was prepared ahead of time (PrepareCrashDump) and waits for it with a time limit, so that a stuck helper
+// cannot hang the game's exit. The helper writes the crash line and then the dump, with the system's dbghelp.dll.
+// Before the first DXGI factory call there is no helper: the crashing thread writes the line itself when its stack has
+// room for it, and leaves it out when it has not.
 
 // Puts the reporter on top of the unhandled exception filter chain. Loader-lock safe: loads no library and installs
 // no hook, so DllMain may call it (StartInjector does). Calling it again is harmless: when another filter was
