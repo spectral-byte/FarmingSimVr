@@ -1039,13 +1039,44 @@ INSTANTIATE_TEST_SUITE_P(KilobytesLeft, CrashWithLittleStackLeftTest,
                          ::testing::Values(3u, 4u, 5u, 6u, 8u, 10u, 12u, 14u, 16u, 20u, 24u, 32u, 48u, 64u));
 
 // The crashed thread may hold the log's lock (it crashed while writing a line), and then the filter must not wait for
-// it: the line is skipped and the crash is still passed on.
-TEST_F(CrashReporterTest, TheReporterNeverWaitsForTheLogsLockAndStillPassesTheCrashOn) {
+// it: the line is skipped, the dump is still written, and the crash is still passed on. The thread that faults makes
+// the first DXGI factory call itself, which prepares the dump before the Injector logs on that thread, so the dump is
+// ready when the fault comes.
+TEST_F(CrashReporterTest, AFaultWhileTheCrashedThreadHoldsTheLogsLockSkipsTheLineAndStillLeavesTheDumpAndPassesTheCrashOn) {
     RunCrash(Fault::WhileTheInjectorWritesItsLog);
 
     EXPECT_NE(m_childReport.find("faulting while the Injector holds its log lock"), std::string::npos) << m_childReport;
     EXPECT_NE(m_childReport.find("previous filter ran: call=1"), std::string::npos) << m_childReport;
     EXPECT_EQ(CrashLinesInTheLog(), 0);
+
+    const Minidump dump(BytesOf(DumpPath()));
+    ASSERT_TRUE(dump.HasSignature()) << "No dump at " << DumpPath() << "\n" << m_childReport;
+    const std::optional<MINIDUMP_EXCEPTION_STREAM> exception = dump.Exception();
+    ASSERT_TRUE(exception.has_value()) << "The dump has no exception stream.\n" << m_childReport;
+    EXPECT_EQ(exception->ExceptionRecord.ExceptionCode, kAccessViolation);
+    // The thread that held the lock is the one that crashed.
+    EXPECT_EQ(std::to_string(exception->ThreadId), ValueOf(m_childReport, "thread=")) << m_childReport;
+}
+
+// A player without a headset (no OpenXR runtime) runs in Pass-Through Mode, and so does every child here: the Injector
+// logs that it forwards all calls, which is how the test knows it is the mode the child is in. The crash reporter is
+// prepared at the first DXGI factory call, before the Injector decides on a mode, so the crash leaves the same files.
+TEST_F(CrashReporterTest, ACrashInPassThroughModeLeavesTheSameCrashLineAndDump) {
+    RunCrash(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory());
+
+    // The log is complete up to the crash, so the line that tells the mode is in it.
+    const std::vector<std::string> log = Lines(LogPath());
+    EXPECT_TRUE(std::any_of(log.begin(), log.end(), [](const std::string& line) {
+        return line.find("Injector operating in Pass-Through Mode") != std::string::npos;
+    })) << "The child is not in Pass-Through Mode.\n" << m_childReport;
+
+    EXPECT_TRUE(LastLogLineHas("Injector: Crash: exception 0xC0000005"));
+    EXPECT_TRUE(LastLogLineHas(NameOfThisExecutable() + "+0x" + ValueOf(m_childReport, "rva=")));
+    EXPECT_TRUE(LastLogLineHas("Injector " + std::string(kInjectorVersion)));
+    EXPECT_TRUE(LastLogLineHas("fs25_vr_crash.dmp"));
+    const std::optional<MINIDUMP_EXCEPTION_STREAM> exception = Minidump(BytesOf(DumpPath())).Exception();
+    ASSERT_TRUE(exception.has_value()) << "The dump has no exception stream.\n" << m_childReport;
+    EXPECT_EQ(exception->ExceptionRecord.ExceptionCode, kAccessViolation);
 }
 
 TEST_F(CrashReporterTest, AFilterInstalledBeforeTheInjectorStillRunsAfterItsWork) {
