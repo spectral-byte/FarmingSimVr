@@ -88,7 +88,9 @@ end
 
 -- Map load: the saved setting goes to the Injector (the core has done the handshake and read settings.xml by then). Map unload: the
 -- registry removes the command; the saved setting stays as it is, and the next map load reads it again (the Injector's VRBridge flag
--- is reset by VRBridge.onMapUnload). No order against the other subsystems matters here.
+-- is reset by VRBridge.onMapUnload).
+-- Order: the saved settings reach VRBridge in file order, Desktop Mirror first, then FOV Overscan, Menu Distance and Mouse
+-- Confinement (each registers after this file), as the core sent them before the registry.
 VRCompanion:registerSubsystem("desktopMirror", {
     mapLoad = function(self) self:applyDesktopMirror() end,
     consoleCommands = {

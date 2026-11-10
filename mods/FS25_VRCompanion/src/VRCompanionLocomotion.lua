@@ -553,7 +553,6 @@ function VRCompanion:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw, def
         rest.yaw = self:normalizeAngle((cam.origRotY or defaultRotY or 0) + (lookYaw or 0))
     end
     -- The Seat Offset moves the rest position in the cab, whatever the look yaw (VRCompanionSeatOffset.lua)
-    rest.seatX, rest.seatY, rest.seatZ = 0, 0, 0
     rest.seatX, rest.seatY, rest.seatZ = self:getCabSeatOffset(cam, camParent)
     rest.x, rest.y, rest.z = rest.x + rest.seatX, rest.y + rest.seatY, rest.z + rest.seatZ
     if rest.qw == nil then

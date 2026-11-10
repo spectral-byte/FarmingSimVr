@@ -13,7 +13,7 @@
 --   VRCompanion:getSeatOffsetTarget(cam)                          model, cameraIndex of an in-cab camera, nil otherwise
 --   VRCompanion:onSeatSetAction()                                 the Seat Set Action: adds the head's lean to the offset, recenters, saves
 --   Console: vrSeatOffset [<forward> <up> <right> | reset]
---   VRCompanion:registerSeatOffsetConsoleCommands() / unregisterSeatOffsetConsoleCommands()   map load / unload
+--   Registered with the core: the console command only; the registry adds it on map load and removes it on map unload
 --
 -- IDENTITY: the vehicle model is the vehicle's configFileName (two vehicles of one model, mod vehicles included, share an offset), the
 -- camera is its index in the vehicle's camera list (vehicle.spec_enterable.cameras). A passenger camera is another index.
@@ -179,9 +179,7 @@ function VRCompanion:consoleCommandSeatOffset(...)
     end
     -- The next camera update places the head with it; the view jumps, so the upscaler drops its history
     self:signalDiscontinuityFlush()
-    if type(self.saveConfiguration) == "function" then
-        self:saveConfiguration()
-    end
+    self:saveConfiguration()
 
     local text = reset and "Seat offset reset to the vehicle's own eye point."
         or string.format("Seat offset set to %s m.", describeSeatOffset(self:getSeatOffset(model, index)))
@@ -287,13 +285,11 @@ function VRCompanion:loadSeatOffsetSettings(xmlFile, getters)
     end
 end
 
-function VRCompanion:registerSeatOffsetConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrSeatOffset", "Move the head's rest position in the cab you are in, in metres from the vehicle's own eye point (saved): vrSeatOffset [<forward> <up> <right> | reset]", "consoleCommandSeatOffset", self)
-end
-
-function VRCompanion:unregisterSeatOffsetConsoleCommands()
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrSeatOffset")
-    end
-end
+-- Map load and unload: only the console command, which the registry adds and removes. The offsets are loaded and saved with the
+-- rest of the settings (saveConfiguration / loadConfiguration), and the cab camera path reads them every update.
+-- Order: none matters against the other subsystems.
+VRCompanion:registerSubsystem("seatOffset", {
+    consoleCommands = {
+        { name = "vrSeatOffset", description = "Move the head's rest position in the cab you are in, in metres from the vehicle's own eye point (saved): vrSeatOffset [<forward> <up> <right> | reset]", method = "consoleCommandSeatOffset" },
+    },
+})

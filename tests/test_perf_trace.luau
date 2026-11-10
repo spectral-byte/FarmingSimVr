@@ -151,7 +151,7 @@ end)
 
 test("MapUnloadEndsARunningTrace", function()
     VRCompanion:consoleCommandPerfTrace("5")
-    VRCompanion:unregisterPerfTraceConsoleCommands()
+    VRCompanion:runSubsystemMapUnload()
     assert(hasCall("stop"), calls())
     assert(VRCompanion.perfTracing == false)
 end)

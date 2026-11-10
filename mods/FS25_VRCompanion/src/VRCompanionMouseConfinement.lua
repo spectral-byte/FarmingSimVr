@@ -8,8 +8,8 @@
 -- Confinement always holds in the main menu before then (and again after the player leaves to the main menu, which resets the
 -- VRBridge flag to on).
 --
--- The setting is saved in settings.xml (on by default). When a savegame loads, Core's loadMap reads settings.xml and then calls
--- applyMouseConfinement, which sends the value to VRBridge after the handshake.
+-- The setting is saved in settings.xml (on by default). When a savegame loads, Core's loadMap reads settings.xml and then runs the
+-- map-load hook this file registers (see the registry in VRCompanionCore.lua), which sends the value to VRBridge after the handshake.
 --
 -- PUBLIC SURFACE
 --   VRCompanion.mouseConfinement                          true (the default) or false
@@ -17,7 +17,7 @@
 --   VRCompanion:applyMouseConfinement()                   pushes the field to VRBridge (map load, after loadConfiguration)
 --   VRCompanion:saveMouseConfinementSetting(xmlFile, xml) / loadMouseConfinementSetting(xmlFile, xml)   hooks of saveConfiguration / loadConfiguration
 --   VRCompanion:consoleCommandSetMouseConfinement(arg)    nil reports the state, "on" / "off" sets and saves it, anything else returns the usage
---   VRCompanion:registerMouseConfinementConsoleCommands() / resetMouseConfinement()   map load / unload
+--   Registered with the core: a map-load hook (applyMouseConfinement) and the console command; the registry adds and removes the command
 --   Console: vrMouseConfinement [on|off]
 -- ====================================================================
 
@@ -43,7 +43,7 @@ end
 function VRCompanion:setMouseConfinement(enabled, save)
     self.mouseConfinement = (enabled ~= false)
     self:applyMouseConfinement()
-    if save and type(self.saveConfiguration) == "function" then
+    if save then
         self:saveConfiguration()
     end
 end
@@ -82,15 +82,13 @@ function VRCompanion:consoleCommandSetMouseConfinement(arg)
     return string.format("Mouse Confinement set to: %s (Saved)", describe(enabled))
 end
 
-function VRCompanion:registerMouseConfinementConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrMouseConfinement", "Keep the Desk Mouse on the game picture while the headset is in use (saved; on by default): vrMouseConfinement [on|off]", "consoleCommandSetMouseConfinement", self)
-end
-
--- Map unload: the command goes. The saved setting stays as it is, and the next map load reads it again (the Injector's VRBridge
+-- Map load: the saved setting goes to the Injector (the core has done the handshake and read settings.xml by then). Map unload: the
+-- registry removes the command; the saved setting stays as it is, and the next map load reads it again (the Injector's VRBridge
 -- flag is reset by VRBridge.onMapUnload).
-function VRCompanion:resetMouseConfinement()
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrMouseConfinement")
-    end
-end
+-- Order: after Desktop Mirror, FOV Overscan and Menu Distance (file order), as the core sent them before the registry.
+VRCompanion:registerSubsystem("mouseConfinement", {
+    mapLoad = function(self) self:applyMouseConfinement() end,
+    consoleCommands = {
+        { name = "vrMouseConfinement", description = "Keep the Desk Mouse on the game picture while the headset is in use (saved; on by default): vrMouseConfinement [on|off]", method = "consoleCommandSetMouseConfinement" },
+    },
+})

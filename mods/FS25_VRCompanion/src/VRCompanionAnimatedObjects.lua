@@ -41,13 +41,13 @@
 --       While the ray is on an Animated Object the Pointer Hand's trigger is taken off the Virtual Gamepad
 --       (VRCompanion:takeVirtualGamepadInput(hand, "trigger")).
 --   VRCompanion:getAnimatedObjectsDiagnostics() -> string   one line for vrPointerDiagnostics
---   VRCompanion:loadAnimatedObjectsSupport() / resetAnimatedObjectsSupport()   map load / unload (hands the class back as found)
+--   VRCompanion:loadAnimatedObjectsSupport() / resetAnimatedObjectsSupport()   map load / unload (hands the class back as found); both are the
+--       hooks of the "animatedObjects" subsystem this file registers with the core
 --
 -- Hooks into the rest of the mod
---   MotionControllers   registerMotionControllerConsoleCommands -> loadAnimatedObjectsSupport() at map load; updatePointerRay ->
---       updateAnimatedObjects(dt, ...) after Interactive Control, before Object Grab; settleInteractiveControl (the paths where Motion
---       Controller input is ignored) -> updateAnimatedObjects(dt, true) so the selection clears; getPointerDiagnostics;
---       resetMotionControllers -> resetAnimatedObjectsSupport()
+--   MotionControllers   updatePointerRay -> updateAnimatedObjects(dt, ...) after Interactive Control, before Object Grab;
+--       settleInteractiveControl (the paths where Motion Controller input is ignored) -> updateAnimatedObjects(dt, true) so the
+--       selection clears; getPointerDiagnostics
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -194,6 +194,14 @@ function VRCompanion:resetAnimatedObjectsSupport()
     state = newState()
 end
 
+-- Map load wraps the game's trigger callback; map unload hands it back. No commands. Order: loadAnimatedObjectsSupport used to run at
+-- the end of the Motion Controllers' command registration, now it runs with the other map-load hooks, after loadConfiguration; it
+-- does not depend on any of them. Map unload comes in reverse file order, before the Virtual Gamepad's and Wheel Grab's resets.
+VRCompanion:registerSubsystem("animatedObjects", {
+    mapLoad = function(self) self:loadAnimatedObjectsSupport() end,
+    mapUnload = function(self) self:resetAnimatedObjectsSupport() end,
+})
+
 -- ---- Selecting ----------------------------------------------------------------------------------------------------------------
 
 -- Whether the Pointer Ray may work Animated Objects now. Nothing here changes what the game's prompt does.
@@ -294,7 +302,7 @@ end
 
 -- The pulses of a Click Point, on the Pointer Hand only: "selected" as the ray lands, "clicked" for a pull that toggled.
 local function feel(self, kind, object)
-    if type(self.onClickPointEvent) == "function" then self:onClickPointEvent(kind, object) end
+    self:onClickPointEvent(kind, object)
 end
 
 -- Called by the Pointer Ray code once per Companion Mod update, after the ray is placed. Returns whether the ray is on an Animated
@@ -333,7 +341,7 @@ function VRCompanion:updateAnimatedObjects(dt, suppressed, rivalDistance)
     -- already held when the ray landed (it then keeps its binding and toggles nothing). Only the update the trigger went down toggles.
     local mayUseTrigger = true
     local pointerHand = self:getPointerHand()
-    if pointerHand ~= nil and type(self.takeVirtualGamepadInput) == "function" then
+    if pointerHand ~= nil then
         mayUseTrigger = self:takeVirtualGamepadInput(pointerHand, "trigger")
     end
     if mayUseTrigger then

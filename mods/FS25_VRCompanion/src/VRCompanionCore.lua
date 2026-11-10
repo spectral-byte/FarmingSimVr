@@ -145,6 +145,7 @@ end
 --       mapLoad         = function(self) end,        -- map load: apply the saved setting, wrap the game's classes, ...
 --       mapUnload       = function(self) end,        -- map unload: undo what mapLoad did
 --       update          = function(self, dt) end,    -- every update
+--       updateEarly     = function(self, dt) end,    -- every update, before the core polls the GUI (see below); rarely needed
 --       consoleCommands = { { name = "vrX", description = "...", method = "consoleCommandX" }, ... },
 --   })
 --
@@ -158,6 +159,9 @@ end
 --   loadMap   runSubsystemMapLoad        right after loadConfiguration, before the core applies the saved settings of the
 --                                        subsystems that have not moved over yet
 --   loadMap   addSubsystemConsoleCommands   with the console commands, after the core's own list
+--   update    runSubsystemUpdateEarly    right before the core polls the GUI visibility (pollGuiVisibility), so a hook that has to
+--                                        change what the poll sees (the fish catch answers its dialog, which must be gone when the
+--                                        poll looks) runs here, in registration order; for hooks that truly need it, not a default
 --   update    runSubsystemUpdate         where updateMotionControllers is called, after the core's own update steps
 --   deleteMap runSubsystemMapUnload      first of the subsystem resets: removes a subsystem's console commands, then runs its
 --                                        mapUnload, subsystems in reverse order, before the resets that have not moved over yet
@@ -173,7 +177,7 @@ function VRCompanion:registerSubsystem(name, hooks)
         error("registerSubsystem: the subsystem needs a name", 2)
     end
     hooks = hooks or {}
-    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update" }) do
+    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly" }) do
         if hooks[hookName] ~= nil and type(hooks[hookName]) ~= "function" then
             error(string.format("registerSubsystem: the %s hook of '%s' is not a function", hookName, name), 2)
         end
@@ -212,6 +216,12 @@ function VRCompanion:addSubsystemConsoleCommands()
         for _, command in ipairs(subsystem.hooks.consoleCommands or {}) do
             addConsoleCommand(command.name, command.description, command.method, self)
         end
+    end
+end
+
+function VRCompanion:runSubsystemUpdateEarly(dt)
+    for _, subsystem in ipairs(subsystems) do
+        runSubsystemHook(subsystem, "updateEarly", dt)
     end
 end
 
@@ -387,21 +397,11 @@ function VRCompanion:loadMap(name)
     if type(self.loadConfiguration) == "function" then
         self:loadConfiguration()
     end
-    -- 7-. The registered subsystems load: the handshake above is done and the settings are read (Desktop Mirror sends its saved
-    -- setting to VRBridge here; the HUD applies its Safe Area and the HUD state the player last chose). Before the applies below,
-    -- which have not moved over yet. The HUD used to apply after them and before the DLSS near plane; the HUD asks VRBridge for
-    -- nothing there, so the order between them is not observable.
+    -- 7-. The registered subsystems load: the handshake above is done and the settings are read (Desktop Mirror, FOV Overscan, Menu
+    -- Distance and Mouse Confinement send their saved settings to VRBridge here, and the HUD applies its Safe Area and the HUD state the
+    -- player last chose). The HUD used to apply after the settings and before the DLSS near plane; it asks VRBridge for nothing, so the
+    -- order between them is not observable.
     self:runSubsystemMapLoad()
-    -- 7-. Send the saved FOV Overscan to VRBridge too (a map unload put it back to 0 there)
-    if type(self.applyFovOverscan) == "function" then
-        self:applyFovOverscan()
-    end
-    -- 7-. And the saved Menu Distance: the Injector read settings.xml at launch, and this sends what it holds now
-    if type(self.applyMenuDistance) == "function" then
-        self:applyMenuDistance()
-    end
-    if type(self.applyMouseConfinement) == "function" then
-        self:applyMouseConfinement()
     end
     -- 7a. Send the loaded DLSS near plane for the starting camera
     self:applyDlssNearClip(true)
@@ -414,13 +414,6 @@ function VRCompanion:loadMap(name)
     end
     self:addSubsystemConsoleCommands()
     if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
-    if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
-    if type(self.registerFishCatchConsoleCommands) == "function" then self:registerFishCatchConsoleCommands() end
-    if type(self.registerSeatOffsetConsoleCommands) == "function" then self:registerSeatOffsetConsoleCommands() end
-    if type(self.registerFovOverscanConsoleCommands) == "function" then self:registerFovOverscanConsoleCommands() end
-    if type(self.registerMenuDistanceConsoleCommands) == "function" then self:registerMenuDistanceConsoleCommands() end
-    if type(self.registerMouseConfinementConsoleCommands) == "function" then self:registerMouseConfinementConsoleCommands() end
-    if type(self.registerPerfTraceConsoleCommands) == "function" then self:registerPerfTraceConsoleCommands() end
 
     if self.showHudLoadNotification == true then
         local mission = g_currentMission or _G.g_currentMission
@@ -1108,8 +1101,6 @@ end
 
 function VRCompanion:runUpdate(dt)
     self.frameTicks = (self.frameTicks or 0) + 1
-    -- `vrPerfTrace`: the Injector ends a trace by itself
-    if self.perfTracing then self:refreshPerfTracing() end
 
     -- Synchronize 2D view active state with native VRBridge if changed externally
     if VRBridge ~= nil and type(VRBridge.getIs2DViewActive) == "function" then
@@ -1119,8 +1110,8 @@ function VRCompanion:runUpdate(dt)
         end
     end
 
-    -- Answer the fish catch dialog if `vrFishCatch` says so: before the poll, so that the dialog is gone when the poll looks
-    if type(self.updateFishCatch) == "function" then self:updateFishCatch() end
+    -- The registered subsystems that update before the poll (the fish catch answers its dialog, so that it is gone when the poll looks)
+    self:runSubsystemUpdateEarly(dt)
 
     -- Poll in-game GUI visibility and synchronize with native VRBridge
     self:pollGuiVisibility()
@@ -1281,12 +1272,5 @@ function VRCompanion:deleteMap()
     -- The registered subsystems unload, in reverse order, before the resets that have not moved over yet
     self:runSubsystemMapUnload()
 
-    if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
-    if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
-    if type(self.resetFovOverscan) == "function" then self:resetFovOverscan() end
-    if type(self.resetMenuDistance) == "function" then self:resetMenuDistance() end
-    if type(self.resetMouseConfinement) == "function" then self:resetMouseConfinement() end
-    if type(self.unregisterPerfTraceConsoleCommands) == "function" then self:unregisterPerfTraceConsoleCommands() end
-    if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
     if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end

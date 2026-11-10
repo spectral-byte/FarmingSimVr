@@ -18,7 +18,8 @@
 --                                                   wrap a call's results
 --   VRCompanion:refreshPerfTracing()                 the update: notices the Injector ended the trace
 --   VRCompanion:consoleCommandPerfTrace(arg)         starts a trace of `arg` seconds (default 10, up to 60); "stop" ends it
---   VRCompanion:registerPerfTraceConsoleCommands() / unregisterPerfTraceConsoleCommands()   map load / unload
+--   Registered with the core: an early update hook (refreshPerfTracing), a map-unload hook that ends a running trace, and the
+--   console command; the registry adds and removes the command
 --   Console: vrPerfTrace [seconds|stop]
 -- ====================================================================
 
@@ -82,19 +83,20 @@ function VRCompanion:consoleCommandPerfTrace(arg)
     return string.format("Tracing frame timing for %d s into fs25_vr.log (next to the game's dxgi.dll)", seconds)
 end
 
-function VRCompanion:registerPerfTraceConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrPerfTrace", "Log where frame time goes (CPU, GPU, Companion Mod) to fs25_vr.log for some seconds: vrPerfTrace [seconds|stop]", "consoleCommandPerfTrace", self)
-end
-
--- Map unload: the command goes and a running trace ends with its summary.
-function VRCompanion:unregisterPerfTraceConsoleCommands()
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrPerfTrace")
-    end
-    if self.perfTracing then
-        local b = bridge()
-        if b ~= nil then b.stopPerfTrace() end
-        self.perfTracing = false
-    end
-end
+-- Every update: the Injector ends a trace by itself, and this notices. It is an early hook (before the core polls the GUI), the
+-- registry's nearest point to where the update used to do it, at the top; the 2D view sync that now comes first sends nothing to
+-- the trace. Map unload: the registry removes the command, then a running trace ends with its summary.
+-- Order: none matters against the other subsystems.
+VRCompanion:registerSubsystem("perfTrace", {
+    updateEarly = function(self) self:refreshPerfTracing() end,
+    mapUnload = function(self)
+        if self.perfTracing then
+            local b = bridge()
+            if b ~= nil then b.stopPerfTrace() end
+            self.perfTracing = false
+        end
+    end,
+    consoleCommands = {
+        { name = "vrPerfTrace", description = "Log where frame time goes (CPU, GPU, Companion Mod) to fs25_vr.log for some seconds: vrPerfTrace [seconds|stop]", method = "consoleCommandPerfTrace" },
+    },
+})

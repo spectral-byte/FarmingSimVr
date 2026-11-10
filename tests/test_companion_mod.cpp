@@ -5022,7 +5022,7 @@ TEST_F(CompanionModTest, MouseConfinementHelpTextSaysWhatItDoesAndThatItIsSavedA
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registered = {}
         _G.addConsoleCommand = function(cmd, desc, funcName, target) registered[cmd] = desc end
-        VRCompanion:registerMouseConfinementConsoleCommands()
+        VRCompanion:addSubsystemConsoleCommands()
         assert(registered["vrMouseConfinement"] == "Keep the Desk Mouse on the game picture while the headset is in use (saved; on by default): vrMouseConfinement [on|off]",
             "help text: " .. tostring(registered["vrMouseConfinement"]))
     )luau", "=testMouseConfinementHelpText"), 0);

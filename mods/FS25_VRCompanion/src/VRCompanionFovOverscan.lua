@@ -9,7 +9,8 @@
 -- The Injector applies a new value when the next OpenXR frame begins, so both eyes of a pair share one FOV.
 --
 -- The setting is saved in settings.xml (0 by default), like the Desktop Mirror setting. When a savegame loads, Core's loadMap
--- reads settings.xml and then calls applyFovOverscan, which sends the value to VRBridge after the handshake.
+-- reads settings.xml and then runs the map-load hook this file registers (see the registry in VRCompanionCore.lua), which sends the
+-- value to VRBridge after the handshake.
 --
 -- PUBLIC SURFACE
 --   VRCompanion.fovOverscan                          percent, 0 to 20 (0 by default)
@@ -19,7 +20,7 @@
 --   VRCompanion:saveFovOverscanSetting(xmlFile, xml) / loadFovOverscanSetting(xmlFile, xml)   hooks of saveConfiguration / loadConfiguration
 --   VRCompanion:consoleCommandSetFovOverscan(arg)    nil reports the percent and the rendered FOV, a number from 0 to 20 sets
 --                                                    and saves it, anything else returns the usage
---   VRCompanion:registerFovOverscanConsoleCommands() / resetFovOverscan()   map load / unload
+--   Registered with the core: a map-load hook (applyFovOverscan) and the console command; the registry adds and removes the command
 --   Console: vrFovOverscan [0-20]
 -- ====================================================================
 
@@ -71,7 +72,7 @@ function VRCompanion:setFovOverscan(percent, save)
     if not self.is2DViewActive then
         self:repositionAllHudDisplays()
     end
-    if save and type(self.saveConfiguration) == "function" then
+    if save then
         self:saveConfiguration()
     end
     return true
@@ -109,15 +110,14 @@ function VRCompanion:consoleCommandSetFovOverscan(arg)
     return string.format("FOV Overscan set to: %s (Saved)", describe(self.fovOverscan))
 end
 
-function VRCompanion:registerFovOverscanConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrFovOverscan", "Widen the field of view the eyes are rendered with, in percent, to hide black edges during head movement (saved; 0 by default; a higher value softens the picture): vrFovOverscan [0-20]", "consoleCommandSetFovOverscan", self)
-end
-
--- Map unload: the command goes. The saved setting stays as it is, and the next map load reads it again (the Injector's VRBridge
--- value is reset by VRBridge.onMapUnload).
-function VRCompanion:resetFovOverscan()
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrFovOverscan")
-    end
-end
+-- Map load: the saved setting goes to the Injector (a map unload put it back to 0 there). The core has done the handshake and read
+-- settings.xml by then. Map unload: the registry removes the command; the saved setting stays as it is, and the next map load reads
+-- it again (the Injector's VRBridge value is reset by VRBridge.onMapUnload).
+-- Order: Desktop Mirror (VRCompanionDesktopMirror.lua) sends its setting before this file does, then this file, then Menu Distance
+-- and Mouse Confinement, which load after it: file order, as the core sent them before the registry.
+VRCompanion:registerSubsystem("fovOverscan", {
+    mapLoad = function(self) self:applyFovOverscan() end,
+    consoleCommands = {
+        { name = "vrFovOverscan", description = "Widen the field of view the eyes are rendered with, in percent, to hide black edges during head movement (saved; 0 by default; a higher value softens the picture): vrFovOverscan [0-20]", method = "consoleCommandSetFovOverscan" },
+    },
+})
