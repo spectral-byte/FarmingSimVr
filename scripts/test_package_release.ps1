@@ -42,18 +42,37 @@ function Remove-ScratchRepo([string]$root) {
     if ($root -and (Test-Path $root)) { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-# Runs the scratch copy of package_release.ps1 in a child shell and returns its exit code and output.
-function Invoke-Packaging([string]$root) {
-    $out = Join-Path $root "packaging.out.txt"
-    $err = Join-Path $root "packaging.err.txt"
+# Runs one of the scratch copy's scripts in a child shell and returns its exit code and output.
+function Invoke-ScratchScript([string]$root, [string]$script) {
+    $out = Join-Path $root "$script.out.txt"
+    $err = Join-Path $root "$script.err.txt"
     $shell = (Get-Process -Id $PID).Path
     $process = Start-Process -FilePath $shell -PassThru -Wait -NoNewWindow `
-        -ArgumentList @("-NoProfile", "-NonInteractive", "-File", "`"$root\scripts\package_release.ps1`"") `
+        -ArgumentList @("-NoProfile", "-NonInteractive", "-File", "`"$root\scripts\$script.ps1`"") `
         -RedirectStandardOutput $out -RedirectStandardError $err
     [pscustomobject]@{
         ExitCode = $process.ExitCode
         Output   = ((Get-Content $out -Raw) + (Get-Content $err -Raw))
     }
+}
+
+function Invoke-Packaging([string]$root) { Invoke-ScratchScript $root "package_release" }
+
+# What CI runs after packaging, against the scratch release folder and the scratch build's PDB.
+function Invoke-SymbolsCheck([string]$root) { Invoke-ScratchScript $root "check_release_symbols" }
+
+# Replaces the symbols zip in the scratch release folder with one holding exactly these files (name -> bytes).
+function Set-SymbolsZip([string]$root, [hashtable]$files) {
+    $release = Join-Path $root "build\release"
+    $zipPath = (Get-ChildItem $release -File -Filter "FS25_VR_v*_Symbols.zip" | Select-Object -First 1).FullName
+    Remove-Item $zipPath
+    $zip = [IO.Compression.ZipFile]::Open($zipPath, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($name in $files.Keys) {
+            $stream = $zip.CreateEntry($name).Open()
+            try { $stream.Write($files[$name], 0, $files[$name].Length) } finally { $stream.Dispose() }
+        }
+    } finally { $zip.Dispose() }
 }
 
 # The four-part version that names every release file (FS25_VR_v<version>...), read from modDesc.xml.
@@ -126,6 +145,29 @@ Test-Case "Packaging without the Injector's PDB fails, says what is missing and 
     $release = Join-Path $root "build\release"
     $produced = @(Get-ChildItem $release -File -Filter "FS25_VR_v*" -ErrorAction SilentlyContinue)
     Assert-True ($produced.Count -eq 0) "Nothing should be packaged, but found: $($produced.Name -join ', ')"
+}
+
+Test-Case "The symbols check accepts a packaged release and rejects one whose symbols zip is missing, has no PDB or holds another PDB" {
+    param($root)
+    $packaging = Invoke-Packaging $root
+    Assert-True ($packaging.ExitCode -eq 0) "Packaging exited with $($packaging.ExitCode):`n$($packaging.Output)"
+
+    $check = Invoke-SymbolsCheck $root
+    Assert-True ($check.ExitCode -eq 0) "The check rejected a freshly packaged release:`n$($check.Output)"
+
+    Set-SymbolsZip $root @{ "readme.txt" = [Text.Encoding]::ASCII.GetBytes("no symbols here") }
+    $check = Invoke-SymbolsCheck $root
+    Assert-True ($check.ExitCode -ne 0) "The check accepted a symbols zip without version.pdb."
+    Assert-True ($check.Output -match "version\.pdb") "The message should name the missing version.pdb:`n$($check.Output)"
+
+    Set-SymbolsZip $root @{ "version.pdb" = [Text.Encoding]::ASCII.GetBytes("not the linker's PDB") }
+    $check = Invoke-SymbolsCheck $root
+    Assert-True ($check.ExitCode -ne 0) "The check accepted a version.pdb that is not the one the linker wrote."
+
+    Get-ChildItem (Join-Path $root "build\release") -File -Filter "FS25_VR_v*_Symbols.zip" | Remove-Item
+    $check = Invoke-SymbolsCheck $root
+    Assert-True ($check.ExitCode -ne 0) "The check accepted a release without a symbols zip."
+    Assert-True ($check.Output -match "Symbols\.zip") "The message should name the missing symbols zip:`n$($check.Output)"
 }
 
 if ($failures.Count -gt 0) {
