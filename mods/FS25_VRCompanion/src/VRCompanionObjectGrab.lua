@@ -92,16 +92,18 @@
 --   VRCompanion:setObjectGrabEnabled(enabled, save)
 --   VRCompanion:saveObjectGrabSetting(xmlFile, xml) / loadObjectGrabSetting(xmlFile, xml)   settings chain
 --   VRCompanion:getObjectGrabDiagnostics() -> string          the state of Object Grab, one line
---   VRCompanion:registerObjectGrabConsoleCommands() / resetObjectGrab()   map load / unload
+--   VRCompanion:resetObjectGrab()                              map unload (registered with the core as the "objectGrab" subsystem, see the
+--                                                              end of the file: the map-load hook wraps the classes again, the registry
+--                                                              adds and removes the commands)
 --   VRCompanion:consoleCommandObjectGrabDiagnostics()   logs the fields one tagged line each, returns them as one line; reads only
 --   Console: vrObjectGrab [on|off], vrObjectGrabDiagnostics
 --
--- Hooks into the rest of the mod (each a single guarded call):
+-- Hooks into the rest of the mod:
 --   Core               registerLookRayAimer("objectGrab", ...) and holdLookRayWrap("objectGrab")
 --   MotionControllers  updatePointerRay -> peekObjectGrabRayTarget() / settleObjectGrabRayTarget() (after Interactive Control, with
 --                      the Animated Objects module in between: the nearer of the two wins); updateMotionControllers ->
 --                      updateObjectGrab(dt) on every path; isHandCarryingHeldObject(hand) keeps the hand in use and out of the Pointer
---                      Hand candidates; the saved setting, the console commands, the diagnostics and the reset chain through the
+--                      Hand candidates; the saved setting and the diagnostics chain through the
 --                      Motion Controller functions of the same names
 --   VirtualGamepad     takeVirtualGamepadInput(hand, "grip"); VRBridge.getVirtualGamepad() for what the pad reads as squeezed
 -- ====================================================================
@@ -938,7 +940,7 @@ local SETTING_KEY_ENABLED = "vrSettings.objectGrab"
 
 function VRCompanion:setObjectGrabEnabled(enabled, save)
     self.objectGrabEnabled = (enabled ~= false)
-    if save and type(self.saveConfiguration) == "function" then
+    if save then
         self:saveConfiguration()
     end
 end
@@ -1140,22 +1142,26 @@ function VRCompanion:consoleCommandObjectGrabDiagnostics()
     return self:getObjectGrabDiagnostics()
 end
 
-function VRCompanion:registerObjectGrabConsoleCommands()
-    wrapAll()    -- map load: the classes again (resetObjectGrab lifted the wraps with the last map)
-    checkWraps()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrObjectGrab", "Turn Object Grab, picking up objects aimed by a Motion Controller, on or off (saved): vrObjectGrab [on|off]", "consoleCommandSetObjectGrab", self)
-    addConsoleCommand("vrObjectGrabDiagnostics", "Report whether Object Grab is on and why not, the aim, the target against the game's limits, the carry and the last release: vrObjectGrabDiagnostics", "consoleCommandObjectGrabDiagnostics", self)
-end
-
--- Map unload: the wraps come off and everything seen this session is forgotten. The saved setting stays as it is.
+-- Map unload: the wraps come off and everything seen this session is forgotten. The saved setting stays as it is. The registry
+-- removes the commands.
 function VRCompanion:resetObjectGrab()
     liftWraps()
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrObjectGrab")
-        removeConsoleCommand("vrObjectGrabDiagnostics")
-    end
     state = newState()
 end
 
 wrapAll()  -- the game's classes are there as the files load
+
+-- Map load: the classes are wrapped again (resetObjectGrab lifted the wraps with the last map), then checked. Map unload runs in
+-- reverse file order, so Object Grab lifts its wraps before Hand Tools do (their classes are different; they share only the look ray
+-- wrap, which Core lifts when the last holder lets go).
+VRCompanion:registerSubsystem("objectGrab", {
+    mapLoad = function(self)
+        wrapAll()
+        checkWraps()
+    end,
+    mapUnload = function(self) self:resetObjectGrab() end,
+    consoleCommands = {
+        { name = "vrObjectGrab", description = "Turn Object Grab, picking up objects aimed by a Motion Controller, on or off (saved): vrObjectGrab [on|off]", method = "consoleCommandSetObjectGrab" },
+        { name = "vrObjectGrabDiagnostics", description = "Report whether Object Grab is on and why not, the aim, the target against the game's limits, the carry and the last release: vrObjectGrabDiagnostics", method = "consoleCommandObjectGrabDiagnostics" },
+    },
+})

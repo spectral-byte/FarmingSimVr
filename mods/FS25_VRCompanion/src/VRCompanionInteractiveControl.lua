@@ -38,7 +38,7 @@
 -- updateInteractiveControl(dt, selectNone) selects no Click Point for that update when the Coupling Point is nearer.
 --
 -- Other modules build on:
---   VRCompanion:onClickPointEvent(kind, clickPoint)   optional hook, called with "selected" (the
+--   VRCompanion:onClickPointEvent(kind, clickPoint)   the Motion Controllers' hook, called with "selected" (the
 --       selected Click Point changed, clickPoint may be nil) and "clicked" (a trigger pull was executed:
 --       once per pull, not on every frame an analog Click Point keeps acting)
 --   rayControlsSelection()                            the one place that decides whether the Pointer
@@ -547,3 +547,9 @@ function VRCompanion:resetInteractiveControlSupport()
     end
     state = newState()
 end
+
+-- Map unload only (the support installs itself from the update, not at map load, and has no commands). Order: it comes after Wheel
+-- Grab and the Virtual Gamepad in modDesc.xml, so it unloads before their resets, which it does not depend on.
+VRCompanion:registerSubsystem("interactiveControl", {
+    mapUnload = function(self) self:resetInteractiveControlSupport() end,
+})

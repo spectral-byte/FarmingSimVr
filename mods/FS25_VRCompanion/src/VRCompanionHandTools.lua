@@ -60,16 +60,17 @@
 --   VRCompanion:updateHandTools(dt)                     once per update, called by updateMotionControllers on every path
 --   VRCompanion:placeHandToolsForRender()               before every rendered frame, called by placeVirtualHandsForRender
 --   VRCompanion:getHandToolsDiagnostics() -> string     the state of Hand Tools, one line
---   VRCompanion:registerHandToolsConsoleCommands() / resetHandTools()   map load / unload
+--   VRCompanion:resetHandTools()                        map unload (registered with the core as the "handTools" subsystem, see the end of the file:
+--                                                       the map-load hook wraps the game's class again, the registry adds and removes the commands)
 --   Console: vrHandTools [on|off], vrToolHand [left|right], vrChainsawReach [<metres>|default|game], vrHandToolsDiagnostics (also describes the fishing rod in the Tool
 --     Hand in the log, "fishing rod" lines: its state, last cast and last action, ADR-0031; and an unsupported held tool,
 --     "Hand Tool probe:" lines, ADR-0030; the one-line answer is unchanged),
 --     vrHandToolOffset <tool> <nudge|turn|reset> (tuning HAND_TOOL_HANDLE_OFFSETS live; not saved)
 --
--- Hooks into the rest of the mod (each a single guarded call):
+-- Hooks into the rest of the mod:
 --   MotionControllers  updateMotionControllers -> updateHandTools(dt) on every path (also when input is ignored or the
---                      Injector offers no hand states, so a tool goes back to the camera); the saved setting, the console
---                      commands and the reset chain through the Motion Controller functions of the same names. Pointer Hand
+--                      Injector offers no hand states, so a tool goes back to the camera); the saved setting chains through
+--                      the Motion Controller functions of the same names. Pointer Hand
 --                      selection never picks a hand that isHandHoldingHandTool in the world (a menu is not the world: either hand
 --                      can point), and a hand that isHandKeptInUseByHandTool stays in use however still it is held
 --   VirtualGamepad     updateHandTools asks takeVirtualGamepadInput(toolHand, "trigger") every update the Tool Hand holds a
@@ -2090,7 +2091,7 @@ function VRCompanion:setHandToolsEnabled(enabled, save)
         liftRodEventWraps()  -- and the rod's secondary event is the game's own
         liftRodDrawWrap()    -- and so is its draw
     end
-    if save and type(self.saveConfiguration) == "function" then
+    if save then
         self:saveConfiguration()
     end
 end
@@ -2119,7 +2120,7 @@ function VRCompanion:setToolHand(hand, save)
         syncPlacement(self)
         endTriggerUse()
     end
-    if save and type(self.saveConfiguration) == "function" then
+    if save then
         self:saveConfiguration()
     end
 end
@@ -2155,9 +2156,7 @@ function VRCompanion:consoleCommandSetChainsawReach(arg)
         return string.format("'%s' is not a reach. %s", tostring(arg), CHAINSAW_REACH_USAGE)
     end
     self.chainsawReach = reach
-    if type(self.saveConfiguration) == "function" then
-        self:saveConfiguration()
-    end
+    self:saveConfiguration()
     local text = describeChainsawReach(self)
     showBlinkingWarning(string.format("VR Chainsaw reach: %s (Saved)", text))
     print(string.format("[FS25_VR] Chainsaw reach set to: %s", text))
@@ -2681,17 +2680,6 @@ function VRCompanion:consoleCommandHandToolOffset(kind, action, a, b, c)
     return text
 end
 
-function VRCompanion:registerHandToolsConsoleCommands()
-    wrapAll()    -- map load: the class again (resetHandTools lifted the wrap with the last map)
-    checkWraps()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrHandToolOffset", "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush|fishingrod> <nudge dx dy dz | turn rx ry rz | reset>", "consoleCommandHandToolOffset", self)
-    addConsoleCommand("vrHandTools", "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance, spray can, horse brush and fishing rod held in a Motion Controller, on or off (saved): vrHandTools [on|off]", "consoleCommandSetHandTools", self)
-    addConsoleCommand("vrToolHand", "Choose the Motion Controller that holds Hand Tools, left or right (saved; right by default): vrToolHand [left|right]", "consoleCommandSetToolHand", self)
-    addConsoleCommand("vrChainsawReach", "How far past the tip of its bar the chainsaw in the Tool Hand still finds a tree: metres (0 to 3; 0.15 for contact-only cutting), or default / game (the game's own reach and end of cut, the default), saved: vrChainsawReach [<metres> | default | game]", "consoleCommandSetChainsawReach", self)
-    addConsoleCommand("vrHandToolsDiagnostics", "Report the Tool Hand, the held Hand Tool, whether it is in the hand and where the look ray starts: vrHandToolsDiagnostics", "consoleCommandHandToolsDiagnostics", self)
-end
-
 -- Called by the Virtual Hands just before they delete their nodes: the tool hangs below one, and deleting the node would
 -- delete the tool. It goes back to where the game puts it.
 function VRCompanion:releaseHandToolsFromHands()
@@ -2702,7 +2690,7 @@ function VRCompanion:releaseHandToolsFromHands()
 end
 
 -- Map unload: the tool goes back to the game's placement (the Virtual Hand it hangs below is deleted next), the wraps come
--- off and everything seen this session is forgotten. The saved setting stays as it is.
+-- off and everything seen this session is forgotten. The saved setting stays as it is. The registry removes the commands.
 function VRCompanion:resetHandTools()
     local tool = state.linkedTool
     endTriggerUse()
@@ -2710,17 +2698,32 @@ function VRCompanion:resetHandTools()
     liftRodEventWraps()
     liftRodDrawWrap()
     if tool ~= nil and heldTool() == tool then pcall(returnToTheGame, tool) end
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrHandTools")
-        removeConsoleCommand("vrToolHand")
-        removeConsoleCommand("vrChainsawReach")
-        removeConsoleCommand("vrHandToolOffset")
-        removeConsoleCommand("vrHandToolsDiagnostics")
-    end
     state = newState()
 end
 
 wrapAll()  -- the game's HandTool is there as the files load
+
+-- Map load: the class is wrapped again (resetHandTools lifted the wrap with the last map), then checked. Map unload: the tool goes
+-- back to the game and the wraps come off.
+-- Order. Map unload runs in reverse file order, so this one runs after Object Grab's and before Virtual Gamepad's, Wheel Grab's and
+-- the Virtual Hands': the tool hangs below a Virtual Hand, so this unload must come before the Virtual Hands delete their scene
+-- (they also call releaseHandToolsFromHands as they go). That holds as long as Hand Tools load after the Virtual Hands in modDesc.xml.
+-- Object Grab and Hand Tools wrap different classes (they share only the look ray wrap, which Core lifts when the last holder lets go),
+-- so which of the two lifts its wraps first does not matter.
+VRCompanion:registerSubsystem("handTools", {
+    mapLoad = function(self)
+        wrapAll()
+        checkWraps()
+    end,
+    mapUnload = function(self) self:resetHandTools() end,
+    consoleCommands = {
+        { name = "vrHandToolOffset", description = "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush|fishingrod> <nudge dx dy dz | turn rx ry rz | reset>", method = "consoleCommandHandToolOffset" },
+        { name = "vrHandTools", description = "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance, spray can, horse brush and fishing rod held in a Motion Controller, on or off (saved): vrHandTools [on|off]", method = "consoleCommandSetHandTools" },
+        { name = "vrToolHand", description = "Choose the Motion Controller that holds Hand Tools, left or right (saved; right by default): vrToolHand [left|right]", method = "consoleCommandSetToolHand" },
+        { name = "vrChainsawReach", description = "How far past the tip of its bar the chainsaw in the Tool Hand still finds a tree: metres (0 to 3; 0.15 for contact-only cutting), or default / game (the game's own reach and end of cut, the default), saved: vrChainsawReach [<metres> | default | game]", method = "consoleCommandSetChainsawReach" },
+        { name = "vrHandToolsDiagnostics", description = "Report the Tool Hand, the held Hand Tool, whether it is in the hand and where the look ray starts: vrHandToolsDiagnostics", method = "consoleCommandHandToolsDiagnostics" },
+    },
+})
 
 
 -- The probe's readers of an unknown table (the dialog probe, VRCompanionDialogProbe.lua, dumps with them): a short text for a value,

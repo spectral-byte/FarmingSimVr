@@ -290,7 +290,7 @@ end
 -- Drops everything this module put into the scene. A Hand Tool hangs below a holder (VRCompanionHandTools.lua): it goes
 -- back to the game's placement first, so that deleting the holder does not delete the tool with it.
 local function discardScene()
-    if type(VRCompanion.releaseHandToolsFromHands) == "function" then VRCompanion:releaseHandToolsFromHands() end
+    VRCompanion:releaseHandToolsFromHands()
     for _, hand in ipairs(HANDS) do
         local entry = state.hands[hand]
         if entry ~= nil then deleteNode(entry.holder) end
@@ -580,7 +580,7 @@ local function updateHand(self, hand, unavailable)
                 relative.valid = true
                 pinToWheel(self, hand, world)
                 placeHolder(self, entry, world)
-                local holdsTool = type(self.isHandHoldingHandTool) == "function" and self:isHandHoldingHandTool(hand) == true
+                local holdsTool = self:isHandHoldingHandTool(hand) == true
                 curlFingers(entry, pose, holdsTool)
                 entry.holdsTool = holdsTool
                 status = "shown"
@@ -719,7 +719,7 @@ function VRCompanion:placeVirtualHandsForRender()
         end
     end
     -- What rides in a hand and is placed by the game's update (the flashlight's light node) follows the hand for this frame too.
-    if type(self.placeHandToolsForRender) == "function" then self:placeHandToolsForRender() end
+    self:placeHandToolsForRender()
     traceHands(self, "camera")
 end
 
@@ -766,7 +766,7 @@ end
 
 -- Registered with the core (the registry is documented in VRCompanionCore.lua). No update hook: updateVirtualHands runs from the Motion
 -- Controller poll (after the Menu Pointer, before the Virtual Gamepad's uses). Unload runs in reverse file order: after the Virtual
--- Gamepad and Wheel Grab, which do not touch the hands, and before Hand Tools once those register (their file follows this one), so a
+-- Gamepad and Wheel Grab, which do not touch the hands, and after Hand Tools (their file follows this one, so they reset first), so a
 -- tool is given back before the hands it hangs below are deleted; discardScene gives it back too (releaseHandToolsFromHands).
 VRCompanion:registerSubsystem("virtualHands", {
     mapUnload = function(self) self:resetVirtualHands() end,

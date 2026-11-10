@@ -217,7 +217,7 @@ TEST_F(VirtualGamepadObjectGrabCarryTest, TurningTheMotionControllersOffWhileCar
 TEST_F(VirtualGamepadObjectGrabCarryTest, ObjectGrabGivingUpWhileCarryingDropsTheObjectThroughTheGame) {
     ASSERT_NO_FATAL_FAILURE(StartCarrying());
     // A game function the wraps expect turns out reshaped at the next map load check: Object Grab gives up.
-    ASSERT_EQ(RunLuauChunk(L, "HandToolHands.getCanPickUpNode = function() return false end; VRCompanion:registerObjectGrabConsoleCommands()", "=giveUp"), 0);
+    ASSERT_EQ(RunLuauChunk(L, "HandToolHands.getCanPickUpNode = function() return false end; VRCompanion:runSubsystemMapLoad()", "=giveUp"), 0);
     ASSERT_EQ(CountLogLines("[Warning] Object Grab disabled"), 1);
     FRAMES(1);
     EXPECT_EQ(Drops(), 1);
