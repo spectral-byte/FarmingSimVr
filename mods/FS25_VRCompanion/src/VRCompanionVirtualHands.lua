@@ -524,7 +524,6 @@ end
 -- A hand holding the Steering Wheel is drawn pinned to the rim where it grabbed (Wheel Grab): its world pose replaces
 -- the grip pose's in `world`.
 local function pinToWheel(self, hand, world)
-    if type(self.getWheelGrabHandPose) ~= "function" then return end
     local x, y, z, qx, qy, qz, qw = self:getWheelGrabHandPose(hand)
     if x ~= nil then
         world.x, world.y, world.z, world.qx, world.qy, world.qz, world.qw = x, y, z, qx, qy, qz, qw
@@ -759,20 +758,21 @@ function VRCompanion:consoleCommandVirtualHandsDiagnostics()
     return self:getVirtualHandsDiagnostics()
 end
 
-function VRCompanion:registerVirtualHandsConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrVirtualHandsDiagnostics", "Report why the Virtual Hands are shown or hidden: vrVirtualHandsDiagnostics", "consoleCommandVirtualHandsDiagnostics", self)
-    addConsoleCommand("vrVirtualHandsGeometry", "Report where the engine puts the Virtual Hands and how big they are: vrVirtualHandsGeometry", "consoleCommandVirtualHandsGeometry", self)
-    addConsoleCommand("vrVirtualHandsTrace", "Log where each Virtual Hand is relative to the rendering camera, after the update and at draw time, for some frames: vrVirtualHandsTrace [frames]", "consoleCommandVirtualHandsTrace", self)
-end
-
 -- Map unload: the hands and the model go, and the next map loads the model again.
 function VRCompanion:resetVirtualHands()
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrVirtualHandsDiagnostics")
-        removeConsoleCommand("vrVirtualHandsGeometry")
-        removeConsoleCommand("vrVirtualHandsTrace")
-    end
     discardScene()
     state = newState()
 end
+
+-- Registered with the core (the registry is documented in VRCompanionCore.lua). No update hook: updateVirtualHands runs from the Motion
+-- Controller poll (after the Menu Pointer, before the Virtual Gamepad's uses). Unload runs in reverse file order: after the Virtual
+-- Gamepad and Wheel Grab, which do not touch the hands, and after Hand Tools (their file follows this one, so they reset first), so a
+-- tool is given back before the hands it hangs below are deleted; discardScene gives it back too (releaseHandToolsFromHands).
+VRCompanion:registerSubsystem("virtualHands", {
+    mapUnload = function(self) self:resetVirtualHands() end,
+    consoleCommands = {
+        { name = "vrVirtualHandsDiagnostics", description = "Report why the Virtual Hands are shown or hidden: vrVirtualHandsDiagnostics", method = "consoleCommandVirtualHandsDiagnostics" },
+        { name = "vrVirtualHandsGeometry", description = "Report where the engine puts the Virtual Hands and how big they are: vrVirtualHandsGeometry", method = "consoleCommandVirtualHandsGeometry" },
+        { name = "vrVirtualHandsTrace", description = "Log where each Virtual Hand is relative to the rendering camera, after the update and at draw time, for some frames: vrVirtualHandsTrace [frames]", method = "consoleCommandVirtualHandsTrace" },
+    },
+})

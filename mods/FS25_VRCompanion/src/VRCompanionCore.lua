@@ -162,7 +162,8 @@ end
 --   update    runSubsystemUpdateEarly    right before the core polls the GUI visibility (pollGuiVisibility), so a hook that has to
 --                                        change what the poll sees (the fish catch answers its dialog, which must be gone when the
 --                                        poll looks) runs here, in registration order; for hooks that truly need it, not a default
---   update    runSubsystemUpdate         where updateMotionControllers is called, after the core's own update steps
+--   update    runSubsystemUpdate         after the core's own update steps, just before applyDlssNearClip (Motion Controllers were
+--                                        the last step before it and are the update hook there now)
 --   deleteMap runSubsystemMapUnload      first of the subsystem resets: removes a subsystem's console commands, then runs its
 --                                        mapUnload, subsystems in reverse order, before the resets that have not moved over yet
 --
@@ -412,7 +413,6 @@ function VRCompanion:loadMap(name)
         end
     end
     self:addSubsystemConsoleCommands()
-    if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
 
     if self.showHudLoadNotification == true then
         local mission = g_currentMission or _G.g_currentMission
@@ -1163,9 +1163,6 @@ function VRCompanion:runUpdate(dt)
     -- the context of the vehicle being controlled, whichever frame it became so; the camera node is the menu's, not an eye's).
     self:runSubsystemUpdate(dt)
 
-    -- Motion Controllers: poll both hands once per update
-    if type(self.updateMotionControllers) == "function" then self:updateMotionControllers(dt) end
-
     -- Follow the camera mode with the DLSS near plane (cab, outside camera, on foot)
     self:applyDlssNearClip(false)
 end
@@ -1271,5 +1268,4 @@ function VRCompanion:deleteMap()
     -- The registered subsystems unload, in reverse order, before the resets that have not moved over yet
     self:runSubsystemMapUnload()
 
-    if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end

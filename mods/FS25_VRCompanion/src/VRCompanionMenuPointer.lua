@@ -352,3 +352,10 @@ function VRCompanion:resetMenuPointer()
     hands = {}
     scroll.dir, scroll.nextMs = 0, nil
 end
+
+-- Registered with the core (the registry is documented in VRCompanionCore.lua). No update hook: updateMenuPointer runs from the
+-- Motion Controller poll, which fixes where in the update it comes (see updateMotionControllers). Unload runs in reverse file order,
+-- so it comes after the Virtual Hands, Wheel Grab and Virtual Gamepad have reset; none of them reads what this lets go of.
+VRCompanion:registerSubsystem("menuPointer", {
+    mapUnload = function(self) self:resetMenuPointer() end,
+})

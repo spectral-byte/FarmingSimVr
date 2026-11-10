@@ -486,3 +486,85 @@ TEST_F(CompanionModTest, WithoutAnInjectorTheModKeepsRunningAndNoHandIsTracked) 
     EXPECT_EQ(EvalLua(L, "VRCompanion:getPointerHand()"), "nil");
     EXPECT_NE(EvalLua(L, "runCommand('vrMotionControllerStatus')").find("not available"), std::string::npos);
 }
+
+// ---- The subsystems of the Motion Controller poll, registered with the core ----
+
+namespace {
+
+// Wraps the five subsystem updates the poll fans out to (and VRBridge.onMapUnload) so a test can read the order they ran in.
+constexpr const char* kOrderRecorder = R"luau(
+    _G.order = {}
+    for _, name in ipairs({ "updateVirtualGamepad", "updateWheelGrab", "updateMenuPointer", "updateVirtualHands", "updateVirtualGamepadUse" }) do
+        local original = VRCompanion[name]
+        VRCompanion[name] = function(self, ...)
+            table.insert(_G.order, name)
+            return original(self, ...)
+        end
+    end
+    _G.takeOrder = function()
+        local text = table.concat(_G.order, " ")
+        _G.order = {}
+        return text
+    end
+)luau";
+
+} // namespace
+
+TEST_F(CompanionModTest, EachUpdateRunsThePollOnceWithTheVirtualGamepadFirstAndTheMenuPointerVirtualHandsAndPadUsesLast) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, headset, bridge));
+    ASSERT_EQ(RunLuauChunk(L, kOrderRecorder, "=orderRecorder"), 0);
+    SetGameTime(10000);
+    headset.SetHandPose(kRight, HandAt(0.30f, 1.20f, -0.40f));
+
+    NextFrame(&headset);
+    EXPECT_EQ(EvalLua(L, "takeOrder()"),
+              "updateVirtualGamepad updateWheelGrab updateMenuPointer updateVirtualHands updateVirtualGamepadUse")
+        << "the polled path";
+
+    ASSERT_EQ(RunLuauChunk(L, "VRBridge.getHandState = nil", "=olderInjector"), 0);
+    NextFrame(&headset);
+    EXPECT_EQ(EvalLua(L, "takeOrder()"),
+              "updateVirtualGamepad updateWheelGrab updateMenuPointer updateVirtualHands updateVirtualGamepadUse")
+        << "no hand states from the Injector";
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:setMotionControllersEnabled(false)", "=off"), 0);
+    NextFrame(&headset);
+    EXPECT_EQ(EvalLua(L, "takeOrder()"),
+              "updateVirtualGamepad updateWheelGrab updateMenuPointer updateVirtualHands updateVirtualGamepadUse")
+        << "Motion Controller input ignored";
+}
+
+TEST_F(CompanionModTest, UnloadingTheMapZeroesTheVirtualGamepadThroughTheBridgeAfterTheInjectorWasToldTheMapIsGone) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, headset, bridge));
+    SetGameTime(10000);
+    NextFrame(&headset);
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        _G.calls = {}
+        local function record(name)
+            local original = VRBridge[name]
+            VRBridge[name] = function(...)
+                local parts = {}
+                for i = 1, select("#", ...) do parts[#parts + 1] = tostring(select(i, ...)) end
+                table.insert(_G.calls, name .. "(" .. table.concat(parts, ",") .. ")")
+                return original(...)
+            end
+        end
+        record("onMapUnload"); record("setVirtualGamepad"); record("setVirtualGamepadUse")
+        VRCompanion:deleteMap()
+        _G.unloadCalls = table.concat(_G.calls, " ")
+    )luau", "=unload"), 0);
+
+    const std::string calls = EvalLua(L, "unloadCalls");
+    const size_t unloaded = calls.find("onMapUnload()");
+    const size_t zeroed = calls.find("setVirtualGamepad(");
+    const size_t uses = calls.find("setVirtualGamepadUse(0,0)");
+    ASSERT_NE(unloaded, std::string::npos) << calls;
+    ASSERT_NE(zeroed, std::string::npos) << calls;
+    ASSERT_NE(uses, std::string::npos) << calls;
+    EXPECT_LT(unloaded, zeroed) << "the pad is zeroed after the Injector was told the map is gone: " << calls;
+    EXPECT_NE(calls.find(",false)", zeroed), std::string::npos) << "reads neutral (live = false): " << calls;
+}
