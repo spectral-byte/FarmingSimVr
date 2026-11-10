@@ -247,7 +247,7 @@ function VRCompanion:saveConfiguration(xmlPath)
         end
         if type(self.saveMotionControllerSettings) == "function" then self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn }) end
         if type(self.saveFishCatchSetting) == "function" then self:saveFishCatchSetting(xmlFile, { setString = setXmlStringFn }) end
-        if type(self.saveDesktopMirrorSetting) == "function" then self:saveDesktopMirrorSetting(xmlFile, { setBool = setXmlBoolFn }) end
+        self:saveDesktopMirrorSetting(xmlFile, { setBool = setXmlBoolFn })
         if type(self.saveFovOverscanSetting) == "function" then self:saveFovOverscanSetting(xmlFile, { setFloat = setXmlFloatFn }) end
         if type(self.saveMenuDistanceSetting) == "function" then self:saveMenuDistanceSetting(xmlFile, { setFloat = setXmlFloatFn }) end
         if type(self.saveMouseConfinementSetting) == "function" then self:saveMouseConfinementSetting(xmlFile, { setBool = setXmlBoolFn }) end
@@ -360,7 +360,7 @@ function VRCompanion:loadConfiguration(xmlPath)
 
                 if type(self.loadMotionControllerSettings) == "function" then self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn }) end
                 if type(self.loadFishCatchSetting) == "function" then self:loadFishCatchSetting(xmlFile, { getString = getXmlStringFn }) end
-                if type(self.loadDesktopMirrorSetting) == "function" then self:loadDesktopMirrorSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn }) end
+                self:loadDesktopMirrorSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn })
                 if type(self.loadFovOverscanSetting) == "function" then self:loadFovOverscanSetting(xmlFile, { getFloat = getXmlFloatFn }) end
                 if type(self.loadMenuDistanceSetting) == "function" then self:loadMenuDistanceSetting(xmlFile, { getFloat = getXmlFloatFn }) end
                 if type(self.loadMouseConfinementSetting) == "function" then self:loadMouseConfinementSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn }) end

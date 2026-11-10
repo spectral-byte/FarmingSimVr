@@ -137,6 +137,102 @@ function VRCompanion:getLookRayWrapOriginal()
     return lookRayWrap ~= nil and lookRayWrap.original or nil
 end
 
+-- ---- The subsystem registry ---------------------------------------------------------------------------------------
+-- A subsystem (a feature in its own file: Desktop Mirror, Hand Tools, ...) registers itself by name when its file loads, with the
+-- hooks it needs, and the core runs them. Adding a subsystem is its file plus a line in modDesc.xml, not an edit of the core's lists.
+--
+--   VRCompanion:registerSubsystem(name, {
+--       mapLoad         = function(self) end,        -- map load: apply the saved setting, wrap the game's classes, ...
+--       mapUnload       = function(self) end,        -- map unload: undo what mapLoad did
+--       update          = function(self, dt) end,    -- every update
+--       consoleCommands = { { name = "vrX", description = "...", method = "consoleCommandX" }, ... },
+--   })
+--
+-- Every field but the name is optional; `self` is the Companion Mod (hooks are called as methods, with plain functions, so a hook
+-- that calls `self:foo()` finds `foo` when it runs). Registering a name again replaces its hooks and keeps its place.
+--
+-- Order. Map-load and update hooks run in registration order, which is modDesc.xml order; map-unload hooks run in reverse. Where
+-- two subsystems need an order, their file order gives it and the registration says so in a comment. The core's own steps come
+-- first and are not hooks: the handshake with VRBridge, the engine's stereo and head tracking toggles, the camera and mission
+-- hooks and loadConfiguration. The run points in the core are:
+--   loadMap   runSubsystemMapLoad        right after loadConfiguration, before the core applies the saved settings of the
+--                                        subsystems that have not moved over yet
+--   loadMap   addSubsystemConsoleCommands   with the console commands, after the core's own list
+--   update    runSubsystemUpdate         where updateMotionControllers is called, after the core's own update steps
+--   deleteMap runSubsystemMapUnload      first of the subsystem resets: removes a subsystem's console commands, then runs its
+--                                        mapUnload, subsystems in reverse order, before the resets that have not moved over yet
+--
+-- A hook that raises is caught: it is logged once per subsystem and hook, as
+--   [FS25_VR] [Error] Subsystem '<name>' <hook> hook raised: <error>
+-- and the other hooks still run. The test harnesses fail a test in which that line was logged unless the test expects it.
+local subsystems = {}          -- { name = <string>, hooks = <table> } in registration order
+local hooksLoggedAsRaising = {}   -- "<name>/<hook>" -> true
+
+function VRCompanion:registerSubsystem(name, hooks)
+    if type(name) ~= "string" or name == "" then
+        error("registerSubsystem: the subsystem needs a name", 2)
+    end
+    hooks = hooks or {}
+    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update" }) do
+        if hooks[hookName] ~= nil and type(hooks[hookName]) ~= "function" then
+            error(string.format("registerSubsystem: the %s hook of '%s' is not a function", hookName, name), 2)
+        end
+    end
+    for _, subsystem in ipairs(subsystems) do
+        if subsystem.name == name then
+            subsystem.hooks = hooks
+            return
+        end
+    end
+    subsystems[#subsystems + 1] = { name = name, hooks = hooks }
+end
+
+local function runSubsystemHook(subsystem, hookName, ...)
+    local hook = subsystem.hooks[hookName]
+    if hook == nil then return end
+    local ok, err = pcall(hook, VRCompanion, ...)
+    if not ok then
+        local key = subsystem.name .. "/" .. hookName
+        if not hooksLoggedAsRaising[key] then
+            hooksLoggedAsRaising[key] = true
+            print(string.format("[FS25_VR] [Error] Subsystem '%s' %s hook raised: %s", subsystem.name, hookName, tostring(err)))
+        end
+    end
+end
+
+function VRCompanion:runSubsystemMapLoad()
+    for _, subsystem in ipairs(subsystems) do
+        runSubsystemHook(subsystem, "mapLoad")
+    end
+end
+
+function VRCompanion:addSubsystemConsoleCommands()
+    if addConsoleCommand == nil then return end
+    for _, subsystem in ipairs(subsystems) do
+        for _, command in ipairs(subsystem.hooks.consoleCommands or {}) do
+            addConsoleCommand(command.name, command.description, command.method, self)
+        end
+    end
+end
+
+function VRCompanion:runSubsystemUpdate(dt)
+    for _, subsystem in ipairs(subsystems) do
+        runSubsystemHook(subsystem, "update", dt)
+    end
+end
+
+function VRCompanion:runSubsystemMapUnload()
+    for i = #subsystems, 1, -1 do
+        local subsystem = subsystems[i]
+        if removeConsoleCommand ~= nil then
+            for _, command in ipairs(subsystem.hooks.consoleCommands or {}) do
+                removeConsoleCommand(command.name)
+            end
+        end
+        runSubsystemHook(subsystem, "mapUnload")
+    end
+end
+
 -- Every console command the core registers on map load: map load adds them and map unload removes them, both from this one list.
 VRCompanion.CORE_CONSOLE_COMMANDS = {
     { name = "vrHudSafeArea", description = "Set the VR HUD Safe Area, the margin that keeps warnings, notifications and other mods' HUDs inside the lens: vrHudSafeArea <horizontal> <vertical>", method = "consoleCommandSetHudSafeArea" },
@@ -310,10 +406,9 @@ function VRCompanion:loadMap(name)
     if type(self.loadConfiguration) == "function" then
         self:loadConfiguration()
     end
-    -- 7-. Send the saved Desktop Mirror setting to VRBridge: the handshake above is done, so the Injector sees it at once
-    if type(self.applyDesktopMirror) == "function" then
-        self:applyDesktopMirror()
-    end
+    -- 7-. The registered subsystems load: the handshake above is done and the settings are read (Desktop Mirror sends its saved
+    -- setting to VRBridge here). Before the applies below, which have not moved over yet, so the order of effects stays.
+    self:runSubsystemMapLoad()
     -- 7-. Send the saved FOV Overscan to VRBridge too (a map unload put it back to 0 there)
     if type(self.applyFovOverscan) == "function" then
         self:applyFovOverscan()
@@ -342,13 +437,13 @@ function VRCompanion:loadMap(name)
             addConsoleCommand(command.name, command.description, command.method, self)
         end
     end
+    self:addSubsystemConsoleCommands()
     if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
     if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
     if type(self.registerFishCatchConsoleCommands) == "function" then self:registerFishCatchConsoleCommands() end
     if type(self.registerSeatOffsetConsoleCommands) == "function" then self:registerSeatOffsetConsoleCommands() end
     if type(self.registerStereoDialogDepthConsoleCommands) == "function" then self:registerStereoDialogDepthConsoleCommands() end
     if type(self.registerDualPassPhysicsConsoleCommands) == "function" then self:registerDualPassPhysicsConsoleCommands() end
-    if type(self.registerDesktopMirrorConsoleCommands) == "function" then self:registerDesktopMirrorConsoleCommands() end
     if type(self.registerFovOverscanConsoleCommands) == "function" then self:registerFovOverscanConsoleCommands() end
     if type(self.registerMenuDistanceConsoleCommands) == "function" then self:registerMenuDistanceConsoleCommands() end
     if type(self.registerMouseConfinementConsoleCommands) == "function" then self:registerMouseConfinementConsoleCommands() end
@@ -1125,6 +1220,9 @@ function VRCompanion:runUpdate(dt)
         end
     end
 
+    -- The registered subsystems update, after the core's own steps above
+    self:runSubsystemUpdate(dt)
+
     -- Motion Controllers: poll both hands once per update
     if type(self.updateMotionControllers) == "function" then self:updateMotionControllers(dt) end
 
@@ -1309,9 +1407,11 @@ function VRCompanion:deleteMap()
         end
     end
 
+    -- The registered subsystems unload, in reverse order, before the resets that have not moved over yet
+    self:runSubsystemMapUnload()
+
     if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
     if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
-    if type(self.resetDesktopMirror) == "function" then self:resetDesktopMirror() end
     if type(self.resetFovOverscan) == "function" then self:resetFovOverscan() end
     if type(self.resetMenuDistance) == "function" then self:resetMenuDistance() end
     if type(self.stopHudTrace) == "function" then self:stopHudTrace() end
