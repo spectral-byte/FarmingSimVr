@@ -170,6 +170,55 @@ Test-Case "The symbols check accepts a packaged release and rejects one whose sy
     Assert-True ($check.Output -match "Symbols\.zip") "The message should name the missing symbols zip:`n$($check.Output)"
 }
 
+# A PDB belongs to a DLL when both carry the GUID and age the linker stamped them with. These cases make a DLL
+# that names another PDB than the one it was linked with, by changing its CodeView record, so that the real PDB
+# in the scratch build no longer belongs to it.
+. (Join-Path $PSScriptRoot "symbols_identity.ps1")
+function Set-DllPdbIdentity([string]$dllPath, [ValidateSet("GUID", "age")][string]$Change) {
+    $offset = (Get-DllPdbIdentity $dllPath).Offset
+    $bytes = [IO.File]::ReadAllBytes($dllPath)
+    if ($Change -eq "GUID") { $bytes[$offset + 4] = $bytes[$offset + 4] -bxor 0xFF } else { $bytes[$offset + 20] = $bytes[$offset + 20] + 1 }
+    [IO.File]::WriteAllBytes($dllPath, $bytes)
+}
+
+# The console wraps an error message at its own width: compare the message with its line breaks folded away.
+function Get-OneLine([string]$text) { $text -replace '\s+', ' ' }
+
+foreach ($change in "GUID", "age") {
+    Test-Case "Packaging refuses an Injector whose PDB has another $change, says so, and produces no release files" {
+        param($root)
+        Set-DllPdbIdentity (Join-Path $root "build\version.dll") $change
+        $result = Invoke-Packaging $root
+        Assert-True ($result.ExitCode -ne 0) "Packaging succeeded with a version.pdb that has another ${change}:`n$($result.Output)"
+        Assert-True ((Get-OneLine $result.Output) -match "does not belong") "The message should say the PDB does not belong to the DLL:`n$($result.Output)"
+        Assert-True ((Get-OneLine $result.Output) -match "PDB of $change|PDB with $change") "The message should name the $change that differs:`n$($result.Output)"
+        $produced = @(Get-ChildItem (Join-Path $root "build\release") -File -Filter "FS25_VR_v*" -ErrorAction SilentlyContinue)
+        Assert-True ($produced.Count -eq 0) "Nothing should be packaged, but found: $($produced.Name -join ', ')"
+    }
+}
+
+Test-Case "Packaging refuses a version.pdb that is not a PDB the linker writes, and says so" {
+    param($root)
+    [IO.File]::WriteAllBytes((Join-Path $root "build\version.pdb"), [Text.Encoding]::ASCII.GetBytes("this is not a PDB, only text of the same name"))
+    $result = Invoke-Packaging $root
+    Assert-True ($result.ExitCode -ne 0) "Packaging succeeded with a version.pdb that is not a PDB:`n$($result.Output)"
+    Assert-True ((Get-OneLine $result.Output) -match "not an MSF 7\.00 PDB") "The message should say what is wrong with the file:`n$($result.Output)"
+}
+
+foreach ($change in "GUID", "age") {
+    Test-Case "The symbols check rejects a release whose Injector was linked with a PDB of another $change than the symbols zip holds" {
+        param($root)
+        $packaging = Invoke-Packaging $root
+        Assert-True ($packaging.ExitCode -eq 0) "Packaging exited with $($packaging.ExitCode):`n$($packaging.Output)"
+
+        $shipped = Get-ChildItem (Join-Path $root "build\release") -Directory -Filter "FS25_VR_v*" | ForEach-Object { Join-Path $_.FullName "x64\version.dll" }
+        Set-DllPdbIdentity $shipped $change
+        $check = Invoke-SymbolsCheck $root
+        Assert-True ($check.ExitCode -ne 0) "The check accepted a symbols zip whose PDB has another $change than the shipped Injector."
+        Assert-True ((Get-OneLine $check.Output) -match "does not belong") "The message should say the PDB does not belong to the Injector:`n$($check.Output)"
+    }
+}
+
 if ($failures.Count -gt 0) {
     Write-Error "$($failures.Count) release packaging test(s) failed: $($failures -join '; ')"
 }

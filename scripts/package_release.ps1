@@ -24,6 +24,10 @@ if (-not (Test-Path $builtDll)) {
 if (-not (Test-Path $builtPdb)) {
     Write-Error "build\version.pdb not found. The linker writes it next to version.dll, and every release must carry the Injector's symbols (the symbols zip). Rebuild the Injector (cmake --build build --target injector); do not copy a version.dll in without its PDB."
 }
+# A PDB left over from another build would be zipped as this release's symbols and open none of its crash dumps:
+# it must carry the GUID and age the linker stamped into this version.dll.
+. (Join-Path $PSScriptRoot "symbols_identity.ps1")
+Assert-PdbBelongsToDll $builtPdb $builtDll
 
 # Only ship an Injector that needs no VC++ redistributable (static C runtime).
 & (Join-Path $PSScriptRoot "check_injector_imports.ps1") $builtDll

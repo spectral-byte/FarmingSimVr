@@ -117,4 +117,4 @@ Attach all three files that `scripts\package_release.ps1` leaves in `build\relea
 | `FS25_VR_v1.2.0.0_Setup.exe`, the Installer | `FS25_VR_v1.2.0_Setup.exe` |
 | `FS25_VR_v1.2.0.0_Symbols.zip`, the Injector's PDB | `FS25_VR_v1.2.0_Symbols.zip` |
 
-The symbols zip is easy to leave out because players never need it. It is what opens a crash dump from this release with full symbols, and it cannot be fetched later: the next local build overwrites the PDB. `scripts\package_release.ps1` stops when `build\version.pdb` is missing, so a release without symbols cannot be packaged by accident.
+The symbols zip is easy to leave out because players never need it. It is what opens a crash dump from this release with full symbols, and it cannot be fetched later: the next local build overwrites the PDB. `scripts\package_release.ps1` stops when `build\version.pdb` is missing or does not belong to `build\version.dll` (the GUID and age the linker stamped in both), so a release without matching symbols cannot be packaged by accident.
