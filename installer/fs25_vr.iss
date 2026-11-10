@@ -1032,6 +1032,10 @@ const
   CrashDumpCount = 3;
   CrashDumpsSkippedPerUserMessage =
     'Skipped the Windows crash dump setting: it needs an administrator install and this is a per-user run.';
+  { Leaves the setting alone: no key, no record (an existing key and record stay as they are). }
+  NoCrashDumpsSwitch = 'FS25VR_NOCRASHDUMPS';
+
+function HasCommandLineSwitch(const Name: String): Boolean; forward;
 
 type
   { What the Installer recorded about the key it made. ExeName is empty when there is no record. The Written
@@ -1062,6 +1066,12 @@ end;
 function CrashDumpsAllowed: Boolean;
 begin
   Result := IsAdminInstallMode;
+end;
+
+{ Whether the player wants the setting: yes unless /FS25VR_NOCRASHDUMPS is given. }
+function WantCrashDumps: Boolean;
+begin
+  Result := not HasCommandLineSwitch(NoCrashDumpsSwitch);
 end;
 
 { The exe file name the key is written for: the game's, unless the hidden test-only /FS25VR_GAMEEXE switch
@@ -1148,6 +1158,11 @@ var
   ExeName, Key: String;
   R: TCrashDumpRecord;
 begin
+  if not WantCrashDumps then
+  begin
+    Log('Windows crash dump setting: left alone because of /' + NoCrashDumpsSwitch + '.');
+    Exit;
+  end;
   if not CrashDumpsAllowed then
   begin
     Log(CrashDumpsSkippedPerUserMessage);

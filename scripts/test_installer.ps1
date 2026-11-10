@@ -1551,6 +1551,24 @@ foreach ($change in @(
     } $change -Needs Elevated
 }
 
+Test-Case "/FS25VR_NOCRASHDUMPS leaves no crash dump key and no record, and the uninstall has nothing to remove" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+
+    Assert-InstallSucceeds $world @("/FS25VR_NOCRASHDUMPS")
+
+    Assert-SameFile $p.Injector $stagedInjector "Injector (version.dll in x64)"
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key was written although /FS25VR_NOCRASHDUMPS was given."
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "A crash dump record was written although /FS25VR_NOCRASHDUMPS was given."
+    Assert-True ((Get-LastSetupLog $world) -match "FS25VR_NOCRASHDUMPS") "Setup did not log that the crash dump setting was left alone because of the switch."
+
+    Uninstall-Fs25Vr
+
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "A crash dump key appeared by the uninstall."
+} -Needs Elevated
+
 Write-Host "Installer tests: $passed passed, $skipped skipped, $($failures.Count) failed."
 if ($failures.Count -gt 0) {
     Write-Error "$($failures.Count) installer test(s) failed: $($failures -join '; ')"
