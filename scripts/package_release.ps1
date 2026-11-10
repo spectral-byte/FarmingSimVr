@@ -239,11 +239,16 @@ Command Prompt as administrator and run
 
 powershell -NoProfile -Command "`$k = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\FarmingSimulator2025Game.exe'; New-Item `$k -Force | Out-Null; @{DumpType=0; CustomDumpFlags=0x1060; DumpCount=3}.GetEnumerator() | ForEach-Object { New-ItemProperty `$k -Name `$_.Key -Value `$_.Value -PropertyType DWord -Force | Out-Null }"
 
-To turn it off again, run
+To turn it off again, open a Command Prompt as administrator and run
 
-reg delete "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\FarmingSimulator2025Game.exe" /f /reg:64
+powershell -NoProfile -Command "`$p = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'; Remove-Item (`$p + '\FarmingSimulator2025Game.exe') -Recurse -ErrorAction SilentlyContinue; if ((Test-Path `$p) -and -not (Get-Item `$p).ValueCount -and -not (Get-ChildItem `$p)) { Remove-Item `$p }"
 
-Windows writes no dump where a policy has switched Windows Error Reporting off.
+That removes the game's key, and the LocalDumps key above it too when nothing else
+is left in it. The Installer's uninstall does the same, except that it removes
+LocalDumps only when the Installer created it.
+
+Windows writes no dump if automatic debugging for application crashes is set up on
+your machine, that is, a debugger that Windows starts when an application crashes.
 
 
 UNINSTALLATION
