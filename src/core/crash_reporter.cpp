@@ -202,32 +202,34 @@ void AddError(CrashText& line, DWORD error) {
     line.AddChar(')');
 }
 
+// Why a state has no dump, in the words that the crash line and the warning at start-up share. A literal, since the
+// crash line is put together without the heap. Empty for the state that has a dump.
+const char* NoDumpReason(DumpState state) {
+    switch (state) {
+        case DumpState::Ready: return "";
+        case DumpState::NotPrepared: return "the crash came before the first DXGI factory call";
+        case DumpState::NoDbghelp: return "the system's dbghelp.dll could not be loaded";
+        case DumpState::NoMiniDumpWriteDump: return "the system's dbghelp.dll has no MiniDumpWriteDump";
+        case DumpState::NoHelperThread: return "the dump helper thread could not be started";
+        case DumpState::PathTooLong: return "the dump's path is too long";
+    }
+    return "";
+}
+
 // How the line ends: the dump's file name, or why there is no dump. The line is written before the dump, so that the
 // log is complete whatever the dump does to the process; a dump that then fails or takes too long is told in a line of
 // its own.
 void AddDumpOutcome(CrashText& line, DumpState state) {
-    switch (state) {
-        case DumpState::Ready:
-            line.Add("dump ");
-            AddDumpFileName(line);
-            return;
-        case DumpState::NotPrepared:
-            line.Add("no dump written: the crash came before the first DXGI factory call");
-            return;
-        case DumpState::NoDbghelp:
-            line.Add("no dump written: the system's dbghelp.dll could not be loaded");
-            AddError(line, g_dumpPrepareError.load());
-            return;
-        case DumpState::NoMiniDumpWriteDump:
-            line.Add("no dump written: the system's dbghelp.dll has no MiniDumpWriteDump");
-            return;
-        case DumpState::NoHelperThread:
-            line.Add("no dump written: the dump helper thread could not be started");
-            AddError(line, g_dumpPrepareError.load());
-            return;
-        case DumpState::PathTooLong:
-            line.Add("no dump written: the dump's path is too long");
-            return;
+    if (state == DumpState::Ready) {
+        line.Add("dump ");
+        AddDumpFileName(line);
+        return;
+    }
+    line.Add("no dump written: ");
+    line.Add(NoDumpReason(state));
+    // The two reasons that come from a failed call say which error it was.
+    if (state == DumpState::NoDbghelp || state == DumpState::NoHelperThread) {
+        AddError(line, g_dumpPrepareError.load());
     }
 }
 
@@ -385,10 +387,13 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* info) {
     return PassOn(info);
 }
 
-void FailPreparing(DumpState state, DWORD error, const char* why) {
+// Preparing the dump failed at a call that has an error to report: the warning at start-up gives the reason that the
+// crash line will give.
+void FailPreparing(DumpState state, DWORD error) {
     g_dumpPrepareError = error;
     g_dumpState = state;
-    LogWarn(std::string("Injector: A crash will leave no dump: ") + why + " (error " + std::to_string(error) + ").");
+    LogWarn(std::string("Injector: A crash will leave no dump: ") + NoDumpReason(state) + " (error " + std::to_string(error) +
+            ").");
 }
 
 void CloseHandleIfOpen(HANDLE& handle) {
@@ -400,6 +405,7 @@ void CloseHandleIfOpen(HANDLE& handle) {
 void PrepareTheDump(const std::wstring& path) {
     if (path.size() >= std::size(g_dumpPath)) {
         g_dumpState = DumpState::PathTooLong;
+        // Not NoDumpReason: the warning names the path, which the crash line has no room for.
         LogWarn("Injector: A crash will leave no dump: the path " + std::filesystem::path(path).string() + " is too long.");
         return;
     }
@@ -416,7 +422,7 @@ void PrepareTheDump(const std::wstring& path) {
                                  LOAD_LIBRARY_SEARCH_SYSTEM32);
     }
     if (!dbghelp) {
-        FailPreparing(DumpState::NoDbghelp, GetLastError(), "the system's dbghelp.dll could not be loaded");
+        FailPreparing(DumpState::NoDbghelp, GetLastError());
         return;
     }
     // Writing the dump reads each module's version resource through version.dll's functions. In the game that name is
@@ -426,7 +432,7 @@ void PrepareTheDump(const std::wstring& path) {
     g_miniDumpWriteDump = reinterpret_cast<MiniDumpWriteDumpFn>(GetProcAddress(dbghelp, "MiniDumpWriteDump"));
     if (!g_miniDumpWriteDump) {
         g_dumpState = DumpState::NoMiniDumpWriteDump;
-        LogWarn("Injector: A crash will leave no dump: the system's dbghelp.dll has no MiniDumpWriteDump.");
+        LogWarn(std::string("Injector: A crash will leave no dump: ") + NoDumpReason(DumpState::NoMiniDumpWriteDump) + ".");
         return;
     }
     g_dumpState = DumpState::Ready;
@@ -469,7 +475,7 @@ void PrepareCrashDump() {
         const DWORD error = GetLastError();
         CloseHandleIfOpen(g_dumpRequested);
         CloseHandleIfOpen(g_dumpFinished);
-        FailPreparing(DumpState::NoHelperThread, error, "the dump helper thread could not be started");
+        FailPreparing(DumpState::NoHelperThread, error);
         return;
     }
     g_helperReady = true;
