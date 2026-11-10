@@ -182,6 +182,9 @@ string(REPLACE "." ";" FS25VR_VERSION_PARTS "${FS25VR_VERSION}.0.0.0")
 list(SUBLIST FS25VR_VERSION_PARTS 0 4 FS25VR_VERSION_PARTS)
 string(REPLACE ";" "," FS25VR_VERSION_COMMA "${FS25VR_VERSION_PARTS}")
 configure_file(src/injector.rc.in "${CMAKE_CURRENT_BINARY_DIR}/injector.rc" @ONLY)
+# The same number reaches the core library (src/core/injector_version.h), which the Injector and the tests share:
+# VRBridge reports it and the Injector's first log line names it.
+target_compile_definitions(fs25_vr_core PUBLIC FS25VR_VERSION="${FS25VR_VERSION}")
 
 # The Injector DLL. The game loads it as its version.dll, and it hooks the system's dxgi.dll (ADR-0038).
 add_library(injector SHARED
