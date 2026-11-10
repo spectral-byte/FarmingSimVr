@@ -457,6 +457,45 @@ public:
     }
     bool Has(MINIDUMP_STREAM_TYPE type) const { return !Stream(type).empty(); }
 
+    // The threads in the thread list, each with the number of bytes of its stack that the dump holds.
+    std::vector<std::pair<ULONG32, ULONG32>> ThreadsWithStackBytes() const {
+        std::vector<std::pair<ULONG32, ULONG32>> threads;
+        const std::vector<unsigned char> stream = Stream(ThreadListStream);
+        if (stream.size() < sizeof(ULONG32)) return threads;
+        ULONG32 count = 0;
+        std::memcpy(&count, stream.data(), sizeof(count));
+        for (ULONG32 i = 0; i < count; ++i) {
+            const size_t at = sizeof(ULONG32) + i * sizeof(MINIDUMP_THREAD);
+            if (at + sizeof(MINIDUMP_THREAD) > stream.size()) break;
+            MINIDUMP_THREAD thread;
+            std::memcpy(&thread, stream.data() + at, sizeof(thread));
+            threads.emplace_back(thread.ThreadId, thread.Stack.Memory.DataSize);
+        }
+        return threads;
+    }
+
+    // The file names of the modules in the list of unloaded modules.
+    std::vector<std::wstring> UnloadedModuleNames() const {
+        std::vector<std::wstring> names;
+        const std::vector<unsigned char> stream = Stream(UnloadedModuleListStream);
+        MINIDUMP_UNLOADED_MODULE_LIST list;
+        if (stream.size() < sizeof(list)) return names;
+        std::memcpy(&list, stream.data(), sizeof(list));
+        for (ULONG32 i = 0; i < list.NumberOfEntries; ++i) {
+            const size_t at = list.SizeOfHeader + static_cast<size_t>(i) * list.SizeOfEntry;
+            if (at + sizeof(MINIDUMP_UNLOADED_MODULE) > stream.size()) break;
+            MINIDUMP_UNLOADED_MODULE module;
+            std::memcpy(&module, stream.data() + at, sizeof(module));
+            names.push_back(StringAt(module.ModuleNameRva));
+        }
+        return names;
+    }
+
+    // Whether the bytes of `text` are anywhere in the file.
+    bool Contains(const std::string& text) const {
+        return std::search(m_bytes.begin(), m_bytes.end(), text.begin(), text.end()) != m_bytes.end();
+    }
+
     // The exception record in the exception stream.
     std::optional<MINIDUMP_EXCEPTION_STREAM> Exception() const {
         const std::vector<unsigned char> stream = Stream(ExceptionStream);
@@ -467,6 +506,17 @@ public:
     }
 
 private:
+    // A MINIDUMP_STRING: the length in bytes, then UTF-16 text.
+    std::wstring StringAt(RVA rva) const {
+        ULONG32 bytes = 0;
+        if (static_cast<size_t>(rva) + sizeof(bytes) > m_bytes.size()) return {};
+        std::memcpy(&bytes, m_bytes.data() + rva, sizeof(bytes));
+        if (static_cast<size_t>(rva) + sizeof(bytes) + bytes > m_bytes.size()) return {};
+        std::wstring text(bytes / sizeof(wchar_t), L'\0');
+        std::memcpy(text.data(), m_bytes.data() + rva + sizeof(bytes), bytes);
+        return text;
+    }
+
     std::vector<MINIDUMP_DIRECTORY> Directory() const {
         std::vector<MINIDUMP_DIRECTORY> entries;
         MINIDUMP_HEADER header;
@@ -718,6 +768,67 @@ TEST_F(CrashReporterTest, TheNextCrashingProcessReplacesTheDump) {
         if (entry.path().extension() == L".dmp") ++dumps;
     }
     EXPECT_EQ(dumps, 1) << "The dump is one file with a fixed name.";
+}
+
+// ---- What the dump holds ----
+// The contents the Installer asks Windows for in the game's own dump (installer/fs25_vr.iss): every thread's stack, the
+// modules (the unloaded ones too), the exception and the thread information, and the memory the stacks point at, but
+// not the whole process, so that a dump is small enough to attach to an issue once zipped.
+
+ChildSetup AfterTheFirstFactoryWithAnUnloadedModule() {
+    ChildSetup setup = AfterTheFirstFactory();
+    setup.unloadsAModule = true;
+    return setup;
+}
+
+TEST_F(CrashReporterTest, TheDumpHoldsEveryThreadsStack) {
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    const Minidump dump(BytesOf(DumpPath()));
+    const auto threads = dump.ThreadsWithStackBytes();
+    ASSERT_FALSE(threads.empty()) << "The dump has no thread list.\n" << m_childReport;
+    // The threads the child knows by id: the one that faulted, the one that waits for it, and the child's watchdog.
+    for (const char* key : {"thread=", "main=", "guard="}) {
+        const std::string id = ValueOf(m_childReport, key);
+        ASSERT_FALSE(id.empty()) << key << "\n" << m_childReport;
+        const auto found = std::find_if(threads.begin(), threads.end(),
+                                        [&](const auto& thread) { return std::to_string(thread.first) == id; });
+        ASSERT_NE(found, threads.end()) << "Thread " << key << id << " is not in the dump.";
+        EXPECT_GT(found->second, 0u) << "The dump holds none of the stack of thread " << key << id;
+    }
+}
+
+TEST_F(CrashReporterTest, TheDumpHoldsTheModuleListWithTheUnloadedModulesAndTheThreadInformation) {
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess,
+                                 AfterTheFirstFactoryWithAnUnloadedModule()),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    const Minidump dump(BytesOf(DumpPath()));
+    EXPECT_TRUE(dump.Has(ModuleListStream));
+    EXPECT_TRUE(dump.Has(ThreadInfoListStream));
+    ASSERT_TRUE(dump.Has(UnloadedModuleListStream)) << "The dump has no list of unloaded modules.";
+    const auto unloaded = dump.UnloadedModuleNames();
+    const bool namesTheLibrary = std::any_of(unloaded.begin(), unloaded.end(), [](const std::wstring& name) {
+        return std::filesystem::path(name).filename() == kUnloadedModuleName;
+    });
+    EXPECT_TRUE(namesTheLibrary) << "The library the child freed is not among the " << unloaded.size() << " unloaded modules.";
+}
+
+TEST_F(CrashReporterTest, TheDumpHoldsTheMemoryTheStacksPointAtAndNotTheWholeProcess) {
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointerWithMemoryOnItsStack, FirstCall::EndsTheProcess,
+                                 AfterTheFirstFactory()),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    const Minidump dump(BytesOf(DumpPath()));
+    ASSERT_TRUE(dump.HasSignature()) << m_childReport;
+    EXPECT_TRUE(dump.Has(MemoryListStream));
+    EXPECT_TRUE(dump.Contains(MarkerText("ON-A-STACK"))) << "The memory a stack points at is not in the dump.";
+    EXPECT_FALSE(dump.Contains(MarkerText("ON-NO-STACK"))) << "Memory that no stack points at is in the dump.";
+    EXPECT_FALSE(dump.Has(Memory64ListStream)) << "The dump holds the whole process.";
+    // A dump of all the memory of this child is about 77 MB; the dump holds a few hundred kilobytes.
+    EXPECT_LT(dump.Size(), 8u * 1024 * 1024) << "The dump is " << dump.Size() / 1024 << " KB.";
+    RecordProperty("DumpSizeBytes", static_cast<int>(dump.Size()));
 }
 
 // dbghelp.dll loads another library, and a library cannot be loaded from DllMain or from a crashing thread: it is
