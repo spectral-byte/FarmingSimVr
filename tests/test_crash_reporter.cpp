@@ -12,6 +12,8 @@
 #include "core/injector_version.h"
 #include "core/logger.h"
 #include "injector_binary.h"
+#include "proxy/dxgi_proxy.h"
+#include "proxy/mirror_window_controller.h"
 #include <windows.h>
 #include <dxgi.h>
 #include <intrin.h>
@@ -279,8 +281,32 @@ void StandInForTheDumpWriter(DumpWriter writer) {
     }
 }
 
+// A filter that another module installs after the Injector's. It may call the filter it replaced, which is the Injector's
+// (filters that chain do), or leave it alone and end the process itself.
+LPTOP_LEVEL_EXCEPTION_FILTER g_replacedByTheLaterFilter = nullptr;
+
+LONG WINAPI LaterFilterThatChains(EXCEPTION_POINTERS* info) {
+    std::fprintf(stderr, "later filter ran, and chains\n");
+    return g_replacedByTheLaterFilter ? g_replacedByTheLaterFilter(info) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+LONG WINAPI LaterFilterThatDoesNotChain(EXCEPTION_POINTERS* info) {
+    std::fprintf(stderr, "later filter ran, and does not chain\n");
+    TerminateProcess(GetCurrentProcess(), info->ExceptionRecord->ExceptionCode);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+enum class FilterInstalledLater {
+    None,
+    Chains,
+    DoesNotChain,
+};
+
 // What else the child does between loading the Injector and faulting.
 struct ChildSetup {
+    // Installed right after the Injector is loaded, so that the Injector's filter is not on top any more when the child
+    // creates its DXGI factory and faults.
+    FilterInstalledLater laterFilter = FilterInstalledLater::None;
     // The game creates its DXGI factory at start-up. The Injector prepares its crash dump at the first factory call, so
     // a child that never creates one stands for a crash before that point.
     bool createsAFactory = false;
@@ -327,6 +353,11 @@ void CrashLikeTheGame(Fault fault = Fault::WriteThroughANullPointer, FirstCall f
         ExitProcess(1);
     }
     StandInForTheDumpWriter(setup.dumpWriter);
+    if (setup.laterFilter == FilterInstalledLater::Chains) {
+        g_replacedByTheLaterFilter = SetUnhandledExceptionFilter(&LaterFilterThatChains);
+    } else if (setup.laterFilter == FilterInstalledLater::DoesNotChain) {
+        g_replacedByTheLaterFilter = SetUnhandledExceptionFilter(&LaterFilterThatDoesNotChain);
+    }
     std::fprintf(stderr, "dbghelp after loading the Injector: %s\n", PathOfDbghelpInThisProcess().c_str());
     if (setup.createsAFactory) {
         // Through the Injector's hook of the system's dxgi.dll.
@@ -770,6 +801,45 @@ TEST_F(CrashReporterTest, TheNextCrashingProcessReplacesTheDump) {
     EXPECT_EQ(dumps, 1) << "The dump is one file with a fixed name.";
 }
 
+// ---- Installing the filter again ----
+// The game may install an unhandled exception filter of its own after the Injector started. Then it, and not the
+// Injector, gets the crash, and neither crash line nor dump is written. The Injector installs its filter again at the
+// first DXGI factory call; what it finds on top becomes the filter it passes the crash on to.
+
+ChildSetup AfterTheFirstFactoryWithALaterFilter(FilterInstalledLater later) {
+    ChildSetup setup = AfterTheFirstFactory();
+    setup.laterFilter = later;
+    return setup;
+}
+
+TEST_F(CrashReporterTest, AFilterInstalledAfterTheInjectorDoesNotKeepTheCrashFromTheLogAndTheDump) {
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess,
+                                 AfterTheFirstFactoryWithALaterFilter(FilterInstalledLater::DoesNotChain)),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    // The later filter is still called: it is the one the Injector passes the crash on to.
+    EXPECT_NE(m_childReport.find("later filter ran, and does not chain"), std::string::npos) << m_childReport;
+    const std::vector<std::string> log = Lines(LogPath());
+    ASSERT_FALSE(log.empty());
+    EXPECT_NE(log.back().find("Injector: Crash:"), std::string::npos) << log.back();
+    EXPECT_TRUE(Minidump(BytesOf(DumpPath())).HasSignature());
+}
+
+// A filter that chains calls the one it replaced, which is the Injector's. The Injector installs again over it and
+// passes the crash on to it, so each calls the other: the chain must end, and no filter may be left out of it.
+TEST_F(CrashReporterTest, AFilterThatChainedToTheReporterDoesNotMakeAChainThatLoops) {
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess,
+                                 AfterTheFirstFactoryWithALaterFilter(FilterInstalledLater::Chains)),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    EXPECT_EQ(Occurrences(m_childReport, "later filter ran, and chains"), 1) << m_childReport;
+    // The filter that was below the Injector's before the later one came is called too, once.
+    EXPECT_EQ(Occurrences(m_childReport, "previous filter ran: call=1"), 1) << m_childReport;
+    EXPECT_EQ(Occurrences(m_childReport, "previous filter ran: call=2"), 0) << m_childReport;
+    EXPECT_EQ(CrashLinesIn(Lines(LogPath())), 1);
+    EXPECT_TRUE(Minidump(BytesOf(DumpPath())).HasSignature());
+}
+
 // ---- What the dump holds ----
 // The contents the Installer asks Windows for in the game's own dump (installer/fs25_vr.iss): every thread's stack, the
 // modules (the unloaded ones too), the exception and the thread information, and the memory the stacks point at, but
@@ -995,6 +1065,49 @@ TEST(CrashReporterInstallTest, InstallingAgainKeepsTheFilterItPassesCrashesOnTo)
     RemoveCrashReporter();
 
     EXPECT_EQ(TopUnhandledExceptionFilter(), &PreviousFilter);
+}
+
+// The Injector attaches to the game's swap chain in Active VR Mode (the swap chain is only hooked there). A filter that
+// took the top place since the first factory call is found then, and the reporter goes on top of it again.
+TEST(CrashReporterInstallTest, AttachingToTheGamesSwapChainPutsTheReporterOnTopAgain) {
+    RestoreTheUnhandledExceptionFilter restore;
+    SetUnhandledExceptionFilter(&PreviousFilter);
+    InstallCrashReporter();
+    SetUnhandledExceptionFilter(&LaterFilter);  // the game installs a filter of its own
+    DxgiProxy proxy(nullptr, nullptr, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+
+    proxy.AttachSwapChain(nullptr);
+    const LPTOP_LEVEL_EXCEPTION_FILTER top = TopUnhandledExceptionFilter();
+    RemoveCrashReporter();
+
+    EXPECT_NE(top, &LaterFilter) << "The reporter was not put on top again.";
+    EXPECT_NE(top, &PreviousFilter);
+    EXPECT_EQ(TopUnhandledExceptionFilter(), &LaterFilter) << "The filter found on top is not the one passed on to.";
+}
+
+// The proxies the tests of the DXGI proxy create must leave the process as they found it: only the Injector, which
+// installs the reporter, has it put on top again.
+TEST(CrashReporterInstallTest, AttachingToASwapChainInstallsNoReporterThatWasNotInstalled) {
+    RestoreTheUnhandledExceptionFilter restore;
+    SetUnhandledExceptionFilter(&PreviousFilter);
+    DxgiProxy proxy(nullptr, nullptr, nullptr, nullptr, std::make_shared<MirrorWindowController>(), nullptr);
+
+    proxy.AttachSwapChain(nullptr);
+
+    EXPECT_EQ(TopUnhandledExceptionFilter(), &PreviousFilter);
+}
+
+TEST(CrashReporterInstallTest, AReinstallThatFindsNoFilterOnTopForgetsTheOnesFromBefore) {
+    RestoreTheUnhandledExceptionFilter restore;
+    SetUnhandledExceptionFilter(&PreviousFilter);
+    InstallCrashReporter();
+    SetUnhandledExceptionFilter(nullptr);  // whoever did this took the chain with it
+
+    ReinstallCrashReporter();
+    RemoveCrashReporter();
+
+    // Put back as nothing: Windows' own handling. The filter from before may sit in a module that is gone.
+    EXPECT_EQ(TopUnhandledExceptionFilter(), nullptr);
 }
 
 TEST(CrashReporterInstallTest, AFilterFoundOnTopWhenInstallingAgainBecomesTheOneItPassesCrashesOnTo) {

@@ -24,9 +24,15 @@ void InstallCrashReporter();
 
 // Puts the reporter on top again after another module took the place (the game may install a filter of its own after
 // the Injector started), but only when InstallCrashReporter ran: the tests that drive the DXGI proxy in-process must
-// not leave a filter behind. A different filter found on top becomes the one to pass crashes on to. When none is on
-// top, the earlier one is forgotten too: whoever removed the reporter removed the chain with it, and a filter taken
-// away may sit in a module that is gone, so the crash goes to Windows' own handling instead.
+// not leave a filter behind. A different filter found on top becomes the first one to pass crashes on to; the ones from
+// before follow it. When none is on top, the earlier ones are forgotten too: whoever removed the reporter removed the
+// chain with it, and a filter taken away may sit in a module that is gone, so the crash goes to Windows' own handling
+// instead.
+//
+// A filter on top that called the one it replaced (the reporter) from its own makes a loop with the reporter, which
+// passes the crash on to it: the reporter, reached again from inside a filter, passes the crash on to the next older
+// one, so that each is called once. The Injector calls this at the first DXGI factory call (PrepareCrashDump) and when
+// it attaches to the game's swap chain, which it hooks in Active VR Mode only.
 void ReinstallCrashReporter();
 
 // Prepares the crash dump, once per process, at the first DXGI factory call, where the Injector's other deferred

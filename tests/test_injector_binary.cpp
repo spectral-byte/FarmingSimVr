@@ -167,6 +167,60 @@ TEST(InjectorCrashFilterTest, FreeingTheInjectorLeavesTheProcessesPreviousFilter
     EXPECT_EQ(TopUnhandledExceptionFilter(), &PreviousFilter);
 }
 
+// The game may install a filter of its own after the Injector loaded. The first DXGI factory call puts the Injector's
+// filter on top of it again, and the game's becomes the one the Injector passes a crash on to, which unloading restores.
+TEST(InjectorCrashFilterTest, TheFirstFactoryCallPutsTheInjectorsFilterOnTopOfOneThatTookThePlace) {
+    RestoreTheUnhandledExceptionFilter restore;
+    SetUnhandledExceptionFilter(&PreviousFilter);
+    HMODULE injector = LoadLibraryW(InjectorPath().c_str());
+    ASSERT_NE(injector, nullptr) << INJECTOR_DLL_PATH << " (error " << GetLastError() << ")";
+    SetUnhandledExceptionFilter(&LaterFilter);
+    void* createFactory1 = DxgiExportHooks::FindExport(LoadedSystemDxgi(), "CreateDXGIFactory1");
+    ASSERT_NE(createFactory1, nullptr);
+
+    ComPtr<IDXGIFactory1> factory;
+    EXPECT_EQ(reinterpret_cast<PFN_CreateDXGIFactory1>(createFactory1)(IID_PPV_ARGS(&factory)), S_OK);
+    const LPTOP_LEVEL_EXCEPTION_FILTER top = TopUnhandledExceptionFilter();
+    factory.Reset();
+    FreeLibrary(injector);
+
+    EXPECT_NE(top, &LaterFilter) << "The first factory call did not put the Injector's filter on top again.";
+    EXPECT_NE(top, &PreviousFilter);
+    EXPECT_EQ(TopUnhandledExceptionFilter(), &LaterFilter) << "The filter found on top is not the one to pass crashes on to.";
+}
+
+// The dump is prepared with a thread that is ended when the Injector unloads, since its code goes with it. Tests and
+// tools that load the Injector again must find it working again.
+TEST(InjectorCrashFilterTest, TheInjectorPreparesItsCrashDumpAgainWhenItIsLoadedAgain) {
+    struct RestoreTestLogger {
+        ~RestoreTestLogger() { Logger::Instance().SetLogFile(Logger::DefaultLogPath()); }
+    } restoreTestLogger;
+    Logger::Instance().Close();
+    const std::filesystem::path logPath = std::filesystem::path(InjectorPath()).parent_path() / L"fs25_vr.log";
+    std::filesystem::remove(logPath);
+    std::filesystem::remove(Logger::BackupPathFor(logPath));
+    void* createFactory1 = DxgiExportHooks::FindExport(LoadedSystemDxgi(), "CreateDXGIFactory1");
+    ASSERT_NE(createFactory1, nullptr);
+
+    for (int load = 0; load < 2; ++load) {
+        HMODULE injector = LoadLibraryW(InjectorPath().c_str());
+        ASSERT_NE(injector, nullptr) << INJECTOR_DLL_PATH << " (error " << GetLastError() << ")";
+        ComPtr<IDXGIFactory1> factory;
+        EXPECT_EQ(reinterpret_cast<PFN_CreateDXGIFactory1>(createFactory1)(IID_PPV_ARGS(&factory)), S_OK);
+        factory.Reset();
+        FreeLibrary(injector);  // detaching flushes the log and closes it
+    }
+
+    std::ifstream log(logPath);
+    std::string line;
+    std::getline(log, line);  // the second load's own log: the first one was moved to the backup
+    bool prepared = false;
+    for (; std::getline(log, line);) {
+        prepared = prepared || line.find("A crash will leave a dump at") != std::string::npos;
+    }
+    EXPECT_TRUE(prepared) << "The second load did not prepare its crash dump.";
+}
+
 TEST(InjectorCrashFilterTest, FreeingTheInjectorLeavesAFilterInstalledAfterItOnTop) {
     RestoreTheUnhandledExceptionFilter restore;
     SetUnhandledExceptionFilter(&PreviousFilter);

@@ -20,16 +20,23 @@ namespace fs25vr {
 namespace {
 
 // Pieces of state the filter reads, which it cannot be handed: the OS calls it with the exception alone.
-std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> g_previousFilter{nullptr};
 std::atomic<bool> g_installed{false};
 // The log, looked up while installing so that the filter never has to construct it inside a crashing process.
 std::atomic<Logger*> g_log{nullptr};
 // Set by the first crash to reach the filter; every later one goes straight to the previous filter.
 std::atomic<bool> g_crashSeen{false};
-// Set while this thread is inside the previous filter. A filter that another module installed on top may have chained to
-// ours (called the filter it replaced), and ours then finds it on top and calls it: the second call to ours on the same
-// thread is that loop, and ends it.
-thread_local bool t_passingOn = false;
+
+// The filters the reporter passes a crash on to, the newest first: the one that was on top when the reporter was
+// installed, and each one it found on top when it installed again. More than one, because a filter that took the top
+// place after the reporter may have called the filter it replaced (the reporter) from its own, as filters that chain do.
+// The reporter, installed again on top of it, passes the crash on to it, it calls the reporter, and the reporter would
+// pass the crash on to it again, for ever. The way out is to count how many filters this thread has been passed on to:
+// the reporter, reached again from inside one, passes on to the next older one, the filter that was below it before the
+// later one came. Each filter is called once, and the chain ends when the list does.
+constexpr int kMaxFiltersPassedOn = 4;
+std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> g_filters[kMaxFiltersPassedOn];
+std::atomic<int> g_filterCount{0};
+thread_local int t_filtersPassedOnByThisThread = 0;
 
 // ---- The crash dump ----
 
@@ -222,14 +229,37 @@ void AddDumpOutcome(CrashText& line, DumpState state) {
     }
 }
 
-// Calling the previous filter from inside ours is how a loop starts when a module on top chained to us: see t_passingOn.
+// Passes the crash on to the next filter of the list that this thread has not been passed on to: see g_filters. With
+// none left, Windows continues its own handling.
 LONG PassOn(EXCEPTION_POINTERS* info) {
-    LPTOP_LEVEL_EXCEPTION_FILTER previous = g_previousFilter.load();
-    if (!previous || t_passingOn) return EXCEPTION_CONTINUE_SEARCH;
-    t_passingOn = true;
-    const LONG result = previous(info);
-    t_passingOn = false;
+    const int position = t_filtersPassedOnByThisThread;
+    if (position >= g_filterCount.load()) return EXCEPTION_CONTINUE_SEARCH;
+    LPTOP_LEVEL_EXCEPTION_FILTER next = g_filters[position].load();
+    if (!next) return EXCEPTION_CONTINUE_SEARCH;
+    t_filtersPassedOnByThisThread = position + 1;
+    const LONG result = next(info);
+    t_filtersPassedOnByThisThread = position;
     return result;
+}
+
+// Puts what SetUnhandledExceptionFilter found on top in front of the list, or empties the list when it found none:
+// whoever removed the reporter removed the chain with it, and a filter that has been taken away may sit in a module that
+// is gone. The crash then goes to Windows' own handling.
+void RememberFilterFoundOnTop(LPTOP_LEVEL_EXCEPTION_FILTER found) {
+    if (!found) {
+        g_filterCount = 0;
+        return;
+    }
+    LPTOP_LEVEL_EXCEPTION_FILTER list[kMaxFiltersPassedOn];
+    int count = 0;
+    list[count++] = found;
+    const int known = g_filterCount.load();
+    for (int i = 0; i < known && count < kMaxFiltersPassedOn; ++i) {
+        LPTOP_LEVEL_EXCEPTION_FILTER filter = g_filters[i].load();
+        if (filter != found) list[count++] = filter;
+    }
+    for (int i = 0; i < count; ++i) g_filters[i] = list[i];
+    g_filterCount = count;
 }
 
 // The line that names the crash. Runs on the helper thread, or on the crashing thread when there is none.
@@ -408,8 +438,7 @@ void InstallCrashReporter() {
     }
     LPTOP_LEVEL_EXCEPTION_FILTER found = SetUnhandledExceptionFilter(&CrashFilter);
     if (found != &CrashFilter) {
-        // Another filter, or none: when none, the earlier one is forgotten as well (see the header).
-        g_previousFilter = found;
+        RememberFilterFoundOnTop(found);
     }
     g_installed = true;
 }
@@ -453,13 +482,15 @@ void RemoveCrashReporter() {
     if (!g_installed.exchange(false)) return;
     // The only way to look at the top filter is to replace it: put the filter that was here before the reporter in its
     // place, and the one that was on top back if it was not the reporter.
-    LPTOP_LEVEL_EXCEPTION_FILTER top = SetUnhandledExceptionFilter(g_previousFilter.load());
+    LPTOP_LEVEL_EXCEPTION_FILTER top =
+        SetUnhandledExceptionFilter(g_filterCount.load() > 0 ? g_filters[0].load() : nullptr);
     if (top != &CrashFilter) {
         SetUnhandledExceptionFilter(top);
     }
 
     // Not while a crash is being handled: the process is going down then, and the helper may be writing the dump.
     if (g_crashSeen.load()) return;
+    g_filterCount = 0;
 
     // The helper thread runs code of the Injector, which is about to be unloaded. It cannot be asked to leave: it would
     // have to run on until it exits, and a thread's exit needs the loader lock, which this thread holds (DllMain).
