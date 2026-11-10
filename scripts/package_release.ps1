@@ -215,9 +215,16 @@ Documents\My Games\FarmingSimulator2025\modSettings\FS25_VRCompanion\settings.xm
 
 IF THE GAME CRASHES
 --------------------------------------------------------------------------------
-A crash dump shows where the game crashed, so attach one to your bug report.
-Zip it first: a dump can contain file paths and your Windows user name.
+The log and the crash dumps show where the game crashed, so attach them to your
+bug report. Zip the dumps first: a dump can contain file paths and your Windows
+user name.
 
+- fs25_vr.log: the Injector's log, in the game's x64 folder (next to
+  FarmingSimulator2025Game.exe). A crash finishes it, and its last line says what
+  crashed.
+- fs25_vr_crash.dmp: the Injector's own crash dump, in the same folder, written by
+  the crash. The next crash replaces it. If the last line of the log says "no dump
+  written", it also says why there is none.
 - Windows' crash dump for the game: the newest
   FarmingSimulator2025Game.exe.<number>.dmp in %LOCALAPPDATA%\CrashDumps (paste
   that into the Explorer address bar). Windows keeps the last three.
@@ -244,8 +251,8 @@ UNINSTALLATION
   FS25_VR_v${version}_Setup.exe /FS25VR_UNINSTALL runs the uninstaller unattended
   and exits with its exit code (non-zero if FS25 VR is not installed or the game
   is running).
-  Uninstalling removes version.dll, FS25_VRCompanion.zip and fs25_vr.log, and
-  keeps your VR settings in modSettings. It puts back the version.dll it moved
+  Uninstalling removes version.dll, FS25_VRCompanion.zip, fs25_vr.log and the
+  Injector's crash dump, and keeps your VR settings in modSettings. It puts back the version.dll it moved
   aside (or keeps a version.dll you installed over FS25 VR's since), leaves a
   dxgi.dll such as ReShade's alone, and
   restores your original Render Resolution unless you changed the width, height
