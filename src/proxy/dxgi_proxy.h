@@ -137,6 +137,9 @@ private:
     // back buffers, marks the window clamp dirty and, in Active VR Mode, replaces the requested size
     // with the Render Resolution.
     static void PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height);
+    // Lets go of the game's cached back buffers and the swap chain they were cached from, so the Injector keeps
+    // nothing of it alive: before a resize and before a creation for the game window is passed on.
+    void ReleaseCachedBackBuffers();
     // Hooks the factory a successful CreateDXGIFactory* call returned, in Active VR Mode.
     void AttachCreatedFactory(HRESULT hr, void** ppFactory);
 

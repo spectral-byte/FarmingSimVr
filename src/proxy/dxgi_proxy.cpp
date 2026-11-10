@@ -604,15 +604,19 @@ void DxgiProxy::DetachAll() {
     m_loggedHiddenColorSpaces = 0;
     m_loggedHiddenOutputHdr = false;
     m_gameSwapChain = nullptr;
-    m_cachedSwapChain = nullptr;
-    m_cachedSwapChain3.Reset();
-    m_cachedBackBuffers.clear();
+    ReleaseCachedBackBuffers();
     m_lastPresentSuppressed = false;
     m_desktopMirrorOffAnnounced = false;
     m_desktopMirrorWasShowing = false;
     if (m_vrBridge) {
         m_vrBridge->ClearPendingRenderingMode();
     }
+}
+
+void DxgiProxy::ReleaseCachedBackBuffers() {
+    m_cachedSwapChain = nullptr;
+    m_cachedSwapChain3.Reset();
+    m_cachedBackBuffers.clear();
 }
 
 bool DxgiProxy::IsForGameWindow(HWND window) const {
@@ -1043,9 +1047,7 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_Present1(IDXGISwapChain1* self, U
 
 void DxgiProxy::PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height) {
     if (!proxy) return;
-    proxy->m_cachedSwapChain = nullptr;
-    proxy->m_cachedSwapChain3.Reset();
-    proxy->m_cachedBackBuffers.clear();
+    proxy->ReleaseCachedBackBuffers();
     proxy->m_windowController->SetWindowClampDirty(true);
     if (proxy->IsActive() && proxy->m_windowController->GetTargetRenderWidth() > 0 && proxy->m_windowController->GetTargetRenderHeight() > 0) {
         const UINT requestedWidth = width;
@@ -1165,6 +1167,8 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
         LogInfo("DxgiProxy: CreateSwapChain for a window other than the game's; passed on as requested.");
         return orig ? orig(self, pDevice, pDesc, ppSwapChain) : E_FAIL;
     }
+    // The game's window gets a new swap chain: nothing of the old one may outlive the creation.
+    proxy->ReleaseCachedBackBuffers();
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
@@ -1213,6 +1217,8 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
         LogInfo("DxgiProxy: CreateSwapChainForHwnd for a window other than the game's; passed on as requested.");
         return orig ? orig(self, pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain) : E_FAIL;
     }
+    // The game's window gets a new swap chain: nothing of the old one may outlive the creation.
+    proxy->ReleaseCachedBackBuffers();
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }

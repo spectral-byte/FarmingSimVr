@@ -19,6 +19,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iterator>
 #include <string>
@@ -5802,10 +5803,13 @@ namespace {
 // through their original, i.e. the system's object (behind a wrapper such as ReShade's, the one the hooks are called with).
 IDXGISwapChain* g_swapChainTheSystemCreates = nullptr;
 HWND g_windowTheSystemWasAskedFor = nullptr;
+// Runs the moment a creation reaches the system, for a test to look at what the Injector still holds by then.
+std::function<void()> g_onSystemCreation;
 
 __declspec(noinline) HRESULT STDMETHODCALLTYPE RecordingCreateSwapChainForHwnd(
     IDXGIFactory2*, IUnknown*, HWND window, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*,
     IDXGIOutput*, IDXGISwapChain1** ppSwapChain) {
+    if (g_onSystemCreation) g_onSystemCreation();
     g_windowTheSystemWasAskedFor = window;
     if (ppSwapChain) *ppSwapChain = static_cast<IDXGISwapChain1*>(g_swapChainTheSystemCreates);
     return S_OK;
@@ -5813,6 +5817,7 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE RecordingCreateSwapChainForHwnd(
 
 __declspec(noinline) HRESULT STDMETHODCALLTYPE RecordingCreateSwapChain(
     IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** ppSwapChain) {
+    if (g_onSystemCreation) g_onSystemCreation();
     g_windowTheSystemWasAskedFor = desc ? desc->OutputWindow : nullptr;
     if (ppSwapChain) *ppSwapChain = g_swapChainTheSystemCreates;
     return S_OK;
@@ -5977,6 +5982,186 @@ TEST(DxgiProxyTest, TheGamesSwapChainIsTheSystemObjectTheHooksAreCalledWithNotAW
     EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u);
     rig.Present(wrapperTheGameHolds, 1, 0);
     EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u) << "only the system object the hooks were handed is the game's";
+
+    rig.runtime->GetDxgiProxy().DetachAll();
+    DestroyWindow(gameWindow);
+}
+
+// A replaced swap chain (#265). A swap chain here owns one back buffer that counts its references: it starts with the
+// swap chain's own, and every GetBuffer adds one, as a real one does. So the count shows whether the Injector still
+// holds the buffer it cached from a Present.
+namespace {
+
+struct BufferedSwapChain {
+    void** vtable;
+    CountingSwapChain buffer{ nullptr, 1 };  // the back buffer: its vtable is set by the constructor
+    int getBufferCalls = 0;
+    std::vector<void*> bufferVTable = std::vector<void*>(3, nullptr);
+    std::vector<void*> ownVTable;
+
+    explicit BufferedSwapChain(const std::vector<void*>& systemVTable) : ownVTable(systemVTable) {
+        bufferVTable[0] = reinterpret_cast<void*>(&CountingQueryInterface);
+        bufferVTable[1] = reinterpret_cast<void*>(&CountingAddRef);
+        bufferVTable[2] = reinterpret_cast<void*>(&CountingRelease);
+        buffer.vtable = bufferVTable.data();
+        ownVTable[9] = reinterpret_cast<void*>(&BufferedGetBuffer);
+        vtable = ownVTable.data();
+    }
+    IDXGISwapChain* Get() { return reinterpret_cast<IDXGISwapChain*>(this); }
+
+    static HRESULT STDMETHODCALLTYPE BufferedGetBuffer(IDXGISwapChain* self, UINT, REFIID, void** ppv) {
+        auto* swapChain = reinterpret_cast<BufferedSwapChain*>(self);
+        ++swapChain->getBufferCalls;
+        ++swapChain->buffer.references;
+        if (ppv) *ppv = &swapChain->buffer;
+        return S_OK;
+    }
+};
+
+} // namespace
+
+TEST(DxgiProxyTest, TheOldSwapChainsBackBuffersAreReleasedBeforeTheCreationForTheGameWindowIsPassedOn) {
+    SecondSwapChainRig rig(VRRenderingMode::AFR, false);
+    HWND gameWindow = MakeTestWindow("ReplacedSwapChainGameWnd1");
+    CreatingFactory creating(rig.runtime->GetDxgiProxy());
+    BufferedSwapChain oldChain(rig.vtable);
+    BufferedSwapChain newChain(rig.vtable);
+    creating.CreateForHwnd(oldChain.Get(), gameWindow);
+    rig.Present(oldChain.Get(), 1, 0);
+    ASSERT_EQ(oldChain.buffer.references, 2) << "the Injector holds the back buffer it copied from";
+
+    long referencesWhenTheSystemIsAsked = -1;
+    g_onSystemCreation = [&] { referencesWhenTheSystemIsAsked = oldChain.buffer.references; };
+    creating.CreateForHwnd(newChain.Get(), gameWindow);
+    g_onSystemCreation = nullptr;
+
+    EXPECT_EQ(referencesWhenTheSystemIsAsked, 1) << "the Injector let go of the old back buffer before the creation";
+    rig.runtime->GetDxgiProxy().DetachAll();
+    DestroyWindow(gameWindow);
+}
+
+TEST(DxgiProxyTest, TheOldSwapChainsBackBuffersAreReleasedBeforeTheOtherCreationMethodIsPassedOnToo) {
+    SecondSwapChainRig rig(VRRenderingMode::AFR, false);
+    HWND gameWindow = MakeTestWindow("ReplacedSwapChainGameWnd2");
+    CreatingFactory creating(rig.runtime->GetDxgiProxy());
+    BufferedSwapChain oldChain(rig.vtable);
+    BufferedSwapChain newChain(rig.vtable);
+    creating.Create(oldChain.Get(), gameWindow);
+    rig.Present(oldChain.Get(), 1, 0);
+    ASSERT_EQ(oldChain.buffer.references, 2);
+
+    long referencesWhenTheSystemIsAsked = -1;
+    g_onSystemCreation = [&] { referencesWhenTheSystemIsAsked = oldChain.buffer.references; };
+    creating.Create(newChain.Get(), gameWindow);
+    g_onSystemCreation = nullptr;
+
+    EXPECT_EQ(referencesWhenTheSystemIsAsked, 1);
+    rig.runtime->GetDxgiProxy().DetachAll();
+    DestroyWindow(gameWindow);
+}
+
+TEST(DxgiProxyTest, ACreationForAnotherWindowReleasesNoneOfTheGamesBackBuffers) {
+    SecondSwapChainRig rig(VRRenderingMode::AFR, false);
+    HWND gameWindow = MakeTestWindow("ReplacedSwapChainGameWnd3");
+    HWND otherWindow = MakeTestWindow("ReplacedSwapChainOtherWnd3");
+    CreatingFactory creating(rig.runtime->GetDxgiProxy());
+    BufferedSwapChain gameChain(rig.vtable);
+    BufferedSwapChain otherChain(rig.vtable);
+    creating.CreateForHwnd(gameChain.Get(), gameWindow);
+    rig.Present(gameChain.Get(), 1, 0);
+    ASSERT_EQ(gameChain.buffer.references, 2);
+
+    long referencesAtHwndCreation = -1;
+    g_onSystemCreation = [&] { referencesAtHwndCreation = gameChain.buffer.references; };
+    creating.CreateForHwnd(otherChain.Get(), otherWindow);
+    long referencesAtPlainCreation = -1;
+    g_onSystemCreation = [&] { referencesAtPlainCreation = gameChain.buffer.references; };
+    creating.Create(otherChain.Get(), otherWindow);
+    g_onSystemCreation = nullptr;
+
+    EXPECT_EQ(referencesAtHwndCreation, 2) << "the game's swap chain carries on with the buffers it has";
+    EXPECT_EQ(referencesAtPlainCreation, 2);
+    const int getBufferCallsBefore = gameChain.getBufferCalls;
+    rig.Present(gameChain.Get(), 1, 0);
+    EXPECT_EQ(gameChain.getBufferCalls, getBufferCallsBefore) << "its cached back buffer is still the one it copies from";
+
+    rig.runtime->GetDxgiProxy().DetachAll();
+    DestroyWindow(gameWindow);
+    DestroyWindow(otherWindow);
+}
+
+TEST(DxgiProxyTest, AfterAReplacementAfrCarriesOnWithTheNewSwapChainsBuffersAndSubmitsTheEyePairs) {
+    SecondSwapChainRig rig(VRRenderingMode::AFR, false);
+    HWND gameWindow = MakeTestWindow("ReplacedSwapChainGameWnd4");
+    CreatingFactory creating(rig.runtime->GetDxgiProxy());
+    BufferedSwapChain oldChain(rig.vtable);
+    BufferedSwapChain newChain(rig.vtable);
+    creating.CreateForHwnd(oldChain.Get(), gameWindow);
+    rig.Present(oldChain.Get(), 1, 0);  // left eye of a pair
+    EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u);
+
+    creating.CreateForHwnd(newChain.Get(), gameWindow);
+
+    rig.Present(newChain.Get(), 1, 0);  // the pair's right eye, from the new swap chain
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(rig.vrBridge->GetFrameParity(), 0u);
+    EXPECT_EQ(newChain.getBufferCalls, 1) << "the new swap chain's own back buffer is what is copied";
+    EXPECT_EQ(newChain.buffer.references, 2);
+    rig.Present(newChain.Get(), 1, 0);  // left eye of the next pair
+    rig.Present(newChain.Get(), 1, 0);  // right eye
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 2u);
+    EXPECT_EQ(oldChain.buffer.references, 1) << "nothing of the old swap chain is kept";
+    EXPECT_EQ(oldChain.getBufferCalls, 1);
+    ASSERT_EQ(g_systemPresents.size(), 4u) << "every AFR Present reaches DXGI while the mirror shows";
+    EXPECT_EQ(g_systemPresents[3].swapChain, static_cast<const void*>(newChain.Get()));
+
+    rig.runtime->GetDxgiProxy().DetachAll();
+    DestroyWindow(gameWindow);
+}
+
+TEST(DxgiProxyTest, AfterAReplacementSequentialDualPassCarriesOnWithTheNewSwapChainsBuffersAndSubmitsTheEyePairs) {
+    SecondSwapChainRig rig(VRRenderingMode::SequentialDualPass, false);
+    HWND gameWindow = MakeTestWindow("ReplacedSwapChainGameWnd5");
+    CreatingFactory creating(rig.runtime->GetDxgiProxy());
+    BufferedSwapChain oldChain(rig.vtable);
+    BufferedSwapChain newChain(rig.vtable);
+    creating.CreateForHwnd(oldChain.Get(), gameWindow);
+    rig.Present(oldChain.Get(), 1, 0);  // sub-pass 0: left eye
+    EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 1u);
+
+    creating.CreateForHwnd(newChain.Get(), gameWindow);
+
+    rig.Present(newChain.Get(), 1, 0);  // sub-pass 1: right eye, pair submitted, real Present
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 1u);
+    EXPECT_EQ(rig.vrBridge->GetSubPassIndex(), 0u);
+    ASSERT_EQ(g_systemPresents.size(), 1u);
+    EXPECT_EQ(g_systemPresents[0].swapChain, static_cast<const void*>(newChain.Get()));
+    EXPECT_EQ(newChain.getBufferCalls, 1);
+    rig.Present(newChain.Get(), 1, 0);
+    rig.Present(newChain.Get(), 1, 0);
+    EXPECT_EQ(rig.openXrManager->GetSubmittedFramePairCount(), 2u);
+    EXPECT_EQ(oldChain.buffer.references, 1);
+
+    rig.runtime->GetDxgiProxy().DetachAll();
+    DestroyWindow(gameWindow);
+}
+
+TEST(DxgiProxyTest, ASwapChainCreatedAtTheOldOnesAddressDoesNotInheritTheOldBackBuffers) {
+    // The game destroys its swap chain and creates the next one; the allocator may hand out the same address.
+    SecondSwapChainRig rig(VRRenderingMode::AFR, false);
+    HWND gameWindow = MakeTestWindow("ReplacedSwapChainGameWnd6");
+    CreatingFactory creating(rig.runtime->GetDxgiProxy());
+    BufferedSwapChain chain(rig.vtable);
+    creating.CreateForHwnd(chain.Get(), gameWindow);
+    rig.Present(chain.Get(), 1, 0);
+    ASSERT_EQ(chain.getBufferCalls, 1);
+
+    g_onSystemCreation = [&] { chain.buffer.references = 1; };  // the old buffers go with the old swap chain
+    creating.CreateForHwnd(chain.Get(), gameWindow);
+    g_onSystemCreation = nullptr;
+
+    rig.Present(chain.Get(), 1, 0);
+    EXPECT_EQ(chain.getBufferCalls, 2) << "the new swap chain's back buffers are fetched, not the cached old ones";
 
     rig.runtime->GetDxgiProxy().DetachAll();
     DestroyWindow(gameWindow);
