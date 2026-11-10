@@ -25,6 +25,30 @@ static bool ParseRenderingMode(const char* s, VRRenderingMode& outMode) {
     return false;
 }
 
+namespace {
+
+// Holds the game's garbage collector off while it lives and lets it run again when it ends, whichever way that is: if
+// the collector was running it is stopped and then restarted, and the game's own next allocation runs the step that
+// became due; if the game had stopped it, it stays stopped. Luau raises a Lua error as a C++ exception, so a scope that
+// ends in one releases the hold too.
+class CollectorHold {
+public:
+    explicit CollectorHold(lua_State* L) : m_L(L), m_wasRunning(lua_gc(L, LUA_GCISRUNNING, 0) != 0) {
+        if (m_wasRunning) lua_gc(m_L, LUA_GCSTOP, 0);
+    }
+    ~CollectorHold() {
+        if (m_wasRunning) lua_gc(m_L, LUA_GCRESTART, 0);
+    }
+    CollectorHold(const CollectorHold&) = delete;
+    CollectorHold& operator=(const CollectorHold&) = delete;
+
+private:
+    lua_State* m_L;
+    bool m_wasRunning;
+};
+
+} // anonymous namespace
+
 VRBridge& VRBridge::FromUpvalue(lua_State* L) {
     auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");  // does not return
@@ -64,39 +88,54 @@ bool VRBridge::Inject(lua_State* L) {
     // collector to run. A collection step started from our pushes below has crashed in the allocator
     // (freeblock, from luaC_step) on several launches. Hold the collector off for the injection and let it run
     // again afterwards, from the game's own allocations; leave it stopped if the game had stopped it.
-    const bool collectorWasRunning = lua_gc(L, LUA_GCISRUNNING, 0) != 0;
-    if (collectorWasRunning) lua_gc(L, LUA_GCSTOP, 0);
+    {
+        CollectorHold collectorHold(L);
 
-    // Create table for VRBridge pre-allocated for all exposed fields (version + every table entry)
-    // to prevent dynamic table resizing/rehashing during startup
-    lua_createtable(L, 0, kExposedFieldCount);
+        // Create table for VRBridge pre-allocated for all exposed fields (version + every table entry)
+        // to prevent dynamic table resizing/rehashing during startup
+        lua_createtable(L, 0, kExposedFieldCount);
 
-    // VRBridge.version = the Injector's release version
-    lua_pushstring(L, m_version.c_str());
-    lua_setfield(L, -2, "version");
+        // VRBridge.version = the Injector's release version
+        lua_pushstring(L, m_version.c_str());
+        lua_setfield(L, -2, "version");
 
-    // VRBridge.<name> = function [bound with 'this' upvalue], driven by kFunctionTable
-    for (const LuaFunctionEntry& entry : kFunctionTable) {
+        // VRBridge.<name> = function [bound with 'this' upvalue], driven by kFunctionTable. A per-frame function is
+        // registered as it is and never touches the collector; every other one is registered behind RunOccasional, which
+        // holds the collector for each call and is the only place that does.
+        for (const LuaFunctionEntry& entry : kFunctionTable) {
+            lua_pushlightuserdata(L, this);
+            if (entry.kind == CallKind::PerFrame) {
+                lua_pushcclosure(L, entry.fn, entry.name, 1);
+            } else {
+                lua_pushlightuserdata(L, const_cast<LuaFunctionEntry*>(&entry));
+                lua_pushcclosure(L, &VRBridge::RunOccasional, entry.name, 2);
+            }
+            lua_setfield(L, -2, entry.name);
+        }
+        // Set metatable on VRBridge table for dynamic property access (__index)
+        lua_createtable(L, 0, 1);
         lua_pushlightuserdata(L, this);
-        lua_pushcclosure(L, entry.fn, entry.name, 1);
-        lua_setfield(L, -2, entry.name);
-    }
-    // Set metatable on VRBridge table for dynamic property access (__index)
-    lua_createtable(L, 0, 1);
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_Index, "__index", 1);
-    lua_setfield(L, -2, "__index");
-    lua_setmetatable(L, -2);
+        lua_pushcclosure(L, &VRBridge::Lua_Index, "__index", 1);
+        lua_setfield(L, -2, "__index");
+        lua_setmetatable(L, -2);
 
-    // Set as global variable _G["VRBridge"]
-    lua_setglobal(L, "VRBridge");
+        // Set as global variable _G["VRBridge"]
+        lua_setglobal(L, "VRBridge");
 
-    // Strictly restore stack state to guarantee zero stack leakage
-    lua_settop(L, origTop);
-    if (collectorWasRunning) lua_gc(L, LUA_GCRESTART, 0);
+        // Strictly restore stack state to guarantee zero stack leakage
+        lua_settop(L, origTop);
+    }  // the collector runs again here if it was running
 
     LogInfo("VRBridge: Successfully injected global VRBridge table into Luau environment.");
     return true;
+}
+
+int VRBridge::RunOccasional(lua_State* L) {
+    const auto* entry = static_cast<const LuaFunctionEntry*>(lua_touserdata(L, lua_upvalueindex(2)));
+    if (!entry) luaL_error(L, "VRBridge: function upvalue is missing");  // does not return
+    // The function runs as this closure, so its own lua_upvalueindex(1) is the bridge upvalue bound at injection.
+    CollectorHold collectorHold(L);
+    return entry->fn(L);
 }
 
 bool VRBridge::IsReady() const {
