@@ -115,6 +115,19 @@ Test-Case "Packaging produces a symbols zip next to the zip bundle and the Setup
     Assert-True ($stagingFolders.Count -eq 1) "build\release should hold exactly one FS25_VR_v* folder, it holds $($stagingFolders.Count)."
 }
 
+Test-Case "Packaging without the Injector's PDB fails, says what is missing and why, and produces no release files" {
+    param($root)
+    Remove-Item (Join-Path $root "build\version.pdb")
+    $result = Invoke-Packaging $root
+    Assert-True ($result.ExitCode -ne 0) "Packaging succeeded without build\version.pdb:`n$($result.Output)"
+    Assert-True ($result.Output -match "version\.pdb") "The message should name the missing build\version.pdb:`n$($result.Output)"
+    Assert-True ($result.Output -match "(?i)symbols") "The message should say the release needs the Injector's symbols:`n$($result.Output)"
+
+    $release = Join-Path $root "build\release"
+    $produced = @(Get-ChildItem $release -File -Filter "FS25_VR_v*" -ErrorAction SilentlyContinue)
+    Assert-True ($produced.Count -eq 0) "Nothing should be packaged, but found: $($produced.Name -join ', ')"
+}
+
 if ($failures.Count -gt 0) {
     Write-Error "$($failures.Count) release packaging test(s) failed: $($failures -join '; ')"
 }

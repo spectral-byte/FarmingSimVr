@@ -18,6 +18,13 @@ if (-not (Test-Path $builtDll)) {
     Write-Error "build\version.dll not found. Build project first (ninja -C build injector)."
 }
 
+# Every release carries the Injector's symbols (the symbols zip), so a crash dump from it can be read.
+# The next build overwrites the PDB, so a release cannot be symbolised afterwards: refuse to package
+# without it, before anything in build\release is touched.
+if (-not (Test-Path $builtPdb)) {
+    Write-Error "build\version.pdb not found. The linker writes it next to version.dll, and every release must carry the Injector's symbols (the symbols zip). Rebuild the Injector (cmake --build build --target injector); do not copy a version.dll in without its PDB."
+}
+
 # Only ship an Injector that needs no VC++ redistributable (static C runtime).
 & (Join-Path $PSScriptRoot "check_injector_imports.ps1") $builtDll
 
