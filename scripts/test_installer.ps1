@@ -1468,6 +1468,89 @@ Test-Case "An install creates the game exe's crash dump key (custom dump, 3 dump
     Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key is still there after the uninstall."
 } -Needs Elevated
 
+# The key as one comparable line: every value (name, type, data) and every subkey name.
+function Format-CrashDumpKey($key) {
+    if ($null -eq $key) { return "(no key)" }
+    $parts = foreach ($name in ($key.Values.Keys | Sort-Object)) { "$name=$($key.Values[$name].Kind):$($key.Values[$name].Data)" }
+    $subs = @($key.SubKeys | Sort-Object) -join ","
+    (@($parts) -join "; ") + " [subkeys: $subs]"
+}
+function Assert-SameCrashDumpKey($expected, $actual, [string]$what) {
+    $e = Format-CrashDumpKey $expected
+    $a = Format-CrashDumpKey $actual
+    Assert-True ($e -eq $a) "$what changed: it was { $e } and is { $a }."
+}
+
+# A key that was there before the Installer: the player's own, or another tool's. Either way it is theirs.
+foreach ($existing in @(
+        @{ Name = "other values";                                Values = @{ DumpType = 2; DumpCount = 10; DumpFolder = "D:\My dumps" } },
+        @{ Name = "exactly the values the Installer would write"; Values = @{ DumpType = 0; CustomDumpFlags = 0x1060; DumpCount = 3 } })) {
+    Test-Case "A crash dump key that already exists for the game's exe ($($existing.Name)) is unchanged after install and after uninstall, and the log says it was left alone" {
+        param($world, $e)
+        New-FakeGame $world
+        New-FakeDocuments $world
+        Set-CrashDumpKey $world.ExeName $e.Values
+        $before = Get-CrashDumpKey $world.ExeName
+
+        Assert-InstallSucceeds $world
+
+        Assert-SameCrashDumpKey $before (Get-CrashDumpKey $world.ExeName) "The existing crash dump key after the install"
+        Assert-True ((Get-LastSetupLog $world) -match "already exists; leaving it alone") "Setup did not log that it left the existing crash dump key alone."
+        Assert-True ($null -eq (Get-CrashDumpRecord)) "The Installer recorded a crash dump key it did not write."
+
+        Uninstall-Fs25Vr
+
+        Assert-SameCrashDumpKey $before (Get-CrashDumpKey $world.ExeName) "The existing crash dump key after the uninstall"
+    } $existing -Needs Elevated
+}
+
+# Like the Render Resolution: the Installer records what it wrote next to the uninstaller, the uninstall
+# removes the key only while it still holds exactly that, and the record is deleted either way.
+Test-Case "The Installer records the crash dump key it wrote next to the uninstaller and the uninstall deletes the record and the folder" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+
+    Assert-InstallSucceeds $world
+
+    $record = Get-CrashDumpRecord
+    Assert-True ($null -ne $record) "The Installer did not record the crash dump key it wrote ($crashDumpRecordPath)."
+    Assert-True ($record["ExeName"] -eq $world.ExeName) "The record names '$($record["ExeName"])', expected the exe the key was written for ($($world.ExeName))."
+    Assert-True (($record["WrittenDumpType"] -eq "0") -and ($record["WrittenCustomDumpFlags"] -eq "4192") -and ($record["WrittenDumpCount"] -eq "3")) `
+        "The record does not hold the written values (DumpType 0, CustomDumpFlags 4192, DumpCount 3)."
+    Assert-True ((Split-Path -Parent $crashDumpRecordPath) -eq (Split-Path -Parent (Get-UninstallEntry).UninstallString.Trim('"'))) "The record is not next to the uninstaller."
+
+    Uninstall-Fs25Vr
+
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "The crash dump record was not deleted by the uninstall."
+    Assert-Missing (Split-Path -Parent $crashDumpRecordPath) "The Installer's common application data folder"
+} -Needs Elevated
+
+# A change to the key by anyone after the install means it is theirs now: the uninstall leaves it.
+foreach ($change in @(
+        @{ Name = "a value was changed";        Apply = { Set-CrashDumpKey $args[0] @{ DumpCount = 10 } } },
+        @{ Name = "a value was added";          Apply = { Set-CrashDumpKey $args[0] @{ DumpFolder = "D:\My dumps" } } },
+        @{ Name = "a value was replaced by text"; Apply = { Set-CrashDumpKey $args[0] @{ DumpCount = "3" } } },
+        @{ Name = "a value was removed";        Apply = { $k = Open-MachineKey "$localDumpsKeyPath\$($args[0])" $true; try { $k.DeleteValue("CustomDumpFlags") } finally { $k.Dispose() } } },
+        @{ Name = "a subkey was added";         Apply = { $k = Open-MachineKey "$localDumpsKeyPath\$($args[0])" $true; try { $k.CreateSubKey("Extra").Dispose() } finally { $k.Dispose() } } })) {
+    Test-Case "A crash dump key the player changed after the install ($($change.Name)) is still there after the uninstall, and the record is deleted" {
+        param($world, $c)
+        New-FakeGame $world
+        New-FakeDocuments $world
+        Assert-InstallSucceeds $world
+        $ours = Get-CrashDumpKey $world.ExeName
+        Assert-CrashDumpKeyIsOurs $ours "after the install"
+        & $c.Apply $world.ExeName
+        $changed = Get-CrashDumpKey $world.ExeName
+        Assert-True ((Format-CrashDumpKey $changed) -ne (Format-CrashDumpKey $ours)) "The test did not change the key ($($c.Name))."
+
+        Uninstall-Fs25Vr
+
+        Assert-SameCrashDumpKey $changed (Get-CrashDumpKey $world.ExeName) "The player's crash dump key after the uninstall"
+        Assert-True ($null -eq (Get-CrashDumpRecord)) "The crash dump record was not deleted by the uninstall."
+    } $change -Needs Elevated
+}
+
 Write-Host "Installer tests: $passed passed, $skipped skipped, $($failures.Count) failed."
 if ($failures.Count -gt 0) {
     Write-Error "$($failures.Count) installer test(s) failed: $($failures -join '; ')"

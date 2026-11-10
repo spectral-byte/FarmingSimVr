@@ -1161,6 +1161,13 @@ begin
   end;
   Key := CrashDumpsKey(ExeName);
 
+  { A key that is already there is the player's or another tool's: it is left exactly as it is. }
+  if RegKeyExists(CrashDumpsRoot, Key) then
+  begin
+    Log('Windows crash dump setting: HKLM\' + Key + ' already exists; leaving it alone.');
+    Exit;
+  end;
+
   R.ExeName := ExeName;
   R.WrittenDumpType := IntToStr(CrashDumpType);
   R.WrittenCustomDumpFlags := IntToStr(CrashDumpFlags);
