@@ -166,6 +166,8 @@ function Get-GamePaths($world) {
         # The Injector of FS25 VR up to 1.1.9, which an upgrade removes (ADR-0038).
         EarlierInjector = Join-Path $world.Game "x64\dxgi.dll"
         Log          = Join-Path $world.Game "x64\fs25_vr.log"
+        # The minidump the Injector writes next to its log when the game crashes (src/core/crash_reporter.cpp).
+        Dump         = Join-Path $world.Game "x64\fs25_vr_crash.dmp"
         MyGames      = $myGames
         DefaultMods  = Join-Path $myGames "mods"
         ModZip       = Join-Path $myGames "mods\FS25_VRCompanion.zip"
@@ -453,6 +455,27 @@ Test-Case "Uninstall removes the Injector, the mod zip and fs25_vr.log and keeps
     Assert-Exists $p.ModSettings "modSettings VR settings"
     Assert-Exists (Join-Path $world.Game "x64\FarmingSimulator2025Game.exe") "The game executable"
     Assert-SameBytes $p.GameXml $gameXmlBefore "game.xml"
+    Assert-True ($null -eq (Get-UninstallEntry)) "FS25 VR is still registered in Add/Remove Programs."
+}
+
+Test-Case "Uninstall removes the Injector's crash dump along with fs25_vr.log" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+    Assert-InstallSucceeds $world
+    # What a crash of the game leaves next to the Injector: the log and a minidump.
+    Set-Content -Path $p.Log -Value "written by the Injector while the game ran" -Encoding ascii
+    [IO.File]::WriteAllBytes($p.Dump, [byte[]](0x4D, 0x44, 0x4D, 0x50, 0x93, 0xA7, 0x00, 0x00) + (1..200))
+    # Any other file in the game's x64 folder is not the Installer's to remove.
+    $other = Join-Path $world.Game "x64\other-tool.dmp"
+    [IO.File]::WriteAllBytes($other, [byte[]](1..16))
+
+    Uninstall-Fs25Vr
+
+    Assert-Missing $p.Log "fs25_vr.log"
+    Assert-Missing $p.Dump "The Injector's crash dump (fs25_vr_crash.dmp)"
+    Assert-Exists $other "A dump of another tool in the x64 folder"
     Assert-True ($null -eq (Get-UninstallEntry)) "FS25 VR is still registered in Add/Remove Programs."
 }
 
@@ -1334,6 +1357,7 @@ Test-Case "Setup /FS25VR_UNINSTALL uninstalls: removes the Injector, the mod zip
     $p = Get-GamePaths $world
     Assert-InstallSucceeds $world
     Set-Content -Path $p.Log -Value "written by the Injector while the game ran" -Encoding ascii
+    [IO.File]::WriteAllBytes($p.Dump, [byte[]](0x4D, 0x44, 0x4D, 0x50, 0x93, 0xA7, 0x00, 0x00) + (1..200))
     $gameXmlBefore = [IO.File]::ReadAllBytes($p.GameXml)
 
     $exit = Invoke-SetupUninstall $world
@@ -1343,6 +1367,7 @@ Test-Case "Setup /FS25VR_UNINSTALL uninstalls: removes the Injector, the mod zip
     Assert-Missing $p.Injector "Injector"
     Assert-Missing $p.ModZip "Companion Mod zip"
     Assert-Missing $p.Log "fs25_vr.log"
+    Assert-Missing $p.Dump "The Injector's crash dump (fs25_vr_crash.dmp)"
     Assert-Exists $p.ModSettings "modSettings VR settings"
     Assert-Exists (Join-Path $world.Game "x64\FarmingSimulator2025Game.exe") "The game executable"
     Assert-SameBytes $p.GameXml $gameXmlBefore "game.xml"

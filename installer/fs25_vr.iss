@@ -160,8 +160,10 @@ Source: "{#StageDir}\LICENSE"; DestDir: "{commonappdata}\FS25 VR"; Flags: ignore
 Source: "{#StageDir}\THIRD_PARTY_NOTICES.txt"; DestDir: "{commonappdata}\FS25 VR"; Flags: ignoreversion
 
 [UninstallDelete]
-; Written by the Injector while the game runs. modSettings (the VR settings) is deliberately kept.
+; Written by the Injector while the game runs, and when it crashes (the minidump next to the log, under a fixed name).
+; modSettings (the VR settings) is deliberately kept.
 Type: files; Name: "{app}\x64\fs25_vr.log"
+Type: files; Name: "{app}\x64\fs25_vr_crash.dmp"
 ; The folder holding the uninstaller, the notices and (while they are in place) the Render Resolution and crash
 ; dump records is created by the Installer's own code before Inno places files in it, so Inno would leave it
 ; behind empty.
