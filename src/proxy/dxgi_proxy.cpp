@@ -420,6 +420,12 @@ bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
     } else if (gameHwnd && !m_windowController->IsWindowSubclassed() && m_openXrManager && m_openXrManager->IsActive()) {
         m_windowController->AttachWindowSubclass(gameHwnd);
     }
+    // Recorded after the inactive check on purpose: Pass-Through is final. Initialize runs once, before the game has a
+    // swap chain, and an Active session that is lost only ever falls back to Pass-Through; nothing makes the manager
+    // Active again. So a swap chain created while inactive can never become the one to act on, and leaving it
+    // unrecorded keeps every hook passing straight through, which is what Pass-Through means. (A replaced swap chain
+    // stays recorded until the next attach, and a new one at a recycled address would be taken for it: both narrow
+    // and harmless, as the old chain was the game's.)
     m_gameSwapChain = swapChain;
     if (m_swapChainAttached) return true;
     if (!m_ownedByRuntime) {
@@ -620,10 +626,25 @@ void DxgiProxy::ReleaseCachedBackBuffers() {
 }
 
 bool DxgiProxy::IsForGameWindow(HWND window) const {
+    // The game's window is first learnt from the first swap chain created through the hooked factory (the creation
+    // hooks, AttachSwapChain and the per-frame mouse update, which sees only the game's Present, are the only places
+    // that set it), so until then the first creation is taken as the game's, as before #264. An overlay creating its
+    // swap chain ahead of the game's would be taken for it: there is no earlier, sound source to tell them apart.
     const HWND gameWindow = m_windowController->GetGameHwnd();
     if (!window || !gameWindow) return true;
     const HWND root = GetAncestor(window, GA_ROOT);
     return (root ? root : window) == gameWindow;
+}
+
+bool DxgiProxy::PrepareGameSwapChainCreation(const char* hookName, HWND window) {
+    if (!IsForGameWindow(window)) {
+        // Not the game's window: its swap chain is never the game's, so it gets none of the game's treatment.
+        LogInfo(std::string("DxgiProxy: ") + hookName + " for a window other than the game's; passed on as requested.");
+        return false;
+    }
+    // The game's window gets a new swap chain: nothing of the old one may outlive the creation.
+    ReleaseCachedBackBuffers();
+    return true;
 }
 
 void DxgiProxy::LatchPendingRenderingMode() {
@@ -1162,13 +1183,9 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChain(
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**)>(
         proxy->m_detourCreateSwapChain.GetOriginal()
     );
-    if (!proxy->IsForGameWindow(pDesc ? pDesc->OutputWindow : nullptr)) {
-        // Not the game's window: its swap chain is never the game's, so it gets none of the game's treatment.
-        LogInfo("DxgiProxy: CreateSwapChain for a window other than the game's; passed on as requested.");
+    if (!proxy->PrepareGameSwapChainCreation("CreateSwapChain", pDesc ? pDesc->OutputWindow : nullptr)) {
         return orig ? orig(self, pDevice, pDesc, ppSwapChain) : E_FAIL;
     }
-    // The game's window gets a new swap chain: nothing of the old one may outlive the creation.
-    proxy->ReleaseCachedBackBuffers();
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }
@@ -1212,13 +1229,9 @@ HRESULT STDMETHODCALLTYPE DxgiProxy::Intercept_CreateSwapChainForHwnd(
     auto orig = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**)>(
         proxy->m_detourCreateSwapChainForHwnd.GetOriginal()
     );
-    if (!proxy->IsForGameWindow(hWnd)) {
-        // Not the game's window: its swap chain is never the game's, so it gets none of the game's treatment.
-        LogInfo("DxgiProxy: CreateSwapChainForHwnd for a window other than the game's; passed on as requested.");
+    if (!proxy->PrepareGameSwapChainCreation("CreateSwapChainForHwnd", hWnd)) {
         return orig ? orig(self, pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain) : E_FAIL;
     }
-    // The game's window gets a new swap chain: nothing of the old one may outlive the creation.
-    proxy->ReleaseCachedBackBuffers();
     if (pDevice) {
         proxy->ResolveD3D12DeviceAndQueue(pDevice);
     }

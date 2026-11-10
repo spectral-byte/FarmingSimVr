@@ -137,9 +137,6 @@ private:
     // back buffers, marks the window clamp dirty and, in Active VR Mode, replaces the requested size
     // with the Render Resolution.
     static void PrepareResize(DxgiProxy* proxy, const char* hookName, UINT& width, UINT& height);
-    // Lets go of the game's cached back buffers and the swap chain they were cached from, so the Injector keeps
-    // nothing of it alive: before a resize and before a creation for the game window is passed on.
-    void ReleaseCachedBackBuffers();
     // Hooks the factory a successful CreateDXGIFactory* call returned, in Active VR Mode.
     void AttachCreatedFactory(HRESULT hr, void** ppFactory);
 
@@ -220,12 +217,20 @@ private:
 
     // The game's swap chain, by identity only: no reference is held, so the game can still destroy it. Set when the
     // proxy attaches to it; every hook acts on this one and passes any other swap chain's call straight through.
-    // Read by hooks on any thread (another tool's swap chain presents from its own), written by swap chain creation.
+    // Atomic because another tool's swap chain (an overlay, a capture tool) may present from a thread of its own while
+    // the game's creation writes this: a statement about the process, not a guarantee the design gives.
     std::atomic<const void*> m_gameSwapChain{ nullptr };
     bool IsGameSwapChain(const void* swapChain) const { return swapChain && swapChain == m_gameSwapChain.load(); }
     // Whether a swap chain created for `window` can be the game's: the game's window is not known yet, or it is
     // that one (a null window is unknown). One rule for every creation hook.
     bool IsForGameWindow(HWND window) const;
+    // The start of both creation hooks, before the original is called. Returns false, having logged it, when the
+    // creation is for another window (the hook then passes it on untouched); otherwise releases the old swap chain's
+    // cached back buffers, since nothing of them may outlive the creation, and returns true.
+    bool PrepareGameSwapChainCreation(const char* hookName, HWND window);
+    // Lets go of the game's cached back buffers and the swap chain they were cached from, so the Injector keeps
+    // nothing of it alive: before a resize and before a creation for the game window is passed on.
+    void ReleaseCachedBackBuffers();
 
     IDXGISwapChain* m_cachedSwapChain = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;
