@@ -10,19 +10,25 @@
 ;
 ; Command line (besides Inno's standard switches such as /VERYSILENT, /SUPPRESSMSGBOXES, /DIR=):
 ;   /FS25VR_DOCUMENTS=<folder>   hidden, test-only: replaces the user's Documents folder
+;   /FS25VR_GAMEEXE=<file name>  hidden, test-only: replaces the game's exe file name (FarmingSimulator2025Game.exe)
+;                                that Windows' crash dump key is written for (see below), so the Installer
+;                                test never touches the key of the real game. Not a file name: no key.
+;   /FS25VR_NOCRASHDUMPS         leaves Windows' crash dump setting for the game alone (see below): no key and
+;                                no record. An upgrade given the switch keeps what the install before it made.
 ;   /FS25VR_RESOLUTION=<W>x<H>   sets the game's Render Resolution (see below) without the wizard page.
 ;                                Whole numbers from 640 to 8192, e.g. /FS25VR_RESOLUTION=4000x2500.
 ;                                An invalid value fails the install before anything is placed. With no
 ;                                game.xml the install succeeds and the resolution is skipped (logged).
 ;                                If game.xml can't be edited once the files are placed (read-only, locked),
 ;                                the install is kept and Setup exits with code 20 (logged).
-;   Exit code 21: the files are placed, but the dxgi.dll of an earlier FS25 VR version could not be deleted
-;                                (logged); the new Injector stays inactive while it is there.
 ;                                In a wizard run it pre-ticks and pre-fills the Render Resolution page.
 ;   /FS25VR_UNINSTALL            runs the existing uninstaller unattended instead of installing (no /DIR needed),
 ;                                waits for it and exits with its exit code. With nothing installed it logs
 ;                                "FS25 VR is not installed" and exits 1. Setup shows no window and
 ;                                no message box for it.
+; Exit codes: 20 = game.xml could not be edited once the files were placed (see /FS25VR_RESOLUTION above);
+;   21 = the files are placed, but the dxgi.dll of an earlier FS25 VR version could not be deleted (logged);
+;   the new Injector stays inactive while it is there. The Windows crash dump setting never changes the exit code.
 ;
 ; Running Setup interactively while FS25 VR is installed first asks: Upgrade or reinstall / Uninstall / Cancel
 ; (see "Uninstalling through the Setup exe" in [Code]). Silent runs never ask and keep upgrading.
@@ -59,6 +65,33 @@
 ;   The uninstall (RestoreRenderResolution) applies that rule to the game.xml named in the
 ;   record, then deletes the record. It never touches game.xml.fs25vr-backup or the Companion Mod's
 ;   modSettings. With no record (the Installer never set a Render Resolution) it does nothing.
+;
+; Windows' own crash dumps for the game (docs/adr/0039-the-installer-turns-on-windows-crash-dumps-for-the-game.md)
+;   Windows Error Reporting writes a dump for an application when a key named after its exe exists under
+;     HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps
+;   in the 64-bit registry view. After the files are placed, an administrative install creates it for
+;   FarmingSimulator2025Game.exe with three DWORD values: DumpType 0 (custom), CustomDumpFlags 0x1060 (thread
+;   information, the memory the stacks point at, unloaded modules: the contents of the Injector's own dump) and
+;   DumpCount 3. No DumpFolder, so Windows' default CrashDumps folder applies. It is on unless
+;   /FS25VR_NOCRASHDUMPS is given. A per-user run (/CURRENTUSER) cannot write HKEY_LOCAL_MACHINE: it logs that
+;   the setting was skipped. Nothing here ever fails the install.
+;   A key that already exists for the exe is the player's or another tool's: install and uninstall leave it
+;   alone (logged).
+;
+; Crash dump record (read again by later installs and by the uninstall)
+;   {commonappdata}\FS25 VR\crash-dumps.ini, next to the uninstaller. UTF-8 with a BOM, one Key=Value per line
+;   after a [CrashDumps] header:
+;     ExeName=<exe file name the key was written for>   (the uninstaller does not get /FS25VR_GAMEEXE)
+;     WrittenDumpType= WrittenCustomDumpFlags= WrittenDumpCount=   the numbers the Installer wrote
+;     CreatedLocalDumpsKey=<1 | 0>   whether the LocalDumps key itself was not there before the write
+;   The record is written before the key and deleted again if the key cannot be written. Remove rule: the
+;   uninstall deletes the exe's key only when a record exists and the key still holds exactly those three
+;   values (no other value, no subkey); then, if CreatedLocalDumpsKey is 1, it deletes LocalDumps too unless
+;   something else has gone into it (Windows treats an existing LocalDumps key as the switch for crash dumps
+;   with its defaults for every application). Either way the record is deleted. An upgrade or reinstall keeps
+;   the key and its record while the key is still its own, writes the key when there is none, and for a key
+;   that was changed since leaves it alone and deletes the record.
+;   Pascal helpers in [Code]: TCrashDumpRecord, SetUpCrashDumps, RemoveCrashDumps, CrashDumpKeyIsUnchanged.
 ;
 ; English only, requires admin, unsigned (see docs/adr/0024-unsigned-inno-setup-installer-and-static-runtime-injector.md).
 
@@ -129,8 +162,9 @@ Source: "{#StageDir}\THIRD_PARTY_NOTICES.txt"; DestDir: "{commonappdata}\FS25 VR
 [UninstallDelete]
 ; Written by the Injector while the game runs. modSettings (the VR settings) is deliberately kept.
 Type: files; Name: "{app}\x64\fs25_vr.log"
-; The folder holding the uninstaller, the notices and (while a Render Resolution is applied) its record is
-; created by the Installer's own code before Inno places files in it, so Inno would leave it behind empty.
+; The folder holding the uninstaller, the notices and (while they are in place) the Render Resolution and crash
+; dump records is created by the Installer's own code before Inno places files in it, so Inno would leave it
+; behind empty.
 Type: dirifempty; Name: "{commonappdata}\FS25 VR"
 
 [Code]
