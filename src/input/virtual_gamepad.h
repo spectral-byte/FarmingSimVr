@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <span>
 
 namespace fs25vr {
 
@@ -55,7 +56,7 @@ public:
     void SetInputsInUse(uint32_t hand, uint32_t inputs);
 
     // Every reason GetStatus can give (the constants it assigns), for whoever hands them to Lua without allocating.
-    static const std::array<const char*, 6>& Reasons();
+    static std::span<const char* const> Reasons();
 
     struct Status {
         bool present = false;

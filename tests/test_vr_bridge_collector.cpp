@@ -5,9 +5,8 @@
 // an occasional one holds the collector off for the call and leaves it as it found it, a per-frame one never touches it.
 // These tests walk the whole table and watch the Luau state from outside: whether the collector runs, and whether the
 // destructor of an unreachable userdata has run.
-#include <gtest/gtest.h>
-#include "core/perf_trace.h"
-#include "luau/vr_bridge.h"
+#include "vr_bridge_fixture.h"
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -24,34 +23,16 @@ void MarkDestroyed(void*) { g_destructorRan = true; }
 // full set of numbers (it does its work).
 enum class Args { None, Numbers };
 
-constexpr int kNumberArgs = 13;
+using fs25vr_test::kNumberArgs;
 
-class VrBridgeCollectorTest : public ::testing::Test {
+class VrBridgeCollectorTest : public fs25vr_test::VrBridgeInjectedTest {
 protected:
-    lua_State* L = nullptr;
-    VRBridge bridge{nullptr, nullptr};
-
     void SetUp() override {
         g_destructorRan = false;
-        L = luaL_newstate();
-        luaL_openlibs(L);
-        ASSERT_TRUE(bridge.Inject(L));
-    }
-
-    void TearDown() override {
-        fs25vr::PerfTrace::Instance().Stop();
-        if (L) lua_close(L);
+        VrBridgeInjectedTest::SetUp();
     }
 
     bool CollectorRunning() const { return lua_gc(L, LUA_GCISRUNNING, 0) != 0; }
-
-    // Pushes VRBridge.<name>.
-    void PushBridgeFunction(const char* name) {
-        lua_getglobal(L, "VRBridge");
-        lua_getfield(L, -1, name);
-        lua_remove(L, -2);
-        ASSERT_EQ(lua_type(L, -1), LUA_TFUNCTION) << name;
-    }
 
     int Call(Args args) {
         lua_pushvalue(L, -1);
@@ -155,18 +136,36 @@ TEST_F(VrBridgeCollectorTest, AnOccasionalCallLeavesAStoppedCollectorStopped) {
 }
 
 TEST_F(VrBridgeCollectorTest, AnOccasionalCallThatEndsWithALuaErrorLeavesTheCollectorAsItFoundIt) {
-    for (bool collectorRunning : {true, false}) {
-        SCOPED_TRACE(collectorRunning ? "running collector" : "stopped collector");
+    // A function that checks its argument raises a Lua error when called with none. The table finds them, so a function
+    // added later that raises is covered by default.
+    std::vector<std::string> raisers;
+    for (const Entry& entry : VRBridge::kFunctionTable) {
+        if (entry.kind != Kind::Occasional) continue;
         lua_checkstack(L, 64);
-        PushBridgeFunction("setDlssMvScale");  // needs a number
-        Call(Args::None);
-        MakeCollectionDue(collectorRunning);
-
-        ASSERT_NE(Call(Args::None), LUA_OK) << "setDlssMvScale without its number raises a Lua error";
-
-        EXPECT_EQ(CollectorRunning(), collectorRunning);
-        EXPECT_FALSE(g_destructorRan) << "a collection ran during the call";
+        PushBridgeFunction(entry.name);
+        const bool raises = Call(Args::None) != LUA_OK;
         lua_settop(L, 0);
+        if (!raises) continue;
+        raisers.push_back(entry.name);
+
+        for (bool collectorRunning : {true, false}) {
+            SCOPED_TRACE(Describe(entry, Args::None, collectorRunning));
+            lua_checkstack(L, 64);
+            PushBridgeFunction(entry.name);
+            Call(Args::None);
+            MakeCollectionDue(collectorRunning);
+
+            ASSERT_NE(Call(Args::None), LUA_OK) << "the call without its argument raises a Lua error";
+
+            EXPECT_EQ(CollectorRunning(), collectorRunning);
+            EXPECT_FALSE(g_destructorRan) << "a collection ran during the call";
+            lua_settop(L, 0);
+        }
+    }
+    // The occasional functions known to check a number. A function that starts to raise is covered by the loop above;
+    // one of these that stops raising makes this fail, so that the list is kept honest.
+    for (const char* name : {"setDlssMvScale", "setDlssSharpness", "setDlssPreset", "setDlssSdpMvScale", "setDlssNearClip"}) {
+        EXPECT_NE(std::find(raisers.begin(), raisers.end(), name), raisers.end()) << name << " no longer raises without its argument";
     }
 }
 

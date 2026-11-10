@@ -4,10 +4,8 @@
 // has crashed the game. A function the Companion Mod calls on every update or render therefore allocates nothing once
 // the caller's reusable tables hold their fields: it cannot start a collection, and it adds no garbage for the game to
 // collect. These tests walk VRBridge's whole function table and watch the Luau state from outside: the bytes it holds.
-#include <gtest/gtest.h>
-#include "core/perf_trace.h"
+#include "vr_bridge_fixture.h"
 #include "input/virtual_gamepad.h"
-#include "luau/vr_bridge.h"
 #include <cstddef>
 #include <string>
 
@@ -19,24 +17,10 @@ using Kind = VRBridge::CallKind;
 
 constexpr int kWarmUpCalls = 5;
 constexpr int kMeasuredCalls = 100;
-constexpr int kNumberArgs = 13;  // the most numbers any function takes (reportCameraRecord)
+using fs25vr_test::kNumberArgs;
 
-class VrBridgePerFrameAllocationTest : public ::testing::Test {
+class VrBridgePerFrameAllocationTest : public fs25vr_test::VrBridgeInjectedTest {
 protected:
-    lua_State* L = nullptr;
-    VRBridge bridge{nullptr, nullptr};
-
-    void SetUp() override {
-        L = luaL_newstate();
-        luaL_openlibs(L);
-        ASSERT_TRUE(bridge.Inject(L));
-    }
-
-    void TearDown() override {
-        fs25vr::PerfTrace::Instance().Stop();
-        if (L) lua_close(L);
-    }
-
     // Everything the Luau state holds on the heap, garbage included.
     size_t HeapBytes() const {
         return static_cast<size_t>(lua_gc(L, LUA_GCCOUNT, 0)) * 1024u + static_cast<size_t>(lua_gc(L, LUA_GCCOUNTB, 0));
@@ -67,10 +51,7 @@ protected:
     // Pushes VRBridge.<name> into slot 1, then the arguments into the next slots.
     Caller SetUpCaller(const char* name, bool withArguments) {
         lua_settop(L, 0);
-        lua_getglobal(L, "VRBridge");
-        lua_getfield(L, -1, name);
-        lua_remove(L, -2);
-        EXPECT_EQ(lua_type(L, 1), LUA_TFUNCTION) << name;
+        PushBridgeFunction(name);  // slot 1
         Caller caller{L, 0, 0, 1};
         if (withArguments) {
             for (int i = 0; i < kNumberArgs; ++i) lua_pushnumber(L, 1.0);
@@ -92,6 +73,30 @@ protected:
         lua_checkstack(L, 128);  // a full collection shrinks the stack; growing it again is not the call's doing
         const size_t before = HeapBytes();
         for (int i = 0; i < kMeasuredCalls; ++i) caller.Call();
+        const size_t after = HeapBytes();
+        lua_gc(L, LUA_GCRESTART, 0);
+        return after - before;
+    }
+
+    // The same for reading VRBridge[key] (answered by VRBridge.__index for what the table does not hold); `pushKey`
+    // pushes the key. The key stays on the stack, kept alive as it is by the caller's own code.
+    template <typename PushKey>
+    size_t BytesAllocatedByRepeatedReads(PushKey pushKey, bool* readNil = nullptr) {
+        lua_settop(L, 0);
+        lua_getglobal(L, "VRBridge");  // slot 1
+        pushKey();                     // slot 2
+        auto read = [&] {
+            lua_pushvalue(L, 2);
+            lua_gettable(L, 1);
+            if (readNil) *readNil = lua_isnil(L, -1);
+            lua_settop(L, 2);
+        };
+        for (int i = 0; i < kWarmUpCalls; ++i) read();
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        lua_gc(L, LUA_GCSTOP, 0);
+        lua_checkstack(L, 128);
+        const size_t before = HeapBytes();
+        for (int i = 0; i < kMeasuredCalls; ++i) read();
         const size_t after = HeapBytes();
         lua_gc(L, LUA_GCRESTART, 0);
         return after - before;
@@ -153,11 +158,13 @@ TEST_F(VrBridgePerFrameAllocationTest, EveryReasonTheVirtualGamepadCanGiveReache
     lua_getglobal(L, "VRBridge");
     lua_getfield(L, -1, "getVirtualGamepad");
     ASSERT_EQ(lua_type(L, -1), LUA_TFUNCTION);
-    ASSERT_NE(lua_getupvalue(L, -1, 2), nullptr) << "the function carries the strings it hands out";
+    ASSERT_NE(lua_getupvalue(L, -1, VRBridge::kAnchorsUpvalue), nullptr) << "the function carries the strings it hands out";
     ASSERT_EQ(lua_type(L, -1), LUA_TTABLE);
     const int anchors = lua_gettop(L);
 
+    ASSERT_GT(fs25vr::VirtualGamepad::Reasons().size(), 0u);
     for (const char* reason : fs25vr::VirtualGamepad::Reasons()) {
+        ASSERT_NE(reason, nullptr) << "a reason is missing from the list of Virtual Gamepad reasons";
         SCOPED_TRACE(reason);
         lua_gc(L, LUA_GCCOLLECT, 0);
         lua_gc(L, LUA_GCSTOP, 0);
@@ -173,6 +180,30 @@ TEST_F(VrBridgePerFrameAllocationTest, EveryReasonTheVirtualGamepadCanGiveReache
     }
 }
 
+TEST_F(VrBridgePerFrameAllocationTest, ReadingTheRenderingModeAllocatesNothingInEitherMode) {
+    // Each mode's name is a text the Injector hands out, so each must be one it keeps made at injection.
+    for (fs25vr::VRRenderingMode mode : {fs25vr::VRRenderingMode::AFR, fs25vr::VRRenderingMode::SequentialDualPass}) {
+        SCOPED_TRACE(mode == fs25vr::VRRenderingMode::AFR ? "AFR" : "SequentialDualPass");
+        bridge.SetRenderingMode(mode);
+
+        Caller caller = SetUpCaller("getRenderingMode", false);
+        EXPECT_EQ(BytesAllocatedByRepeatedCalls(caller), 0u) << "VRBridge.getRenderingMode()";
+
+        EXPECT_EQ(BytesAllocatedByRepeatedReads([&] { lua_pushstring(L, "renderingMode"); }), 0u) << "VRBridge.renderingMode";
+    }
+}
+
+TEST_F(VrBridgePerFrameAllocationTest, ReadingANumberKeyAllocatesNothing) {
+    // lua_isstring accepts a number and lua_tostring then turns it into a string, which allocates; the property reader
+    // answers a key that is not a string with nil without converting it.
+    for (double key : {1.0, 2.5, -7.0}) {
+        SCOPED_TRACE(key);
+        bool readNil = false;
+        EXPECT_EQ(BytesAllocatedByRepeatedReads([&] { lua_pushnumber(L, key); }, &readNil), 0u);
+        EXPECT_TRUE(readNil) << "an unknown key reads nil";
+    }
+}
+
 TEST_F(VrBridgePerFrameAllocationTest, ReadingAnInjectorPropertyAllocatesNothing) {
     // VRBridge.__index answers the properties the table does not hold (the Companion Mod reads requiresAfrFallback,
     // frameParity and ipd through it), and any other name with nil. It is registered outside the function table.
@@ -182,21 +213,6 @@ TEST_F(VrBridgePerFrameAllocationTest, ReadingAnInjectorPropertyAllocatesNothing
     };
     for (const char* key : keys) {
         SCOPED_TRACE(key);
-        lua_settop(L, 0);
-        lua_getglobal(L, "VRBridge");  // slot 1
-        lua_pushstring(L, key);        // slot 2, kept alive here as it is by the caller's own code
-        auto read = [&] {
-            lua_pushvalue(L, 2);
-            lua_gettable(L, 1);
-            lua_settop(L, 2);
-        };
-        for (int i = 0; i < kWarmUpCalls; ++i) read();
-        lua_gc(L, LUA_GCCOLLECT, 0);
-        lua_gc(L, LUA_GCSTOP, 0);
-        lua_checkstack(L, 128);
-        const size_t before = HeapBytes();
-        for (int i = 0; i < kMeasuredCalls; ++i) read();
-        EXPECT_EQ(HeapBytes(), before);
-        lua_gc(L, LUA_GCRESTART, 0);
+        EXPECT_EQ(BytesAllocatedByRepeatedReads([&] { lua_pushstring(L, key); }), 0u);
     }
 }

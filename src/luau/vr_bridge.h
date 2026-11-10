@@ -226,10 +226,17 @@ public:
     static void FillHandStateTable(lua_State* L, int tableIndex, const HandState& hand);
     static void FillEyeProjectionTable(lua_State* L, int tableIndex, const EyeProjection& proj, uint32_t eyeIndex);
 
+    // The upvalues Inject() binds to every registered function's closure; the function runs as that closure, so these
+    // are its lua_upvalueindex(...) slots. The bridge; the table of strings the per-frame functions return (see
+    // PushAnchoredString); and, for an Occasional function only, its table entry (see RunOccasional).
+    static constexpr int kBridgeUpvalue = 1;
+    static constexpr int kAnchorsUpvalue = 2;
+    static constexpr int kEntryUpvalue = 3;
+
     // Pushes the string `text` for a per-frame function to return, without allocating. A string the Injector pushes is
     // made anew whenever the game's collector has freed the last one (a long string, over 40 bytes, is never shared at
     // all), so the strings a per-frame function hands out are made once at injection and kept in the table every
-    // closure carries as upvalue 2. `anchorsIndex` is that table (lua_upvalueindex(2) from inside a function); a
+    // closure carries as kAnchorsUpvalue. `anchorsIndex` is that table (lua_upvalueindex(kAnchorsUpvalue) from inside a function); a
     // text it does not hold, or a function pushed without the table, falls back to lua_pushstring.
     static void PushAnchoredString(lua_State* L, int anchorsIndex, const char* text);
 
@@ -257,7 +264,11 @@ public:
         {"handshake", &Lua_Handshake, CallKind::Occasional},
         {"isCompanionActive", &Lua_IsCompanionActive, CallKind::PerFrame},
         {"onMapUnload", &Lua_OnMapUnload, CallKind::Occasional},
+        // Occasional: builds a result table and strings. The Companion Mod no longer calls it (ADR-0017); a console or
+        // test call may.
         {"getStereoTelemetry", &Lua_GetStereoTelemetry, CallKind::Occasional},
+        // Occasional by caller, not by cost: it allocates nothing, but the Companion Mod does not call it at all
+        // (ADR-0017), so no per-frame caller is there for the hold to cost; the hold on an allocation-free call is harmless.
         {"isStereoActive", &Lua_IsStereoActive, CallKind::Occasional},
         {"getRequiresAfrFallback", &Lua_RequiresAfrFallback, CallKind::PerFrame},
         {"getHeadPose", &Lua_GetHeadPose, CallKind::PerFrame},
@@ -321,11 +332,10 @@ private:
     // Writes the handshake's line to fs25_vr.log: both versions, a warning when they differ or the Companion Mod passed none.
     void LogVersions(const char* companionVersion) const;
 
-    // The bridge bound as upvalue 1 of every registered function (upvalue 2 is the table of anchored strings, see
-    // PushAnchoredString); raises a Lua error if it is missing.
+    // The bridge bound as kBridgeUpvalue of every registered function; raises a Lua error if it is missing.
     static VRBridge& FromUpvalue(lua_State* L);
 
-    // What Inject() registers in place of an Occasional function: runs the function named by upvalue 3 (its table
+    // What Inject() registers in place of an Occasional function: runs the function named by kEntryUpvalue (its table
     // entry) with the game's collector held off, so that no collection step starts from the Injector's copy of Luau
     // during the call. The one place the hold is applied to a function-table function.
     static int RunOccasional(lua_State* L);

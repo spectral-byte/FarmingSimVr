@@ -160,10 +160,10 @@ void VirtualGamepad::SetRealPadProbeForTesting(RealPadProbe probe) {
     m_realPadProbe = std::move(probe);
 }
 
-const std::array<const char*, 6>& VirtualGamepad::Reasons() {
-    static const std::array<const char*, 6> reasons = {kReasonOff, kReasonNoSession, kReasonNoActions, kReasonSlotsFull,
-                                                       kReasonNoHooks, kReasonPresent};
-    return reasons;
+std::span<const char* const> VirtualGamepad::Reasons() {
+    static constexpr const char* reasons[] = {kReasonOff, kReasonNoSession, kReasonNoActions,
+                                              kReasonSlotsFull, kReasonNoHooks, kReasonPresent};
+    return reasons;  // the size is the number of entries listed here
 }
 
 VirtualGamepad::Status VirtualGamepad::GetStatus() {
