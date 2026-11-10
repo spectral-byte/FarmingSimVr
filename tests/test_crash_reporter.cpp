@@ -302,8 +302,24 @@ enum class FilterInstalledLater {
     DoesNotChain,
 };
 
+// The Injector loads the system's dbghelp.dll with LoadLibraryExW. The child can make that fail, as it would on a machine
+// where the library is missing or cannot be loaded.
+FunctionDetour g_loadLibraryEx;
+
+HMODULE WINAPI LoadLibraryExThatCannotLoadDbghelp(LPCWSTR name, HANDLE file, DWORD flags) {
+    const std::wstring_view wanted = L"dbghelp.dll";
+    const std::wstring_view given = name ? name : L"";
+    if (given.size() >= wanted.size() &&
+        _wcsicmp(given.substr(given.size() - wanted.size()).data(), wanted.data()) == 0) {
+        SetLastError(ERROR_MOD_NOT_FOUND);
+        return nullptr;
+    }
+    return reinterpret_cast<decltype(&LoadLibraryExW)>(g_loadLibraryEx.GetOriginal())(name, file, flags);
+}
+
 // What else the child does between loading the Injector and faulting.
 struct ChildSetup {
+    bool dbghelpCannotBeLoaded = false;
     // Installed right after the Injector is loaded, so that the Injector's filter is not on top any more when the child
     // creates its DXGI factory and faults.
     FilterInstalledLater laterFilter = FilterInstalledLater::None;
@@ -353,6 +369,12 @@ void CrashLikeTheGame(Fault fault = Fault::WriteThroughANullPointer, FirstCall f
         ExitProcess(1);
     }
     StandInForTheDumpWriter(setup.dumpWriter);
+    if (setup.dbghelpCannotBeLoaded &&
+        !g_loadLibraryEx.Install(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryExW")),
+                                 reinterpret_cast<void*>(&LoadLibraryExThatCannotLoadDbghelp))) {
+        std::fprintf(stderr, "could not stand in for LoadLibraryExW\n");
+        ExitProcess(1);
+    }
     if (setup.laterFilter == FilterInstalledLater::Chains) {
         g_replacedByTheLaterFilter = SetUnhandledExceptionFilter(&LaterFilterThatChains);
     } else if (setup.laterFilter == FilterInstalledLater::DoesNotChain) {
@@ -930,6 +952,40 @@ TEST_F(CrashReporterTest, TheCrashLoadsNoLibrary) {
                 ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
 
     EXPECT_NE(m_childReport.find("modules loaded since the fault: 0"), std::string::npos) << m_childReport;
+}
+
+// With no dbghelp.dll there is no dump, but the helper thread still writes the crash line, and the line says why.
+TEST_F(CrashReporterTest, WithoutDbghelpTheCrashLineSaysWhyThereIsNoDump) {
+    ChildSetup setup = AfterTheFirstFactory();
+    setup.dbghelpCannotBeLoaded = true;
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, setup),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    EXPECT_NE(m_childReport.find("previous filter ran: call=1"), std::string::npos) << m_childReport;
+    const std::vector<std::string> log = Lines(LogPath());
+    ASSERT_FALSE(log.empty());
+    EXPECT_NE(log.back().find("no dump written: the system's dbghelp.dll could not be loaded (error 126)"),
+              std::string::npos)
+        << log.back();
+    EXPECT_FALSE(std::filesystem::exists(DumpPath()));
+}
+
+// A dump that cannot be created (the folder is read-only, the file is open in another program) is announced in the crash
+// line, which comes first, and then told in a line of its own.
+TEST_F(CrashReporterTest, ADumpThatCannotBeCreatedIsToldInALineAfterTheCrashLine) {
+    // Not a file that can be replaced: a folder in its place.
+    ASSERT_TRUE(std::filesystem::create_directory(DumpPath()));
+
+    EXPECT_EXIT(CrashLikeTheGame(Fault::WriteThroughANullPointer, FirstCall::EndsTheProcess, AfterTheFirstFactory()),
+                ::testing::ExitedWithCode(kAccessViolation), KeepingStderrIn(&m_childReport));
+
+    EXPECT_NE(m_childReport.find("previous filter ran: call=1"), std::string::npos) << m_childReport;
+    const std::vector<std::string> log = Lines(LogPath());
+    ASSERT_GE(log.size(), 2u);
+    EXPECT_NE(log[log.size() - 2].find("Injector: Crash:"), std::string::npos) << log[log.size() - 2];
+    EXPECT_NE(log.back().find("Injector: Crash dump not written: could not create fs25_vr_crash.dmp (error "),
+              std::string::npos)
+        << log.back();
 }
 
 // A helper that never finishes (a thread it needs is suspended, a lock is held) must not hang the game's exit: the
