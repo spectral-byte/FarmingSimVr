@@ -36,6 +36,8 @@ public:
     const std::string& GetVersion() const { return m_version; }
     bool IsReady() const;
     bool PerformHandshake();
+    // Writes the handshake's line to fs25_vr.log: both versions, a warning when they differ or the Companion Mod passed none.
+    void LogVersions(const char* companionVersion) const;
     bool IsCompanionActive() const { return m_handshakeCompleted; }
     void SetCompanionActive(bool active) { m_handshakeCompleted = active; }
     std::shared_ptr<OpenXrManager> GetOpenXrManager() const { return m_openXrManager; }
