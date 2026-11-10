@@ -84,12 +84,12 @@
 --   VRCompanion:setWheelGrabEnabled(enabled, save)
 --   VRCompanion:saveWheelGrabSetting(xmlFile, xml) / loadWheelGrabSetting(xmlFile, xml)   settings chain
 --   VRCompanion:getWheelGrabDiagnostics() -> string          the state of Wheel Grab, one line
---   VRCompanion:registerWheelGrabConsoleCommands() / resetWheelGrab()   map load / unload
+--   VRCompanion:loadWheelGrab() / resetWheelGrab()   map load / unload (registered with the core, with the two console commands)
 --   Console: vrWheelGrab [on|off], vrWheelGrabDiagnostics
 --
--- Hooks into the rest of the mod (each a single guarded call):
---   MotionControllers  updateMotionControllers -> updateWheelGrab(dt), after the hands are polled; the saved setting, the
---                      console commands and the reset chain through the Motion Controller functions of the same names
+-- Hooks into the rest of the mod:
+--   MotionControllers  updateMotionControllers -> updateWheelGrab(dt), after the hands are polled; the saved setting
+--                      chains through the Motion Controller settings functions
 --   VirtualHands       updateHand asks getWheelGrabHandPose(hand): a holding hand is drawn there, and stays shown however
 --                      long it is held still
 -- ====================================================================
@@ -822,19 +822,26 @@ function VRCompanion:consoleCommandWheelGrabDiagnostics()
     return self:getWheelGrabDiagnostics()
 end
 
-function VRCompanion:registerWheelGrabConsoleCommands()
-    wrapClass()  -- map load: the class again (resetWheelGrab lifted the wrap with the last map)
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrWheelGrab", "Turn Wheel Grab, steering by holding the Steering Wheel with a Motion Controller, on or off (saved): vrWheelGrab [on|off]", "consoleCommandSetWheelGrab", self)
-    addConsoleCommand("vrWheelGrabDiagnostics", "Report the Steering Wheel, each hand's distance to the rim ring, the grab and the steering sent: vrWheelGrabDiagnostics", "consoleCommandWheelGrabDiagnostics", self)
+-- Map load: the class is wrapped again (resetWheelGrab lifted the wrap with the last map).
+function VRCompanion:loadWheelGrab()
+    wrapClass()
 end
 
 -- Map unload: forget everything seen this session. The saved setting stays as it is.
 function VRCompanion:resetWheelGrab()
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrWheelGrab")
-        removeConsoleCommand("vrWheelGrabDiagnostics")
-    end
     unwrapAll()
     state = newState()
 end
+
+-- Registered with the core (the registry is documented in VRCompanionCore.lua). No update hook: updateWheelGrab runs from the Motion
+-- Controller poll, right after the hands are polled. The map-load hook is the re-wrap that used to ride on the console command
+-- registration; it still runs at every map load, whether or not the engine has addConsoleCommand. Unload is in reverse file order,
+-- after the Virtual Gamepad and before the Virtual Hands and the Menu Pointer; none of them reads the wrap.
+VRCompanion:registerSubsystem("wheelGrab", {
+    mapLoad = function(self) self:loadWheelGrab() end,
+    mapUnload = function(self) self:resetWheelGrab() end,
+    consoleCommands = {
+        { name = "vrWheelGrab", description = "Turn Wheel Grab, steering by holding the Steering Wheel with a Motion Controller, on or off (saved): vrWheelGrab [on|off]", method = "consoleCommandSetWheelGrab" },
+        { name = "vrWheelGrabDiagnostics", description = "Report the Steering Wheel, each hand's distance to the rim ring, the grab and the steering sent: vrWheelGrabDiagnostics", method = "consoleCommandWheelGrabDiagnostics" },
+    },
+})

@@ -158,7 +158,8 @@ end
 --   loadMap   runSubsystemMapLoad        right after loadConfiguration, before the core applies the saved settings of the
 --                                        subsystems that have not moved over yet
 --   loadMap   addSubsystemConsoleCommands   with the console commands, after the core's own list
---   update    runSubsystemUpdate         where updateMotionControllers is called, after the core's own update steps
+--   update    runSubsystemUpdate         after the core's own update steps, just before applyDlssNearClip (Motion Controllers were
+--                                        the last step before it and are the update hook there now)
 --   deleteMap runSubsystemMapUnload      first of the subsystem resets: removes a subsystem's console commands, then runs its
 --                                        mapUnload, subsystems in reverse order, before the resets that have not moved over yet
 --
@@ -438,7 +439,6 @@ function VRCompanion:loadMap(name)
         end
     end
     self:addSubsystemConsoleCommands()
-    if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
     if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
     if type(self.registerFishCatchConsoleCommands) == "function" then self:registerFishCatchConsoleCommands() end
     if type(self.registerSeatOffsetConsoleCommands) == "function" then self:registerSeatOffsetConsoleCommands() end
@@ -1223,9 +1223,6 @@ function VRCompanion:runUpdate(dt)
     -- The registered subsystems update, after the core's own steps above
     self:runSubsystemUpdate(dt)
 
-    -- Motion Controllers: poll both hands once per update
-    if type(self.updateMotionControllers) == "function" then self:updateMotionControllers(dt) end
-
     -- Follow the camera mode with the DLSS near plane (cab, outside camera, on foot)
     self:applyDlssNearClip(false)
 end
@@ -1421,5 +1418,4 @@ function VRCompanion:deleteMap()
     if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
     if type(self.unregisterStereoDialogDepthConsoleCommands) == "function" then self:unregisterStereoDialogDepthConsoleCommands() end
     if type(self.unregisterDualPassPhysicsConsoleCommands) == "function" then self:unregisterDualPassPhysicsConsoleCommands() end
-    if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end
