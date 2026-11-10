@@ -15,6 +15,7 @@
 ;                                test never touches the key of the real game. Not a file name: no key.
 ;   /FS25VR_NOCRASHDUMPS         leaves Windows' crash dump setting for the game alone (see below): no key and
 ;                                no record. An upgrade given the switch keeps what the install before it made.
+;                                In a wizard run it unticks the Crash Dumps page's checkbox.
 ;   /FS25VR_RESOLUTION=<W>x<H>   sets the game's Render Resolution (see below) without the wizard page.
 ;                                Whole numbers from 640 to 8192, e.g. /FS25VR_RESOLUTION=4000x2500.
 ;                                An invalid value fails the install before anything is placed. With no
@@ -73,8 +74,11 @@
 ;   FarmingSimulator2025Game.exe with three DWORD values: DumpType 0 (custom), CustomDumpFlags 0x1060 (thread
 ;   information, the memory the stacks point at, unloaded modules: the contents of the Injector's own dump) and
 ;   DumpCount 3. No DumpFolder, so Windows' default CrashDumps folder applies. It is on unless
-;   /FS25VR_NOCRASHDUMPS is given. A per-user run (/CURRENTUSER) cannot write HKEY_LOCAL_MACHINE: it logs that
-;   the setting was skipped. Nothing here ever fails the install.
+;   /FS25VR_NOCRASHDUMPS is given. The wizard has a "Crash Dumps" page after the Render Resolution page with
+;   one checkbox, ticked (unticked when the switch is given), that says what Windows keeps and where; a silent
+;   run has no page and is answered by the switch alone. A per-user run (/CURRENTUSER) cannot write
+;   HKEY_LOCAL_MACHINE: it has no page, and it logs that the setting was skipped. Unticked is the same as the
+;   switch: no key and no record. Nothing here ever fails the install.
 ;   A key that already exists for the exe is the player's or another tool's: install and uninstall leave it
 ;   alone (logged).
 ;
@@ -195,11 +199,13 @@ begin
 end;
 
 procedure InitializeRenderResolutionPage; forward;
+procedure InitializeCrashDumpsPage; forward;
 
 procedure InitializeWizard;
 begin
   InitGameDetection;
   InitializeRenderResolutionPage;
+  InitializeCrashDumpsPage;
 end;
 
 { Asks a process of the user who started Setup (normally not elevated) for their Documents folder. That
@@ -1105,10 +1111,73 @@ begin
   Result := IsAdminInstallMode;
 end;
 
-{ Whether the player wants the setting: yes unless /FS25VR_NOCRASHDUMPS is given. }
+var
+  CrashDumpsPage: TWizardPage;
+  CrashDumpsCheck: TNewCheckBox;
+  { True when the wizard offers the checkbox: only in the administrative install mode, the only one that can
+    write the setting. A per-user run has no page and no checkbox. }
+  CrashDumpsOffered: Boolean;
+
+{ The wizard's checkbox answers when it was offered and the player sees the wizard; a silent run is answered
+  by the command line alone. }
+function CrashDumpsAnsweredByWizard: Boolean;
+begin
+  Result := CrashDumpsOffered and not WizardSilent;
+end;
+
+{ Whether the player wants the setting. In a wizard run it is the checkbox, which starts ticked and starts
+  unticked when /FS25VR_NOCRASHDUMPS is given; in a silent run it is yes unless that switch is given. }
 function WantCrashDumps: Boolean;
 begin
-  Result := not HasCommandLineSwitch(NoCrashDumpsSwitch);
+  if CrashDumpsAnsweredByWizard then
+    Result := CrashDumpsCheck.Checked
+  else
+    Result := not HasCommandLineSwitch(NoCrashDumpsSwitch);
+end;
+
+const
+  CrashDumpsCheckCaption = 'Have Windows keep a crash dump when the game crashes';
+  { What the page says, in plain words: what Windows keeps, where, and what the Installer changes. The folder
+    and the count are the ones the key leaves to Windows' defaults (see the README's "The game crashed"). }
+  CrashDumpsExplanation =
+    'When Farming Simulator 25 crashes, Windows saves a small crash dump file that you can attach to a bug report. ' +
+    'Windows keeps the last 3 dumps, in the CrashDumps folder in your local application data ' +
+    '(%LOCALAPPDATA%\CrashDumps). A dump can contain file paths and your Windows user name, so zip it before ' +
+    'you share it.' + #13#10#13#10 +
+    'This turns on one Windows setting, for FarmingSimulator2025Game.exe only. Uninstalling FS25 VR turns it off ' +
+    'again, and a setting you already had for the game is left alone. Untick the box and Setup changes nothing ' +
+    'in Windows.';
+
+{ The optional "Crash Dumps" page: one checkbox, ticked, and what it does. /FS25VR_NOCRASHDUMPS unticks it, as
+  /FS25VR_RESOLUTION pre-ticks the Render Resolution page. Created only when this run can write the setting,
+  so a per-user run never sees it. }
+procedure InitializeCrashDumpsPage;
+var
+  Explanation: TNewStaticText;
+begin
+  CrashDumpsOffered := CrashDumpsAllowed;
+  if not CrashDumpsOffered then Exit;
+
+  CrashDumpsPage := CreateCustomPage(RenderPage.ID, 'Crash Dumps',
+    'Keep a file to attach to a bug report if the game crashes.');
+
+  CrashDumpsCheck := TNewCheckBox.Create(CrashDumpsPage);
+  CrashDumpsCheck.Parent := CrashDumpsPage.Surface;
+  CrashDumpsCheck.Left := 0;
+  CrashDumpsCheck.Top := 0;
+  CrashDumpsCheck.Width := CrashDumpsPage.SurfaceWidth;
+  CrashDumpsCheck.Caption := CrashDumpsCheckCaption;
+  CrashDumpsCheck.Checked := not HasCommandLineSwitch(NoCrashDumpsSwitch);
+
+  Explanation := TNewStaticText.Create(CrashDumpsPage);
+  Explanation.Parent := CrashDumpsPage.Surface;
+  Explanation.Left := 0;
+  Explanation.Top := ScaleY(28);
+  Explanation.Width := CrashDumpsPage.SurfaceWidth;
+  Explanation.AutoSize := False;
+  Explanation.WordWrap := True;
+  Explanation.Height := ScaleY(150);
+  Explanation.Caption := CrashDumpsExplanation;
 end;
 
 { The exe file name the key is written for: the game's, unless the hidden test-only /FS25VR_GAMEEXE switch
@@ -1200,7 +1269,10 @@ var
 begin
   if not WantCrashDumps then
   begin
-    Log('Windows crash dump setting: left alone because of /' + NoCrashDumpsSwitch + '.');
+    if CrashDumpsAnsweredByWizard then
+      Log('Windows crash dump setting: left alone because the Crash Dumps checkbox was unticked.')
+    else
+      Log('Windows crash dump setting: left alone because of /' + NoCrashDumpsSwitch + '.');
     Exit;
   end;
   if not CrashDumpsAllowed then
