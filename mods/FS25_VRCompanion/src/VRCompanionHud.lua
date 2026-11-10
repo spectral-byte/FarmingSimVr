@@ -292,7 +292,7 @@ function VRCompanion:setHudConvergenceDepth(depth, save)
     self.hudConvergenceDepth = depth
     -- 2D Floating Window Mode keeps the engine's layout; the depth applies on returning to VR
     if not self.is2DViewActive then self:repositionAllHudDisplays() end
-    if save and type(self.saveConfiguration) == "function" then self:saveConfiguration() end
+    if save then self:saveConfiguration() end
     return true
 end
 
@@ -1626,7 +1626,7 @@ end
 function VRCompanion:setStereoDialogDepth(depth, save)
     if type(depth) ~= "number" or depth < self.MIN_CONVERGENCE_DEPTH or depth > self.MAX_CONVERGENCE_DEPTH then return false end
     self.stereoDialogDepth = depth
-    if save and type(self.saveConfiguration) == "function" then self:saveConfiguration() end
+    if save then self:saveConfiguration() end
     return true
 end
 
@@ -1651,15 +1651,6 @@ function VRCompanion:consoleCommandSetStereoDialogDepth(arg)
     if not self:setStereoDialogDepth(depth, true) then return usage end
     print(string.format("[FS25_VR] Dialog depth set to: %.1f m", depth))
     return string.format("Dialog depth set to: %.1f m (Saved)", depth)
-end
-
-function VRCompanion:registerStereoDialogDepthConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrDialogDepth", "How far back a Stereo Dialog (the fish catch dialog) reads in the headset, in metres (saved; 2.5 by default; the HUD is at 1.8): vrDialogDepth [0.5-5.0]", "consoleCommandSetStereoDialogDepth", self)
-end
-
-function VRCompanion:unregisterStereoDialogDepthConsoleCommands()
-    if removeConsoleCommand ~= nil then removeConsoleCommand("vrDialogDepth") end
 end
 
 function VRCompanion:drawGuiAtHudDepth(original, gui, ...)
@@ -1688,3 +1679,33 @@ function VRCompanion:unhookGuiDraw()
     if hook ~= nil and hook.class.draw == hook.wrapper then hook.class.draw = hook.original end
     self.guiDrawHook = nil
 end
+
+-- ---- The HUD in the subsystem registry --------------------------------------------------------------------------------------
+-- Map load (after the core has read settings.xml): the HUD Safe Area and the HUD Groups are applied, then the HUD goes to the state
+-- the player last chose; a first install starts Hidden for full VR immersion. Map unload: the HUD goes back to the full screen in
+-- the Full state, the diagnostics stop and the convergence state is reset. The camera and mission hooks (hookHud, hookGuiDraw,
+-- unhookHud, unhookGuiDraw) and updateHudConvergence stay direct calls of the core: a raise in updateHudConvergence reaches the
+-- caller of update. Unload runs after Input's and before Stereo's, as it did.
+VRCompanion:registerSubsystem("hud", {
+    mapLoad = function(self)
+        self:applyHudSafeArea()
+        self:setHudState(self.persistedHudState or self.DEFAULT_HUD_STATE)
+    end,
+    mapUnload = function(self)
+        -- Restore HUD state and visibility to standard 2D Full
+        self:setHudState(self.HUD_STATE_FULL)
+        -- Restore the global HUD anchors to the full screen
+        self:restoreHudSafeArea()
+        self.currentConvergenceOffset = 0.0
+        self.currentConvergenceDisparity = 0.0
+        if self.DEFAULT_HUD_DEPTH ~= nil then
+            self.hudConvergenceDepth = self.DEFAULT_HUD_DEPTH
+        end
+        self.activeFillLevelsDisplay = nil
+        self:stopHudTrace()
+        self.hudEyeTestEye = nil
+    end,
+    consoleCommands = {
+        { name = "vrDialogDepth", description = "How far back a Stereo Dialog (the fish catch dialog) reads in the headset, in metres (saved; 2.5 by default; the HUD is at 1.8): vrDialogDepth [0.5-5.0]", method = "consoleCommandSetStereoDialogDepth" },
+    },
+})

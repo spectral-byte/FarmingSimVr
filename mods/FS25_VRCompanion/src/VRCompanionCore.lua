@@ -282,15 +282,10 @@ function VRCompanion:loadMap(name)
         pcall(isHeadTrackingAvailable)
     end
 
-    -- 0. Cleanly initialize 2D Floating Window Mode state to 3D VR mode (is2DViewActive = false)
-    if type(self.set2DViewActive) == "function" then
-        self:set2DViewActive(false)
-    else
-        self.is2DViewActive = false
-    end
-    if type(self.resetToggleViewDebounce) == "function" then
-        self:resetToggleViewDebounce()
-    end
+    -- 0. Cleanly initialize 2D Floating Window Mode state to 3D VR mode (is2DViewActive = false). A core step, not a Stereo
+    -- hook: it tells VRBridge before the handshake below, and that order is kept.
+    self:set2DViewActive(false)
+    self:resetToggleViewDebounce()
 
     -- 1. Perform native-to-Luau handshake via VRBridge
     local versionWarning = nil
@@ -374,26 +369,12 @@ function VRCompanion:loadMap(name)
     self:hookPlayerCamera()
     self:hookEnterable()
     self:hookVehicleSpeed()
-    if type(self.hookHud) == "function" then
-        self:hookHud()
-    end
+    self:hookHud()
     self:hookMissionUpdate()
 
-    -- 4a. Initialize Dual Eye Camera Nodes and Cyclopean Audio Listener
-    if type(self.initDualEyeCameraNodes) == "function" then
-        self:initDualEyeCameraNodes()
-    end
-    if type(self.initCyclopeanAudioListener) == "function" then
-        self:initCyclopeanAudioListener()
-    end
-
-    -- 5. Register in-engine actions (Recenter and HUD Toggle), and again whenever the player changes a binding
-    if type(self.registerActionEvents) == "function" then
-        self:registerActionEvents(true)
-    end
-    if type(self.subscribeToInputBindingChanges) == "function" then
-        self:subscribeToInputBindingChanges()
-    end
+    -- (The Dual Eye Camera Nodes and the Cyclopean Audio Listener Node are made by the Stereo subsystem, and the VR action events
+    -- are registered by the Input subsystem, in their mapLoad hooks below. Both used to be made here, before the settings are
+    -- read; nothing between here and there uses them, and the settings only reach VRBridge and the HUD.)
 
     -- 6. Synchronize initial GUI menu visibility state
     self.isMenuVisible = false
@@ -402,12 +383,14 @@ function VRCompanion:loadMap(name)
     self.guiVisibilityInitialized = false
     self:pollGuiVisibility()
 
-    -- 7. Apply the HUD Safe Area and place the HUD Groups
+    -- 7. Read the settings (the HUD Safe Area, the HUD Groups and the saved HUD state are applied by the HUD's mapLoad hook)
     if type(self.loadConfiguration) == "function" then
         self:loadConfiguration()
     end
     -- 7-. The registered subsystems load: the handshake above is done and the settings are read (Desktop Mirror sends its saved
-    -- setting to VRBridge here). Before the applies below, which have not moved over yet, so the order of effects stays.
+    -- setting to VRBridge here; the HUD applies its Safe Area and the HUD state the player last chose). Before the applies below,
+    -- which have not moved over yet. The HUD used to apply after them and before the DLSS near plane; the HUD asks VRBridge for
+    -- nothing there, so the order between them is not observable.
     self:runSubsystemMapLoad()
     -- 7-. Send the saved FOV Overscan to VRBridge too (a map unload put it back to 0 there)
     if type(self.applyFovOverscan) == "function" then
@@ -420,16 +403,8 @@ function VRCompanion:loadMap(name)
     if type(self.applyMouseConfinement) == "function" then
         self:applyMouseConfinement()
     end
-    if type(self.applyHudSafeArea) == "function" then
-        self:applyHudSafeArea()
-    end
     -- 7a. Send the loaded DLSS near plane for the starting camera
     self:applyDlssNearClip(true)
-
-    -- 8. Start in the HUD state the player last chose; a first install starts Hidden for full VR immersion
-    if type(self.setHudState) == "function" then
-        self:setHudState(self.persistedHudState or self.DEFAULT_HUD_STATE)
-    end
 
     -- 9. Register developer and tuning console commands
     if addConsoleCommand ~= nil then
@@ -442,8 +417,6 @@ function VRCompanion:loadMap(name)
     if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
     if type(self.registerFishCatchConsoleCommands) == "function" then self:registerFishCatchConsoleCommands() end
     if type(self.registerSeatOffsetConsoleCommands) == "function" then self:registerSeatOffsetConsoleCommands() end
-    if type(self.registerStereoDialogDepthConsoleCommands) == "function" then self:registerStereoDialogDepthConsoleCommands() end
-    if type(self.registerDualPassPhysicsConsoleCommands) == "function" then self:registerDualPassPhysicsConsoleCommands() end
     if type(self.registerFovOverscanConsoleCommands) == "function" then self:registerFovOverscanConsoleCommands() end
     if type(self.registerMenuDistanceConsoleCommands) == "function" then self:registerMenuDistanceConsoleCommands() end
     if type(self.registerMouseConfinementConsoleCommands) == "function" then self:registerMouseConfinementConsoleCommands() end
@@ -491,17 +464,11 @@ function VRCompanion:pollGuiVisibility()
         self.isMenuVisible = menuQuadShown
         self.guiVisibilityInitialized = true
         if wasMenuQuadShown and not menuQuadShown then
-            if type(self.restoreMenuBackgroundCamera) == "function" then
-                self:restoreMenuBackgroundCamera()
-            end
+            self:restoreMenuBackgroundCamera()
             if self.is2DViewActive then
-                if type(self.restoreHudSafeArea) == "function" then
-                    self:restoreHudSafeArea(true)
-                end
+                self:restoreHudSafeArea(true)
             else
-                if type(self.applyHudState) == "function" then
-                    self:applyHudState()
-                end
+                self:applyHudState()
             end
         end
         if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
@@ -969,9 +936,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
         -- Synchronize the eye's camera transforms without running engine simulation
         self:finishSubPass(subPass, eye, targetCam, rawDt)
-        if type(self.updateHudConvergence) == "function" then
-            self:updateHudConvergence(0.0)
-        end
+        self:updateHudConvergence(0.0)
         -- The engine's physics runs natively whatever dt the update gets (VRCompanionDualPassPhysics.lua)
         self:applyDualPassPhysicsPause(subPass, rawDt)
 
@@ -1006,9 +971,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     end
 
     self:finishSubPass(subPass, eye, targetCam, rawDt)
-    if type(self.updateHudConvergence) == "function" then
-        self:updateHudConvergence(effectiveDt)
-    end
+    self:updateHudConvergence(effectiveDt)
     self:applyDualPassPhysicsPause(subPass, rawDt)
 
     return res
@@ -1162,10 +1125,6 @@ function VRCompanion:runUpdate(dt)
     -- Poll in-game GUI visibility and synchronize with native VRBridge
     self:pollGuiVisibility()
 
-    if self:isMenuQuadShown() and type(self.updateMenuBackgroundCamera) == "function" then
-        self:updateMenuBackgroundCamera(dt)
-    end
-
     if not self.vehicleCameraHooked then
         self:hookVehicleCamera()
     end
@@ -1175,13 +1134,13 @@ function VRCompanion:runUpdate(dt)
     if not self.enterableHooked then
         self:hookEnterable()
     end
-    if not self.hudHooked and type(self.hookHud) == "function" then
+    if not self.hudHooked then
         self:hookHud()
     end
     if not self.missionUpdateHooked then
         self:hookMissionUpdate()
     end
-    if self.guiDrawHook == nil and type(self.hookGuiDraw) == "function" then
+    if self.guiDrawHook == nil then
         self:hookGuiDraw()
     end
     -- Install dt=0 guards once, then only retry (to catch a late Ferry class or newly
@@ -1195,18 +1154,8 @@ function VRCompanion:runUpdate(dt)
     end
 
     -- Update physical IPD-scaled HUD convergence parity across alternating AFR frames
-    if type(self.updateHudConvergence) == "function" then
-        self:updateHudConvergence(dt)
-    end
-
-    -- Keep in-engine action events active across context transitions, and register them all again after a binding change
-    local bindingsChanged = self.inputBindingsChanged == true
-    if bindingsChanged or (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) or (self.seatSetActionEventId == nil) then
-        if type(self.registerActionEvents) == "function" then
-            self.inputBindingsChanged = false
-            self:registerActionEvents(bindingsChanged)
-        end
-    end
+    -- (A direct call, not an update hook: its errors reach the caller of update, which the tests rely on)
+    self:updateHudConvergence(dt)
 
     -- Check for vehicle transitions (entering/exiting/switching vehicle)
     local curVehicle = self:getControlledVehicle()
@@ -1215,12 +1164,13 @@ function VRCompanion:runUpdate(dt)
         self.lastControlledVehicle = curVehicle
         -- A new vehicle may have just been spawned/entered: re-run the guard install.
         self:refreshVehicleSpeedGuards()
-        if type(self.onVehicleTransition) == "function" then
-            self:onVehicleTransition(oldVeh, curVehicle)
-        end
+        self:onVehicleTransition(oldVeh, curVehicle)
     end
 
-    -- The registered subsystems update, after the core's own steps above
+    -- The registered subsystems update, after the core's own steps above. Two of them used to update earlier: Input kept the VR
+    -- action events registered between the HUD convergence and the vehicle transition above, and Stereo moved the menu's background
+    -- camera right after the GUI poll. Neither reads or writes anything the steps between touch (the events are registered into
+    -- the context of the vehicle being controlled, whichever frame it became so; the camera node is the menu's, not an eye's).
     self:runSubsystemUpdate(dt)
 
     -- Motion Controllers: poll both hands once per update
@@ -1278,12 +1228,8 @@ function VRCompanion:deleteMap()
     end
 
     -- Unhook HUD display hooks cleanly
-    if type(self.unhookHud) == "function" then
-        self:unhookHud()
-    end
-    if type(self.unhookGuiDraw) == "function" then
-        self:unhookGuiDraw()
-    end
+    self:unhookHud()
+    self:unhookGuiDraw()
 
     -- Unhook mission update loop cleanly
     self:unhookMissionUpdate()
@@ -1305,37 +1251,10 @@ function VRCompanion:deleteMap()
     self.enterableHooked = false
     self.lastControlledVehicle = nil
     self.appliedDlssNearClip = nil
-    self.vehicleRotationStates = {}
     self.isMenuVisible = false
     self.menuTakesInput = false
     self.stereoDialogShowing = false
     self.guiVisibilityInitialized = false
-
-    local deleteFn = delete or (_G and _G.delete)
-    local entityExistsFn = entityExists or (_G and _G.entityExists)
-    -- Nodes linked under a vehicle are already gone: the game deletes its vehicles first, and
-    -- deleting an unknown entity logs a script error even inside pcall
-    local function deleteIfExists(node)
-        if node == nil or node == 0 then return end
-        if type(entityExistsFn) == "function" and not entityExistsFn(node) then return end
-        pcall(deleteFn, node)
-    end
-    if type(deleteFn) == "function" then
-        deleteIfExists(self.cameraNodeLeft)
-        -- Both eyes share one camera node unless something set them apart
-        if self.cameraNodeRight ~= self.cameraNodeLeft then
-            deleteIfExists(self.cameraNodeRight)
-        end
-        deleteIfExists(self.cyclopeanAudioListenerNode)
-        deleteIfExists(self.outsideCameraBaseNode)
-    end
-    self.outsideCameraBaseNode = nil
-    self.cameraNodeLeft = nil
-    self.cameraNodeRight = nil
-    self.cyclopeanAudioListenerNode = nil
-    if type(self.restoreMenuBackgroundCamera) == "function" then
-        self:restoreMenuBackgroundCamera()
-    end
 
     if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
         VRBridge.setMenuVisible(false)
@@ -1345,60 +1264,12 @@ function VRCompanion:deleteMap()
         VRBridge.onMapUnload()
     end
 
-    -- Restore HUD state and visibility to standard 2D Full
-    if type(self.setHudState) == "function" then
-        self:setHudState(self.HUD_STATE_FULL)
-    end
-
-    -- Restore the global HUD anchors to the full screen
-    if type(self.restoreHudSafeArea) == "function" then
-        self:restoreHudSafeArea()
-    end
-
-    self.currentConvergenceOffset = 0.0
-    self.currentConvergenceDisparity = 0.0
-    if self.DEFAULT_HUD_DEPTH ~= nil then
-        self.hudConvergenceDepth = self.DEFAULT_HUD_DEPTH
-    end
-    self.activeFillLevelsDisplay = nil
     self.passThroughMode = nil
     self.headTrackingEnabled = true
-    if type(self.unsubscribeFromInputBindingChanges) == "function" then
-        self:unsubscribeFromInputBindingChanges()
-    end
-    for _, row in ipairs(self.ACTION_EVENTS) do
-        self[row.idField] = nil
-        self[row.loggedField] = false
-    end
-    self.actionEventsContextName = nil
-    if type(self.resetToggleViewDebounce) == "function" then
-        self:resetToggleViewDebounce()
-    end
 
-    -- Restore original camera FOVs and projection offsets
-    if self.origCamSettings ~= nil then
-        for camNode, orig in pairs(self.origCamSettings) do
-            local exists = true
-            if type(entityExists) == "function" then
-                exists = entityExists(camNode)
-            end
-            if exists then
-                if orig.fovY ~= nil and type(setFovY) == "function" then
-                    pcall(setFovY, camNode, orig.fovY)
-                end
-                if type(setProjectionOffset) == "function" then
-                    pcall(setProjectionOffset, camNode, orig.offsetX or 0, orig.offsetY or 0)
-                end
-            end
-        end
-        self.origCamSettings = {}
-    end
-
-    if type(self.set2DViewActive) == "function" then
-        self:set2DViewActive(false)
-    else
-        self.is2DViewActive = false
-    end
+    -- (Stereo deletes its nodes and puts the cameras and the 2D view back, the HUD goes back to the full screen, Input lets go of
+    -- the VR action events and Locomotion forgets the vehicles' rotation states, in the mapUnload hooks below. Each of them
+    -- used to run here, in the middle of the core's teardown; the registry runs them after it, the HUD before Stereo as before.)
 
     -- Remove console commands
     if removeConsoleCommand ~= nil then
@@ -1414,12 +1285,8 @@ function VRCompanion:deleteMap()
     if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
     if type(self.resetFovOverscan) == "function" then self:resetFovOverscan() end
     if type(self.resetMenuDistance) == "function" then self:resetMenuDistance() end
-    if type(self.stopHudTrace) == "function" then self:stopHudTrace() end
-    self.hudEyeTestEye = nil
     if type(self.resetMouseConfinement) == "function" then self:resetMouseConfinement() end
     if type(self.unregisterPerfTraceConsoleCommands) == "function" then self:unregisterPerfTraceConsoleCommands() end
     if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
-    if type(self.unregisterStereoDialogDepthConsoleCommands) == "function" then self:unregisterStereoDialogDepthConsoleCommands() end
-    if type(self.unregisterDualPassPhysicsConsoleCommands) == "function" then self:unregisterDualPassPhysicsConsoleCommands() end
     if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
 end

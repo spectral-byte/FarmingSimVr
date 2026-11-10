@@ -11,7 +11,7 @@ VRCompanion = VRCompanion or {}
 -- registerActionEvent adds to the context that is current, and at map load that is the loading screen's menu context,
 -- which gameplay never uses: events registered there exist in g_inputBinding.events but never fire.
 function VRCompanion:getActionEventsContextName()
-    if type(self.getControlledVehicle) == "function" and self:getControlledVehicle() ~= nil then
+    if self:getControlledVehicle() ~= nil then
         return (Vehicle ~= nil and Vehicle.INPUT_CONTEXT_NAME) or "VEHICLE"
     end
     return (PlayerInputComponent ~= nil and PlayerInputComponent.INPUT_CONTEXT_NAME) or "PLAYER"
@@ -619,3 +619,30 @@ function VRCompanion:consoleCommandSetRenderingMode(modeStr)
     print(string.format("[FS25_VR] Stereo Presentation Mode is now: %s (%s)", tostring(newMode), modeLabel))
     return string.format("Stereo Presentation Mode set to: %s (%s, Saved)", tostring(newMode), modeLabel)
 end
+
+-- ---- Input in the subsystem registry ----------------------------------------------------------------------------------------
+-- Map load: the VR actions (Recenter, HUD Toggle, ...) are registered with the game, and again whenever the player changes a binding.
+-- The core used to do this before it read settings.xml, which has no say in it. Update: the events are kept active across
+-- context transitions (the vehicle's context and the player's on foot), every 30 ticks or when one is missing, and all registered
+-- again after a binding change. Map unload: Input lets go of the binding-change message and forgets the event ids.
+VRCompanion:registerSubsystem("input", {
+    mapLoad = function(self)
+        self:registerActionEvents(true)
+        self:subscribeToInputBindingChanges()
+    end,
+    update = function(self, dt)
+        local bindingsChanged = self.inputBindingsChanged == true
+        if bindingsChanged or (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) or (self.seatSetActionEventId == nil) then
+            self.inputBindingsChanged = false
+            self:registerActionEvents(bindingsChanged)
+        end
+    end,
+    mapUnload = function(self)
+        self:unsubscribeFromInputBindingChanges()
+        for _, row in ipairs(self.ACTION_EVENTS) do
+            self[row.idField] = nil
+            self[row.loggedField] = false
+        end
+        self.actionEventsContextName = nil
+    end,
+})
