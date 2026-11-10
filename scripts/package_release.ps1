@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $builtDll = Join-Path $repoRoot "build\version.dll"
+$builtPdb = Join-Path $repoRoot "build\version.pdb"
 $companionDir = Join-Path $repoRoot "mods\FS25_VRCompanion"
 $releaseDir = Join-Path $repoRoot "build\release"
 $modDescPath = Join-Path $companionDir "modDesc.xml"
@@ -15,6 +16,13 @@ Write-Host "Packaging FS25 VR Release..."
 
 if (-not (Test-Path $builtDll)) {
     Write-Error "build\version.dll not found. Build project first (ninja -C build injector)."
+}
+
+# Every release carries the Injector's symbols (the symbols zip), so a crash dump from it can be read.
+# The next build overwrites the PDB, so a release cannot be symbolised afterwards: refuse to package
+# without it, before anything in build\release is touched.
+if (-not (Test-Path $builtPdb)) {
+    Write-Error "build\version.pdb not found. The linker writes it next to version.dll, and every release must carry the Injector's symbols (the symbols zip). Rebuild the Injector (cmake --build build --target injector); do not copy a version.dll in without its PDB."
 }
 
 # Only ship an Injector that needs no VC++ redistributable (static C runtime).
@@ -39,9 +47,8 @@ New-Item -ItemType Directory -Path "$bundleDir\mods" -Force | Out-Null
 # Copy Injector DLL (the game loads it as its version.dll, ADR-0038)
 Copy-Item $builtDll "$bundleDir\x64\version.dll" -Force
 Copy-Item $builtDll "$releaseDir\version.dll" -Force
-$builtPdb = Join-Path $repoRoot "build\version.pdb"
-if (Test-Path $builtPdb) { Copy-Item $builtPdb "$releaseDir\version.pdb" -Force }
-Write-Host "[Package] Staged version.dll"
+Copy-Item $builtPdb "$releaseDir\version.pdb" -Force
+Write-Host "[Package] Staged version.dll and version.pdb"
 
 # version.dll statically links these dependencies; their licenses require shipping the notices.
 # Fetched sources live wherever the build was configured to put them (CI uses -DFETCHCONTENT_BASE_DIR=.deps).
@@ -240,6 +247,16 @@ try {
 } finally {
     Pop-Location
 }
+
+# Symbols zip: the PDB the linker wrote for the staged Injector, published next to the zip bundle and
+# the Setup exe so a crash dump from this release opens with full symbols. It is a file, not a second
+# FS25_VR_v* folder: scripts\test_installer.ps1 takes the one such folder in build\release as its staging dir.
+$symbolsZip = Join-Path $releaseDir "${bundleName}_Symbols.zip"
+tar.exe -a -cf $symbolsZip -C $releaseDir version.pdb
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $symbolsZip)) {
+    Write-Error "Failed to create the symbols zip $symbolsZip (tar exit code $LASTEXITCODE)."
+}
+Write-Host "[Package] Created $symbolsZip"
 
 # Build the Installer from the same staged bundle folder, so it carries the identical binaries,
 # LICENSE and THIRD_PARTY_NOTICES as the zip bundle. Inno Setup's compiler is not on PATH by default.
