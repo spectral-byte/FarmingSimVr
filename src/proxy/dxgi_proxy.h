@@ -9,6 +9,7 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -213,6 +214,15 @@ private:
     // after the Present's work. It runs once per Present (m_mouseConfinementUpdated).
     void UpdateMouseConfinement();
     bool m_mouseConfinementUpdated = false;
+
+    // The game's swap chain, by identity only: no reference is held, so the game can still destroy it. Set when the
+    // proxy attaches to it; every hook acts on this one and passes any other swap chain's call straight through.
+    // Read by hooks on any thread (another tool's swap chain presents from its own), written by swap chain creation.
+    std::atomic<const void*> m_gameSwapChain{ nullptr };
+    bool IsGameSwapChain(const void* swapChain) const { return swapChain && swapChain == m_gameSwapChain.load(); }
+    // Whether a swap chain created for `window` can be the game's: the game's window is not known yet, or it is
+    // that one (a null window is unknown). One rule for every creation hook.
+    bool IsForGameWindow(HWND window) const;
 
     IDXGISwapChain* m_cachedSwapChain = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_cachedSwapChain3;
