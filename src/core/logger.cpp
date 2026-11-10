@@ -167,6 +167,60 @@ void Logger::Log(LogLevel level, const std::string& message) {
     OutputDebugStringA(formatted.c_str());
 }
 
+namespace {
+
+// Writes value as exactly `digits` decimal digits; returns the end of what it wrote.
+char* PutDigits(char* out, unsigned value, int digits) {
+    for (int i = digits - 1; i >= 0; --i) {
+        out[i] = static_cast<char>('0' + value % 10);
+        value /= 10;
+    }
+    return out + digits;
+}
+
+} // namespace
+
+bool Logger::TryLogWithoutWaiting(LogLevel level, const char* message, std::size_t length) {
+    std::unique_lock<std::mutex> lock(m_mutex, std::try_to_lock);
+    if (!lock.owns_lock() || !m_fileStream.is_open()) {
+        return false;
+    }
+
+    // The layout of the lines Log writes, put together by hand: snprintf and localtime_s need more stack than a
+    // thread that has just overflowed its stack has left, and the CRT's time functions take a lock of their own.
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    char* out = m_emergencyLine;
+    out = PutDigits(out, now.wYear, 4);
+    *out++ = '-';
+    out = PutDigits(out, now.wMonth, 2);
+    *out++ = '-';
+    out = PutDigits(out, now.wDay, 2);
+    *out++ = ' ';
+    out = PutDigits(out, now.wHour, 2);
+    *out++ = ':';
+    out = PutDigits(out, now.wMinute, 2);
+    *out++ = ':';
+    out = PutDigits(out, now.wSecond, 2);
+    *out++ = '.';
+    out = PutDigits(out, now.wMilliseconds, 3);
+    *out++ = ' ';
+    for (const char* tag = LogLevelToString(level); *tag; ++tag) {
+        *out++ = *tag;
+    }
+    *out++ = ' ';
+    const std::size_t room = sizeof(m_emergencyLine) - static_cast<std::size_t>(out - m_emergencyLine) - 1;
+    const std::size_t kept = length < room ? length : room;
+    for (std::size_t i = 0; i < kept; ++i) {
+        *out++ = message[i];
+    }
+    *out++ = '\n';
+
+    m_fileStream.write(m_emergencyLine, out - m_emergencyLine);
+    m_fileStream.flush();
+    return !m_fileStream.fail();
+}
+
 void Logger::Flush() {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_fileStream.is_open()) {

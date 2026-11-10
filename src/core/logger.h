@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <fstream>
@@ -37,6 +38,10 @@ public:
     void SetMinLevel(LogLevel level);
     LogLevel GetMinLevel() const;
     void Log(LogLevel level, const std::string& message);
+    // For the crash reporter, which runs in a process that may be broken. Appends one line to the log and flushes it,
+    // but only if the log is open and its lock is free right now: it never waits for the lock, because the crashed
+    // thread may hold it. Allocates nothing and uses next to no stack. Returns whether the line was written.
+    bool TryLogWithoutWaiting(LogLevel level, const char* message, std::size_t length);
     void Flush();
     void Close();
 
@@ -51,6 +56,8 @@ private:
 
     std::ofstream m_fileStream;
     std::mutex m_mutex;
+    // The line TryLogWithoutWaiting puts together, under the lock, so that it needs no heap and no stack.
+    char m_emergencyLine[512];
     std::filesystem::path m_filepath;
     std::atomic<LogLevel> m_minLevel{LogLevel::Info};
 };

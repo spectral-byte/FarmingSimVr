@@ -87,6 +87,8 @@ enable_testing()
 set(CORE_SOURCES
     src/core/logger.cpp
     src/core/logger.h
+    src/core/crash_reporter.cpp
+    src/core/crash_reporter.h
     src/core/thread_trace.cpp
     src/core/thread_trace.h
     src/core/perf_trace.cpp
@@ -301,6 +303,7 @@ add_executable(fs25_vr_tests
     tests/test_manual_attach_wraps.cpp
     tests/test_manual_attach_pto_hoses.cpp
     tests/test_manual_attach_prompts.cpp
+    tests/test_crash_reporter.cpp
 )
 
 target_link_libraries(fs25_vr_tests PRIVATE

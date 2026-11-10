@@ -1,5 +1,6 @@
 #include "core/injector_startup.h"
 
+#include "core/crash_reporter.h"
 #include "core/injector_runtime.h"
 #include "core/logger.h"
 #include "proxy/dxgi_export_hooks.h"
@@ -131,6 +132,9 @@ void StartInjector() {
         return;
     }
 
+    // From DllMain, where it is loader-lock safe: it loads no library and installs no hook.
+    InstallCrashReporter();
+
     HMODULE systemDxgi = nullptr;
     const std::wstring& path = SystemDxgiPath();
     if (!path.empty() &&
@@ -156,6 +160,7 @@ void StartInjector() {
 }
 
 void StopInjector() {
+    RemoveCrashReporter();
     if (g_notificationCookie) {
         if (auto unregisterNotification =
                 reinterpret_cast<LdrUnregisterDllNotificationFn>(NtdllFunction("LdrUnregisterDllNotification"))) {
