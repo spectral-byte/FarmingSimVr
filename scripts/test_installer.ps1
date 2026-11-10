@@ -1659,24 +1659,36 @@ Test-Case "An upgrade over an install that has the crash dump key keeps it and i
     Assert-True ($null -eq (Get-CrashDumpRecord)) "The crash dump record was not deleted by the uninstall."
 } -Needs Elevated
 
-Test-Case "An upgrade writes the crash dump key again when it is gone, and the later uninstall removes it" {
+# The first install may have created the LocalDumps key itself (when the machine had none). The key being gone
+# while LocalDumps stayed must not make the upgrade forget that: the uninstall after it still takes away what the
+# install made, and leaves LocalDumps as the first install found it (ADR-0039, item 8). On a machine that had
+# LocalDumps already, the same steps check that the upgrade does not start to remove a key that was never ours.
+Test-Case "An upgrade writes the crash dump key again when it is gone, and the later uninstall removes it and leaves the LocalDumps key as the first install found it" {
     param($world)
     New-FakeGame $world
     New-FakeDocuments $world
+    $existedBefore = Test-MachineKeyExists $localDumpsKeyPath
     Assert-InstallSucceeds $world @() "First Setup"
     Remove-CrashDumpKey $world.ExeName
+    Assert-True (Test-MachineKeyExists $localDumpsKeyPath) "The LocalDumps key went with the game's key; the test needs it to stay."
 
     $newer = New-NewerSetup $world
     $exit = Invoke-SetupExe $newer $world
     Assert-True ($exit -eq 0) "Upgrade Setup exited with $exit."
 
     Assert-CrashDumpKeyIsOurs (Get-CrashDumpKey $world.ExeName) "after the upgrade"
-    Assert-True ($null -ne (Get-CrashDumpRecord)) "The upgrade did not record the crash dump key it wrote."
+    $record = Get-CrashDumpRecord
+    Assert-True ($null -ne $record) "The upgrade did not record the crash dump key it wrote."
+    if (-not $existedBefore) {
+        Assert-True ($record["CreatedLocalDumpsKey"] -eq "1") "The upgrade forgot that the first install created the LocalDumps key (the record says CreatedLocalDumpsKey=$($record["CreatedLocalDumpsKey"]))."
+    }
 
     Uninstall-Fs25Vr
 
     Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key is still there after the uninstall."
     Assert-True ($null -eq (Get-CrashDumpRecord)) "The crash dump record was not deleted by the uninstall."
+    Assert-True ((Test-MachineKeyExists $localDumpsKeyPath) -eq $existedBefore) `
+        "The LocalDumps key $(if ($existedBefore) { 'was there before the first install and is gone' } else { 'was not there before the first install and is still there' }) after the uninstall."
 } -Needs Elevated
 
 Test-Case "An upgrade over a crash dump key the player changed leaves it alone, and the later uninstall leaves it too" {

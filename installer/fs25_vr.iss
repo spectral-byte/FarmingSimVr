@@ -94,8 +94,9 @@
 ;   something else has gone into it. Microsoft does not say what a LocalDumps key with nothing in it does (it
 ;   may keep crash dumps on for every application), so the Installer leaves the registry as it found it
 ;   (docs/adr/0039, item 8). Either way the record is deleted. An upgrade or reinstall keeps the key and its
-;   record while the key is still its own, writes the key when there is none, and for a key that was changed
-;   since leaves it alone and deletes the record.
+;   record while the key is still its own, writes the key when there is none (and, when the earlier record says
+;   the install created LocalDumps and LocalDumps is still empty, carries CreatedLocalDumpsKey=1 forward), and
+;   for a key that was changed since leaves it alone and deletes the record.
 ;   Pascal helpers in [Code]: TCrashDumpRecord, SetUpCrashDumps, RemoveCrashDumps, CrashDumpKeyIsUnchanged.
 ;
 ; English only, requires admin, unsigned (see docs/adr/0024-unsigned-inno-setup-installer-and-static-runtime-injector.md).
@@ -1262,6 +1263,16 @@ begin
   Result := True;
 end;
 
+{ True when the key is there and holds nothing: no value and no subkey. }
+function CrashDumpsKeyHoldsNothing(const Key: String): Boolean;
+var
+  Names, SubKeys: TArrayOfString;
+begin
+  Result := RegKeyExists(CrashDumpsRoot, Key) and RegGetValueNames(CrashDumpsRoot, Key, Names) and
+            RegGetSubkeyNames(CrashDumpsRoot, Key, SubKeys) and
+            (GetArrayLength(Names) = 0) and (GetArrayLength(SubKeys) = 0);
+end;
+
 { Turns on Windows' own crash dumps for the game. Called once the files are placed, in the administrative
   install mode only. It never fails the install: whatever it cannot do is logged. The record goes first
   and is deleted again if the key cannot be written, so a record never names a key that is not there. }
@@ -1269,6 +1280,7 @@ procedure SetUpCrashDumps;
 var
   ExeName, Key: String;
   R, Old: TCrashDumpRecord;
+  HaveOld: Boolean;
 begin
   if not WantCrashDumps then
   begin
@@ -1291,18 +1303,23 @@ begin
   end;
   Key := CrashDumpsKey(ExeName);
 
+  { The record an earlier run left for this exe, if there is one. }
+  HaveOld := LoadCrashDumpRecord(Old);
+  if HaveOld then
+    HaveOld := SameText(Old.ExeName, ExeName);
+
   { A key that is already there is left exactly as it is, and so is its record. It is ours when an earlier
     run recorded it and it still holds what was written (an upgrade or a reinstall): it stays, with its
     record. Otherwise it is the player's or another tool's, and a record of an earlier key of ours that
     was changed since no longer describes anything of ours. }
   if RegKeyExists(CrashDumpsRoot, Key) then
   begin
-    if LoadCrashDumpRecord(Old) and SameText(Old.ExeName, ExeName) and CrashDumpKeyIsUnchanged(Old) then
+    if HaveOld and CrashDumpKeyIsUnchanged(Old) then
       Log('Windows crash dump setting: HKLM\' + Key + ' is still the one this Installer made; keeping it and its record.')
     else
     begin
       Log('Windows crash dump setting: HKLM\' + Key + ' already exists; leaving it alone.');
-      if LoadCrashDumpRecord(Old) and SameText(Old.ExeName, ExeName) then
+      if HaveOld then
       begin
         Log('Windows crash dump setting: it was changed since this Installer made it; deleting the record of it.');
         DeleteFile(GetCrashDumpRecordPath);
@@ -1315,10 +1332,17 @@ begin
   R.WrittenDumpType := IntToStr(CrashDumpType);
   R.WrittenCustomDumpFlags := IntToStr(CrashDumpFlags);
   R.WrittenDumpCount := IntToStr(CrashDumpCount);
-  if RegKeyExists(CrashDumpsRoot, CrashDumpsBaseKey) then
-    R.CreatedLocalDumpsKey := '0'
-  else
+  if not RegKeyExists(CrashDumpsRoot, CrashDumpsBaseKey) then
+    R.CreatedLocalDumpsKey := '1'
+  else if HaveOld and (Old.CreatedLocalDumpsKey = '1') and CrashDumpsKeyHoldsNothing(CrashDumpsBaseKey) then
+  begin
+    { The game's key is gone, but LocalDumps is still the empty key an earlier run of this Installer created:
+      the new record carries that on, so the uninstall that follows takes LocalDumps away too. }
     R.CreatedLocalDumpsKey := '1';
+    Log('Windows crash dump setting: HKLM\' + CrashDumpsBaseKey + ' is still the empty key an earlier install created; the record keeps that.');
+  end
+  else
+    R.CreatedLocalDumpsKey := '0';
   if not SaveCrashDumpRecord(R) then
   begin
     Log('Skipped the Windows crash dump setting: could not write ' + GetCrashDumpRecordPath + '.');
