@@ -63,12 +63,13 @@
 --       "trigger")). The Pointer Hand feels it as a Click Point (VRCompanion:onClickPointEvent): a light pulse as the ray lands on a Coupling
 --       Point it was not on, a firmer one for each pull that ran Manual Attach's path.
 --   VRCompanion:getManualAttachDiagnostics() -> string   one line for vrPointerDiagnostics
---   VRCompanion:resetManualAttachSupport()               map unload (hands the wrapped candidate update back as found)
+--   VRCompanion:resetManualAttachSupport()               map unload (hands the wrapped candidate update back as found); the hook of the
+--       "manualAttach" subsystem this file registers with the core
 --
 -- Hooks into the rest of the mod
 --   MotionControllers   updatePointerRay -> peekInteractiveControlTarget(), updateManualAttach(dt, false, clickCos), updateInteractiveControl(dt,
 --       selectNone), before Animated Objects and Object Grab; settleInteractiveControl (the paths where Motion Controller input is ignored) -> updateManualAttach(dt, true) so the selection
---       clears; getPointerDiagnostics -> getManualAttachDiagnostics(); resetMotionControllers -> resetManualAttachSupport()
+--       clears; getPointerDiagnostics -> getManualAttachDiagnostics()
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -265,6 +266,12 @@ function VRCompanion:resetManualAttachSupport()
     state = newState()
 end
 
+-- Map unload only (the support installs itself from the update, not at map load, and has no commands). Order: it comes after Wheel
+-- Grab and the Virtual Gamepad in modDesc.xml, so it unloads before their resets, which it does not depend on.
+VRCompanion:registerSubsystem("manualAttach", {
+    mapUnload = function(self) self:resetManualAttachSupport() end,
+})
+
 -- ---- The hitches in reach -----------------------------------------------------------------------------------------------------
 
 local function localPlayer()
@@ -441,7 +448,7 @@ end
 
 -- The pulses of a Click Point, on the Pointer Hand only: "selected" as the ray lands, "clicked" for a pull that ran Manual Attach's path.
 local function feel(self, kind, hitch)
-    if type(self.onClickPointEvent) == "function" then self:onClickPointEvent(kind, hitch) end
+    self:onClickPointEvent(kind, hitch)
 end
 
 -- Whether the Pointer Ray may work Coupling Points now. Manual Attach's own on-foot check (its flag) covers the cab, Hand Tools and Held Objects.
@@ -506,7 +513,7 @@ function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
     -- already held when the ray landed (it then keeps its binding and works nothing). Only the update the trigger went down works the Coupling Point.
     local mayUseTrigger = true
     local pointerHand = self:getPointerHand()
-    if pointerHand ~= nil and type(self.takeVirtualGamepadInput) == "function" then
+    if pointerHand ~= nil then
         mayUseTrigger = self:takeVirtualGamepadInput(pointerHand, "trigger")
     end
     if mayUseTrigger then
