@@ -246,13 +246,13 @@ function VRCompanion:saveConfiguration(xmlPath)
             setXmlBoolFn(xmlFile, "vrSettings.hudGroups.controls.expanded", self.controlsExpanded ~= false)
         end
         self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn })
-        if type(self.saveFishCatchSetting) == "function" then self:saveFishCatchSetting(xmlFile, { setString = setXmlStringFn }) end
+        self:saveFishCatchSetting(xmlFile, { setString = setXmlStringFn })
         self:saveDesktopMirrorSetting(xmlFile, { setBool = setXmlBoolFn })
-        if type(self.saveFovOverscanSetting) == "function" then self:saveFovOverscanSetting(xmlFile, { setFloat = setXmlFloatFn }) end
-        if type(self.saveMenuDistanceSetting) == "function" then self:saveMenuDistanceSetting(xmlFile, { setFloat = setXmlFloatFn }) end
-        if type(self.saveMouseConfinementSetting) == "function" then self:saveMouseConfinementSetting(xmlFile, { setBool = setXmlBoolFn }) end
+        self:saveFovOverscanSetting(xmlFile, { setFloat = setXmlFloatFn })
+        self:saveMenuDistanceSetting(xmlFile, { setFloat = setXmlFloatFn })
+        self:saveMouseConfinementSetting(xmlFile, { setBool = setXmlBoolFn })
         if type(self.saveStereoDialogDepthSetting) == "function" then self:saveStereoDialogDepthSetting(xmlFile, { setFloat = setXmlFloatFn }) end
-        if type(self.saveSeatOffsetSettings) == "function" then self:saveSeatOffsetSettings(xmlFile, { setString = setXmlStringFn, setInt = setXmlIntFn,setFloat = setXmlFloatFn }) end
+        self:saveSeatOffsetSettings(xmlFile, { setString = setXmlStringFn, setInt = setXmlIntFn,setFloat = setXmlFloatFn })
         if type(setXmlStringFn) == "function" then
             -- Persist the mode last requested, not VRBridge's: while the compositor is active the bridge
             -- only queues a change until the next frame boundary, so it still reports the old mode here.
@@ -359,13 +359,13 @@ function VRCompanion:loadConfiguration(xmlPath)
                 if loadedControlsExpanded ~= nil then controlsExpanded = loadedControlsExpanded end
 
                 self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn })
-                if type(self.loadFishCatchSetting) == "function" then self:loadFishCatchSetting(xmlFile, { getString = getXmlStringFn }) end
+                self:loadFishCatchSetting(xmlFile, { getString = getXmlStringFn })
                 self:loadDesktopMirrorSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn })
-                if type(self.loadFovOverscanSetting) == "function" then self:loadFovOverscanSetting(xmlFile, { getFloat = getXmlFloatFn }) end
-                if type(self.loadMenuDistanceSetting) == "function" then self:loadMenuDistanceSetting(xmlFile, { getFloat = getXmlFloatFn }) end
-                if type(self.loadMouseConfinementSetting) == "function" then self:loadMouseConfinementSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn }) end
+                self:loadFovOverscanSetting(xmlFile, { getFloat = getXmlFloatFn })
+                self:loadMenuDistanceSetting(xmlFile, { getFloat = getXmlFloatFn })
+                self:loadMouseConfinementSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn })
                 if type(self.loadStereoDialogDepthSetting) == "function" then self:loadStereoDialogDepthSetting(xmlFile, { getFloat = getXmlFloatFn }) end
-                if type(self.loadSeatOffsetSettings) == "function" then self:loadSeatOffsetSettings(xmlFile, { has = hasXmlPropertyFn, getString = getXmlStringFn, getInt = getXmlIntFn,getFloat = getXmlFloatFn }) end
+                self:loadSeatOffsetSettings(xmlFile, { has = hasXmlPropertyFn, getString = getXmlStringFn, getInt = getXmlIntFn,getFloat = getXmlFloatFn })
 
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.snapTurnAngle")
