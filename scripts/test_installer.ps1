@@ -1437,6 +1437,37 @@ Test-Case "A per-user install writes no Windows crash dump key, logs that the se
     Assert-True ((Get-LastSetupLog $world) -match "Skipped the Windows crash dump setting") "Setup did not log that the Windows crash dump setting was skipped."
 } -Needs NotElevated
 
+# What the Installer writes for the game's exe, spelled out here from the spec and not from the Installer:
+# a custom dump (DumpType 0) with the Injector's own dump contents (CustomDumpFlags 0x1060 =
+# MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithUnloadedModules, next to the
+# stacks and the module list every minidump holds), 3 dumps kept, and no DumpFolder (Windows' default
+# CrashDumps folder applies).
+function Assert-CrashDumpKeyIsOurs($key, [string]$when) {
+    Assert-True ($null -ne $key) "There is no crash dump key $when."
+    $expected = [ordered]@{ DumpType = 0; CustomDumpFlags = 0x1060; DumpCount = 3 }
+    $names = @($key.Values.Keys | Sort-Object)
+    Assert-True (($names -join ",") -eq ((@($expected.Keys) | Sort-Object) -join ",")) "The crash dump key holds the values '$($names -join ', ')' $when, expected '$(@($expected.Keys) -join ', ')' only."
+    foreach ($name in $expected.Keys) {
+        $v = $key.Values[$name]
+        Assert-True ($v.Kind -eq "DWord" -and $v.Data -eq $expected[$name]) "The crash dump key's $name is $($v.Kind) $($v.Data) $when, expected DWord $($expected[$name])."
+    }
+    Assert-True ($key.SubKeys.Count -eq 0) "The crash dump key has subkeys ${when}: $($key.SubKeys -join ', ')"
+}
+
+Test-Case "An install creates the game exe's crash dump key (custom dump, 3 dumps kept, no dump folder) and an uninstall removes it" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+
+    Assert-InstallSucceeds $world
+
+    Assert-CrashDumpKeyIsOurs (Get-CrashDumpKey $world.ExeName) "after the install"
+
+    Uninstall-Fs25Vr
+
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key is still there after the uninstall."
+} -Needs Elevated
+
 Write-Host "Installer tests: $passed passed, $skipped skipped, $($failures.Count) failed."
 if ($failures.Count -gt 0) {
     Write-Error "$($failures.Count) installer test(s) failed: $($failures -join '; ')"
