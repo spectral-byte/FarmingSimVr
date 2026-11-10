@@ -134,6 +134,11 @@ Close the game first.
   FS25 VR is moved to version.dll.fs25vr-backup before FS25 VR is installed.
 - Upgrading from FS25 VR 1.1.9 or earlier (which was dxgi.dll) removes that
   dxgi.dll and puts back a dxgi.dll it had moved aside for it, such as ReShade.
+- Crash dumps for the game: the Installer turns on Windows' own crash dumps for
+  FarmingSimulator2025Game.exe (a registry setting), so a crash leaves a file to
+  attach to a bug report. See "IF THE GAME CRASHES" below. A setting you already
+  had for the game is left alone. A silent install can leave the setting alone
+  with /FS25VR_NOCRASHDUMPS.
 
 Windows may show "Windows protected your PC" because the Installer is not
 code-signed yet. This is expected: click "More info", then "Run anyway".
@@ -208,6 +213,29 @@ Settings are automatically saved in:
 Documents\My Games\FarmingSimulator2025\modSettings\FS25_VRCompanion\settings.xml
 
 
+IF THE GAME CRASHES
+--------------------------------------------------------------------------------
+A crash dump shows where the game crashed, so attach one to your bug report.
+Zip it first: a dump can contain file paths and your Windows user name.
+
+- Windows' crash dump for the game: the newest
+  FarmingSimulator2025Game.exe.<number>.dmp in %LOCALAPPDATA%\CrashDumps (paste
+  that into the Explorer address bar). Windows keeps the last three.
+
+The Installer turns on Windows' crash dump for FarmingSimulator2025Game.exe,
+unless you ran it with /FS25VR_NOCRASHDUMPS or Windows already had a setting for
+the game, which the Installer leaves as it is. If you installed by hand, turn it
+on yourself: open a Command Prompt as administrator and run
+
+powershell -NoProfile -Command "`$k = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\FarmingSimulator2025Game.exe'; New-Item `$k -Force | Out-Null; @{DumpType=0; CustomDumpFlags=0x1060; DumpCount=3}.GetEnumerator() | ForEach-Object { New-ItemProperty `$k -Name `$_.Key -Value `$_.Value -PropertyType DWord -Force | Out-Null }"
+
+To turn it off again, run
+
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\FarmingSimulator2025Game.exe" /f /reg:64
+
+Windows writes no dump where a policy has switched Windows Error Reporting off.
+
+
 UNINSTALLATION
 --------------------------------------------------------------------------------
 - Installed with the Installer: run FS25_VR_v${version}_Setup.exe again and choose
@@ -221,7 +249,8 @@ UNINSTALLATION
   aside (or keeps a version.dll you installed over FS25 VR's since), leaves a
   dxgi.dll such as ReShade's alone, and
   restores your original Render Resolution unless you changed the width, height
-  or fullscreen mode in the game since. game.xml.fs25vr-backup stays.
+  or fullscreen mode in the game since. game.xml.fs25vr-backup stays. It also
+  removes the crash dump setting the Installer made, unless you changed it since.
 - Installed manually:
   Delete 'version.dll' from the game's 'x64' folder, and
   delete 'FS25_VRCompanion.zip' from your 'mods' folder.

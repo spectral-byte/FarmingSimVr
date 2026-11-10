@@ -8,7 +8,7 @@ Players used to copy `dxgi.dll` and `FS25_VRCompanion.zip` by hand, and needed t
 3. **The Installer recognises its own `dxgi.dll` by the `ProductName` value, "FS25 VR", in the DLL's version resource** (`src/dxgi.rc.in`, checked by `IsOurInjector` in `installer/fs25_vr.iss`). Our DLL found in the game folder is overwritten. Any other `dxgi.dll`, such as ReShade, is moved to `dxgi.dll.fs25vr-backup` and put back on uninstall. An Injector built before the version resource existed has no `ProductName`, so it is treated as foreign: it is moved to the backup and restored on uninstall rather than overwritten.
 
 ## Status
-Accepted, amended: the Injector is the game's `version.dll` now, its version resource is `src/injector.rc.in`, and a `dxgi.dll` such as ReShade's is no longer moved aside, see [ADR-0038](0038-the-injector-is-the-games-version-dll.md).
+Accepted, amended: the Injector is the game's `version.dll` now, its version resource is `src/injector.rc.in`, and a `dxgi.dll` such as ReShade's is no longer moved aside, see [ADR-0038](0038-the-injector-is-the-games-version-dll.md). The Installer also turns on Windows' own crash dumps for the game, a Windows setting and not a file, see [ADR-0039](0039-the-installer-turns-on-windows-crash-dumps-for-the-game.md).
 
 ## Considered Options
 - **Compare the installed `dxgi.dll` with the bundled one by hash** (rejected: every release differs, so every upgrade would look foreign).

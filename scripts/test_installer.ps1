@@ -6,6 +6,12 @@
 # from a non-elevated shell it passes /CURRENTUSER (which the Installer allows on the command line
 # only) so it can run without a UAC prompt, and looks for the uninstall entry in HKCU instead.
 #
+# Windows' own crash dumps for the game are a key under HKEY_LOCAL_MACHINE, which only an elevated Setup
+# can write. The cases that need that run only in an elevated shell and are reported as [SKIP], never as
+# [PASS], in a non-elevated one (Test-Case -Needs Elevated); the case for the per-user run is the reverse
+# (-Needs NotElevated). Every Setup run is given a throwaway game exe name (the hidden /FS25VR_GAMEEXE
+# switch, see New-TestWorld), so the key of the real FarmingSimulator2025Game.exe is never read or written.
+#
 # Extending: add a Test-Case at the bottom. Build the world with New-FakeGame / New-FakeDocuments,
 # drive it with Install-Fs25Vr / Uninstall-Fs25Vr (both always clean up via Remove-TestWorld),
 # assert with the Assert-* helpers.
@@ -78,6 +84,9 @@ function New-TestWorld {
         Root      = $root
         Game      = Join-Path $root "Game folder"          # spaces on purpose
         Documents = Join-Path $root "Documents"
+        # The exe name every Setup run writes Windows' crash dump key for (the hidden /FS25VR_GAMEEXE
+        # switch). Unique per world, never the real game's.
+        ExeName   = "fs25vr-test-" + [guid]::NewGuid().ToString("N").Substring(0, 8) + ".exe"
     }
 }
 
@@ -182,12 +191,14 @@ function Wait-GuardedProcess($process, [string]$what, [int]$timeoutSeconds = 120
     $process.ExitCode
 }
 # Runs Setup silently into $world.Game with $world.Documents standing in for the user's Documents
-# folder (the hidden /FS25VR_DOCUMENTS switch). Returns Setup's exit code.
+# folder (the hidden /FS25VR_DOCUMENTS switch) and $world.ExeName standing in for the game's exe name
+# (the hidden /FS25VR_GAMEEXE switch). Returns Setup's exit code.
 function Install-Fs25Vr($world, [string[]]$extraArgs = @()) {
     $setupArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
               "/LOG=`"$($world.Root)\setup.log`"",
               "/DIR=`"$($world.Game)`"",
-              "/FS25VR_DOCUMENTS=`"$($world.Documents)`"")
+              "/FS25VR_DOCUMENTS=`"$($world.Documents)`"",
+              "/FS25VR_GAMEEXE=$($world.ExeName)")
     if (-not $isAdmin) { $setupArgs += "/CURRENTUSER" }
     $setupArgs += $extraArgs
     Wait-GuardedProcess (Start-Process -FilePath $SetupExe -ArgumentList $setupArgs -PassThru) "Setup"
@@ -252,11 +263,85 @@ function Get-RenderResolutionRecord {
     $record
 }
 
+# Windows' own crash dumps for the game: the per-application key under Windows Error Reporting's
+# LocalDumps key in HKEY_LOCAL_MACHINE (64-bit view), and the Installer's record of what it wrote, next to
+# the uninstaller. Every helper refuses the real game's exe name: the tests only ever use a throwaway one.
+$localDumpsKeyPath = "SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps"
+$crashDumpRecordPath = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) "FS25 VR\crash-dumps.ini"
+function Assert-ThrowawayExeName([string]$exeName) {
+    if ($exeName -notlike "fs25vr-test-*.exe") { throw "Refusing to touch the crash dump key of '$exeName': tests use a throwaway exe name only." }
+}
+# The 64-bit view of HKEY_LOCAL_MACHINE, however this script was started.
+function Open-MachineKey([string]$subKey, [bool]$writable = $false) {
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    try { $base.OpenSubKey($subKey, $writable) } finally { $base.Dispose() }
+}
+function Test-MachineKeyExists([string]$subKey) {
+    $key = Open-MachineKey $subKey
+    if ($key) { $key.Dispose() }
+    $null -ne $key
+}
+# Removes a key only when it holds nothing (the test run's own tidying of a LocalDumps key it caused).
+function Remove-EmptyMachineKey([string]$subKey) {
+    $key = Open-MachineKey $subKey
+    if (-not $key) { return }
+    try { $empty = ($key.ValueCount -eq 0) -and ($key.SubKeyCount -eq 0) } finally { $key.Dispose() }
+    if ($empty) {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+        try { $base.DeleteSubKey($subKey, $false) } finally { $base.Dispose() }
+    }
+}
+# What the per-application key holds: @{ Values = name -> @{ Kind; Data }; SubKeys = names }, or $null when
+# there is no such key.
+function Get-CrashDumpKey([string]$exeName) {
+    Assert-ThrowawayExeName $exeName
+    $key = Open-MachineKey "$localDumpsKeyPath\$exeName"
+    if (-not $key) { return $null }
+    try {
+        $values = @{}
+        foreach ($name in $key.GetValueNames()) {
+            $values[$name] = [pscustomobject]@{ Kind = $key.GetValueKind($name).ToString(); Data = $key.GetValue($name) }
+        }
+        [pscustomobject]@{ Values = $values; SubKeys = @($key.GetSubKeyNames()) }
+    } finally { $key.Dispose() }
+}
+# Creates or replaces a key as a player (or another tool) would have: @{ Name = value } (numbers become DWORDs).
+function Set-CrashDumpKey([string]$exeName, [hashtable]$values) {
+    Assert-ThrowawayExeName $exeName
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    try {
+        $key = $base.CreateSubKey("$localDumpsKeyPath\$exeName")
+        try {
+            foreach ($name in $values.Keys) {
+                $v = $values[$name]
+                if ($v -is [int]) { $key.SetValue($name, $v, [Microsoft.Win32.RegistryValueKind]::DWord) }
+                else { $key.SetValue($name, $v, [Microsoft.Win32.RegistryValueKind]::String) }
+            }
+        } finally { $key.Dispose() }
+    } finally { $base.Dispose() }
+}
+function Remove-CrashDumpKey([string]$exeName) {
+    Assert-ThrowawayExeName $exeName
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    try { $base.DeleteSubKeyTree("$localDumpsKeyPath\$exeName", $false) } finally { $base.Dispose() }
+}
+# Reads the Installer's crash dump record into a hashtable of key -> value, or $null when there is none.
+function Get-CrashDumpRecord {
+    if (-not (Test-Path $crashDumpRecordPath)) { return $null }
+    $record = @{}
+    foreach ($line in [IO.File]::ReadAllLines($crashDumpRecordPath)) {
+        if ($line -match '^([A-Za-z]+)=(.*)$') { $record[$Matches[1]] = $Matches[2] }
+    }
+    $record
+}
+
 # Always leave the machine clean, whether or not the case passed.
 function Remove-TestWorld($world) {
     Stop-StandInGame      # a running game would (rightly) block the cleanup uninstall
     if (Get-UninstallEntry) { try { Uninstall-Fs25Vr } catch { Write-Warning "Cleanup uninstall failed: $_" } }
     Remove-Item $recordPath -Force -ErrorAction SilentlyContinue   # in case a case failed before the uninstall removed it
+    Remove-Item $crashDumpRecordPath -Force -ErrorAction SilentlyContinue
+    if ($isAdmin) { try { Remove-CrashDumpKey $world.ExeName } catch { Write-Warning "Cleanup of the crash dump key failed: $_" } }
     Remove-Item $world.Root -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -289,13 +374,30 @@ function Assert-SameBytes([string]$path, [byte[]]$expected, [string]$what) {
 # ---------------------------------------------------------------------------------------------
 
 $failures = New-Object Collections.Generic.List[string]
+$passed = 0
+$skipped = 0
 # $data (optional) is handed to the body as its second argument, for cases generated in a loop.
-function Test-Case([string]$name, [scriptblock]$body, $data = $null) {
+# -Needs says what the run has to be for the case to mean anything: 'Elevated' (the case writes or reads
+# machine-wide state only an elevated Setup can write) or 'NotElevated' (the case is about a per-user run,
+# which CI, being elevated, does not make). A case whose need is not met is reported as [SKIP], not [PASS],
+# and its body does not run.
+function Test-Case([string]$name, [scriptblock]$body, $data = $null, [ValidateSet('', 'Elevated', 'NotElevated')][string]$Needs = '') {
     if ($Filter -and $name -notlike $Filter) { return }
+    if ($Needs -eq 'Elevated' -and -not $isAdmin) {
+        Write-Host "[SKIP] $name -- needs an elevated run"
+        $script:skipped++
+        return
+    }
+    if ($Needs -eq 'NotElevated' -and $isAdmin) {
+        Write-Host "[SKIP] $name -- needs a non-elevated run"
+        $script:skipped++
+        return
+    }
     $world = New-TestWorld
     try {
         & $body $world $data
         Write-Host "[PASS] $name"
+        $script:passed++
     } catch {
         Write-Host "[FAIL] $name -- $($_.Exception.Message)"
         $failures.Add($name)
@@ -306,6 +408,10 @@ function Test-Case([string]$name, [scriptblock]$body, $data = $null) {
 
 # Refuse to run over a real FS25 VR install: the fixed application ID means we would upgrade it.
 if (Get-UninstallEntry) { Write-Error "FS25 VR is already installed on this machine; uninstall it before running the installer tests." }
+
+# Whether Windows Error Reporting's LocalDumps key was there before this run. An install creates it when it
+# is not (and the uninstall takes it away again); if a failing case left it behind, the end of the run does.
+$localDumpsExistedAtStart = Test-MachineKeyExists $localDumpsKeyPath
 
 # ---------------------------------------------------------------------------------------------
 # Cases
@@ -547,7 +653,8 @@ Test-Case "Active override plus a Render Resolution: the mod goes to the overrid
 function Invoke-SetupExe([string]$exe, $world, [string[]]$extraArgs = @(), [switch]$NoDir) {
     $setupArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
               "/LOG=`"$($world.Root)\setup-$([guid]::NewGuid().ToString('N').Substring(0, 6)).log`"",
-              "/FS25VR_DOCUMENTS=`"$($world.Documents)`"")
+              "/FS25VR_DOCUMENTS=`"$($world.Documents)`"",
+              "/FS25VR_GAMEEXE=$($world.ExeName)")
     if (-not $NoDir) { $setupArgs += "/DIR=`"$($world.Game)`"" }
     if (-not $isAdmin) { $setupArgs += "/CURRENTUSER" }
     $setupArgs += $extraArgs
@@ -1200,7 +1307,8 @@ Test-Case "Uninstall copes with a game.xml that is gone and still removes the re
 # or /DIR, so a message box the Installer should not show would hang and fail the case.
 function Invoke-SetupWithArgs($world, [string[]]$setupArgs) {
     $all = @("/LOG=`"$($world.Root)\setup-$([guid]::NewGuid().ToString('N').Substring(0, 6)).log`"",
-             "/FS25VR_DOCUMENTS=`"$($world.Documents)`"") + $setupArgs
+             "/FS25VR_DOCUMENTS=`"$($world.Documents)`"",
+             "/FS25VR_GAMEEXE=$($world.ExeName)") + $setupArgs
     if (-not $isAdmin) { $all += "/CURRENTUSER" }
     Wait-GuardedProcess (Start-Process -FilePath $SetupExe -ArgumentList $all -PassThru) "Setup"
 }
@@ -1327,7 +1435,272 @@ foreach ($mode in @("/VERYSILENT", "/SILENT")) {
     } $mode
 }
 
+# --- Windows' own crash dumps for the game --------------------------------------------------------
+# The Installer turns them on by creating the game exe's key under Windows Error Reporting's LocalDumps key
+# (HKEY_LOCAL_MACHINE, 64-bit view) and records what it wrote next to the uninstaller (docs\adr\0039-...).
+# Only an administrative install can write it. Every Setup run here is given a throwaway exe name
+# (/FS25VR_GAMEEXE), so the real game's key is never read or written; see the header of this script for
+# why some of these cases are skipped outside an elevated run.
+
+Test-Case "A per-user install writes no Windows crash dump key, logs that the setting was skipped and still succeeds" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+
+    Assert-InstallSucceeds $world
+
+    Assert-SameFile $p.Injector $stagedInjector "Injector (version.dll in x64)"
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "A per-user run wrote the crash dump key for $($world.ExeName)."
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "A per-user run recorded a crash dump key it did not write."
+    Assert-True ((Get-LastSetupLog $world) -match "Skipped the Windows crash dump setting") "Setup did not log that the Windows crash dump setting was skipped."
+} -Needs NotElevated
+
+# What the Installer writes for the game's exe, spelled out here from the spec and not from the Installer:
+# a custom dump (DumpType 0) with the Injector's own dump contents (CustomDumpFlags 0x1060 =
+# MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithUnloadedModules, next to the
+# stacks and the module list every minidump holds), 3 dumps kept, and no DumpFolder (Windows' default
+# CrashDumps folder applies).
+function Assert-CrashDumpKeyIsOurs($key, [string]$when) {
+    Assert-True ($null -ne $key) "There is no crash dump key $when."
+    $expected = [ordered]@{ DumpType = 0; CustomDumpFlags = 0x1060; DumpCount = 3 }
+    $names = @($key.Values.Keys | Sort-Object)
+    Assert-True (($names -join ",") -eq ((@($expected.Keys) | Sort-Object) -join ",")) "The crash dump key holds the values '$($names -join ', ')' $when, expected '$(@($expected.Keys) -join ', ')' only."
+    foreach ($name in $expected.Keys) {
+        $v = $key.Values[$name]
+        Assert-True ($v.Kind -eq "DWord" -and $v.Data -eq $expected[$name]) "The crash dump key's $name is $($v.Kind) $($v.Data) $when, expected DWord $($expected[$name])."
+    }
+    Assert-True ($key.SubKeys.Count -eq 0) "The crash dump key has subkeys ${when}: $($key.SubKeys -join ', ')"
+}
+
+Test-Case "An install creates the game exe's crash dump key (custom dump, 3 dumps kept, no dump folder) and an uninstall removes it" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+
+    Assert-InstallSucceeds $world
+
+    Assert-CrashDumpKeyIsOurs (Get-CrashDumpKey $world.ExeName) "after the install"
+
+    Uninstall-Fs25Vr
+
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key is still there after the uninstall."
+} -Needs Elevated
+
+# The key as one comparable line: every value (name, type, data) and every subkey name.
+function Format-CrashDumpKey($key) {
+    if ($null -eq $key) { return "(no key)" }
+    $parts = foreach ($name in ($key.Values.Keys | Sort-Object)) { "$name=$($key.Values[$name].Kind):$($key.Values[$name].Data)" }
+    $subs = @($key.SubKeys | Sort-Object) -join ","
+    (@($parts) -join "; ") + " [subkeys: $subs]"
+}
+function Assert-SameCrashDumpKey($expected, $actual, [string]$what) {
+    $e = Format-CrashDumpKey $expected
+    $a = Format-CrashDumpKey $actual
+    Assert-True ($e -eq $a) "$what changed: it was { $e } and is { $a }."
+}
+
+# A key that was there before the Installer: the player's own, or another tool's. Either way it is theirs.
+foreach ($existing in @(
+        @{ Name = "other values";                                Values = @{ DumpType = 2; DumpCount = 10; DumpFolder = "D:\My dumps" } },
+        @{ Name = "exactly the values the Installer would write"; Values = @{ DumpType = 0; CustomDumpFlags = 0x1060; DumpCount = 3 } })) {
+    Test-Case "A crash dump key that already exists for the game's exe ($($existing.Name)) is unchanged after install and after uninstall, and the log says it was left alone" {
+        param($world, $e)
+        New-FakeGame $world
+        New-FakeDocuments $world
+        Set-CrashDumpKey $world.ExeName $e.Values
+        $before = Get-CrashDumpKey $world.ExeName
+
+        Assert-InstallSucceeds $world
+
+        Assert-SameCrashDumpKey $before (Get-CrashDumpKey $world.ExeName) "The existing crash dump key after the install"
+        Assert-True ((Get-LastSetupLog $world) -match "already exists; leaving it alone") "Setup did not log that it left the existing crash dump key alone."
+        Assert-True ($null -eq (Get-CrashDumpRecord)) "The Installer recorded a crash dump key it did not write."
+
+        Uninstall-Fs25Vr
+
+        Assert-SameCrashDumpKey $before (Get-CrashDumpKey $world.ExeName) "The existing crash dump key after the uninstall"
+    } $existing -Needs Elevated
+}
+
+# Like the Render Resolution: the Installer records what it wrote next to the uninstaller, the uninstall
+# removes the key only while it still holds exactly that, and the record is deleted either way.
+Test-Case "The Installer records the crash dump key it wrote next to the uninstaller and the uninstall deletes the record and the folder" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+
+    Assert-InstallSucceeds $world
+
+    $record = Get-CrashDumpRecord
+    Assert-True ($null -ne $record) "The Installer did not record the crash dump key it wrote ($crashDumpRecordPath)."
+    Assert-True ($record["ExeName"] -eq $world.ExeName) "The record names '$($record["ExeName"])', expected the exe the key was written for ($($world.ExeName))."
+    Assert-True (($record["WrittenDumpType"] -eq "0") -and ($record["WrittenCustomDumpFlags"] -eq "4192") -and ($record["WrittenDumpCount"] -eq "3")) `
+        "The record does not hold the written values (DumpType 0, CustomDumpFlags 4192, DumpCount 3)."
+    Assert-True ((Split-Path -Parent $crashDumpRecordPath) -eq (Split-Path -Parent (Get-UninstallEntry).UninstallString.Trim('"'))) "The record is not next to the uninstaller."
+
+    Uninstall-Fs25Vr
+
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "The crash dump record was not deleted by the uninstall."
+    Assert-Missing (Split-Path -Parent $crashDumpRecordPath) "The Installer's common application data folder"
+} -Needs Elevated
+
+# A change to the key by anyone after the install means it is theirs now: the uninstall leaves it.
+foreach ($change in @(
+        @{ Name = "a value was changed";        Apply = { Set-CrashDumpKey $args[0] @{ DumpCount = 10 } } },
+        @{ Name = "a value was added";          Apply = { Set-CrashDumpKey $args[0] @{ DumpFolder = "D:\My dumps" } } },
+        @{ Name = "a value was replaced by text"; Apply = { Set-CrashDumpKey $args[0] @{ DumpCount = "3" } } },
+        @{ Name = "a value was removed";        Apply = { $k = Open-MachineKey "$localDumpsKeyPath\$($args[0])" $true; try { $k.DeleteValue("CustomDumpFlags") } finally { $k.Dispose() } } },
+        @{ Name = "a subkey was added";         Apply = { $k = Open-MachineKey "$localDumpsKeyPath\$($args[0])" $true; try { $k.CreateSubKey("Extra").Dispose() } finally { $k.Dispose() } } })) {
+    Test-Case "A crash dump key the player changed after the install ($($change.Name)) is still there after the uninstall, and the record is deleted" {
+        param($world, $c)
+        New-FakeGame $world
+        New-FakeDocuments $world
+        Assert-InstallSucceeds $world
+        $ours = Get-CrashDumpKey $world.ExeName
+        Assert-CrashDumpKeyIsOurs $ours "after the install"
+        & $c.Apply $world.ExeName
+        $changed = Get-CrashDumpKey $world.ExeName
+        Assert-True ((Format-CrashDumpKey $changed) -ne (Format-CrashDumpKey $ours)) "The test did not change the key ($($c.Name))."
+
+        Uninstall-Fs25Vr
+
+        Assert-SameCrashDumpKey $changed (Get-CrashDumpKey $world.ExeName) "The player's crash dump key after the uninstall"
+        Assert-True ($null -eq (Get-CrashDumpRecord)) "The crash dump record was not deleted by the uninstall."
+    } $change -Needs Elevated
+}
+
+Test-Case "/FS25VR_NOCRASHDUMPS leaves no crash dump key and no record, and the uninstall has nothing to remove" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+
+    Assert-InstallSucceeds $world @("/FS25VR_NOCRASHDUMPS")
+
+    Assert-SameFile $p.Injector $stagedInjector "Injector (version.dll in x64)"
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key was written although /FS25VR_NOCRASHDUMPS was given."
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "A crash dump record was written although /FS25VR_NOCRASHDUMPS was given."
+    Assert-True ((Get-LastSetupLog $world) -match "FS25VR_NOCRASHDUMPS") "Setup did not log that the crash dump setting was left alone because of the switch."
+
+    Uninstall-Fs25Vr
+
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "A crash dump key appeared by the uninstall."
+} -Needs Elevated
+
+# An upgrade or reinstall applies the same rules: it keeps the key and its record while the key is still its
+# own, writes the key when there is none, and leaves a key the player changed alone (and forgets the record,
+# which no longer describes anything of ours).
+Test-Case "An upgrade over an install that has the crash dump key keeps it and its record, and the later uninstall removes it" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    Assert-InstallSucceeds $world @() "First Setup"
+    $recordBefore = Get-CrashDumpRecord
+    Assert-CrashDumpKeyIsOurs (Get-CrashDumpKey $world.ExeName) "after the first install"
+
+    $newer = New-NewerSetup $world
+    $exit = Invoke-SetupExe $newer $world
+    Assert-True ($exit -eq 0) "Upgrade Setup exited with $exit."
+
+    Assert-CrashDumpKeyIsOurs (Get-CrashDumpKey $world.ExeName) "after the upgrade"
+    $recordAfter = Get-CrashDumpRecord
+    Assert-True ($null -ne $recordAfter -and (($recordAfter.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ";") -eq
+        (($recordBefore.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ";")) "The crash dump record changed or went missing in the upgrade."
+    Assert-True ((Get-LastSetupLog $world) -match "still the one this Installer made") "The upgrade did not log that it kept the crash dump key it had made."
+
+    Uninstall-Fs25Vr
+
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key is still there after the uninstall that followed the upgrade."
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "The crash dump record was not deleted by the uninstall."
+} -Needs Elevated
+
+Test-Case "An upgrade writes the crash dump key again when it is gone, and the later uninstall removes it" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    Assert-InstallSucceeds $world @() "First Setup"
+    Remove-CrashDumpKey $world.ExeName
+
+    $newer = New-NewerSetup $world
+    $exit = Invoke-SetupExe $newer $world
+    Assert-True ($exit -eq 0) "Upgrade Setup exited with $exit."
+
+    Assert-CrashDumpKeyIsOurs (Get-CrashDumpKey $world.ExeName) "after the upgrade"
+    Assert-True ($null -ne (Get-CrashDumpRecord)) "The upgrade did not record the crash dump key it wrote."
+
+    Uninstall-Fs25Vr
+
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key is still there after the uninstall."
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "The crash dump record was not deleted by the uninstall."
+} -Needs Elevated
+
+Test-Case "An upgrade over a crash dump key the player changed leaves it alone, and the later uninstall leaves it too" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    Assert-InstallSucceeds $world @() "First Setup"
+    Set-CrashDumpKey $world.ExeName @{ DumpCount = 10 }
+    $changed = Get-CrashDumpKey $world.ExeName
+
+    $newer = New-NewerSetup $world
+    $exit = Invoke-SetupExe $newer $world
+    Assert-True ($exit -eq 0) "Upgrade Setup exited with $exit."
+
+    Assert-SameCrashDumpKey $changed (Get-CrashDumpKey $world.ExeName) "The player's crash dump key after the upgrade"
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "The upgrade kept a crash dump record for a key that is no longer the Installer's."
+
+    Uninstall-Fs25Vr
+
+    Assert-SameCrashDumpKey $changed (Get-CrashDumpKey $world.ExeName) "The player's crash dump key after the uninstall"
+} -Needs Elevated
+
+# Windows creates the LocalDumps key itself when the game exe's key is the first thing written under it, and
+# it counts as the switch for crash dumps (with Windows' defaults) for the other applications too. So the
+# Installer records that it created it, and the uninstall takes it away again when it is still empty.
+Test-Case "An install and an uninstall leave the LocalDumps key as they found it" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $existedBefore = Test-MachineKeyExists $localDumpsKeyPath
+
+    Assert-InstallSucceeds $world
+    Assert-True (Test-MachineKeyExists $localDumpsKeyPath) "There is no LocalDumps key after the install."
+
+    Uninstall-Fs25Vr
+
+    Assert-True ((Test-MachineKeyExists $localDumpsKeyPath) -eq $existedBefore) `
+        "The LocalDumps key $(if ($existedBefore) { 'was there before the install and is gone' } else { 'was not there before the install and is still there' }) after the uninstall."
+} -Needs Elevated
+
+Test-Case "The uninstall leaves the LocalDumps key alone when another application's key has appeared under it" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $existedBefore = Test-MachineKeyExists $localDumpsKeyPath
+    $sibling = "fs25vr-test-sibling-" + [guid]::NewGuid().ToString("N").Substring(0, 8) + ".exe"
+    Assert-InstallSucceeds $world
+    try {
+        Set-CrashDumpKey $sibling @{ DumpCount = 5 }
+
+        Uninstall-Fs25Vr
+
+        Assert-True (Test-MachineKeyExists "$localDumpsKeyPath\$sibling") "The uninstall removed another application's key under LocalDumps."
+        Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key for the game is still there after the uninstall."
+    } finally {
+        Remove-CrashDumpKey $sibling
+        if (-not $existedBefore) { Remove-EmptyMachineKey $localDumpsKeyPath }
+    }
+} -Needs Elevated
+
+if ($isAdmin -and -not $localDumpsExistedAtStart) { try { Remove-EmptyMachineKey $localDumpsKeyPath } catch { Write-Warning "Cleanup of the LocalDumps key failed: $_" } }
+
+Write-Host "Installer tests: $passed passed, $skipped skipped, $($failures.Count) failed."
 if ($failures.Count -gt 0) {
     Write-Error "$($failures.Count) installer test(s) failed: $($failures -join '; ')"
 }
-Write-Host "All installer tests passed."
+if ($skipped -gt 0) {
+    Write-Host "No installer test failed, but $skipped case(s) did not run here (see [SKIP] above): a skipped case is not a passed one."
+} else {
+    Write-Host "All installer tests passed."
+}

@@ -48,11 +48,12 @@ The Installer copies `version.dll` to the game's `x64` folder and `FS25_VRCompan
 - **ReShade stays where it is.** ReShade and other tools that install a `dxgi.dll` keep working alongside FS25 VR, in the headset too.
 - **Another `version.dll`** that isn't part of FS25 VR is moved to `version.dll.fs25vr-backup`.
 - **Upgrading from 1.1.9 or earlier**, when FS25 VR was `dxgi.dll`: the Installer deletes that old `dxgi.dll` and puts back the `dxgi.dll` it had moved aside, such as ReShade.
+- **Crash dumps for the game.** The Installer turns on Windows' own crash dumps for `FarmingSimulator2025Game.exe`, a registry setting, so a crash leaves a file to attach to a bug report (see [The game crashed](#the-game-crashed)). A setting you already had for the game is left alone. For a silent install, `/FS25VR_NOCRASHDUMPS` leaves the setting alone.
 
 > [!NOTE]
 > The Installer isn't code-signed, so Windows SmartScreen will warn you. Click **More info**, then **Run anyway**.
 
-**Uninstall**: run the Setup exe again and choose **Uninstall**, or use *Settings > Apps > Installed apps*. For scripts, use `/FS25VR_UNINSTALL`. This removes `version.dll`, the mod zip and `fs25_vr.log`, restores your backed-up `version.dll` and Render Resolution, leaves a `dxgi.dll` such as ReShade's alone, and keeps your VR settings.
+**Uninstall**: run the Setup exe again and choose **Uninstall**, or use *Settings > Apps > Installed apps*. For scripts, use `/FS25VR_UNINSTALL`. This removes `version.dll`, the mod zip and `fs25_vr.log`, restores your backed-up `version.dll` and Render Resolution, removes the crash dump setting the Installer made (unless you changed it since), leaves a `dxgi.dll` such as ReShade's alone, and keeps your VR settings.
 
 ### Manual install
 
@@ -117,6 +118,26 @@ The Motion Controllers' buttons, triggers, grips and thumbsticks reach the game 
 ### Black edges at the borders of the view during head movement
 
 Most often seen on Virtual Desktop. For an instant after you move your head, a thin black strip shows at the top, bottom, left or right of the picture. Open the console and try `vrFovOverscan 5`, then `vrFovOverscan 10` if the edges are still there. It takes effect at once and is saved, so you set it once. The picture gets slightly softer, because the same Render Resolution is spread over a wider view. Raise the Render Resolution by the same percentage to win the sharpness back.
+
+### The game crashed
+
+A crash dump shows where the game crashed, so attach one to your bug report. Zip it first: a dump can contain file paths and your Windows user name.
+
+- **Windows' crash dump for the game**: the newest `FarmingSimulator2025Game.exe.<number>.dmp` in `%LOCALAPPDATA%\CrashDumps` (paste that into the Explorer address bar). Windows keeps the last three.
+
+The Installer turns on Windows' crash dump for `FarmingSimulator2025Game.exe`, unless you ran it with `/FS25VR_NOCRASHDUMPS` or Windows already had a setting for the game, which the Installer leaves as it is. If you installed by hand, turn it on yourself: open a Command Prompt as administrator and run
+
+```
+powershell -NoProfile -Command "$k = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\FarmingSimulator2025Game.exe'; New-Item $k -Force | Out-Null; @{DumpType=0; CustomDumpFlags=0x1060; DumpCount=3}.GetEnumerator() | ForEach-Object { New-ItemProperty $k -Name $_.Key -Value $_.Value -PropertyType DWord -Force | Out-Null }"
+```
+
+To turn it off again, run
+
+```
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\FarmingSimulator2025Game.exe" /f /reg:64
+```
+
+Windows writes no dump where a policy has switched Windows Error Reporting off.
 
 ## License
 
