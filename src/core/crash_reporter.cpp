@@ -89,6 +89,7 @@ MINIDUMP_EXCEPTION_INFORMATION g_dumpException;
 enum class DumpResult { Pending, Written, CouldNotCreateFile, WriteFailed };
 std::atomic<DumpResult> g_dumpResult{DumpResult::Pending};
 std::atomic<DWORD> g_dumpResultError{0};
+std::atomic<bool> g_failureReported{false};
 
 // The stack the crash line needs on the crashing thread, when there is no helper to write it. The log's write and flush
 // run through the C runtime, and the first write allocates the file's buffer. Measured with a child that raises a stack
@@ -287,7 +288,8 @@ void ReportCrash(const EXCEPTION_POINTERS* info, DWORD crashingThread, DumpState
 // thread, which knows what went wrong, or on the crashing thread when the helper never finished.
 void ReportDumpFailure(DWORD waited) {
     Logger* log = g_log.load();
-    if (!log) return;
+    // Once: a helper that finishes after the crashing thread gave up on it would tell its failure over the other's line.
+    if (!log || g_failureReported.exchange(true)) return;
 
     CrashText& line = g_crashText;
     line.length = 0;

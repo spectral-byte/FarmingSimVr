@@ -158,14 +158,23 @@ LONG WINAPI GamesFilter(EXCEPTION_POINTERS* info) {
 
 // Two regions of text for the dump to find or not find: one that the faulting thread's stack points at (as a local variable
 // in its frames does), and one that only a global points at. A dump has the memory the stacks point at, and not the whole
-// process. The text is put together at run time, so that it is not in the executable's image either.
+// process. The text is put together at run time, so that it is not in the executable's image either, and only ever in
+// the region itself: a copy on the heap (a std::string) would leave the text next to the heap blocks that a stack does
+// point at, and the dump includes a kilobyte or so around each of those.
 std::string MarkerText(const char* which) {
     return std::string("FS25VR-DUMP-MARKER-") + which + "-" + "END";
 }
 
-void* NewRegionWithText(const std::string& text) {
-    void* region = VirtualAlloc(nullptr, 65536, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (region) std::memcpy(region, text.c_str(), text.size() + 1);
+void* NewRegionWithMarker(const char* which) {
+    char* region = static_cast<char*>(VirtualAlloc(nullptr, 65536, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    if (!region) return nullptr;
+    char* at = region;
+    for (const char* part : {"FS25VR-DUMP-MARKER-", which, "-", "END"}) {
+        const size_t length = std::strlen(part);
+        std::memcpy(at, part, length);
+        at += length;
+    }
+    *at = '\0';
     return region;
 }
 
@@ -173,12 +182,12 @@ void* g_regionOnNoStack = nullptr;
 
 // On a thread of its own that ends, so that no stack of the child still holds the region's address or its text.
 DWORD WINAPI PutTextInARegionOnNoStack(void*) {
-    g_regionOnNoStack = NewRegionWithText(MarkerText("ON-NO-STACK"));
+    g_regionOnNoStack = NewRegionWithMarker("ON-NO-STACK");
     return 0;
 }
 
 __declspec(noinline) DWORD WINAPI WriteThroughANullPointerWithMemoryOnItsStack(void*) {
-    char* volatile onThisStack = static_cast<char*>(NewRegionWithText(MarkerText("ON-A-STACK")));
+    char* volatile onThisStack = static_cast<char*>(NewRegionWithMarker("ON-A-STACK"));
     volatile int* nowhere = nullptr;
     *nowhere = onThisStack ? 1 : 2;
     return 0;
