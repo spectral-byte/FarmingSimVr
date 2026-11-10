@@ -2,6 +2,8 @@
 // its x64 folder: its version.dll exports must behave as the system's do, and while it is loaded it must hook the
 // system's dxgi.dll without breaking factory creation (ADR-0038).
 #include <gtest/gtest.h>
+#include "core/injector_version.h"
+#include "core/logger.h"
 #include "proxy/dxgi_export_hooks.h"
 #include "proxy/system_dxgi.h"
 #include <windows.h>
@@ -9,6 +11,8 @@
 #include <wrl/client.h>
 #include <array>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -154,6 +158,30 @@ TEST_F(InjectorBinaryTest, HooksTheSystemsDxgiWhileLoadedAndAFactoryIsStillCreat
     FreeLibrary(m_injector);
     m_injector = nullptr;
     EXPECT_EQ(FirstBytes(m_createFactory1), m_unhooked) << "Unloading the Injector left CreateDXGIFactory1 hooked.";
+}
+
+// A log alone should tell the developer which Injector the player runs, so the Injector's first line names its version.
+TEST(InjectorLogTest, FirstLineNamesTheInjectorsVersion) {
+    // The Injector loaded from the build folder writes the same fs25_vr.log as the test process's own logger, which
+    // holds it open. Let go of it and clear the way, as a game start finds the folder, and put the test logger back
+    // afterwards.
+    struct RestoreTestLogger {
+        ~RestoreTestLogger() { Logger::Instance().SetLogFile(Logger::DefaultLogPath()); }
+    } restoreTestLogger;
+    Logger::Instance().Close();
+    const std::filesystem::path logPath = std::filesystem::path(InjectorPath()).parent_path() / L"fs25_vr.log";
+    std::filesystem::remove(logPath);
+    std::filesystem::remove(Logger::BackupPathFor(logPath));
+
+    HMODULE injector = LoadLibraryW(InjectorPath().c_str());
+    ASSERT_NE(injector, nullptr) << INJECTOR_DLL_PATH << " (error " << GetLastError() << ")";
+    FreeLibrary(injector);  // detaching flushes the log and closes it
+
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open()) << logPath;
+    std::string firstLine;
+    std::getline(log, firstLine);
+    EXPECT_NE(firstLine.find(" " + std::string(kInjectorVersion) + " "), std::string::npos) << firstLine;
 }
 
 } // namespace fs25vr
