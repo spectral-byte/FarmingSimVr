@@ -48,11 +48,12 @@ The Installer copies `version.dll` to the game's `x64` folder and `FS25_VRCompan
 - **ReShade stays where it is.** ReShade and other tools that install a `dxgi.dll` keep working alongside FS25 VR, in the headset too.
 - **Another `version.dll`** that isn't part of FS25 VR is moved to `version.dll.fs25vr-backup`.
 - **Upgrading from 1.1.9 or earlier**, when FS25 VR was `dxgi.dll`: the Installer deletes that old `dxgi.dll` and puts back the `dxgi.dll` it had moved aside, such as ReShade.
+- **Crash dumps for the game.** The Installer turns on Windows' own crash dumps for `FarmingSimulator2025Game.exe`, a registry setting, so a crash leaves a file to attach to a bug report (see [The game crashed](#the-game-crashed)). A setting you already had for the game is left alone. The wizard has a *Crash Dumps* page with a ticked box that says what Windows will keep; untick it to leave the setting alone. For a silent install, `/FS25VR_NOCRASHDUMPS` leaves the setting alone (and unticks the box in a wizard run).
 
 > [!NOTE]
 > The Installer isn't code-signed, so Windows SmartScreen will warn you. Click **More info**, then **Run anyway**.
 
-**Uninstall**: run the Setup exe again and choose **Uninstall**, or use *Settings > Apps > Installed apps*. For scripts, use `/FS25VR_UNINSTALL`. This removes `version.dll`, the mod zip and `fs25_vr.log`, restores your backed-up `version.dll` and Render Resolution, leaves a `dxgi.dll` such as ReShade's alone, and keeps your VR settings.
+**Uninstall**: run the Setup exe again and choose **Uninstall**, or use *Settings > Apps > Installed apps*. For scripts, use `/FS25VR_UNINSTALL`. This removes `version.dll`, the mod zip, `fs25_vr.log` and the Injector's crash dump, restores your backed-up `version.dll` and Render Resolution, removes the crash dump setting the Installer made (unless you changed it since), leaves a `dxgi.dll` such as ReShade's alone, and keeps your VR settings.
 
 ### Manual install
 
@@ -117,6 +118,30 @@ The Motion Controllers' buttons, triggers, grips and thumbsticks reach the game 
 ### Black edges at the borders of the view during head movement
 
 Most often seen on Virtual Desktop. For an instant after you move your head, a thin black strip shows at the top, bottom, left or right of the picture. Open the console and try `vrFovOverscan 5`, then `vrFovOverscan 10` if the edges are still there. It takes effect at once and is saved, so you set it once. The picture gets slightly softer, because the same Render Resolution is spread over a wider view. Raise the Render Resolution by the same percentage to win the sharpness back.
+
+### The game crashed
+
+The log and the crash dumps show where the game crashed, so attach them to your bug report. Zip the dumps first: a dump can contain file paths and your Windows user name.
+
+- **`fs25_vr.log`**: the Injector's log, in the game's `x64` folder (next to `FarmingSimulator2025Game.exe`). A crash finishes it, and its last line says what crashed.
+- **`fs25_vr_crash.dmp`**: the Injector's own crash dump, in the same folder, written by the crash. The next crash replaces it. If the last line of the log says `no dump written`, it also says why there is none.
+- **Windows' crash dump for the game**: the newest `FarmingSimulator2025Game.exe.<number>.dmp` in `%LOCALAPPDATA%\CrashDumps` (paste that into the Explorer address bar). Windows keeps the last three.
+
+The Installer turns on Windows' crash dump for `FarmingSimulator2025Game.exe`, unless you unticked the box on its *Crash Dumps* page, ran it with `/FS25VR_NOCRASHDUMPS`, or Windows already had a setting for the game, which the Installer leaves as it is. If you installed by hand, turn it on yourself: open a Command Prompt as administrator and run
+
+```
+powershell -NoProfile -Command "$k = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\FarmingSimulator2025Game.exe'; New-Item $k -Force | Out-Null; @{DumpType=0; CustomDumpFlags=0x1060; DumpCount=3}.GetEnumerator() | ForEach-Object { New-ItemProperty $k -Name $_.Key -Value $_.Value -PropertyType DWord -Force | Out-Null }"
+```
+
+To turn it off again, open a Command Prompt as administrator and run
+
+```
+powershell -NoProfile -Command "$p = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'; Remove-Item ($p + '\FarmingSimulator2025Game.exe') -Recurse -ErrorAction SilentlyContinue; if ((Test-Path $p) -and -not (Get-Item $p).ValueCount -and -not (Get-ChildItem $p)) { Remove-Item $p }"
+```
+
+That removes the game's key, and the `LocalDumps` key above it too when nothing else is left in it. The Installer's uninstall does the same, except that it removes `LocalDumps` only when the Installer created it.
+
+Windows writes no dump if automatic debugging for application crashes is set up on your machine, that is, a debugger that Windows starts when an application crashes.
 
 ## License
 

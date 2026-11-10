@@ -1,4 +1,5 @@
 #include "dxgi_proxy.h"
+#include "core/crash_reporter.h"
 #include "core/logger.h"
 #include "core/thread_trace.h"
 #include "core/injector_runtime.h"
@@ -400,6 +401,9 @@ bool DxgiProxy::ResolveD3D12DeviceAndQueue(IUnknown* source) {
 }
 
 bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
+    // The game may have installed a crash filter of its own since the first factory call (a no-op unless the Injector
+    // installed its crash reporter).
+    ReinstallCrashReporter();
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
         return false;
     }

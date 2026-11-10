@@ -13,8 +13,24 @@ The in-engine Luau script mod executing inside GIANTS Engine 10 that manipulates
 _Avoid_: Script hook, Lua plugin
 
 **Installer**:
-The setup program a player runs to place the Injector into a chosen game installation and the Companion Mod into their mods folder, and to remove both again. Never part of the running game.
+The setup program a player runs to place the Injector into a chosen game installation and the Companion Mod into their mods folder, and to remove both again. Besides those files it changes two settings, each recorded so the uninstall can undo it while the setting is still what the Installer wrote: the Render Resolution in the player's `game.xml`, and the Windows Crash Dump Setting. Never part of the running game.
 _Avoid_: Injector installer, setup script, launcher
+
+**Crash Line**:
+The line the Injector adds at the end of `fs25_vr.log` when the game process crashes. It names the exception code, the faulting address as module and offset, the crashing thread, the Injector's version, and the Injector Crash Dump's file name or the reason there is none.
+_Avoid_: Crash report, stack trace
+
+**Injector Crash Dump**:
+The minidump the Injector writes as `fs25_vr_crash.dmp` next to `fs25_vr.log` when the game process crashes: every thread's stack, the modules (the unloaded ones too), thread information and the memory the stacks point at, not the whole process. The next crash replaces it. Not the dump Windows writes (see Windows Crash Dump Setting).
+_Avoid_: Core dump, memory dump, crash report
+
+**Windows Crash Dump Setting**:
+The key for the game's exe under Windows Error Reporting's `LocalDumps` key that makes Windows write its own small dump of the game, in the player's `CrashDumps` folder, for every crash, including those the Injector cannot see. The Installer writes it with the same contents as the Injector Crash Dump and keeps the last 3, unless the player unticks the box on the Crash Dumps Page or passes `/FS25VR_NOCRASHDUMPS`. A key that was already there is never touched.
+_Avoid_: WER setting, crash handler registration
+
+**Crash Dumps Page**:
+The Installer's wizard page, after the Render Resolution page, with one box, ticked, that turns the Windows Crash Dump Setting on. Offered only in an administrative install; a silent install is answered by the command line alone.
+_Avoid_: Crash reporting page, telemetry
 
 **VRBridge**:
 The global Luau table injected into GIANTS Engine 10 by the Injector that exposes OpenXR view state, asymmetric projection parameters, and frame synchronization flags to the Companion Mod.

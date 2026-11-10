@@ -10,19 +10,26 @@
 ;
 ; Command line (besides Inno's standard switches such as /VERYSILENT, /SUPPRESSMSGBOXES, /DIR=):
 ;   /FS25VR_DOCUMENTS=<folder>   hidden, test-only: replaces the user's Documents folder
+;   /FS25VR_GAMEEXE=<file name>  hidden, test-only: replaces the game's exe file name (FarmingSimulator2025Game.exe)
+;                                that Windows' crash dump key is written for (see below), so the Installer
+;                                test never touches the key of the real game. Not a file name: no key.
+;   /FS25VR_NOCRASHDUMPS         leaves Windows' crash dump setting for the game alone (see below): no key and
+;                                no record. An upgrade given the switch keeps what the install before it made.
+;                                In a wizard run it unticks the Crash Dumps page's checkbox.
 ;   /FS25VR_RESOLUTION=<W>x<H>   sets the game's Render Resolution (see below) without the wizard page.
 ;                                Whole numbers from 640 to 8192, e.g. /FS25VR_RESOLUTION=4000x2500.
 ;                                An invalid value fails the install before anything is placed. With no
 ;                                game.xml the install succeeds and the resolution is skipped (logged).
 ;                                If game.xml can't be edited once the files are placed (read-only, locked),
 ;                                the install is kept and Setup exits with code 20 (logged).
-;   Exit code 21: the files are placed, but the dxgi.dll of an earlier FS25 VR version could not be deleted
-;                                (logged); the new Injector stays inactive while it is there.
 ;                                In a wizard run it pre-ticks and pre-fills the Render Resolution page.
 ;   /FS25VR_UNINSTALL            runs the existing uninstaller unattended instead of installing (no /DIR needed),
 ;                                waits for it and exits with its exit code. With nothing installed it logs
 ;                                "FS25 VR is not installed" and exits 1. Setup shows no window and
 ;                                no message box for it.
+; Exit codes: 20 = game.xml could not be edited once the files were placed (see /FS25VR_RESOLUTION above);
+;   21 = the files are placed, but the dxgi.dll of an earlier FS25 VR version could not be deleted (logged);
+;   the new Injector stays inactive while it is there. The Windows crash dump setting never changes the exit code.
 ;
 ; Running Setup interactively while FS25 VR is installed first asks: Upgrade or reinstall / Uninstall / Cancel
 ; (see "Uninstalling through the Setup exe" in [Code]). Silent runs never ask and keep upgrading.
@@ -59,6 +66,38 @@
 ;   The uninstall (RestoreRenderResolution) applies that rule to the game.xml named in the
 ;   record, then deletes the record. It never touches game.xml.fs25vr-backup or the Companion Mod's
 ;   modSettings. With no record (the Installer never set a Render Resolution) it does nothing.
+;
+; Windows' own crash dumps for the game (docs/adr/0039-the-installer-turns-on-windows-crash-dumps-for-the-game.md)
+;   Windows Error Reporting writes a dump for an application when a key named after its exe exists under
+;     HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps
+;   in the 64-bit registry view. After the files are placed, an administrative install creates it for
+;   FarmingSimulator2025Game.exe with three DWORD values: DumpType 0 (custom), CustomDumpFlags 0x1060 (thread
+;   information, the memory the stacks point at, unloaded modules: the contents of the Injector's own dump) and
+;   DumpCount 3. No DumpFolder, so Windows' default CrashDumps folder applies. It is on unless
+;   /FS25VR_NOCRASHDUMPS is given. The wizard has a "Crash Dumps" page after the Render Resolution page with
+;   one checkbox, ticked (unticked when the switch is given), that says what Windows keeps and where; a silent
+;   run has no page and is answered by the switch alone. A per-user run (/CURRENTUSER) cannot write
+;   HKEY_LOCAL_MACHINE: it has no page, and it logs that the setting was skipped. Unticked is the same as the
+;   switch: no key and no record. Nothing here ever fails the install.
+;   A key that already exists for the exe is the player's or another tool's: install and uninstall leave it
+;   alone (logged).
+;
+; Crash dump record (read again by later installs and by the uninstall)
+;   {commonappdata}\FS25 VR\crash-dumps.ini, next to the uninstaller. UTF-8 with a BOM, one Key=Value per line
+;   after a [CrashDumps] header:
+;     ExeName=<exe file name the key was written for>   (the uninstaller does not get /FS25VR_GAMEEXE)
+;     WrittenDumpType= WrittenCustomDumpFlags= WrittenDumpCount=   the numbers the Installer wrote
+;     CreatedLocalDumpsKey=<1 | 0>   whether the LocalDumps key itself was not there before the write
+;   The record is written before the key and deleted again if the key cannot be written. Remove rule: the
+;   uninstall deletes the exe's key only when a record exists and the key still holds exactly those three
+;   values (no other value, no subkey); then, if CreatedLocalDumpsKey is 1, it deletes LocalDumps too unless
+;   something else has gone into it. Microsoft does not say what a LocalDumps key with nothing in it does (it
+;   may keep crash dumps on for every application), so the Installer leaves the registry as it found it
+;   (docs/adr/0039, item 8). Either way the record is deleted. An upgrade or reinstall keeps the key and its
+;   record while the key is still its own, writes the key when there is none (and, when the earlier record says
+;   the install created LocalDumps and LocalDumps is still empty, carries CreatedLocalDumpsKey=1 forward), and
+;   for a key that was changed since leaves it alone and deletes the record.
+;   Pascal helpers in [Code]: TCrashDumpRecord, SetUpCrashDumps, RemoveCrashDumps, CrashDumpKeyIsUnchanged.
 ;
 ; English only, requires admin, unsigned (see docs/adr/0024-unsigned-inno-setup-installer-and-static-runtime-injector.md).
 
@@ -127,10 +166,13 @@ Source: "{#StageDir}\LICENSE"; DestDir: "{commonappdata}\FS25 VR"; Flags: ignore
 Source: "{#StageDir}\THIRD_PARTY_NOTICES.txt"; DestDir: "{commonappdata}\FS25 VR"; Flags: ignoreversion
 
 [UninstallDelete]
-; Written by the Injector while the game runs. modSettings (the VR settings) is deliberately kept.
+; Written by the Injector while the game runs, and when it crashes (the minidump next to the log, under a fixed name).
+; modSettings (the VR settings) is deliberately kept.
 Type: files; Name: "{app}\x64\fs25_vr.log"
-; The folder holding the uninstaller, the notices and (while a Render Resolution is applied) its record is
-; created by the Installer's own code before Inno places files in it, so Inno would leave it behind empty.
+Type: files; Name: "{app}\x64\fs25_vr_crash.dmp"
+; The folder holding the uninstaller, the notices and (while they are in place) the Render Resolution and crash
+; dump records is created by the Installer's own code before Inno places files in it, so Inno would leave it
+; behind empty.
 Type: dirifempty; Name: "{commonappdata}\FS25 VR"
 
 [Code]
@@ -161,11 +203,13 @@ begin
 end;
 
 procedure InitializeRenderResolutionPage; forward;
+procedure InitializeCrashDumpsPage; forward;
 
 procedure InitializeWizard;
 begin
   InitGameDetection;
   InitializeRenderResolutionPage;
+  InitializeCrashDumpsPage;
 end;
 
 { Asks a process of the user who started Setup (normally not elevated) for their Documents folder. That
@@ -519,14 +563,16 @@ begin
 end;
 
 procedure RestoreRenderResolution; forward;
+procedure RemoveCrashDumps; forward;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  { Before Inno removes the files, so the record is gone and its folder (common appdata, FS25 VR)
+  { Before Inno removes the files, so the records are gone and their folder (common appdata, FS25 VR)
     is removed along with them, and so a DLL that is not ours is out of the way of the removal. }
   if CurUninstallStep = usUninstall then
   begin
     RestoreRenderResolution;
+    RemoveCrashDumps;
     SetAsideReplacedDll(ExpandConstant('{app}'), InjectorFileName);
     SetAsideReplacedDll(ExpandConstant('{app}'), EarlierInjectorFileName);
   end;
@@ -1015,6 +1061,342 @@ begin
   RenderHeight := H;
 end;
 
+{ ---- Windows' own crash dumps for the game (docs/adr/0039-...; the key and the record are described at the
+  top of this script) ---- }
+
+const
+  CrashDumpsBaseKey = 'SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps';
+  CrashDumpsGameExe = 'FarmingSimulator2025Game.exe';
+  { What is written for the game's exe. DumpType 0 is a custom dump, whose contents CustomDumpFlags names (a
+    MINIDUMP_TYPE mask): thread information $1000, the memory the stacks point at $40 and the unloaded
+    modules $20, on top of the stacks and the module list every minidump holds. Those are the contents of
+    the Injector's own dump. No DumpFolder: Windows' default CrashDumps folder applies. }
+  CrashDumpType = 0;
+  CrashDumpFlags = $1060;
+  CrashDumpCount = 3;
+  CrashDumpsSkippedPerUserMessage =
+    'Skipped the Windows crash dump setting: it needs an administrator install and this is a per-user run.';
+  { Leaves the setting alone: no key, no record (an existing key and record stay as they are). }
+  NoCrashDumpsSwitch = 'FS25VR_NOCRASHDUMPS';
+
+function HasCommandLineSwitch(const Name: String): Boolean; forward;
+
+type
+  { What the Installer recorded about the key it made. ExeName is empty when there is no record. The Written
+    values are the numbers it wrote, as text. CreatedLocalDumpsKey is '1' when the LocalDumps key itself was
+    not there and the Installer's write created it (what Windows does with a LocalDumps key that has nothing
+    in it is not documented, so the uninstall takes it away again when it is empty: docs/adr/0039, item 8). }
+  TCrashDumpRecord = record
+    ExeName: String;
+    WrittenDumpType, WrittenCustomDumpFlags, WrittenDumpCount: String;
+    CreatedLocalDumpsKey: String;
+  end;
+
+{ Where the key lives: the 64-bit view of HKEY_LOCAL_MACHINE, which is the one Windows Error Reporting reads. }
+function CrashDumpsRoot: Integer;
+begin
+  Result := HKLM64;
+end;
+
+function CrashDumpsKey(ExeName: String): String;
+begin
+  Result := CrashDumpsBaseKey + '\' + ExeName;
+end;
+
+{ A registry key name made from the exe name must not reach into a different key. }
+function IsPlainFileName(S: String): Boolean;
+begin
+  Result := (S <> '') and (Pos('\', S) = 0) and (Pos('/', S) = 0);
+end;
+
+{ True when this run may write a machine-wide setting: only an administrative install can. }
+function CrashDumpsAllowed: Boolean;
+begin
+  Result := IsAdminInstallMode;
+end;
+
+var
+  CrashDumpsPage: TWizardPage;
+  CrashDumpsCheck: TNewCheckBox;
+  { True when the wizard offers the checkbox: only in the administrative install mode, the only one that can
+    write the setting. A per-user run has no page and no checkbox. }
+  CrashDumpsOffered: Boolean;
+
+{ The wizard's checkbox answers when it was offered and the player sees the wizard; a silent run is answered
+  by the command line alone. }
+function CrashDumpsAnsweredByWizard: Boolean;
+begin
+  Result := CrashDumpsOffered and not WizardSilent;
+end;
+
+{ Whether the player wants the setting. In a wizard run it is the checkbox, which starts ticked and starts
+  unticked when /FS25VR_NOCRASHDUMPS is given; in a silent run it is yes unless that switch is given. }
+function WantCrashDumps: Boolean;
+begin
+  if CrashDumpsAnsweredByWizard then
+    Result := CrashDumpsCheck.Checked
+  else
+    Result := not HasCommandLineSwitch(NoCrashDumpsSwitch);
+end;
+
+const
+  CrashDumpsCheckCaption = 'Have Windows keep a crash dump when the game crashes';
+  { What the page says, in plain words: what Windows keeps, where, and what the Installer changes. The folder
+    and the count are the ones the key leaves to Windows' defaults (see the README's "The game crashed"). }
+  CrashDumpsExplanation =
+    'When Farming Simulator 25 crashes, Windows saves a small crash dump file that you can attach to a bug report. ' +
+    'Windows keeps the last 3 dumps, in the CrashDumps folder in your local application data ' +
+    '(%LOCALAPPDATA%\CrashDumps). A dump can contain file paths and your Windows user name, so zip it before ' +
+    'you share it.' + #13#10#13#10 +
+    'This turns on one Windows setting, for FarmingSimulator2025Game.exe only. Uninstalling FS25 VR turns it off ' +
+    'again, and a setting you already had for the game is left alone. Untick the box and Setup changes nothing ' +
+    'in Windows.';
+
+{ The optional "Crash Dumps" page: one checkbox, ticked, and what it does. /FS25VR_NOCRASHDUMPS unticks it, as
+  /FS25VR_RESOLUTION pre-ticks the Render Resolution page. Created only when this run can write the setting,
+  so a per-user run never sees it. }
+procedure InitializeCrashDumpsPage;
+var
+  Explanation: TNewStaticText;
+begin
+  CrashDumpsOffered := CrashDumpsAllowed;
+  if not CrashDumpsOffered then Exit;
+
+  CrashDumpsPage := CreateCustomPage(RenderPage.ID, 'Crash Dumps',
+    'Keep a file to attach to a bug report if the game crashes.');
+
+  CrashDumpsCheck := TNewCheckBox.Create(CrashDumpsPage);
+  CrashDumpsCheck.Parent := CrashDumpsPage.Surface;
+  CrashDumpsCheck.Left := 0;
+  CrashDumpsCheck.Top := 0;
+  CrashDumpsCheck.Width := CrashDumpsPage.SurfaceWidth;
+  CrashDumpsCheck.Caption := CrashDumpsCheckCaption;
+  CrashDumpsCheck.Checked := not HasCommandLineSwitch(NoCrashDumpsSwitch);
+
+  Explanation := TNewStaticText.Create(CrashDumpsPage);
+  Explanation.Parent := CrashDumpsPage.Surface;
+  Explanation.Left := 0;
+  Explanation.Top := ScaleY(28);
+  Explanation.Width := CrashDumpsPage.SurfaceWidth;
+  Explanation.AutoSize := False;
+  Explanation.WordWrap := True;
+  Explanation.Height := ScaleY(150);
+  Explanation.Caption := CrashDumpsExplanation;
+end;
+
+{ The exe file name the key is written for: the game's, unless the hidden test-only /FS25VR_GAMEEXE switch
+  replaces it (as /FS25VR_DOCUMENTS replaces the Documents folder), so the Installer test never touches the
+  key of the real game. }
+function GetCrashDumpExeName: String;
+begin
+  Result := Trim(ExpandConstant('{param:FS25VR_GAMEEXE|}'));
+  if Result = '' then
+    Result := CrashDumpsGameExe;
+end;
+
+function GetCrashDumpRecordPath: String;
+begin
+  Result := ExpandConstant('{commonappdata}\FS25 VR\crash-dumps.ini');
+end;
+
+{ Usable from the uninstaller too. False when there is no record. }
+function LoadCrashDumpRecord(var R: TCrashDumpRecord): Boolean;
+var
+  Lines: TArrayOfString;
+  I, P: Integer;
+  Key, Value: String;
+begin
+  R.ExeName := '';
+  R.WrittenDumpType := '';
+  R.WrittenCustomDumpFlags := '';
+  R.WrittenDumpCount := '';
+  R.CreatedLocalDumpsKey := '';
+  Result := False;
+  if not LoadStringsFromFile(GetCrashDumpRecordPath, Lines) then Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    P := Pos('=', Lines[I]);
+    if P > 0 then
+    begin
+      Key := Copy(Lines[I], 1, P - 1);
+      Value := Copy(Lines[I], P + 1, Length(Lines[I]));
+      if Key = 'ExeName' then R.ExeName := Value
+      else if Key = 'WrittenDumpType' then R.WrittenDumpType := Value
+      else if Key = 'WrittenCustomDumpFlags' then R.WrittenCustomDumpFlags := Value
+      else if Key = 'WrittenDumpCount' then R.WrittenDumpCount := Value
+      else if Key = 'CreatedLocalDumpsKey' then R.CreatedLocalDumpsKey := Value;
+    end;
+  end;
+  Result := R.ExeName <> '';
+end;
+
+function SaveCrashDumpRecord(const R: TCrashDumpRecord): Boolean;
+var
+  Lines: TArrayOfString;
+begin
+  SetArrayLength(Lines, 6);
+  Lines[0] := '[CrashDumps]';
+  Lines[1] := 'ExeName=' + R.ExeName;
+  Lines[2] := 'WrittenDumpType=' + R.WrittenDumpType;
+  Lines[3] := 'WrittenCustomDumpFlags=' + R.WrittenCustomDumpFlags;
+  Lines[4] := 'WrittenDumpCount=' + R.WrittenDumpCount;
+  Lines[5] := 'CreatedLocalDumpsKey=' + R.CreatedLocalDumpsKey;
+  ForceDirectories(ExtractFilePath(GetCrashDumpRecordPath));
+  Result := SaveStringsToUTF8File(GetCrashDumpRecordPath, Lines, False);
+end;
+
+{ True when the exe's key holds exactly what the record says the Installer wrote: the three DWORD values
+  and nothing else (no other value, no subkey). Any change by the player or another tool makes it theirs. }
+function CrashDumpKeyIsUnchanged(const R: TCrashDumpRecord): Boolean;
+var
+  Key: String;
+  Names, SubKeys: TArrayOfString;
+  Current: Cardinal;
+begin
+  Result := False;
+  Key := CrashDumpsKey(R.ExeName);
+  if not RegGetValueNames(CrashDumpsRoot, Key, Names) or (GetArrayLength(Names) <> 3) then Exit;
+  if RegGetSubkeyNames(CrashDumpsRoot, Key, SubKeys) and (GetArrayLength(SubKeys) > 0) then Exit;
+  if not RegQueryDWordValue(CrashDumpsRoot, Key, 'DumpType', Current) or (IntToStr(Current) <> R.WrittenDumpType) then Exit;
+  if not RegQueryDWordValue(CrashDumpsRoot, Key, 'CustomDumpFlags', Current) or (IntToStr(Current) <> R.WrittenCustomDumpFlags) then Exit;
+  if not RegQueryDWordValue(CrashDumpsRoot, Key, 'DumpCount', Current) or (IntToStr(Current) <> R.WrittenDumpCount) then Exit;
+  Result := True;
+end;
+
+{ True when the key is there and holds nothing: no value and no subkey. }
+function CrashDumpsKeyHoldsNothing(const Key: String): Boolean;
+var
+  Names, SubKeys: TArrayOfString;
+begin
+  Result := RegKeyExists(CrashDumpsRoot, Key) and RegGetValueNames(CrashDumpsRoot, Key, Names) and
+            RegGetSubkeyNames(CrashDumpsRoot, Key, SubKeys) and
+            (GetArrayLength(Names) = 0) and (GetArrayLength(SubKeys) = 0);
+end;
+
+{ Turns on Windows' own crash dumps for the game. Called once the files are placed, in the administrative
+  install mode only. It never fails the install: whatever it cannot do is logged. The record goes first
+  and is deleted again if the key cannot be written, so a record never names a key that is not there. }
+procedure SetUpCrashDumps;
+var
+  ExeName, Key: String;
+  R, Old: TCrashDumpRecord;
+  HaveOld: Boolean;
+begin
+  if not WantCrashDumps then
+  begin
+    if CrashDumpsAnsweredByWizard then
+      Log('Windows crash dump setting: left alone because the Crash Dumps checkbox was unticked.')
+    else
+      Log('Windows crash dump setting: left alone because of /' + NoCrashDumpsSwitch + '.');
+    Exit;
+  end;
+  if not CrashDumpsAllowed then
+  begin
+    Log(CrashDumpsSkippedPerUserMessage);
+    Exit;
+  end;
+  ExeName := GetCrashDumpExeName;
+  if not IsPlainFileName(ExeName) then
+  begin
+    Log('Skipped the Windows crash dump setting: "' + ExeName + '" is not a file name.');
+    Exit;
+  end;
+  Key := CrashDumpsKey(ExeName);
+
+  { The record an earlier run left for this exe, if there is one. }
+  HaveOld := LoadCrashDumpRecord(Old);
+  if HaveOld then
+    HaveOld := SameText(Old.ExeName, ExeName);
+
+  { A key that is already there is left exactly as it is, and so is its record. It is ours when an earlier
+    run recorded it and it still holds what was written (an upgrade or a reinstall): it stays, with its
+    record. Otherwise it is the player's or another tool's, and a record of an earlier key of ours that
+    was changed since no longer describes anything of ours. }
+  if RegKeyExists(CrashDumpsRoot, Key) then
+  begin
+    if HaveOld and CrashDumpKeyIsUnchanged(Old) then
+      Log('Windows crash dump setting: HKLM\' + Key + ' is still the one this Installer made; keeping it and its record.')
+    else
+    begin
+      Log('Windows crash dump setting: HKLM\' + Key + ' already exists; leaving it alone.');
+      if HaveOld then
+      begin
+        Log('Windows crash dump setting: it was changed since this Installer made it; deleting the record of it.');
+        DeleteFile(GetCrashDumpRecordPath);
+      end;
+    end;
+    Exit;
+  end;
+
+  R.ExeName := ExeName;
+  R.WrittenDumpType := IntToStr(CrashDumpType);
+  R.WrittenCustomDumpFlags := IntToStr(CrashDumpFlags);
+  R.WrittenDumpCount := IntToStr(CrashDumpCount);
+  if not RegKeyExists(CrashDumpsRoot, CrashDumpsBaseKey) then
+    R.CreatedLocalDumpsKey := '1'
+  else if HaveOld and (Old.CreatedLocalDumpsKey = '1') and CrashDumpsKeyHoldsNothing(CrashDumpsBaseKey) then
+  begin
+    { The game's key is gone, but LocalDumps is still the empty key an earlier run of this Installer created:
+      the new record carries that on, so the uninstall that follows takes LocalDumps away too. }
+    R.CreatedLocalDumpsKey := '1';
+    Log('Windows crash dump setting: HKLM\' + CrashDumpsBaseKey + ' is still the empty key an earlier install created; the record keeps that.');
+  end
+  else
+    R.CreatedLocalDumpsKey := '0';
+  if not SaveCrashDumpRecord(R) then
+  begin
+    Log('Skipped the Windows crash dump setting: could not write ' + GetCrashDumpRecordPath + '.');
+    Exit;
+  end;
+  if not (RegWriteDWordValue(CrashDumpsRoot, Key, 'DumpType', CrashDumpType) and
+          RegWriteDWordValue(CrashDumpsRoot, Key, 'CustomDumpFlags', CrashDumpFlags) and
+          RegWriteDWordValue(CrashDumpsRoot, Key, 'DumpCount', CrashDumpCount)) then
+  begin
+    Log('The Windows crash dump setting was not set: could not write HKLM\' + Key + '.');
+    RegDeleteKeyIncludingSubkeys(CrashDumpsRoot, Key);
+    if R.CreatedLocalDumpsKey = '1' then
+      RegDeleteKeyIfEmpty(CrashDumpsRoot, CrashDumpsBaseKey);
+    DeleteFile(GetCrashDumpRecordPath);
+    Exit;
+  end;
+  Log('Windows crash dump setting: created HKLM\' + Key + '.');
+end;
+
+{ Uninstall: remove the key, but only while it is still ours. It is when a record exists and the key still
+  holds exactly what the Installer wrote; otherwise it is the player's (or another tool's) and stays. The
+  record is deleted either way. The record names the exe (the uninstaller does not get the hidden
+  /FS25VR_GAMEEXE switch). Failures are logged, never shown: the rest of the uninstall must go on. }
+procedure RemoveCrashDumps;
+var
+  R: TCrashDumpRecord;
+  Key: String;
+begin
+  if not LoadCrashDumpRecord(R) then Exit;   { never set, nothing to undo }
+
+  Key := CrashDumpsKey(R.ExeName);
+  if not IsPlainFileName(R.ExeName) then
+    Log('Windows crash dump setting: the record names "' + R.ExeName + '", which is not a file name; leaving the registry alone.')
+  else if not RegKeyExists(CrashDumpsRoot, Key) then
+    Log('Windows crash dump setting: HKLM\' + Key + ' is gone; nothing to remove.')
+  else if not CrashDumpKeyIsUnchanged(R) then
+    Log('Windows crash dump setting: HKLM\' + Key + ' was changed since install; leaving it alone.')
+  else if RegDeleteKeyIncludingSubkeys(CrashDumpsRoot, Key) then
+  begin
+    Log('Windows crash dump setting: removed HKLM\' + Key + '.');
+    { The LocalDumps key this Installer's write created goes too, unless something else has gone into it. }
+    if R.CreatedLocalDumpsKey = '1' then
+      if RegDeleteKeyIfEmpty(CrashDumpsRoot, CrashDumpsBaseKey) then
+        Log('Windows crash dump setting: removed HKLM\' + CrashDumpsBaseKey + ', which the install had created.')
+      else
+        Log('Windows crash dump setting: HKLM\' + CrashDumpsBaseKey + ' holds other entries now; leaving it.');
+  end
+  else
+    Log('Windows crash dump setting: could not remove HKLM\' + Key + '.');
+
+  if not DeleteFile(GetCrashDumpRecordPath) then
+    Log('Windows crash dump setting: could not delete ' + GetCrashDumpRecordPath + '.');
+end;
+
 const
   RenderResolutionFailedExitCode = 20;
   { The files are placed, but the dxgi.dll of an earlier FS25 VR version could not be deleted, and the new
@@ -1056,6 +1438,7 @@ begin
           MsgBox('FS25 VR is installed, but the Render Resolution was not set:' + #13#10#13#10 + Problem, mbError, MB_OK);
       end;
     end;
+    SetUpCrashDumps;
   end;
 end;
 

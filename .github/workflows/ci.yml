@@ -95,6 +95,18 @@ jobs:
         shell: pwsh
         run: scripts/package_release.ps1
 
+      # The release also carries the Injector's PDB as a symbols zip (so a crash dump from any release
+      # opens with symbols): it must exist, hold the PDB the linker wrote, and that PDB must belong to the
+      # Injector the bundle ships (same GUID and age). The packaging test then
+      # proves, in a scratch copy, that packaging fails without the PDB and that this check can fail.
+      - name: Check the symbols zip
+        shell: pwsh
+        run: scripts/check_release_symbols.ps1
+
+      - name: Test release packaging
+        shell: pwsh
+        run: scripts/test_package_release.ps1
+
       - name: Test Installer (silent install and uninstall)
         shell: pwsh
         run: scripts/test_installer.ps1
@@ -113,4 +125,11 @@ jobs:
         with:
           name: installer
           path: build/release/FS25_VR_v*_Setup.exe
+          if-no-files-found: error
+
+      - name: Upload symbols
+        uses: actions/upload-artifact@v7
+        with:
+          name: symbols
+          path: build/release/FS25_VR_v*_Symbols.zip
           if-no-files-found: error

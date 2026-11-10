@@ -32,9 +32,11 @@ VRBridge& VRBridge::FromUpvalue(lua_State* L) {
 }
 
 VRBridge::VRBridge(std::shared_ptr<OpenXrManager> openXrManager,
-                   std::shared_ptr<NgxInterceptor> ngxInterceptor)
+                   std::shared_ptr<NgxInterceptor> ngxInterceptor,
+                   std::string version)
     : m_openXrManager(std::move(openXrManager)),
-      m_ngxInterceptor(std::move(ngxInterceptor)) {
+      m_ngxInterceptor(std::move(ngxInterceptor)),
+      m_version(std::move(version)) {
 }
 
 bool VRBridge::IsInjected(lua_State* L) {
@@ -69,7 +71,7 @@ bool VRBridge::Inject(lua_State* L) {
     // to prevent dynamic table resizing/rehashing during startup
     lua_createtable(L, 0, kExposedFieldCount);
 
-    // VRBridge.version = "1.0.0"
+    // VRBridge.version = the Injector's release version
     lua_pushstring(L, m_version.c_str());
     lua_setfield(L, -2, "version");
 

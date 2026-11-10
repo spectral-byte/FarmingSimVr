@@ -1,5 +1,6 @@
 #include "core/injector_startup.h"
 
+#include "core/crash_reporter.h"
 #include "core/injector_runtime.h"
 #include "core/logger.h"
 #include "proxy/dxgi_export_hooks.h"
@@ -30,16 +31,21 @@ using DllNotificationCallback = VOID(CALLBACK*)(ULONG reason, const DllLoadedNot
 using LdrRegisterDllNotificationFn = LONG(NTAPI*)(ULONG flags, DllNotificationCallback callback, PVOID context, PVOID* cookie);
 using LdrUnregisterDllNotificationFn = LONG(NTAPI*)(PVOID cookie);
 
-// Passes each caught factory call to the process's InjectorRuntime, which is created by the first one.
+// Passes each caught factory call to the process's InjectorRuntime, which is created by the first one. The first call
+// also prepares the crash dump, before the runtime starts: a crash while it initializes OpenXR is the likeliest one.
+// Here and not in the proxy, since this runs once per process however many proxies the tests create.
 class RuntimeFactoryEntry final : public IDxgiFactoryEntry {
 public:
     HRESULT CreateDXGIFactory(REFIID riid, void** ppFactory) override {
+        PrepareCrashDump();
         return InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory(riid, ppFactory);
     }
     HRESULT CreateDXGIFactory1(REFIID riid, void** ppFactory) override {
+        PrepareCrashDump();
         return InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory1(riid, ppFactory);
     }
     HRESULT CreateDXGIFactory2(UINT flags, REFIID riid, void** ppFactory) override {
+        PrepareCrashDump();
         return InjectorRuntime::Instance().GetDxgiProxy().CreateDXGIFactory2(flags, riid, ppFactory);
     }
 };
@@ -131,6 +137,9 @@ void StartInjector() {
         return;
     }
 
+    // From DllMain, where it is loader-lock safe: it loads no library and installs no hook.
+    InstallCrashReporter();
+
     HMODULE systemDxgi = nullptr;
     const std::wstring& path = SystemDxgiPath();
     if (!path.empty() &&
@@ -156,6 +165,7 @@ void StartInjector() {
 }
 
 void StopInjector() {
+    RemoveCrashReporter();
     if (g_notificationCookie) {
         if (auto unregisterNotification =
                 reinterpret_cast<LdrUnregisterDllNotificationFn>(NtdllFunction("LdrUnregisterDllNotification"))) {

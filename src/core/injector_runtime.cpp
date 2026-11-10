@@ -106,7 +106,8 @@ InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
     if (!m_deps.ngxInterceptor) m_deps.ngxInterceptor = std::make_shared<NgxInterceptor>();
     if (!m_deps.ffxInterceptor) m_deps.ffxInterceptor = std::make_shared<FidelityFxInterceptor>();
     if (!m_deps.vrBridge) {
-        m_deps.vrBridge = std::make_shared<VRBridge>(m_deps.openXrManager, m_deps.ngxInterceptor);
+        m_deps.vrBridge = std::make_shared<VRBridge>(m_deps.openXrManager, m_deps.ngxInterceptor,
+                                                     m_deps.injectorVersion);
     }
     if (!m_deps.companionSettingsFile.empty()) {
         ApplySavedMenuDistance(*m_deps.vrBridge, m_deps.companionSettingsFile);

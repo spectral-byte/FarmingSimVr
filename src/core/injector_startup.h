@@ -9,12 +9,15 @@ namespace fs25vr {
 // when that dxgi.dll is already loaded, else from a DLL load notification the moment it loads (a dxgi.dll in the
 // game folder, such as ReShade's, loads it later). Every caught factory call goes to InjectorRuntime::Instance().
 // Installing these three hooks is the one exception to "no hooks from DllMain" (see dll_lifecycle.h).
-// Hooks nothing when an FS25 VR Injector of an earlier version, which was the game's dxgi.dll, is loaded too:
+// Puts the crash reporter on the process's unhandled exception filter first (crash_reporter.h), which loads no
+// library and installs no hook either.
+// Does neither when an FS25 VR Injector of an earlier version, which was the game's dxgi.dll, is loaded too:
 // both would hook the game.
 void StartInjector();
 
-// Called from DllMain when the Injector is unloaded with FreeLibrary: removes the hooks and the load notification.
-// Not called at process termination, where hooks are left as they are.
+// Called from DllMain when the Injector is unloaded with FreeLibrary: removes the hooks and the load notification,
+// and takes the crash reporter off again if it is still the top filter.
+// Not called at process termination, where hooks and the crash reporter are left as they are.
 void StopInjector();
 
 // True when the module's version resource gives "FS25 VR" as ProductName. Reads the resource directly, without

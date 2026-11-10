@@ -164,6 +164,27 @@ TEST_F(CompanionModTest, PerformsHandshakeWhenVRBridgePresent) {
     EXPECT_TRUE(foundHandshakeLog);
 }
 
+TEST_F(CompanionModTest, CompletesItsHandshakeWhateverVersionTheInjectorReports) {
+    // The Companion Mod only prints the Injector's version for now; an Injector of another release than the mod's
+    // must not stop the handshake.
+    fs25vr::VRBridge bridge(nullptr, nullptr, "7.8.9");
+    ASSERT_TRUE(bridge.Inject(L));
+    ASSERT_EQ(LoadCompanionModChecked(L), 0) << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
+
+    ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('mapUS')", "=loadMapCall"), 0)
+        << (lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
+
+    EXPECT_EQ(RunLuauChunk(L, "assert(VRCompanion.handshakeComplete == true)", "=assertHandshake"), 0);
+    bool printedTheVersion = false;
+    for (const auto& msg : s_capturedLogs) {
+        if (msg.find("[FS25_VR] Handshake successful! VRBridge detected (version: 7.8.9,") != std::string::npos) {
+            printedTheVersion = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(printedTheVersion);
+}
+
 TEST_F(CompanionModTest, FallsBackGracefullyInPassThroughModeWhenVRBridgeAbsent) {
 
     int loadStatus = LoadCompanionModChecked(L);

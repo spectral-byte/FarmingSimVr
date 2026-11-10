@@ -2,50 +2,24 @@
 // its x64 folder: its version.dll exports must behave as the system's do, and while it is loaded it must hook the
 // system's dxgi.dll without breaking factory creation (ADR-0038).
 #include <gtest/gtest.h>
+#include "core/injector_version.h"
+#include "core/logger.h"
+#include "injector_binary.h"
 #include "proxy/dxgi_export_hooks.h"
 #include "proxy/system_dxgi.h"
 #include <windows.h>
 #include <winver.h>
 #include <wrl/client.h>
 #include <array>
-#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
-
-#ifndef INJECTOR_DLL_PATH
-#error INJECTOR_DLL_PATH must be defined by the build
-#endif
 
 using Microsoft::WRL::ComPtr;
 
 namespace fs25vr {
 namespace {
-
-// CMake writes the path with forward slashes; Windows paths take backslashes.
-std::string InjectorPathA() {
-    std::string path = INJECTOR_DLL_PATH;
-    for (char& c : path) {
-        if (c == '/') c = '\\';
-    }
-    return path;
-}
-
-std::wstring InjectorPath() {
-    const std::string narrow = InjectorPathA();
-    return std::wstring(narrow.begin(), narrow.end());
-}
-
-HMODULE LoadedSystemDxgi() {
-    HMODULE module = nullptr;
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, SystemDxgiPath().c_str(), &module);
-    return module;
-}
-
-std::array<unsigned char, 16> FirstBytes(const void* function) {
-    std::array<unsigned char, 16> bytes{};
-    std::memcpy(bytes.data(), function, bytes.size());
-    return bytes;
-}
 
 // The names the system's version.dll exports (Windows 10 and 11).
 constexpr const char* kVersionExports[] = {
@@ -154,6 +128,96 @@ TEST_F(InjectorBinaryTest, HooksTheSystemsDxgiWhileLoadedAndAFactoryIsStillCreat
     FreeLibrary(m_injector);
     m_injector = nullptr;
     EXPECT_EQ(FirstBytes(m_createFactory1), m_unhooked) << "Unloading the Injector left CreateDXGIFactory1 hooked.";
+}
+
+// A log alone should tell the developer which Injector the player runs, so the Injector's first line names its version.
+TEST(InjectorLogTest, FirstLineNamesTheInjectorsVersion) {
+    LetTheInjectorHaveItsLog theLog;
+    const std::filesystem::path logPath = InjectorLogPath();
+
+    HMODULE injector = LoadLibraryW(InjectorPath().c_str());
+    ASSERT_NE(injector, nullptr) << INJECTOR_DLL_PATH << " (error " << GetLastError() << ")";
+    FreeLibrary(injector);  // detaching flushes the log and closes it
+
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open()) << logPath;
+    std::string firstLine;
+    std::getline(log, firstLine);
+    EXPECT_NE(firstLine.find(" " + std::string(kInjectorVersion) + " "), std::string::npos) << firstLine;
+}
+
+// Tests and tools that load and unload the Injector must find the process as they left it, the crash handling included.
+TEST(InjectorCrashFilterTest, FreeingTheInjectorLeavesTheProcessesPreviousFilterInPlace) {
+    RestoreTheUnhandledExceptionFilter restore;
+    SetUnhandledExceptionFilter(&PreviousFilter);
+
+    HMODULE injector = LoadLibraryW(InjectorPath().c_str());
+    ASSERT_NE(injector, nullptr) << INJECTOR_DLL_PATH << " (error " << GetLastError() << ")";
+    EXPECT_NE(TopUnhandledExceptionFilter(), &PreviousFilter) << "Loading the Injector did not install its filter.";
+
+    FreeLibrary(injector);
+    EXPECT_EQ(TopUnhandledExceptionFilter(), &PreviousFilter);
+}
+
+// The game may install a filter of its own after the Injector loaded. The first DXGI factory call puts the Injector's
+// filter on top of it again, and the game's becomes the one the Injector passes a crash on to, which unloading restores.
+TEST(InjectorCrashFilterTest, TheFirstFactoryCallPutsTheInjectorsFilterOnTopOfOneThatTookThePlace) {
+    RestoreTheUnhandledExceptionFilter restore;
+    SetUnhandledExceptionFilter(&PreviousFilter);
+    HMODULE injector = LoadLibraryW(InjectorPath().c_str());
+    ASSERT_NE(injector, nullptr) << INJECTOR_DLL_PATH << " (error " << GetLastError() << ")";
+    SetUnhandledExceptionFilter(&LaterFilter);
+    void* createFactory1 = DxgiExportHooks::FindExport(LoadedSystemDxgi(), "CreateDXGIFactory1");
+    ASSERT_NE(createFactory1, nullptr);
+
+    ComPtr<IDXGIFactory1> factory;
+    EXPECT_EQ(reinterpret_cast<PFN_CreateDXGIFactory1>(createFactory1)(IID_PPV_ARGS(&factory)), S_OK);
+    const LPTOP_LEVEL_EXCEPTION_FILTER top = TopUnhandledExceptionFilter();
+    factory.Reset();
+    FreeLibrary(injector);
+
+    EXPECT_NE(top, &LaterFilter) << "The first factory call did not put the Injector's filter on top again.";
+    EXPECT_NE(top, &PreviousFilter);
+    EXPECT_EQ(TopUnhandledExceptionFilter(), &LaterFilter) << "The filter found on top is not the one to pass crashes on to.";
+}
+
+// The dump is prepared with a thread that is ended when the Injector unloads, since its code goes with it. Tests and
+// tools that load the Injector again must find it working again.
+TEST(InjectorCrashFilterTest, TheInjectorPreparesItsCrashDumpAgainWhenItIsLoadedAgain) {
+    LetTheInjectorHaveItsLog theLog;
+    const std::filesystem::path logPath = InjectorLogPath();
+    void* createFactory1 = DxgiExportHooks::FindExport(LoadedSystemDxgi(), "CreateDXGIFactory1");
+    ASSERT_NE(createFactory1, nullptr);
+
+    for (int load = 0; load < 2; ++load) {
+        HMODULE injector = LoadLibraryW(InjectorPath().c_str());
+        ASSERT_NE(injector, nullptr) << INJECTOR_DLL_PATH << " (error " << GetLastError() << ")";
+        ComPtr<IDXGIFactory1> factory;
+        EXPECT_EQ(reinterpret_cast<PFN_CreateDXGIFactory1>(createFactory1)(IID_PPV_ARGS(&factory)), S_OK);
+        factory.Reset();
+        FreeLibrary(injector);  // detaching flushes the log and closes it
+    }
+
+    std::ifstream log(logPath);
+    std::string line;
+    std::getline(log, line);  // the second load's own log: the first one was moved to the backup
+    bool prepared = false;
+    for (; std::getline(log, line);) {
+        prepared = prepared || line.find("A crash will leave a dump at") != std::string::npos;
+    }
+    EXPECT_TRUE(prepared) << "The second load did not prepare its crash dump.";
+}
+
+TEST(InjectorCrashFilterTest, FreeingTheInjectorLeavesAFilterInstalledAfterItOnTop) {
+    RestoreTheUnhandledExceptionFilter restore;
+    SetUnhandledExceptionFilter(&PreviousFilter);
+
+    HMODULE injector = LoadLibraryW(InjectorPath().c_str());
+    ASSERT_NE(injector, nullptr) << INJECTOR_DLL_PATH << " (error " << GetLastError() << ")";
+    SetUnhandledExceptionFilter(&LaterFilter);  // another module takes the place on top, and may have kept ours
+
+    FreeLibrary(injector);
+    EXPECT_EQ(TopUnhandledExceptionFilter(), &LaterFilter);
 }
 
 } // namespace fs25vr

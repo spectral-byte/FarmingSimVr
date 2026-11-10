@@ -27,6 +27,7 @@ scratch/
 *.dll
 *.lib
 *.pdb
+*.dmp
 *.exp
 *.zip
 *.obj

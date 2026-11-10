@@ -1,8 +1,10 @@
 #include "dll_lifecycle.h"
+#include "injector_version.h"
 #include "logger.h"
 #include "ngx/ngx_interceptor.h"
 #include "fidelityfx/fidelityfx_interceptor.h"
 #include <atomic>
+#include <string>
 
 namespace fs25vr {
 
@@ -12,7 +14,8 @@ std::atomic<bool> s_processTerminating{false};
 
 void OnProcessAttach(HMODULE selfModule) {
     DisableThreadLibraryCalls(selfModule);
-    LogInfo("Farming Simulator 25 VR Injector attached to process.");
+    // The first line of fs25_vr.log: it names the version, so a log alone says which Injector the player runs.
+    LogInfo("Farming Simulator 25 VR Injector " + std::string(kInjectorVersion) + " attached to process.");
 }
 
 void OnProcessDetach(LPVOID lpReserved) {

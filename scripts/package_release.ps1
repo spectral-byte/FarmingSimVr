@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $builtDll = Join-Path $repoRoot "build\version.dll"
+$builtPdb = Join-Path $repoRoot "build\version.pdb"
 $companionDir = Join-Path $repoRoot "mods\FS25_VRCompanion"
 $releaseDir = Join-Path $repoRoot "build\release"
 $modDescPath = Join-Path $companionDir "modDesc.xml"
@@ -16,6 +17,17 @@ Write-Host "Packaging FS25 VR Release..."
 if (-not (Test-Path $builtDll)) {
     Write-Error "build\version.dll not found. Build project first (ninja -C build injector)."
 }
+
+# Every release carries the Injector's symbols (the symbols zip), so a crash dump from it can be read.
+# The next build overwrites the PDB, so a release cannot be symbolised afterwards: refuse to package
+# without it, before anything in build\release is touched.
+if (-not (Test-Path $builtPdb)) {
+    Write-Error "build\version.pdb not found. The linker writes it next to version.dll, and every release must carry the Injector's symbols (the symbols zip). Rebuild the Injector (cmake --build build --target injector); do not copy a version.dll in without its PDB."
+}
+# A PDB left over from another build would be zipped as this release's symbols and open none of its crash dumps:
+# it must carry the GUID and age the linker stamped into this version.dll.
+. (Join-Path $PSScriptRoot "symbols_identity.ps1")
+Assert-PdbBelongsToDll $builtPdb $builtDll
 
 # Only ship an Injector that needs no VC++ redistributable (static C runtime).
 & (Join-Path $PSScriptRoot "check_injector_imports.ps1") $builtDll
@@ -39,9 +51,8 @@ New-Item -ItemType Directory -Path "$bundleDir\mods" -Force | Out-Null
 # Copy Injector DLL (the game loads it as its version.dll, ADR-0038)
 Copy-Item $builtDll "$bundleDir\x64\version.dll" -Force
 Copy-Item $builtDll "$releaseDir\version.dll" -Force
-$builtPdb = Join-Path $repoRoot "build\version.pdb"
-if (Test-Path $builtPdb) { Copy-Item $builtPdb "$releaseDir\version.pdb" -Force }
-Write-Host "[Package] Staged version.dll"
+Copy-Item $builtPdb "$releaseDir\version.pdb" -Force
+Write-Host "[Package] Staged version.dll and version.pdb"
 
 # version.dll statically links these dependencies; their licenses require shipping the notices.
 # Fetched sources live wherever the build was configured to put them (CI uses -DFETCHCONTENT_BASE_DIR=.deps).
@@ -127,6 +138,13 @@ Close the game first.
   FS25 VR is moved to version.dll.fs25vr-backup before FS25 VR is installed.
 - Upgrading from FS25 VR 1.1.9 or earlier (which was dxgi.dll) removes that
   dxgi.dll and puts back a dxgi.dll it had moved aside for it, such as ReShade.
+- Crash dumps for the game: the Installer turns on Windows' own crash dumps for
+  FarmingSimulator2025Game.exe (a registry setting), so a crash leaves a file to
+  attach to a bug report. See "IF THE GAME CRASHES" below. A setting you already
+  had for the game is left alone. The wizard has a "Crash Dumps" page with a
+  ticked box that says what Windows will keep; untick it to leave the setting
+  alone. A silent install can leave the setting alone with /FS25VR_NOCRASHDUMPS
+  (which also unticks the box in a wizard run).
 
 Windows may show "Windows protected your PC" because the Installer is not
 code-signed yet. This is expected: click "More info", then "Run anyway".
@@ -201,6 +219,42 @@ Settings are automatically saved in:
 Documents\My Games\FarmingSimulator2025\modSettings\FS25_VRCompanion\settings.xml
 
 
+IF THE GAME CRASHES
+--------------------------------------------------------------------------------
+The log and the crash dumps show where the game crashed, so attach them to your
+bug report. Zip the dumps first: a dump can contain file paths and your Windows
+user name.
+
+- fs25_vr.log: the Injector's log, in the game's x64 folder (next to
+  FarmingSimulator2025Game.exe). A crash finishes it, and its last line says what
+  crashed.
+- fs25_vr_crash.dmp: the Injector's own crash dump, in the same folder, written by
+  the crash. The next crash replaces it. If the last line of the log says "no dump
+  written", it also says why there is none.
+- Windows' crash dump for the game: the newest
+  FarmingSimulator2025Game.exe.<number>.dmp in %LOCALAPPDATA%\CrashDumps (paste
+  that into the Explorer address bar). Windows keeps the last three.
+
+The Installer turns on Windows' crash dump for FarmingSimulator2025Game.exe,
+unless you unticked the box on its "Crash Dumps" page, ran it with
+/FS25VR_NOCRASHDUMPS, or Windows already had a setting for the game, which the
+Installer leaves as it is. If you installed by hand, turn it on yourself: open a
+Command Prompt as administrator and run
+
+powershell -NoProfile -Command "`$k = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\FarmingSimulator2025Game.exe'; New-Item `$k -Force | Out-Null; @{DumpType=0; CustomDumpFlags=0x1060; DumpCount=3}.GetEnumerator() | ForEach-Object { New-ItemProperty `$k -Name `$_.Key -Value `$_.Value -PropertyType DWord -Force | Out-Null }"
+
+To turn it off again, open a Command Prompt as administrator and run
+
+powershell -NoProfile -Command "`$p = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'; Remove-Item (`$p + '\FarmingSimulator2025Game.exe') -Recurse -ErrorAction SilentlyContinue; if ((Test-Path `$p) -and -not (Get-Item `$p).ValueCount -and -not (Get-ChildItem `$p)) { Remove-Item `$p }"
+
+That removes the game's key, and the LocalDumps key above it too when nothing else
+is left in it. The Installer's uninstall does the same, except that it removes
+LocalDumps only when the Installer created it.
+
+Windows writes no dump if automatic debugging for application crashes is set up on
+your machine, that is, a debugger that Windows starts when an application crashes.
+
+
 UNINSTALLATION
 --------------------------------------------------------------------------------
 - Installed with the Installer: run FS25_VR_v${version}_Setup.exe again and choose
@@ -209,12 +263,13 @@ UNINSTALLATION
   FS25_VR_v${version}_Setup.exe /FS25VR_UNINSTALL runs the uninstaller unattended
   and exits with its exit code (non-zero if FS25 VR is not installed or the game
   is running).
-  Uninstalling removes version.dll, FS25_VRCompanion.zip and fs25_vr.log, and
-  keeps your VR settings in modSettings. It puts back the version.dll it moved
+  Uninstalling removes version.dll, FS25_VRCompanion.zip, fs25_vr.log and the
+  Injector's crash dump, and keeps your VR settings in modSettings. It puts back the version.dll it moved
   aside (or keeps a version.dll you installed over FS25 VR's since), leaves a
   dxgi.dll such as ReShade's alone, and
   restores your original Render Resolution unless you changed the width, height
-  or fullscreen mode in the game since. game.xml.fs25vr-backup stays.
+  or fullscreen mode in the game since. game.xml.fs25vr-backup stays. It also
+  removes the crash dump setting the Installer made, unless you changed it since.
 - Installed manually:
   Delete 'version.dll' from the game's 'x64' folder, and
   delete 'FS25_VRCompanion.zip' from your 'mods' folder.
@@ -240,6 +295,16 @@ try {
 } finally {
     Pop-Location
 }
+
+# Symbols zip: the PDB the linker wrote for the staged Injector, published next to the zip bundle and
+# the Setup exe so a crash dump from this release opens with full symbols. It is a file, not a second
+# FS25_VR_v* folder: scripts\test_installer.ps1 takes the one such folder in build\release as its staging dir.
+$symbolsZip = Join-Path $releaseDir "${bundleName}_Symbols.zip"
+tar.exe -a -cf $symbolsZip -C $releaseDir version.pdb
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $symbolsZip)) {
+    Write-Error "Failed to create the symbols zip $symbolsZip (tar exit code $LASTEXITCODE)."
+}
+Write-Host "[Package] Created $symbolsZip"
 
 # Build the Installer from the same staged bundle folder, so it carries the identical binaries,
 # LICENSE and THIRD_PARTY_NOTICES as the zip bundle. Inno Setup's compiler is not on PATH by default.
