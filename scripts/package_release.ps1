@@ -137,8 +137,10 @@ Close the game first.
 - Crash dumps for the game: the Installer turns on Windows' own crash dumps for
   FarmingSimulator2025Game.exe (a registry setting), so a crash leaves a file to
   attach to a bug report. See "IF THE GAME CRASHES" below. A setting you already
-  had for the game is left alone. A silent install can leave the setting alone
-  with /FS25VR_NOCRASHDUMPS.
+  had for the game is left alone. The wizard has a "Crash Dumps" page with a
+  ticked box that says what Windows will keep; untick it to leave the setting
+  alone. A silent install can leave the setting alone with /FS25VR_NOCRASHDUMPS
+  (which also unticks the box in a wizard run).
 
 Windows may show "Windows protected your PC" because the Installer is not
 code-signed yet. This is expected: click "More info", then "Run anyway".
@@ -230,9 +232,10 @@ user name.
   that into the Explorer address bar). Windows keeps the last three.
 
 The Installer turns on Windows' crash dump for FarmingSimulator2025Game.exe,
-unless you ran it with /FS25VR_NOCRASHDUMPS or Windows already had a setting for
-the game, which the Installer leaves as it is. If you installed by hand, turn it
-on yourself: open a Command Prompt as administrator and run
+unless you unticked the box on its "Crash Dumps" page, ran it with
+/FS25VR_NOCRASHDUMPS, or Windows already had a setting for the game, which the
+Installer leaves as it is. If you installed by hand, turn it on yourself: open a
+Command Prompt as administrator and run
 
 powershell -NoProfile -Command "`$k = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\FarmingSimulator2025Game.exe'; New-Item `$k -Force | Out-Null; @{DumpType=0; CustomDumpFlags=0x1060; DumpCount=3}.GetEnumerator() | ForEach-Object { New-ItemProperty `$k -Name `$_.Key -Value `$_.Value -PropertyType DWord -Force | Out-Null }"
 

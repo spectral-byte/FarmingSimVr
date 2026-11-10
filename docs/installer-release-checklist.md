@@ -95,6 +95,16 @@ FS25 VR up to 1.1.9 was `dxgi.dll` (ADR-0038). `scripts\test_installer.ps1` fake
 - [ ] The menu shows in the headset and the game keeps running. Under SteamVR, `fs25_vr.log` has `D3D11On12CreateDevice with device ... (dxgi.dll) -> real ... (D3D12Core.dll)`, and `ReShade.log` has no `Device was lost`.
 - [ ] Uninstall FS25 VR: `version.dll` is gone and ReShade's `dxgi.dll` is still there.
 
+## 13. Crash Dumps checkbox in the wizard
+
+`scripts\test_installer.ps1` runs Setup silently and cannot see the wizard's pages; it checks the setting itself (the key, the record, the switch) when it runs elevated. The checkbox needs a person. Use an administrator account that has no key for the game yet (`reg query "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\FarmingSimulator2025Game.exe" /reg:64` says it cannot find it), and uninstall FS25 VR between the runs below.
+
+- [ ] Run the Installer and accept the UAC prompt. After the **Render Resolution** page there is a **Crash Dumps** page with one checkbox, **ticked**, and a short text that says Windows keeps the last 3 dumps in the `CrashDumps` folder in your local application data (`%LOCALAPPDATA%\CrashDumps`) and that a dump can contain file paths and your Windows user name. The text fits the page, nothing is cut off.
+- [ ] Finish the install with it ticked. The `reg query` above now shows `DumpType` 0, `CustomDumpFlags` 0x1060 and `DumpCount` 3, and `C:\ProgramData\FS25 VR\crash-dumps.ini` exists. Uninstall FS25 VR: the key and `crash-dumps.ini` are gone.
+- [ ] Run the Installer again, untick the box and finish. The `reg query` finds no key and there is no `crash-dumps.ini`. The log (run with `/LOG`) has `left alone because the Crash Dumps checkbox was unticked`.
+- [ ] Run `FS25_VR_v<version>_Setup.exe /FS25VR_NOCRASHDUMPS` (no `/VERYSILENT`): the **Crash Dumps** page shows the checkbox **unticked**. Ticking it by hand and finishing writes the key.
+- [ ] Run `FS25_VR_v<version>_Setup.exe /CURRENTUSER` (a per-user run): there is no **Crash Dumps** page, the install succeeds, and the log has `Skipped the Windows crash dump setting`.
+
 ## After the checklist
 
 Record the Installer version and the date you ran it in the release notes draft, together with any item you could not run (for example "no Epic machine available").

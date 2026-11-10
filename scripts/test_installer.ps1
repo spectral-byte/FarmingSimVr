@@ -1481,6 +1481,25 @@ Test-Case "A per-user install writes no Windows crash dump key, logs that the se
     Assert-True ((Get-LastSetupLog $world) -match "Skipped the Windows crash dump setting") "Setup did not log that the Windows crash dump setting was skipped."
 } -Needs NotElevated
 
+# A silent run is answered by the command line alone: the wizard's Crash Dumps checkbox (ticked by default,
+# not offered at all in a per-user run) takes no part in it. With the switch, the log names the switch in an
+# elevated and in a per-user run alike, and no key and no record appear either way. This one runs in both.
+Test-Case "A silent install given /FS25VR_NOCRASHDUMPS logs that the switch left the Windows crash dump setting alone, writes no key and no record, and succeeds" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    $p = Get-GamePaths $world
+
+    Assert-InstallSucceeds $world @("/FS25VR_NOCRASHDUMPS")
+
+    Assert-SameFile $p.Injector $stagedInjector "Injector (version.dll in x64)"
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key was written although /FS25VR_NOCRASHDUMPS was given."
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "A crash dump record was written although /FS25VR_NOCRASHDUMPS was given."
+    $log = Get-LastSetupLog $world
+    Assert-True ($log -match "left alone because of /FS25VR_NOCRASHDUMPS") "Setup did not log that /FS25VR_NOCRASHDUMPS left the crash dump setting alone."
+    Assert-True ($log -notmatch "Skipped the Windows crash dump setting") "Setup logged the per-user skip although the switch was given."
+}
+
 # What the Installer writes for the game's exe, spelled out here from the spec and not from the Installer:
 # a custom dump (DumpType 0) with the Injector's own dump contents (CustomDumpFlags 0x1060 =
 # MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithUnloadedModules, next to the
