@@ -59,9 +59,7 @@ function VRCompanion:setRecenterMode(modeOrBool)
 
     if newTracking ~= nil then
         self.recenterVrTrackingSpace = newTracking
-        if type(self.saveConfiguration) == "function" then
-            self:saveConfiguration()
-        end
+        self:saveConfiguration()
     end
     return self:getRecenterMode()
 end
@@ -83,7 +81,7 @@ function VRCompanion:setSnapTurnAngle(angle, inDegrees, saveConfig)
                 self.snapTurnAngle = angle
             end
         end
-        if saveConfig == true and type(self.saveConfiguration) == "function" then
+        if saveConfig == true then
             self:saveConfiguration()
         end
     end
@@ -336,7 +334,7 @@ function VRCompanion:onVehicleCameraChanged(veh, camIndex)
     if veh ~= nil then
         -- Any camera switch of the controlled vehicle (cab or Outside Camera, either direction) jumps
         -- to an unrelated viewpoint, so the temporal upscaler must drop its history.
-        if veh == self:getControlledVehicle() and type(self.signalDiscontinuityFlush) == "function" then
+        if veh == self:getControlledVehicle() then
             self:signalDiscontinuityFlush()
         end
 
@@ -501,9 +499,7 @@ end
 -- cooldown, flushes the temporal upscaler's history across the jump and logs the new yaw.
 function VRCompanion:completeSnapTurn(t, viewLabel, direction, angle, yawLabel, newYaw)
     self.lastSnapTurnTime = t
-    if type(self.signalDiscontinuityFlush) == "function" then
-        self:signalDiscontinuityFlush()
-    end
+    self:signalDiscontinuityFlush()
     print(string.format("[FS25_VR] %s snap turn %s (%.1f deg): %s = %.3f",
         viewLabel, direction < 0 and "left" or "right", math.deg(angle), yawLabel, newYaw))
 end
@@ -557,10 +553,7 @@ function VRCompanion:getCabRestPose(cam, camParent, targetHeadRotY, lookYaw, def
         rest.yaw = self:normalizeAngle((cam.origRotY or defaultRotY or 0) + (lookYaw or 0))
     end
     -- The Seat Offset moves the rest position in the cab, whatever the look yaw (VRCompanionSeatOffset.lua)
-    rest.seatX, rest.seatY, rest.seatZ = 0, 0, 0
-    if type(self.getCabSeatOffset) == "function" then
-        rest.seatX, rest.seatY, rest.seatZ = self:getCabSeatOffset(cam, camParent)
-    end
+    rest.seatX, rest.seatY, rest.seatZ = self:getCabSeatOffset(cam, camParent)
     rest.x, rest.y, rest.z = rest.x + rest.seatX, rest.y + rest.seatY, rest.z + rest.seatZ
     if rest.qw == nil then
         rest.qx, rest.qy, rest.qz, rest.qw = self:yawQuaternion(rest.yaw)
@@ -721,9 +714,7 @@ end
 -- leaves it alone otherwise): the Seat Set Action needs the head back at the tracking space's origin to rest where it leaned.
 function VRCompanion:recenterView(alwaysRecenterTracking)
     print("[FS25_VR] Recenter Action triggered.")
-    if type(self.signalDiscontinuityFlush) == "function" then
-        self:signalDiscontinuityFlush()
-    end
+    self:signalDiscontinuityFlush()
     local bridge = VRBridge or (_G and _G.VRBridge)
     if self.is2DViewActive then
         if bridge ~= nil and type(bridge.alignMenuQuad) == "function" then
@@ -737,7 +728,7 @@ function VRCompanion:recenterView(alwaysRecenterTracking)
         if bridge ~= nil and type(bridge.recenter) == "function" then
             bridge.recenter()
         end
-        if type(self.resetMotionControllerMovement) == "function" then self:resetMotionControllerMovement() end
+        self:resetMotionControllerMovement()
         if self:isMenuQuadShown() then
             print("[FS25_VR] Menu Quad layer realigned directly in front of head pose.")
         end
@@ -787,3 +778,13 @@ end
 function VRCompanion:onSnapTurnRightAction()
     self:snapTurnRight()
 end
+
+-- ---- Locomotion in the subsystem registry -----------------------------------------------------------------------------------
+-- Map unload: the rotation states kept for each vehicle are forgotten (the core used to reset them with its own fields). Snap Turn
+-- and the Recenter Action are driven by the Input subsystem's action events and the console commands in the core's list; the
+-- core tells Locomotion when the controlled vehicle changes (onVehicleTransition), which is part of its own update.
+VRCompanion:registerSubsystem("locomotion", {
+    mapUnload = function(self)
+        self.vehicleRotationStates = {}
+    end,
+})

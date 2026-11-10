@@ -418,6 +418,52 @@ test("ToggleViewActionRegistrationAndCleanup", function()
     assert(VRCompanion.toggleViewActionEventId == nil, "toggleViewActionEventId must be cleared by deleteMap")
 end)
 
+-- The map's life: load makes the eye nodes and registers the VR action events, unload undoes them and leaves 2D mode
+test("MapLoadMakesTheEyeNodesAndRegistersTheActionEventsAndUnloadUndoesThem", function()
+    local nextId = 0
+    _G.g_inputBinding = {
+        events = {}, actionEvents = {},
+        registerActionEvent = function(self, actionName)
+            nextId = nextId + 1
+            local id = actionName .. "|" .. nextId
+            self.events[id] = { id = id }
+            return true, id
+        end,
+        setActionEventTextPriority = function() end,
+        setActionEventActive = function() end,
+        setActionEventTextVisibility = function() end,
+        setActionEventText = function() end
+    }
+    local nextNode = 7000
+    local realCreateCamera, realCreateTransformGroup = _G.createCamera, _G.createTransformGroup
+    _G.createCamera = function() nextNode = nextNode + 1; return nextNode end
+    _G.createTransformGroup = function() nextNode = nextNode + 1; return nextNode end
+    VRCompanion.cameraNodeLeft, VRCompanion.cameraNodeRight, VRCompanion.cyclopeanAudioListenerNode = nil, nil, nil
+    VRCompanion.toggleViewActionEventId = nil
+
+    VRCompanion:loadMap("mapUS")
+    _G.createCamera, _G.createTransformGroup = realCreateCamera, realCreateTransformGroup
+    assert(VRCompanion.cameraNodeLeft ~= nil and VRCompanion.cameraNodeRight ~= nil, "map load makes the Dual Eye Camera Nodes")
+    assert(VRCompanion.cyclopeanAudioListenerNode ~= nil, "map load makes the Cyclopean Audio Listener Node")
+    for _, row in ipairs(VRCompanion.ACTION_EVENTS) do
+        assert(VRCompanion[row.idField] ~= nil, "map load registers " .. row.action)
+    end
+
+    VRCompanion:set2DViewActive(true)
+    VRCompanion.vehicleRotationStates = { [1] = { rotY = 1.0 } }
+    VRCompanion.lastToggleViewTime = 123
+    VRCompanion:deleteMap()
+    assert(VRCompanion.cameraNodeLeft == nil and VRCompanion.cameraNodeRight == nil, "map unload forgets the Dual Eye Camera Nodes")
+    assert(VRCompanion.cyclopeanAudioListenerNode == nil, "map unload forgets the Cyclopean Audio Listener Node")
+    assert(VRCompanion.is2DViewActive == false, "map unload leaves 2D Floating Window Mode")
+    assert(VRBridge.getIs2DViewActive() == false, "and tells VRBridge")
+    assert(next(VRCompanion.vehicleRotationStates) == nil, "map unload forgets the vehicles' rotation states")
+    assert(VRCompanion.lastToggleViewTime == nil, "and the toggle view debounce")
+    for _, row in ipairs(VRCompanion.ACTION_EVENTS) do
+        assert(VRCompanion[row.idField] == nil, "map unload forgets the " .. row.action .. " event")
+    end
+end)
+
 -- Slice 11: Toggle View Action Debounce & Silent Execution
 test("ToggleViewActionDebounceAndSilentExecution", function()
     local warningCalls = 0

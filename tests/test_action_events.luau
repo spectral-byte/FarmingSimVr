@@ -300,6 +300,41 @@ test("AChangedBindingRegistersEveryVrEventAgainAtTheNextUpdate", function()
     cleanup()
 end)
 
+-- The frame the player gets into a vehicle, when it is also the periodic check's tick: the update looks after the events first
+-- (they are in the on-foot context, and the vehicle's is the one now), and the vehicle transition registers them once more after
+-- that. Both registrations, in that order, are what the engine saw before the subsystem registry moved the update's step.
+test("TheFrameTheControlledVehicleChangesRegistersTheEventsBeforeTheTransitionDoesAndThenItDoesAgain", function()
+    installBinding()
+    _G.g_inputBinding.removeActionEvent = function(self, id) self.events[id] = nil end
+    VRCompanion:deleteMap()
+    VRCompanion:registerActionEvents(true)
+    VRCompanion.lastControlledVehicle = nil
+    VRCompanion.frameTicks = 0
+    VRCompanion:update(16.6)
+    local before = nextEventId
+    assert(VRCompanion.frameTicks % 30 ~= 0, "the update is off the periodic tick")
+    VRCompanion.frameTicks = 29  -- the next update is the periodic check's (30th) tick
+    assert(#contexts == 1 and contexts[1] == "PLAYER", "on foot so far")
+
+    local registeredWhenTheTransitionBegan
+    local onVehicleTransition = VRCompanion.onVehicleTransition
+    VRCompanion.onVehicleTransition = function(self, ...)
+        registeredWhenTheTransitionBegan = nextEventId - before
+        return onVehicleTransition(self, ...)
+    end
+    _G.g_currentMission = { controlledVehicle = {} }
+    local ok, err = pcall(function() VRCompanion:update(16.6) end)
+    VRCompanion.onVehicleTransition = onVehicleTransition
+    _G.g_currentMission = nil
+    VRCompanion.lastControlledVehicle = nil
+    cleanup()
+    assert(ok, err)
+    assert(registeredWhenTheTransitionBegan == #SIX,
+        "the update has moved the events to the vehicle's context before the transition runs, got " .. tostring(registeredWhenTheTransitionBegan))
+    assert(nextEventId - before == 2 * #SIX, "and the transition registers all six again, got " .. (nextEventId - before))
+    assert(contexts[#contexts] == "VEHICLE", "into the vehicle's context")
+end)
+
 print(string.format("Action Event Tests: %d passed, %d failed", passed, failed))
 if failed > 0 then
     error(string.format("%d Action Event test(s) failed", failed))

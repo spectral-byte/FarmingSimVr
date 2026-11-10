@@ -16,9 +16,11 @@
 --   VRCompanion.perfTracing                         true while a trace runs
 --   VRCompanion:perfTraceBegin(name) / perfTraceEnd(name, ...)   around a section; End returns its extra arguments, so it can
 --                                                   wrap a call's results
---   VRCompanion:refreshPerfTracing()                 the update: notices the Injector ended the trace
+--   VRCompanion:refreshPerfTracing()                 the update: notices the Injector ended the trace (the core's update calls it
+--                                                   first, while `perfTracing` is set)
 --   VRCompanion:consoleCommandPerfTrace(arg)         starts a trace of `arg` seconds (default 10, up to 60); "stop" ends it
---   VRCompanion:registerPerfTraceConsoleCommands() / unregisterPerfTraceConsoleCommands()   map load / unload
+--   Registered with the core: a map-unload hook that ends a running trace, and the console command; the registry adds and
+--   removes the command
 --   Console: vrPerfTrace [seconds|stop]
 -- ====================================================================
 
@@ -82,19 +84,20 @@ function VRCompanion:consoleCommandPerfTrace(arg)
     return string.format("Tracing frame timing for %d s into fs25_vr.log (next to the game's dxgi.dll)", seconds)
 end
 
-function VRCompanion:registerPerfTraceConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrPerfTrace", "Log where frame time goes (CPU, GPU, Companion Mod) to fs25_vr.log for some seconds: vrPerfTrace [seconds|stop]", "consoleCommandPerfTrace", self)
-end
-
--- Map unload: the command goes and a running trace ends with its summary.
-function VRCompanion:unregisterPerfTraceConsoleCommands()
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrPerfTrace")
-    end
-    if self.perfTracing then
-        local b = bridge()
-        if b ~= nil then b.stopPerfTrace() end
-        self.perfTracing = false
-    end
-end
+-- No update hook: the Injector ends a trace by itself, and the core's update notices (refreshPerfTracing), as the very first step
+-- of the update, where it always was: a camera hook that runs in the steps after it, and the update's own sections, must not
+-- time into a trace the Injector has ended. Map unload: the registry removes the command, then a running trace ends with its
+-- summary.
+-- Order: none matters against the other subsystems.
+VRCompanion:registerSubsystem("perfTrace", {
+    mapUnload = function(self)
+        if self.perfTracing then
+            local b = bridge()
+            if b ~= nil then b.stopPerfTrace() end
+            self.perfTracing = false
+        end
+    end,
+    consoleCommands = {
+        { name = "vrPerfTrace", description = "Log where frame time goes (CPU, GPU, Companion Mod) to fs25_vr.log for some seconds: vrPerfTrace [seconds|stop]", method = "consoleCommandPerfTrace" },
+    },
+})

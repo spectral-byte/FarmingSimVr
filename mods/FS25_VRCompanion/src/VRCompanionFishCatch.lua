@@ -7,8 +7,9 @@
 --
 -- PUBLIC SURFACE
 --   VRCompanion.fishCatchAnswer                  "ask" | "sell" | "release", default "ask", saved (`vrFishCatch`); `ask` leaves the dialog alone
---   VRCompanion:updateFishCatch()                once per update, before the GUI is polled (VRCompanionCore.lua runUpdate)
---   VRCompanion:registerFishCatchConsoleCommands() / resetFishCatch()   map load / unload
+--   VRCompanion:updateFishCatch()                once per update, before the GUI is polled (the early update hook this file registers)
+--   Registered with the core: an early update hook (updateFishCatch), a map-unload hook and the console command; the registry adds
+--   and removes the command
 --   Console: vrFishCatch [ask|sell|release]      no argument reports the value, an invalid one is refused with the usage
 --
 -- THE ANSWER PATH (chosen for ticket #147): the dialog's own answer method, `target:onYes()` for SELL and `target:onNo()` for RELEASE,
@@ -149,7 +150,7 @@ end
 function VRCompanion:setFishCatchAnswer(answer, save)
     if ANSWERS[answer] ~= true then return end
     self.fishCatchAnswer = answer
-    if save and type(self.saveConfiguration) == "function" then
+    if save then
         self:saveConfiguration()
     end
 end
@@ -182,16 +183,17 @@ function VRCompanion:consoleCommandSetFishCatch(arg)
     return string.format("Fish catch answer set to: %s (Saved)", answer)
 end
 
-function VRCompanion:registerFishCatchConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrFishCatch", "Answer the fish catch dialog (Highlands Fishing DLC) as it opens, with a notification of the catch (saved; ask by default): vrFishCatch [ask|sell|release]", "consoleCommandSetFishCatch", self)
-end
-
--- Map unload: the dialog that was answered is forgotten. The saved setting stays as it is.
-function VRCompanion:resetFishCatch()
-    forgetDialog()
-    warnedNoMethod = false
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrFishCatch")
-    end
-end
+-- Every update, as an early hook: the core polls the GUI visibility after it, so the answered dialog is gone when the poll looks (the
+-- quad of 2D Floating Window Mode does not flash for it). Map unload: the registry removes the command, then the dialog that was
+-- answered is forgotten. The saved setting stays as it is.
+-- Order: none matters against the other subsystems; the early phase is what places it before the poll.
+VRCompanion:registerSubsystem("fishCatch", {
+    updateEarly = function(self) self:updateFishCatch() end,
+    mapUnload = function(self)
+        forgetDialog()
+        warnedNoMethod = false
+    end,
+    consoleCommands = {
+        { name = "vrFishCatch", description = "Answer the fish catch dialog (Highlands Fishing DLC) as it opens, with a notification of the catch (saved; ask by default): vrFishCatch [ask|sell|release]", method = "consoleCommandSetFishCatch" },
+    },
+})

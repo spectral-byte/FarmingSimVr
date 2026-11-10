@@ -12,6 +12,10 @@ _Avoid_: Wrapper, loader, hook DLL
 The in-engine Luau script mod executing inside GIANTS Engine 10 that manipulates camera transforms.
 _Avoid_: Script hook, Lua plugin
 
+**Subsystem**:
+A feature of the Companion Mod that lives in its own file and registers itself with the core by name when the file loads, with the hooks it needs: map load, map unload, update, and its console commands. The core runs the hooks in registration order (map unload in reverse), catches a hook that raises and logs it once by subsystem and hook name.
+_Avoid_: Module, plugin, component
+
 **Installer**:
 The setup program a player runs to place the Injector into a chosen game installation and the Companion Mod into their mods folder, and to remove both again. Besides those files it changes two settings, each recorded so the uninstall can undo it while the setting is still what the Installer wrote: the Render Resolution in the player's `game.xml`, and the Windows Crash Dump Setting. Never part of the running game.
 _Avoid_: Injector installer, setup script, launcher

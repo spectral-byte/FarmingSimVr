@@ -163,7 +163,7 @@ function VRCompanion:setRenderingMode(modeStr, saveConfig)
 
     print(string.format("[FS25_VR] Active VR Rendering Mode: %s", targetMode))
 
-    if saveConfig == true and type(self.saveConfiguration) == "function" then
+    if saveConfig == true then
         self:saveConfiguration()
     end
 
@@ -483,20 +483,14 @@ function VRCompanion:set2DViewActive(active)
         if newActive then
             print("[FS25_VR] Entered 2D Floating Window Mode.")
             self:restoreCameraProjectionsFor2D()
-            if self.activePlayerCamera ~= nil and type(self.realignPlayerCameraToRoot) == "function" then
+            if self.activePlayerCamera ~= nil then
                 self:realignPlayerCameraToRoot(self.activePlayerCamera)
             end
-            if type(self.restoreHudSafeArea) == "function" then
-                self:restoreHudSafeArea(true)
-            end
+            self:restoreHudSafeArea(true)
         else
             print("[FS25_VR] Exited 2D Floating Window Mode; returning to 3D VR mode.")
-            if type(self.applyHudSafeArea) == "function" then
-                self:applyHudSafeArea()
-            end
-            if type(self.applyHudState) == "function" then
-                self:applyHudState()
-            end
+            self:applyHudSafeArea()
+            self:applyHudState()
         end
     end
 end
@@ -507,7 +501,7 @@ function VRCompanion:toggle2DView()
 end
 
 function VRCompanion:isToggleViewDebounced(curTime)
-    local t = curTime or (type(self.getCurrentTimeMs) == "function" and self:getCurrentTimeMs())
+    local t = curTime or self:getCurrentTimeMs()
     if t == nil then
         return false
     end
@@ -534,7 +528,7 @@ function VRCompanion:onToggleVrViewAction(actionName, keyStatus, curTime)
     elseif type(actionName) == "number" then
         t = actionName
     end
-    t = t or (type(self.getCurrentTimeMs) == "function" and self:getCurrentTimeMs())
+    t = t or self:getCurrentTimeMs()
 
     if self:isToggleViewDebounced(t) then
         return false, "debounced"
@@ -1001,12 +995,8 @@ function VRCompanion:placeAndBindEyes(referenceCamNode, parentNode,
         end
         -- The Virtual Hands and the Pointer Ray follow the head for this rendered frame (a frame may be rendered with no
         -- update before it).
-        if type(self.placeVirtualHandsForRender) == "function" then
-            self:placeVirtualHandsForRender()
-        end
-        if type(self.placePointerRayForRender) == "function" then
-            self:placePointerRayForRender()
-        end
+        self:placeVirtualHandsForRender()
+        self:placePointerRayForRender()
     end
 
     local isStereoActive = stereoRequested and not self:isMenuQuadShown() and not self.is2DViewActive
@@ -1276,7 +1266,7 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     end
 
     -- Look yaw offset relative to neutral forward orientation (cam.rotY - cam.origRotY)
-    local lookYaw = (type(self.getVehicleLookYaw) == "function" and self:getVehicleLookYaw(cam)) or 0
+    local lookYaw = self:getVehicleLookYaw(cam) or 0
 
     -- Auto-construct headTrackingNode matching VehicleCamera:loadFromXML if missing
     if cam.headTrackingNode == nil and type(createTransformGroupFn) == "function" then
@@ -1311,13 +1301,11 @@ function VRCompanion:onVehicleCameraUpdate(cam, dt)
     end
 
     -- Update camera tracking node orientation with mouse/controller look yaw so head pose is composited cleanly on top.
-    local targetHeadRotY = (type(self.normalizeAngle) == "function" and self:normalizeAngle((cam.origRotY or math.pi) + lookYaw)) or ((cam.origRotY or math.pi) + lookYaw)
+    local targetHeadRotY = self:normalizeAngle((cam.origRotY or math.pi) + lookYaw) or ((cam.origRotY or math.pi) + lookYaw)
     if cam.headTrackingNode ~= nil and cam.headTrackingNode ~= 0 then
-        if type(self.updateVehicleCameraTrackingNode) == "function" then
-            local nodeRotY = self:updateVehicleCameraTrackingNode(cam)
-            if nodeRotY ~= nil then
-                targetHeadRotY = nodeRotY
-            end
+        local nodeRotY = self:updateVehicleCameraTrackingNode(cam)
+        if nodeRotY ~= nil then
+            targetHeadRotY = nodeRotY
         end
     end
 
@@ -1352,9 +1340,7 @@ function VRCompanion:onPlayerCameraMakeCurrent(cam)
         return
     end
     self.activePlayerCamera = cam
-    if type(self.getPlayerBaseTranslation) == "function" then
-        self:getPlayerBaseTranslation(cam)
-    end
+    self:getPlayerBaseTranslation(cam)
 end
 
 function VRCompanion:onPlayerCameraUpdate(cam, dt)
@@ -1438,7 +1424,7 @@ function VRCompanion:onPlayerCameraUpdate(cam, dt)
         end
         baseQx, baseQy, baseQz, baseQw = self:getRotationInSpace(cam.vrHeadTrackingNode, camParent)
     else
-        local base = (type(self.getPlayerBaseTranslation) == "function" and self:getPlayerBaseTranslation(cam)) or {0, 0, 0}
+        local base = self:getPlayerBaseTranslation(cam) or {0, 0, 0}
         local bx = base.x or base[1] or 0
         local by = base.y or base[2] or 0
         local bz = base.z or base[3] or 0
@@ -1676,3 +1662,74 @@ function VRCompanion:restoreMenuBackgroundCamera()
         self.menuCamTicks = 0
     end
 end
+
+-- ---- Stereo in the subsystem registry ---------------------------------------------------------------------------------------
+-- Map load: the Dual Eye Camera Nodes and the Cyclopean Audio Listener Node are made. The core used to make them before it polled
+-- the GUI and read settings.xml. Neither uses them: the poll only reads the GUI (the menu camera it restores on a closing menu
+-- is the game's, and there is no menu to close yet), loadConfiguration reads settings.xml and sends the Stereo Presentation Mode
+-- and the HUD layout (setRenderingMode, configureHudSafeArea) and touches no node, no camera setting and no action event. The
+-- nodes are made from fixed defaults, which no setting changes.
+-- No update hook: the game's menu camera follows the head while the menu quad is shown from the core's update, where it always
+-- was (updateMenuBackgroundCamera, right after the GUI poll: the camera is written before the hooks the core installs next and the
+-- vehicle transition, which may move it, and its offsets are relative to what is there). Map unload: the nodes go and the cameras
+-- are put back. Unload runs after the core's teardown and after the HUD's and Input's (they are registered after this file, so they
+-- unload first, as the HUD did before): the 2D Floating Window Mode goes last, so that leaving it finds the HUD already restored.
+-- The nodes used to be deleted before VRBridge.onMapUnload; the proof that the order is not observable is in the core's deleteMap.
+local function deleteDualEyeNodes(self)
+    local deleteFn = delete or (_G and _G.delete)
+    local entityExistsFn = entityExists or (_G and _G.entityExists)
+    -- Nodes linked under a vehicle are already gone: the game deletes its vehicles first, and
+    -- deleting an unknown entity logs a script error even inside pcall
+    local function deleteIfExists(node)
+        if node == nil or node == 0 then return end
+        if type(entityExistsFn) == "function" and not entityExistsFn(node) then return end
+        pcall(deleteFn, node)
+    end
+    if type(deleteFn) == "function" then
+        deleteIfExists(self.cameraNodeLeft)
+        -- Both eyes share one camera node unless something set them apart
+        if self.cameraNodeRight ~= self.cameraNodeLeft then
+            deleteIfExists(self.cameraNodeRight)
+        end
+        deleteIfExists(self.cyclopeanAudioListenerNode)
+        deleteIfExists(self.outsideCameraBaseNode)
+    end
+    self.outsideCameraBaseNode = nil
+    self.cameraNodeLeft = nil
+    self.cameraNodeRight = nil
+    self.cyclopeanAudioListenerNode = nil
+end
+
+-- Puts the FOV and projection offset every camera had back
+local function restoreOriginalCameraSettings(self)
+    if self.origCamSettings == nil then return end
+    for camNode, orig in pairs(self.origCamSettings) do
+        local exists = true
+        if type(entityExists) == "function" then
+            exists = entityExists(camNode)
+        end
+        if exists then
+            if orig.fovY ~= nil and type(setFovY) == "function" then
+                pcall(setFovY, camNode, orig.fovY)
+            end
+            if type(setProjectionOffset) == "function" then
+                pcall(setProjectionOffset, camNode, orig.offsetX or 0, orig.offsetY or 0)
+            end
+        end
+    end
+    self.origCamSettings = {}
+end
+
+VRCompanion:registerSubsystem("stereo", {
+    mapLoad = function(self)
+        self:initDualEyeCameraNodes()
+        self:initCyclopeanAudioListener()
+    end,
+    mapUnload = function(self)
+        deleteDualEyeNodes(self)
+        self:restoreMenuBackgroundCamera()
+        self:resetToggleViewDebounce()
+        restoreOriginalCameraSettings(self)
+        self:set2DViewActive(false)
+    end,
+})

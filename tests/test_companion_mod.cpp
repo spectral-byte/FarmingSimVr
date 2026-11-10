@@ -4790,7 +4790,15 @@ TEST_F(CompanionModTest, DesktopMirrorHelpTextSaysSavedOnByDefaultAndUntestedWit
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registered = {}
         _G.addConsoleCommand = function(cmd, desc, funcName, target) registered[cmd] = desc end
-        VRCompanion:registerDesktopMirrorConsoleCommands()
+        _G.removeConsoleCommand = function() end
+        _G.createXMLFile = function() return 1 end
+        _G.setXMLFloat = function() end
+        _G.setXMLBool = function() end
+        _G.setXMLString = function() end
+        _G.saveXMLFile = function() return true end
+        _G.delete = function() end
+        _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
+        VRCompanion:loadMap("testMap")
         local help = string.lower(registered["vrDesktopMirror"] or "")
         assert(help ~= "", "vrDesktopMirror must be registered")
         assert(string.find(help, "saved", 1, true) ~= nil, "help must say the setting is saved: " .. help)
@@ -5014,7 +5022,7 @@ TEST_F(CompanionModTest, MouseConfinementHelpTextSaysWhatItDoesAndThatItIsSavedA
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local registered = {}
         _G.addConsoleCommand = function(cmd, desc, funcName, target) registered[cmd] = desc end
-        VRCompanion:registerMouseConfinementConsoleCommands()
+        VRCompanion:addSubsystemConsoleCommands()
         assert(registered["vrMouseConfinement"] == "Keep the Desk Mouse on the game picture while the headset is in use (saved; on by default): vrMouseConfinement [on|off]",
             "help text: " .. tostring(registered["vrMouseConfinement"]))
     )luau", "=testMouseConfinementHelpText"), 0);

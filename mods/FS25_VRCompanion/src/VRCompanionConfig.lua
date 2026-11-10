@@ -245,14 +245,14 @@ function VRCompanion:saveConfiguration(xmlPath)
             end
             setXmlBoolFn(xmlFile, "vrSettings.hudGroups.controls.expanded", self.controlsExpanded ~= false)
         end
-        if type(self.saveMotionControllerSettings) == "function" then self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn }) end
-        if type(self.saveFishCatchSetting) == "function" then self:saveFishCatchSetting(xmlFile, { setString = setXmlStringFn }) end
-        if type(self.saveDesktopMirrorSetting) == "function" then self:saveDesktopMirrorSetting(xmlFile, { setBool = setXmlBoolFn }) end
-        if type(self.saveFovOverscanSetting) == "function" then self:saveFovOverscanSetting(xmlFile, { setFloat = setXmlFloatFn }) end
-        if type(self.saveMenuDistanceSetting) == "function" then self:saveMenuDistanceSetting(xmlFile, { setFloat = setXmlFloatFn }) end
-        if type(self.saveMouseConfinementSetting) == "function" then self:saveMouseConfinementSetting(xmlFile, { setBool = setXmlBoolFn }) end
-        if type(self.saveStereoDialogDepthSetting) == "function" then self:saveStereoDialogDepthSetting(xmlFile, { setFloat = setXmlFloatFn }) end
-        if type(self.saveSeatOffsetSettings) == "function" then self:saveSeatOffsetSettings(xmlFile, { setString = setXmlStringFn, setInt = setXmlIntFn,setFloat = setXmlFloatFn }) end
+        self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn })
+        self:saveFishCatchSetting(xmlFile, { setString = setXmlStringFn })
+        self:saveDesktopMirrorSetting(xmlFile, { setBool = setXmlBoolFn })
+        self:saveFovOverscanSetting(xmlFile, { setFloat = setXmlFloatFn })
+        self:saveMenuDistanceSetting(xmlFile, { setFloat = setXmlFloatFn })
+        self:saveMouseConfinementSetting(xmlFile, { setBool = setXmlBoolFn })
+        self:saveStereoDialogDepthSetting(xmlFile, { setFloat = setXmlFloatFn })
+        self:saveSeatOffsetSettings(xmlFile, { setString = setXmlStringFn, setInt = setXmlIntFn,setFloat = setXmlFloatFn })
         if type(setXmlStringFn) == "function" then
             -- Persist the mode last requested, not VRBridge's: while the compositor is active the bridge
             -- only queues a change until the next frame boundary, so it still reports the old mode here.
@@ -358,14 +358,14 @@ function VRCompanion:loadConfiguration(xmlPath)
                     "vrSettings.hudGroups.controls.expanded")
                 if loadedControlsExpanded ~= nil then controlsExpanded = loadedControlsExpanded end
 
-                if type(self.loadMotionControllerSettings) == "function" then self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn }) end
-                if type(self.loadFishCatchSetting) == "function" then self:loadFishCatchSetting(xmlFile, { getString = getXmlStringFn }) end
-                if type(self.loadDesktopMirrorSetting) == "function" then self:loadDesktopMirrorSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn }) end
-                if type(self.loadFovOverscanSetting) == "function" then self:loadFovOverscanSetting(xmlFile, { getFloat = getXmlFloatFn }) end
-                if type(self.loadMenuDistanceSetting) == "function" then self:loadMenuDistanceSetting(xmlFile, { getFloat = getXmlFloatFn }) end
-                if type(self.loadMouseConfinementSetting) == "function" then self:loadMouseConfinementSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn }) end
-                if type(self.loadStereoDialogDepthSetting) == "function" then self:loadStereoDialogDepthSetting(xmlFile, { getFloat = getXmlFloatFn }) end
-                if type(self.loadSeatOffsetSettings) == "function" then self:loadSeatOffsetSettings(xmlFile, { has = hasXmlPropertyFn, getString = getXmlStringFn, getInt = getXmlIntFn,getFloat = getXmlFloatFn }) end
+                self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn })
+                self:loadFishCatchSetting(xmlFile, { getString = getXmlStringFn })
+                self:loadDesktopMirrorSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn })
+                self:loadFovOverscanSetting(xmlFile, { getFloat = getXmlFloatFn })
+                self:loadMenuDistanceSetting(xmlFile, { getFloat = getXmlFloatFn })
+                self:loadMouseConfinementSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn })
+                self:loadStereoDialogDepthSetting(xmlFile, { getFloat = getXmlFloatFn })
+                self:loadSeatOffsetSettings(xmlFile, { has = hasXmlPropertyFn, getString = getXmlStringFn, getInt = getXmlIntFn,getFloat = getXmlFloatFn })
 
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.snapTurnAngle")

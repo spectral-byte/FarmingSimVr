@@ -137,6 +137,169 @@ function VRCompanion:getLookRayWrapOriginal()
     return lookRayWrap ~= nil and lookRayWrap.original or nil
 end
 
+-- ---- The subsystem registry ---------------------------------------------------------------------------------------
+-- A subsystem (a feature in its own file: Desktop Mirror, Hand Tools, ...) registers itself by name when its file loads, with the
+-- hooks it needs, and the core runs them. Adding a subsystem is its file plus a line in modDesc.xml, not an edit of the core's lists.
+--
+--   VRCompanion:registerSubsystem(name, {
+--       mapLoad         = function(self) end,        -- map load: apply the saved setting, wrap the game's classes, ...
+--       mapUnload       = function(self) end,        -- map unload: undo what mapLoad did
+--       update          = function(self, dt) end,    -- every update
+--       updateEarly     = function(self, dt) end,    -- every update, before the core polls the GUI (see below); rarely needed
+--       consoleCommands = { { name = "vrX", description = "...", method = "consoleCommandX" }, ... },
+--   })
+--
+-- Every field but the name is optional; `self` is the Companion Mod the run point was called on (hooks are called as methods, with
+-- plain functions, so a hook that calls `self:foo()` finds `foo` when it runs). Registering a name again replaces its hooks and
+-- keeps its place. A bad name, a hook that is not a function and a console command without a name, a description or a method
+-- raise when the file loads, not when the map does.
+--
+-- Order. Map-load and update hooks run in registration order, which is modDesc.xml order; map-unload hooks run in reverse. Where
+-- two subsystems need an order, their file order gives it and the registration says so in a comment. The core's own steps come
+-- first and are not hooks: the handshake with VRBridge, the engine's stereo and head tracking toggles, the camera and mission
+-- hooks and loadConfiguration. The run points in the core are:
+--   loadMap   runSubsystemMapLoad        right after loadConfiguration, before the core applies the saved settings of the
+--                                        subsystems that have not moved over yet
+--   loadMap   addSubsystemConsoleCommands   with the console commands, after the core's own list
+--   update    runSubsystemUpdateEarly    right before the core polls the GUI visibility (pollGuiVisibility), so a hook that has to
+--                                        change what the poll sees (the fish catch answers its dialog, which must be gone when the
+--                                        poll looks) runs here, in registration order; for hooks that truly need it, not a default
+--   update    runSubsystemUpdate         after the core's own update steps, just before applyDlssNearClip (Motion Controllers were
+--                                        the last step before it and are the update hook there now)
+--   deleteMap runSubsystemMapUnload      first of the subsystem resets: removes a subsystem's console commands, then runs its
+--                                        mapUnload, subsystems in reverse order, before the resets that have not moved over yet
+-- Three steps of the update stay direct calls of the core, at the places they always had, because a hook cannot run there: the
+-- Perf Trace refresh (the very top: the Injector may have ended the trace), the menu's background camera (right after the GUI
+-- poll) and the Input subsystem's check of the VR action events (between the HUD convergence and the vehicle transition: the
+-- transition registers them again, forced, so after it the events would have been registered once instead of twice).
+--
+-- A hook that raises is caught: it is logged once per subsystem and hook, as
+--   [FS25_VR] [Error] Subsystem '<name>' <mapLoad|updateEarly|update|mapUnload> hook raised: <error>
+-- and the other hooks still run. This is by design (spec #244: a fault in one subsystem does not cost the player the others), so a
+-- raise in a hook, the Motion Controllers' update included, no longer reaches the caller of update or of loadMap; the log line is
+-- how it is found, and the test harnesses fail a test in which that line was logged unless the test expects it. The log-once set
+-- is kept for the life of the Lua state and is not cleared at map unload (a hook that raised on one map is not logged again on
+-- the next: the same fault every time is one line, not one per map; test_subsystem_registry.cpp pins it).
+local subsystems = {}                -- { name = <string>, hooks = <table> } in registration order
+-- The subsystems with an updateEarly / update hook, in registration order, as { name = <string>, hook = <function> }: built when a
+-- subsystem registers, so that an update loops over the few that update and not over every subsystem (it runs every frame)
+local updateEarlyHooks = {}
+local updateHooks = {}
+local hooksLoggedAsRaising = {}      -- "<name>/<hook>" -> true
+
+local function checkConsoleCommands(name, commands)
+    if commands == nil then return end
+    if type(commands) ~= "table" then
+        error(string.format("registerSubsystem: the consoleCommands of '%s' are not a list", name), 3)
+    end
+    for index, command in ipairs(commands) do
+        if type(command) ~= "table" then
+            error(string.format("registerSubsystem: consoleCommands[%d] of '%s' is not a table", index, name), 3)
+        end
+        for _, field in ipairs({ "name", "description", "method" }) do
+            if type(command[field]) ~= "string" or command[field] == "" then
+                error(string.format("registerSubsystem: consoleCommands[%d] of '%s' has no %s", index, name, field), 3)
+            end
+        end
+    end
+end
+
+local function rebuildUpdateHooks()
+    updateEarlyHooks, updateHooks = {}, {}
+    for _, subsystem in ipairs(subsystems) do
+        local hooks = subsystem.hooks
+        if hooks.updateEarly ~= nil then
+            updateEarlyHooks[#updateEarlyHooks + 1] = { name = subsystem.name, hook = hooks.updateEarly }
+        end
+        if hooks.update ~= nil then
+            updateHooks[#updateHooks + 1] = { name = subsystem.name, hook = hooks.update }
+        end
+    end
+end
+
+function VRCompanion:registerSubsystem(name, hooks)
+    if type(name) ~= "string" or name == "" then
+        error("registerSubsystem: the subsystem needs a name", 2)
+    end
+    hooks = hooks or {}
+    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly" }) do
+        if hooks[hookName] ~= nil and type(hooks[hookName]) ~= "function" then
+            error(string.format("registerSubsystem: the %s hook of '%s' is not a function", hookName, name), 2)
+        end
+    end
+    checkConsoleCommands(name, hooks.consoleCommands)
+    local replaced = false
+    for _, subsystem in ipairs(subsystems) do
+        if subsystem.name == name then
+            subsystem.hooks = hooks
+            replaced = true
+            break
+        end
+    end
+    if not replaced then
+        subsystems[#subsystems + 1] = { name = name, hooks = hooks }
+    end
+    rebuildUpdateHooks()
+end
+
+local function logHookRaised(name, hookName, err)
+    local key = name .. "/" .. hookName
+    if not hooksLoggedAsRaising[key] then
+        hooksLoggedAsRaising[key] = true
+        print(string.format("[FS25_VR] [Error] Subsystem '%s' %s hook raised: %s", name, hookName, tostring(err)))
+    end
+end
+
+local function runSubsystemHook(self, subsystem, hookName)
+    local hook = subsystem.hooks[hookName]
+    if hook == nil then return end
+    local ok, err = pcall(hook, self)
+    if not ok then logHookRaised(subsystem.name, hookName, err) end
+end
+
+function VRCompanion:runSubsystemMapLoad()
+    for _, subsystem in ipairs(subsystems) do
+        runSubsystemHook(self, subsystem, "mapLoad")
+    end
+end
+
+function VRCompanion:addSubsystemConsoleCommands()
+    if addConsoleCommand == nil then return end
+    for _, subsystem in ipairs(subsystems) do
+        for _, command in ipairs(subsystem.hooks.consoleCommands or {}) do
+            addConsoleCommand(command.name, command.description, command.method, self)
+        end
+    end
+end
+
+-- The two update run points run every frame: plain loops over the flat lists, no allocation
+function VRCompanion:runSubsystemUpdateEarly(dt)
+    for i = 1, #updateEarlyHooks do
+        local entry = updateEarlyHooks[i]
+        local ok, err = pcall(entry.hook, self, dt)
+        if not ok then logHookRaised(entry.name, "updateEarly", err) end
+    end
+end
+
+function VRCompanion:runSubsystemUpdate(dt)
+    for i = 1, #updateHooks do
+        local entry = updateHooks[i]
+        local ok, err = pcall(entry.hook, self, dt)
+        if not ok then logHookRaised(entry.name, "update", err) end
+    end
+end
+
+function VRCompanion:runSubsystemMapUnload()
+    for i = #subsystems, 1, -1 do
+        local subsystem = subsystems[i]
+        if removeConsoleCommand ~= nil then
+            for _, command in ipairs(subsystem.hooks.consoleCommands or {}) do
+                removeConsoleCommand(command.name)
+            end
+        end
+        runSubsystemHook(self, subsystem, "mapUnload")
+    end
+end
 -- Every console command the core registers on map load: map load adds them and map unload removes them, both from this one list.
 VRCompanion.CORE_CONSOLE_COMMANDS = {
     { name = "vrHudSafeArea", description = "Set the VR HUD Safe Area, the margin that keeps warnings, notifications and other mods' HUDs inside the lens: vrHudSafeArea <horizontal> <vertical>", method = "consoleCommandSetHudSafeArea" },
@@ -186,15 +349,10 @@ function VRCompanion:loadMap(name)
         pcall(isHeadTrackingAvailable)
     end
 
-    -- 0. Cleanly initialize 2D Floating Window Mode state to 3D VR mode (is2DViewActive = false)
-    if type(self.set2DViewActive) == "function" then
-        self:set2DViewActive(false)
-    else
-        self.is2DViewActive = false
-    end
-    if type(self.resetToggleViewDebounce) == "function" then
-        self:resetToggleViewDebounce()
-    end
+    -- 0. Cleanly initialize 2D Floating Window Mode state to 3D VR mode (is2DViewActive = false). A core step, not a Stereo
+    -- hook: it tells VRBridge before the handshake below, and that order is kept.
+    self:set2DViewActive(false)
+    self:resetToggleViewDebounce()
 
     -- 1. Perform native-to-Luau handshake via VRBridge
     local versionWarning = nil
@@ -278,26 +436,17 @@ function VRCompanion:loadMap(name)
     self:hookPlayerCamera()
     self:hookEnterable()
     self:hookVehicleSpeed()
-    if type(self.hookHud) == "function" then
-        self:hookHud()
-    end
+    self:hookHud()
     self:hookMissionUpdate()
 
-    -- 4a. Initialize Dual Eye Camera Nodes and Cyclopean Audio Listener
-    if type(self.initDualEyeCameraNodes) == "function" then
-        self:initDualEyeCameraNodes()
-    end
-    if type(self.initCyclopeanAudioListener) == "function" then
-        self:initCyclopeanAudioListener()
-    end
-
-    -- 5. Register in-engine actions (Recenter and HUD Toggle), and again whenever the player changes a binding
-    if type(self.registerActionEvents) == "function" then
-        self:registerActionEvents(true)
-    end
-    if type(self.subscribeToInputBindingChanges) == "function" then
-        self:subscribeToInputBindingChanges()
-    end
+    -- (The Dual Eye Camera Nodes and the Cyclopean Audio Listener Node are made by the Stereo subsystem, and the VR action events
+    -- are registered by the Input subsystem, in their mapLoad hooks below. Both used to be made here, before the GUI poll and
+    -- the settings were read. That is not observable: the poll below reads the GUI and tells VRBridge, and on a map that has just
+    -- loaded it restores no menu camera and applies no HUD state (no menu was shown before); loadConfiguration reads settings.xml
+    -- and sends the Stereo Presentation Mode to VRBridge (setRenderingMode, which touches no node), works out the HUD anchors
+    -- (configureHudSafeArea, fields only) and, on a first run, writes the file. None of the three reads an eye node, the listener, the
+    -- camera settings Stereo saves (origCamSettings) or an action event id, and the nodes are made from defaults no setting
+    -- changes. The game sees the same calls on its own objects and VRBridge the same calls, only interleaved differently.)
 
     -- 6. Synchronize initial GUI menu visibility state
     self.isMenuVisible = false
@@ -306,35 +455,19 @@ function VRCompanion:loadMap(name)
     self.guiVisibilityInitialized = false
     self:pollGuiVisibility()
 
-    -- 7. Apply the HUD Safe Area and place the HUD Groups
-    if type(self.loadConfiguration) == "function" then
-        self:loadConfiguration()
-    end
-    -- 7-. Send the saved Desktop Mirror setting to VRBridge: the handshake above is done, so the Injector sees it at once
-    if type(self.applyDesktopMirror) == "function" then
-        self:applyDesktopMirror()
-    end
-    -- 7-. Send the saved FOV Overscan to VRBridge too (a map unload put it back to 0 there)
-    if type(self.applyFovOverscan) == "function" then
-        self:applyFovOverscan()
-    end
-    -- 7-. And the saved Menu Distance: the Injector read settings.xml at launch, and this sends what it holds now
-    if type(self.applyMenuDistance) == "function" then
-        self:applyMenuDistance()
-    end
-    if type(self.applyMouseConfinement) == "function" then
-        self:applyMouseConfinement()
-    end
-    if type(self.applyHudSafeArea) == "function" then
-        self:applyHudSafeArea()
-    end
+    -- 7. Read the settings (the HUD Safe Area, the HUD Groups and the saved HUD state are applied by the HUD's mapLoad hook)
+    self:loadConfiguration()
+    -- 7-. The registered subsystems load: the handshake above is done and the settings are read (Desktop Mirror, FOV Overscan, Menu
+    -- Distance and Mouse Confinement send their saved settings to VRBridge here, and the HUD applies its Safe Area and the HUD state the
+    -- player last chose). The HUD's setHudState used to be the last step of the map load, after the DLSS near plane (and after
+    -- the Safe Area, which still comes after the settings the other subsystems send): the HUD hook writes the HUD (its displays,
+    -- the anchors, hudState) and asks VRBridge for nothing, and the near plane reads the camera mode (the controlled vehicle and
+    -- its camera) and the near plane settings, so neither reads what the other writes. The re-wraps of Hand Tools, Object Grab,
+    -- Wheel Grab and the Animated Objects trigger callback also run here now, not inside the console command registration after
+    -- the near plane: they wrap game classes the HUD, the near plane and the commands do not call into at map load.
+    self:runSubsystemMapLoad()
     -- 7a. Send the loaded DLSS near plane for the starting camera
     self:applyDlssNearClip(true)
-
-    -- 8. Start in the HUD state the player last chose; a first install starts Hidden for full VR immersion
-    if type(self.setHudState) == "function" then
-        self:setHudState(self.persistedHudState or self.DEFAULT_HUD_STATE)
-    end
 
     -- 9. Register developer and tuning console commands
     if addConsoleCommand ~= nil then
@@ -342,17 +475,7 @@ function VRCompanion:loadMap(name)
             addConsoleCommand(command.name, command.description, command.method, self)
         end
     end
-    if type(self.registerMotionControllerConsoleCommands) == "function" then self:registerMotionControllerConsoleCommands() end
-    if type(self.registerDialogDiagnosticsConsoleCommands) == "function" then self:registerDialogDiagnosticsConsoleCommands() end
-    if type(self.registerFishCatchConsoleCommands) == "function" then self:registerFishCatchConsoleCommands() end
-    if type(self.registerSeatOffsetConsoleCommands) == "function" then self:registerSeatOffsetConsoleCommands() end
-    if type(self.registerStereoDialogDepthConsoleCommands) == "function" then self:registerStereoDialogDepthConsoleCommands() end
-    if type(self.registerDualPassPhysicsConsoleCommands) == "function" then self:registerDualPassPhysicsConsoleCommands() end
-    if type(self.registerDesktopMirrorConsoleCommands) == "function" then self:registerDesktopMirrorConsoleCommands() end
-    if type(self.registerFovOverscanConsoleCommands) == "function" then self:registerFovOverscanConsoleCommands() end
-    if type(self.registerMenuDistanceConsoleCommands) == "function" then self:registerMenuDistanceConsoleCommands() end
-    if type(self.registerMouseConfinementConsoleCommands) == "function" then self:registerMouseConfinementConsoleCommands() end
-    if type(self.registerPerfTraceConsoleCommands) == "function" then self:registerPerfTraceConsoleCommands() end
+    self:addSubsystemConsoleCommands()
 
     if self.showHudLoadNotification == true then
         local mission = g_currentMission or _G.g_currentMission
@@ -396,17 +519,11 @@ function VRCompanion:pollGuiVisibility()
         self.isMenuVisible = menuQuadShown
         self.guiVisibilityInitialized = true
         if wasMenuQuadShown and not menuQuadShown then
-            if type(self.restoreMenuBackgroundCamera) == "function" then
-                self:restoreMenuBackgroundCamera()
-            end
+            self:restoreMenuBackgroundCamera()
             if self.is2DViewActive then
-                if type(self.restoreHudSafeArea) == "function" then
-                    self:restoreHudSafeArea(true)
-                end
+                self:restoreHudSafeArea(true)
             else
-                if type(self.applyHudState) == "function" then
-                    self:applyHudState()
-                end
+                self:applyHudState()
             end
         end
         if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
@@ -874,9 +991,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
 
         -- Synchronize the eye's camera transforms without running engine simulation
         self:finishSubPass(subPass, eye, targetCam, rawDt)
-        if type(self.updateHudConvergence) == "function" then
-            self:updateHudConvergence(0.0)
-        end
+        self:updateHudConvergence(0.0)
         -- The engine's physics runs natively whatever dt the update gets (VRCompanionDualPassPhysics.lua)
         self:applyDualPassPhysicsPause(subPass, rawDt)
 
@@ -911,9 +1026,7 @@ function VRCompanion:runMissionUpdate(missionSelf, dt, origUpdateFn, ...)
     end
 
     self:finishSubPass(subPass, eye, targetCam, rawDt)
-    if type(self.updateHudConvergence) == "function" then
-        self:updateHudConvergence(effectiveDt)
-    end
+    self:updateHudConvergence(effectiveDt)
     self:applyDualPassPhysicsPause(subPass, rawDt)
 
     return res
@@ -1061,13 +1174,13 @@ function VRCompanion:runUpdate(dt)
         end
     end
 
-    -- Answer the fish catch dialog if `vrFishCatch` says so: before the poll, so that the dialog is gone when the poll looks
-    if type(self.updateFishCatch) == "function" then self:updateFishCatch() end
+    -- The registered subsystems that update before the poll (the fish catch answers its dialog, so that it is gone when the poll looks)
+    self:runSubsystemUpdateEarly(dt)
 
     -- Poll in-game GUI visibility and synchronize with native VRBridge
     self:pollGuiVisibility()
 
-    if self:isMenuQuadShown() and type(self.updateMenuBackgroundCamera) == "function" then
+    if self:isMenuQuadShown() then
         self:updateMenuBackgroundCamera(dt)
     end
 
@@ -1080,13 +1193,13 @@ function VRCompanion:runUpdate(dt)
     if not self.enterableHooked then
         self:hookEnterable()
     end
-    if not self.hudHooked and type(self.hookHud) == "function" then
+    if not self.hudHooked then
         self:hookHud()
     end
     if not self.missionUpdateHooked then
         self:hookMissionUpdate()
     end
-    if self.guiDrawHook == nil and type(self.hookGuiDraw) == "function" then
+    if self.guiDrawHook == nil then
         self:hookGuiDraw()
     end
     -- Install dt=0 guards once, then only retry (to catch a late Ferry class or newly
@@ -1100,18 +1213,12 @@ function VRCompanion:runUpdate(dt)
     end
 
     -- Update physical IPD-scaled HUD convergence parity across alternating AFR frames
-    if type(self.updateHudConvergence) == "function" then
-        self:updateHudConvergence(dt)
-    end
+    -- (A direct call, not an update hook: its errors reach the caller of update, which the tests rely on)
+    self:updateHudConvergence(dt)
 
     -- Keep in-engine action events active across context transitions, and register them all again after a binding change
-    local bindingsChanged = self.inputBindingsChanged == true
-    if bindingsChanged or (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) or (self.seatSetActionEventId == nil) then
-        if type(self.registerActionEvents) == "function" then
-            self.inputBindingsChanged = false
-            self:registerActionEvents(bindingsChanged)
-        end
-    end
+    -- (Input; before the vehicle transition below, which registers them again on its own)
+    self:updateActionEvents()
 
     -- Check for vehicle transitions (entering/exiting/switching vehicle)
     local curVehicle = self:getControlledVehicle()
@@ -1120,13 +1227,11 @@ function VRCompanion:runUpdate(dt)
         self.lastControlledVehicle = curVehicle
         -- A new vehicle may have just been spawned/entered: re-run the guard install.
         self:refreshVehicleSpeedGuards()
-        if type(self.onVehicleTransition) == "function" then
-            self:onVehicleTransition(oldVeh, curVehicle)
-        end
+        self:onVehicleTransition(oldVeh, curVehicle)
     end
 
-    -- Motion Controllers: poll both hands once per update
-    if type(self.updateMotionControllers) == "function" then self:updateMotionControllers(dt) end
+    -- The registered subsystems update, after the core's own steps above
+    self:runSubsystemUpdate(dt)
 
     -- Follow the camera mode with the DLSS near plane (cab, outside camera, on foot)
     self:applyDlssNearClip(false)
@@ -1180,12 +1285,8 @@ function VRCompanion:deleteMap()
     end
 
     -- Unhook HUD display hooks cleanly
-    if type(self.unhookHud) == "function" then
-        self:unhookHud()
-    end
-    if type(self.unhookGuiDraw) == "function" then
-        self:unhookGuiDraw()
-    end
+    self:unhookHud()
+    self:unhookGuiDraw()
 
     -- Unhook mission update loop cleanly
     self:unhookMissionUpdate()
@@ -1207,37 +1308,10 @@ function VRCompanion:deleteMap()
     self.enterableHooked = false
     self.lastControlledVehicle = nil
     self.appliedDlssNearClip = nil
-    self.vehicleRotationStates = {}
     self.isMenuVisible = false
     self.menuTakesInput = false
     self.stereoDialogShowing = false
     self.guiVisibilityInitialized = false
-
-    local deleteFn = delete or (_G and _G.delete)
-    local entityExistsFn = entityExists or (_G and _G.entityExists)
-    -- Nodes linked under a vehicle are already gone: the game deletes its vehicles first, and
-    -- deleting an unknown entity logs a script error even inside pcall
-    local function deleteIfExists(node)
-        if node == nil or node == 0 then return end
-        if type(entityExistsFn) == "function" and not entityExistsFn(node) then return end
-        pcall(deleteFn, node)
-    end
-    if type(deleteFn) == "function" then
-        deleteIfExists(self.cameraNodeLeft)
-        -- Both eyes share one camera node unless something set them apart
-        if self.cameraNodeRight ~= self.cameraNodeLeft then
-            deleteIfExists(self.cameraNodeRight)
-        end
-        deleteIfExists(self.cyclopeanAudioListenerNode)
-        deleteIfExists(self.outsideCameraBaseNode)
-    end
-    self.outsideCameraBaseNode = nil
-    self.cameraNodeLeft = nil
-    self.cameraNodeRight = nil
-    self.cyclopeanAudioListenerNode = nil
-    if type(self.restoreMenuBackgroundCamera) == "function" then
-        self:restoreMenuBackgroundCamera()
-    end
 
     if VRBridge ~= nil and type(VRBridge.setMenuVisible) == "function" then
         VRBridge.setMenuVisible(false)
@@ -1247,60 +1321,30 @@ function VRCompanion:deleteMap()
         VRBridge.onMapUnload()
     end
 
-    -- Restore HUD state and visibility to standard 2D Full
-    if type(self.setHudState) == "function" then
-        self:setHudState(self.HUD_STATE_FULL)
-    end
-
-    -- Restore the global HUD anchors to the full screen
-    if type(self.restoreHudSafeArea) == "function" then
-        self:restoreHudSafeArea()
-    end
-
-    self.currentConvergenceOffset = 0.0
-    self.currentConvergenceDisparity = 0.0
-    if self.DEFAULT_HUD_DEPTH ~= nil then
-        self.hudConvergenceDepth = self.DEFAULT_HUD_DEPTH
-    end
-    self.activeFillLevelsDisplay = nil
     self.passThroughMode = nil
     self.headTrackingEnabled = true
-    if type(self.unsubscribeFromInputBindingChanges) == "function" then
-        self:unsubscribeFromInputBindingChanges()
-    end
-    for _, row in ipairs(self.ACTION_EVENTS) do
-        self[row.idField] = nil
-        self[row.loggedField] = false
-    end
-    self.actionEventsContextName = nil
-    if type(self.resetToggleViewDebounce) == "function" then
-        self:resetToggleViewDebounce()
-    end
 
-    -- Restore original camera FOVs and projection offsets
-    if self.origCamSettings ~= nil then
-        for camNode, orig in pairs(self.origCamSettings) do
-            local exists = true
-            if type(entityExists) == "function" then
-                exists = entityExists(camNode)
-            end
-            if exists then
-                if orig.fovY ~= nil and type(setFovY) == "function" then
-                    pcall(setFovY, camNode, orig.fovY)
-                end
-                if type(setProjectionOffset) == "function" then
-                    pcall(setProjectionOffset, camNode, orig.offsetX or 0, orig.offsetY or 0)
-                end
-            end
-        end
-        self.origCamSettings = {}
-    end
-
-    if type(self.set2DViewActive) == "function" then
-        self:set2DViewActive(false)
-    else
-        self.is2DViewActive = false
-    end
+    -- (Stereo deletes its nodes and puts the cameras and the 2D view back, the HUD goes back to the full screen, Input lets go of
+    -- the VR action events and Locomotion forgets the vehicles' rotation states, in the mapUnload hooks below. They used to run
+    -- here, in the middle of the core's teardown: Stereo's nodes and menu camera before VRBridge.onMapUnload, then the HUD, Input
+    -- and the rest of Stereo's after it, all before the resets of the other subsystems. Now the registry runs them after the
+    -- core's teardown and, in reverse file order, after the subsystems registered later, and none of that is observable:
+    --  * Order that matters is kept: the HUD unloads before Stereo does (leaving 2D Floating Window Mode reapplies the HUD, which
+    --    must find it restored), Stereo deletes its nodes before it restores the camera settings (the restore skips deleted
+    --    nodes), and Hand Tools unload before the Virtual Hands (a tool hangs below a hand).
+    --  * Stereo's nodes against VRBridge.onMapUnload: the Injector never sees a node; onMapUnload only resets the Injector's own
+    --    flags (src/luau/vr_bridge.cpp, Lua_OnMapUnload), and Stereo only touches the scene. No state is shared, and nothing
+    --    runs between the two calls.
+    --  * Nothing that runs in teardown reads what the three change: the eye nodes and the listener are read by the camera and
+    --    hand placement of an update (Stereo, Locomotion, Motion Controllers, Virtual Hands), never by a reset; the HUD's
+    --    teardown reads the HUD and the HUD state, not a node; the action event ids are read by Input alone; the rotation
+    --    states by the camera hooks, which are lifted at the top of this function.
+    --  * Nothing the three do reaches a wrap a later reset lifts: the HUD's displays, the message center, the cameras' FOV and
+    --    projection and the game's menu camera are not among the classes the subsystems wrap (Player.getLookRay, HandTool,
+    --    Drivable's steering, the animated objects' trigger callback, the attachable candidates, Interactive Control's class).
+    --  * The other resets (Perf Trace, Fish Catch, Dual Pass Physics, the Motion Controllers' group) are described where the
+    --    Motion Controllers register; they touch only their own state, a wrap, the Injector's pad, cursor and trace, or the
+    --    hands' nodes.)
 
     -- Remove console commands
     if removeConsoleCommand ~= nil then
@@ -1309,17 +1353,7 @@ function VRCompanion:deleteMap()
         end
     end
 
-    if type(self.resetDialogDiagnostics) == "function" then self:resetDialogDiagnostics() end
-    if type(self.resetFishCatch) == "function" then self:resetFishCatch() end
-    if type(self.resetDesktopMirror) == "function" then self:resetDesktopMirror() end
-    if type(self.resetFovOverscan) == "function" then self:resetFovOverscan() end
-    if type(self.resetMenuDistance) == "function" then self:resetMenuDistance() end
-    if type(self.stopHudTrace) == "function" then self:stopHudTrace() end
-    self.hudEyeTestEye = nil
-    if type(self.resetMouseConfinement) == "function" then self:resetMouseConfinement() end
-    if type(self.unregisterPerfTraceConsoleCommands) == "function" then self:unregisterPerfTraceConsoleCommands() end
-    if type(self.unregisterSeatOffsetConsoleCommands) == "function" then self:unregisterSeatOffsetConsoleCommands() end
-    if type(self.unregisterStereoDialogDepthConsoleCommands) == "function" then self:unregisterStereoDialogDepthConsoleCommands() end
-    if type(self.unregisterDualPassPhysicsConsoleCommands) == "function" then self:unregisterDualPassPhysicsConsoleCommands() end
-    if type(self.resetMotionControllers) == "function" then self:resetMotionControllers() end
+    -- The registered subsystems unload, in reverse order, before the resets that have not moved over yet
+    self:runSubsystemMapUnload()
+
 end

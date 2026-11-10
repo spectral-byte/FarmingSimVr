@@ -17,6 +17,12 @@
 #include <vector>
 inline std::vector<std::string> s_capturedLogs;
 
+// A hook the core caught and logged (IsHookErrorLine) fails the test, unless the test called ExpectHookErrors() first: the core
+// protects every subsystem hook, so the log is the only place a hook that raises shows up. Checked as the line is printed, so a
+// test that clears s_capturedLogs midway cannot hide one.
+inline bool s_expectHookErrors = false;
+inline void ExpectHookErrors() { s_expectHookErrors = true; }
+
 inline int MockPrint(lua_State* L) {
     int n = lua_gettop(L);
     std::string line;
@@ -26,6 +32,9 @@ inline int MockPrint(lua_State* L) {
         line += (s ? s : "");
     }
     s_capturedLogs.push_back(line);
+    if (IsHookErrorLine(line) && !s_expectHookErrors) {
+        ADD_FAILURE() << "unexpected Companion Mod hook error: " << line;
+    }
     return 0;
 }
 
@@ -202,6 +211,7 @@ protected:
 
     void SetUp() override {
         s_capturedLogs.clear();
+        s_expectHookErrors = false;
         L = luaL_newstate();
         luaL_openlibs(L);
 

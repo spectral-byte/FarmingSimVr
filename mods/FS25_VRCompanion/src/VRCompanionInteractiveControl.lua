@@ -38,7 +38,7 @@
 -- updateInteractiveControl(dt, selectNone) selects no Click Point for that update when the Coupling Point is nearer.
 --
 -- Other modules build on:
---   VRCompanion:onClickPointEvent(kind, clickPoint)   optional hook, called with "selected" (the
+--   VRCompanion:onClickPointEvent(kind, clickPoint)   the Motion Controllers' hook, called with "selected" (the
 --       selected Click Point changed, clickPoint may be nil) and "clicked" (a trigger pull was executed:
 --       once per pull, not on every frame an analog Click Point keeps acting)
 --   rayControlsSelection()                            the one place that decides whether the Pointer
@@ -121,9 +121,7 @@ local function rayControlsSelection(self)
 end
 
 local function notify(self, kind, point)
-    if type(self.onClickPointEvent) == "function" then
-        self:onClickPointEvent(kind, point)
-    end
+    self:onClickPointEvent(kind, point)
 end
 
 -- Remembers a Click Point Interactive Control just updated while it is active; forgets it otherwise.
@@ -448,7 +446,7 @@ local function updateAutoOn(self)
     local vehicle = nil
     -- A hand holding the Steering Wheel is not the Pointer Hand, but grabbing it does not touch Interactive Control's
     -- state either: what was switched on stays on while a hand holds (Wheel Grab never starts it).
-    local holding = autoOn ~= nil and type(self.isSteeringWheelHeld) == "function" and self:isSteeringWheelHeld()
+    local holding = autoOn ~= nil and self:isSteeringWheelHeld()
     if (self:getPointerHand() ~= nil or holding) and self.motionControllersEnabled ~= false then
         vehicle = self:getControlledVehicle()
     end
@@ -527,7 +525,7 @@ function VRCompanion:updateInteractiveControl(dt, selectNone)
         -- Virtual Gamepad, unless it was already held when the ray landed.
         local mayUseTrigger = true
         local pointerHand = self:getPointerHand()
-        if selected ~= nil and pointerHand ~= nil and type(self.takeVirtualGamepadInput) == "function" then
+        if selected ~= nil and pointerHand ~= nil then
             mayUseTrigger = self:takeVirtualGamepadInput(pointerHand, "trigger")
         end
         clickSelected(self, mayUseTrigger)
@@ -549,3 +547,9 @@ function VRCompanion:resetInteractiveControlSupport()
     end
     state = newState()
 end
+
+-- Map unload only (the support installs itself from the update, not at map load, and has no commands). Order: it comes after Wheel
+-- Grab and the Virtual Gamepad in modDesc.xml, so it unloads before their resets, which it does not depend on.
+VRCompanion:registerSubsystem("interactiveControl", {
+    mapUnload = function(self) self:resetInteractiveControlSupport() end,
+})

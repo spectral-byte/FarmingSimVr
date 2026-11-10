@@ -33,7 +33,7 @@
 --                                                                   nil under AFR; frameDt the update's real dt); returns the
 --                                                                   line, nil when not tracing
 --   Console: vrDualPassPhysicsPause [off|on], vrEyePairTrace [frames]
---   VRCompanion:registerDualPassPhysicsConsoleCommands() / unregisterDualPassPhysicsConsoleCommands()   map load / unload
+--   Registered as the subsystem "dualPassPhysics": the two commands are added at map load and removed at map unload, where the pause is released
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -254,18 +254,15 @@ function VRCompanion:consoleCommandDualPassPhysicsPause(arg)
     return describePause(self)
 end
 
-function VRCompanion:registerDualPassPhysicsConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrDualPassPhysicsPause", "Pause physics for one frame of each Sequential Dual-Pass pair, so a moving vehicle is still between the eyes (this session only; on by default; held off in multiplayer): vrDualPassPhysicsPause [off|on]", "consoleCommandDualPassPhysicsPause", self)
-    addConsoleCommand("vrEyePairTrace", "Log how far the vehicle and the eye camera moved between rendered eye frames, for some frames: vrEyePairTrace [frames]", "consoleCommandEyePairTrace", self)
-end
-
--- Map unload: physics runs normally again and the trace stops
-function VRCompanion:unregisterDualPassPhysicsConsoleCommands()
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrDualPassPhysicsPause")
-        removeConsoleCommand("vrEyePairTrace")
-    end
-    self:releaseDualPassPhysicsPause()
-    trace = { frames = 0 }
-end
+-- Map load adds the two commands; map unload removes them (the registry does both), and physics runs normally again and the
+-- trace stops
+VRCompanion:registerSubsystem("dualPassPhysics", {
+    mapUnload = function(self)
+        self:releaseDualPassPhysicsPause()
+        trace = { frames = 0 }
+    end,
+    consoleCommands = {
+        { name = "vrDualPassPhysicsPause", description = "Pause physics for one frame of each Sequential Dual-Pass pair, so a moving vehicle is still between the eyes (this session only; on by default; held off in multiplayer): vrDualPassPhysicsPause [off|on]", method = "consoleCommandDualPassPhysicsPause" },
+        { name = "vrEyePairTrace", description = "Log how far the vehicle and the eye camera moved between rendered eye frames, for some frames: vrEyePairTrace [frames]", method = "consoleCommandEyePairTrace" },
+    },
+})

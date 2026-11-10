@@ -7,16 +7,16 @@
 -- the mirror off the Injector does not call the game's real Present; the headset is unchanged. The mirror shows by itself while
 -- the session is not running, in Pass-Through Mode and before the Companion Mod's handshake.
 --
--- The setting is saved in settings.xml (on by default). When a savegame loads, Core's loadMap reads settings.xml and then calls
--- applyDesktopMirror, which sends the value to VRBridge after the handshake.
+-- The setting is saved in settings.xml (on by default). When a savegame loads, Core's loadMap reads settings.xml and then runs the
+-- map-load hook this file registers (see the registry in VRCompanionCore.lua), which sends the value to VRBridge after the handshake.
 --
 -- PUBLIC SURFACE
 --   VRCompanion.desktopMirror                          true (the default) or false
 --   VRCompanion:setDesktopMirror(enabled, save)        sets the field, pushes it to VRBridge, saves settings.xml when `save`
---   VRCompanion:applyDesktopMirror()                   pushes the field to VRBridge (map load, after loadConfiguration)
+--   VRCompanion:applyDesktopMirror()                   pushes the field to VRBridge (the map-load hook, after loadConfiguration)
 --   VRCompanion:saveDesktopMirrorSetting(xmlFile, xml) / loadDesktopMirrorSetting(xmlFile, xml)   hooks of saveConfiguration / loadConfiguration
 --   VRCompanion:consoleCommandSetDesktopMirror(arg)    nil reports the state, "on" / "off" sets and saves it, anything else returns the usage
---   VRCompanion:registerDesktopMirrorConsoleCommands() / resetDesktopMirror()   map load / unload
+--   Registered with the core: a map-load hook (applyDesktopMirror) and the console command; the registry adds and removes the command
 --   Console: vrDesktopMirror [on|off]
 -- ====================================================================
 
@@ -47,7 +47,7 @@ end
 function VRCompanion:setDesktopMirror(enabled, save)
     self.desktopMirror = (enabled ~= false)
     self:applyDesktopMirror()
-    if save and type(self.saveConfiguration) == "function" then
+    if save then
         self:saveConfiguration()
     end
 end
@@ -86,15 +86,14 @@ function VRCompanion:consoleCommandSetDesktopMirror(arg)
     return string.format("Desktop Mirror set to: %s (Saved)", describe(enabled))
 end
 
-function VRCompanion:registerDesktopMirrorConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrDesktopMirror", "Turn the Desktop Mirror Window on or off while the headset is in use (saved; on by default; untested with frame generation): vrDesktopMirror [on|off]", "consoleCommandSetDesktopMirror", self)
-end
-
--- Map unload: the command goes. The saved setting stays as it is, and the next map load reads it again (the Injector's VRBridge
--- flag is reset by VRBridge.onMapUnload).
-function VRCompanion:resetDesktopMirror()
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrDesktopMirror")
-    end
-end
+-- Map load: the saved setting goes to the Injector (the core has done the handshake and read settings.xml by then). Map unload: the
+-- registry removes the command; the saved setting stays as it is, and the next map load reads it again (the Injector's VRBridge flag
+-- is reset by VRBridge.onMapUnload).
+-- Order: the saved settings reach VRBridge in file order, Desktop Mirror first, then FOV Overscan, Menu Distance and Mouse
+-- Confinement (each registers after this file), as the core sent them before the registry.
+VRCompanion:registerSubsystem("desktopMirror", {
+    mapLoad = function(self) self:applyDesktopMirror() end,
+    consoleCommands = {
+        { name = "vrDesktopMirror", description = "Turn the Desktop Mirror Window on or off while the headset is in use (saved; on by default; untested with frame generation): vrDesktopMirror [on|off]", method = "consoleCommandSetDesktopMirror" },
+    },
+})

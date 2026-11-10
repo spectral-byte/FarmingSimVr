@@ -13,7 +13,7 @@
 --
 -- PUBLIC SURFACE
 --   VRCompanion:getDialogDiagnostics() -> lines   the lines the command writes, without the tag ("no dialog open" when none is)
---   VRCompanion:registerDialogDiagnosticsConsoleCommands() / resetDialogDiagnostics()   map load / unload
+--   Registered with the core: the console command only; the registry adds it on map load and removes it on map unload
 --   Console: vrDialogDiagnostics   logs, tagged "[FS25_VR] dialog probe: " in the game log (Documents\My Games\FarmingSimulator2025\log.txt):
 --     g_gui.currentGuiName and currentDialogName, the open dialogs' names, the newest dialog's name and class, its class chain
 --     (each class's method names), its root element's fields and its target's own fields (one level deep, functions by name), and
@@ -287,11 +287,9 @@ function VRCompanion:consoleCommandDialogDiagnostics()
     return lines[1] == "no dialog open" and "no dialog open" or string.format("dialog probe: %d lines in the game log", #lines)
 end
 
-function VRCompanion:registerDialogDiagnosticsConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrDialogDiagnostics", "Log the open dialog's GUI name, class, methods and fields to the game log (read-only; says so when no dialog is open): vrDialogDiagnostics", "consoleCommandDialogDiagnostics", self)
-end
-
-function VRCompanion:resetDialogDiagnostics()
-    if removeConsoleCommand ~= nil then removeConsoleCommand("vrDialogDiagnostics") end
-end
+-- Map load and unload: only the console command, which the registry adds and removes. Order: none matters against the others.
+VRCompanion:registerSubsystem("dialogDiagnostics", {
+    consoleCommands = {
+        { name = "vrDialogDiagnostics", description = "Log the open dialog's GUI name, class, methods and fields to the game log (read-only; says so when no dialog is open): vrDialogDiagnostics", method = "consoleCommandDialogDiagnostics" },
+    },
+})

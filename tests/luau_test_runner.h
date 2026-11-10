@@ -42,6 +42,14 @@ inline const std::vector<std::string>& CompanionModLoadOrder() {
 
 inline constexpr const char* kCompanionModDir = "mods/FS25_VRCompanion/";
 
+// The line the Companion Mod's core logs when a subsystem's hook raises (VRCompanion:registerSubsystem):
+//   [FS25_VR] [Error] Subsystem '<name>' <hook> hook raised: <error>
+// Both harnesses fail a test in which such a line was logged unless the test said it expects it, because a hook that raises is
+// caught by the core and would otherwise pass unnoticed.
+inline bool IsHookErrorLine(const std::string& line) {
+    return line.rfind("[FS25_VR] [Error] Subsystem '", 0) == 0 && line.find(" hook raised: ") != std::string::npos;
+}
+
 // Extracts <sourceFile filename="..."/> entries (in document order) from modDesc.xml content.
 std::vector<std::string> ParseModDescSourceFiles(const std::string& modDescXml);
 
@@ -79,8 +87,12 @@ public:
 private:
     lua_State* L_ = nullptr;
     std::vector<std::string> capturedLogs_;
+    // Hook-error lines (IsHookErrorLine) logged during the run that no expectHookError(substring) of the chunk covers
+    std::vector<std::string> unexpectedHookErrors_;
+    std::vector<std::string> expectedHookErrors_;
 
     void InitializeEnvironment();
+    static int LuauExpectHookError(lua_State* L);
     static int LuauPrint(lua_State* L);
     static int LuauLoadString(lua_State* L);
     static int LuauRequire(lua_State* L);

@@ -100,11 +100,11 @@
 -- is one warning in the game log for the session, no flag, and the bindings put back as they were. The pad then keeps the
 -- game's defaults plus the Companion Mod's GAMEPAD_DEFAULT bindings, and the player rebinds in the Controls screen.
 --
---   Hooks into the rest of the mod (each a single guarded call):
---     MotionControllers.lua  updateMotionControllers -> updateVirtualGamepad(dt) first of all, saveMotionControllerSettings
---                            / loadMotionControllerSettings -> save/loadVirtualGamepadSetting, getMotionControllerStatus ->
---                            getVirtualGamepadStatus, registerMotionControllerConsoleCommands and resetMotionControllers ->
---                            registerVirtualGamepadConsoleCommands / resetVirtualGamepad
+--   Hooks into the rest of the mod:
+--     MotionControllers.lua  updateMotionControllers -> updateVirtualGamepad(dt) first of all and updateVirtualGamepadUse(dt) last,
+--                            saveMotionControllerSettings / loadMotionControllerSettings -> save/loadVirtualGamepadSetting,
+--                            getMotionControllerStatus -> getVirtualGamepadStatus. The console command and the unload
+--                            (resetVirtualGamepad) are registered with the core at the end of this file.
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -310,11 +310,9 @@ function VRCompanion:updateVirtualGamepadUse(dt)
                 end
             end
         end
-        if type(self.isHandHoldingSteeringWheel) == "function" then
-            for _, hand in ipairs(HANDS) do
-                if self:isHandHoldingSteeringWheel(hand) == true then
-                    self:takeVirtualGamepadInput(hand, "grip")
-                end
+        for _, hand in ipairs(HANDS) do
+            if self:isHandHoldingSteeringWheel(hand) == true then
+                self:takeVirtualGamepadInput(hand, "grip")
             end
         end
     end
@@ -619,9 +617,7 @@ function VRCompanion:updateVirtualGamepadDefaults(dt, present, slot)
         self.virtualGamepadDefaultsWritten = true
         print(string.format("[FS25_VR] Virtual Gamepad default bindings written to %s (%d changes) and saved", deviceId, changes))
     end
-    if type(self.saveConfiguration) == "function" then
-        self:saveConfiguration()
-    end
+    self:saveConfiguration()
 end
 
 function VRCompanion:getVirtualGamepadStatus()
@@ -691,16 +687,9 @@ function VRCompanion:consoleCommandSetVirtualGamepad(arg)
     end
     self.virtualGamepadEnabled = enabled
     self:updateVirtualGamepad(0)
-    if type(self.saveConfiguration) == "function" then
-        self:saveConfiguration()
-    end
+    self:saveConfiguration()
     print(string.format("[FS25_VR] Virtual Gamepad set to: %s", enabled and "on" or "off"))
     return string.format("Virtual Gamepad set to: %s (Saved): %s", enabled and "on" or "off", self:getVirtualGamepadStatus())
-end
-
-function VRCompanion:registerVirtualGamepadConsoleCommands()
-    if addConsoleCommand == nil then return end
-    addConsoleCommand("vrVirtualGamepad", "Turn the Virtual Gamepad (the Motion Controllers as an Xbox pad bound in the Controls screen) on or off (saved): vrVirtualGamepad [on|off]", "consoleCommandSetVirtualGamepad", self)
 end
 
 -- Map unload: the pad stays in the game (the OpenXR session goes on) but reads neutral; the next map sends
@@ -713,8 +702,16 @@ function VRCompanion:resetVirtualGamepad()
     if b ~= nil and type(b.setVirtualGamepadUse) == "function" then
         b.setVirtualGamepadUse(0, 0)
     end
-    if removeConsoleCommand ~= nil then
-        removeConsoleCommand("vrVirtualGamepad")
-    end
     state = newState()
 end
+
+-- Registered with the core (the registry is documented in VRCompanionCore.lua). No update hook: updateVirtualGamepad runs FIRST of the
+-- Motion Controller poll and updateVirtualGamepadUse LAST (see updateMotionControllers), which file order cannot give. Unload runs in
+-- reverse file order, so the pad is zeroed first of the Motion Controller subsystems (it was last), through VRBridge, after the core's
+-- VRBridge.onMapUnload as always. It shares no state with the Wheel Grab, Virtual Hands and Menu Pointer resets that now follow it.
+VRCompanion:registerSubsystem("virtualGamepad", {
+    mapUnload = function(self) self:resetVirtualGamepad() end,
+    consoleCommands = {
+        { name = "vrVirtualGamepad", description = "Turn the Virtual Gamepad (the Motion Controllers as an Xbox pad bound in the Controls screen) on or off (saved): vrVirtualGamepad [on|off]", method = "consoleCommandSetVirtualGamepad" },
+    },
+})

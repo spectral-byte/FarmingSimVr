@@ -53,6 +53,11 @@ void LuauTestRunner::InitializeEnvironment() {
     lua_pushcclosure(L_, &LuauPrint, "print", 1);
     lua_setglobal(L_, "print");
 
+    // expectHookError(substring): a suite that expects the core to log a hook error containing `substring` says so, or the run fails
+    lua_pushlightuserdata(L_, this);
+    lua_pushcclosure(L_, &LuauExpectHookError, "expectHookError", 1);
+    lua_setglobal(L_, "expectHookError");
+
     lua_pushcfunction(L_, &LuauCollectGarbage, "collectgarbage");
     lua_setglobal(L_, "collectgarbage");
 
@@ -81,7 +86,21 @@ int LuauTestRunner::LuauPrint(lua_State* L) {
     }
     if (runner) {
         runner->capturedLogs_.push_back(line);
+        if (IsHookErrorLine(line)) {
+            bool expected = false;
+            for (const auto& substring : runner->expectedHookErrors_) {
+                if (line.find(substring) != std::string::npos) { expected = true; break; }
+            }
+            if (!expected) runner->unexpectedHookErrors_.push_back(line);
+        }
     }
+    return 0;
+}
+
+int LuauTestRunner::LuauExpectHookError(lua_State* L) {
+    auto* runner = static_cast<LuauTestRunner*>(lua_touserdata(L, lua_upvalueindex(1)));
+    const char* substring = luaL_checkstring(L, 1);
+    if (runner) runner->expectedHookErrors_.emplace_back(substring);
     return 0;
 }
 
@@ -250,6 +269,8 @@ std::string LuauTestRunner::ReadFile(const std::string& relativePath) const {
 
 LuauExecutionResult LuauTestRunner::ExecuteCode(const std::string& code, const std::string& chunkName) {
     capturedLogs_.clear();
+    unexpectedHookErrors_.clear();
+    expectedHookErrors_.clear();
 
     if (!L_) {
         return LuauExecutionResult{
@@ -316,10 +337,18 @@ LuauExecutionResult LuauTestRunner::ExecuteCode(const std::string& code, const s
         }
     }
 
+    // A hook the core caught and logged still fails the run, unless the chunk said it expects it
+    std::string errorMessage = hasFailures ? "One or more assertions failed in captured test output" : "";
+    if (!unexpectedHookErrors_.empty()) {
+        hasFailures = true;
+        errorMessage = "A Companion Mod hook raised and no expectHookError() covers it: " + unexpectedHookErrors_.front();
+        capturedLogs_.push_back("  [FAIL] " + errorMessage);
+    }
+
     return LuauExecutionResult{
         .success = !hasFailures,
         .exitCode = hasFailures ? 1 : 0,
-        .errorMessage = hasFailures ? "One or more assertions failed in captured test output" : "",
+        .errorMessage = errorMessage,
         .capturedLogs = capturedLogs_
     };
 }
