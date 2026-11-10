@@ -160,6 +160,12 @@ void VirtualGamepad::SetRealPadProbeForTesting(RealPadProbe probe) {
     m_realPadProbe = std::move(probe);
 }
 
+std::span<const char* const> VirtualGamepad::Reasons() {
+    static constexpr const char* reasons[] = {kReasonOff, kReasonNoSession, kReasonNoActions,
+                                              kReasonSlotsFull, kReasonNoHooks, kReasonPresent};
+    return reasons;  // the size is the number of entries listed here
+}
+
 VirtualGamepad::Status VirtualGamepad::GetStatus() {
     std::lock_guard<std::mutex> lock(m_mutex);
     return EvaluateLocked();

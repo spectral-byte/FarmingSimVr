@@ -47,10 +47,13 @@ local function describe(percent)
     return string.format("%g%%", percent)
 end
 
+-- The table VRBridge.getEyeProjection fills in place, kept so a call allocates nothing on the game's heap (spec #245)
+local renderedFovProjection = {}
+
 -- The FOV the eyes are rendered with, as the Injector publishes it for the left eye; nil while there is no headset projection
 local function describeRenderedFov()
     if type(VRBridge) ~= "table" or type(VRBridge.getEyeProjection) ~= "function" then return nil end
-    local ok, projection = pcall(VRBridge.getEyeProjection, 0)
+    local ok, projection = pcall(VRBridge.getEyeProjection, 0, renderedFovProjection)
     if not ok or type(projection) ~= "table" or projection.isValid ~= true then return nil end
     if type(projection.fovY) ~= "number" or type(projection.fovX) ~= "number" then return nil end
     return string.format("Rendered FOV %.1f x %.1f degrees (vertical x horizontal).", math.deg(projection.fovY), math.deg(projection.fovX))

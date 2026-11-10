@@ -226,71 +226,102 @@ public:
     static void FillHandStateTable(lua_State* L, int tableIndex, const HandState& hand);
     static void FillEyeProjectionTable(lua_State* L, int tableIndex, const EyeProjection& proj, uint32_t eyeIndex);
 
+    // The upvalues Inject() binds to every registered function's closure; the function runs as that closure, so these
+    // are its lua_upvalueindex(...) slots. The bridge; the table of strings the per-frame functions return (see
+    // PushAnchoredString); and, for an Occasional function only, its table entry (see RunOccasional).
+    static constexpr int kBridgeUpvalue = 1;
+    static constexpr int kAnchorsUpvalue = 2;
+    static constexpr int kEntryUpvalue = 3;
+
+    // Pushes the string `text` for a per-frame function to return, without allocating. A string the Injector pushes is
+    // made anew whenever the game's collector has freed the last one (a long string, over 40 bytes, is never shared at
+    // all), so the strings a per-frame function hands out are made once at injection and kept in the table every
+    // closure carries as kAnchorsUpvalue. `anchorsIndex` is that table (lua_upvalueindex(kAnchorsUpvalue) from inside a function); a
+    // text it does not hold, or a function pushed without the table, falls back to lua_pushstring.
+    static void PushAnchoredString(lua_State* L, int anchorsIndex, const char* text);
+
+    // How often the Companion Mod calls a function, which decides what the collector does around the call. The Injector
+    // links its own copy of Luau and runs it on the game's heap (ADR-0002), and a collection step started from that copy
+    // has crashed the game, so no call may let one start from there.
+    //  PerFrame:   called on every update or render. Allocates nothing on the game's heap once the caller's reusable
+    //              tables hold their fields, and never touches the collector: restarting it makes a step due at the next
+    //              allocation, and doing that every frame would change the game's collection pacing.
+    //  Occasional: called at handshake, on map load or unload, when a setting changes or from a console command. May
+    //              allocate; Inject() registers it so the collector is held off for the call and left as it was found,
+    //              a Lua error included (see RunOccasional).
+    //  Unmarked:   a table entry that names no kind. Treated like Occasional, and the function table test fails on it.
+    enum class CallKind : uint8_t { Unmarked = 0, PerFrame, Occasional };
+
     struct LuaFunctionEntry {
         const char* name;
         lua_CFunction fn;
+        CallKind kind = CallKind::Unmarked;
     };
 
-    // Single source of truth for the Lua-visible functions registered by Inject().
+    // Single source of truth for the Lua-visible functions registered by Inject(); the kind of each is written next to it.
     static constexpr LuaFunctionEntry kFunctionTable[] = {
-        {"isReady", &Lua_IsReady},
-        {"handshake", &Lua_Handshake},
-        {"isCompanionActive", &Lua_IsCompanionActive},
-        {"onMapUnload", &Lua_OnMapUnload},
-        {"getStereoTelemetry", &Lua_GetStereoTelemetry},
-        {"isStereoActive", &Lua_IsStereoActive},
-        {"getRequiresAfrFallback", &Lua_RequiresAfrFallback},
-        {"getHeadPose", &Lua_GetHeadPose},
-        {"getHandState", &Lua_GetHandState},
-        {"pulseHaptic", &Lua_PulseHaptic},
-        {"setVirtualGamepad", &Lua_SetVirtualGamepad},
-        {"getVirtualGamepad", &Lua_GetVirtualGamepad},
-        {"setVirtualGamepadUse", &Lua_SetVirtualGamepadUse},
-        {"recenter", &Lua_Recenter},
-        {"getEyeProjection", &Lua_GetEyeProjection},
-        {"getFrameParity", &Lua_GetFrameParity},
-        {"getFrameIndex", &Lua_GetFrameIndex},
-        {"getIpd", &Lua_GetIpd},
-        {"getEyePose", &Lua_GetEyePose},
-        {"setMenuVisible", &Lua_SetMenuVisible},
-        {"getIsMenuVisible", &Lua_GetIsMenuVisible},
-        {"alignMenuQuad", &Lua_AlignMenuQuad},
-        {"getPanelHit", &Lua_GetPanelHit},
-        {"getPanelHitAlongRay", &Lua_GetPanelHitAlongRay},
-        {"setMenuCursor", &Lua_SetMenuCursor},
-        {"set2DViewActive", &Lua_Set2DViewActive},
-        {"getIs2DViewActive", &Lua_GetIs2DViewActive},
-        {"setDesktopMirror", &Lua_SetDesktopMirror},
-        {"getDesktopMirror", &Lua_GetDesktopMirror},
-        {"setMouseConfinement", &Lua_SetMouseConfinement},
-        {"getMouseConfinement", &Lua_GetMouseConfinement},
-        {"setFovOverscan", &Lua_SetFovOverscan},
-        {"getFovOverscan", &Lua_GetFovOverscan},
-        {"setMenuDistance", &Lua_SetMenuDistance},
-        {"getMenuDistance", &Lua_GetMenuDistance},
-        {"snapshotEyes", &Lua_SnapshotEyes},
-        {"getRenderingMode", &Lua_GetRenderingMode},
-        {"setRenderingMode", &Lua_SetRenderingMode},
-        {"getSubPassIndex", &Lua_GetSubPassIndex},
-        {"setSubPassIndex", &Lua_SetSubPassIndex},
-        {"advanceSubPass", &Lua_AdvanceSubPass},
-        {"getActiveEye", &Lua_GetActiveEye},
-        {"resetTemporalHistory", &Lua_ResetTemporalHistory},
-        {"signalDiscontinuity", &Lua_SignalDiscontinuity},
-        {"setDlssMvScale", &Lua_SetDlssMvScale},
-        {"setDlssSharpness", &Lua_SetDlssSharpness},
-        {"setDlssPreset", &Lua_SetDlssPreset},
-        {"dlssDiag", &Lua_DlssDiag},
-        {"setDlssSdpMvScale", &Lua_SetDlssSdpMvScale},
-        {"reportCameraRecord", &Lua_ReportCameraRecord},
-        {"setDlssMvFix", &Lua_SetDlssMvFix},
-        {"setDlssDepthModel", &Lua_SetDlssDepthModel},
-        {"setDlssNearClip", &Lua_SetDlssNearClip},
-        {"startPerfTrace", &Lua_StartPerfTrace},
-        {"stopPerfTrace", &Lua_StopPerfTrace},
-        {"isPerfTracing", &Lua_IsPerfTracing},
-        {"perfTraceBegin", &Lua_PerfTraceBegin},
-        {"perfTraceEnd", &Lua_PerfTraceEnd},
+        {"isReady", &Lua_IsReady, CallKind::PerFrame},
+        {"handshake", &Lua_Handshake, CallKind::Occasional},
+        {"isCompanionActive", &Lua_IsCompanionActive, CallKind::PerFrame},
+        {"onMapUnload", &Lua_OnMapUnload, CallKind::Occasional},
+        // Occasional: builds a result table and strings. The Companion Mod no longer calls it (ADR-0017); a console or
+        // test call may.
+        {"getStereoTelemetry", &Lua_GetStereoTelemetry, CallKind::Occasional},
+        // Occasional by caller, not by cost: it allocates nothing, but the Companion Mod does not call it at all
+        // (ADR-0017), so no per-frame caller is there for the hold to cost; the hold on an allocation-free call is harmless.
+        {"isStereoActive", &Lua_IsStereoActive, CallKind::Occasional},
+        {"getRequiresAfrFallback", &Lua_RequiresAfrFallback, CallKind::PerFrame},
+        {"getHeadPose", &Lua_GetHeadPose, CallKind::PerFrame},
+        {"getHandState", &Lua_GetHandState, CallKind::PerFrame},
+        {"pulseHaptic", &Lua_PulseHaptic, CallKind::PerFrame},
+        {"setVirtualGamepad", &Lua_SetVirtualGamepad, CallKind::PerFrame},
+        {"getVirtualGamepad", &Lua_GetVirtualGamepad, CallKind::PerFrame},
+        {"setVirtualGamepadUse", &Lua_SetVirtualGamepadUse, CallKind::PerFrame},
+        {"recenter", &Lua_Recenter, CallKind::Occasional},
+        {"getEyeProjection", &Lua_GetEyeProjection, CallKind::PerFrame},
+        {"getFrameParity", &Lua_GetFrameParity, CallKind::PerFrame},
+        {"getFrameIndex", &Lua_GetFrameIndex, CallKind::PerFrame},
+        {"getIpd", &Lua_GetIpd, CallKind::PerFrame},
+        {"getEyePose", &Lua_GetEyePose, CallKind::PerFrame},
+        {"setMenuVisible", &Lua_SetMenuVisible, CallKind::Occasional},
+        {"getIsMenuVisible", &Lua_GetIsMenuVisible, CallKind::PerFrame},
+        {"alignMenuQuad", &Lua_AlignMenuQuad, CallKind::Occasional},
+        {"getPanelHit", &Lua_GetPanelHit, CallKind::PerFrame},
+        {"getPanelHitAlongRay", &Lua_GetPanelHitAlongRay, CallKind::PerFrame},
+        {"setMenuCursor", &Lua_SetMenuCursor, CallKind::PerFrame},
+        {"set2DViewActive", &Lua_Set2DViewActive, CallKind::Occasional},
+        {"getIs2DViewActive", &Lua_GetIs2DViewActive, CallKind::PerFrame},
+        {"setDesktopMirror", &Lua_SetDesktopMirror, CallKind::Occasional},
+        {"getDesktopMirror", &Lua_GetDesktopMirror, CallKind::PerFrame},
+        {"setMouseConfinement", &Lua_SetMouseConfinement, CallKind::Occasional},
+        {"getMouseConfinement", &Lua_GetMouseConfinement, CallKind::PerFrame},
+        {"setFovOverscan", &Lua_SetFovOverscan, CallKind::Occasional},
+        {"getFovOverscan", &Lua_GetFovOverscan, CallKind::PerFrame},
+        {"setMenuDistance", &Lua_SetMenuDistance, CallKind::Occasional},
+        {"getMenuDistance", &Lua_GetMenuDistance, CallKind::PerFrame},
+        {"snapshotEyes", &Lua_SnapshotEyes, CallKind::Occasional},
+        {"getRenderingMode", &Lua_GetRenderingMode, CallKind::PerFrame},
+        {"setRenderingMode", &Lua_SetRenderingMode, CallKind::Occasional},
+        {"getSubPassIndex", &Lua_GetSubPassIndex, CallKind::PerFrame},
+        {"setSubPassIndex", &Lua_SetSubPassIndex, CallKind::PerFrame},
+        {"advanceSubPass", &Lua_AdvanceSubPass, CallKind::PerFrame},
+        {"getActiveEye", &Lua_GetActiveEye, CallKind::PerFrame},
+        {"resetTemporalHistory", &Lua_ResetTemporalHistory, CallKind::Occasional},
+        {"signalDiscontinuity", &Lua_SignalDiscontinuity, CallKind::Occasional},
+        {"setDlssMvScale", &Lua_SetDlssMvScale, CallKind::Occasional},
+        {"setDlssSharpness", &Lua_SetDlssSharpness, CallKind::Occasional},
+        {"setDlssPreset", &Lua_SetDlssPreset, CallKind::Occasional},
+        {"dlssDiag", &Lua_DlssDiag, CallKind::Occasional},
+        {"setDlssSdpMvScale", &Lua_SetDlssSdpMvScale, CallKind::Occasional},
+        {"reportCameraRecord", &Lua_ReportCameraRecord, CallKind::PerFrame},
+        {"setDlssMvFix", &Lua_SetDlssMvFix, CallKind::Occasional},
+        {"setDlssDepthModel", &Lua_SetDlssDepthModel, CallKind::Occasional},
+        {"setDlssNearClip", &Lua_SetDlssNearClip, CallKind::Occasional},
+        {"startPerfTrace", &Lua_StartPerfTrace, CallKind::Occasional},
+        {"stopPerfTrace", &Lua_StopPerfTrace, CallKind::Occasional},
+        {"isPerfTracing", &Lua_IsPerfTracing, CallKind::PerFrame},
+        {"perfTraceBegin", &Lua_PerfTraceBegin, CallKind::PerFrame},
+        {"perfTraceEnd", &Lua_PerfTraceEnd, CallKind::PerFrame},
     };
 
     // 1 version property + one field per table entry.
@@ -301,8 +332,13 @@ private:
     // Writes the handshake's line to fs25_vr.log: both versions, a warning when they differ or the Companion Mod passed none.
     void LogVersions(const char* companionVersion) const;
 
-    // The bridge bound as upvalue 1 of every registered function; raises a Lua error if it is missing.
+    // The bridge bound as kBridgeUpvalue of every registered function; raises a Lua error if it is missing.
     static VRBridge& FromUpvalue(lua_State* L);
+
+    // What Inject() registers in place of an Occasional function: runs the function named by kEntryUpvalue (its table
+    // entry) with the game's collector held off, so that no collection step starts from the Injector's copy of Luau
+    // during the call. The one place the hold is applied to a function-table function.
+    static int RunOccasional(lua_State* L);
 
     std::shared_ptr<OpenXrManager> m_openXrManager;
     std::shared_ptr<NgxInterceptor> m_ngxInterceptor;

@@ -4,7 +4,10 @@
 #include "core/thread_trace.h"
 #include "ngx/ngx_interceptor.h"
 #include "fidelityfx/fidelityfx_interceptor.h"
+#include "input/virtual_gamepad.h"
 #include <algorithm>
+#include <cstring>
+#include <vector>
 
 namespace fs25vr {
 
@@ -25,8 +28,59 @@ static bool ParseRenderingMode(const char* s, VRRenderingMode& outMode) {
     return false;
 }
 
+namespace {
+
+// Holds the game's garbage collector off while it lives and lets it run again when it ends, whichever way that is: if
+// the collector was running it is stopped and then restarted, and the game's own next allocation runs the step that
+// became due; if the game had stopped it, it stays stopped. Luau raises a Lua error as a C++ exception, so a scope that
+// ends in one releases the hold too.
+class CollectorHold {
+public:
+    explicit CollectorHold(lua_State* L) : m_L(L), m_wasRunning(lua_gc(L, LUA_GCISRUNNING, 0) != 0) {
+        if (m_wasRunning) lua_gc(m_L, LUA_GCSTOP, 0);
+    }
+    ~CollectorHold() {
+        if (m_wasRunning) lua_gc(m_L, LUA_GCRESTART, 0);
+    }
+    CollectorHold(const CollectorHold&) = delete;
+    CollectorHold& operator=(const CollectorHold&) = delete;
+
+private:
+    lua_State* m_L;
+    bool m_wasRunning;
+};
+
+// The names of the rendering modes, which the handshake, getRenderingMode and VRBridge.renderingMode hand out, indexed by
+// the mode's value. The list of anchored strings is built from this table, so a mode named here is anchored.
+constexpr const char* kRenderingModeNames[] = {"AFR", "SequentialDualPass"};
+static_assert(std::size(kRenderingModeNames) == static_cast<size_t>(VRRenderingMode::SequentialDualPass) + 1,
+              "every rendering mode needs a name in kRenderingModeNames");
+
+constexpr const char* RenderingModeName(VRRenderingMode mode) {
+    return kRenderingModeNames[static_cast<size_t>(mode)];
+}
+
+// Every string a per-frame function returns (see VRBridge::PushAnchoredString): the rendering mode names and the
+// reasons the Virtual Gamepad can give.
+const std::vector<const char*>& AnchoredStrings() {
+    static const std::vector<const char*> strings = [] {
+        std::vector<const char*> all(std::begin(kRenderingModeNames), std::end(kRenderingModeNames));
+        all.insert(all.end(), VirtualGamepad::Reasons().begin(), VirtualGamepad::Reasons().end());
+        return all;
+    }();
+    return strings;
+}
+
+// The string argument at `index`, or null when it is anything else. A number is not converted: lua_tostring would make a
+// string from it, which allocates on the game's heap.
+const char* StringArgument(lua_State* L, int index) {
+    return lua_type(L, index) == LUA_TSTRING ? lua_tostring(L, index) : nullptr;
+}
+
+} // anonymous namespace
+
 VRBridge& VRBridge::FromUpvalue(lua_State* L) {
-    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(1)));
+    auto* self = static_cast<VRBridge*>(lua_touserdata(L, lua_upvalueindex(kBridgeUpvalue)));
     if (!self) luaL_error(L, "VRBridge: bridge upvalue is missing");  // does not return
     return *self;
 }
@@ -64,39 +118,82 @@ bool VRBridge::Inject(lua_State* L) {
     // collector to run. A collection step started from our pushes below has crashed in the allocator
     // (freeblock, from luaC_step) on several launches. Hold the collector off for the injection and let it run
     // again afterwards, from the game's own allocations; leave it stopped if the game had stopped it.
-    const bool collectorWasRunning = lua_gc(L, LUA_GCISRUNNING, 0) != 0;
-    if (collectorWasRunning) lua_gc(L, LUA_GCSTOP, 0);
+    {
+        CollectorHold collectorHold(L);
 
-    // Create table for VRBridge pre-allocated for all exposed fields (version + every table entry)
-    // to prevent dynamic table resizing/rehashing during startup
-    lua_createtable(L, 0, kExposedFieldCount);
+        // The strings the per-frame functions return, made once here and carried by every closure as kAnchorsUpvalue so that
+        // returning one allocates nothing (see PushAnchoredString).
+        const std::vector<const char*>& anchoredStrings = AnchoredStrings();
+        lua_createtable(L, static_cast<int>(anchoredStrings.size()), 0);
+        const int anchors = lua_gettop(L);
+        for (size_t i = 0; i < anchoredStrings.size(); ++i) {
+            lua_pushstring(L, anchoredStrings[i]);
+            lua_rawseti(L, anchors, static_cast<int>(i) + 1);
+        }
 
-    // VRBridge.version = the Injector's release version
-    lua_pushstring(L, m_version.c_str());
-    lua_setfield(L, -2, "version");
+        // Create table for VRBridge pre-allocated for all exposed fields (version + every table entry)
+        // to prevent dynamic table resizing/rehashing during startup
+        lua_createtable(L, 0, kExposedFieldCount);
 
-    // VRBridge.<name> = function [bound with 'this' upvalue], driven by kFunctionTable
-    for (const LuaFunctionEntry& entry : kFunctionTable) {
-        lua_pushlightuserdata(L, this);
-        lua_pushcclosure(L, entry.fn, entry.name, 1);
-        lua_setfield(L, -2, entry.name);
-    }
-    // Set metatable on VRBridge table for dynamic property access (__index)
-    lua_createtable(L, 0, 1);
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, &VRBridge::Lua_Index, "__index", 1);
-    lua_setfield(L, -2, "__index");
-    lua_setmetatable(L, -2);
+        // VRBridge.version = the Injector's release version
+        lua_pushstring(L, m_version.c_str());
+        lua_setfield(L, -2, "version");
 
-    // Set as global variable _G["VRBridge"]
-    lua_setglobal(L, "VRBridge");
+        // VRBridge.<name> = function [bound with 'this' upvalue], driven by kFunctionTable. A per-frame function is
+        // registered as it is and never touches the collector; every other one is registered behind RunOccasional, which
+        // holds the collector for each call and is the only place that does.
+        // The upvalues are pushed in the order of their slots (kBridgeUpvalue, kAnchorsUpvalue, kEntryUpvalue), and a
+        // closure carries as many as its highest slot.
+        for (const LuaFunctionEntry& entry : kFunctionTable) {
+            lua_pushlightuserdata(L, this);  // kBridgeUpvalue
+            lua_pushvalue(L, anchors);       // kAnchorsUpvalue
+            if (entry.kind == CallKind::PerFrame) {
+                lua_pushcclosure(L, entry.fn, entry.name, kAnchorsUpvalue);
+            } else {
+                lua_pushlightuserdata(L, const_cast<LuaFunctionEntry*>(&entry));  // kEntryUpvalue
+                lua_pushcclosure(L, &VRBridge::RunOccasional, entry.name, kEntryUpvalue);
+            }
+            lua_setfield(L, -2, entry.name);
+        }
+        // Set metatable on VRBridge table for dynamic property access (__index)
+        lua_createtable(L, 0, 1);
+        lua_pushlightuserdata(L, this);  // kBridgeUpvalue
+        lua_pushvalue(L, anchors);       // kAnchorsUpvalue
+        lua_pushcclosure(L, &VRBridge::Lua_Index, "__index", kAnchorsUpvalue);
+        lua_setfield(L, -2, "__index");
+        lua_setmetatable(L, -2);
 
-    // Strictly restore stack state to guarantee zero stack leakage
-    lua_settop(L, origTop);
-    if (collectorWasRunning) lua_gc(L, LUA_GCRESTART, 0);
+        // Set as global variable _G["VRBridge"]
+        lua_setglobal(L, "VRBridge");
+
+        // Strictly restore stack state to guarantee zero stack leakage
+        lua_settop(L, origTop);
+    }  // the collector runs again here if it was running
 
     LogInfo("VRBridge: Successfully injected global VRBridge table into Luau environment.");
     return true;
+}
+
+void VRBridge::PushAnchoredString(lua_State* L, int anchorsIndex, const char* text) {
+    if (lua_type(L, anchorsIndex) == LUA_TTABLE) {
+        const std::vector<const char*>& strings = AnchoredStrings();
+        for (size_t i = 0; i < strings.size(); ++i) {
+            if (std::strcmp(strings[i], text) == 0) {
+                lua_rawgeti(L, anchorsIndex, static_cast<int>(i) + 1);
+                return;
+            }
+        }
+    }
+    lua_pushstring(L, text);
+}
+
+int VRBridge::RunOccasional(lua_State* L) {
+    const auto* entry = static_cast<const LuaFunctionEntry*>(lua_touserdata(L, lua_upvalueindex(kEntryUpvalue)));
+    if (!entry) luaL_error(L, "VRBridge: function upvalue is missing");  // does not return
+    // The function runs as this closure, so its own kBridgeUpvalue and kAnchorsUpvalue are the bridge and the anchored
+    // strings bound at injection.
+    CollectorHold collectorHold(L);
+    return entry->fn(L);
 }
 
 bool VRBridge::IsReady() const {
@@ -147,7 +244,7 @@ int VRBridge::Lua_Handshake(lua_State* L) {
 
     // The Companion Mod passes its own version as the second argument (the first is the optional mode). One from before
     // that passes none, and an Injector from before it ignores the argument.
-    const char* companionVersion = (lua_type(L, 2) == LUA_TSTRING) ? lua_tostring(L, 2) : nullptr;
+    const char* companionVersion = StringArgument(L, 2);
 
     self->PerformHandshake();
     self->LogVersions(companionVersion);
@@ -164,8 +261,7 @@ int VRBridge::Lua_Handshake(lua_State* L) {
     lua_pushstring(L, modeStr);
     lua_setfield(L, -2, "mode");
 
-    const char* rendStr = (self->GetRenderingMode() == VRRenderingMode::SequentialDualPass) ? "SequentialDualPass" : "AFR";
-    lua_pushstring(L, rendStr);
+    lua_pushstring(L, RenderingModeName(self->GetRenderingMode()));
     lua_setfield(L, -2, "renderingMode");
 
     lua_pushinteger(L, static_cast<int>(self->GetRenderingMode()));
@@ -539,7 +635,7 @@ int VRBridge::Lua_GetVirtualGamepad(lua_State* L) {
     } else {
         lua_pushnil(L);
     }
-    lua_pushstring(L, status.reason);
+    PushAnchoredString(L, lua_upvalueindex(kAnchorsUpvalue), status.reason);
     lua_pushboolean(L, status.gripHeld[0] ? 1 : 0);
     lua_pushboolean(L, status.gripHeld[1] ? 1 : 0);
     return 5;
@@ -1036,18 +1132,16 @@ int VRBridge::Lua_GetRenderingMode(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
     VRRenderingMode mode = self->GetRenderingMode();
-    const char* str = (mode == VRRenderingMode::SequentialDualPass) ? "SequentialDualPass" : "AFR";
+    const char* str = RenderingModeName(mode);
     int intVal = static_cast<int>(mode);
 
-    if (lua_gettop(L) >= 1 && lua_isstring(L, 1)) {
-        const char* fmt = lua_tostring(L, 1);
-        if (fmt && (_stricmp(fmt, "int") == 0 || _stricmp(fmt, "number") == 0 || _stricmp(fmt, "index") == 0)) {
-            lua_pushinteger(L, intVal);
-            return 1;
-        }
+    const char* fmt = StringArgument(L, 1);
+    if (fmt && (_stricmp(fmt, "int") == 0 || _stricmp(fmt, "number") == 0 || _stricmp(fmt, "index") == 0)) {
+        lua_pushinteger(L, intVal);
+        return 1;
     }
 
-    lua_pushstring(L, str);
+    PushAnchoredString(L, lua_upvalueindex(kAnchorsUpvalue), str);
     lua_pushinteger(L, intVal);
     return 2;
 }
@@ -1125,8 +1219,8 @@ int VRBridge::Lua_GetActiveEye(lua_State* L) {
 int VRBridge::Lua_Index(lua_State* L) {
     VRBridge* self = &FromUpvalue(L);
 
-    if (lua_isstring(L, 2)) {
-        const char* key = lua_tostring(L, 2);
+    // A key that is not a string (a number, say) is not converted to one: that would allocate. It reads nil.
+    if (const char* key = StringArgument(L, 2)) {
         if (strcmp(key, "requiresAfrFallback") == 0) {
             lua_pushboolean(L, self->RequiresAfrFallback() ? 1 : 0);
             return 1;
@@ -1140,8 +1234,8 @@ int VRBridge::Lua_Index(lua_State* L) {
             return 1;
         }
         if (strcmp(key, "renderingMode") == 0) {
-            const char* str = (self->GetRenderingMode() == VRRenderingMode::SequentialDualPass) ? "SequentialDualPass" : "AFR";
-            lua_pushstring(L, str);
+            const char* str = RenderingModeName(self->GetRenderingMode());
+            PushAnchoredString(L, lua_upvalueindex(kAnchorsUpvalue), str);
             return 1;
         }
         if (strcmp(key, "renderingModeIndex") == 0) {
@@ -1360,14 +1454,14 @@ int VRBridge::Lua_IsPerfTracing(lua_State* L) {
 int VRBridge::Lua_PerfTraceBegin(lua_State* L) {
     FromUpvalue(L);
     PerfSection section;
-    if (PerfSectionFromLuaName(lua_tostring(L, 1), section)) PerfTrace::Instance().Begin(section);
+    if (PerfSectionFromLuaName(StringArgument(L, 1), section)) PerfTrace::Instance().Begin(section);
     return 0;
 }
 
 int VRBridge::Lua_PerfTraceEnd(lua_State* L) {
     FromUpvalue(L);
     PerfSection section;
-    if (PerfSectionFromLuaName(lua_tostring(L, 1), section)) PerfTrace::Instance().End(section);
+    if (PerfSectionFromLuaName(StringArgument(L, 1), section)) PerfTrace::Instance().End(section);
     return 0;
 }
 
