@@ -1699,9 +1699,10 @@ Test-Case "An upgrade over a crash dump key the player changed leaves it alone, 
     Assert-SameCrashDumpKey $changed (Get-CrashDumpKey $world.ExeName) "The player's crash dump key after the uninstall"
 } -Needs Elevated
 
-# Windows creates the LocalDumps key itself when the game exe's key is the first thing written under it, and
-# it counts as the switch for crash dumps (with Windows' defaults) for the other applications too. So the
-# Installer records that it created it, and the uninstall takes it away again when it is still empty.
+# Writing the game exe's key creates the LocalDumps key when it is not there. Microsoft does not say what a
+# LocalDumps key with nothing in it does (it may keep crash dumps on for the other applications too), so the
+# Installer leaves the registry as it found it: it records that it created LocalDumps, and the uninstall takes
+# it away again when it is still empty (docs\adr\0039-..., item 8).
 Test-Case "An install and an uninstall leave the LocalDumps key as they found it" {
     param($world)
     New-FakeGame $world

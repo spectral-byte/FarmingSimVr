@@ -91,10 +91,11 @@
 ;   The record is written before the key and deleted again if the key cannot be written. Remove rule: the
 ;   uninstall deletes the exe's key only when a record exists and the key still holds exactly those three
 ;   values (no other value, no subkey); then, if CreatedLocalDumpsKey is 1, it deletes LocalDumps too unless
-;   something else has gone into it (Windows treats an existing LocalDumps key as the switch for crash dumps
-;   with its defaults for every application). Either way the record is deleted. An upgrade or reinstall keeps
-;   the key and its record while the key is still its own, writes the key when there is none, and for a key
-;   that was changed since leaves it alone and deletes the record.
+;   something else has gone into it. Microsoft does not say what a LocalDumps key with nothing in it does (it
+;   may keep crash dumps on for every application), so the Installer leaves the registry as it found it
+;   (docs/adr/0039, item 8). Either way the record is deleted. An upgrade or reinstall keeps the key and its
+;   record while the key is still its own, writes the key when there is none, and for a key that was changed
+;   since leaves it alone and deletes the record.
 ;   Pascal helpers in [Code]: TCrashDumpRecord, SetUpCrashDumps, RemoveCrashDumps, CrashDumpKeyIsUnchanged.
 ;
 ; English only, requires admin, unsigned (see docs/adr/0024-unsigned-inno-setup-installer-and-static-runtime-injector.md).
@@ -1082,8 +1083,8 @@ function HasCommandLineSwitch(const Name: String): Boolean; forward;
 type
   { What the Installer recorded about the key it made. ExeName is empty when there is no record. The Written
     values are the numbers it wrote, as text. CreatedLocalDumpsKey is '1' when the LocalDumps key itself was
-    not there and the Installer's write created it (Windows then counts it as the switch for crash dumps
-    with its defaults for every application, so the uninstall takes it away again when it is empty). }
+    not there and the Installer's write created it (what Windows does with a LocalDumps key that has nothing
+    in it is not documented, so the uninstall takes it away again when it is empty: docs/adr/0039, item 8). }
   TCrashDumpRecord = record
     ExeName: String;
     WrittenDumpType, WrittenCustomDumpFlags, WrittenDumpCount: String;
