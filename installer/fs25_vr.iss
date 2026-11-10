@@ -1156,7 +1156,7 @@ end;
 procedure SetUpCrashDumps;
 var
   ExeName, Key: String;
-  R: TCrashDumpRecord;
+  R, Old: TCrashDumpRecord;
 begin
   if not WantCrashDumps then
   begin
@@ -1176,10 +1176,23 @@ begin
   end;
   Key := CrashDumpsKey(ExeName);
 
-  { A key that is already there is the player's or another tool's: it is left exactly as it is. }
+  { A key that is already there is left exactly as it is, and so is its record. It is ours when an earlier
+    run recorded it and it still holds what was written (an upgrade or a reinstall): it stays, with its
+    record. Otherwise it is the player's or another tool's, and a record of an earlier key of ours that
+    was changed since no longer describes anything of ours. }
   if RegKeyExists(CrashDumpsRoot, Key) then
   begin
-    Log('Windows crash dump setting: HKLM\' + Key + ' already exists; leaving it alone.');
+    if LoadCrashDumpRecord(Old) and SameText(Old.ExeName, ExeName) and CrashDumpKeyIsUnchanged(Old) then
+      Log('Windows crash dump setting: HKLM\' + Key + ' is still the one this Installer made; keeping it and its record.')
+    else
+    begin
+      Log('Windows crash dump setting: HKLM\' + Key + ' already exists; leaving it alone.');
+      if LoadCrashDumpRecord(Old) and SameText(Old.ExeName, ExeName) then
+      begin
+        Log('Windows crash dump setting: it was changed since this Installer made it; deleting the record of it.');
+        DeleteFile(GetCrashDumpRecordPath);
+      end;
+    end;
     Exit;
   end;
 

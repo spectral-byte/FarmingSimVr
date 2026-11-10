@@ -1569,6 +1569,73 @@ Test-Case "/FS25VR_NOCRASHDUMPS leaves no crash dump key and no record, and the 
     Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "A crash dump key appeared by the uninstall."
 } -Needs Elevated
 
+# An upgrade or reinstall applies the same rules: it keeps the key and its record while the key is still its
+# own, writes the key when there is none, and leaves a key the player changed alone (and forgets the record,
+# which no longer describes anything of ours).
+Test-Case "An upgrade over an install that has the crash dump key keeps it and its record, and the later uninstall removes it" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    Assert-InstallSucceeds $world @() "First Setup"
+    $recordBefore = Get-CrashDumpRecord
+    Assert-CrashDumpKeyIsOurs (Get-CrashDumpKey $world.ExeName) "after the first install"
+
+    $newer = New-NewerSetup $world
+    $exit = Invoke-SetupExe $newer $world
+    Assert-True ($exit -eq 0) "Upgrade Setup exited with $exit."
+
+    Assert-CrashDumpKeyIsOurs (Get-CrashDumpKey $world.ExeName) "after the upgrade"
+    $recordAfter = Get-CrashDumpRecord
+    Assert-True ($null -ne $recordAfter -and (($recordAfter.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ";") -eq
+        (($recordBefore.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ";")) "The crash dump record changed or went missing in the upgrade."
+    Assert-True ((Get-LastSetupLog $world) -match "still the one this Installer made") "The upgrade did not log that it kept the crash dump key it had made."
+
+    Uninstall-Fs25Vr
+
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key is still there after the uninstall that followed the upgrade."
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "The crash dump record was not deleted by the uninstall."
+} -Needs Elevated
+
+Test-Case "An upgrade writes the crash dump key again when it is gone, and the later uninstall removes it" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    Assert-InstallSucceeds $world @() "First Setup"
+    Remove-CrashDumpKey $world.ExeName
+
+    $newer = New-NewerSetup $world
+    $exit = Invoke-SetupExe $newer $world
+    Assert-True ($exit -eq 0) "Upgrade Setup exited with $exit."
+
+    Assert-CrashDumpKeyIsOurs (Get-CrashDumpKey $world.ExeName) "after the upgrade"
+    Assert-True ($null -ne (Get-CrashDumpRecord)) "The upgrade did not record the crash dump key it wrote."
+
+    Uninstall-Fs25Vr
+
+    Assert-True ($null -eq (Get-CrashDumpKey $world.ExeName)) "The crash dump key is still there after the uninstall."
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "The crash dump record was not deleted by the uninstall."
+} -Needs Elevated
+
+Test-Case "An upgrade over a crash dump key the player changed leaves it alone, and the later uninstall leaves it too" {
+    param($world)
+    New-FakeGame $world
+    New-FakeDocuments $world
+    Assert-InstallSucceeds $world @() "First Setup"
+    Set-CrashDumpKey $world.ExeName @{ DumpCount = 10 }
+    $changed = Get-CrashDumpKey $world.ExeName
+
+    $newer = New-NewerSetup $world
+    $exit = Invoke-SetupExe $newer $world
+    Assert-True ($exit -eq 0) "Upgrade Setup exited with $exit."
+
+    Assert-SameCrashDumpKey $changed (Get-CrashDumpKey $world.ExeName) "The player's crash dump key after the upgrade"
+    Assert-True ($null -eq (Get-CrashDumpRecord)) "The upgrade kept a crash dump record for a key that is no longer the Installer's."
+
+    Uninstall-Fs25Vr
+
+    Assert-SameCrashDumpKey $changed (Get-CrashDumpKey $world.ExeName) "The player's crash dump key after the uninstall"
+} -Needs Elevated
+
 Write-Host "Installer tests: $passed passed, $skipped skipped, $($failures.Count) failed."
 if ($failures.Count -gt 0) {
     Write-Error "$($failures.Count) installer test(s) failed: $($failures -join '; ')"
