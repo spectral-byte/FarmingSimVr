@@ -654,7 +654,6 @@ void DxgiProxy::LatchPendingRenderingMode() {
 }
 
 bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
-    m_presentWasStereo = false;
     m_mouseConfinementUpdated = false;
     bool shouldPresent;
     {
@@ -681,13 +680,26 @@ bool DxgiProxy::OnPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT fla
 
 bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, UINT /*flags*/) {
     FS25VR_TRACE_THREAD("DxgiProxy.Present");
-    m_lastPresentSuppressed = false;
+
+    // Decide first, then act: the facts of this Present, the plan they give, and the plan carried out. The back buffer
+    // is held here until the Present is done, whether or not the cache holds it too.
+    Microsoft::WRL::ComPtr<ID3D12Resource> backBufferHolder;
+    ID3D12Resource* pBackBuffer = nullptr;
+    PresentFacts facts = GatherPresentFacts(swapChain, backBufferHolder, pBackBuffer);
+    PresentPlan plan = PlanPresent(facts);
+    return CarryOutPresentPlan(swapChain, pBackBuffer, facts, plan);
+}
+
+PresentFacts DxgiProxy::GatherPresentFacts(IDXGISwapChain* swapChain,
+                                           Microsoft::WRL::ComPtr<ID3D12Resource>& backBufferHolder,
+                                           ID3D12Resource*& pBackBuffer) {
+    PresentFacts facts;
+    facts.wasInQuadMode = m_wasInQuadMode;
+    facts.mirrorWasShowing = m_desktopMirrorWasShowing;
 
     if (!m_openXrManager || !m_openXrManager->IsActive()) {
         // Not Active: no eye pair can be in flight, so a queued mode change must not be lost.
-        LatchPendingRenderingMode();
-        m_desktopMirrorWasShowing = true;
-        return true;
+        return facts;
     }
 
     // Poll runtime events before deciding how to present; this may begin/end the session or
@@ -695,11 +707,9 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
     m_openXrManager->PollEvents();
     if (!m_openXrManager->IsActive()) {
         // Dropped to Pass-Through after a mode was queued; the released eye pair is abandoned.
-        LatchPendingRenderingMode();
-        m_lastPresentSuppressed = false;
-        m_desktopMirrorWasShowing = true;
-        return true;
+        return facts;
     }
+    facts.active = true;
 
     if (!m_windowController->GetGameHwnd() && swapChain) {
         DXGI_SWAP_CHAIN_DESC desc{};
@@ -710,9 +720,6 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
     if (m_windowController->GetGameHwnd() && m_windowController->IsWindowClampDirty()) {
         m_windowController->EnforceClampedMirrorWindowDimensions(m_windowController->GetGameHwnd());
     }
-
-    ID3D12Resource* pBackBuffer = nullptr;
-    Microsoft::WRL::ComPtr<ID3D12Resource> backBuffer;
 
     if (swapChain) {
         // Ensure D3D12 device and command queue via consolidated helper
@@ -766,125 +773,106 @@ bool DxgiProxy::OnPresentImpl(IDXGISwapChain* swapChain, UINT /*syncInterval*/, 
         if (bufferIndex < m_cachedBackBuffers.size() && m_cachedBackBuffers[bufferIndex]) {
             pBackBuffer = m_cachedBackBuffers[bufferIndex].Get();
         } else {
-            if (SUCCEEDED(swapChain->GetBuffer(bufferIndex, IID_PPV_ARGS(&backBuffer)))) {
-                pBackBuffer = backBuffer.Get();
+            if (SUCCEEDED(swapChain->GetBuffer(bufferIndex, IID_PPV_ARGS(&backBufferHolder)))) {
+                pBackBuffer = backBufferHolder.Get();
                 if (bufferIndex >= m_cachedBackBuffers.size()) {
                     m_cachedBackBuffers.resize(bufferIndex + 1);
                 }
-                m_cachedBackBuffers[bufferIndex] = backBuffer;
+                m_cachedBackBuffers[bufferIndex] = backBufferHolder;
             }
         }
     }
 
-    if (m_openXrManager->HasEyeSwapchains() && !m_openXrManager->IsSessionRunning()) {
-        // Session is IDLE/STOPPING (headset asleep, dashboard) or not yet READY: submit no VR
-        // frames and let the game keep presenting to the Desktop Mirror Window.
-        // On resume, start a fresh eye pair and re-align the menu quad to the new head pose.
-        if (m_vrBridge) {
-            m_vrBridge->SetFrameParity(0);
-            if (m_vrBridge->GetSubPassIndex() != 0) {
-                m_vrBridge->ResetSubPass();
-            }
+    facts.eyeSwapchains = m_openXrManager->HasEyeSwapchains();
+    facts.sessionRunning = m_openXrManager->IsSessionRunning();
+    if (m_vrBridge) {
+        facts.companionActive = m_vrBridge->IsCompanionActive();
+        facts.menuVisible = m_vrBridge->IsMenuVisible();
+        facts.floatingWindow2D = m_vrBridge->Is2DViewActive();
+        facts.sequentialDualPass = m_vrBridge->GetRenderingMode() == VRRenderingMode::SequentialDualPass;
+        facts.eyePhase = m_vrBridge->GetActiveEye();
+    }
+    facts.desktopMirrorOff = IsDesktopMirrorOffNow();
+    return facts;
+}
+
+bool DxgiProxy::CarryOutPresentPlan(IDXGISwapChain* swapChain, ID3D12Resource* backBuffer, PresentFacts facts,
+                                    PresentPlan plan) {
+    if (plan.resetPacing && m_vrBridge) {
+        // A fresh eye pair: back to the left eye / Sub-Pass 0.
+        m_vrBridge->SetFrameParity(0);
+        m_vrBridge->ResetSubPass();
+    }
+
+    if (plan.hideMenuCursor && m_openXrManager->GetMenuCursorState().visible) {
+        m_openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
+    }
+
+    if (plan.copyToEye) {
+        m_openXrManager->CopyBackBufferToEye(*plan.copyToEye, backBuffer);
+        if (plan.snapshotEye) {
+            SnapshotEyeIfRequested(*plan.copyToEye, backBuffer);
         }
-        // No eye pair is in flight, so a queued Stereo Presentation Mode change is safe to apply now.
+    }
+
+    if (plan.submit == EyeSubmission::MenuQuad) {
+        if (plan.alignMenuQuad) {
+            m_openXrManager->AlignMenuQuadToHeadPose();
+        }
+        if (!m_openXrManager->HasCursorSwapchain()) {
+            m_openXrManager->CreateCursorSwapchain();
+        }
+        // Mouse Confinement first: when it starts holding it brings the Desk Mouse to the middle of
+        // the picture, and this frame's drawn cursor reads where the Desk Mouse is.
+        UpdateMouseConfinement();
+        m_windowController->UpdateMenuCursorState(swapChain, m_openXrManager.get());
+
+        // Floating quad layer mode:
+        // Backbuffer is presented on an OpenXR Quad layer positioned in 3D tracking space
+        // rather than warping across an immersive projection layer.
+        // Active during pre-game / Main Menu, in-game GUI menus (ESC pause menu, shop, etc.),
+        // or in 2D Floating Window Mode.
+        m_openXrManager->SubmitMenuQuad();
+    } else if (plan.submit == EyeSubmission::FramePair) {
+        m_openXrManager->SubmitFramePair();
+    }
+
+    if (m_vrBridge) {
+        if (plan.advance == FrameAdvance::ToSecondSubPass) {
+            m_vrBridge->SetSubPassIndex(1);
+        } else if (plan.advance == FrameAdvance::ToNextFrame) {
+            m_vrBridge->AdvanceFrame();
+        }
+    }
+
+    if (plan.latchQueuedMode) {
         LatchPendingRenderingMode();
-        m_wasInQuadMode = false;
-        m_lastPresentSuppressed = false;
-        m_desktopMirrorWasShowing = true;  // the mirror shows by itself: a resume with it off re-triggers the black frame
-        return true;
     }
 
-    if (m_openXrManager->HasEyeSwapchains()) {
-        bool isCompanionActive = m_vrBridge && m_vrBridge->IsCompanionActive();
-        bool isMenuVisible = m_vrBridge && m_vrBridge->IsMenuVisible();
-        bool is2DViewActive = m_vrBridge && m_vrBridge->Is2DViewActive();
-        bool inQuadMode = !isCompanionActive || isMenuVisible || is2DViewActive;
-        if (inQuadMode) {
-            m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
-            if (!m_wasInQuadMode) {
-                m_openXrManager->AlignMenuQuadToHeadPose();
-            }
-            m_wasInQuadMode = true;
-
-            if (!m_openXrManager->HasCursorSwapchain()) {
-                m_openXrManager->CreateCursorSwapchain();
-            }
-            // Mouse Confinement first: when it starts holding it brings the Desk Mouse to the middle of
-            // the picture, and this frame's drawn cursor reads where the Desk Mouse is.
-            UpdateMouseConfinement();
-            m_windowController->UpdateMenuCursorState(swapChain, m_openXrManager.get());
-
-            // Floating quad layer mode:
-            // Backbuffer is presented on an OpenXR Quad layer positioned in 3D tracking space
-            // rather than warping across an immersive projection layer.
-            // Active during pre-game / Main Menu, in-game GUI menus (ESC pause menu, shop, etc.),
-            // or in 2D Floating Window Mode.
-            m_openXrManager->SubmitMenuQuad();
-            // The quad frame is a completed compositor frame and no eye pair is in flight.
-            LatchPendingRenderingMode();
-            return ShouldCallRealPresent(pBackBuffer);
-        } else {
-            if (m_wasInQuadMode) {
-                // Seamlessly returning to stereoscopic 3D VR view: reset AFR frame parity and subPassIndex
-                if (m_vrBridge) {
-                    m_vrBridge->SetFrameParity(0);
-                    m_vrBridge->ResetSubPass();
-                }
-            }
-            m_wasInQuadMode = false;
-            m_presentWasStereo = true;
-            if (m_openXrManager->GetMenuCursorState().visible) {
-                m_openXrManager->SetMenuCursorState({ false, 0.0f, 0.0f, MenuCursorState::kDefaultCursorSize });
-            }
-            VRRenderingMode renderingMode = m_vrBridge ? m_vrBridge->GetRenderingMode() : VRRenderingMode::AFR;
-            if (renderingMode == VRRenderingMode::SequentialDualPass) {
-                uint32_t subPass = m_vrBridge ? m_vrBridge->GetSubPassIndex() : 0;
-                if (subPass == 0) {
-                    // Sub-Pass 0: copies the left eye, suppresses the physical present, advances subPassIndex to 1
-                    m_openXrManager->CopyBackBufferToEye(0, pBackBuffer);
-                    SnapshotEyeIfRequested(0, pBackBuffer);
-                    if (m_vrBridge) {
-                        m_vrBridge->SetSubPassIndex(1);
-                    }
-                    m_lastPresentSuppressed = true;
-                    return false;
-                } else {
-                    // Sub-Pass 1: copies the right eye, submits the pair, executes the physical present, resets subPassIndex to 0
-                    m_openXrManager->CopyBackBufferToEye(1, pBackBuffer);
-                    SnapshotEyeIfRequested(1, pBackBuffer);
-                    m_openXrManager->SubmitFramePair();
-                    if (m_vrBridge) {
-                        m_vrBridge->AdvanceFrame();
-                    }
-                    LatchPendingRenderingMode();
-                    return ShouldCallRealPresent(pBackBuffer);
-                }
-            } else {
-                // Alternate Frame Rendering (AFR) pacing pipeline: alternate sequential frames
-                uint32_t parity = m_vrBridge ? m_vrBridge->GetFrameParity() : 0;
-                m_openXrManager->CopyBackBufferToEye(parity, pBackBuffer);
-                SnapshotEyeIfRequested(parity, pBackBuffer);
-
-                if (parity == 1) {
-                    m_openXrManager->SubmitFramePair();
-                }
-
-                if (m_vrBridge) {
-                    m_vrBridge->AdvanceFrame();
-                }
-
-                if (parity == 1) {
-                    LatchPendingRenderingMode();
-                }
-                return ShouldCallRealPresent(pBackBuffer);
-            }
-        }
+    // Whether the Desktop Mirror Window is off is the one fact a step above can change (a submission that finds the
+    // session lost drops the Injector to Pass-Through Mode), so it is asked again, and only the tail of the plan follows.
+    const bool mirrorOffNow = IsDesktopMirrorOffNow();
+    if (mirrorOffNow != facts.desktopMirrorOff) {
+        facts.desktopMirrorOff = mirrorOffNow;
+        plan = PlanPresent(facts);
     }
-    // No eye swapchains (creation failed or Pass-Through): no eye pair can be in flight.
-    LatchPendingRenderingMode();
-    m_lastPresentSuppressed = false;
-    m_desktopMirrorWasShowing = true;
-    return true;
+
+    // Called after this frame's eye copy, so the headset has the game's frame; only the Desktop Mirror Window gets the
+    // black one. A null back buffer (unit tests) leaves nothing to clear.
+    if (plan.clearBackBufferToBlack && m_openXrManager) {
+        m_openXrManager->ClearBackBufferToBlack(backBuffer);
+    }
+
+    // The bookkeeping every Present ends with, whichever case it was.
+    m_presentWasStereo = plan.presentWasStereo;
+    if (plan.inQuadModeAfter) {
+        m_wasInQuadMode = *plan.inQuadModeAfter;
+    }
+    if (plan.mirror != MirrorBookkeeping::Unchanged) {
+        m_desktopMirrorWasShowing = plan.mirror == MirrorBookkeeping::Showing;
+    }
+    m_lastPresentSuppressed = !plan.callRealPresent;
+    return plan.callRealPresent;
 }
 
 void DxgiProxy::SnapshotEyeIfRequested(uint32_t eyeIndex, ID3D12Resource* backBuffer) {
@@ -965,31 +953,6 @@ void DxgiProxy::UpdateMouseConfinement() {
     }
     m_mouseConfinementUpdated = true;
     m_windowController->UpdateMouseConfinement(state);
-}
-
-bool DxgiProxy::ShouldCallRealPresent(ID3D12Resource* backBuffer) {
-    if (!IsDesktopMirrorOffNow()) {
-        m_desktopMirrorWasShowing = true;
-        m_lastPresentSuppressed = false;
-        return true;
-    }
-    if (ConsumeSwitchToOff(backBuffer)) {
-        m_lastPresentSuppressed = false;
-        return true;
-    }
-    m_lastPresentSuppressed = true;
-    return false;
-}
-
-bool DxgiProxy::ConsumeSwitchToOff(ID3D12Resource* backBuffer) {
-    if (!m_desktopMirrorWasShowing) return false;
-    m_desktopMirrorWasShowing = false;
-    // Called after this frame's eye copy, so the headset has the game's frame; only the Desktop
-    // Mirror Window gets the black one. A null back buffer (unit tests) leaves nothing to clear.
-    if (m_openXrManager) {
-        m_openXrManager->ClearBackBufferToBlack(backBuffer);
-    }
-    return true;
 }
 
 void DxgiProxy::OnPresentReturned(HRESULT presentResult) {

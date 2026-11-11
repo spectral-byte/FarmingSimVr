@@ -133,6 +133,8 @@ set(CORE_SOURCES
     src/proxy/desktop_cursor_port.cpp
     src/proxy/mirror_window_controller.h
     src/proxy/mirror_window_controller.cpp
+    src/proxy/present_plan.cpp
+    src/proxy/present_plan.h
     src/proxy/dxgi_proxy.cpp
     src/proxy/dxgi_proxy.h
     src/ngx/ngx_defs.h
@@ -225,6 +227,7 @@ add_executable(fs25_vr_tests
     tests/test_openxr_motion_controllers.cpp
     tests/test_mirror_window_controller.cpp
     tests/test_dxgi_proxy.cpp
+    tests/test_present_plan.cpp
     tests/test_d3d11on12_unwrap.cpp
     tests/test_dxgi_export_hooks.cpp
     tests/test_injector_binary.cpp
