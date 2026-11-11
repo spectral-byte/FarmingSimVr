@@ -104,7 +104,7 @@ protected:
         Triple t;
         const size_t at = line.find(label);
         if (at == std::string::npos) return t;
-        t.found = std::sscanf(line.c_str() + at + label.size(), " (%lf, %lf, %lf)", &t.x, &t.y, &t.z) == 3;
+        t.found = sscanf_s(line.c_str() + at + label.size(), " (%lf, %lf, %lf)", &t.x, &t.y, &t.z) == 3;
         return t;
     }
 };
