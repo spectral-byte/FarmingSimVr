@@ -118,6 +118,8 @@ set(CORE_SOURCES
     src/openxr/openxr_dispatch.h
     src/openxr/d3d12_eye_copy.h
     src/openxr/d3d12_eye_copy.cpp
+    src/openxr/menu_quad.h
+    src/openxr/menu_quad.cpp
     src/openxr/openxr_cursor_overlay.h
     src/openxr/openxr_cursor_overlay.cpp
     src/openxr/openxr_input.h
@@ -222,6 +224,7 @@ add_executable(fs25_vr_tests
     tests/test_fov_coverage.cpp
     tests/test_fov_overscan.cpp
     tests/test_menu_distance.cpp
+    tests/test_menu_quad.cpp
     tests/test_texture_snapshot.cpp
     tests/test_openxr_eye_copy_d3d12.cpp
     tests/test_openxr_motion_controllers.cpp

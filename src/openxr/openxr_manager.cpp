@@ -294,7 +294,7 @@ void OpenXrManager::Shutdown() {
     m_fovOverscan = m_fovOverscanSuspended.load() ? 0.0f : m_requestedFovOverscan.load();
     m_loggedEyeCopySizeMismatch = false;
     m_headPoseLocateFailures = 0;
-    m_hasCustomMenuQuadSize = false;
+    m_menuQuad.ClearCustomSize();
     m_lastSubmittedQuadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
     m_lastPolledTime = 0;
     m_lastLocatedViewsTime = 0;
@@ -369,8 +369,7 @@ void OpenXrManager::PollEvents() {
             // comes with the Companion Mod. Poses respect it from changeTime on.
             const auto* change = reinterpret_cast<const XrEventDataReferenceSpaceChangePending*>(&event);
             if (change->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL) {
-                m_menuQuadAwaitsHead = true;
-                m_menuQuadAwaitsHeadAfter = change->changeTime;
+                m_menuQuad.AwaitHeadAfter(change->changeTime);
                 LogInfo("OpenXrManager: Runtime recentered the local space; the menu quad follows the head.");
             }
             break;
@@ -421,8 +420,7 @@ void OpenXrManager::HandleSessionStateChanged(XrSessionState state) {
         // rests. The first focus of a running session is when the player has it on.
         if (!m_focusedSinceBegin) {
             m_focusedSinceBegin = true;
-            m_menuQuadAwaitsHead = true;
-            m_menuQuadAwaitsHeadAfter = 0;
+            m_menuQuad.AwaitHeadAfter(0);
         }
         break;
     case XR_SESSION_STATE_STOPPING:
@@ -1206,8 +1204,7 @@ bool OpenXrManager::BeginFrame() {
     if (m_frameState.shouldRender) {
         LocateActiveViews(m_frameState.predictedDisplayTime);
         PollHeadPose(m_frameState.predictedDisplayTime);
-        if (m_menuQuadAwaitsHead && m_hasMenuQuadPose && m_lastPose.isValid &&
-            m_frameState.predictedDisplayTime >= m_menuQuadAwaitsHeadAfter) {
+        if (m_menuQuad.AwaitsHead(m_lastPose.isValid, m_frameState.predictedDisplayTime)) {
             AlignMenuQuadToHeadPose();
             LogInfo("OpenXrManager: Menu quad placed in front of the tracked head.");
         }
@@ -1465,135 +1462,18 @@ bool OpenXrManager::SubmitFramePair() {
     return true;
 }
 
-XrPosef OpenXrManager::ComputeMenuQuadPoseFromHeadPose(const HeadPose& headPose, float distance) {
-    float yaw = headPose.rotation.yaw;
-    // Fallback: if yaw Euler is 0 but orientation quaternion is non-identity, extract yaw from quaternion
-    if (std::abs(yaw) < 1e-6f && (std::abs(headPose.orientation.x) > 1e-6f ||
-                                 std::abs(headPose.orientation.y) > 1e-6f ||
-                                 std::abs(headPose.orientation.z) > 1e-6f ||
-                                 std::abs(headPose.orientation.w - 1.0f) > 1e-6f)) {
-        yaw = QuaternionToEuler(headPose.orientation).yaw;
-    }
-
-    float halfYaw = yaw * 0.5f;
-    Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
-
-    Vector3 forwardOffset(0.0f, 0.0f, -distance);
-    Vector3 rotatedOffset = RotateVectorByQuaternion(qYaw, forwardOffset);
-
-    XrPosef pose{};
-    pose.position.x = headPose.position.x + rotatedOffset.x;
-    pose.position.y = headPose.position.y; // Decouple pitch/roll: virtual screen remains at eye level
-    pose.position.z = headPose.position.z + rotatedOffset.z;
-
-    pose.orientation.x = qYaw.x;
-    pose.orientation.y = qYaw.y;
-    pose.orientation.z = qYaw.z;
-    pose.orientation.w = qYaw.w;
-
-    return pose;
-}
-
 void OpenXrManager::AlignMenuQuadToHeadPose(const HeadPose* customPose) {
     // The head as located in m_localSpace, the space SubmitMenuQuad() submits the quad in. The raw
     // pose is in the runtime's own local space, which after a Recenter Action is offset by wherever
     // the head was in it: about 24 m on Pimax OpenXR, enough to put the menu out of sight (issue 238).
-    const HeadPose& pose = customPose ? *customPose : m_lastPose;
-    m_menuQuadPose = ComputeMenuQuadPoseFromHeadPose(pose, m_menuQuadDistance);
-    m_hasMenuQuadPose = true;
-    // The first menu frame of a session usually has no head pose yet (the frame is not rendered, or
-    // the runtime is not tracking): the quad then sits at the local space origin, which can be far
-    // below the eyes, until the head is tracked.
-    m_menuQuadAwaitsHead = !pose.isValid;
-    m_menuQuadAwaitsHeadAfter = 0;
-}
-
-float OpenXrManager::ClampMenuQuadDistance(float distance) {
-    if (std::isnan(distance)) return kDefaultMenuQuadDistance;
-    return std::clamp(distance, kMinMenuQuadDistance, kMaxMenuQuadDistance);
-}
-
-void OpenXrManager::SetMenuQuadDistance(float distance) {
-    distance = ClampMenuQuadDistance(distance);
-    if (m_hasMenuQuadPose) {
-        // Along the quad's own -Z, the way the player looks at it, by the change in distance.
-        const Quaternion facing(m_menuQuadPose.orientation.x, m_menuQuadPose.orientation.y,
-                                m_menuQuadPose.orientation.z, m_menuQuadPose.orientation.w);
-        const Vector3 shift = RotateVectorByQuaternion(facing, Vector3(0.0f, 0.0f, m_menuQuadDistance - distance));
-        m_menuQuadPose.position.x += shift.x;
-        m_menuQuadPose.position.y += shift.y;
-        m_menuQuadPose.position.z += shift.z;
-    }
-    m_menuQuadDistance = distance;
-}
-
-XrPosef OpenXrManager::ComputeMenuQuadPose() const {
-    if (m_hasMenuQuadPose) {
-        return m_menuQuadPose;
-    }
-    XrPosef pose{};
-    pose.position.x = 0.0f;
-    pose.position.y = 0.0f;
-    pose.position.z = -m_menuQuadDistance;
-    pose.orientation.w = 1.0f;
-    return pose;
+    m_menuQuad.AlignToHeadPose(customPose ? *customPose : m_lastPose);
 }
 
 XrExtent2Df OpenXrManager::ComputeMenuQuadSize() const {
-    if (m_hasCustomMenuQuadSize) {
-        return m_customMenuQuadSize;
+    if (m_hasEyeSwapchains) {
+        return m_menuQuad.Size(m_eyeSwapchains[0].width, m_eyeSwapchains[0].height);
     }
-    float height = 0.9f;
-    float aspect = 16.0f / 9.0f;
-    if (m_hasEyeSwapchains && m_eyeSwapchains[0].height > 0) {
-        aspect = static_cast<float>(m_eyeSwapchains[0].width) / static_cast<float>(m_eyeSwapchains[0].height);
-    }
-    return XrExtent2Df{ height * aspect, height };
-}
-
-PanelHit OpenXrManager::ComputeQuadRayHit(const XrPosef& quadPose, const XrExtent2Df& quadSize,
-                                          const Vector3& rayOrigin, const Quaternion& rayOrientation) {
-    return ComputeQuadRayHitAlong(quadPose, quadSize, rayOrigin,
-                                  RotateVectorByQuaternion(rayOrientation, Vector3(0.0f, 0.0f, -1.0f)));
-}
-
-PanelHit OpenXrManager::ComputeQuadRayHitAlong(const XrPosef& quadPose, const XrExtent2Df& quadSize,
-                                               const Vector3& rayOrigin, const Vector3& rayDirection) {
-    PanelHit miss;
-    if (quadSize.width <= 0.0f || quadSize.height <= 0.0f) {
-        return miss;
-    }
-    const float length = std::sqrt(rayDirection.x * rayDirection.x + rayDirection.y * rayDirection.y + rayDirection.z * rayDirection.z);
-    if (!(length > 1e-6f)) {
-        return miss;
-    }
-    // Into the quad's own frame, where the panel is the z = 0 plane facing +Z.
-    const Quaternion quadToWorld(quadPose.orientation.x, quadPose.orientation.y, quadPose.orientation.z, quadPose.orientation.w);
-    const Quaternion worldToQuad(-quadToWorld.x, -quadToWorld.y, -quadToWorld.z, quadToWorld.w);
-    const Vector3 offset(rayOrigin.x - quadPose.position.x, rayOrigin.y - quadPose.position.y, rayOrigin.z - quadPose.position.z);
-    const Vector3 origin = RotateVectorByQuaternion(worldToQuad, offset);
-    const Vector3 worldDir(rayDirection.x / length, rayDirection.y / length, rayDirection.z / length);
-    const Vector3 dir = RotateVectorByQuaternion(worldToQuad, worldDir);
-
-    // The panel is only visible from its front: the ray must start in front of it and head into it.
-    constexpr float kMinApproach = 1e-6f;
-    if (dir.z > -kMinApproach || origin.z <= 0.0f) {
-        return miss;
-    }
-    const float t = -origin.z / dir.z;
-    const float x = origin.x + dir.x * t;
-    const float y = origin.y + dir.y * t;
-    const float u = x / quadSize.width + 0.5f;
-    const float v = 0.5f - y / quadSize.height;
-    if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) {
-        return miss;
-    }
-    PanelHit hit;
-    hit.hit = true;
-    hit.u = u;
-    hit.v = v;
-    hit.distance = t;
-    return hit;
+    return m_menuQuad.Size(0, 0);
 }
 
 PanelHit OpenXrManager::GetPanelHit(uint32_t hand) {
@@ -1603,7 +1483,7 @@ PanelHit OpenXrManager::GetPanelHit(uint32_t hand) {
     }
     // The hand is located in the local space the quad layer is submitted in, so the pose and size
     // SubmitMenuQuad() uses are the ones to test against.
-    return ComputeQuadRayHit(ComputeMenuQuadPose(), ComputeMenuQuadSize(), state.aim.position, state.aim.orientation);
+    return MenuQuad::RayHit(m_menuQuad.Pose(), ComputeMenuQuadSize(), state.aim.position, state.aim.orientation);
 }
 
 PanelHit OpenXrManager::GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction) {
@@ -1611,7 +1491,7 @@ PanelHit OpenXrManager::GetPanelHitAlongRay(uint32_t hand, const Vector3& origin
     if (!state.tracked || !state.aim.isValid) {
         return {};
     }
-    return ComputeQuadRayHitAlong(ComputeMenuQuadPose(), ComputeMenuQuadSize(), origin, direction);
+    return MenuQuad::RayHitAlong(m_menuQuad.Pose(), ComputeMenuQuadSize(), origin, direction);
 }
 
 bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df* customSize) {
