@@ -530,6 +530,20 @@ TEST(HostModuleTest, RuntimeGivenAHostModuleWithTheFingerprintAndTheQueryAttache
     EXPECT_TRUE(runtime.GetLuauInterceptor().GetDetour().IsInstalled());
 }
 
+TEST(HostModuleTest, RuntimeBuiltWithoutAHostModuleLeavesASuppliedInterceptorsHostModuleAlone) {
+    // Empty means do nothing: a caller that configured its own interceptor keeps what it configured.
+    MockHostModule host(AllFingerprintMarkers());
+    ASSERT_TRUE(host.Valid());
+    auto interceptor = std::make_shared<fs25vr::LuauInterceptor>(nullptr);
+    interceptor->SetHostModule(host.Handle());
+    fs25vr::InjectorRuntime::Dependencies deps;
+    deps.luauInterceptor = interceptor;
+    fs25vr::InjectorRuntime runtime(std::move(deps));
+
+    EXPECT_TRUE(runtime.GetLuauInterceptor().AttachToEngine());
+    EXPECT_TRUE(runtime.GetLuauInterceptor().GetDetour().IsInstalled());
+}
+
 TEST(HostModuleTest, RuntimeGivenAHostModuleWithoutTheFingerprintDoesNotAttach) {
     MockHostModule host({});
     ASSERT_TRUE(host.Valid());

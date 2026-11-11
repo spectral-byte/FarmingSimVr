@@ -116,7 +116,7 @@ InjectorRuntime::InjectorRuntime(Dependencies deps) : m_deps(std::move(deps)) {
         ApplySavedMenuDistance(*m_deps.vrBridge, m_deps.companionSettingsFile);
     }
     if (!m_deps.luauInterceptor) m_deps.luauInterceptor = std::make_shared<LuauInterceptor>(m_deps.vrBridge);
-    m_deps.luauInterceptor->SetHostModule(m_deps.hostModule);
+    if (m_deps.hostModule) m_deps.luauInterceptor->SetHostModule(m_deps.hostModule);
     if (!m_deps.windowController) m_deps.windowController = std::make_shared<MirrorWindowController>(nullptr, m_deps.cursorPort);
 
     m_proxy = std::make_unique<DxgiProxy>(
