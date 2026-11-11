@@ -189,9 +189,10 @@ private:
     // One Present in three steps (present_plan.h): the facts, the plan PlanPresent makes of them, the plan carried out
     // with the bookkeeping done once at its end. Returns whether the game's real Present is called.
     bool OnPresentImpl(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
-    // Looks after what the decision needs (polls the runtime's events, learns the game window, resolves the device,
-    // creates the eye swapchains, finds the back buffer: held in `backBufferHolder` when the cache does not hold it
-    // alone) and reads the facts. Decides nothing: a Present with no VR work is a plan, not an early return.
+    // Does the setup the decision needs, then reports the facts. The setup has side effects: it polls the runtime's
+    // events, learns the game window, resolves the device and creates the D3D12 device/queue and the eye swapchains,
+    // and finds the back buffer (cached; held in `backBufferHolder` when the cache does not hold it alone). It makes no
+    // plan decisions: a Present with no VR work is a plan, not an early return.
     PresentFacts GatherPresentFacts(IDXGISwapChain* swapChain, Microsoft::WRL::ComPtr<ID3D12Resource>& backBufferHolder,
                                     ID3D12Resource*& pBackBuffer);
     // Carries `plan` out in the one order the OpenXR runtime and DXGI see (ADR-0015, ADR-0019): pacing reset, the eye copy,

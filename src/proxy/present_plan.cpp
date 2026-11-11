@@ -9,21 +9,19 @@ namespace {
 PresentPlan PresentAsTheGameDid() {
     PresentPlan plan;
     plan.latchQueuedMode = true;
-    plan.callRealPresent = true;
-    plan.mirror = MirrorBookkeeping::Showing;
-    return plan;
+    return plan;  // callRealPresent and mirror keep their defaults: present, mirror Showing
 }
 
 // With the headset fed, the Desktop Mirror Window decides whether the real Present is called. A mirror going from
-// showing to off presents once more, black, so the window does not keep the last frame.
+// showing to off presents once more, black, so the window does not keep the last frame. A mirror that stays on keeps
+// the plan's defaults: present, mirror Showing.
 void ApplyDesktopMirror(const PresentFacts& facts, PresentPlan& plan) {
     if (!facts.desktopMirrorOff) {
-        plan.callRealPresent = true;
-        plan.mirror = MirrorBookkeeping::Showing;
-    } else if (facts.mirrorWasShowing) {
+        return;
+    }
+    if (facts.mirrorWasShowing) {
         plan.clearBackBufferToBlack = true;
-        plan.callRealPresent = true;
-        plan.mirror = MirrorBookkeeping::Off;
+        plan.mirror = MirrorBookkeeping::Off;  // still presents (the default), once, black
     } else {
         plan.callRealPresent = false;
         plan.mirror = MirrorBookkeeping::Unchanged;
