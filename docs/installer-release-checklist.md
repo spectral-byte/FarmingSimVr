@@ -109,7 +109,9 @@ FS25 VR up to 1.1.9 was `dxgi.dll` (ADR-0038). `scripts\test_installer.ps1` fake
 
 Record the Installer version and the date you ran it in the release notes draft, together with any item you could not run (for example "no Epic machine available").
 
-Attach all three files that `scripts\package_release.ps1` leaves in `build\release` to the GitHub release (`gh release create` takes them as arguments, `gh release upload <tag>` adds them to a release that exists). Published names drop the last `.0` of the four-part version:
+Pushing a version tag (`v1.2.0`, or `v1.2.0-pre.1` for a pre-release) runs `.github/workflows/release.yml`, which builds and tests as CI does and creates a **draft** GitHub release with the three files below already named for release. It fails before building when the tag and the Companion Mod's version disagree (`scripts\check_release_tag.ps1`). Read the draft, write the notes and publish it yourself; the workflow never publishes.
+
+To attach the files by hand instead, take the three files that `scripts\package_release.ps1` leaves in `build\release` (`gh release create` takes them as arguments, `gh release upload <tag>` adds them to a release that exists). Published names drop the last `.0` of the four-part version:
 
 | In `build\release` | Attach as |
 |---|---|

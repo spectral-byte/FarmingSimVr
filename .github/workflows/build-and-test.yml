@@ -1,0 +1,148 @@
+name: Build and test
+
+# The steps CI runs on every change and a release runs on a tag, defined once so the two cannot drift
+# apart. Called by ci.yml and release.yml; it only reads the repository, whoever calls it.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Reject proprietary files
+        shell: pwsh
+        run: scripts/check_proprietary.ps1
+
+      # Loads vcvars64.bat and exports what it changes to later steps. Done by
+      # hand because ilammy/msvc-dev-cmd has no release off deprecated Node 20.
+      - name: Set up MSVC developer environment
+        shell: pwsh
+        run: |
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $vs = & "$installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'No Visual Studio with the x64 C++ tools' }
+          $env:PATH += ";$installer"
+          $before = @{}
+          Get-ChildItem env: | ForEach-Object { $before[$_.Name] = $_.Value }
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$' -and $before[$Matches[1]] -ne $Matches[2]) {
+              "$($Matches[1])=$($Matches[2])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+            }
+          }
+          if ($LASTEXITCODE) { throw "vcvars64.bat failed ($LASTEXITCODE)" }
+
+      # Fetched dependencies (OpenXR-SDK, GoogleTest, Luau) live outside the
+      # build tree so they can be cached across runs. Only the sources and the
+      # FetchContent stamps are cached; the *-build trees are rebuilt anyway.
+      # Keyed on CMakeLists.txt, where the pinned dependency tags are declared.
+      - name: Cache fetched dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            .deps/*-src
+            .deps/*-subbuild
+          key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DFS25VR_WARNINGS_AS_ERRORS=ON
+          -DFETCHCONTENT_BASE_DIR="${{ github.workspace }}/.deps"
+
+      # The shipped configuration compiles with full inlining (/Ob2); fail if the
+      # cache says otherwise (e.g. CMake's default /Ob1 crept back in), or if the
+      # configure step above lost the warnings-as-errors option.
+      - name: Verify full inlining
+        shell: pwsh
+        run: scripts/check_build_config.ps1 build -RequireWarningsAsErrors
+
+      - name: Build (Injector DLL and tests)
+        run: cmake --build build --target injector fs25_vr_tests
+
+      # The Injector is built against the static C runtime; fail if the built version.dll
+      # imports VCRUNTIME140/MSVCP140/api-ms-win-crt-* (players would need the VC++ redistributable),
+      # or version.dll (the game loads the Injector as its version.dll).
+      - name: Verify Injector imports
+        shell: pwsh
+        run: scripts/check_injector_imports.ps1 build\version.dll
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 120
+
+      # ctest runs each test in its own process; a single-process run catches
+      # state leaking between tests through process-wide state (the hook
+      # registries and InjectorRuntime::Instance()).
+      - name: Test (single process)
+        run: build\fs25_vr_tests.exe --gtest_brief=1
+
+      # Build the Installer exactly as a release does (the zip bundle and the Setup exe from the
+      # same staged files), then drive it silently against a fake game folder.
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Package release (zip bundle and Installer)
+        shell: pwsh
+        run: scripts/package_release.ps1
+
+      # The release also carries the Injector's PDB as a symbols zip (so a crash dump from any release
+      # opens with symbols): it must exist, hold the PDB the linker wrote, and that PDB must belong to the
+      # Injector the bundle ships (same GUID and age). The packaging test then
+      # proves, in a scratch copy, that packaging fails without the PDB and that this check can fail.
+      - name: Check the symbols zip
+        shell: pwsh
+        run: scripts/check_release_symbols.ps1
+
+      - name: Test release packaging
+        shell: pwsh
+        run: scripts/test_package_release.ps1
+
+      # The release workflow runs scripts/check_release_tag.ps1 on a tag, which a CI run never has;
+      # its own test keeps that rule exercised on every change.
+      - name: Test the release tag check
+        shell: pwsh
+        run: scripts/test_check_release_tag.ps1
+
+      - name: Test Installer (silent install and uninstall)
+        shell: pwsh
+        run: scripts/test_installer.ps1
+
+      - name: Upload version.dll
+        uses: actions/upload-artifact@v7
+        with:
+          name: injector-dll
+          path: |
+            build/version.dll
+            build/version.pdb
+          if-no-files-found: error
+
+      # A release publishes these three files as built here: the zip bundle, the Setup exe and the
+      # symbols zip.
+      - name: Upload zip bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle
+          path: build/release/FS25_VR_v*[0-9].zip
+          if-no-files-found: error
+
+      - name: Upload Installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer
+          path: build/release/FS25_VR_v*_Setup.exe
+          if-no-files-found: error
+
+      - name: Upload symbols
+        uses: actions/upload-artifact@v7
+        with:
+          name: symbols
+          path: build/release/FS25_VR_v*_Symbols.zip
+          if-no-files-found: error
