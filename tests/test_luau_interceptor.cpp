@@ -245,22 +245,39 @@ std::vector<std::string> AllFingerprintMarkers() {
     return std::vector<std::string>(std::begin(fs25vr::kHostLuauFingerprint), std::end(fs25vr::kHostLuauFingerprint));
 }
 
-// An executable stand-in for the host module: .text holds a query function plus the registration code
-// that pairs it with its name, and .rdata holds that name followed by the given strings. Executable so
-// the detour can really be installed when the guard lets AttachToHostSections through.
+// An executable stand-in for the host module, laid out as a minimal PE image: headers, then a .text section
+// holding a query function plus the registration code that pairs it with its name, then a .rdata section
+// holding that name followed by the given strings. Executable so the detour can really be installed when the
+// guard lets AttachToHostSections through; a PE image so the whole module can be handed to AttachToEngine.
 class MockHost {
 public:
+    static constexpr size_t kSize = 0x2000;
+    static constexpr size_t kTextOffset = 0x400;
     static constexpr size_t kTextSize = 0x100;
-    static constexpr size_t kRdataOffset = 0x200;
-    static constexpr size_t kSize = 0x1000;
-    static constexpr size_t kFnOffset = 0x20;
+    static constexpr size_t kRdataOffset = 0x600;
+    static constexpr size_t kRdataSize = 0x1000;
+    static constexpr size_t kFnOffset = kTextOffset + 0x20;
 
     explicit MockHost(const std::vector<std::string>& rdataStrings) {
         m_base = static_cast<uint8_t*>(VirtualAlloc(nullptr, kSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
         if (!m_base) return;
-        std::memset(m_base, 0x90, kTextSize);
-        std::memset(m_base + kTextSize, 0, kSize - kTextSize);
+        std::memset(m_base, 0, kSize);
 
+        auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(m_base);
+        dos->e_magic = IMAGE_DOS_SIGNATURE;
+        dos->e_lfanew = 0x80;
+        auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(m_base + dos->e_lfanew);
+        nt->Signature = IMAGE_NT_SIGNATURE;
+        nt->FileHeader.NumberOfSections = 2;
+        auto* sections = IMAGE_FIRST_SECTION(nt);
+        std::memcpy(sections[0].Name, ".text", 6);
+        sections[0].VirtualAddress = static_cast<DWORD>(kTextOffset);
+        sections[0].Misc.VirtualSize = static_cast<DWORD>(kTextSize);
+        std::memcpy(sections[1].Name, ".rdata", 7);
+        sections[1].VirtualAddress = static_cast<DWORD>(kRdataOffset);
+        sections[1].Misc.VirtualSize = static_cast<DWORD>(kRdataSize);
+
+        std::memset(m_base + kTextOffset, 0x90, kTextSize);
         const uint8_t fnEntry[] = {0x48, 0x83, 0xEC, 0x28};  // sub rsp, 0x28
         std::memcpy(m_base + kFnOffset, fnEntry, sizeof(fnEntry));
 
@@ -274,8 +291,8 @@ public:
             cursor += s.size() + 1;
         }
 
-        EmitRipLea(0x80, 0x4C, 0x05, queryString);       // lea r8, [rip + queryName]
-        EmitRipLea(0x87, 0x48, 0x15, m_base + kFnOffset); // lea rdx, [rip + fn]
+        EmitRipLea(kTextOffset + 0x80, 0x4C, 0x05, queryString);        // lea r8, [rip + queryName]
+        EmitRipLea(kTextOffset + 0x87, 0x48, 0x15, m_base + kFnOffset); // lea rdx, [rip + fn]
     }
     ~MockHost() {
         if (m_base) VirtualFree(m_base, 0, MEM_RELEASE);
@@ -284,9 +301,10 @@ public:
     MockHost& operator=(const MockHost&) = delete;
 
     bool Valid() const { return m_base != nullptr; }
-    const uint8_t* Text() const { return m_base; }
+    void* Handle() const { return m_base; }
+    const uint8_t* Text() const { return m_base + kTextOffset; }
     const uint8_t* Rdata() const { return m_base + kRdataOffset; }
-    size_t RdataSize() const { return kSize - kRdataOffset; }
+    size_t RdataSize() const { return kRdataSize; }
     void* QueryFunction() const { return m_base + kFnOffset; }
 
 private:
@@ -439,75 +457,6 @@ private:
     std::filesystem::path m_path;
 };
 
-// A minimal PE image in executable memory: headers, then a .text section holding a query function and the
-// registration code that pairs it with its name, then a .rdata section holding that name and the given strings.
-class MockHostModule {
-public:
-    static constexpr size_t kSize = 0x2000;
-    static constexpr size_t kTextRva = 0x400;
-    static constexpr size_t kTextSize = 0x100;
-    static constexpr size_t kRdataRva = 0x600;
-    static constexpr size_t kRdataSize = 0x1000;
-    static constexpr size_t kFnOffset = 0x20;
-
-    explicit MockHostModule(const std::vector<std::string>& rdataStrings) {
-        m_base = static_cast<uint8_t*>(VirtualAlloc(nullptr, kSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-        if (!m_base) return;
-        std::memset(m_base, 0, kSize);
-
-        auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(m_base);
-        dos->e_magic = IMAGE_DOS_SIGNATURE;
-        dos->e_lfanew = 0x80;
-        auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(m_base + dos->e_lfanew);
-        nt->Signature = IMAGE_NT_SIGNATURE;
-        nt->FileHeader.NumberOfSections = 2;
-        auto* sections = IMAGE_FIRST_SECTION(nt);
-        std::memcpy(sections[0].Name, ".text", 6);
-        sections[0].VirtualAddress = static_cast<DWORD>(kTextRva);
-        sections[0].Misc.VirtualSize = static_cast<DWORD>(kTextSize);
-        std::memcpy(sections[1].Name, ".rdata", 7);
-        sections[1].VirtualAddress = static_cast<DWORD>(kRdataRva);
-        sections[1].Misc.VirtualSize = static_cast<DWORD>(kRdataSize);
-
-        uint8_t* text = m_base + kTextRva;
-        std::memset(text, 0x90, kTextSize);
-        const uint8_t fnEntry[] = {0x48, 0x83, 0xEC, 0x28};  // sub rsp, 0x28
-        std::memcpy(text + kFnOffset, fnEntry, sizeof(fnEntry));
-
-        size_t cursor = kRdataRva;
-        const char queryName[] = "isHeadTrackingAvailable";
-        std::memcpy(m_base + cursor, queryName, sizeof(queryName));
-        const uint8_t* queryString = m_base + cursor;
-        cursor += sizeof(queryName);
-        for (const std::string& s : rdataStrings) {
-            std::memcpy(m_base + cursor, s.c_str(), s.size() + 1);
-            cursor += s.size() + 1;
-        }
-
-        EmitRipLea(text + 0x80, 0x4C, 0x05, queryString);       // lea r8, [rip + queryName]
-        EmitRipLea(text + 0x87, 0x48, 0x15, text + kFnOffset);  // lea rdx, [rip + fn]
-    }
-    ~MockHostModule() {
-        if (m_base) VirtualFree(m_base, 0, MEM_RELEASE);
-    }
-    MockHostModule(const MockHostModule&) = delete;
-    MockHostModule& operator=(const MockHostModule&) = delete;
-
-    bool Valid() const { return m_base != nullptr; }
-    void* Handle() const { return m_base; }
-
-private:
-    static void EmitRipLea(uint8_t* at, uint8_t rex, uint8_t modrm, const uint8_t* target) {
-        at[0] = rex;
-        at[1] = 0x8D;
-        at[2] = modrm;
-        const int32_t disp = static_cast<int32_t>(target - (at + 7));
-        std::memcpy(at + 3, &disp, sizeof(disp));
-    }
-
-    uint8_t* m_base = nullptr;
-};
-
 } // anonymous namespace
 
 TEST(HostModuleTest, RuntimeBuiltWithoutAHostModuleInstallsNoDetourAndStandsBy) {
@@ -520,7 +469,7 @@ TEST(HostModuleTest, RuntimeBuiltWithoutAHostModuleInstallsNoDetourAndStandsBy) 
 }
 
 TEST(HostModuleTest, RuntimeGivenAHostModuleWithTheFingerprintAndTheQueryAttaches) {
-    MockHostModule host(AllFingerprintMarkers());
+    MockHost host(AllFingerprintMarkers());
     ASSERT_TRUE(host.Valid());
     fs25vr::InjectorRuntime::Dependencies deps;
     deps.hostModule = host.Handle();
@@ -532,7 +481,7 @@ TEST(HostModuleTest, RuntimeGivenAHostModuleWithTheFingerprintAndTheQueryAttache
 
 TEST(HostModuleTest, RuntimeBuiltWithoutAHostModuleLeavesASuppliedInterceptorsHostModuleAlone) {
     // Empty means do nothing: a caller that configured its own interceptor keeps what it configured.
-    MockHostModule host(AllFingerprintMarkers());
+    MockHost host(AllFingerprintMarkers());
     ASSERT_TRUE(host.Valid());
     auto interceptor = std::make_shared<fs25vr::LuauInterceptor>(nullptr);
     interceptor->SetHostModule(host.Handle());
@@ -545,7 +494,7 @@ TEST(HostModuleTest, RuntimeBuiltWithoutAHostModuleLeavesASuppliedInterceptorsHo
 }
 
 TEST(HostModuleTest, RuntimeGivenAHostModuleWithoutTheFingerprintDoesNotAttach) {
-    MockHostModule host({});
+    MockHost host({});
     ASSERT_TRUE(host.Valid());
     fs25vr::InjectorRuntime::Dependencies deps;
     deps.hostModule = host.Handle();
