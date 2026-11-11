@@ -339,6 +339,16 @@ target_compile_definitions(fs25_vr_tests PRIVATE
 )
 add_dependencies(fs25_vr_tests fake_nvngx)
 
+# Warnings as errors for the project's own targets only (never the fetched dependencies, which
+# share the /W4 above but are not ours to fix). Off by default so a newer compiler cannot block a
+# local build; CI turns it on and scripts/check_build_config.ps1 -RequireWarningsAsErrors verifies it.
+option(FS25VR_WARNINGS_AS_ERRORS "Treat compiler warnings in the project's own code as errors" OFF)
+if(FS25VR_WARNINGS_AS_ERRORS AND MSVC)
+    foreach(target fs25_vr_core injector fs25_vr_tests fake_nvngx)
+        target_compile_options(${target} PRIVATE /WX)
+    endforeach()
+endif()
+
 include(GoogleTest)
 gtest_discover_tests(fs25_vr_tests DISCOVERY_TIMEOUT 30)
 

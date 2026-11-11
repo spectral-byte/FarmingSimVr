@@ -59,13 +59,15 @@ jobs:
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DFS25VR_WARNINGS_AS_ERRORS=ON
           -DFETCHCONTENT_BASE_DIR="${{ github.workspace }}/.deps"
 
       # The shipped configuration compiles with full inlining (/Ob2); fail if the
-      # cache says otherwise (e.g. CMake's default /Ob1 crept back in).
+      # cache says otherwise (e.g. CMake's default /Ob1 crept back in), or if the
+      # configure step above lost the warnings-as-errors option.
       - name: Verify full inlining
         shell: pwsh
-        run: scripts/check_build_config.ps1 build
+        run: scripts/check_build_config.ps1 build -RequireWarningsAsErrors
 
       - name: Build (Injector DLL and tests)
         run: cmake --build build --target injector fs25_vr_tests

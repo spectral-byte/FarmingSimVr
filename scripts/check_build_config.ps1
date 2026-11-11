@@ -1,7 +1,10 @@
 ﻿# Verifies that a CMake build tree uses the shipped configuration:
 # RelWithDebInfo with full inlining (/Ob2) and debug info (/Zi).
+# With -RequireWarningsAsErrors it also requires the FS25VR_WARNINGS_AS_ERRORS option to be on
+# (CI passes it, so a configure step that forgets the option cannot go unnoticed).
 param(
-    [string]$BuildDir = "build"
+    [string]$BuildDir = "build",
+    [switch]$RequireWarningsAsErrors
 )
 $ErrorActionPreference = "Stop"
 
@@ -23,6 +26,12 @@ foreach ($var in "CMAKE_CXX_FLAGS_RELWITHDEBINFO", "CMAKE_C_FLAGS_RELWITHDEBINFO
     $flags = Get-CacheValue $var
     if ($flags -notmatch '(^|\s)/Ob2(\s|$)' -or $flags -notmatch '(^|\s)/Zi(\s|$)') {
         Write-Error "$var is '$flags'; expected full inlining (/Ob2) with debug info (/Zi)."
+    }
+}
+if ($RequireWarningsAsErrors) {
+    $werror = Get-CacheValue "FS25VR_WARNINGS_AS_ERRORS"
+    if ($werror -ne "ON") {
+        Write-Error "FS25VR_WARNINGS_AS_ERRORS is '$werror'; expected ON (configure with -DFS25VR_WARNINGS_AS_ERRORS=ON)."
     }
 }
 Write-Host "Build configuration OK: RelWithDebInfo with /Ob2 and /Zi."
