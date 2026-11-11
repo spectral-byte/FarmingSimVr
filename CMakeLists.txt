@@ -116,6 +116,8 @@ set(CORE_SOURCES
     src/luau/luau_interceptor.cpp
     src/luau/luau_interceptor.h
     src/openxr/openxr_dispatch.h
+    src/openxr/d3d12_eye_copy.h
+    src/openxr/d3d12_eye_copy.cpp
     src/openxr/openxr_cursor_overlay.h
     src/openxr/openxr_cursor_overlay.cpp
     src/openxr/openxr_input.h

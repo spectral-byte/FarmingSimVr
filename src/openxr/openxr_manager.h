@@ -1,6 +1,7 @@
 #pragma once
 
 #include "openxr_dispatch.h"
+#include "d3d12_eye_copy.h"
 #include "openxr_cursor_overlay.h"
 #include "openxr_input.h"
 #include "openxr_types.h"
@@ -303,33 +304,8 @@ private:
 
     ID3D12Device* m_device = nullptr;
     ID3D12CommandQueue* m_queue = nullptr;
-    static constexpr uint32_t kCopyRingSize = 2;
-    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_copyAllocators[kCopyRingSize];
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_copyCommandLists[kCopyRingSize];
-    Microsoft::WRL::ComPtr<ID3D12Fence> m_copyFence;
-    uint64_t m_copyFenceValues[kCopyRingSize] = {0, 0};
-    uint64_t m_currentFenceValue = 0;
-    uint32_t m_copyRingIndex = 0;
-    ScopedEventHandle m_copyFenceEvent;
-    void EnsureCopyFence();
-    // ClearBackBufferToBlack's own recording objects; it signals m_copyFence with m_clearFenceValue.
-    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_clearAllocator;
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_clearCommandList;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_clearRtvHeap;
-    uint64_t m_clearFenceValue = 0;
-    // `vrPerfTrace`: GPU timestamps before and after each eye copy, two per ring slot, read back when the
-    // slot is reused (its fence has passed by then). Created on the first copy a trace times.
-    Microsoft::WRL::ComPtr<ID3D12QueryHeap> m_copyTimestampHeap;
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_copyTimestampReadback;
-    bool m_copyTimestampsFailed = false;
-    bool m_copyTimestampPending[kCopyRingSize] = {false, false};
-    int64_t m_copySubmitNs[kCopyRingSize] = {0, 0};
-    uint64_t m_gpuTimestampFrequency = 0;
-    uint64_t m_gpuCalibrationTicks = 0;
-    int64_t m_gpuCalibrationCpuNs = 0;
-    uint32_t m_copiesSinceCalibration = 0;
-    bool EnsureCopyTimestamps();
-    void ReadCopyTimestamps(uint32_t ringSlot);
+    // The Direct3D 12 side of the eye copy and the clear to black; it follows m_device and m_queue.
+    D3D12EyeCopy m_eyeCopy;
     XrResult DispatchEndFrame(const XrFrameEndInfo& endInfo);
 
     EyeSwapchain m_eyeSwapchains[2];
