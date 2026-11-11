@@ -1,6 +1,8 @@
 #pragma once
 
 #include "openxr_dispatch.h"
+#include "d3d12_eye_copy.h"
+#include "menu_quad.h"
 #include "openxr_cursor_overlay.h"
 #include "openxr_input.h"
 #include "openxr_types.h"
@@ -169,24 +171,28 @@ public:
     bool SubmitFramePair();
     bool SubmitMenuQuad(const XrPosef* customPose = nullptr, const XrExtent2Df* customSize = nullptr);
 
-    XrPosef ComputeMenuQuadPose() const;
-    static XrPosef ComputeMenuQuadPoseFromHeadPose(const HeadPose& headPose, float distance);
+    // The menu quad's geometry is the MenuQuad module's (spec #247); these ask it, and the manager submits what it says.
+    XrPosef ComputeMenuQuadPose() const { return m_menuQuad.Pose(); }
+    static XrPosef ComputeMenuQuadPoseFromHeadPose(const HeadPose& headPose, float distance) {
+        return MenuQuad::PoseFromHeadPose(headPose, distance);
+    }
+    // Places the quad in front of `customPose`, else of the last polled head (the head as located in m_localSpace).
     void AlignMenuQuadToHeadPose(const HeadPose* customPose = nullptr);
-    bool HasMenuQuadPose() const { return m_hasMenuQuadPose; }
+    bool HasMenuQuadPose() const { return m_menuQuad.HasPose(); }
     XrExtent2Df ComputeMenuQuadSize() const;
     // Menu Distance: how far in front of the head the menu quad (menus and 2D Floating Window Mode) is placed, in metres.
     // The quad keeps its size, so further away it fills less of the view. A quad already placed moves straight back or
     // forward along the way it faces, so it stays in front of the head that placed it. Clamped to kMinMenuQuadDistance..
     // kMaxMenuQuadDistance; NaN counts as the default. The setting outlives Shutdown, like the FOV Overscan.
-    static constexpr float kDefaultMenuQuadDistance = 1.5f;
-    static constexpr float kMinMenuQuadDistance = 1.0f;
-    static constexpr float kMaxMenuQuadDistance = 5.0f;
-    static float ClampMenuQuadDistance(float distance);
-    void SetMenuQuadDistance(float distance);
-    float GetMenuQuadDistance() const { return m_menuQuadDistance; }
-    void SetMenuQuadSize(float width, float height) { m_customMenuQuadSize = { width, height }; m_hasCustomMenuQuadSize = true; }
+    static constexpr float kDefaultMenuQuadDistance = MenuQuad::kDefaultDistance;
+    static constexpr float kMinMenuQuadDistance = MenuQuad::kMinDistance;
+    static constexpr float kMaxMenuQuadDistance = MenuQuad::kMaxDistance;
+    static float ClampMenuQuadDistance(float distance) { return MenuQuad::ClampDistance(distance); }
+    void SetMenuQuadDistance(float distance) { m_menuQuad.SetDistance(distance); }
+    float GetMenuQuadDistance() const { return m_menuQuad.Distance(); }
+    void SetMenuQuadSize(float width, float height) { m_menuQuad.SetCustomSize(width, height); }
     XrExtent2Df GetMenuQuadSize() const { return ComputeMenuQuadSize(); }
-    void ResetMenuQuadSettings() { m_menuQuadDistance = kDefaultMenuQuadDistance; m_hasCustomMenuQuadSize = false; m_hasMenuQuadPose = false; }
+    void ResetMenuQuadSettings() { m_menuQuad.ResetSettings(); }
 
     // Where the ray of `hand` (0 = left, 1 = right) lands on the panel the next SubmitMenuQuad()
     // submits, in normalized panel coordinates (see PanelHit). The hand's aim pose and the layer are
@@ -200,10 +206,14 @@ public:
     // Pure ray (origin, -Z of rayOrientation) against a quad of `quadSize` at `quadPose`; the quad
     // is hit from its front side only, like it is seen.
     static PanelHit ComputeQuadRayHit(const XrPosef& quadPose, const XrExtent2Df& quadSize,
-                                      const Vector3& rayOrigin, const Quaternion& rayOrientation);
+                                      const Vector3& rayOrigin, const Quaternion& rayOrientation) {
+        return MenuQuad::RayHit(quadPose, quadSize, rayOrigin, rayOrientation);
+    }
     // The same for a ray with a direction vector (any length above zero; `distance` is along the unit direction).
     static PanelHit ComputeQuadRayHitAlong(const XrPosef& quadPose, const XrExtent2Df& quadSize,
-                                           const Vector3& rayOrigin, const Vector3& rayDirection);
+                                           const Vector3& rayOrigin, const Vector3& rayDirection) {
+        return MenuQuad::RayHitAlong(quadPose, quadSize, rayOrigin, rayDirection);
+    }
 
     // While active the drawn cursor sits at (u, v) in PanelHit coordinates (clamped onto the panel)
     // and MirrorWindowController ignores the Win32 cursor: the Pointer Ray has control of the cursor.
@@ -303,33 +313,8 @@ private:
 
     ID3D12Device* m_device = nullptr;
     ID3D12CommandQueue* m_queue = nullptr;
-    static constexpr uint32_t kCopyRingSize = 2;
-    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_copyAllocators[kCopyRingSize];
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_copyCommandLists[kCopyRingSize];
-    Microsoft::WRL::ComPtr<ID3D12Fence> m_copyFence;
-    uint64_t m_copyFenceValues[kCopyRingSize] = {0, 0};
-    uint64_t m_currentFenceValue = 0;
-    uint32_t m_copyRingIndex = 0;
-    ScopedEventHandle m_copyFenceEvent;
-    void EnsureCopyFence();
-    // ClearBackBufferToBlack's own recording objects; it signals m_copyFence with m_clearFenceValue.
-    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_clearAllocator;
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_clearCommandList;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_clearRtvHeap;
-    uint64_t m_clearFenceValue = 0;
-    // `vrPerfTrace`: GPU timestamps before and after each eye copy, two per ring slot, read back when the
-    // slot is reused (its fence has passed by then). Created on the first copy a trace times.
-    Microsoft::WRL::ComPtr<ID3D12QueryHeap> m_copyTimestampHeap;
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_copyTimestampReadback;
-    bool m_copyTimestampsFailed = false;
-    bool m_copyTimestampPending[kCopyRingSize] = {false, false};
-    int64_t m_copySubmitNs[kCopyRingSize] = {0, 0};
-    uint64_t m_gpuTimestampFrequency = 0;
-    uint64_t m_gpuCalibrationTicks = 0;
-    int64_t m_gpuCalibrationCpuNs = 0;
-    uint32_t m_copiesSinceCalibration = 0;
-    bool EnsureCopyTimestamps();
-    void ReadCopyTimestamps(uint32_t ringSlot);
+    // The Direct3D 12 side of the eye copy and the clear to black; it follows m_device and m_queue.
+    D3D12EyeCopy m_eyeCopy;
     XrResult DispatchEndFrame(const XrFrameEndInfo& endInfo);
 
     EyeSwapchain m_eyeSwapchains[2];
@@ -350,17 +335,9 @@ private:
     uint32_t m_headPoseLocateFailures = 0;
     uint64_t m_submittedFramePairCount = 0;
     uint64_t m_submittedQuadFrameCount = 0;
-    float m_menuQuadDistance = kDefaultMenuQuadDistance;
-    XrExtent2Df m_customMenuQuadSize{ 1.6f, 0.9f };
-    bool m_hasCustomMenuQuadSize = false;
+    // The menu quad's pose, size, Menu Distance and panel hit; the manager owns the space it is submitted in.
+    MenuQuad m_menuQuad;
     XrCompositionLayerQuad m_lastSubmittedQuadLayer{ XR_TYPE_COMPOSITION_LAYER_QUAD };
-    XrPosef m_menuQuadPose{};
-    bool m_hasMenuQuadPose = false;
-    // The menu quad moves to the head on the first rendered frame with a valid head pose predicted at
-    // or after m_menuQuadAwaitsHeadAfter: it was placed from no pose, the runtime recentered the
-    // local space under it, or the running session was focused for the first time.
-    bool m_menuQuadAwaitsHead = false;
-    XrTime m_menuQuadAwaitsHeadAfter = 0;
     bool m_focusedSinceBegin = false;
     bool m_frameBegun = false;
     XrFrameState m_frameState{XR_TYPE_FRAME_STATE};

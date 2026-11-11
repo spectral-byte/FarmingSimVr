@@ -2,6 +2,7 @@
 
 #include "system_dxgi.h"
 #include "mirror_window_controller.h"
+#include "present_plan.h"
 #include "openxr/openxr_manager.h"
 #include "luau/luau_interceptor.h"
 #include "luau/vr_bridge.h"
@@ -182,10 +183,22 @@ private:
     std::once_flag m_vrInitOnce;
     bool m_wasInQuadMode = false;
     bool m_lastPresentSuppressed = false;
-    // Set by OnPresentImpl when the Present was a stereo presentation (an eye copy), so OnPresent
-    // advances the rendered-frame counter for it and discards camera records for any other Present.
+    // Set by the bookkeeping of every Present (from the plan) when the Present was a stereo presentation (an eye
+    // copy), so OnPresent advances the rendered-frame counter for it and discards camera records for any other Present.
     bool m_presentWasStereo = false;
+    // One Present in three steps (present_plan.h): the facts, the plan PlanPresent makes of them, the plan carried out
+    // with the bookkeeping done once at its end. Returns whether the game's real Present is called.
     bool OnPresentImpl(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags);
+    // Does the setup the decision needs, then reports the facts. The setup has side effects: it polls the runtime's
+    // events, learns the game window, resolves the device and creates the D3D12 device/queue and the eye swapchains,
+    // and finds the back buffer (cached; held in `backBufferHolder` when the cache does not hold it alone). It makes no
+    // plan decisions: a Present with no VR work is a plan, not an early return.
+    PresentFacts GatherPresentFacts(IDXGISwapChain* swapChain, Microsoft::WRL::ComPtr<ID3D12Resource>& backBufferHolder,
+                                    ID3D12Resource*& pBackBuffer);
+    // Carries `plan` out in the one order the OpenXR runtime and DXGI see (ADR-0015, ADR-0019): pacing reset, the eye copy,
+    // the submission, the counters, the latch, then the Desktop Mirror Window's black frame; then the bookkeeping. `facts`
+    // are the ones the plan was made from.
+    bool CarryOutPresentPlan(IDXGISwapChain* swapChain, ID3D12Resource* backBuffer, PresentFacts facts, PresentPlan plan);
     // `vrEyeSnapshot`: after an eye copy, writes the back buffer just copied to that eye to fs25_vr_eye<N>.bmp next to the
     // log when VRBridge has a request for that eye. Blocks until the GPU has read it back.
     void SnapshotEyeIfRequested(uint32_t eyeIndex, ID3D12Resource* backBuffer);
@@ -193,15 +206,9 @@ private:
     // Companion Mod's handshake has completed, and the headset session runs with eye swapchains. Everywhere
     // else (Pass-Through Mode, session not running, before the handshake) the mirror shows by itself.
     bool IsDesktopMirrorOffNow() const;
-    // The decision at each Present that would reach DXGI: records it in m_lastPresentSuppressed and returns
-    // whether the game's real Present is called (false with the mirror off).
-    // A frame that goes from showing to off is the one exception: it presents once, black (see below).
-    bool ShouldCallRealPresent(ID3D12Resource* backBuffer);
     // True while the Desktop Mirror Window showed at the last Present (on, or shown by itself); false once it switched off.
+    // A frame that goes from showing to off presents once, black (PresentPlan::clearBackBufferToBlack).
     bool m_desktopMirrorWasShowing = false;
-    // If the mirror just went from showing to off: changes that state (it is now off), clears the back buffer to
-    // black (after the eye copy that already ran) and returns true so the real Present is called once. Else false.
-    bool ConsumeSwitchToOff(ID3D12Resource* backBuffer);
     // After each Present: logs each change of IsDesktopMirrorOffNow() once, and keeps the game window's title
     // matching it (off note whenever the mirror is off and the title is not shown, the kept title when it shows
     // again). Leaves the title alone otherwise.

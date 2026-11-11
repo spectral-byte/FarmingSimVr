@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "openxr/openxr_manager.h"
+#include "openxr/d3d12_eye_copy.h"
 #include "fake_openxr_runtime.h"
 #include <d3d12.h>
 #include <dxgi1_4.h>
@@ -116,6 +117,25 @@ public:
         }
     }
 
+    // A texture in the RENDER_TARGET state the OpenXR D3D12 extension hands swapchain images out in.
+    ComPtr<ID3D12Resource> CreateEyeImage(UINT width, UINT height) {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = width;
+        desc.Height = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        ComPtr<ID3D12Resource> image;
+        device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                        nullptr, IID_PPV_ARGS(&image));
+        return image;
+    }
+
     ComPtr<ID3D12Resource> CreateBackBuffer(UINT width, UINT height) {
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -216,6 +236,78 @@ TEST(OpenXrEyeCopyD3D12Test, EyeCopyOnARealDeviceReportsNoDebugLayerErrors) {
 
         gpu.WaitForQueue();
         manager.DestroyEyeSwapchains();
+    }
+    gpu.WaitForQueue();
+
+    const std::vector<std::string> errors = gpu.Errors();
+    for (const std::string& error : errors) {
+        ADD_FAILURE() << "D3D12 debug layer: " << error;
+    }
+    EXPECT_TRUE(errors.empty());
+}
+
+// The eye copy module on its own: it needs a device and a queue and nothing from OpenXR.
+TEST(OpenXrEyeCopyD3D12Test, TheModuleCopiesAndClearsWithoutAnyOpenXrHandle) {
+    WarpDebugDevice gpu;
+    if (!gpu.unavailableReason.empty()) {
+        GTEST_SKIP() << "Cannot run the eye copy on a real D3D12 device: " << gpu.unavailableReason;
+    }
+    constexpr UINT kWidth = 256;
+    constexpr UINT kHeight = 128;
+    ComPtr<ID3D12Resource> backBuffer = gpu.CreateBackBuffer(kWidth, kHeight);
+    ComPtr<ID3D12Resource> sameSize = gpu.CreateEyeImage(kWidth, kHeight);
+    ComPtr<ID3D12Resource> smaller = gpu.CreateEyeImage(kWidth / 2, kHeight / 2);
+    ASSERT_TRUE(backBuffer && sameSize && smaller);
+
+    struct Mismatch { uint64_t srcWidth; uint32_t srcHeight; uint64_t dstWidth; uint32_t dstHeight; };
+    std::vector<Mismatch> mismatches;
+    {
+        D3D12EyeCopy eyeCopy;
+        eyeCopy.SetSizeMismatchHandler([&](uint64_t sw, uint32_t sh, uint64_t dw, uint32_t dh) {
+            mismatches.push_back({sw, sh, dw, dh});
+        });
+
+        // Without a device and queue there is nothing to record on.
+        EXPECT_FALSE(eyeCopy.ClearToBlack(backBuffer.Get()));
+        eyeCopy.Copy(backBuffer.Get(), sameSize.Get(), kWidth, kHeight);
+        EXPECT_TRUE(mismatches.empty());
+
+        eyeCopy.SetDeviceAndQueue(gpu.device.Get(), gpu.queue.Get());
+        EXPECT_FALSE(eyeCopy.ClearToBlack(nullptr));
+
+        // More copies than the ring has slots, so every slot is reused.
+        for (uint32_t i = 0; i < 6; ++i) {
+            eyeCopy.Copy(backBuffer.Get(), sameSize.Get(), kWidth, kHeight);
+        }
+        EXPECT_TRUE(mismatches.empty());
+
+        // A destination of another size takes the part that fits and reports the mismatch.
+        eyeCopy.Copy(backBuffer.Get(), smaller.Get(), kWidth / 2, kHeight / 2);
+        // (The expected size is what the swapchain was made with; here it differs from the back buffer's.)
+        ASSERT_EQ(mismatches.size(), 1u);
+        EXPECT_EQ(mismatches[0].srcWidth, kWidth);
+        EXPECT_EQ(mismatches[0].srcHeight, kHeight);
+        EXPECT_EQ(mismatches[0].dstWidth, kWidth / 2);
+        EXPECT_EQ(mismatches[0].dstHeight, kHeight / 2);
+
+        // No destination texture: nothing is recorded, and the next copy still works.
+        eyeCopy.Copy(backBuffer.Get(), nullptr, kWidth, kHeight);
+        eyeCopy.Copy(backBuffer.Get(), sameSize.Get(), kWidth, kHeight);
+
+        EXPECT_TRUE(eyeCopy.ClearToBlack(backBuffer.Get()));
+        EXPECT_TRUE(eyeCopy.ClearToBlack(backBuffer.Get()));
+        eyeCopy.Copy(backBuffer.Get(), sameSize.Get(), kWidth, kHeight);
+
+        gpu.WaitForQueue();
+        eyeCopy.Release();
+        // After a release it starts over.
+        eyeCopy.Copy(backBuffer.Get(), sameSize.Get(), kWidth, kHeight);
+        EXPECT_TRUE(eyeCopy.ClearToBlack(backBuffer.Get()));
+
+        // The module has no destructor that waits: its owner calls Release (the OpenXR manager does, on
+        // shutdown) before it goes away. Destroying it with the copy and clear above still in flight
+        // would free their command allocators under the GPU, which the debug layer reports.
+        eyeCopy.Release();
     }
     gpu.WaitForQueue();
 

@@ -70,6 +70,9 @@ XrTime OpenXrManager::GetCurrentXrTime() const {
 
 OpenXrManager::OpenXrManager(std::shared_ptr<IOpenXrDispatch> dispatch)
     : m_dispatch(std::move(dispatch)) {
+    m_eyeCopy.SetSizeMismatchHandler([this](uint64_t srcWidth, uint32_t srcHeight, uint64_t dstWidth, uint32_t dstHeight) {
+        LogEyeCopySizeMismatchOnce(srcWidth, srcHeight, dstWidth, dstHeight);
+    });
 }
 
 OpenXrManager::~OpenXrManager() {
@@ -77,7 +80,6 @@ OpenXrManager::~OpenXrManager() {
     // leave the session and instance to the OS (see IsProcessTerminating).
     if (IsProcessTerminating()) return;
     Shutdown();
-    m_copyFenceEvent.Close();
 }
 
 bool OpenXrManager::CheckD3D12ExtensionSupport() {
@@ -292,12 +294,13 @@ void OpenXrManager::Shutdown() {
     m_fovOverscan = m_fovOverscanSuspended.load() ? 0.0f : m_requestedFovOverscan.load();
     m_loggedEyeCopySizeMismatch = false;
     m_headPoseLocateFailures = 0;
-    m_hasCustomMenuQuadSize = false;
+    m_menuQuad.ClearCustomSize();
     m_lastSubmittedQuadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
     m_lastPolledTime = 0;
     m_lastLocatedViewsTime = 0;
     m_device = nullptr;
     m_queue = nullptr;
+    m_eyeCopy.SetDeviceAndQueue(m_device, m_queue);
 }
 
 bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queue) {
@@ -306,6 +309,7 @@ bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queu
     }
     if (device) m_device = device;
     if (queue) m_queue = queue;
+    m_eyeCopy.SetDeviceAndQueue(m_device, m_queue);
 
     if (m_session != XR_NULL_HANDLE) {
         return true;
@@ -365,8 +369,7 @@ void OpenXrManager::PollEvents() {
             // comes with the Companion Mod. Poses respect it from changeTime on.
             const auto* change = reinterpret_cast<const XrEventDataReferenceSpaceChangePending*>(&event);
             if (change->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL) {
-                m_menuQuadAwaitsHead = true;
-                m_menuQuadAwaitsHeadAfter = change->changeTime;
+                m_menuQuad.AwaitHeadAfter(change->changeTime);
                 LogInfo("OpenXrManager: Runtime recentered the local space; the menu quad follows the head.");
             }
             break;
@@ -417,8 +420,7 @@ void OpenXrManager::HandleSessionStateChanged(XrSessionState state) {
         // rests. The first focus of a running session is when the player has it on.
         if (!m_focusedSinceBegin) {
             m_focusedSinceBegin = true;
-            m_menuQuadAwaitsHead = true;
-            m_menuQuadAwaitsHeadAfter = 0;
+            m_menuQuad.AwaitHeadAfter(0);
         }
         break;
     case XR_SESSION_STATE_STOPPING:
@@ -943,6 +945,7 @@ uint32_t OpenXrManager::GetRecommendedEyeHeight(uint32_t eyeIndex) const {
 void OpenXrManager::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue* queue) {
     if (device) m_device = device;
     if (queue) m_queue = queue;
+    m_eyeCopy.SetDeviceAndQueue(m_device, m_queue);
     if (m_session == XR_NULL_HANDLE && m_state == OpenXrState::Active && m_device && m_queue) {
         CreateSession(m_device, m_queue);
         CreateTrackingSpaces();
@@ -1076,30 +1079,7 @@ bool OpenXrManager::CreateEyeSwapchains(uint32_t width, uint32_t height, DXGI_FO
 }
 
 void OpenXrManager::DestroyEyeSwapchains() {
-    if (m_copyFence && m_queue && m_currentFenceValue > 0) {
-        if (m_copyFence->GetCompletedValue() < m_currentFenceValue) {
-            if (m_copyFenceEvent.IsValid()) {
-                m_copyFence->SetEventOnCompletion(m_currentFenceValue, m_copyFenceEvent.Get());
-                WaitForSingleObject(m_copyFenceEvent.Get(), INFINITE);
-            }
-        }
-    }
-    m_copyFence.Reset();
-    m_currentFenceValue = 0;
-    m_clearFenceValue = 0;
-    m_clearCommandList.Reset();
-    m_clearAllocator.Reset();
-    m_clearRtvHeap.Reset();
-    for (uint32_t r = 0; r < kCopyRingSize; ++r) {
-        m_copyFenceValues[r] = 0;
-        m_copyCommandLists[r].Reset();
-        m_copyAllocators[r].Reset();
-        m_copyTimestampPending[r] = false;
-    }
-    m_copyTimestampHeap.Reset();
-    m_copyTimestampReadback.Reset();
-    m_copyRingIndex = 0;
-    m_copyFenceEvent.Close();
+    m_eyeCopy.Release();
     for (uint32_t i = 0; i < 2; ++i) {
         if (m_eyeSwapchains[i].handle != XR_NULL_HANDLE) {
             m_dispatch->DestroySwapchain(m_eyeSwapchains[i].handle);
@@ -1224,8 +1204,7 @@ bool OpenXrManager::BeginFrame() {
     if (m_frameState.shouldRender) {
         LocateActiveViews(m_frameState.predictedDisplayTime);
         PollHeadPose(m_frameState.predictedDisplayTime);
-        if (m_menuQuadAwaitsHead && m_hasMenuQuadPose && m_lastPose.isValid &&
-            m_frameState.predictedDisplayTime >= m_menuQuadAwaitsHeadAfter) {
+        if (m_menuQuad.AwaitsHead(m_lastPose.isValid, m_frameState.predictedDisplayTime)) {
             AlignMenuQuadToHeadPose();
             LogInfo("OpenXrManager: Menu quad placed in front of the tracked head.");
         }
@@ -1266,90 +1245,9 @@ bool OpenXrManager::EndFrame() {
     return true;
 }
 
-void OpenXrManager::EnsureCopyFence() {
-    if (m_copyFence || !m_device) return;
-    m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_copyFence));
-    m_currentFenceValue = 0;
-    m_clearFenceValue = 0;
-    for (uint32_t r = 0; r < kCopyRingSize; ++r) {
-        m_copyFenceValues[r] = 0;
-    }
-    if (!m_copyFenceEvent.IsValid()) {
-        m_copyFenceEvent = ScopedEventHandle::Create(nullptr, FALSE, FALSE, nullptr);
-    }
-}
-
 XrResult OpenXrManager::DispatchEndFrame(const XrFrameEndInfo& endInfo) {
     PerfScope timing(PerfSection::XrEndFrame);
     return m_dispatch->EndFrame(m_session, &endInfo);
-}
-
-bool OpenXrManager::EnsureCopyTimestamps() {
-    if (m_copyTimestampHeap && m_copyTimestampReadback) return true;
-    if (m_copyTimestampsFailed || !m_device || !m_queue || !m_copyFence) return false;
-
-    D3D12_QUERY_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-    heapDesc.Count = kCopyRingSize * 2;
-    D3D12_HEAP_PROPERTIES props{};
-    props.Type = D3D12_HEAP_TYPE_READBACK;
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = kCopyRingSize * 2 * sizeof(uint64_t);
-    desc.Height = 1;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    UINT64 frequency = 0;
-    if (FAILED(m_device->CreateQueryHeap(&heapDesc, IID_PPV_ARGS(&m_copyTimestampHeap))) ||
-        FAILED(m_device->CreateCommittedResource(&props, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
-                                                 nullptr, IID_PPV_ARGS(&m_copyTimestampReadback))) ||
-        FAILED(m_queue->GetTimestampFrequency(&frequency)) || frequency == 0) {
-        // The trace still has its CPU timings; only the GPU eye copy lines are missing.
-        LogWarn("OpenXrManager: GPU timestamps unavailable; vrPerfTrace logs no GPU eye copy timing");
-        m_copyTimestampHeap.Reset();
-        m_copyTimestampReadback.Reset();
-        m_copyTimestampsFailed = true;
-        return false;
-    }
-    m_gpuTimestampFrequency = frequency;
-    m_copiesSinceCalibration = 0;
-    PerfTrace::Instance().SetGpuTimestampFrequency(frequency);
-    return true;
-}
-
-void OpenXrManager::ReadCopyTimestamps(uint32_t ringSlot) {
-    if (!m_copyTimestampPending[ringSlot]) return;
-    m_copyTimestampPending[ringSlot] = false;
-    if (!m_copyTimestampReadback || !PerfTrace::Instance().IsActive()) return;
-
-    const D3D12_RANGE readRange{ringSlot * 2 * sizeof(uint64_t), (ringSlot * 2 + 2) * sizeof(uint64_t)};
-    void* mapped = nullptr;
-    if (FAILED(m_copyTimestampReadback->Map(0, &readRange, &mapped)) || !mapped) return;
-    const uint64_t* stamps = static_cast<const uint64_t*>(mapped) + ringSlot * 2;
-    const uint64_t start = stamps[0];
-    const uint64_t end = stamps[1];
-    const D3D12_RANGE written{0, 0};
-    m_copyTimestampReadback->Unmap(0, &written);
-    if (end < start) return;
-
-    // The GPU and CPU clocks drift apart slowly; recalibrating every few dozen copies keeps the lag exact.
-    if (m_copiesSinceCalibration++ % 64 == 0) {
-        UINT64 gpuTicks = 0;
-        UINT64 cpuQpc = 0;
-        if (SUCCEEDED(m_queue->GetClockCalibration(&gpuTicks, &cpuQpc))) {
-            m_gpuCalibrationTicks = gpuTicks;
-            m_gpuCalibrationCpuNs = QpcTicksToNanoseconds(static_cast<int64_t>(cpuQpc), QpcFrequency());
-        }
-    }
-    PerfTrace& trace = PerfTrace::Instance();
-    trace.AddSample(PerfSection::GpuEyeCopy, GpuTicksToNanoseconds(end - start, m_gpuTimestampFrequency));
-    if (m_gpuCalibrationTicks != 0) {
-        const int64_t startNs = GpuTimestampToCpuNanoseconds(start, m_gpuTimestampFrequency, m_gpuCalibrationTicks,
-                                                             m_gpuCalibrationCpuNs);
-        trace.AddSample(PerfSection::GpuQueueLag, startNs - m_copySubmitNs[ringSlot]);
-    }
 }
 
 void OpenXrManager::LogEyeCopySizeMismatchOnce(uint64_t srcWidth, uint32_t srcHeight, uint64_t dstWidth, uint32_t dstHeight) {
@@ -1420,128 +1318,14 @@ bool OpenXrManager::CopyBackBufferToEye(uint32_t eyeIndex, ID3D12Resource* backB
         return false;
     }
 
-    // If backBuffer, device, and queue are present, perform D3D12 command list recording & execution
+    // If backBuffer, device, and queue are present, the eye copy module records and submits the copy on the
+    // game's queue into the acquired image's texture (none when the runtime gave an index past its images).
     if (backBuffer && m_device && m_queue) {
-        EnsureCopyFence();
-
-        uint32_t ringSlot = m_copyRingIndex;
-        m_copyRingIndex = (m_copyRingIndex + 1) % kCopyRingSize;
-
-        if (!m_copyAllocators[ringSlot]) {
-            m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_copyAllocators[ringSlot]));
-        }
-        if (!m_copyCommandLists[ringSlot] && m_copyAllocators[ringSlot]) {
-            // A new list is created open. Close it so every use starts from a closed list that can be reset.
-            if (SUCCEEDED(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_copyAllocators[ringSlot].Get(), nullptr, IID_PPV_ARGS(&m_copyCommandLists[ringSlot])))) {
-                m_copyCommandLists[ringSlot]->Close();
-            }
-        }
-
-        auto& curAllocator = m_copyAllocators[ringSlot];
-        auto& curCommandList = m_copyCommandLists[ringSlot];
-
-        // A copy with no destination texture records nothing: the slot's list stays closed, nothing is
-        // executed and its fence value is not advanced.
         ID3D12Resource* destTexture = nullptr;
         if (imageIndex < m_eyeSwapchains[eyeIndex].images.size()) {
             destTexture = m_eyeSwapchains[eyeIndex].images[imageIndex].texture;
         }
-
-        if (curCommandList && curAllocator && destTexture) {
-            // Synchronize with previous execution on this specific ring slot if GPU has not finished it
-            uint64_t waitVal = m_copyFenceValues[ringSlot];
-            {
-                PerfScope fenceTiming(PerfSection::CopyFenceWait);
-                if (m_copyFence && waitVal > 0) {
-                    if (m_copyFence->GetCompletedValue() < waitVal) {
-                        if (m_copyFenceEvent.IsValid()) {
-                            m_copyFence->SetEventOnCompletion(waitVal, m_copyFenceEvent.Get());
-                            WaitForSingleObject(m_copyFenceEvent.Get(), INFINITE);
-                        }
-                    }
-                }
-            }
-            // The slot's earlier copy has run, so its timestamps are written.
-            ReadCopyTimestamps(ringSlot);
-            const bool timed = PerfTrace::Instance().IsActive() && EnsureCopyTimestamps();
-
-            // The slot's fence has passed, so the allocator is idle; its list is closed, so it can be reset.
-            curAllocator->Reset();
-            curCommandList->Reset(curAllocator.Get(), nullptr);
-
-            D3D12_RESOURCE_BARRIER barriers[2]{};
-            barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barriers[0].Transition.pResource = backBuffer;
-            barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-            barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-            barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-            barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barriers[1].Transition.pResource = destTexture;
-            // OpenXR D3D12: acquired color swapchain images are in RENDER_TARGET and must be
-            // returned to RENDER_TARGET before release.
-            barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-            barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-            if (timed) {
-                curCommandList->EndQuery(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2);
-            }
-            curCommandList->ResourceBarrier(2, barriers);
-
-            uint32_t scWidth = m_eyeSwapchains[eyeIndex].width;
-            uint32_t scHeight = m_eyeSwapchains[eyeIndex].height;
-
-            D3D12_RESOURCE_DESC srcDesc = backBuffer->GetDesc();
-            if (srcDesc.Width == scWidth && srcDesc.Height == scHeight) {
-                curCommandList->CopyResource(destTexture, backBuffer);
-            } else {
-                D3D12_RESOURCE_DESC dstDesc = destTexture->GetDesc();
-                LogEyeCopySizeMismatchOnce(srcDesc.Width, srcDesc.Height, dstDesc.Width, dstDesc.Height);
-                D3D12_TEXTURE_COPY_LOCATION dstLoc{};
-                dstLoc.pResource = destTexture;
-                dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                dstLoc.SubresourceIndex = 0;
-
-                D3D12_TEXTURE_COPY_LOCATION srcLoc{};
-                srcLoc.pResource = backBuffer;
-                srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                srcLoc.SubresourceIndex = 0;
-
-                D3D12_BOX box{};
-                box.left = 0;
-                box.top = 0;
-                box.front = 0;
-                box.right = static_cast<UINT>(std::min(srcDesc.Width, static_cast<UINT64>(dstDesc.Width)));
-                box.bottom = static_cast<UINT>(std::min(srcDesc.Height, dstDesc.Height));
-                box.back = 1;
-
-                curCommandList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &box);
-            }
-
-            std::swap(barriers[0].Transition.StateBefore, barriers[0].Transition.StateAfter);
-            std::swap(barriers[1].Transition.StateBefore, barriers[1].Transition.StateAfter);
-            curCommandList->ResourceBarrier(2, barriers);
-            if (timed) {
-                curCommandList->EndQuery(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2 + 1);
-                curCommandList->ResolveQueryData(m_copyTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ringSlot * 2, 2,
-                                                 m_copyTimestampReadback.Get(), ringSlot * 2 * sizeof(uint64_t));
-            }
-
-            curCommandList->Close();
-            ID3D12CommandList* lists[] = { curCommandList.Get() };
-            if (timed) {
-                m_copySubmitNs[ringSlot] = PerfTrace::Instance().Now();
-            }
-            m_queue->ExecuteCommandLists(1, lists);
-
-            if (m_copyFence) {
-                m_currentFenceValue++;
-                m_copyFenceValues[ringSlot] = m_currentFenceValue;
-                m_queue->Signal(m_copyFence.Get(), m_currentFenceValue);
-                m_copyTimestampPending[ringSlot] = timed;
-            }
-        }
+        m_eyeCopy.Copy(backBuffer, destTexture, m_eyeSwapchains[eyeIndex].width, m_eyeSwapchains[eyeIndex].height);
     }
 
     XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -1560,62 +1344,7 @@ bool OpenXrManager::ClearBackBufferToBlack(ID3D12Resource* backBuffer) {
     if (!backBuffer || !m_device || !m_queue) {
         return false;
     }
-    EnsureCopyFence();
-    if (!m_copyFence) {
-        return false;
-    }
-
-    if (!m_clearAllocator) {
-        m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_clearAllocator));
-    }
-    if (!m_clearCommandList && m_clearAllocator) {
-        if (SUCCEEDED(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_clearAllocator.Get(), nullptr, IID_PPV_ARGS(&m_clearCommandList)))) {
-            m_clearCommandList->Close();
-        }
-    }
-    if (!m_clearRtvHeap) {
-        D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-        heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        heapDesc.NumDescriptors = 1;
-        heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_clearRtvHeap));
-    }
-    if (!m_clearAllocator || !m_clearCommandList || !m_clearRtvHeap) {
-        return false;
-    }
-
-    // The previous clear's allocator is reusable only once the GPU has finished with it.
-    if (m_clearFenceValue > 0 && m_copyFence->GetCompletedValue() < m_clearFenceValue && m_copyFenceEvent.IsValid()) {
-        m_copyFence->SetEventOnCompletion(m_clearFenceValue, m_copyFenceEvent.Get());
-        WaitForSingleObject(m_copyFenceEvent.Get(), INFINITE);
-    }
-    m_clearAllocator->Reset();
-    m_clearCommandList->Reset(m_clearAllocator.Get(), nullptr);
-
-    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_clearRtvHeap->GetCPUDescriptorHandleForHeapStart();
-    m_device->CreateRenderTargetView(backBuffer, nullptr, rtv);
-
-    // The game hands the back buffer to Present in the PRESENT state (as CopyBackBufferToEye assumes);
-    // it goes back to that state after the clear.
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = backBuffer;
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    m_clearCommandList->ResourceBarrier(1, &barrier);
-    const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-    m_clearCommandList->ClearRenderTargetView(rtv, black, 0, nullptr);
-    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-    m_clearCommandList->ResourceBarrier(1, &barrier);
-    m_clearCommandList->Close();
-
-    ID3D12CommandList* lists[] = { m_clearCommandList.Get() };
-    m_queue->ExecuteCommandLists(1, lists);
-    m_currentFenceValue++;
-    m_clearFenceValue = m_currentFenceValue;
-    m_queue->Signal(m_copyFence.Get(), m_currentFenceValue);
-    return true;
+    return m_eyeCopy.ClearToBlack(backBuffer);
 }
 
 bool OpenXrManager::SubmitFramePair() {
@@ -1733,135 +1462,18 @@ bool OpenXrManager::SubmitFramePair() {
     return true;
 }
 
-XrPosef OpenXrManager::ComputeMenuQuadPoseFromHeadPose(const HeadPose& headPose, float distance) {
-    float yaw = headPose.rotation.yaw;
-    // Fallback: if yaw Euler is 0 but orientation quaternion is non-identity, extract yaw from quaternion
-    if (std::abs(yaw) < 1e-6f && (std::abs(headPose.orientation.x) > 1e-6f ||
-                                 std::abs(headPose.orientation.y) > 1e-6f ||
-                                 std::abs(headPose.orientation.z) > 1e-6f ||
-                                 std::abs(headPose.orientation.w - 1.0f) > 1e-6f)) {
-        yaw = QuaternionToEuler(headPose.orientation).yaw;
-    }
-
-    float halfYaw = yaw * 0.5f;
-    Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
-
-    Vector3 forwardOffset(0.0f, 0.0f, -distance);
-    Vector3 rotatedOffset = RotateVectorByQuaternion(qYaw, forwardOffset);
-
-    XrPosef pose{};
-    pose.position.x = headPose.position.x + rotatedOffset.x;
-    pose.position.y = headPose.position.y; // Decouple pitch/roll: virtual screen remains at eye level
-    pose.position.z = headPose.position.z + rotatedOffset.z;
-
-    pose.orientation.x = qYaw.x;
-    pose.orientation.y = qYaw.y;
-    pose.orientation.z = qYaw.z;
-    pose.orientation.w = qYaw.w;
-
-    return pose;
-}
-
 void OpenXrManager::AlignMenuQuadToHeadPose(const HeadPose* customPose) {
     // The head as located in m_localSpace, the space SubmitMenuQuad() submits the quad in. The raw
     // pose is in the runtime's own local space, which after a Recenter Action is offset by wherever
     // the head was in it: about 24 m on Pimax OpenXR, enough to put the menu out of sight (issue 238).
-    const HeadPose& pose = customPose ? *customPose : m_lastPose;
-    m_menuQuadPose = ComputeMenuQuadPoseFromHeadPose(pose, m_menuQuadDistance);
-    m_hasMenuQuadPose = true;
-    // The first menu frame of a session usually has no head pose yet (the frame is not rendered, or
-    // the runtime is not tracking): the quad then sits at the local space origin, which can be far
-    // below the eyes, until the head is tracked.
-    m_menuQuadAwaitsHead = !pose.isValid;
-    m_menuQuadAwaitsHeadAfter = 0;
-}
-
-float OpenXrManager::ClampMenuQuadDistance(float distance) {
-    if (std::isnan(distance)) return kDefaultMenuQuadDistance;
-    return std::clamp(distance, kMinMenuQuadDistance, kMaxMenuQuadDistance);
-}
-
-void OpenXrManager::SetMenuQuadDistance(float distance) {
-    distance = ClampMenuQuadDistance(distance);
-    if (m_hasMenuQuadPose) {
-        // Along the quad's own -Z, the way the player looks at it, by the change in distance.
-        const Quaternion facing(m_menuQuadPose.orientation.x, m_menuQuadPose.orientation.y,
-                                m_menuQuadPose.orientation.z, m_menuQuadPose.orientation.w);
-        const Vector3 shift = RotateVectorByQuaternion(facing, Vector3(0.0f, 0.0f, m_menuQuadDistance - distance));
-        m_menuQuadPose.position.x += shift.x;
-        m_menuQuadPose.position.y += shift.y;
-        m_menuQuadPose.position.z += shift.z;
-    }
-    m_menuQuadDistance = distance;
-}
-
-XrPosef OpenXrManager::ComputeMenuQuadPose() const {
-    if (m_hasMenuQuadPose) {
-        return m_menuQuadPose;
-    }
-    XrPosef pose{};
-    pose.position.x = 0.0f;
-    pose.position.y = 0.0f;
-    pose.position.z = -m_menuQuadDistance;
-    pose.orientation.w = 1.0f;
-    return pose;
+    m_menuQuad.AlignToHeadPose(customPose ? *customPose : m_lastPose);
 }
 
 XrExtent2Df OpenXrManager::ComputeMenuQuadSize() const {
-    if (m_hasCustomMenuQuadSize) {
-        return m_customMenuQuadSize;
+    if (m_hasEyeSwapchains) {
+        return m_menuQuad.Size(m_eyeSwapchains[0].width, m_eyeSwapchains[0].height);
     }
-    float height = 0.9f;
-    float aspect = 16.0f / 9.0f;
-    if (m_hasEyeSwapchains && m_eyeSwapchains[0].height > 0) {
-        aspect = static_cast<float>(m_eyeSwapchains[0].width) / static_cast<float>(m_eyeSwapchains[0].height);
-    }
-    return XrExtent2Df{ height * aspect, height };
-}
-
-PanelHit OpenXrManager::ComputeQuadRayHit(const XrPosef& quadPose, const XrExtent2Df& quadSize,
-                                          const Vector3& rayOrigin, const Quaternion& rayOrientation) {
-    return ComputeQuadRayHitAlong(quadPose, quadSize, rayOrigin,
-                                  RotateVectorByQuaternion(rayOrientation, Vector3(0.0f, 0.0f, -1.0f)));
-}
-
-PanelHit OpenXrManager::ComputeQuadRayHitAlong(const XrPosef& quadPose, const XrExtent2Df& quadSize,
-                                               const Vector3& rayOrigin, const Vector3& rayDirection) {
-    PanelHit miss;
-    if (quadSize.width <= 0.0f || quadSize.height <= 0.0f) {
-        return miss;
-    }
-    const float length = std::sqrt(rayDirection.x * rayDirection.x + rayDirection.y * rayDirection.y + rayDirection.z * rayDirection.z);
-    if (!(length > 1e-6f)) {
-        return miss;
-    }
-    // Into the quad's own frame, where the panel is the z = 0 plane facing +Z.
-    const Quaternion quadToWorld(quadPose.orientation.x, quadPose.orientation.y, quadPose.orientation.z, quadPose.orientation.w);
-    const Quaternion worldToQuad(-quadToWorld.x, -quadToWorld.y, -quadToWorld.z, quadToWorld.w);
-    const Vector3 offset(rayOrigin.x - quadPose.position.x, rayOrigin.y - quadPose.position.y, rayOrigin.z - quadPose.position.z);
-    const Vector3 origin = RotateVectorByQuaternion(worldToQuad, offset);
-    const Vector3 worldDir(rayDirection.x / length, rayDirection.y / length, rayDirection.z / length);
-    const Vector3 dir = RotateVectorByQuaternion(worldToQuad, worldDir);
-
-    // The panel is only visible from its front: the ray must start in front of it and head into it.
-    constexpr float kMinApproach = 1e-6f;
-    if (dir.z > -kMinApproach || origin.z <= 0.0f) {
-        return miss;
-    }
-    const float t = -origin.z / dir.z;
-    const float x = origin.x + dir.x * t;
-    const float y = origin.y + dir.y * t;
-    const float u = x / quadSize.width + 0.5f;
-    const float v = 0.5f - y / quadSize.height;
-    if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) {
-        return miss;
-    }
-    PanelHit hit;
-    hit.hit = true;
-    hit.u = u;
-    hit.v = v;
-    hit.distance = t;
-    return hit;
+    return m_menuQuad.Size(0, 0);
 }
 
 PanelHit OpenXrManager::GetPanelHit(uint32_t hand) {
@@ -1871,7 +1483,7 @@ PanelHit OpenXrManager::GetPanelHit(uint32_t hand) {
     }
     // The hand is located in the local space the quad layer is submitted in, so the pose and size
     // SubmitMenuQuad() uses are the ones to test against.
-    return ComputeQuadRayHit(ComputeMenuQuadPose(), ComputeMenuQuadSize(), state.aim.position, state.aim.orientation);
+    return MenuQuad::RayHit(m_menuQuad.Pose(), ComputeMenuQuadSize(), state.aim.position, state.aim.orientation);
 }
 
 PanelHit OpenXrManager::GetPanelHitAlongRay(uint32_t hand, const Vector3& origin, const Vector3& direction) {
@@ -1879,7 +1491,7 @@ PanelHit OpenXrManager::GetPanelHitAlongRay(uint32_t hand, const Vector3& origin
     if (!state.tracked || !state.aim.isValid) {
         return {};
     }
-    return ComputeQuadRayHitAlong(ComputeMenuQuadPose(), ComputeMenuQuadSize(), origin, direction);
+    return MenuQuad::RayHitAlong(m_menuQuad.Pose(), ComputeMenuQuadSize(), origin, direction);
 }
 
 bool OpenXrManager::SubmitMenuQuad(const XrPosef* customPose, const XrExtent2Df* customSize) {

@@ -116,6 +116,10 @@ set(CORE_SOURCES
     src/luau/luau_interceptor.cpp
     src/luau/luau_interceptor.h
     src/openxr/openxr_dispatch.h
+    src/openxr/d3d12_eye_copy.h
+    src/openxr/d3d12_eye_copy.cpp
+    src/openxr/menu_quad.h
+    src/openxr/menu_quad.cpp
     src/openxr/openxr_cursor_overlay.h
     src/openxr/openxr_cursor_overlay.cpp
     src/openxr/openxr_input.h
@@ -131,6 +135,8 @@ set(CORE_SOURCES
     src/proxy/desktop_cursor_port.cpp
     src/proxy/mirror_window_controller.h
     src/proxy/mirror_window_controller.cpp
+    src/proxy/present_plan.cpp
+    src/proxy/present_plan.h
     src/proxy/dxgi_proxy.cpp
     src/proxy/dxgi_proxy.h
     src/ngx/ngx_defs.h
@@ -218,11 +224,13 @@ add_executable(fs25_vr_tests
     tests/test_fov_coverage.cpp
     tests/test_fov_overscan.cpp
     tests/test_menu_distance.cpp
+    tests/test_menu_quad.cpp
     tests/test_texture_snapshot.cpp
     tests/test_openxr_eye_copy_d3d12.cpp
     tests/test_openxr_motion_controllers.cpp
     tests/test_mirror_window_controller.cpp
     tests/test_dxgi_proxy.cpp
+    tests/test_present_plan.cpp
     tests/test_d3d11on12_unwrap.cpp
     tests/test_dxgi_export_hooks.cpp
     tests/test_injector_binary.cpp
