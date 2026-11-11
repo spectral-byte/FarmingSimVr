@@ -4,7 +4,7 @@
 [![OpenXR](https://img.shields.io/badge/OpenXR-1.0-blue.svg)]()
 [![DirectX](https://img.shields.io/badge/Direct3D-12-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey.svg)]()
-[![Release](https://img.shields.io/badge/release-v1.0.0-success.svg)](https://github.com/spectral-byte/FarmingSimVr/releases)
+[![Release](https://img.shields.io/github/v/release/spectral-byte/FarmingSimVr?color=success)](https://github.com/spectral-byte/FarmingSimVr/releases)
 
 A VR mod for **Farming Simulator 25** (Direct3D 12). It works with any OpenXR runtime: Meta Quest Link/AirLink, Virtual Desktop, SteamVR, Pimax and Bigscreen Beyond.
 
@@ -111,7 +111,7 @@ Open the console with `` ` `` / `~`. Commands that take arguments print their us
 
 ### Motion Controller buttons
 
-The Motion Controllers' buttons, triggers, grips and thumbsticks reach the game as the Virtual Gamepad, an Xbox-style pad (`vrVirtualGamepad`, on by default). Bind it in the game's Controls screen like any gamepad, for any game action and for the VR actions (Snap turn, Recenter view, Cycle HUD, Toggle 3D VR / 2D window). Each control on each hand is its own pad input:
+The Motion Controllers' buttons, triggers, grips and thumbsticks reach the game as the Virtual Gamepad, an Xbox-style pad (`vrVirtualGamepad`, on by default). Bind it in the game's Controls screen like any gamepad, for any game action and for the VR actions (Snap turn, Recenter view, Cycle HUD, Toggle 3D VR / 2D window). Each control on each hand is its own pad input, so each one can be bound to any action you like.
 
 ## Troubleshooting
 
