@@ -46,6 +46,10 @@ public:
         // The Companion Mod's settings.xml, read once on construction for the settings the main menu needs before a
         // savegame has loaded (the Menu Distance). Empty: nothing is read. Instance() passes the player's file.
         std::filesystem::path companionSettingsFile;
+        // The host module (an HMODULE) whose .rdata and .text sections the Luau interceptor scans for the game's
+        // head-tracking query. Null: nothing is scanned and the interceptor stands by, which is what a runtime
+        // built by a test gets. Instance() passes the process's executable.
+        void* hostModule = nullptr;
         // The Injector's release version, given to the VRBridge the runtime creates itself (a supplied VRBridge
         // brings its own). The build's version unless a test supplies another.
         std::string injectorVersion{kInjectorVersion};

@@ -45,7 +45,11 @@ public:
     // Attach installs the detour only while a live InjectorRuntime owns the interceptor, so the hook
     // can always find the interceptor that holds its original.
     void SetOwnedByRuntime(bool owned) { m_ownedByRuntime = owned; }
+    // The module (an HMODULE) AttachToEngine scans; the composition root names it. Null: nothing is scanned.
+    void SetHostModule(void* hostModule) { m_hostModule = hostModule; }
     bool Attach(void* targetQueryFunction);
+    // Scans the host module's sections for the head-tracking query and attaches to it. With no host module
+    // set, stands by and returns false.
     bool AttachToEngine();
     // The part of AttachToEngine after the host's sections are located: refuses a Luau mismatch, then
     // resolves the head-tracking query and attaches to it. Returns true only when the detour is installed.
@@ -69,6 +73,7 @@ private:
     lua_State* m_activeState = nullptr;
     bool m_bridgeInjected = false;
     bool m_ownedByRuntime = false;
+    void* m_hostModule = nullptr;
 };
 
 } // namespace fs25vr
