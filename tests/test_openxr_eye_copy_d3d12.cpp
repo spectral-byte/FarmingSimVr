@@ -303,6 +303,11 @@ TEST(OpenXrEyeCopyD3D12Test, TheModuleCopiesAndClearsWithoutAnyOpenXrHandle) {
         // After a release it starts over.
         eyeCopy.Copy(backBuffer.Get(), sameSize.Get(), kWidth, kHeight);
         EXPECT_TRUE(eyeCopy.ClearToBlack(backBuffer.Get()));
+
+        // The module has no destructor that waits: its owner calls Release (the OpenXR manager does, on
+        // shutdown) before it goes away. Destroying it with the copy and clear above still in flight
+        // would free their command allocators under the GPU, which the debug layer reports.
+        eyeCopy.Release();
     }
     gpu.WaitForQueue();
 
