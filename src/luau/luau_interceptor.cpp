@@ -78,19 +78,9 @@ bool LuauInterceptor::Attach(void* targetQueryFunction) {
 }
 
 bool LuauInterceptor::AttachToEngine() {
-    HMODULE hModule = GetModuleHandleW(nullptr);
+    HMODULE hModule = static_cast<HMODULE>(m_hostModule);
     if (!hModule) {
-        LogError("LuauInterceptor::AttachToEngine: Failed to get process module handle.");
-        return false;
-    }
-
-    WCHAR modulePath[MAX_PATH] = {0};
-    GetModuleFileNameW(hModule, modulePath, MAX_PATH);
-    std::wstring pathStr(modulePath);
-
-    // If running in unit test runner, don't attempt host scan
-    if (pathStr.find(L"fs25_vr_tests") != std::wstring::npos) {
-        LogInfo("LuauInterceptor: Running in test executable context. Standing by for explicit attachment.");
+        LogInfo("LuauInterceptor: No host module to scan. Standing by for explicit attachment.");
         return false;
     }
 

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "core/injector_runtime.h"
+#include "core/logger.h"
 #include "core/injector_version.h"
 #include "luau/luau_interceptor.h"
 #include "luau/vr_bridge.h"
@@ -412,4 +413,130 @@ TEST(InjectorVersionPinTest, BuildVersionIsTheVersionInModDesc) {
     std::smatch version;
     ASSERT_TRUE(std::regex_search(modDesc, version, std::regex("<version>([^<]+)</version>")));
     EXPECT_EQ(std::string(fs25vr::kInjectorVersion), version[1].str());
+}
+
+// The composition root names the module the interceptor scans (Dependencies::hostModule). A runtime built by a
+// test names none, so nothing is scanned and the test process is never hooked.
+
+namespace {
+
+// Redirects the game log to a temp file while a test runs and reads it back.
+class HostModuleLogCapture {
+public:
+    HostModuleLogCapture() : m_path(std::filesystem::temp_directory_path() / "fs25vr_host_module_test.log") {
+        fs25vr::Logger::Instance().SetLogFile(m_path);
+    }
+    ~HostModuleLogCapture() {
+        fs25vr::Logger::Instance().SetLogFile(fs25vr::Logger::DefaultLogPath());
+        std::filesystem::remove(m_path);
+    }
+    std::string Text() const {
+        fs25vr::Logger::Instance().Flush();
+        std::ifstream file(m_path);
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    }
+private:
+    std::filesystem::path m_path;
+};
+
+// A minimal PE image in executable memory: headers, then a .text section holding a query function and the
+// registration code that pairs it with its name, then a .rdata section holding that name and the given strings.
+class MockHostModule {
+public:
+    static constexpr size_t kSize = 0x2000;
+    static constexpr size_t kTextRva = 0x400;
+    static constexpr size_t kTextSize = 0x100;
+    static constexpr size_t kRdataRva = 0x600;
+    static constexpr size_t kRdataSize = 0x1000;
+    static constexpr size_t kFnOffset = 0x20;
+
+    explicit MockHostModule(const std::vector<std::string>& rdataStrings) {
+        m_base = static_cast<uint8_t*>(VirtualAlloc(nullptr, kSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        if (!m_base) return;
+        std::memset(m_base, 0, kSize);
+
+        auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(m_base);
+        dos->e_magic = IMAGE_DOS_SIGNATURE;
+        dos->e_lfanew = 0x80;
+        auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(m_base + dos->e_lfanew);
+        nt->Signature = IMAGE_NT_SIGNATURE;
+        nt->FileHeader.NumberOfSections = 2;
+        auto* sections = IMAGE_FIRST_SECTION(nt);
+        std::memcpy(sections[0].Name, ".text", 6);
+        sections[0].VirtualAddress = static_cast<DWORD>(kTextRva);
+        sections[0].Misc.VirtualSize = static_cast<DWORD>(kTextSize);
+        std::memcpy(sections[1].Name, ".rdata", 7);
+        sections[1].VirtualAddress = static_cast<DWORD>(kRdataRva);
+        sections[1].Misc.VirtualSize = static_cast<DWORD>(kRdataSize);
+
+        uint8_t* text = m_base + kTextRva;
+        std::memset(text, 0x90, kTextSize);
+        const uint8_t fnEntry[] = {0x48, 0x83, 0xEC, 0x28};  // sub rsp, 0x28
+        std::memcpy(text + kFnOffset, fnEntry, sizeof(fnEntry));
+
+        size_t cursor = kRdataRva;
+        const char queryName[] = "isHeadTrackingAvailable";
+        std::memcpy(m_base + cursor, queryName, sizeof(queryName));
+        const uint8_t* queryString = m_base + cursor;
+        cursor += sizeof(queryName);
+        for (const std::string& s : rdataStrings) {
+            std::memcpy(m_base + cursor, s.c_str(), s.size() + 1);
+            cursor += s.size() + 1;
+        }
+
+        EmitRipLea(text + 0x80, 0x4C, 0x05, queryString);       // lea r8, [rip + queryName]
+        EmitRipLea(text + 0x87, 0x48, 0x15, text + kFnOffset);  // lea rdx, [rip + fn]
+    }
+    ~MockHostModule() {
+        if (m_base) VirtualFree(m_base, 0, MEM_RELEASE);
+    }
+    MockHostModule(const MockHostModule&) = delete;
+    MockHostModule& operator=(const MockHostModule&) = delete;
+
+    bool Valid() const { return m_base != nullptr; }
+    void* Handle() const { return m_base; }
+
+private:
+    static void EmitRipLea(uint8_t* at, uint8_t rex, uint8_t modrm, const uint8_t* target) {
+        at[0] = rex;
+        at[1] = 0x8D;
+        at[2] = modrm;
+        const int32_t disp = static_cast<int32_t>(target - (at + 7));
+        std::memcpy(at + 3, &disp, sizeof(disp));
+    }
+
+    uint8_t* m_base = nullptr;
+};
+
+} // anonymous namespace
+
+TEST(HostModuleTest, RuntimeBuiltWithoutAHostModuleInstallsNoDetourAndStandsBy) {
+    HostModuleLogCapture log;
+    fs25vr::InjectorRuntime runtime;
+
+    EXPECT_FALSE(runtime.GetLuauInterceptor().AttachToEngine());
+    EXPECT_FALSE(runtime.GetLuauInterceptor().GetDetour().IsInstalled());
+    EXPECT_NE(log.Text().find("Standing by"), std::string::npos) << log.Text();
+}
+
+TEST(HostModuleTest, RuntimeGivenAHostModuleWithTheFingerprintAndTheQueryAttaches) {
+    MockHostModule host(AllFingerprintMarkers());
+    ASSERT_TRUE(host.Valid());
+    fs25vr::InjectorRuntime::Dependencies deps;
+    deps.hostModule = host.Handle();
+    fs25vr::InjectorRuntime runtime(std::move(deps));
+
+    EXPECT_TRUE(runtime.GetLuauInterceptor().AttachToEngine());
+    EXPECT_TRUE(runtime.GetLuauInterceptor().GetDetour().IsInstalled());
+}
+
+TEST(HostModuleTest, RuntimeGivenAHostModuleWithoutTheFingerprintDoesNotAttach) {
+    MockHostModule host({});
+    ASSERT_TRUE(host.Valid());
+    fs25vr::InjectorRuntime::Dependencies deps;
+    deps.hostModule = host.Handle();
+    fs25vr::InjectorRuntime runtime(std::move(deps));
+
+    EXPECT_FALSE(runtime.GetLuauInterceptor().AttachToEngine());
+    EXPECT_FALSE(runtime.GetLuauInterceptor().GetDetour().IsInstalled());
 }
