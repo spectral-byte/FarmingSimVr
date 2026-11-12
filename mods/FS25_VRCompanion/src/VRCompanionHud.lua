@@ -280,7 +280,7 @@ end
 
 -- The share of the screen width each eye's HUD is shifted by so that it reads `depth` metres away: each eye sees a point that
 -- far straight ahead half the IPD to the side, (ipd / 2) / depth in tangent, on a screen 2 tan(fovX / 2) wide. Without a
--- headset projection, the old fixed factor (right for a 73 degree view) stands in, shrunk by the FOV Overscan.
+-- headset projection, a fixed factor (right for a 73 degree view) stands in, shrunk by the FOV Overscan.
 function VRCompanion:computeConvergenceDisparity(ipd, depth)
     local targetDepth = depth or self.hudConvergenceDepth or self.DEFAULT_HUD_DEPTH
     if targetDepth == nil or targetDepth <= 0.001 then
@@ -1118,7 +1118,7 @@ function VRCompanion:onHudToggleAction(...)
 end
 
 -- The HUD Safe Area: the engine's global HUD anchors, which keep everything outside the HUD Groups
--- (warnings, notifications, other mods' HUDs) inside the lens. It no longer places the groups.
+-- (warnings, notifications, other mods' HUDs) inside the lens. It does not place the HUD Groups.
 function VRCompanion:calculateHudAnchors(horizontal, vertical)
     local clampedHorizontal = self:clamp(horizontal or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL, self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_HORIZONTAL)
     local clampedVertical = self:clamp(vertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL, self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_VERTICAL)
@@ -1723,7 +1723,8 @@ end
 -- the player last chose; a first install starts Hidden for full VR immersion. Map unload: the HUD goes back to the full screen in
 -- the Full state, the diagnostics stop and the convergence state is reset. The camera and mission hooks (hookHud, hookGuiDraw,
 -- unhookHud, unhookGuiDraw) and updateHudConvergence stay direct calls of the core: a raise in updateHudConvergence reaches the
--- caller of update. Unload runs after Input's and before Stereo's, as it did.
+-- caller of update. Unload runs after Input's (no order matters between the two) and before Stereo's, whose leaving 2D Floating
+-- Window Mode applies the Safe Area and the HUD state again (see the core's deleteMap).
 VRCompanion:registerSubsystem("hud", {
     mapLoad = function(self)
         self:applyHudSafeArea()
@@ -1743,7 +1744,7 @@ VRCompanion:registerSubsystem("hud", {
         self:stopHudTrace()
         self.hudEyeTestEye = nil
     end,
-    -- The Stereo Dialog depth; the HUD Safe Area, the HUD Groups and the HUD state are the core's settings and stay in its code
+    -- The Stereo Dialog depth; the HUD Safe Area, the HUD Groups and the HUD state are the core's settings (VRCompanionConfig.lua)
     saveSettings = function(self, xmlFile, xml) self:saveStereoDialogDepthSetting(xmlFile, xml) end,
     loadSettings = function(self, xmlFile, xml) self:loadStereoDialogDepthSetting(xmlFile, xml) end,
     consoleCommands = {

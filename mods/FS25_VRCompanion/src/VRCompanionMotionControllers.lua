@@ -124,7 +124,7 @@
 --                 command ends with the pad's state and it registers its own settings hooks, console command and unload (VRCompanionVirtualGamepad.lua, ADR-0028)
 --     The buttons, triggers and thumbsticks do nothing here beyond the uses above (pointing, Click Points, menus, Wheel Grab):
 --                 Snap Turn, the Recenter Action and the HUD Toggle Action from the Motion Controllers arrive only as game actions
---                 bound on the Virtual Gamepad (ADR-0028). The old button mapping and its settings are gone.
+--                 bound on the Virtual Gamepad (ADR-0028). No button is mapped to an action here, and no setting does it.
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -640,7 +640,7 @@ end
 -- (VRCompanion.VIRTUAL_HAND_POINTER, VRCompanionVirtualHands.lua, the relaxed finger of the glove, so the ray does not
 -- twitch as the trigger curls the finger) applied to the GRIP pose. It does not depend on Virtual Hands being shown or
 -- their model loaded. Only when the grip pose is not tracked (a runtime that refuses it) does the ray start at the aim
--- pose and run along its -Z axis, as it did before the ray moved to the finger.
+-- pose and run along its -Z axis.
 --
 -- VRCompanion.POINTER_RAY_FOLLOWS_FINGER_DIRECTION  true (default): the ray runs along the finger. false: it keeps the
 --     aim pose's direction (-Z) and only starts at the fingertip.
@@ -1106,11 +1106,10 @@ end
 --     Grab and Virtual Gamepad) is not the order they run in.
 --   mapUnload: runs last of the Motion Controller subsystems (it registered first, and unload runs in reverse), after the Virtual
 --     Gamepad, Wheel Grab, Virtual Hands and Menu Pointer and the subsystems of the fan-out have reset; nothing of theirs reads this state.
---     The group's resets used to run in this order: Menu Pointer, Hand Tools, Object Grab, Virtual Hands, Wheel Grab, Virtual
---     Gamepad, then Interactive Control, Animated Objects, Manual Attach, then this state. They run in reverse file order now
---     (Manual Attach, Animated Objects, Interactive Control, Object Grab, Hand Tools, Virtual Gamepad, Wheel Grab, Virtual Hands,
---     Menu Pointer, this state). Where order matters it is kept: Hand Tools reset before the Virtual Hands (a tool hangs below a
---     hand), this state last. Everything else is independent, because each reset touches only its own state and:
+--     The group's resets run in reverse file order (Manual Attach, Animated Objects, Interactive Control, Object Grab, Hand Tools,
+--     Virtual Gamepad, Wheel Grab, Virtual Hands, Menu Pointer, this state). Two orders matter, and file order gives both: Hand
+--     Tools reset before the Virtual Hands (a tool hangs below a hand), this state last. Everything else is independent, because
+--     each reset touches only its own state and:
 --       Menu Pointer      lets go of a held mouse button (g_gui) and of the drawn cursor (VRBridge.setMenuCursor)
 --       Hand Tools        ends a use in progress (the tool's own use handler, called with the trigger released), lifts the wraps of
 --                         HandTool and of Player.getLookRay (held through the core's count), gives the held tool back to the game

@@ -85,7 +85,7 @@ end
 -- Map load: the saved setting goes to the Injector (the core has done the handshake and read settings.xml by then). Map unload: the
 -- registry removes the command; the saved setting stays as it is, and the next map load reads it again (the Injector's VRBridge
 -- flag is reset by VRBridge.onMapUnload).
--- Order: after Desktop Mirror, FOV Overscan and Menu Distance (file order), as the core sent them before the registry.
+-- Order: after Desktop Mirror, FOV Overscan and Menu Distance (file order); none matters, each sets an Injector field of its own.
 VRCompanion:registerSubsystem("mouseConfinement", {
     mapLoad = function(self) self:applyMouseConfinement() end,
     saveSettings = function(self, xmlFile, xml) self:saveMouseConfinementSetting(xmlFile, xml) end,

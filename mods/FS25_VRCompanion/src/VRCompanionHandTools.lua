@@ -373,7 +373,7 @@ local function chainsawMinimumCutDistance()
 end
 
 -- The chainsaw's `reachBehind` (HAND_TOOL_POINTING_AXES): the game's minimum cut distance, or nil, which leaves the ray where it
--- is, as before this was moved back, and the reach below off: the chainsaw then reaches and stops as in the game. ONE warning is
+-- is (not moved back), and the reach below off: the chainsaw then reaches and stops as in the game. ONE warning is
 -- logged the first time it cannot be read.
 local function chainsawReachBehind(tool)
     local minimum = chainsawMinimumCutDistance()
@@ -1443,8 +1443,8 @@ end
 -- The ray the game's targeter casts for the tool in the Tool Hand: the tool's pointing ray (getHandToolRay) with its origin moved
 -- back along the axis by the entry's `reachBehind` (HAND_TOOL_POINTING_AXES; a number or a function of the tool that may answer
 -- nil for none), or nil like getHandToolRay. A chainsaw cut under way has its ray start where the bar does (not moved back): the
--- targeter's ray start is what the game measures its end-of-cut distance from, and that is the bar's base, as it was before the
--- ray was moved back to find a trunk the bar is against. The tree is found before the cut starts, which a cut does not need again.
+-- targeter's ray start is what the game measures its end-of-cut distance from, and that must be the bar's base; the ray is moved
+-- back only to find a trunk the bar is against. The tree is found before the cut starts, which a cut does not need again.
 function VRCompanion:getHandToolLookRay(player)
     local x, y, z, dx, dy, dz, axis = heldToolPointingRay(self, player)
     if x == nil then return nil end

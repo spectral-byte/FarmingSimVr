@@ -707,8 +707,8 @@ end
 
 -- Registered with the core (the registry is documented in VRCompanionCore.lua). No update hook: updateVirtualGamepad runs FIRST of the
 -- Motion Controller poll and updateVirtualGamepadUse LAST (see updateMotionControllers), which file order cannot give. Unload runs in
--- reverse file order, so the pad is zeroed first of the Motion Controller subsystems (it was last), through VRBridge, after the core's
--- VRBridge.onMapUnload as always. It shares no state with the Wheel Grab, Virtual Hands and Menu Pointer resets that now follow it.
+-- reverse file order, so the pad is zeroed first of the Motion Controller subsystems, through VRBridge, after the core's
+-- VRBridge.onMapUnload. It shares no state with the Wheel Grab, Virtual Hands and Menu Pointer resets that follow it.
 VRCompanion:registerSubsystem("virtualGamepad", {
     mapUnload = function(self) self:resetVirtualGamepad() end,
     saveSettings = function(self, xmlFile, xml) self:saveVirtualGamepadSetting(xmlFile, xml) end,

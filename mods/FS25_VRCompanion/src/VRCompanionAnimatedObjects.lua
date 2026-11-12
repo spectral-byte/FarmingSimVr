@@ -163,9 +163,8 @@ function VRCompanion:resetAnimatedObjectsSupport()
     state = newState()
 end
 
--- Map load wraps the game's trigger callback; map unload hands it back. No commands. Order: loadAnimatedObjectsSupport used to run at
--- the end of the Motion Controllers' command registration, now it runs with the other map-load hooks, after loadConfiguration; it
--- does not depend on any of them. Map unload comes in reverse file order, before the Virtual Gamepad's and Wheel Grab's resets.
+-- Map load wraps the game's trigger callback; map unload hands it back. No commands. Order: loadAnimatedObjectsSupport runs with
+-- the other map-load hooks, after loadConfiguration; it does not depend on any of them. Map unload comes in reverse file order, before the Virtual Gamepad's and Wheel Grab's resets.
 VRCompanion:registerSubsystem("animatedObjects", {
     mapLoad = function(self) self:loadAnimatedObjectsSupport() end,
     mapUnload = function(self) self:resetAnimatedObjectsSupport() end,

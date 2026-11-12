@@ -136,8 +136,12 @@ end
 --   })
 --
 -- A subsystem owns its settings' keys in settings.xml; the settings code (VRCompanionConfig.lua) opens the file, writes and reads
--- the core's own settings (HUD Safe Area, HUD Groups, HUD state, Stereo Presentation Mode, Snap Turn angle, the DLSS near planes)
--- and runs the hooks, but names no subsystem. A load hook only stores the value; sending it to VRBridge is its mapLoad's job.
+-- the core's own settings (HUD Safe Area, HUD Groups and their visibility, the Controls group's expanded state, HUD Depth, the HUD
+-- load alert, the Recenter Action mode, Stereo Presentation Mode, HUD state, Snap Turn angle, the DLSS near planes) and runs the
+-- hooks, but names no subsystem. A load hook only stores the value; sending it to VRBridge is its mapLoad's job (every load hook
+-- does only that). A subsystem that wraps a game function does it through the shared wrap helper (VRCompanionGameWraps.lua), which
+-- the registry does not call: the subsystem wraps from its own hooks (mapLoad, or its update for a class that appears later) and
+-- lifts its wraps in its mapUnload.
 --
 -- Every field but the name is optional; `self` is the Companion Mod the run point was called on (hooks are called as methods, with
 -- plain functions, so a hook that calls `self:foo()` finds `foo` when it runs). Registering a name again replaces its hooks and
@@ -148,31 +152,33 @@ end
 -- two subsystems need an order, their file order gives it and the registration says so in a comment. The core's own steps come
 -- first and are not hooks: the handshake with VRBridge, the engine's stereo and head tracking toggles, the camera and mission
 -- hooks and loadConfiguration. The run points in the core are:
---   loadMap   runSubsystemMapLoad        right after loadConfiguration, before the core applies the saved settings of the
---                                        subsystems that have not moved over yet
+--   loadMap   runSubsystemMapLoad        after the handshake and loadConfiguration, so a hook sends VRBridge the setting its load
+--                                        hook stored; before the DLSS near plane is sent (neither reads what the other writes,
+--                                        see loadMap) and before the HUD load alert, which names the HUD state the HUD's hook set
 --   loadMap   addSubsystemConsoleCommands   with the console commands, after the core's own list
 --   update    runSubsystemUpdateEarly    right before the core polls the GUI visibility (pollGuiVisibility), so a hook that has to
 --                                        change what the poll sees (the fish catch answers its dialog, which must be gone when the
 --                                        poll looks) runs here, in registration order; for hooks that truly need it, not a default
---   update    runSubsystemUpdate         after the core's own update steps, just before applyDlssNearClip (Motion Controllers were
---                                        the last step before it and are the update hook there now)
---   deleteMap runSubsystemMapUnload      first of the subsystem resets: removes a subsystem's console commands, then runs its
---                                        mapUnload, subsystems in reverse order, before the resets that have not moved over yet
+--   update    runSubsystemUpdate         after the core's own update steps, so a hook sees this update's GUI poll and vehicle
+--                                        transition; before applyDlssNearClip, which reads only the controlled vehicle and its
+--                                        camera, which no update hook changes
+--   deleteMap runSubsystemMapUnload      the last step of the map unload, after the core's own teardown: removes a subsystem's
+--                                        console commands, then runs its mapUnload, subsystems in reverse order
 --   saveConfiguration runSubsystemSaveSettings   after the core's HUD settings, before the Stereo Presentation Mode, the HUD
 --                                        state, the Snap Turn angle and the DLSS near planes, in registration order
 --   loadConfiguration runSubsystemLoadSettings   at the same place in the load (after the HUD Groups, before the Snap Turn angle,
 --                                        the DLSS near planes, the HUD state and the Stereo Presentation Mode), in registration
---                                        order. Every load hook today stores only its own fields, so none needs another's to
---                                        have run first; one that does says so in a comment at its registration
--- Three steps of the update stay direct calls of the core, at the places they always had, because a hook cannot run there: the
--- Perf Trace refresh (the very top: the Injector may have ended the trace), the menu's background camera (right after the GUI
--- poll) and the Input subsystem's check of the VR action events (between the HUD convergence and the vehicle transition: the
--- transition registers them again, forced, so after it the events would have been registered once instead of twice).
+--                                        order. Every load hook stores only its own fields, so none needs another's to have run
+--                                        first; one that does says so in a comment at its registration
+-- Three steps of the update are direct calls of the core, because no run point is where they must be: the Perf Trace refresh
+-- (the very top: the Injector may have ended the trace, and nothing after it may time into an ended trace), the menu's
+-- background camera (right after the GUI poll) and the Input subsystem's check of the VR action events (before the vehicle
+-- transition, see updateActionEvents in VRCompanionInput.lua).
 --
 -- A hook that raises is caught: it is logged once per subsystem and hook, as
 --   [FS25_VR] [Error] Subsystem '<name>' <mapLoad|updateEarly|update|mapUnload|saveSettings|loadSettings> hook raised: <error>
 -- and the other hooks still run. This is by design (spec #244: a fault in one subsystem does not cost the player the others), so a
--- raise in a hook, the Motion Controllers' update included, no longer reaches the caller of update or of loadMap; the log line is
+-- raise in a hook, the Motion Controllers' update included, does not reach the caller of update or of loadMap; the log line is
 -- how it is found, and the test harnesses fail a test in which that line was logged unless the test expects it. The log-once set
 -- is kept for the life of the Lua state and is not cleared at map unload (a hook that raised on one map is not logged again on
 -- the next: the same fault every time is one line, not one per map; test_subsystem_registry.cpp pins it).
@@ -372,7 +378,8 @@ function VRCompanion:loadMap(name)
     end
 
     -- 0. Cleanly initialize 2D Floating Window Mode state to 3D VR mode (is2DViewActive = false). A core step, not a Stereo
-    -- hook: it tells VRBridge before the handshake below, and that order is kept.
+    -- hook, so that it tells VRBridge before the handshake below. Leaving the 2D view resets the Injector's sub-pass index and
+    -- frame parity when it changes its state, and the handshake aligns both to 0 again, so the first frame starts aligned.
     self:set2DViewActive(false)
     self:resetToggleViewDebounce()
 
@@ -443,7 +450,7 @@ function VRCompanion:loadMap(name)
         print("[FS25_VR] Engine stereo rendering toggle 'setStereoRendering' not found in Luau environment.")
     end
 
-    -- 3. Report the stereo requirement (fixed since the telemetry probe was retired, ADR-0017)
+    -- 3. Report the stereo requirement (a fixed verdict of the Injector, ADR-0017)
     if VRBridge ~= nil then
         print(string.format("[FS25_VR] Stereo presentation: AFR fallback required: %s.",
             tostring(self:requiresAfrFallback())))
@@ -464,13 +471,12 @@ function VRCompanion:loadMap(name)
     self:hookMissionUpdate()
 
     -- (The Dual Eye Camera Nodes and the Cyclopean Audio Listener Node are made by the Stereo subsystem, and the VR action events
-    -- are registered by the Input subsystem, in their mapLoad hooks below. Both used to be made here, before the GUI poll and
-    -- the settings were read. That is not observable: the poll below reads the GUI and tells VRBridge, and on a map that has just
-    -- loaded it restores no menu camera and applies no HUD state (no menu was shown before); loadConfiguration reads settings.xml
-    -- and sends the Stereo Presentation Mode to VRBridge (setRenderingMode, which touches no node), works out the HUD anchors
-    -- (configureHudSafeArea, fields only) and, on a first run, writes the file. None of the three reads an eye node, the listener, the
-    -- camera settings Stereo saves (origCamSettings) or an action event id, and the nodes are made from defaults no setting
-    -- changes. The game sees the same calls on its own objects and VRBridge the same calls, only interleaved differently.)
+    -- are registered by the Input subsystem, in their mapLoad hooks below, after the GUI poll and loadConfiguration. Neither of
+    -- those needs them: the poll reads the GUI and tells VRBridge, and on a map that has just loaded it restores no menu camera
+    -- and applies no HUD state (no menu was shown before); loadConfiguration reads settings.xml, sends the Stereo Presentation
+    -- Mode to VRBridge (setRenderingMode, which touches no node), works out the HUD anchors (configureHudSafeArea, fields only)
+    -- and, on a first run, writes the file. None of them reads an eye node, the listener, the camera settings Stereo saves
+    -- (origCamSettings) or an action event id, and the nodes are made from defaults no setting changes.)
 
     -- 6. Synchronize initial GUI menu visibility state
     self.isMenuVisible = false
@@ -481,14 +487,14 @@ function VRCompanion:loadMap(name)
 
     -- 7. Read the settings (the HUD Safe Area, the HUD Groups and the saved HUD state are applied by the HUD's mapLoad hook)
     self:loadConfiguration()
-    -- 7-. The registered subsystems load: the handshake above is done and the settings are read (Desktop Mirror, FOV Overscan, Menu
-    -- Distance and Mouse Confinement send their saved settings to VRBridge here, and the HUD applies its Safe Area and the HUD state the
-    -- player last chose). The HUD's setHudState used to be the last step of the map load, after the DLSS near plane (and after
-    -- the Safe Area, which still comes after the settings the other subsystems send): the HUD hook writes the HUD (its displays,
-    -- the anchors, hudState) and asks VRBridge for nothing, and the near plane reads the camera mode (the controlled vehicle and
-    -- its camera) and the near plane settings, so neither reads what the other writes. The re-wraps of Hand Tools, Object Grab,
-    -- Wheel Grab and the Animated Objects trigger callback also run here now, not inside the console command registration after
-    -- the near plane: they wrap game classes the HUD, the near plane and the commands do not call into at map load.
+    -- 7-. The registered subsystems load. They come after the handshake above and after the settings are read: Desktop Mirror,
+    -- FOV Overscan, Menu Distance and Mouse Confinement send their saved settings to VRBridge here, and the HUD applies its Safe
+    -- Area and the HUD state the player last chose. The DLSS near plane below may come before or after them: the HUD hook writes
+    -- the HUD (its displays, the anchors, hudState) and asks VRBridge for nothing, and the near plane reads the camera mode (the
+    -- controlled vehicle and its camera) and the near plane settings, so neither reads what the other writes. The re-wraps of Hand
+    -- Tools, Object Grab, Wheel Grab and the Animated Objects trigger callback run here too: they wrap game classes the HUD, the
+    -- near plane and the console commands do not call into at map load. The HUD load alert below comes after them, because it
+    -- names the HUD state the HUD hook set.
     self:runSubsystemMapLoad()
     -- 7a. Send the loaded DLSS near plane for the starting camera
     self:applyDlssNearClip(true)
@@ -1351,23 +1357,24 @@ function VRCompanion:deleteMap()
     self.headTrackingEnabled = true
 
     -- (Stereo deletes its nodes and puts the cameras and the 2D view back, the HUD goes back to the full screen, Input lets go of
-    -- the VR action events and Locomotion forgets the vehicles' rotation states, in the mapUnload hooks below. They used to run
-    -- here, in the middle of the core's teardown: Stereo's nodes and menu camera before VRBridge.onMapUnload, then the HUD, Input
-    -- and the rest of Stereo's after it, all before the resets of the other subsystems. Now the registry runs them after the
-    -- core's teardown and, in reverse file order, after the subsystems registered later, and none of that is observable:
-    --  * Order that matters is kept: the HUD unloads before Stereo does (leaving 2D Floating Window Mode reapplies the HUD, which
-    --    must find it restored), Stereo deletes its nodes before it restores the camera settings (the restore skips deleted
-    --    nodes), and Hand Tools unload before the Virtual Hands (a tool hangs below a hand).
-    --  * Stereo's nodes against VRBridge.onMapUnload: the Injector never sees a node; onMapUnload only resets the Injector's own
-    --    flags (src/luau/vr_bridge.cpp, Lua_OnMapUnload), and Stereo only touches the scene. No state is shared, and nothing
-    --    runs between the two calls.
-    --  * Nothing that runs in teardown reads what the three change: the eye nodes and the listener are read by the camera and
-    --    hand placement of an update (Stereo, Locomotion, Motion Controllers, Virtual Hands), never by a reset; the HUD's
-    --    teardown reads the HUD and the HUD state, not a node; the action event ids are read by Input alone; the rotation
-    --    states by the camera hooks, which are lifted at the top of this function.
-    --  * Nothing the three do reaches a wrap a later reset lifts: the HUD's displays, the message center, the cameras' FOV and
-    --    projection and the game's menu camera are not among the classes the subsystems wrap (Player.getLookRay, HandTool,
-    --    Drivable's steering, the animated objects' trigger callback, the attachable candidates, Interactive Control's class).
+    -- the VR action events and Locomotion forgets the vehicles' rotation states, in the mapUnload hooks below. The registry runs
+    -- them after the core's teardown above and, in reverse file order, after the subsystems registered later. What that order
+    -- has to give:
+    --  * The HUD unloads before Stereo (it registers after it): Stereo's mapUnload leaves 2D Floating Window Mode last of all.
+    --    When the map unloads in that mode, leaving it applies the HUD Safe Area and the HUD state again (set2DViewActive) after
+    --    the HUD went back to the full screen, so the game's HUD anchors are left at the Safe Area.
+    --  * Within Stereo's mapUnload the nodes go before the camera settings are restored; the restore skips every camera that no
+    --    longer exists (entityExists), the eye nodes among them.
+    --  * Hand Tools unload before the Virtual Hands (they register after them): a tool hangs below a hand.
+    --  * Stereo's nodes go after VRBridge.onMapUnload, which does not matter: the Injector never sees a node; onMapUnload resets
+    --    only the Injector's own state (src/luau/vr_bridge.cpp, Lua_OnMapUnload), and Stereo only touches the scene.
+    --  * Nothing in the core's teardown needs what the hooks free: the eye nodes and the listener are read by the camera and hand
+    --    placement of an update (Stereo, Locomotion, Motion Controllers, Virtual Hands), never by a reset; the action event ids
+    --    are read by Input alone; the rotation states by the camera hooks, which are lifted at the top of this function.
+    --  * Nothing the four do reaches a wrap another subsystem's reset lifts: the HUD's displays, the message center, the cameras'
+    --    FOV and projection and the game's menu camera are not among the classes the subsystems wrap (Player.getLookRay,
+    --    HandTool, Drivable's steering, the animated objects' trigger callback, the attachable candidates, Interactive Control's
+    --    class).
     --  * The other resets (Perf Trace, Fish Catch, Dual Pass Physics, the Motion Controllers' group) are described where the
     --    Motion Controllers register; they touch only their own state, a wrap, the Injector's pad, cursor and trace, or the
     --    hands' nodes.)
@@ -1379,7 +1386,7 @@ function VRCompanion:deleteMap()
         end
     end
 
-    -- The registered subsystems unload, in reverse order, before the resets that have not moved over yet
+    -- The registered subsystems unload, in reverse order, last of the map unload
     self:runSubsystemMapUnload()
 
 end

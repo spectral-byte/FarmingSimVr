@@ -519,7 +519,7 @@ end
 -- With a head tracking node, that is the node's position and rotation (the rotation read as a
 -- quaternion, see getRotationInSpace) and targetHeadRotY is the node's yaw. Without one, it is
 -- the camera's own eye point turned by the camera's neutral yaw (cam.origRotY, or defaultRotY
--- when the camera has none yet: the camera update has always taken 0 there and the realign pi)
+-- when the camera has none yet: the camera update takes 0 there and the realign pi)
 -- plus lookYaw. The Seat Offset moves the position either way.
 -- Also gives what cabPointFromHead needs to carry a head-space vector into the cab: rest.yaw and,
 -- with a node, rest.node. The returned table is reused: read it before asking again.
@@ -780,7 +780,7 @@ function VRCompanion:onSnapTurnRightAction()
 end
 
 -- ---- Locomotion in the subsystem registry -----------------------------------------------------------------------------------
--- Map unload: the rotation states kept for each vehicle are forgotten (the core used to reset them with its own fields). Snap Turn
+-- Map unload: the rotation states kept for each vehicle are forgotten (after the core lifted the camera hooks that read them). Snap Turn
 -- and the Recenter Action are driven by the Input subsystem's action events and the console commands in the core's list; the
 -- core tells Locomotion when the controlled vehicle changes (onVehicleTransition), which is part of its own update.
 VRCompanion:registerSubsystem("locomotion", {
