@@ -89,7 +89,7 @@
 --
 -- Hooks into the rest of the mod:
 --   MotionControllers  updateMotionControllers -> updateWheelGrab(dt), after the hands are polled; the saved setting
---                      chains through the Motion Controller settings functions
+--                      is saved and loaded by this file's own settings hooks (see the registration)
 --   VirtualHands       updateHand asks getWheelGrabHandPose(hand): a holding hand is drawn there, and stays shown however
 --                      long it is held still
 -- ====================================================================
@@ -640,14 +640,14 @@ function VRCompanion:setWheelGrabEnabled(enabled, save)
     end
 end
 
--- Called from the Motion Controller settings with the open settings file and the engine's setters (any may be nil).
+-- The saveSettings hook: the open settings file and the engine's setters (any may be nil).
 function VRCompanion:saveWheelGrabSetting(xmlFile, xml)
     if type(xml.setBool) == "function" then
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.wheelGrabEnabled ~= false)
     end
 end
 
--- Called from the Motion Controller settings with the open settings file and the engine's getters (any may be nil).
+-- The loadSettings hook: the open settings file and the engine's getters (any may be nil).
 -- A key that is missing keeps the current value.
 function VRCompanion:loadWheelGrabSetting(xmlFile, xml)
     local loaded = nil
@@ -772,6 +772,8 @@ end
 VRCompanion:registerSubsystem("wheelGrab", {
     mapLoad = function(self) self:loadWheelGrab() end,
     mapUnload = function(self) self:resetWheelGrab() end,
+    saveSettings = function(self, xmlFile, xml) self:saveWheelGrabSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadWheelGrabSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrWheelGrab", description = "Turn Wheel Grab, steering by holding the Steering Wheel with a Motion Controller, on or off (saved): vrWheelGrab [on|off]", method = "consoleCommandSetWheelGrab" },
         { name = "vrWheelGrabDiagnostics", description = "Report the Steering Wheel, each hand's distance to the rim ring, the grab and the steering sent: vrWheelGrabDiagnostics", method = "consoleCommandWheelGrabDiagnostics" },

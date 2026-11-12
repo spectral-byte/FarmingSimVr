@@ -817,14 +817,14 @@ function VRCompanion:setObjectGrabEnabled(enabled, save)
     end
 end
 
--- Called from the Motion Controller settings with the open settings file and the engine's setters (any may be nil).
+-- The saveSettings hook: the open settings file and the engine's setters (any may be nil).
 function VRCompanion:saveObjectGrabSetting(xmlFile, xml)
     if type(xml.setBool) == "function" then
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.objectGrabEnabled ~= false)
     end
 end
 
--- Called from the Motion Controller settings with the open settings file and the engine's getters (any may be nil).
+-- The loadSettings hook: the open settings file and the engine's getters (any may be nil).
 -- A key that is missing keeps the current value.
 function VRCompanion:loadObjectGrabSetting(xmlFile, xml)
     local loaded = nil
@@ -1032,6 +1032,8 @@ VRCompanion:registerSubsystem("objectGrab", {
         checkWraps()
     end,
     mapUnload = function(self) self:resetObjectGrab() end,
+    saveSettings = function(self, xmlFile, xml) self:saveObjectGrabSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadObjectGrabSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrObjectGrab", description = "Turn Object Grab, picking up objects aimed by a Motion Controller, on or off (saved): vrObjectGrab [on|off]", method = "consoleCommandSetObjectGrab" },
         { name = "vrObjectGrabDiagnostics", description = "Report whether Object Grab is on and why not, the aim, the target against the game's limits, the carry and the last release: vrObjectGrabDiagnostics", method = "consoleCommandObjectGrabDiagnostics" },

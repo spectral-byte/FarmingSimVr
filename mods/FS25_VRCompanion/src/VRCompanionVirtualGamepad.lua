@@ -102,9 +102,9 @@
 --
 --   Hooks into the rest of the mod:
 --     MotionControllers.lua  updateMotionControllers -> updateVirtualGamepad(dt) first of all and updateVirtualGamepadUse(dt) last,
---                            saveMotionControllerSettings / loadMotionControllerSettings -> save/loadVirtualGamepadSetting,
---                            getMotionControllerStatus -> getVirtualGamepadStatus. The console command and the unload
---                            (resetVirtualGamepad) are registered with the core at the end of this file.
+--                            getMotionControllerStatus -> getVirtualGamepadStatus. The settings hooks
+--                            (save/loadVirtualGamepadSetting), the console command and the unload (resetVirtualGamepad) are
+--                            registered with the core at the end of this file.
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -711,6 +711,8 @@ end
 -- VRBridge.onMapUnload as always. It shares no state with the Wheel Grab, Virtual Hands and Menu Pointer resets that now follow it.
 VRCompanion:registerSubsystem("virtualGamepad", {
     mapUnload = function(self) self:resetVirtualGamepad() end,
+    saveSettings = function(self, xmlFile, xml) self:saveVirtualGamepadSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadVirtualGamepadSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrVirtualGamepad", description = "Turn the Virtual Gamepad (the Motion Controllers as an Xbox pad bound in the Controls screen) on or off (saved): vrVirtualGamepad [on|off]", method = "consoleCommandSetVirtualGamepad" },
     },
