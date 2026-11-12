@@ -1,0 +1,10 @@
+{
+    "file_format_version": "1.0.0",
+    "api_layer": {
+        "name": "XR_APILAYER_FS25VR_vdxr_sim",
+        "library_path": ".\\XrApiLayer_vdxr_sim.dll",
+        "api_version": "1.0",
+        "implementation_version": "1",
+        "description": "Test only: calls CreateDXGIFactory1 inside xrGetSystem, like VDXR"
+    }
+}
