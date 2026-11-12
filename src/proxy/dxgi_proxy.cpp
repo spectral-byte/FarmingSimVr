@@ -120,7 +120,7 @@ std::string DescribeAdapter(PFN_CreateDXGIFactory1 createFactory, const LUID& lu
 bool SameAdapter(ID3D12Device* a, ID3D12Device* b) {
     const LUID la = a->GetAdapterLuid();
     const LUID lb = b->GetAdapterLuid();
-    return la.LowPart == lb.LowPart && la.HighPart == lb.HighPart;
+    return SameLuid(la, lb);
 }
 
 // The system's factory behind `factory` when `factory` is a wrapper whose methods are not the system's, as a
