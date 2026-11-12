@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
   pull_request:
 
-# Superseded PR pushes are cancelled; every push to main keeps its own result.
+# Superseded PR pushes are cancelled; every push to main or beta keeps its own result.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
