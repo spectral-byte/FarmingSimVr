@@ -106,8 +106,6 @@ local CANDIDATE_UPDATE = { name = "updateCandidates", parameters = 1, describe =
 local function newState()
     return {
         installed = false,
-        gaveUp = false,       -- the support was found unusable (warned once); do not look again
-        gaveUpBecause = nil,  -- why (the warning's problem), for the diagnostics
         waitedMs = 0,         -- how long Manual Attach's instance or handler has been waited for
         waitingFor = nil,     -- what is waited for (the problem found at the last look), for the diagnostics
         loggedErrors = {},    -- [message] = true for each error of the hitch listing already logged (once each)
@@ -121,8 +119,6 @@ local function newState()
         landedVehicle = nil,  -- the vehicle of the hitch whose Coupling Point the ray is on and has pulsed for
         landedJoint = nil,
         landedKind = nil,
-        candidateUpdate = nil,        -- the class's candidate update as found, while the module has it wrapped
-        candidateUpdateWrap = nil,    -- and what the module put there
     }
 end
 
@@ -130,34 +126,9 @@ local state = newState()
 
 -- ---- Checking what Manual Attach has ---------------------------------------------------------------------------------------
 
--- How many parameters a Lua function declares, or nil when it takes any number or the runtime cannot tell.
-local function parameterCount(fn)
-    local library = _G and _G.debug
-    if type(library) ~= "table" then return nil end
-    if type(library.info) == "function" then
-        local ok, count, isVararg = pcall(library.info, fn, "a")
-        if ok and type(count) == "number" then return (not isVararg) and count or nil end
-    end
-    if type(library.getinfo) == "function" then
-        local ok, info = pcall(library.getinfo, fn, "u")
-        if ok and type(info) == "table" and type(info.nparams) == "number" then
-            return (not info.isvararg) and info.nparams or nil
-        end
-    end
-    return nil
-end
-
--- Why a function of an owner is not what the module expects, or nil when it is.
+-- Why a function of an owner is not what the module expects, or nil when it is (the core's wrap helper checks the shape).
 local function shapeProblem(owner, ownerName, spec)
-    local fn = owner[spec.name]
-    local name = ownerName .. "." .. spec.name
-    if fn == nil then return name .. " is missing" end
-    if type(fn) ~= "function" then return name .. " is not a function" end
-    local count = parameterCount(fn)
-    if count ~= nil and count < spec.parameters then
-        return string.format("%s takes %d parameters, not %s", name, count, spec.describe)
-    end
-    return nil
+    return VRCompanion.GameWraps.shapeProblem(owner[spec.name], spec.parameters, spec.describe, ownerName .. "." .. spec.name)
 end
 
 -- Manual Attach's objects, looked up in its mod environment with the global table as the fallback; and why they cannot be used, or nil.
@@ -205,22 +176,15 @@ local function findManualAttach()
     return instance, handler, class, nil
 end
 
-local function giveUp(problem)
-    state.gaveUp, state.gaveUpBecause = true, problem
-    print("[FS25_VR] [Warning] Manual Attach support disabled: " .. problem
-        .. ". Motion Controllers cannot work Manual Attach's Coupling Points; Manual Attach is unchanged.")
-end
-
 local function anyHandTracked(self)
     return self:getHandState(self.MOTION_HAND_LEFT).tracked == true
         or self:getHandState(self.MOTION_HAND_RIGHT).tracked == true
 end
 
--- Wraps the class's candidate update, original first: after Manual Attach has picked its nearest candidate, while the ray is on a Coupling Point,
--- the five candidate fields are its hitch's, so Manual Attach's prompts, context box and keys describe and act on the pointed hitch.
-local function wrapCandidateUpdate(class)
-    local original = class.updateCandidates
-    local function updateCandidates(handler, ...)
+-- The wrap of the class's candidate update, original first: after Manual Attach has picked its nearest candidate, while the ray is on a Coupling
+-- Point, the five candidate fields are its hitch's, so Manual Attach's prompts, context box and keys describe and act on the pointed hitch.
+local function makeCandidateUpdate(original)
+    return function(handler, ...)
         original(handler, ...)
         local selected = state.selected
         if selected ~= nil and handler == state.handler and handler.playerCanPerformManualAttachment == true then
@@ -228,9 +192,21 @@ local function wrapCandidateUpdate(class)
             handler.attachable, handler.attachableJointDescIndex, handler.attachedImplement = selected.attachable, selected.attachableJointIndex, selected.implement
         end
     end
-    state.candidateUpdate, state.candidateUpdateWrap = original, updateCandidates
-    class.updateCandidates = updateCandidates
 end
+
+-- The one function the module wraps, declared to the core's wrap helper (VRCompanionGameWraps.lua): on the class found in Manual Attach's
+-- environment (findManualAttach, which checks it with the rest). Giving up is ONE warning and lifts the wrap; map unload forgets it.
+local wraps = VRCompanion.GameWraps.newSet({
+    owner = "manualAttach",
+    giveUp = "Manual Attach support disabled: %s. Motion Controllers cannot work Manual Attach's Coupling Points; Manual Attach is unchanged.",
+    nameAsSubject = true,
+    functions = {
+        updateCandidates = {
+            class = function() return state.class end, className = "VehicleAttachmentHandler",
+            parameters = CANDIDATE_UPDATE.parameters, describe = CANDIDATE_UPDATE.describe, make = makeCandidateUpdate,
+        },
+    },
+})
 
 -- Looks for Manual Attach when a Motion Controller is in use.
 local function tryInstall(dt)
@@ -244,25 +220,19 @@ local function tryInstall(dt)
                 return
             end
         end
-        giveUp(problem)
+        wraps:giveUp(problem)
         return
     end
     state.instance, state.handler, state.class = instance, handler, class
-    wrapCandidateUpdate(class)
+    wraps:wrapAll()
     state.installed = true
     print("[FS25_VR] Manual Attach support: installed")
 end
 
 -- Map unload (and the end of a session): the class's candidate update is handed back as found (unless something else wrapped it since, which
--- cannot be taken out from under it), and the module forgets.
-local function unwrapCandidateUpdate()
-    if state.class ~= nil and state.candidateUpdateWrap ~= nil and state.class.updateCandidates == state.candidateUpdateWrap then
-        state.class.updateCandidates = state.candidateUpdate
-    end
-end
-
+-- cannot be taken out from under it), and the module forgets, that it gave up included.
 function VRCompanion:resetManualAttachSupport()
-    unwrapCandidateUpdate()
+    wraps:reset()
     state = newState()
 end
 
@@ -465,7 +435,7 @@ end
 function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
     if not state.installed then
         -- Looked for once, when a Motion Controller is in use: a player without them is never told.
-        if state.gaveUp or self.motionControllersEnabled == false or not anyHandTracked(self) then return false end
+        if wraps:problem() ~= nil or self.motionControllersEnabled == false or not anyHandTracked(self) then return false end
         tryInstall(dt)
         if not state.installed then return false end
     end
@@ -483,8 +453,7 @@ function VRCompanion:updateManualAttach(dt, suppressed, clickCos)
         -- The game's side of a vehicle is not what the support expects: it switches itself off, with one warning, for good.
         state.installed, state.selected, state.selectedKind, state.count = false, nil, nil, 0
         state.landedVehicle, state.landedJoint, state.landedKind = nil, nil, nil
-        unwrapCandidateUpdate()
-        giveUp(problem)
+        wraps:giveUp(problem)  -- the candidate update wrap comes off with it
         return false
     end
     if not collected then
@@ -525,7 +494,7 @@ end
 
 -- One line for vrPointerDiagnostics: whether the support is installed, how many hitches are in reach and which Coupling Point is selected.
 function VRCompanion:getManualAttachDiagnostics()
-    if state.gaveUp then return "Manual Attach support: gave up (" .. tostring(state.gaveUpBecause) .. ")" end
+    if wraps:problem() ~= nil then return "Manual Attach support: gave up (" .. wraps:problem() .. ")" end
     if not state.installed then
         if state.waitingFor ~= nil then
             return "Manual Attach support: not installed yet (waiting for Manual Attach's objects: " .. state.waitingFor .. ")"

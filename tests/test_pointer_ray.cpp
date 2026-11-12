@@ -759,6 +759,39 @@ TEST_F(CompanionModTest, WithoutInteractiveControlTheModWarnsExactlyOnceAndDraws
     ASSERT_EQ(RunLuauChunk(L, "drawPass(); assert(#debugLines == 0 and #debugPoints == 0)", "=nothingDrawn"), 0);
 }
 
+namespace {
+int ExactLogLines(const std::string& line) {
+    int count = 0;
+    for (const auto& logged : s_capturedLogs) {
+        if (logged == line) ++count;
+    }
+    return count;
+}
+
+std::string InteractiveControlWarning(const std::string& reason) {
+    return "[FS25_VR] [Warning] Interactive Control support disabled: " + reason
+        + ". Motion Controllers cannot select Click Points; Interactive Control itself is unchanged.";
+}
+} // namespace
+
+TEST_F(CompanionModTest, TheInteractiveControlWarningSaysTheModIsNotLoaded) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, nullptr));
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(3);
+    EXPECT_EQ(ExactLogLines(InteractiveControlWarning("the mod FS25_interactiveControl is not loaded")), 1);
+}
+
+TEST_F(CompanionModTest, TheInteractiveControlWarningSaysWhichClickPointFunctionIsMissing) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "renamedUpdateClickable"));
+    PICK_UP_AND_AIM(kRight, 0.3f, 0.0f, -0.3f);
+    FRAMES(3);
+    EXPECT_EQ(ExactLogLines(InteractiveControlWarning("the Click Point class has no updateClickable")), 1);
+}
+
 TEST_F(CompanionModTest, NoWarningWhileNoMotionControllerIsTrackedOrWhileMotionControllersAreOff) {
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge(headset.manager, nullptr);

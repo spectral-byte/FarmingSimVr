@@ -495,4 +495,19 @@ test("an object's copy that is reshaped is not wrapped, and giving up lifts the 
     expectEqual(object.update, ownCopy, "and not wrapped again")
 end)
 
+test("the Subsystem can tell which object's own copy is wrapped, for its diagnostics", function()
+    _G.StubClass = { update = function(object, dt) return "class" end, draw = function(object) end }
+    local set = twoFunctionSet()
+    set:wrapAll()
+    expectEqual(set:instanceTarget(), nil, "none before")
+    local reaching = setmetatable({}, { __index = StubClass })
+    set:wrapInstance(reaching, { "update" })
+    expectEqual(set:instanceTarget(), nil, "none when the class wrap reaches the object")
+    local object = { update = function(object, dt) return "own" end }
+    set:wrapInstance(object, { "update" })
+    expectEqual(set:instanceTarget(), object, "the object with its own copy")
+    set:liftInstance()
+    expectEqual(set:instanceTarget(), nil, "none once lifted")
+end)
+
 realPrint(string.format("GameWraps: %d passed, %d failed", passed, failed))

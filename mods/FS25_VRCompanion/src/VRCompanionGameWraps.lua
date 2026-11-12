@@ -37,6 +37,7 @@
 --   wraps:wrapInstance(target, { <name>, ... })   wraps the target's own copies (a vehicle's, a tool's: the game copies type
 --                                   functions onto an object), unless the class wrap reaches them; replaces a wrap of an earlier target
 --   wraps:liftInstance()            gives the target its own copies back (or nothing of its own, when it had none), where still the wrapper
+--   wraps:instanceTarget()          the target whose own copies are wrapped, or nil
 --   wraps:isWrapped(name), wraps:original(name)   whether the class wrap is on, and the game's function under it
 --   wraps:wrapNames(), wraps:status(name)         the wrapped (not check-only) names, sorted, and "<name> wrap: installed" (or
 --                                   "not installed", "gave up (<reason>)") for the diagnostics
@@ -232,6 +233,10 @@ function Set:wrapInstance(target, names)
             end
         end
     end
+end
+
+function Set:instanceTarget()
+    return self.instance ~= nil and self.instance.target or nil
 end
 
 -- Takes every wrap off again, each only when it is still the wrapper put there; lets go of the shared ones.
