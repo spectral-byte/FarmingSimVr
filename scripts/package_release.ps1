@@ -55,7 +55,7 @@ Copy-Item $builtPdb "$releaseDir\version.pdb" -Force
 Write-Host "[Package] Staged version.dll and version.pdb"
 
 # version.dll statically links these dependencies; their licenses require shipping the notices.
-# Fetched sources live wherever the build was configured to put them (CI uses -DFETCHCONTENT_BASE_DIR=.deps).
+# Fetched sources live wherever the build was configured to put them (the CMake presets put them in .deps).
 $depsDir = Join-Path $repoRoot "build\_deps"
 $cmakeCache = Join-Path $repoRoot "build\CMakeCache.txt"
 if (Test-Path $cmakeCache) {
@@ -73,7 +73,7 @@ $notices = @(
 $noticeText = foreach ($notice in $notices) {
     $path = Join-Path $depsDir $notice.File
     if (-not (Test-Path $path)) {
-        Write-Error "$path not found. Configure the build first (cmake -B build) so dependencies are fetched."
+        Write-Error "$path not found. Configure the build first (cmake --preset local) so dependencies are fetched."
     }
     "=" * 80
     "  $($notice.Name)"
