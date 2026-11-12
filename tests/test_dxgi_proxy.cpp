@@ -6172,6 +6172,181 @@ TEST(DxgiProxyTest, ASwapChainCreatedAtTheOldOnesAddressDoesNotInheritTheOldBack
     EXPECT_EQ(chain.getBufferCalls, 2) << "the new swap chain's back buffers are fetched, not the cached old ones";
 }
 
+// ---- A refused OpenXR session (ADR-0004) ----------------------------------------------------------------------------
+
+namespace {
+
+// A runtime that refuses the session for the game's device, as one does when the headset is on another GPU than the
+// one the game renders on. Its graphics requirements name `requiredAdapter`.
+class SessionRefusingOpenXrRuntime : public FakeOpenXrRuntime {
+public:
+    uint32_t createSessionCalls = 0;
+    LUID requiredAdapter{ 0x1234, 0x5678 };
+
+    XrResult GetD3D12GraphicsRequirementsKHR(XrInstance instance, XrSystemId systemId,
+                                             XrGraphicsRequirementsD3D12KHR* reqs) override {
+        const XrResult result = FakeOpenXrRuntime::GetD3D12GraphicsRequirementsKHR(instance, systemId, reqs);
+        if (reqs) reqs->adapterLuid = requiredAdapter;
+        return result;
+    }
+    XrResult CreateSession(XrInstance, const XrSessionCreateInfo*, XrSession*) override {
+        ++createSessionCalls;
+        return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+    }
+};
+
+// What the system's factory was asked to create.
+struct SystemCreationRequest {
+    int calls = 0;
+    DXGI_SWAP_CHAIN_DESC desc{};
+    DXGI_SWAP_CHAIN_DESC1 desc1{};
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
+    bool hadFullscreenDesc = false;
+};
+SystemCreationRequest g_systemCreationRequest;
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE DescRecordingCreateSwapChainForHwnd(
+    IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreenDesc,
+    IDXGIOutput*, IDXGISwapChain1** ppSwapChain) {
+    ++g_systemCreationRequest.calls;
+    if (desc) g_systemCreationRequest.desc1 = *desc;
+    g_systemCreationRequest.hadFullscreenDesc = fullscreenDesc != nullptr;
+    if (fullscreenDesc) g_systemCreationRequest.fullscreenDesc = *fullscreenDesc;
+    if (ppSwapChain) *ppSwapChain = nullptr;
+    return S_OK;
+}
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE DescRecordingCreateSwapChain(
+    IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** ppSwapChain) {
+    ++g_systemCreationRequest.calls;
+    if (desc) g_systemCreationRequest.desc = *desc;
+    if (ppSwapChain) *ppSwapChain = nullptr;
+    return S_OK;
+}
+
+// The Injector in Active VR Mode on a runtime that will refuse the session, with a hooked factory, a game window and
+// the game's real (WARP) Direct3D 12 device and queue, which the game hands to the creation hooks.
+struct RefusedSessionRig {
+    std::shared_ptr<SessionRefusingOpenXrRuntime> runtime = std::make_shared<SessionRefusingOpenXrRuntime>();
+    std::shared_ptr<OpenXrManager> openXrManager = std::make_shared<OpenXrManager>(runtime);
+    ComPtr<ID3D12Device> device;
+    ComPtr<ID3D12CommandQueue> queue;
+    HWND window = nullptr;
+    RECT windowRect{};
+    MockFactory2 factory;
+    std::unique_ptr<InjectorRuntime> injector;
+
+    // `runtimeNeedsTheGamesAdapter` makes the runtime's graphics requirements name the adapter the game renders on.
+    explicit RefusedSessionRig(bool runtimeNeedsTheGamesAdapter = false) {
+        g_systemCreationRequest = {};
+        ComPtr<IDXGIFactory4> dxgiFactory;
+        ComPtr<IDXGIAdapter> warp;
+        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory))) || FAILED(dxgiFactory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) ||
+            FAILED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+            return;
+        }
+        D3D12_COMMAND_QUEUE_DESC direct{ D3D12_COMMAND_LIST_TYPE_DIRECT };
+        if (FAILED(device->CreateCommandQueue(&direct, IID_PPV_ARGS(&queue)))) return;
+        if (runtimeNeedsTheGamesAdapter) runtime->requiredAdapter = device->GetAdapterLuid();
+
+        window = CreateWindowA("STATIC", "RefusedSessionGameWnd", WS_OVERLAPPEDWINDOW, 50, 50, 4000, 3000,
+                               nullptr, nullptr, nullptr, nullptr);
+        GetWindowRect(window, &windowRect);
+        EXPECT_TRUE(openXrManager->Initialize());
+        EXPECT_TRUE(openXrManager->IsActive());
+        injector = MakeRuntime(openXrManager);
+        factory.vtable[kCreateSwapChainVTableSlot] = reinterpret_cast<void*>(&DescRecordingCreateSwapChain);
+        factory.vtable[kCreateSwapChainForHwndVTableSlot] = reinterpret_cast<void*>(&DescRecordingCreateSwapChainForHwnd);
+        EXPECT_TRUE(Proxy().AttachFactory(factory.Get()));
+    }
+    ~RefusedSessionRig() {
+        if (injector) Proxy().DetachAll();
+        injector.reset();
+        if (window) DestroyWindow(window);
+    }
+    bool Ready() const { return injector != nullptr; }
+    DxgiProxy& Proxy() { return injector->GetDxgiProxy(); }
+
+    // The game creates its swap chain the way FS25 does: windowed=FALSE, at 3840x2160, scaling NONE.
+    HRESULT CreateForHwnd() {
+        DXGI_SWAP_CHAIN_DESC1 desc{};
+        desc.Width = 3840;
+        desc.Height = 2160;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.BufferCount = 2;
+        desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        desc.Scaling = DXGI_SCALING_NONE;
+        DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreenDesc{};
+        fullscreenDesc.Windowed = FALSE;
+        IDXGISwapChain1* out = nullptr;
+        return DxgiProxy::Intercept_CreateSwapChainForHwnd(reinterpret_cast<IDXGIFactory2*>(factory.Get()), queue.Get(),
+                                                           window, &desc, &fullscreenDesc, nullptr, &out);
+    }
+    HRESULT Create() {
+        DXGI_SWAP_CHAIN_DESC desc{};
+        desc.BufferDesc.Width = 3840;
+        desc.BufferDesc.Height = 2160;
+        desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.BufferCount = 2;
+        desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        desc.OutputWindow = window;
+        desc.Windowed = FALSE;
+        IDXGISwapChain* out = nullptr;
+        return DxgiProxy::Intercept_CreateSwapChain(factory.Get(), queue.Get(), &desc, &out);
+    }
+
+    void ExpectWindowUntouched() {
+        RECT now{};
+        GetWindowRect(window, &now);
+        EXPECT_EQ(now.left, windowRect.left);
+        EXPECT_EQ(now.top, windowRect.top);
+        EXPECT_EQ(now.right - now.left, windowRect.right - windowRect.left) << "no window clamp";
+        EXPECT_EQ(now.bottom - now.top, windowRect.bottom - windowRect.top) << "no window clamp";
+        EXPECT_FALSE(Proxy().GetWindowController().IsWindowSubclassed());
+    }
+};
+
+} // namespace
+
+TEST(DxgiProxyTest, ARefusedSessionLeavesTheGamesCreateSwapChainForHwndAsTheGameAskedAndEntersPassThrough) {
+    RefusedSessionRig rig;
+    if (!rig.Ready()) GTEST_SKIP() << "no WARP D3D12 device";
+
+    EXPECT_EQ(rig.CreateForHwnd(), S_OK);
+
+    EXPECT_EQ(rig.runtime->createSessionCalls, 1u) << "the session was attempted with the game's device";
+    EXPECT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_FALSE(rig.Proxy().IsActive());
+    ASSERT_EQ(g_systemCreationRequest.calls, 1);
+    EXPECT_EQ(g_systemCreationRequest.desc1.Width, 3840u);
+    EXPECT_EQ(g_systemCreationRequest.desc1.Height, 2160u);
+    EXPECT_EQ(g_systemCreationRequest.desc1.Scaling, DXGI_SCALING_NONE) << "scaling as the game asked";
+    ASSERT_TRUE(g_systemCreationRequest.hadFullscreenDesc);
+    EXPECT_TRUE(g_systemCreationRequest.fullscreenDesc.Windowed == FALSE) << "fullscreen as the game asked";
+    EXPECT_EQ(rig.Proxy().GetWindowController().GetTargetRenderWidth(), 0u) << "no Render Resolution recorded";
+    EXPECT_EQ(rig.Proxy().GetWindowController().GetTargetRenderHeight(), 0u);
+    rig.ExpectWindowUntouched();
+}
+
+TEST(DxgiProxyTest, ARefusedSessionLeavesTheGamesCreateSwapChainAsTheGameAskedAndEntersPassThrough) {
+    RefusedSessionRig rig;
+    if (!rig.Ready()) GTEST_SKIP() << "no WARP D3D12 device";
+
+    EXPECT_EQ(rig.Create(), S_OK);
+
+    EXPECT_EQ(rig.runtime->createSessionCalls, 1u);
+    EXPECT_TRUE(rig.openXrManager->IsPassThrough());
+    EXPECT_FALSE(rig.Proxy().IsActive());
+    ASSERT_EQ(g_systemCreationRequest.calls, 1);
+    EXPECT_TRUE(g_systemCreationRequest.desc.Windowed == FALSE) << "fullscreen as the game asked";
+    EXPECT_EQ(g_systemCreationRequest.desc.BufferDesc.Width, 3840u);
+    EXPECT_EQ(g_systemCreationRequest.desc.BufferDesc.Height, 2160u);
+    EXPECT_EQ(rig.Proxy().GetWindowController().GetTargetRenderWidth(), 0u) << "no Render Resolution recorded";
+    rig.ExpectWindowUntouched();
+}
+
 } // namespace fs25vr
 
 
