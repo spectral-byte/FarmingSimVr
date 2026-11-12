@@ -1343,9 +1343,9 @@ function VRCompanion:deleteMap()
     -- has to give:
     --  * The HUD unloads before Stereo (it registers after it). The order is kept because it is the order of the unload before
     --    the registry, where the HUD went back to the full screen before Stereo left 2D Floating Window Mode, so that unloading
-    --    behaves as it did (the HUD's unload reads whether that mode is on). It is also why a map unloaded in 2D Floating Window Mode leaves the game's HUD anchors at the VR
-    --    Safe Area (a known bug): Stereo's mapUnload leaves the mode last of all, and leaving it applies the HUD Safe Area and
-    --    the HUD state again (set2DViewActive) after the HUD went back to the full screen.
+    --    behaves as it did (the HUD's unload reads whether that mode is on). Stereo's mapUnload leaves the mode last of all,
+    --    with leave2DViewOnMapUnload rather than set2DViewActive: returning to VR would apply the HUD Safe Area and the HUD
+    --    state again after the HUD went back to the full screen, and leave the game's HUD anchors at the Safe Area.
     --  * Within Stereo's mapUnload the nodes go before the camera settings are restored; the restore skips every camera that no
     --    longer exists (entityExists), the eye nodes among them.
     --  * Hand Tools unload before the Virtual Hands (they register after them): a tool hangs below a hand.

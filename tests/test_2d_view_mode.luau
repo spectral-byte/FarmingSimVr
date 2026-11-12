@@ -464,6 +464,26 @@ test("MapLoadMakesTheEyeNodesAndRegistersTheActionEventsAndUnloadUndoesThem", fu
     end
 end)
 
+-- A map unloaded in 2D Floating Window Mode hands the game its full-screen HUD in the Full state, as one unloaded in VR does
+test("MapUnloadIn2DModeLeavesTheGamesHudAnchorsAtTheFullScreen", function()
+    _G.g_hudAnchorLeft, _G.g_hudAnchorRight, _G.g_hudAnchorBottom, _G.g_hudAnchorTop = 0.0, 1.0, 0.0, 1.0
+    VRCompanion.origHudAnchors = nil
+    VRCompanion.persistedHudState = VRCompanion.HUD_STATE_HIDDEN
+    VRCompanion:loadMap("mapUS")
+    assert(_G.g_hudAnchorLeft > 0.0, "map load applies the VR HUD Safe Area")
+
+    VRCompanion:set2DViewActive(true)
+    VRCompanion:deleteMap()
+
+    assert(VRCompanion.is2DViewActive == false, "map unload leaves 2D Floating Window Mode")
+    assert(_G.g_hudAnchorLeft == 0.0, "left anchor back at the full screen, got " .. tostring(_G.g_hudAnchorLeft))
+    assert(_G.g_hudAnchorRight == 1.0, "right anchor back at the full screen, got " .. tostring(_G.g_hudAnchorRight))
+    assert(_G.g_hudAnchorBottom == 0.0, "bottom anchor back at the full screen, got " .. tostring(_G.g_hudAnchorBottom))
+    assert(_G.g_hudAnchorTop == 1.0, "top anchor back at the full screen, got " .. tostring(_G.g_hudAnchorTop))
+    assert(VRCompanion:getHudState() == VRCompanion.HUD_STATE_FULL, "the HUD is left in the Full state")
+    assert(VRCompanion.origHudAnchors == nil, "no game anchors are kept for the next map")
+end)
+
 -- Slice 11: Toggle View Action Debounce & Silent Execution
 test("ToggleViewActionDebounceAndSilentExecution", function()
     local warningCalls = 0

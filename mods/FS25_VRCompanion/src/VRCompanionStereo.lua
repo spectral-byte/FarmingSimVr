@@ -469,17 +469,31 @@ function VRCompanion:getIs2DViewActive()
     return self.is2DViewActive == true
 end
 
-function VRCompanion:set2DViewActive(active)
+-- Records the mode and tells VRBridge; returns whether the mode changed
+local function store2DViewActive(self, newActive)
     local wasActive = (self.is2DViewActive == true)
-    local newActive = (active == true)
     self.is2DViewActive = newActive
 
     if VRBridge ~= nil and type(VRBridge.set2DViewActive) == "function" then
         VRBridge.set2DViewActive(newActive)
     end
 
-    if wasActive ~= newActive then
-        self:signalDiscontinuityFlush()
+    if wasActive == newActive then return false end
+    self:signalDiscontinuityFlush()
+    return true
+end
+
+-- Map unload leaves 2D Floating Window Mode without the HUD Safe Area and the HUD state that returning to VR applies: the HUD's
+-- own unload has already handed the game its full-screen anchors in the Full state.
+function VRCompanion:leave2DViewOnMapUnload()
+    if store2DViewActive(self, false) then
+        print("[FS25_VR] Left 2D Floating Window Mode for the map unload.")
+    end
+end
+
+function VRCompanion:set2DViewActive(active)
+    local newActive = (active == true)
+    if store2DViewActive(self, newActive) then
         if newActive then
             print("[FS25_VR] Entered 2D Floating Window Mode.")
             self:restoreCameraProjectionsFor2D()
@@ -1673,8 +1687,8 @@ end
 -- (updateMenuBackgroundCamera, right after the GUI poll: the camera is written before the hooks the core installs next and the
 -- vehicle transition, which may move it, and its offsets are relative to what is there). Map unload: the nodes go and the cameras
 -- are put back. Unload runs after the core's teardown (VRBridge.onMapUnload included) and after the HUD's and Input's (they are
--- registered after this file, so they unload first); the 2D Floating Window Mode goes last. Why each of these orders holds or
--- does not matter is in the core's deleteMap.
+-- registered after this file, so they unload first); the 2D Floating Window Mode goes last, leaving the HUD as the HUD's unload
+-- left it. Why each of these orders holds or does not matter is in the core's deleteMap.
 local function deleteDualEyeNodes(self)
     local deleteFn = delete or (_G and _G.delete)
     local entityExistsFn = entityExists or (_G and _G.entityExists)
@@ -1721,9 +1735,8 @@ local function restoreOriginalCameraSettings(self)
 end
 
 -- Map unload runs after the HUD's (the HUD registers after Stereo), as it did before the registry, so unloading behaves as it did. The
--- nodes go before the camera settings are restored, which skips cameras that no longer exist. Leaving 2D Floating Window Mode
--- last applies the HUD Safe Area and the HUD state again after the HUD went back to the full screen, so a map unloaded in that
--- mode leaves the game's HUD anchors at the Safe Area (a known bug; see the core's deleteMap).
+-- nodes go before the camera settings are restored, which skips cameras that no longer exist. 2D Floating Window Mode is left
+-- last, without applying the HUD again, so the full-screen HUD the HUD's unload left stays (see the core's deleteMap).
 VRCompanion:registerSubsystem("stereo", {
     mapLoad = function(self)
         self:initDualEyeCameraNodes()
@@ -1734,6 +1747,6 @@ VRCompanion:registerSubsystem("stereo", {
         self:restoreMenuBackgroundCamera()
         self:resetToggleViewDebounce()
         restoreOriginalCameraSettings(self)
-        self:set2DViewActive(false)
+        self:leave2DViewOnMapUnload()
     end,
 })
