@@ -248,6 +248,7 @@ add_executable(fs25_vr_tests
     tests/test_companion_mod_stubs.cpp
     tests/test_companion_mod_globals.cpp
     tests/test_injector_version_warning.cpp
+    tests/test_hud_load_alert.cpp
     tests/test_motion_controllers.cpp
     tests/test_pointer_ray.cpp
     tests/test_virtual_hands.cpp

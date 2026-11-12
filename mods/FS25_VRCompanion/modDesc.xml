@@ -75,6 +75,18 @@ CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigg
             <en>Marker type: %s</en>
             <de>Markierungstyp: %s</de>
         </text>
+        <text name="vrHud_loadAlert_hidden">
+            <en>VR HUD: Hidden</en>
+            <de>VR-HUD: Ausgeblendet</de>
+        </text>
+        <text name="vrHud_loadAlert_streamlined">
+            <en>VR HUD: Streamlined</en>
+            <de>VR-HUD: Reduziert</de>
+        </text>
+        <text name="vrHud_loadAlert_full">
+            <en>VR HUD: Full</en>
+            <de>VR-HUD: Vollständig</de>
+        </text>
         <text name="setting_vrHudConvergenceDepth">
             <en>VR HUD Convergence Depth (Meters)</en>
             <de>VR-HUD Konvergenztiefe (Meter)</de>

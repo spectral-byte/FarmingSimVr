@@ -280,7 +280,7 @@ TEST_F(InjectorVersionWarningTest, TheHudLoadNoticeAndTheVersionWarningAreBothSh
     const std::vector<Warning> shown = ShownWarnings();
     int noticeAt = -1, versionAt = -1;
     for (int i = 0; i < static_cast<int>(shown.size()); ++i) {
-        if (shown[i].text.find("Press RCtrl+H to cycle") != std::string::npos) noticeAt = i;
+        if (shown[i].text.rfind("VR HUD: ", 0) == 0) noticeAt = i;
         if (shown[i].text.find("Injector") != std::string::npos) versionAt = i;
     }
     ASSERT_GE(noticeAt, 0) << "the HUD notice is shown";

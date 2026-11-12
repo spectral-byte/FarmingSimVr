@@ -24,6 +24,14 @@ VRCompanion.HUD_STATE_NAMES = {
     [2] = "Full"
 }
 
+-- The map-load HUD alert for each HUD state: its l10n key (modDesc.xml) and its English text. It names no key or button, since
+-- the HUD Toggle Action can be rebound.
+VRCompanion.HUD_LOAD_ALERT_TEXTS = {
+    [0] = { key = "vrHud_loadAlert_hidden", english = "VR HUD: Hidden" },
+    [1] = { key = "vrHud_loadAlert_streamlined", english = "VR HUD: Streamlined" },
+    [2] = { key = "vrHud_loadAlert_full", english = "VR HUD: Full" },
+}
+
 -- VR HUD runtime state defaults (initialized only when not already set)
 if VRCompanion.hudState == nil then VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN end
 if VRCompanion.hudSafeAreaHorizontal == nil then VRCompanion.hudSafeAreaHorizontal = VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL end

@@ -48,6 +48,20 @@ function VRCompanion.getEngineGlobal(name)
     return _G and _G[name]
 end
 
+-- The text the player reads for an l10n key (the game's own, or this mod's from modDesc.xml) in the game's current language,
+-- else englishText: when the game has no text for the key, has no g_i18n, or asking it raises. A key is never returned as the
+-- text. englishText may be nil, for a caller that tries something else next.
+function VRCompanion.getLocalisedText(key, englishText)
+    local i18n = VRCompanion.getEngineGlobal("g_i18n")
+    if type(key) ~= "string" or key == "" or type(i18n) ~= "table" then return englishText end
+    local ok, text = pcall(function()
+        if i18n:hasText(key) then return i18n:getText(key) end
+        return nil
+    end)
+    if ok and type(text) == "string" and text ~= "" then return text end
+    return englishText
+end
+
 -- ---- Who aims the look ray ----------------------------------------------------------------------------------
 -- The game's Player:getLookRay is wrapped once, as the shared wrap "lookRay" of VRCompanionGameWraps.lua, for as long as a
 -- subsystem that aims holds the wrap (Hand Tools and Object Grab each hold it, so that one giving up leaves the other aiming). The wrap asks each subsystem
@@ -433,8 +447,10 @@ function VRCompanion:loadMap(name)
     if self.showHudLoadNotification == true then
         local mission = g_currentMission or _G.g_currentMission
         if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
+            local alert = self.HUD_LOAD_ALERT_TEXTS[self:getHudState()] or self.HUD_LOAD_ALERT_TEXTS[self.HUD_STATE_HIDDEN]
+            local text = VRCompanion.getLocalisedText(alert.key, alert.english)
             pcall(function()
-                mission:showBlinkingWarning("VR HUD: Hidden (Press RCtrl+H to cycle)", 4000)
+                mission:showBlinkingWarning(text, 4000)
             end)
         end
     end
