@@ -10,7 +10,8 @@
 --
 --   local wraps = VRCompanion.GameWraps.newSet({
 --       owner = "objectGrab",                  -- the Subsystem's name: what holds a shared wrap
---       giveUp = "Object Grab disabled: %s. Picking up is unchanged.",   -- the warning, %s the reason ("[FS25_VR] [Warning] " before it)
+--       giveUp = "Object Grab disabled: %s. Picking up is unchanged.",   -- the warning, %s the reason ("[FS25_VR] [Warning] " before it);
+--                                              -- newSet raises when it is not a string with a %s
 --       nameAsSubject = false,                 -- reasons read "<Class.fn>: it is missing" (default) or "<Class.fn> is missing" (true)
 --       functions = {                          -- keyed by a name the Subsystem uses for the function
 --           <name> = {
@@ -160,8 +161,17 @@ end
 local Set = {}
 Set.__index = Set
 
+-- Raises (at the Subsystem's declaration) unless the give-up sentence is a string with a %s for the reason.
+local function checkGiveUpSentence(owner, sentence)
+    if type(sentence) ~= "string" or string.find(sentence, "%s", 1, true) == nil then
+        error("Subsystem '" .. tostring(owner) .. "': the give-up sentence must be a string with a %s for the reason, not "
+            .. tostring(sentence), 3)
+    end
+end
+
 -- wraps[name] = { class, fn, original, wrapper } (or { ..., shared = key } for a held shared wrap); instance = { target, entries }
 function GameWraps.newSet(declaration)
+    checkGiveUpSentence(declaration.owner, declaration.giveUp)
     return setmetatable({ declaration = declaration, gaveUpBecause = nil, wraps = {}, instance = nil }, Set)
 end
 
@@ -284,7 +294,7 @@ function Set:giveUp(problem)
     self.gaveUpBecause = problem
     self:liftAll()
     local template = self.declaration.giveUp
-    local at = string.find(template, "%s", 1, true)
+    local at = string.find(template, "%s", 1, true)  -- there is one: newSet checks the sentence
     print("[FS25_VR] [Warning] " .. string.sub(template, 1, at - 1) .. problem .. string.sub(template, at + 2))
 end
 

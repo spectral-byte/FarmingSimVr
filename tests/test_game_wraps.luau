@@ -510,4 +510,26 @@ test("the Subsystem can tell which object's own copy is wrapped, for its diagnos
     expectEqual(set:instanceTarget(), nil, "none once lifted")
 end)
 
+-- ---- The give-up warning's sentence ---------------------------------------------------------------------------------------
+
+test("a give-up sentence without %s raises when the set is declared, naming the Subsystem", function()
+    for _, sentence in ipairs({ "Stub disabled. The game is unchanged.", 42 }) do
+        local ok, err = pcall(GameWraps.newSet, {
+            owner = "stub",
+            giveUp = sentence,
+            functions = { update = { class = "StubClass", parameters = 2, describe = "(object, dt)" } },
+        })
+        expectEqual(ok, false, "declaring " .. tostring(sentence))
+        expectEqual(string.find(tostring(err), "stub", 1, true) ~= nil, true, "the message names the Subsystem: " .. tostring(err))
+        expectEqual(string.find(tostring(err), "%s", 1, true) ~= nil, true, "and what is missing: " .. tostring(err))
+    end
+end)
+
+test("a give-up reason with a % in it is logged as it is", function()
+    _G.StubClass = {}
+    local set = stubSet(function(original) return original end)
+    set:giveUp("100% gone")
+    expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: 100% gone. The game is unchanged.", "the warning")
+end)
+
 realPrint(string.format("GameWraps: %d passed, %d failed", passed, failed))
