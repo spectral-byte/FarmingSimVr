@@ -98,13 +98,10 @@ local function missingFunctions(owner, names)
     return missing
 end
 
--- Giving up goes through the core's wrap helper (VRCompanionGameWraps.lua): ONE warning. Interactive Control installs its wraps itself
--- (installWrappers) and only once everything was checked, so there is nothing for the helper to lift; map unload forgets it gave up.
-local giveUpOnce = VRCompanion.GameWraps.newSet({
-    owner = "interactiveControl",
-    giveUp = "Interactive Control support disabled: %s. Motion Controllers cannot select Click Points; Interactive Control itself is unchanged.",
-    functions = {},
-})
+-- Giving up goes through the give-up part of the core's wrap helper (VRCompanionGameWraps.lua): ONE warning. Interactive Control installs
+-- its wraps itself (installWrappers) and only once everything was checked, so there is nothing to lift; map unload forgets it gave up.
+local giveUpOnce = VRCompanion.GameWraps.newGiveUp("interactiveControl",
+    "Interactive Control support disabled: %s. Motion Controllers cannot select Click Points; Interactive Control itself is unchanged.")
 
 local function giveUp(reason)
     giveUpOnce:giveUp(reason)

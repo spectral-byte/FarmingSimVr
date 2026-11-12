@@ -579,4 +579,26 @@ test("an order that leaves out a declared function, or names one that is not dec
     end
 end)
 
+-- ---- Giving up once, without wraps ----------------------------------------------------------------------------------------
+
+test("a Subsystem that wraps by itself gives up once with one warning, and again after a reset", function()
+    local giveUp = GameWraps.newGiveUp("stub", "Stub disabled: %s. The game is unchanged.")
+    expectEqual(giveUp:problem(), nil, "not given up")
+    giveUp:giveUp("it broke")
+    giveUp:giveUp("it broke again")
+    expectEqual(#warnings(), 1, "warnings")
+    expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: it broke. The game is unchanged.", "the warning")
+    expectEqual(giveUp:problem(), "it broke", "why")
+    giveUp:reset()
+    expectEqual(giveUp:problem(), nil, "forgotten at map unload")
+    giveUp:giveUp("it broke on the next map")
+    expectEqual(#warnings(), 2, "warned again on the next map")
+end)
+
+test("a give-up-once sentence without %s raises when it is made", function()
+    local ok, err = pcall(GameWraps.newGiveUp, "stub", "Stub disabled.")
+    expectEqual(ok, false, "making it")
+    expectEqual(string.find(tostring(err), "stub", 1, true) ~= nil, true, "the message names the Subsystem: " .. tostring(err))
+end)
+
 realPrint(string.format("GameWraps: %d passed, %d failed", passed, failed))

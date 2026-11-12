@@ -46,6 +46,9 @@
 --   wraps:wrapNames(), wraps:status(name)         the wrapped (not check-only) names, sorted, and "<name> wrap: installed" (or
 --                                   "not installed", "gave up (<reason>)") for the diagnostics
 --
+--   GameWraps.newGiveUp(owner, sentence)   the give-up part alone, for a Subsystem that wraps by itself: giveUp(reason) logs the
+--                                   sentence (as a set's giveUp) once and returns true, false when it already gave up; problem();
+--                                   reset() at map unload. A set gives up through one of its own.
 --   GameWraps.parameterCount(fn) -> number|nil   nil when it takes any number, or the runtime cannot tell
 --   GameWraps.shapeProblem(fn, parameters, describe, subject) -> reason|nil   "<subject> is missing", "... is not a function",
 --                                   "... takes N parameters, not <describe>"; subject defaults to "it"
@@ -177,9 +180,36 @@ local function checkGiveUpSentence(owner, sentence)
     end
 end
 
+-- ---- Giving up once ---------------------------------------------------------------------------------------------------------
+
+local GiveUp = {}
+GiveUp.__index = GiveUp
+
+function GameWraps.newGiveUp(owner, sentence)
+    checkGiveUpSentence(owner, sentence)
+    return setmetatable({ sentence = sentence, because = nil }, GiveUp)
+end
+
+-- Logs the warning with the reason and returns true, the first time; a later give-up is ignored (false) until reset.
+function GiveUp:giveUp(problem)
+    if self.because ~= nil then return false end
+    self.because = problem
+    local at = string.find(self.sentence, "%s", 1, true)  -- there is one: newGiveUp checks the sentence
+    print("[FS25_VR] [Warning] " .. string.sub(self.sentence, 1, at - 1) .. problem .. string.sub(self.sentence, at + 2))
+    return true
+end
+
+function GiveUp:problem()
+    return self.because
+end
+
+function GiveUp:reset()
+    self.because = nil
+end
+
 -- wraps[name] = { class, fn, original, wrapper } (or { ..., shared = key } for a held shared wrap); instance = { target, entries }
 function GameWraps.newSet(declaration)
-    checkGiveUpSentence(declaration.owner, declaration.giveUp)
+    local givingUp = GameWraps.newGiveUp(declaration.owner, declaration.giveUp)
     local order = declaration.order
     if order ~= nil then
         local listed = {}
@@ -195,7 +225,7 @@ function GameWraps.newSet(declaration)
             end
         end
     end
-    return setmetatable({ declaration = declaration, gaveUpBecause = nil, wraps = {}, instance = nil }, Set)
+    return setmetatable({ declaration = declaration, givingUp = givingUp, wraps = {}, instance = nil }, Set)
 end
 
 -- The declared names, sorted, so that the first reason found does not depend on the table's order.
@@ -233,7 +263,7 @@ function Set:wrap(name)
 end
 
 function Set:wrapAll()
-    if self.gaveUpBecause ~= nil then return end
+    if self.givingUp:problem() ~= nil then return end
     for _, name in ipairs(checkOrder(self.declaration)) do self:wrap(name) end
 end
 
@@ -253,7 +283,7 @@ end
 -- that is the class wrapper (the class wrap reaches it) or is not the expected shape is left alone; one the game replaced since
 -- is wrapped again.
 function Set:wrapInstance(target, names)
-    if self.gaveUpBecause ~= nil then return end
+    if self.givingUp:problem() ~= nil then return end
     if self.instance ~= nil and self.instance.target ~= target then self:liftInstance() end
     for _, name in ipairs(names) do
         local spec = self.declaration.functions[name]
@@ -318,28 +348,23 @@ end
 
 -- The Subsystem cannot rely on the game's functions: every wrap lifted, ONE warning. A later give-up is ignored until reset.
 function Set:giveUp(problem)
-    if self.gaveUpBecause ~= nil then return end
-    self.gaveUpBecause = problem
-    self:liftAll()
-    local template = self.declaration.giveUp
-    local at = string.find(template, "%s", 1, true)  -- there is one: newSet checks the sentence
-    print("[FS25_VR] [Warning] " .. string.sub(template, 1, at - 1) .. problem .. string.sub(template, at + 2))
+    if self.givingUp:giveUp(problem) then self:liftAll() end
 end
 
 function Set:check()
-    if self.gaveUpBecause ~= nil then return self.gaveUpBecause end
+    if self.givingUp:problem() ~= nil then return self.givingUp:problem() end
     local problem = self:findProblem()
     if problem ~= nil then self:giveUp(problem) end
     return problem
 end
 
 function Set:problem()
-    return self.gaveUpBecause
+    return self.givingUp:problem()
 end
 
 function Set:reset()
     self:liftAll()
-    self.gaveUpBecause = nil
+    self.givingUp:reset()
 end
 
 function Set:isWrapped(name)
@@ -361,7 +386,7 @@ function Set:wrapNames()
 end
 
 function Set:status(name)
-    if self.gaveUpBecause ~= nil then return name .. " wrap: gave up (" .. self.gaveUpBecause .. ")" end
+    if self.givingUp:problem() ~= nil then return name .. " wrap: gave up (" .. self.givingUp:problem() .. ")" end
     return name .. " wrap: " .. (self.wraps[name] ~= nil and "installed" or "not installed")
 end
 
