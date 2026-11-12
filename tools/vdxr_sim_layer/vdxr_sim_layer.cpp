@@ -1,6 +1,7 @@
 // Test-only OpenXR API layer that imitates VDXR's xrGetSystem: it creates a DXGI factory through
 // its static dxgi.dll import before passing the call on to the real runtime. Loaded into the game,
-// that import binds to the FS25 VR dxgi.dll proxy, the same path that deadlocked under VDXR.
+// that call re-enters the FS25 VR Injector's CreateDXGIFactory1 hook (up to 1.1.9: the dxgi.dll proxy)
+// while it is still starting VR, the same path that deadlocked under VDXR.
 #define XR_NO_PROTOTYPES
 #include <windows.h>
 #include <dxgi.h>
