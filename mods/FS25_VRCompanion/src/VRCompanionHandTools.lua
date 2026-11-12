@@ -1984,14 +1984,7 @@ end
 
 -- The text of an l10n key (the game's or this mod's modDesc.xml l10n), nil when there is none or the game has no i18n.
 local function l10nText(key)
-    local i18n = engine("g_i18n")
-    if type(key) ~= "string" or key == "" or type(i18n) ~= "table" then return nil end
-    local ok, text = pcall(function()
-        if i18n:hasText(key) then return i18n:getText(key) end
-        return nil
-    end)
-    if ok and type(text) == "string" and text ~= "" then return text end
-    return nil
+    return VRCompanion.getLocalisedText(key, nil)
 end
 
 -- What the player reads for a marker type. The game defines the types in data/maps/maps_treeMarkerTypes.xml, each with a name
@@ -2021,7 +2014,7 @@ end
 local MARKER_TYPE_TEXT_KEY = "vrHandTools_markerType"
 local function markerTypeMessage(spec)
     local name = markerTypeName(spec)
-    local ok, message = pcall(string.format, l10nText(MARKER_TYPE_TEXT_KEY) or "Marker type: %s", name)
+    local ok, message = pcall(string.format, VRCompanion.getLocalisedText(MARKER_TYPE_TEXT_KEY, "Marker type: %s"), name)
     if ok then return message end
     return "Marker type: " .. name
 end
