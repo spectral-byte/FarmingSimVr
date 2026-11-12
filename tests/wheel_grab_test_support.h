@@ -94,7 +94,7 @@ inline std::string SteerableCab(const std::string& options = "") {
 // Which stubs the mod is started with, besides the scene graph and the steering vehicle.
 struct StartOptions {
     bool consoleStubs = true;   // kConsoleStubs
-    bool modelLoading = false;  // kStubModelLoading: the Virtual Hand's model (StubModel)
+    bool modelLoading = false;  // model_loading.luau: the Virtual Hand's model (StubModel)
     bool noPullAway = false;    // kNoPullAway
     const char* extraStubs = "";  // one more Lua chunk, run after the stubs above and before the scene
 };
@@ -105,9 +105,9 @@ inline void StartWheelGrabMod(lua_State* L, fs25vr::VRBridge& bridge, const std:
                               const StartOptions& options = StartOptions()) {
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubSceneGraph, "=sceneGraph"), 0);
-    if (options.modelLoading) ASSERT_EQ(RunLuauChunk(L, kStubModelLoading, "=modelLoading"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubSteeringVehicle, "=steeringVehicle"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
+    if (options.modelLoading) ASSERT_EQ(RunLuauChunk(L, StubChunk("model_loading"), "=modelLoading"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("steering_vehicle"), "=steeringVehicle"), 0);
     if (options.consoleStubs) ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, options.extraStubs, "=extraStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, scene.c_str(), "=scene"), 0);

@@ -1,6 +1,6 @@
 // Hand Tools, the fishing rod's haptics on the Tool Hand (ADR-0031), seen from outside: the real Companion Mod runs against the
 // real VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool: a player on foot
-// and the Highlands Fishing DLC's rod, kStubHandToolFishingRod, whose bite has a hook window of 880 ms of updates and whose
+// and the Highlands Fishing DLC's rod, hand_tool_fishing_rod.luau, whose bite has a hook window of 880 ms of updates and whose
 // rodBendFactor while reeling is the fish's pull). A test moves the fake Motion Controllers, drives the rod and frames the way the
 // game would and asserts what the player would feel: which haptic pulses reached which fake Motion Controller
 // (headset.HapticPulses()), how strong and long they were, and when they stop. Never the mod's own state.

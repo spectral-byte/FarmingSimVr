@@ -39,9 +39,9 @@ protected:
     void StartWithPadOn() {
         ASSERT_TRUE(bridge.Inject(L));
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
-        ASSERT_EQ(RunLuauChunk(L, kStubSceneGraph, "=sceneGraph"), 0);
-        ASSERT_EQ(RunLuauChunk(L, kStubSteeringVehicle, "=steeringVehicle"), 0);
-        ASSERT_EQ(RunLuauChunk(L, kStubInteractiveControl, "=interactiveControl"), 0);
+        ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
+        ASSERT_EQ(RunLuauChunk(L, StubChunk("steering_vehicle"), "=steeringVehicle"), 0);
+        ASSERT_EQ(RunLuauChunk(L, StubChunk("interactive_control"), "=interactiveControl"), 0);
         ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
         ASSERT_EQ(RunLuauChunk(L, "StubIC.install('ok'); StubSteer.install()", "=install"), 0);
         ASSERT_EQ(RunLuauChunk(L, SteerableCab().c_str(), "=scene"), 0);

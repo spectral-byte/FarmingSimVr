@@ -289,7 +289,7 @@ TEST_F(VirtualGamepadManualAttachTest, EitherHandWorksAHitchAsThePointerHand) {
 TEST_F(VirtualGamepadManualAttachTest, AClickPointWithinThePointerConeWinsOverAHitch) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(kTractorAndImplement);
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); _G.point = StubIC.addPoint('lever', -0.4, -0.2, 1.0)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "lever");
@@ -310,7 +310,7 @@ TEST_F(VirtualGamepadManualAttachTest, AClickPointWithinThePointerConeWinsOverAH
 TEST_F(VirtualGamepadManualAttachTest, ClickPointsOutsideTheConeDoNotHideAHitchFromTheRay) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(kTractorAndImplement);
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('farOff', 3.0, 1.5, 1.0)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(EvalLua(L, "tostring(StubIC.selected())"), "nil");

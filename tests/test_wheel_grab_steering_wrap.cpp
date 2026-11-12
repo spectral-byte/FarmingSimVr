@@ -27,8 +27,8 @@ constexpr const char* kPhoneTiltValue = "0.55";
 // options, e.g. "copyOfOriginal = true" for a vehicle whose copy was taken before the class was wrapped.
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& variant = "ok", const std::string& equipOptions = "") {
     ASSERT_TRUE(bridge.Inject(L));
-    ASSERT_EQ(RunLuauChunk(L, kStubSceneGraph, "=sceneGraph"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubSteeringVehicle, "=steeringVehicle"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("steering_vehicle"), "=steeringVehicle"), 0);
     ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, ("StubSteer.install('" + variant + "')").c_str(), "=installGame"), 0);
     ASSERT_EQ(LoadCompanionModChecked(L), 0);

@@ -249,7 +249,7 @@ TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, AVehicleWithNoPtoOutputsOrHo
 TEST_F(VirtualGamepadManualAttachTest, AClickPointAndThePtoStubBothInTheConeTheNearerTheRaysCentreWinsEitherWayRoundAndTheOtherSelectsNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(kTractorWithAttachedImplement);
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('lever', -0.37, 0.2, 1.0)");  // 3 cm off the PTO stub's line, 0.7 m ahead: about 2.5 degrees
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);                            // the PTO stub is on the ray's centre
 

@@ -69,7 +69,7 @@ protected:
         ASSERT_EQ(RunLuauChunk(L, kXmlStubs, "=xmlStubs"), 0);
         ASSERT_EQ(RunLuauChunk(L, settingsFile, "=settingsFile"), 0);
         if (!turnOn) ASSERT_EQ(RunLuauChunk(L, "savedXml['vrSettings.virtualGamepad'] = false", "=padSavedOff"), 0);
-        ASSERT_EQ(RunLuauChunk(L, kStubInputBinding, "=inputBindingStub"), 0);
+        ASSERT_EQ(RunLuauChunk(L, StubChunk("input_binding"), "=inputBindingStub"), 0);
         ASSERT_EQ(RunLuauChunk(L, "StubInput.install(" + bindings + ")", "=installBindings"), 0);
         ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
         SetGameTime(10000);

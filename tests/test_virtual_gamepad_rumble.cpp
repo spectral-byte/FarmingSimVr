@@ -62,8 +62,8 @@ protected:
         ASSERT_EQ(RunLuauChunk(L, kXmlStubs, "=xmlStubs"), 0);
         // A cab at the world origin and the Interactive Control stand-in, as test_haptics.cpp has them: the player sits
         // at (0, 1.5, 0) looking along +Z, so a hand held at (x, y, -z) points at world (-x, 1.5 + y, +z).
-        ASSERT_EQ(RunLuauChunk(L, kStubSceneGraph, "=sceneGraph"), 0);
-        ASSERT_EQ(RunLuauChunk(L, kStubInteractiveControl, "=interactiveControl"), 0);
+        ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
+        ASSERT_EQ(RunLuauChunk(L, StubChunk("interactive_control"), "=interactiveControl"), 0);
         ASSERT_EQ(RunLuauChunk(L, "StubIC.install('ok')", "=installIc"), 0);
         ASSERT_EQ(RunLuauChunk(L, "StubScene.cab({})", "=scene"), 0);
         ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);

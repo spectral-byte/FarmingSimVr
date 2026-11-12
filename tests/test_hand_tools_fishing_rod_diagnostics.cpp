@@ -2,7 +2,7 @@
 // the rod's state, its last cast (the rod's and the head's directions and where the bobber landed) and the last action it was
 // given, so that the headset round can tell whether the cast follows the rod or the head and learn what the secondary action does.
 // Seen from outside: the real Companion Mod runs against the real VRBridge over FakeTrackedHeadset, with the game stood in by Lua
-// stubs (companion_mod_stubs.h, StubHandTool and the Highlands Fishing DLC's rod, kStubHandToolFishingRod). A test drives the fake
+// stubs (companion_mod_stubs.h, StubHandTool and the Highlands Fishing DLC's rod, hand_tool_fishing_rod.luau). A test drives the fake
 // Motion Controllers and the rod's stub as the game would, runs the command as the game runs it and asserts what the developer
 // reads in the log and what the command answers. Never the mod's own state.
 // Prior art: test_hand_tools_describe_unsupported.cpp and test_hand_tools_offset_tuning.cpp (a console command and its log lines),

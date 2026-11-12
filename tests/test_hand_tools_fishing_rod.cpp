@@ -1,6 +1,6 @@
 // Hand Tools, the fishing rod (ADR-0031), seen from outside: the real Companion Mod runs against the real VRBridge over
 // FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h, StubHandTool: a player on foot, and the Highlands
-// Fishing DLC's rod, kStubHandToolFishingRod, shaped after the #125 probe dump: a specialization class with no global name, its
+// Fishing DLC's rod, hand_tool_fishing_rod.luau, shaped after the #125 probe dump: a specialization class with no global name, its
 // handlers on the class only, a state machine recognised by the keys of spec.state). A test moves the fake Motion Controllers and
 // the game clock, drives frames the way the game would and asserts what the player or the game would see: where the rod is, the
 // ray the targeter cast, the calls the rod's handlers received and what the rod did with them (its state, its casts), what XInput

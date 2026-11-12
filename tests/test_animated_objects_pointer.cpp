@@ -281,7 +281,7 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, AHandCarryingAHeldObjectNeverTogglesAD
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, AClickPointWithinThePointerConeWinsOverADoorBehindIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
-    ASSERT_EQ(RunLuauChunk(L, kStubInteractiveControl, "=interactiveControl"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("interactive_control"), "=interactiveControl"), 0);
     ASSERT_EQ(RunLuauChunk(L, "StubIC.install('ok'); _G.point = StubIC.addPoint('lever', -0.4, -0.2, 1.0)", "=clickPoint"), 0);
     EnterZone();
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
@@ -302,7 +302,7 @@ TEST_F(VirtualGamepadAnimatedObjectsTest, AClickPointWithinThePointerConeWinsOve
 
 TEST_F(VirtualGamepadAnimatedObjectsTest, ClickPointsOutsideTheConeDoNotHideADoorFromTheRay) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoor());
-    ASSERT_EQ(RunLuauChunk(L, kStubInteractiveControl, "=interactiveControl"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("interactive_control"), "=interactiveControl"), 0);
     ASSERT_EQ(RunLuauChunk(L, "StubIC.install('ok'); StubIC.addPoint('farOff', 3.0, 1.5, 1.0)", "=clickPoint"), 0);
     EnterZone();
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
