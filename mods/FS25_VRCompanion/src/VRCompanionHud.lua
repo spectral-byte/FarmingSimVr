@@ -1713,6 +1713,9 @@ VRCompanion:registerSubsystem("hud", {
         self:stopHudTrace()
         self.hudEyeTestEye = nil
     end,
+    -- The Stereo Dialog depth; the HUD Safe Area, the HUD Groups and the HUD state are the core's settings and stay in its code
+    saveSettings = function(self, xmlFile, xml) self:saveStereoDialogDepthSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadStereoDialogDepthSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrDialogDepth", description = "How far back a Stereo Dialog (the fish catch dialog) reads in the headset, in metres (saved; 2.5 by default; the HUD is at 1.8): vrDialogDepth [0.5-5.0]", method = "consoleCommandSetStereoDialogDepth" },
     },
