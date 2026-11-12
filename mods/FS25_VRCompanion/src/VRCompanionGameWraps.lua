@@ -1,3 +1,56 @@
+-- ====================================================================
+-- FS25 VR Companion Mod: game function wraps (spec #280)
+--
+-- The one implementation of wrapping the game's functions that the Subsystems share: counting a function's declared parameters,
+-- saying why a game function is not the shape a Subsystem expects, putting a wrapper on a class once per class table (and again
+-- when the game replaced the table), lifting a wrapper only while it is still the class's function (so another mod's later wrap is
+-- never undone), wraps two Subsystems share, a wrap on one game object's own copy of a function, and giving up once with a warning.
+--
+-- A Subsystem declares the functions it wraps as a SET, and gets the checking, wrapping, lifting and giving up from here:
+--
+--   local wraps = VRCompanion.GameWraps.newSet({
+--       owner = "objectGrab",                  -- the Subsystem's name: what holds a shared wrap
+--       giveUp = "Object Grab disabled: %s. Picking up is unchanged.",   -- the warning, %s the reason ("[FS25_VR] [Warning] " before it)
+--       nameAsSubject = false,                 -- reasons read "<Class.fn>: it is missing" (default) or "<Class.fn> is missing" (true)
+--       functions = {                          -- keyed by a name the Subsystem uses for the function
+--           <name> = {
+--               class = "HandToolHands",       -- the engine global the function is on, or function() -> the table (another mod's environment)
+--               className = nil,               -- the class's name in reasons, when `class` is a function
+--               fn = "onDraw",                 -- the function's name on the class, when it is not <name>
+--               parameters = 1,                -- how many parameters it must declare at least (a reshaped function declares fewer)
+--               describe = "(tool)",           -- what they are, for the reason
+--               make = function(original) return wrapper end,   -- nil: CHECK-ONLY (checked, never wrapped); may be set after newSet
+--               shared = nil,                  -- the key of a shared wrap (GameWraps.defineShared) held instead of making one
+--               missingClass = nil,            -- the reason when the game has no such class; nil: a missing class is not a failure
+--           },
+--       },
+--   })
+--
+--   wraps:wrapAll()                 wraps each function on its class (once per class table), none once the set gave up; a function
+--                                   that is not the expected shape is left alone (check reports it)
+--   wraps:check() -> reason|nil     gives up (once) on the first declared function, by name, that is missing or reshaped
+--   wraps:findProblem() -> reason|nil   the same reason without giving up (for a Subsystem that warns only later)
+--   wraps:giveUp(reason)            lifts every wrap and logs the warning, once: a later give-up is ignored
+--   wraps:problem() -> reason|nil   why the set gave up
+--   wraps:liftAll()                 lifts every wrap, each only while it is still the function there; lets go of shared wraps
+--   wraps:reset()                   map unload: liftAll, and forgets that the set gave up
+--   wraps:wrapInstance(target, { <name>, ... })   wraps the target's own copies (a vehicle's, a tool's: the game copies type
+--                                   functions onto an object), unless the class wrap reaches them; replaces a wrap of an earlier target
+--   wraps:liftInstance()            gives the target its own copies back (or nothing of its own, when it had none), where still the wrapper
+--   wraps:isWrapped(name), wraps:original(name)   whether the class wrap is on, and the game's function under it
+--   wraps:wrapNames(), wraps:status(name)         the wrapped (not check-only) names, sorted, and "<name> wrap: installed" (or
+--                                   "not installed", "gave up (<reason>)") for the diagnostics
+--
+--   GameWraps.parameterCount(fn) -> number|nil   nil when it takes any number, or the runtime cannot tell
+--   GameWraps.shapeProblem(fn, parameters, describe, subject) -> reason|nil   "<subject> is missing", "... is not a function",
+--                                   "... takes N parameters, not <describe>"; subject defaults to "it"
+--   GameWraps.defineShared(key, { class, fn, make })   a wrap more than one Subsystem holds: put on with the first hold, lifted
+--                                   when the last holder lets go. holdShared(key, owner), releaseShared(key, owner), sharedOriginal(key)
+--
+-- THE SHARED LOOK RAY: Player:getLookRay is the shared wrap "lookRay", held by Hand Tools and Object Grab, so that one giving up
+-- leaves the other aiming. Its wrapper answers VRCompanion:getAimedLookRay (Core) and the game's own ray otherwise.
+-- ====================================================================
+
 VRCompanion = VRCompanion or {}
 
 local GameWraps = {}
@@ -7,6 +60,7 @@ local function engine(name)
     return VRCompanion.getEngineGlobal(name)
 end
 
+-- How many parameters a Lua function declares, or nil when it takes any number or the runtime cannot tell.
 function GameWraps.parameterCount(fn)
     local library = _G and _G.debug
     if type(library) ~= "table" then return nil end
@@ -23,6 +77,7 @@ function GameWraps.parameterCount(fn)
     return nil
 end
 
+-- Why fn is not a function declaring at least `parameters` parameters, or nil when it is.
 function GameWraps.shapeProblem(fn, parameters, describe, subject)
     subject = subject or "it"
     if fn == nil then return subject .. " is missing" end
@@ -32,20 +87,6 @@ function GameWraps.shapeProblem(fn, parameters, describe, subject)
         return string.format("%s takes %d parameters, not %s", subject, count, describe)
     end
     return nil
-end
-
-local Set = {}
-Set.__index = Set
-
-function GameWraps.newSet(declaration)
-    return setmetatable({ declaration = declaration, gaveUpBecause = nil, wraps = {} }, Set)
-end
-
-local function sortedNames(functions)
-    local names = {}
-    for name in pairs(functions) do names[#names + 1] = name end
-    table.sort(names)
-    return names
 end
 
 local function classOf(spec)
@@ -58,6 +99,9 @@ local function classNameOf(spec)
     return spec.className or (type(spec.class) == "string" and spec.class) or "?"
 end
 
+-- ---- Shared wraps ---------------------------------------------------------------------------------------------------------
+
+-- sharedWraps[key] = { spec, wrap = { class, original, wrapper } | nil, holders = { [owner] = true } }
 local sharedWraps = {}
 
 function GameWraps.defineShared(key, spec)
@@ -70,12 +114,14 @@ local function sharedOf(key)
     return shared
 end
 
--- The game's function under the shared wrap while it is on `class`.
-local function sharedOriginal(key, class)
+-- The game's function under the shared wrap while the wrap is on `class`, or nil.
+local function sharedOriginalOn(key, class)
     local wrap = sharedOf(key).wrap
     return wrap ~= nil and wrap.class == class and wrap.original or nil
 end
 
+-- Holds the shared wrap for `owner`, putting it on the class when it is not there (or the game replaced the class table). Returns
+-- whether it is there.
 function GameWraps.holdShared(key, owner)
     local shared = sharedOf(key)
     local class = classOf(shared.spec)
@@ -92,6 +138,7 @@ function GameWraps.holdShared(key, owner)
     return true
 end
 
+-- `owner` lets go; the class gets the game's function back when nobody holds the wrap any more and it is still the wrapper there.
 function GameWraps.releaseShared(key, owner)
     local shared = sharedOf(key)
     shared.holders[owner] = nil
@@ -101,11 +148,31 @@ function GameWraps.releaseShared(key, owner)
     if wrap.class[shared.spec.fn] == wrap.wrapper then wrap.class[shared.spec.fn] = wrap.original end
 end
 
+-- The game's function under the shared wrap while it is on, or nil.
 function GameWraps.sharedOriginal(key)
     local wrap = sharedOf(key).wrap
     return wrap ~= nil and wrap.original or nil
 end
 
+-- ---- A Subsystem's set of wraps ------------------------------------------------------------------------------------------
+
+local Set = {}
+Set.__index = Set
+
+-- wraps[name] = { class, fn, original, wrapper } (or { ..., shared = key } for a held shared wrap); instance = { target, entries }
+function GameWraps.newSet(declaration)
+    return setmetatable({ declaration = declaration, gaveUpBecause = nil, wraps = {}, instance = nil }, Set)
+end
+
+-- The declared names, sorted, so that the first reason found does not depend on the table's order.
+local function sortedNames(functions)
+    local names = {}
+    for name in pairs(functions) do names[#names + 1] = name end
+    table.sort(names)
+    return names
+end
+
+-- Wraps one declared function on its class, once per class table. A function that is not the expected shape is left alone.
 function Set:wrap(name)
     local spec = self.declaration.functions[name]
     local class = classOf(spec)
@@ -113,11 +180,11 @@ function Set:wrap(name)
     local current = self.wraps[name]
     if current ~= nil and current.class == class then return end
     local fn = spec.fn or name
-    local original = spec.shared ~= nil and sharedOriginal(spec.shared, class) or class[fn]
+    local original = spec.shared ~= nil and sharedOriginalOn(spec.shared, class) or class[fn]
     if GameWraps.shapeProblem(original, spec.parameters, spec.describe) ~= nil then return end
     if spec.shared ~= nil then
         if GameWraps.holdShared(spec.shared, self.declaration.owner) then
-            self.wraps[name] = { class = class, fn = fn, original = sharedOriginal(spec.shared, class), shared = spec.shared }
+            self.wraps[name] = { class = class, fn = fn, original = sharedOriginalOn(spec.shared, class), shared = spec.shared }
         end
         return
     end
@@ -131,6 +198,7 @@ function Set:wrapAll()
     for _, name in ipairs(sortedNames(self.declaration.functions)) do self:wrap(name) end
 end
 
+-- Gives the target its own copies back, each unless something else has replaced the wrapper since.
 function Set:liftInstance()
     local current = self.instance
     self.instance = nil
@@ -142,6 +210,9 @@ function Set:liftInstance()
     end
 end
 
+-- Wraps the target's own copies of the named functions (each with its declared `make`), for as long as it is the target. A copy
+-- that is the class wrapper (the class wrap reaches it) or is not the expected shape is left alone; one the game replaced since
+-- is wrapped again.
 function Set:wrapInstance(target, names)
     if self.gaveUpBecause ~= nil then return end
     if self.instance ~= nil and self.instance.target ~= target then self:liftInstance() end
@@ -163,6 +234,7 @@ function Set:wrapInstance(target, names)
     end
 end
 
+-- Takes every wrap off again, each only when it is still the wrapper put there; lets go of the shared ones.
 function Set:liftAll()
     self:liftInstance()
     for _, wrap in pairs(self.wraps) do
@@ -175,6 +247,8 @@ function Set:liftAll()
     self.wraps = {}
 end
 
+-- The reason the first declared function (by name) is missing or reshaped, or nil. A wrapped function is checked as it was
+-- when wrapped (the game's, under the wrapper).
 function Set:findProblem()
     local functions = self.declaration.functions
     for _, name in ipairs(sortedNames(functions)) do
@@ -199,6 +273,7 @@ function Set:findProblem()
     return nil
 end
 
+-- The Subsystem cannot rely on the game's functions: every wrap lifted, ONE warning. A later give-up is ignored until reset.
 function Set:giveUp(problem)
     if self.gaveUpBecause ~= nil then return end
     self.gaveUpBecause = problem
@@ -245,4 +320,34 @@ end
 function Set:status(name)
     if self.gaveUpBecause ~= nil then return name .. " wrap: gave up (" .. self.gaveUpBecause .. ")" end
     return name .. " wrap: " .. (self.wraps[name] ~= nil and "installed" or "not installed")
+end
+
+-- ---- The shared look ray ----------------------------------------------------------------------------------------------------
+
+GameWraps.defineShared("lookRay", {
+    class = "Player", fn = "getLookRay",
+    make = function(original)
+        return function(player, ...)
+            if type(player) == "table" then
+                local x, y, z, dx, dy, dz = VRCompanion:getAimedLookRay(player)
+                if x ~= nil then return x, y, z, dx, dy, dz end
+            end
+            return original(player, ...)
+        end
+    end,
+})
+
+-- Hand Tools hold the look ray wrap through these (its WRAP_SPECS.getLookRay checks the shape itself); a set declares
+-- `shared = "lookRay"` instead.
+function VRCompanion:holdLookRayWrap(owner)
+    return GameWraps.holdShared("lookRay", owner)
+end
+
+function VRCompanion:releaseLookRayWrap(owner)
+    GameWraps.releaseShared("lookRay", owner)
+end
+
+-- The game's own Player:getLookRay while the wrap is on the class (the head's ray), or nil.
+function VRCompanion:getLookRayWrapOriginal()
+    return GameWraps.sharedOriginal("lookRay")
 end
