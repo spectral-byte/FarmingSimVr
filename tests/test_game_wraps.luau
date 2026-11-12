@@ -532,4 +532,51 @@ test("a give-up reason with a % in it is logged as it is", function()
     expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: 100% gone. The game is unchanged.", "the warning")
 end)
 
+-- ---- The order the functions are checked in -----------------------------------------------------------------------------
+
+test("a set declared with an order checks its functions in that order, so the first reason logged is the first declared", function()
+    _G.StubClass = {}
+    local set = GameWraps.newSet({
+        owner = "stub",
+        giveUp = "Stub disabled: %s. The game is unchanged.",
+        order = { "zeta", "alpha" },
+        functions = {
+            alpha = { class = "StubClass", parameters = 1, describe = "(object)" },
+            zeta = { class = "StubClass", parameters = 1, describe = "(object)" },
+        },
+    })
+    set:check()
+    expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: StubClass.zeta: it is missing. The game is unchanged.", "the warning")
+end)
+
+test("a set declared without an order checks its functions by name", function()
+    _G.StubClass = {}
+    local set = GameWraps.newSet({
+        owner = "stub",
+        giveUp = "Stub disabled: %s. The game is unchanged.",
+        functions = {
+            zeta = { class = "StubClass", parameters = 1, describe = "(object)" },
+            alpha = { class = "StubClass", parameters = 1, describe = "(object)" },
+        },
+    })
+    set:check()
+    expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: StubClass.alpha: it is missing. The game is unchanged.", "the warning")
+end)
+
+test("an order that leaves out a declared function, or names one that is not declared, raises when the set is declared", function()
+    for _, order in ipairs({ { "alpha" }, { "alpha", "zeta", "omega" } }) do
+        local ok, err = pcall(GameWraps.newSet, {
+            owner = "stub",
+            giveUp = "Stub disabled: %s.",
+            order = order,
+            functions = {
+                alpha = { class = "StubClass", parameters = 1, describe = "(object)" },
+                zeta = { class = "StubClass", parameters = 1, describe = "(object)" },
+            },
+        })
+        expectEqual(ok, false, "declaring the order " .. table.concat(order, ","))
+        expectEqual(string.find(tostring(err), "stub", 1, true) ~= nil, true, "the message names the Subsystem: " .. tostring(err))
+    end
+end)
+
 realPrint(string.format("GameWraps: %d passed, %d failed", passed, failed))

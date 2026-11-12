@@ -62,7 +62,7 @@ local BEHIND_MARGIN = 0.1
 
 -- The game's functions the Subsystem relies on, declared to the core's wrap helper (VRCompanionGameWraps.lua, which says what each field
 -- means): the trigger callback is wrapped (its `make` is attached with the zone below), the other two are CHECK-ONLY. Checked in the
--- order of their names: the callback, the "can be triggered" check, the toggle handler.
+-- declared order (the set's `order`): the callback, the "can be triggered" check, the toggle handler.
 local WRAP_SPECS = {
     callback = {
         class = "AnimatedObject", fn = "triggerCallback", parameters = 6,
@@ -84,6 +84,7 @@ local wraps = VRCompanion.GameWraps.newSet({
     owner = "animatedObjects",
     giveUp = "Animated Objects support disabled: %s. Motion Controllers cannot work doors and gates; the game's prompts are unchanged.",
     nameAsSubject = true,
+    order = { "callback", "canBeTriggered", "toggle" },
     functions = WRAP_SPECS,
 })
 

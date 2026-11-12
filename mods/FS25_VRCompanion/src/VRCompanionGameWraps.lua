@@ -13,6 +13,8 @@
 --       giveUp = "Object Grab disabled: %s. Picking up is unchanged.",   -- the warning, %s the reason ("[FS25_VR] [Warning] " before it);
 --                                              -- newSet raises when it is not a string with a %s
 --       nameAsSubject = false,                 -- reasons read "<Class.fn>: it is missing" (default) or "<Class.fn> is missing" (true)
+--       order = nil,                           -- { <name>, ... }: every declared name, in the order they are checked and wrapped,
+--                                              -- so the first reason logged is the first in it; nil: by name (see CHECK ORDER)
 --       functions = {                          -- keyed by a name the Subsystem uses for the function
 --           <name> = {
 --               class = "HandToolHands",       -- the engine global the function is on, or function() -> the table (another mod's environment)
@@ -29,7 +31,8 @@
 --
 --   wraps:wrapAll()                 wraps each function on its class (once per class table), none once the set gave up; a function
 --                                   that is not the expected shape is left alone (check reports it)
---   wraps:check() -> reason|nil     gives up (once) on the first declared function, by name, that is missing or reshaped
+--   wraps:check() -> reason|nil     gives up (once) on the first declared function (in `order`, or by name) that is missing or
+--                                   reshaped
 --   wraps:findProblem() -> reason|nil   the same reason without giving up (for a Subsystem that warns only later)
 --   wraps:giveUp(reason)            lifts every wrap and logs the warning, once: a later give-up is ignored
 --   wraps:problem() -> reason|nil   why the set gave up
@@ -48,6 +51,11 @@
 --                                   "... takes N parameters, not <describe>"; subject defaults to "it"
 --   GameWraps.defineShared(key, { class, fn, make })   a wrap more than one Subsystem holds: put on with the first hold, lifted
 --                                   when the last holder lets go. holdShared(key, owner), releaseShared(key, owner), sharedOriginal(key)
+--
+-- CHECK ORDER: when two declared functions are missing or reshaped, the warning names the first one checked. A Subsystem whose
+-- own checks went down a list before the helper (Animated Objects: the trigger callback, the "can be triggered" check, the
+-- toggle handler) declares that list as `order`, so it warns as before. Hand Tools and Object Grab went over their table with
+-- pairs, in no fixed order, so they declare none and are checked by name: a fixed order, where theirs had none.
 --
 -- THE SHARED LOOK RAY: Player:getLookRay is the shared wrap "lookRay", held by Hand Tools and Object Grab, so that one giving up
 -- leaves the other aiming. Its wrapper answers VRCompanion:getAimedLookRay (Core) and the game's own ray otherwise.
@@ -172,6 +180,21 @@ end
 -- wraps[name] = { class, fn, original, wrapper } (or { ..., shared = key } for a held shared wrap); instance = { target, entries }
 function GameWraps.newSet(declaration)
     checkGiveUpSentence(declaration.owner, declaration.giveUp)
+    local order = declaration.order
+    if order ~= nil then
+        local listed = {}
+        for _, name in ipairs(order) do
+            if declaration.functions[name] == nil then
+                error("Subsystem '" .. tostring(declaration.owner) .. "': the order names " .. tostring(name) .. ", which is not declared", 2)
+            end
+            listed[name] = true
+        end
+        for name in pairs(declaration.functions) do
+            if not listed[name] then
+                error("Subsystem '" .. tostring(declaration.owner) .. "': the order leaves out " .. tostring(name), 2)
+            end
+        end
+    end
     return setmetatable({ declaration = declaration, gaveUpBecause = nil, wraps = {}, instance = nil }, Set)
 end
 
@@ -181,6 +204,11 @@ local function sortedNames(functions)
     for name in pairs(functions) do names[#names + 1] = name end
     table.sort(names)
     return names
+end
+
+-- The declared names in the order they are checked and wrapped: the declared `order`, or by name.
+local function checkOrder(declaration)
+    return declaration.order or sortedNames(declaration.functions)
 end
 
 -- Wraps one declared function on its class, once per class table. A function that is not the expected shape is left alone.
@@ -206,7 +234,7 @@ end
 
 function Set:wrapAll()
     if self.gaveUpBecause ~= nil then return end
-    for _, name in ipairs(sortedNames(self.declaration.functions)) do self:wrap(name) end
+    for _, name in ipairs(checkOrder(self.declaration)) do self:wrap(name) end
 end
 
 -- Gives the target its own copies back, each unless something else has replaced the wrapper since.
@@ -262,11 +290,11 @@ function Set:liftAll()
     self.wraps = {}
 end
 
--- The reason the first declared function (by name) is missing or reshaped, or nil. A wrapped function is checked as it was
--- when wrapped (the game's, under the wrapper).
+-- The reason the first declared function (in the declared order, or by name) is missing or reshaped, or nil. A wrapped function
+-- is checked as it was when wrapped (the game's, under the wrapper).
 function Set:findProblem()
     local functions = self.declaration.functions
-    for _, name in ipairs(sortedNames(functions)) do
+    for _, name in ipairs(checkOrder(self.declaration)) do
         local spec = functions[name]
         local class = classOf(spec)
         if class == nil then
