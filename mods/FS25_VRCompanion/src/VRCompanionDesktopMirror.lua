@@ -93,6 +93,8 @@ end
 -- Confinement (each registers after this file), as the core sent them before the registry.
 VRCompanion:registerSubsystem("desktopMirror", {
     mapLoad = function(self) self:applyDesktopMirror() end,
+    saveSettings = function(self, xmlFile, xml) self:saveDesktopMirrorSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadDesktopMirrorSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrDesktopMirror", description = "Turn the Desktop Mirror Window on or off while the headset is in use (saved; on by default; untested with frame generation): vrDesktopMirror [on|off]", method = "consoleCommandSetDesktopMirror" },
     },

@@ -99,6 +99,9 @@ end
 -- Order: after FOV Overscan and before Mouse Confinement (file order), as the core sent them before the registry.
 VRCompanion:registerSubsystem("menuDistance", {
     mapLoad = function(self) self:applyMenuDistance() end,
+    -- The key and its values stay as they are: the Injector reads vrSettings.menuDistance from this file at launch (ADR-0036)
+    saveSettings = function(self, xmlFile, xml) self:saveMenuDistanceSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadMenuDistanceSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrMenuDistance", description = "How far in front of you menus, the main menu included, and 2D Floating Window Mode are shown, in metres (saved; 1.5 by default; further away they fill less of the view): vrMenuDistance [1.0-5.0]", method = "consoleCommandSetMenuDistance" },
     },

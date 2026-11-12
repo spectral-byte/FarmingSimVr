@@ -88,6 +88,8 @@ end
 -- Order: after Desktop Mirror, FOV Overscan and Menu Distance (file order), as the core sent them before the registry.
 VRCompanion:registerSubsystem("mouseConfinement", {
     mapLoad = function(self) self:applyMouseConfinement() end,
+    saveSettings = function(self, xmlFile, xml) self:saveMouseConfinementSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadMouseConfinementSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrMouseConfinement", description = "Keep the Desk Mouse on the game picture while the headset is in use (saved; on by default): vrMouseConfinement [on|off]", method = "consoleCommandSetMouseConfinement" },
     },
