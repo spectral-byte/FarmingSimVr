@@ -91,7 +91,7 @@ TEST_F(ThreadTraceTest, FirstSightingIsOnDiskWithoutAnExplicitFlush) {
     ThreadTrace trace("test-durable");
     trace.Record(100);
 
-    // Read without Logger::Flush: the trace flushes so a crash can't lose the line.
+    // Read without Logger::Flush: an Info line is on disk as soon as it is logged.
     EXPECT_NE(ReadAll(kTraceLogPath).find("test-durable on thread 100"), std::string::npos);
 }
 

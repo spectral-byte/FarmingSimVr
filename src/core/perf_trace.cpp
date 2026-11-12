@@ -129,13 +129,8 @@ PerfTrace& PerfTrace::Instance() {
     return instance;
 }
 
-// Info lines are buffered: each trace line is flushed, so the log can be read while the game runs.
-static void LogAndFlush(const std::string& line) {
-    LogInfo(line);
-    Logger::Instance().Flush();
-}
-
-PerfTrace::PerfTrace() : m_clock(&ReadQpcNanoseconds), m_sink(&LogAndFlush) {}
+// Info lines reach the file as they are logged, so the trace can be read while the game runs.
+PerfTrace::PerfTrace() : m_clock(&ReadQpcNanoseconds), m_sink(&LogInfo) {}
 
 void PerfTrace::SetClock(Clock clock) {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -144,7 +139,7 @@ void PerfTrace::SetClock(Clock clock) {
 
 void PerfTrace::SetSink(Sink sink) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_sink = sink ? std::move(sink) : Sink(&LogAndFlush);
+    m_sink = sink ? std::move(sink) : Sink(&LogInfo);
 }
 
 int64_t PerfTrace::Now() const {

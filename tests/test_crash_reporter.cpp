@@ -757,8 +757,7 @@ TEST_F(CrashReporterTest, ACrashBeforeAnyFactoryCallLeavesTheCrashLineWithTheRea
     EXPECT_FALSE(std::filesystem::exists(DumpPath()));
 }
 
-// Info lines are buffered and only warnings and errors are flushed, so the Injector's start-up lines, which the child
-// never flushed, reach the file only because the crash finishes the log.
+// A crash does not cost the lines logged before it: the Injector's start-up lines are in the file above the crash line.
 TEST_F(CrashReporterTest, LogLinesWrittenBeforeTheCrashAreInTheFile) {
     RunCrash();
 
