@@ -192,3 +192,50 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, ThePointerDiagnosticsSayTheSupportIs
     EXPECT_NE(EvalLua(L, "runCommand('vrPointerDiagnostics')").find("Manual Attach support: gave up (VehicleAttachmentHandler.PLAYER_MIN_DISTANCE_SQ is missing)"), std::string::npos)
         << "the line says why, as the warning does: " << EvalLua(L, "runCommand('vrPointerDiagnostics')");
 }
+
+// ---- The warning's exact words ---------------------------------------------------------------------------------------------------
+
+namespace {
+// How many of the game's log lines are exactly `line`.
+int ExactLogLines(const std::string& line) {
+    int count = 0;
+    for (const auto& logged : s_capturedLogs) {
+        if (logged == line) ++count;
+    }
+    return count;
+}
+
+std::string ManualAttachWarning(const std::string& problem) {
+    return "[FS25_VR] [Warning] Manual Attach support disabled: " + problem
+        + ". Motion Controllers cannot work Manual Attach's Coupling Points; Manual Attach is unchanged.";
+}
+}  // namespace
+
+TEST_F(VirtualGamepadManualAttachWrapsTest, TheWarningSaysHowAHelperOfTheClassIsReshaped) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach("rangeHelperReshaped"));
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(3);
+    EXPECT_EQ(ExactLogLines(ManualAttachWarning("VehicleAttachmentHandler.getAttachableInJointRange takes 1 parameters, not "
+                                                "(vehicleSystem, vehicle, attacherJoint, maxDistanceSq, maxAngle, isPlayerBased)")), 1);
+}
+
+TEST_F(VirtualGamepadManualAttachWrapsTest, TheWarningSaysTheCandidateUpdateIsMissing) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach("candidateUpdateMissing"));
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(3);
+    EXPECT_EQ(ExactLogLines(ManualAttachWarning("VehicleAttachmentHandler.updateCandidates is missing")), 1);
+}
+
+TEST_F(VirtualGamepadManualAttachWrapsTest, TheWarningSaysHowTheHandlersExecutePathIsReshaped) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach("executeReshaped"));
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(3);
+    EXPECT_EQ(ExactLogLines(ManualAttachWarning("the attachment handler.executeAttachment takes 1 parameters, not (handler, attachment)")), 1);
+}
+
+TEST_F(VirtualGamepadManualAttachWrapsTest, TheWarningSaysManualAttachIsNotLoaded) {
+    ASSERT_NO_FATAL_FAILURE(StartWithManualAttach("notLoaded"));
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(3);
+    EXPECT_EQ(ExactLogLines(ManualAttachWarning("the mod FS25_manualAttach is not loaded")), 1);
+}
