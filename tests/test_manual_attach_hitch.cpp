@@ -16,7 +16,7 @@ using namespace manual_attach_test;
 
 TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnAHitchAttachesTheLinedUpImplementAndASecondPullDetachesIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearHitch) << "the ray ends on the hitch";
     ASSERT_EQ(Performs(), 0);

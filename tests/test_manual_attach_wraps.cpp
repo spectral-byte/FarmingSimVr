@@ -20,7 +20,7 @@ protected:
     void ExpectTheSupportGivesUpWith(const char* variant, int frames = 3) {
         SCOPED_TRACE(variant);
         ASSERT_NO_FATAL_FAILURE(StartWithManualAttach(variant));
-        Lua(kTractorAndImplement);
+        Lua(StubChunk("manual_attach_tractor_and_implement"));
         NoteManualAttachFunctions();
         POINT_HAND(kRight, kHandX, kHandY, kHandZ);
         FRAMES(frames);
@@ -72,7 +72,7 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, AGameWithoutManualAttachAtAllWarnsOn
 
 TEST_F(VirtualGamepadManualAttachWrapsTest, ManualAttachsObjectsInTheGlobalTableAreFoundWhenTheModEnvironmentHasNone) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach("globalFallback"));
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearHitch);
     PullTrigger(kRight);
@@ -99,7 +99,7 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, NoWarningWhileNoMotionControllerIsTr
 // waited for, for a while, before the support gives up with its one warning. (A missing function or a mod that is not loaded is final at once.)
 TEST_F(VirtualGamepadManualAttachWrapsTest, ManualAttachsInstanceAppearingAfterTheFirstTrackedUpdateIsStillFound) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach("instanceMissing"));
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     FRAMES(30);
     EXPECT_EQ(Warnings(), 0) << "half a second is not long enough to give up";
@@ -116,7 +116,7 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, ManualAttachsInstanceAppearingAfterT
 
 TEST_F(VirtualGamepadManualAttachWrapsTest, ManualAttachsHandlerAppearingAfterTheFirstTrackedUpdateIsStillFound) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach("handlerMissing"));
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     FRAMES(30);
     EXPECT_EQ(Warnings(), 0);
@@ -131,7 +131,7 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, ManualAttachsHandlerAppearingAfterTh
 
 TEST_F(VirtualGamepadManualAttachWrapsTest, AnErrorWhileLookingForHitchesIsLoggedOnceNotEveryFrameAndSelectsNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     // Manual Attach's own update does not use its class's isVehicleValid here (the stand-in has a local), the module does.
     Lua("StubManualAttach.Handler.isVehicleValid = function(vehicle) error('boom') end");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
@@ -152,7 +152,7 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, AnErrorWhileLookingForHitchesIsLogge
 
 TEST_F(VirtualGamepadManualAttachWrapsTest, UnloadingTheMapLeavesManualAttachExactlyAsFoundAndTheNextMapStartsAgain) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     NoteManualAttachFunctions();
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     PullTrigger(kRight);
@@ -169,7 +169,7 @@ TEST_F(VirtualGamepadManualAttachWrapsTest, UnloadingTheMapLeavesManualAttachExa
 
 TEST_F(VirtualGamepadManualAttachWrapsTest, ThePointerDiagnosticsCarryOneLineForManualAttach) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_NE(EvalLua(L, "runCommand('vrPointerDiagnostics')").find("Manual Attach support: installed | hitches in reach: 2 | selected: hitch 1 of tractor"),
               std::string::npos) << EvalLua(L, "runCommand('vrPointerDiagnostics')");

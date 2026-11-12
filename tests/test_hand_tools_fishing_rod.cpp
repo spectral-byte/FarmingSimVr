@@ -69,7 +69,7 @@ protected:
     // Virtual Gamepad on and the game clock set (the in-use timeout is on it).
     void Start(const char* variant = "ok") {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
-        stubs = std::string(kXmlStubs) + FishingRodStubs(variant);
+        stubs = StubChunk("xml_settings") + FishingRodStubs(variant);
         StartOptions options;
         options.extraStubs = stubs.c_str();
         ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge, options));

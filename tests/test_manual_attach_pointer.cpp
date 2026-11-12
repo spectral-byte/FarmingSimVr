@@ -28,7 +28,7 @@ float StrongestTo(const FakeTrackedHeadset& headset, uint32_t hand) {
 
 TEST_F(VirtualGamepadManualAttachTest, WhileTheRayIsOnAHitchThePointerHandsTriggerReadsReleasedOnThePadAndTheOtherHandsStillReachesIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
 
     headset.SetHandInputs(kLeft, Trigger(0.5f));
@@ -50,7 +50,7 @@ TEST_F(VirtualGamepadManualAttachTest, WhileTheRayIsOnAHitchThePointerHandsTrigg
 
 TEST_F(VirtualGamepadManualAttachTest, ATriggerHeldWhenTheRayLandsOnAHitchKeepsItsBindingAndWorksNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, 1.0f, kHandZ);  // aimed over the hitch
     PullTrigger(kRight);                        // held for throttle, say
     ASSERT_EQ(Pad().bRightTrigger, 255);
@@ -70,7 +70,7 @@ TEST_F(VirtualGamepadManualAttachTest, ATriggerHeldWhenTheRayLandsOnAHitchKeepsI
 
 TEST_F(VirtualGamepadManualAttachTest, ATriggerThatWorkedAHitchStaysOffThePadUntilLetGoEvenIfTheRayLeavesTheHitch) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     PullTrigger(kRight);
     ASSERT_EQ(Performs("joint"), 1);
@@ -87,7 +87,7 @@ TEST_F(VirtualGamepadManualAttachTest, ATriggerThatWorkedAHitchStaysOffThePadUnt
 
 TEST_F(VirtualGamepadManualAttachTest, WhileTheDeskMouseHasControlTheRayIsNotDrawnOnAHitchAndNothingIsWorked) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
 
@@ -114,7 +114,7 @@ TEST_F(VirtualGamepadManualAttachTest, WhileTheDeskMouseHasControlTheRayIsNotDra
 
 TEST_F(VirtualGamepadManualAttachTest, InAMenuNothingIsSelectedAndNothingIsWorked) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
 
@@ -134,7 +134,7 @@ TEST_F(VirtualGamepadManualAttachTest, InAMenuNothingIsSelectedAndNothingIsWorke
 
 TEST_F(VirtualGamepadManualAttachTest, WhileAStereoDialogShowsTheRayIsOnNoHitchAndThePullIsForTheDialog) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
 
@@ -162,7 +162,7 @@ TEST_F(VirtualGamepadManualAttachTest, WhileAStereoDialogShowsTheRayIsOnNoHitchA
 
 TEST_F(VirtualGamepadManualAttachTest, In2DFloatingWindowModeNothingIsSelectedAndNothingIsWorked) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
 
@@ -181,7 +181,7 @@ TEST_F(VirtualGamepadManualAttachTest, In2DFloatingWindowModeNothingIsSelectedAn
 
 TEST_F(VirtualGamepadManualAttachTest, WithMotionControllersOffNothingIsSelectedOrWorkedAndOnAgainTheHitchWorks) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
 
@@ -202,7 +202,7 @@ TEST_F(VirtualGamepadManualAttachTest, WithMotionControllersOffNothingIsSelected
 
 TEST_F(VirtualGamepadManualAttachTest, InTheCabNoHitchIsOfferedAndManualAttachsOwnCandidatesAreLeftAlone) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
 
@@ -218,7 +218,7 @@ TEST_F(VirtualGamepadManualAttachTest, InTheCabNoHitchIsOfferedAndManualAttachsO
 
 TEST_F(VirtualGamepadManualAttachTest, TheToolHandHoldingAHandToolNeverWorksAHitchAndNoHitchIsOfferedWhileItIsHeld) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     ASSERT_NO_FATAL_FAILURE(HoldLance(L));
     PICK_UP(kRight, 0.25f, -0.10f, -0.30f);
     FRAMES(1);
@@ -247,7 +247,7 @@ TEST_F(VirtualGamepadManualAttachTest, TheToolHandHoldingAHandToolNeverWorksAHit
 
 TEST_F(VirtualGamepadManualAttachTest, ACarriedHeldObjectMeansNoHitchIsOfferedToEitherHand) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua("_G.bale = StubHandTool.looseObject(0.4, -0.2, 1.5, 0.05, { name = 'bale' })");
     POINT_HAND(kLeft, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
@@ -265,7 +265,7 @@ TEST_F(VirtualGamepadManualAttachTest, ACarriedHeldObjectMeansNoHitchIsOfferedTo
 
 TEST_F(VirtualGamepadManualAttachTest, EitherHandWorksAHitchAsThePointerHand) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     POINT_HAND(kLeft, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
     PullTrigger(kLeft);
@@ -288,7 +288,7 @@ TEST_F(VirtualGamepadManualAttachTest, EitherHandWorksAHitchAsThePointerHand) {
 
 TEST_F(VirtualGamepadManualAttachTest, AClickPointWithinThePointerConeWinsOverAHitch) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); _G.point = StubIC.addPoint('lever', -0.4, -0.2, 1.0)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
@@ -309,7 +309,7 @@ TEST_F(VirtualGamepadManualAttachTest, AClickPointWithinThePointerConeWinsOverAH
 
 TEST_F(VirtualGamepadManualAttachTest, ClickPointsOutsideTheConeDoNotHideAHitchFromTheRay) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('farOff', 3.0, 1.5, 1.0)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
@@ -322,7 +322,7 @@ TEST_F(VirtualGamepadManualAttachTest, ClickPointsOutsideTheConeDoNotHideAHitchF
 
 TEST_F(VirtualGamepadManualAttachTest, AHitchTheRayIsOnWinsOverAnAnimatedObjectInFrontOfIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua("_G.door = StubAnimatedObject.door({ name = 'door', x = -0.4, y = -0.2, z = 1.2 }); StubAnimatedObject.enterZone(door)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearHitch) << "the hitch, not the door the ray meets first";
@@ -339,7 +339,7 @@ TEST_F(VirtualGamepadManualAttachTest, AHitchTheRayIsOnWinsOverAnAnimatedObjectI
 
 TEST_F(VirtualGamepadManualAttachTest, AHitchTheRayIsOnWinsOverAnObjectObjectGrabCouldPickUp) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua("_G.bale = StubHandTool.looseObject(-0.4, -0.2, 1.3, 0.05, { name = 'bale' })");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearHitch) << "the hitch, not the bale the ray meets first";
@@ -354,7 +354,7 @@ TEST_F(VirtualGamepadManualAttachTest, AHitchTheRayIsOnWinsOverAnObjectObjectGra
 
 TEST_F(VirtualGamepadManualAttachTest, WithTheRayOnNoHitchManualAttachKeepsItsOwnNearestCandidate) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     POINT_HAND(kRight, kHandX, 1.0f, kHandZ);  // over both hitches
     PullTrigger(kRight);
     FRAMES(2);
@@ -370,7 +370,7 @@ TEST_F(VirtualGamepadManualAttachTest, WithTheRayOnNoHitchManualAttachKeepsItsOw
 
 TEST_F(VirtualGamepadManualAttachTest, PointingAndPullingLeavesManualAttachItselfAsFoundBesidesTheCandidateItWorks) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     NoteManualAttachFunctions();
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     PullTrigger(kRight);
@@ -384,7 +384,7 @@ TEST_F(VirtualGamepadManualAttachTest, PointingAndPullingLeavesManualAttachItsel
 
 TEST_F(VirtualGamepadManualAttachTest, OneLightPulseOnThePointerHandAsTheRayLandsOnAHitchAndAFirmerOneForThePullThatWorkedIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     POINT_HAND(kRight, kHandX + 1.6f, kHandY, kHandZ);  // beside the hitches
     ASSERT_EQ(PulsesTo(kRight), 0) << "nothing under the ray: nothing felt";
 
@@ -414,7 +414,7 @@ TEST_F(VirtualGamepadManualAttachTest, OneLightPulseOnThePointerHandAsTheRayLand
 
 TEST_F(VirtualGamepadManualAttachTest, LandingOnAnotherHitchPulsesAgainAndARefusedPullStillGivesTheClickPulse) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(PulsesTo(kRight), 1);
     POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);  // straight onto the other hitch

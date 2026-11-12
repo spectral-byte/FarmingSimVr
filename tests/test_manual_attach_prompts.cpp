@@ -26,7 +26,7 @@ protected:
 
 TEST_F(VirtualGamepadManualAttachPromptsTest, WithTwoHitchesInReachThePromptsAndContextBoxDescribeTheHitchTheRayIsOnNotTheNearestOne) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     Lua("StubManualAttach.attach(tractor, rearPlow, 1, 1)");  // detach at the rear hitch, attach at the front one
     FRAMES(1);
     ASSERT_EQ(Prompt("joint"), "Attach") << "with the ray on neither, Manual Attach's own nearest candidate, the front hitch";
@@ -41,7 +41,7 @@ TEST_F(VirtualGamepadManualAttachPromptsTest, WithTwoHitchesInReachThePromptsAnd
 
 TEST_F(VirtualGamepadManualAttachPromptsTest, MovingTheRayFromOneHitchToAnotherChangesThePromptsToTheNewHitchsAndBackToo) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     Lua("StubManualAttach.attach(tractor, rearPlow, 1, 1)");
 
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
@@ -63,7 +63,7 @@ TEST_F(VirtualGamepadManualAttachPromptsTest, MovingTheRayFromOneHitchToAnotherC
 
 TEST_F(VirtualGamepadManualAttachPromptsTest, ManualAttachsOwnKeysActOnTheImplementOfTheHitchTheRayIsOn) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
     FRAMES(1);
@@ -84,7 +84,7 @@ TEST_F(VirtualGamepadManualAttachPromptsTest, ManualAttachsOwnKeysActOnTheImplem
 
 TEST_F(VirtualGamepadManualAttachPromptsTest, WithTheRayOnNoHitchManualAttachsPromptsAndKeysAreItsOwnNearestCandidates) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     Lua("StubManualAttach.attach(tractor, rearPlow, 1, 1)");
     POINT_HAND(kRight, kHandX, 1.0f, kHandZ);  // over both hitches
     ASSERT_EQ(DrawnEnd(), "none");
@@ -97,7 +97,7 @@ TEST_F(VirtualGamepadManualAttachPromptsTest, WithTheRayOnNoHitchManualAttachsPr
 
 TEST_F(VirtualGamepadManualAttachPromptsTest, WhileTheDeskMouseHasControlOrAMenuIsOpenThePromptsAreManualAttachsOwnNearestCandidatesAgain) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     FRAMES(1);
     ASSERT_EQ(ContextBox(), "rearPlow");
@@ -116,7 +116,7 @@ TEST_F(VirtualGamepadManualAttachPromptsTest, WhileTheDeskMouseHasControlOrAMenu
 
 TEST_F(VirtualGamepadManualAttachPromptsTest, WithMotionControllersOffThePromptsAreManualAttachsOwnNearestCandidates) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     FRAMES(1);
     ASSERT_EQ(ContextBox(), "rearPlow");
@@ -128,7 +128,7 @@ TEST_F(VirtualGamepadManualAttachPromptsTest, WithMotionControllersOffThePrompts
 
 TEST_F(VirtualGamepadManualAttachPromptsTest, UnloadingTheMapHandsTheCandidateUpdateBackAsFound) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     FRAMES(1);
     ASSERT_FALSE(CandidateUpdateIsAsFound()) << "while the support is in use the candidate update is wrapped";

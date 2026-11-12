@@ -36,7 +36,7 @@ void StartMod(lua_State* L, fs25vr::VRBridge& bridge, bool interactiveControlOn 
     ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
     ASSERT_EQ(RunLuauChunk(L, StubChunk("steering_vehicle"), "=steeringVehicle"), 0);
     ASSERT_EQ(RunLuauChunk(L, StubChunk("interactive_control"), "=interactiveControl"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("console"), "=consoleStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, "StubIC.install('ok'); StubSteer.install()", "=install"), 0);
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         local cab = StubScene.cab({})

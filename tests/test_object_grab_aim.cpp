@@ -125,7 +125,8 @@ TEST_F(CompanionModTest, WithObjectGrabOffTheTargeterCastsTheHeadsRayAndItIsSave
     headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     StartOptions options;
-    options.extraStubs = kXmlStubs;
+    const std::string xmlStubs = StubChunk("xml_settings");
+    options.extraStubs = xmlStubs.c_str();
     ASSERT_NO_FATAL_FAILURE(StartObjectGrabMod(L, bridge, options));
     SetGameTime(10000);
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);

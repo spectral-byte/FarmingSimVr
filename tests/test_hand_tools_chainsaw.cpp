@@ -121,14 +121,14 @@ class VirtualGamepadHandToolsChainsawTest : public CompanionModTest {
 protected:
     FakeTrackedHeadset headset;
     fs25vr::VRBridge bridge{ headset.manager, nullptr };
-    bool settingsFile = false;  // the game's XML settings API is there (kXmlStubs), so what is saved can be read back
+    bool settingsFile = false;  // the game's XML settings API is there (xml_settings.luau), so what is saved can be read back
 
     // The mod started in a game whose chainsaw is as `variant` says, the player on foot, the Virtual Gamepad on and the game
     // clock set (the in-use timeout is on it).
     void Start(const char* variant = "ok") {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         StartOptions options;
-        const std::string stubs = (settingsFile ? std::string(kXmlStubs) : std::string()) + ChainsawStubs(variant);
+        const std::string stubs = (settingsFile ? StubChunk("xml_settings") : std::string()) + ChainsawStubs(variant);
         options.extraStubs = stubs.c_str();
         ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge, options));
         ASSERT_EQ(RunLuauChunk(L, kChainsawHelpers, "=chainsawHelpers"), 0);
@@ -1034,8 +1034,8 @@ protected:
         lua_setglobal(L, "print");
         ASSERT_TRUE(laterBridge->Inject(L));
         ASSERT_EQ(LoadCompanionModChecked(L), 0);
-        ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
-        ASSERT_EQ(RunLuauChunk(L, kXmlStubs, "=xmlStubs"), 0);
+        ASSERT_EQ(RunLuauChunk(L, StubChunk("console"), "=consoleStubs"), 0);
+        ASSERT_EQ(RunLuauChunk(L, StubChunk("xml_settings"), "=xmlStubs"), 0);
         const std::string load = std::string("savedXml['vrSettings.chainsawReach'] = ") + saved + "; VRCompanion:loadMap('x')";
         ASSERT_EQ(RunLuauChunk(L, load.c_str(), "=loadMapAgain"), 0);
     }

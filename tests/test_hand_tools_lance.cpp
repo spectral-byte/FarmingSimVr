@@ -437,7 +437,8 @@ TEST_F(CompanionModTest, VrHandToolsWithoutAnArgumentSaysWhetherItIsOnAndAWrongA
 
 TEST_F(CompanionModTest, VrHandToolsIsSavedAcrossSessions) {
     StartOptions saving;
-    saving.extraStubs = kXmlStubs;
+    const std::string xmlStubs = StubChunk("xml_settings");
+    saving.extraStubs = xmlStubs.c_str();
     std::string saved;
     {
         FakeTrackedHeadset headset;
@@ -459,8 +460,8 @@ TEST_F(CompanionModTest, VrHandToolsIsSavedAcrossSessions) {
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    ASSERT_EQ(RunLuauChunk(L, hand_tools_test::kConsoleStubs, "=consoleStubs"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kXmlStubs, "=xmlStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("console"), "=consoleStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("xml_settings"), "=xmlStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, "savedXml['vrSettings.handTools'] = false; VRCompanion:loadMap('x')", "=loadMapAgain"), 0);
     EXPECT_EQ(EvalLua(L, "VRCompanion.handToolsEnabled"), "false");
 
