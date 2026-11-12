@@ -30,7 +30,7 @@ using namespace animated_object_test;
 
 // Manual Attach (manual_attach.luau and manual_attach_vehicles.luau), for StartOptions::extraStubs. variant: see the top of manual_attach.luau.
 inline std::string ManualAttachStubs(const char* variant = "ok") {
-    return StubChunk("manual_attach") + "\n" + StubChunk("manual_attach_vehicles") + "\nStubManualAttach.install('" + variant + "')\n";
+    return StubChunk("manual_attach") + "\n" + StubInstalled("manual_attach_vehicles", std::string("StubManualAttach.install('") + variant + "')");
 }
 
 // A hand pointing at tracking (0.4, -0.2, -0.3) has its fingertip at world (-0.4, -0.2, 0.3) and the Pointer Ray runs along +Z (the same
@@ -54,7 +54,7 @@ class VirtualGamepadManualAttachTest : public VirtualGamepadAnimatedObjectsTest 
 protected:
     // The game with Manual Attach ("ok" or a variant).
     void StartWithManualAttach(const char* variant = "ok") {
-        stubs_ = StubChunk("animated_objects") + "\nStubAnimatedObject.install('ok')\n" + ManualAttachStubs(variant);
+        stubs_ = AnimatedObjectStubs() + ManualAttachStubs(variant);
         StartOptions options;
         options.extraStubs = stubs_.c_str();
         ASSERT_NO_FATAL_FAILURE(Start(options));
@@ -75,7 +75,7 @@ protected:
 
     // The game without Manual Attach at all.
     void StartWithoutManualAttach() {
-        stubs_ = StubChunk("animated_objects") + "\nStubAnimatedObject.install('ok')\n";
+        stubs_ = AnimatedObjectStubs();
         StartOptions options;
         options.extraStubs = stubs_.c_str();
         ASSERT_NO_FATAL_FAILURE(Start(options));

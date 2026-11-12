@@ -22,7 +22,7 @@ using namespace object_grab_test;
 
 // The game's Animated Objects (animated_objects.luau), for StartOptions::extraStubs. variant: see the top of that file.
 inline std::string AnimatedObjectStubs(const char* variant = "ok") {
-    return StubChunk("animated_objects") + "\nStubAnimatedObject.install('" + variant + "')\n";
+    return StubInstalled("animated_objects", std::string("StubAnimatedObject.install('") + variant + "')");
 }
 
 // A hand pointing at tracking (0.4, -0.2, -0.3) has its fingertip at world (-0.4, -0.2, 0.3) and the Pointer Ray runs along +Z (the same
