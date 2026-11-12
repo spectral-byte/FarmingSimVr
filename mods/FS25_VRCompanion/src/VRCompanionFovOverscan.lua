@@ -120,6 +120,8 @@ end
 -- and Mouse Confinement, which load after it: file order, as the core sent them before the registry.
 VRCompanion:registerSubsystem("fovOverscan", {
     mapLoad = function(self) self:applyFovOverscan() end,
+    saveSettings = function(self, xmlFile, xml) self:saveFovOverscanSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadFovOverscanSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrFovOverscan", description = "Widen the field of view the eyes are rendered with, in percent, to hide black edges during head movement (saved; 0 by default; a higher value softens the picture): vrFovOverscan [0-20]", method = "consoleCommandSetFovOverscan" },
     },

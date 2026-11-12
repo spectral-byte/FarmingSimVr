@@ -2715,6 +2715,8 @@ VRCompanion:registerSubsystem("handTools", {
         checkWraps()
     end,
     mapUnload = function(self) self:resetHandTools() end,
+    saveSettings = function(self, xmlFile, xml) self:saveHandToolsSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadHandToolsSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrHandToolOffset", description = "Move or turn a Hand Tool in the Tool Hand while you look at it, this session only: vrHandToolOffset <lance|flashlight|chainsaw|spraycan|horsebrush|fishingrod> <nudge dx dy dz | turn rx ry rz | reset>", method = "consoleCommandHandToolOffset" },
         { name = "vrHandTools", description = "Turn Hand Tools, the flashlight, chainsaw, pressure washer lance, spray can, horse brush and fishing rod held in a Motion Controller, on or off (saved): vrHandTools [on|off]", method = "consoleCommandSetHandTools" },

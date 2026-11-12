@@ -24,7 +24,7 @@
 -- (getCabSeatOffset): the offset follows the vehicle's heading. It is not rotated by look yaw or a Snap Turn. No rotation component.
 --
 -- The Seat Set Action (VR_SET_SEAT, onSeatSetAction): in an in-cab camera, takes the head's lean as the new rest position (ticket #170).
--- SAVING: saveConfiguration -> saveSeatOffsetSettings(...), loadConfiguration -> loadSeatOffsetSettings(...); a vrSeatOffset change and a Seat Set press save the settings at once.
+-- SAVING: the saveSettings / loadSettings hooks (saveSeatOffsetSettings / loadSeatOffsetSettings); a vrSeatOffset change and a Seat Set press save the settings at once.
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -251,7 +251,7 @@ end
 -- SETTINGS: vrSettings.seatOffsets.seatOffset(i) with #vehicle, #camera, #forward, #up and #right, one per non-zero Seat Offset.
 local SEAT_OFFSETS_KEY = "vrSettings.seatOffsets.seatOffset"
 
--- Called from saveConfiguration with the open settings file and the engine's setters (any may be nil).
+-- The saveSettings hook: the open settings file and the engine's setters (any may be nil).
 function VRCompanion:saveSeatOffsetSettings(xmlFile, setters)
     local setString, setInt, setFloat = setters.setString, setters.setInt, setters.setFloat
     if type(setString) ~= "function" or type(setInt) ~= "function" or type(setFloat) ~= "function" then return end
@@ -278,7 +278,7 @@ function VRCompanion:saveSeatOffsetSettings(xmlFile, setters)
     end
 end
 
--- Called from loadConfiguration with the open settings file and the engine's getters (any may be nil). Replaces the Seat Offsets
+-- The loadSettings hook: the open settings file and the engine's getters (any may be nil). Replaces the Seat Offsets
 -- with the saved ones, each clamped; an entry that lacks a part, or has no camera index, is skipped.
 function VRCompanion:loadSeatOffsetSettings(xmlFile, getters)
     local has, getString, getInt, getFloat = getters.has, getters.getString, getters.getInt, getters.getFloat
@@ -298,10 +298,12 @@ function VRCompanion:loadSeatOffsetSettings(xmlFile, getters)
     end
 end
 
--- Map load and unload: only the console command, which the registry adds and removes. The offsets are loaded and saved with the
--- rest of the settings (saveConfiguration / loadConfiguration), and the cab camera path reads them every update.
+-- Map load and unload: only the console command, which the registry adds and removes. The offsets are saved and loaded by the
+-- settings hooks (saveConfiguration / loadConfiguration run them), and the cab camera path reads them every update.
 -- Order: none matters against the other subsystems.
 VRCompanion:registerSubsystem("seatOffset", {
+    saveSettings = function(self, xmlFile, xml) self:saveSeatOffsetSettings(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadSeatOffsetSettings(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrSeatOffset", description = "Move the head's rest position in the cab you are in, in metres from the vehicle's own eye point (saved): vrSeatOffset [<forward> <up> <right> | reset]", method = "consoleCommandSeatOffset" },
     },

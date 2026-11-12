@@ -78,8 +78,8 @@ function VRCompanion.onOffText(enabled)
 end
 
 -- ---- Who aims the look ray ----------------------------------------------------------------------------------
--- The game's Player:getLookRay is wrapped once, by this file, for as long as a subsystem that aims holds the wrap (Hand Tools and
--- Object Grab each hold it, so that one giving up leaves the other aiming: see holdLookRayWrap). The wrap asks each subsystem
+-- The game's Player:getLookRay is wrapped once, as the shared wrap "lookRay" of VRCompanionGameWraps.lua, for as long as a
+-- subsystem that aims holds the wrap (Hand Tools and Object Grab each hold it, so that one giving up leaves the other aiming). The wrap asks each subsystem
 -- that can aim, in this fixed order, and answers the first ray it gets: the game's own (the head's) when none does. A subsystem
 -- registers by name with an aimer, function(player) -> x, y, z, dirX, dirY, dirZ in the world, or nil when it is not aiming for
 -- that player (Hand Tools: a supported Hand Tool is in a tracked Tool Hand; Object Grab: the hands are empty and the Pointer Hand
@@ -119,53 +119,6 @@ function VRCompanion:getAimedLookRay(player)
     return nil
 end
 
--- ---- The one wrap of Player:getLookRay ------------------------------------------------------------------------------
--- The wrap is put on the class once and stays while at least one subsystem holds it (holdLookRayWrap), whoever asked for it
--- first. Each subsystem checks the shape of Player.getLookRay itself before holding it, and releases its hold when it gives up
--- (or at map unload), so that a subsystem giving up lifts the wrap only when it was the last one that needed it. The wrapper is
--- lifted only while it is still the class function, so another mod's later wrap is never undone.
-local lookRayWrap = nil   -- { class = <Player>, original = <the game's function>, wrapper = <what the wrap put there> }
-local lookRayHolders = {}
-
-local function installLookRayWrap()
-    local class = VRCompanion.getEngineGlobal("Player")
-    if type(class) ~= "table" then return false end
-    if lookRayWrap ~= nil and lookRayWrap.class == class then return true end
-    local original = class.getLookRay
-    if type(original) ~= "function" then return false end
-    local wrapper = function(player, ...)
-        if type(player) == "table" then
-            local x, y, z, dx, dy, dz = VRCompanion:getAimedLookRay(player)
-            if x ~= nil then return x, y, z, dx, dy, dz end
-        end
-        return original(player, ...)
-    end
-    lookRayWrap = { class = class, original = original, wrapper = wrapper }
-    class.getLookRay = wrapper
-    return true
-end
-
--- Holds the wrap for the subsystem `owner` (a name), putting it on the class when it is not there. Returns whether it is there.
-function VRCompanion:holdLookRayWrap(owner)
-    if not installLookRayWrap() then return false end
-    lookRayHolders[owner] = true
-    return true
-end
-
--- The subsystem lets go of the wrap; the class gets the game's function back when nobody holds it any more.
-function VRCompanion:releaseLookRayWrap(owner)
-    lookRayHolders[owner] = nil
-    if next(lookRayHolders) ~= nil or lookRayWrap == nil then return end
-    local wrap = lookRayWrap
-    lookRayWrap = nil
-    if wrap.class.getLookRay == wrap.wrapper then wrap.class.getLookRay = wrap.original end
-end
-
--- The game's own Player:getLookRay while the wrap is on the class (the head's ray), or nil.
-function VRCompanion:getLookRayWrapOriginal()
-    return lookRayWrap ~= nil and lookRayWrap.original or nil
-end
-
 -- ---- The subsystem registry ---------------------------------------------------------------------------------------
 -- A subsystem (a feature in its own file: Desktop Mirror, Hand Tools, ...) registers itself by name when its file loads, with the
 -- hooks it needs, and the core runs them. Adding a subsystem is its file plus a line in modDesc.xml, not an edit of the core's lists.
@@ -175,8 +128,16 @@ end
 --       mapUnload       = function(self) end,        -- map unload: undo what mapLoad did
 --       update          = function(self, dt) end,    -- every update
 --       updateEarly     = function(self, dt) end,    -- every update, before the core polls the GUI (see below); rarely needed
+--       saveSettings    = function(self, xmlFile, xml) end,   -- saveConfiguration: write its settings with xml.setBool / setFloat /
+--                                                             -- setString / setInt (the engine's setters, any may be nil)
+--       loadSettings    = function(self, xmlFile, xml) end,   -- loadConfiguration: read them back with xml.has / getBool / getFloat
+--                                                             -- / getString / getInt; a key that is missing keeps the current value
 --       consoleCommands = { { name = "vrX", description = "...", method = "consoleCommandX" }, ... },
 --   })
+--
+-- A subsystem owns its settings' keys in settings.xml; the settings code (VRCompanionConfig.lua) opens the file, writes and reads
+-- the core's own settings (HUD Safe Area, HUD Groups, HUD state, Stereo Presentation Mode, Snap Turn angle, the DLSS near planes)
+-- and runs the hooks, but names no subsystem. A load hook only stores the value; sending it to VRBridge is its mapLoad's job.
 --
 -- Every field but the name is optional; `self` is the Companion Mod the run point was called on (hooks are called as methods, with
 -- plain functions, so a hook that calls `self:foo()` finds `foo` when it runs). Registering a name again replaces its hooks and
@@ -197,13 +158,19 @@ end
 --                                        the last step before it and are the update hook there now)
 --   deleteMap runSubsystemMapUnload      first of the subsystem resets: removes a subsystem's console commands, then runs its
 --                                        mapUnload, subsystems in reverse order, before the resets that have not moved over yet
+--   saveConfiguration runSubsystemSaveSettings   after the core's HUD settings, before the Stereo Presentation Mode, the HUD
+--                                        state, the Snap Turn angle and the DLSS near planes, in registration order
+--   loadConfiguration runSubsystemLoadSettings   at the same place in the load (after the HUD Groups, before the Snap Turn angle,
+--                                        the DLSS near planes, the HUD state and the Stereo Presentation Mode), in registration
+--                                        order. Every load hook today stores only its own fields, so none needs another's to
+--                                        have run first; one that does says so in a comment at its registration
 -- Three steps of the update stay direct calls of the core, at the places they always had, because a hook cannot run there: the
 -- Perf Trace refresh (the very top: the Injector may have ended the trace), the menu's background camera (right after the GUI
 -- poll) and the Input subsystem's check of the VR action events (between the HUD convergence and the vehicle transition: the
 -- transition registers them again, forced, so after it the events would have been registered once instead of twice).
 --
 -- A hook that raises is caught: it is logged once per subsystem and hook, as
---   [FS25_VR] [Error] Subsystem '<name>' <mapLoad|updateEarly|update|mapUnload> hook raised: <error>
+--   [FS25_VR] [Error] Subsystem '<name>' <mapLoad|updateEarly|update|mapUnload|saveSettings|loadSettings> hook raised: <error>
 -- and the other hooks still run. This is by design (spec #244: a fault in one subsystem does not cost the player the others), so a
 -- raise in a hook, the Motion Controllers' update included, no longer reaches the caller of update or of loadMap; the log line is
 -- how it is found, and the test harnesses fail a test in which that line was logged unless the test expects it. The log-once set
@@ -251,7 +218,7 @@ function VRCompanion:registerSubsystem(name, hooks)
         error("registerSubsystem: the subsystem needs a name", 2)
     end
     hooks = hooks or {}
-    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly" }) do
+    for _, hookName in ipairs({ "mapLoad", "mapUnload", "update", "updateEarly", "saveSettings", "loadSettings" }) do
         if hooks[hookName] ~= nil and type(hooks[hookName]) ~= "function" then
             error(string.format("registerSubsystem: the %s hook of '%s' is not a function", hookName, name), 2)
         end
@@ -279,16 +246,30 @@ local function logHookRaised(name, hookName, err)
     end
 end
 
-local function runSubsystemHook(self, subsystem, hookName)
+local function runSubsystemHook(self, subsystem, hookName, ...)
     local hook = subsystem.hooks[hookName]
     if hook == nil then return end
-    local ok, err = pcall(hook, self)
+    local ok, err = pcall(hook, self, ...)
     if not ok then logHookRaised(subsystem.name, hookName, err) end
 end
 
 function VRCompanion:runSubsystemMapLoad()
     for _, subsystem in ipairs(subsystems) do
         runSubsystemHook(self, subsystem, "mapLoad")
+    end
+end
+
+-- The settings run points (saveConfiguration and loadConfiguration in VRCompanionConfig.lua call them with the open settings file
+-- and the engine's XML setters or getters), in registration order
+function VRCompanion:runSubsystemSaveSettings(xmlFile, setters)
+    for _, subsystem in ipairs(subsystems) do
+        runSubsystemHook(self, subsystem, "saveSettings", xmlFile, setters)
+    end
+end
+
+function VRCompanion:runSubsystemLoadSettings(xmlFile, getters)
+    for _, subsystem in ipairs(subsystems) do
+        runSubsystemHook(self, subsystem, "loadSettings", xmlFile, getters)
     end
 end
 
