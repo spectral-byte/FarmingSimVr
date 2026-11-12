@@ -347,12 +347,22 @@ VRCompanion.CORE_CONSOLE_COMMANDS = {
     { name = "vrHudGroupShow", description = "Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", method = "consoleCommandHudGroupShow" },
 }
 
--- Compares this Companion Mod's version with the Injector's. Returns nil when they are the same release (or the Injector reports
--- none, which no release does), else the sentence for both the player and log.txt. An Injector that reports the fixed text of the releases up to 1.2
--- is "an older version": the number would say nothing.
-function VRCompanion:describeVersionMismatch(injectorVersion)
+-- What the version mismatch warning calls the Injector, or nil when it is the same release as this Companion Mod (or reports
+-- none, which no release does). An Injector that reports the fixed text of the releases up to 1.2 is older(): the number would
+-- say nothing; any other is version(injectorVersion).
+local function mismatchedInjector(self, injectorVersion, older, version)
     if type(injectorVersion) ~= "string" or injectorVersion == self.VERSION then return nil end
-    local injectorText = (injectorVersion == self.LEGACY_INJECTOR_VERSION) and "an older version" or ("version " .. injectorVersion)
+    if injectorVersion == self.LEGACY_INJECTOR_VERSION then return older() end
+    return version(injectorVersion)
+end
+
+-- Compares this Companion Mod's version with the Injector's. Returns nil when they are the same release, else the sentence for
+-- log.txt (in English).
+function VRCompanion:describeVersionMismatch(injectorVersion)
+    local injectorText = mismatchedInjector(self, injectorVersion,
+        function() return "an older version" end,
+        function(version) return "version " .. version end)
+    if injectorText == nil then return nil end
     return string.format("The Companion Mod is version %s but the Injector is %s. Install both files from the same release.",
         self.VERSION, injectorText)
 end
@@ -360,10 +370,10 @@ end
 -- The same warning as the player reads it on the screen: in the game's language, "FS25 VR: " and the sentence in English otherwise.
 -- log.txt keeps the English sentence (describeVersionMismatch).
 function VRCompanion:describeVersionMismatchOnScreen(injectorVersion)
-    if type(injectorVersion) ~= "string" or injectorVersion == self.VERSION then return nil end
-    local injectorText = (injectorVersion == self.LEGACY_INJECTOR_VERSION)
-        and VRCompanion.getLocalisedText("vrVersion_injectorOlder", "an older version")
-        or VRCompanion.formatLocalisedText("vrVersion_injectorVersion", "version %s", injectorVersion)
+    local injectorText = mismatchedInjector(self, injectorVersion,
+        function() return VRCompanion.getLocalisedText("vrVersion_injectorOlder", "an older version") end,
+        function(version) return VRCompanion.formatLocalisedText("vrVersion_injectorVersion", "version %s", version) end)
+    if injectorText == nil then return nil end
     return VRCompanion.formatLocalisedText("vrVersion_mismatch",
         "FS25 VR: The Companion Mod is version %s but the Injector is %s. Install both files from the same release.",
         self.VERSION, injectorText)
