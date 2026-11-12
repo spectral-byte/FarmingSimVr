@@ -767,8 +767,8 @@ function VRCompanion:resetWheelGrab()
 end
 
 -- Registered with the core (the registry is documented in VRCompanionCore.lua). No update hook: updateWheelGrab runs from the Motion
--- Controller poll, right after the hands are polled. The map-load hook is the re-wrap that used to ride on the console command
--- registration; it still runs at every map load, whether or not the engine has addConsoleCommand. Unload is in reverse file order,
+-- Controller poll, right after the hands are polled. The map-load hook is the re-wrap; it runs at every map load, whether or not
+-- the engine has addConsoleCommand. Unload is in reverse file order,
 -- after the Virtual Gamepad and before the Virtual Hands and the Menu Pointer; none of them reads the wrap.
 VRCompanion:registerSubsystem("wheelGrab", {
     mapLoad = function(self) self:loadWheelGrab() end,

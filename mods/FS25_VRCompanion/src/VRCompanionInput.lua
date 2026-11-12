@@ -632,8 +632,10 @@ end
 
 -- Keeps the VR action events registered: across context transitions (the vehicle's context and the player's on foot), every 30
 -- ticks or when one is missing, and all of them again after a binding change. The core's update calls it between the HUD
--- convergence and the vehicle transition, where it always was: the transition registers the events again, forced, so a step that
--- came after it would register them once on the frame the vehicle changes where there used to be two registrations.
+-- convergence and the vehicle transition. The transition registers the events again, forced, so on the frame the vehicle changes
+-- the game sees this check's registration and then the transition's, which takes out what came before. Called after the
+-- transition, the check would find every event active and register nothing: the events end up the same, with one registration
+-- on that frame instead of two.
 function VRCompanion:updateActionEvents()
     local bindingsChanged = self.inputBindingsChanged == true
     if bindingsChanged or (self.frameTicks % 30 == 0) or (self.hudToggleActionEventId == nil) or (self.recenterActionEventId == nil) or (self.snapLeftActionEventId == nil) or (self.snapRightActionEventId == nil) or (self.toggleViewActionEventId == nil) or (self.seatSetActionEventId == nil) then
@@ -644,8 +646,8 @@ end
 
 -- ---- Input in the subsystem registry ----------------------------------------------------------------------------------------
 -- Map load: the VR actions (Recenter, HUD Toggle, ...) are registered with the game, and again whenever the player changes a binding.
--- The core used to do this before it read settings.xml. Registering reads the input context of the vehicle being controlled and
--- the game's text, and reading the settings touches no action event, so neither needs the other first. No update hook: the check
+-- This runs after the core read settings.xml. Registering reads the input context of the vehicle being controlled and the
+-- game's text, and reading the settings touches no action event, so neither needs the other first. No update hook: the check
 -- of the events (updateActionEvents, above) is a step of the core's update. Map unload: Input lets go of the binding-change
 -- message and forgets the event ids.
 VRCompanion:registerSubsystem("input", {

@@ -1664,17 +1664,17 @@ function VRCompanion:restoreMenuBackgroundCamera()
 end
 
 -- ---- Stereo in the subsystem registry ---------------------------------------------------------------------------------------
--- Map load: the Dual Eye Camera Nodes and the Cyclopean Audio Listener Node are made. The core used to make them before it polled
--- the GUI and read settings.xml. Neither uses them: the poll only reads the GUI (the menu camera it restores on a closing menu
--- is the game's, and there is no menu to close yet), loadConfiguration reads settings.xml and sends the Stereo Presentation Mode
--- and the HUD layout (setRenderingMode, configureHudSafeArea) and touches no node, no camera setting and no action event. The
--- nodes are made from fixed defaults, which no setting changes.
--- No update hook: the game's menu camera follows the head while the menu quad is shown from the core's update, where it always
--- was (updateMenuBackgroundCamera, right after the GUI poll: the camera is written before the hooks the core installs next and the
+-- Map load: the Dual Eye Camera Nodes and the Cyclopean Audio Listener Node are made, after the core polled the GUI and read
+-- settings.xml. Neither uses them: the poll only reads the GUI (the menu camera it restores on a closing menu is the game's, and
+-- there is no menu to close yet), loadConfiguration reads settings.xml and sends the Stereo Presentation Mode and the HUD layout
+-- (setRenderingMode, configureHudSafeArea) and touches no node, no camera setting and no action event. The nodes are made from
+-- fixed defaults, which no setting changes.
+-- No update hook: the game's menu camera follows the head while the menu quad is shown from a direct call of the core's update
+-- (updateMenuBackgroundCamera, right after the GUI poll: the camera is written before the hooks the core installs next and the
 -- vehicle transition, which may move it, and its offsets are relative to what is there). Map unload: the nodes go and the cameras
--- are put back. Unload runs after the core's teardown and after the HUD's and Input's (they are registered after this file, so they
--- unload first, as the HUD did before): the 2D Floating Window Mode goes last, so that leaving it finds the HUD already restored.
--- The nodes used to be deleted before VRBridge.onMapUnload; the proof that the order is not observable is in the core's deleteMap.
+-- are put back. Unload runs after the core's teardown (VRBridge.onMapUnload included) and after the HUD's and Input's (they are
+-- registered after this file, so they unload first); the 2D Floating Window Mode goes last. Why each of these orders holds or
+-- does not matter is in the core's deleteMap.
 local function deleteDualEyeNodes(self)
     local deleteFn = delete or (_G and _G.delete)
     local entityExistsFn = entityExists or (_G and _G.entityExists)
