@@ -342,7 +342,7 @@ TEST_F(CompanionModTest, MetadataDescriptorDeclaresRecenterActionAndInputBinding
     EXPECT_EQ(modDescContent.find("\"VR_RECENTER\""), std::string::npos) << "VR_RECENTER is superseded by VR_RECENTER_VIEW";
     EXPECT_NE(modDescContent.find("KEY_numPad5"), std::string::npos);
     EXPECT_EQ(modDescContent.find("<vrSettings>"), std::string::npos) << "Setting defaults live in the DEFAULT_* constants, not modDesc.xml";
-    EXPECT_NE(modDescContent.find("setting_recenterVrTrackingSpace"), std::string::npos);
+    EXPECT_NE(modDescContent.find("<text name=\"input_VR_RECENTER_VIEW\">"), std::string::npos) << "the Recenter Action's text";
 }
 
 TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBinding) {

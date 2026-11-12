@@ -125,7 +125,6 @@ local function newState()
             action = nil,    -- the last action a rod was given: { tool, name = "primary" | "secondary", by = text, value }
             draws = {},      -- per rod state: its last draw (see drawPulledIn)
         },
-        problem = nil,      -- why Hand Tools gave up, once it did (the warning is logged then and never again)
         toolProblems = {},   -- per tool kind: why that tool is left to the game, once it was found reshaped (warned once)
         checkedTools = setmetatable({}, { __mode = "k" }),  -- the tools toolProblem found as expected (not checked again)
         fieldsPending = nil, -- { tool, sinceMs }: the held tool whose fields were not yet as expected, since when (game clock)
@@ -529,20 +528,15 @@ local function useHandlerOf(tool, entry)
 end
 
 -- ---- Wraps --------------------------------------------------------------------------------------------------------------
--- WRAP_SPECS is keyed by the name of the function wrapped. Each entry:
---   class        the name of the global table the function is on
---   fn           the function's name on the class, when it is not the key (two classes can have an `onUpdate`)
---   parameters   how many parameters the wrap needs the function to declare at least (a reshaped function declares fewer)
---   describe     what the parameters are, for the warning
---   make         function(original) -> the wrapper (attached by the section that owns the wrap, which needs locals defined below
---                this table); an entry without one is CHECK-ONLY: a function the module depends on but does not wrap, which is
---                only checked at map load (the feature gives up when it is missing or reshaped)
---   shared       the wrap is held through Core (Player.getLookRay: see VRCompanion:holdLookRayWrap) rather than made here
--- Every function the module depends on is listed here, so that the give-up check knows all of them.
+-- The game functions Hand Tools wrap or rely on, declared to the core's wrap helper (VRCompanionGameWraps.lua, which says what
+-- each field means), keyed by a name of the function wrapped (`fn` is its name on the class when two classes have an `onUpdate`).
+-- The wrappers (`make`) are attached by the sections that own them, which need locals defined below this table; an entry without
+-- one is CHECK-ONLY: a function the module depends on but does not wrap, which is only checked at map load (the feature gives up
+-- when it is missing or reshaped). Every function the module depends on is listed here, so that the give-up check knows all of them.
 local WRAP_SPECS = {
     attachToolToCamera = { class = "HandTool", parameters = 1, describe = "(tool)" },
-    -- SHARED: the wrap is Core's (VRCompanion:holdLookRayWrap), which Object Grab holds too; this module holds it while it has not given up
-    getLookRay = { class = "Player", parameters = 1, describe = "(player)", shared = true },
+    -- SHARED: the helper's look ray wrap "lookRay", which Object Grab holds too; this module holds it while it has not given up
+    getLookRay = { class = "Player", parameters = 1, describe = "(player)", shared = "lookRay" },
     -- The chainsaw: the specialization's update (the game's event dispatch reads it off the class at every call) and its roll
     -- action's handler
     chainsawOnUpdate = { class = "HandToolChainsaw", fn = "onUpdate", parameters = 2, describe = "(tool, dt)" },
@@ -564,99 +558,21 @@ local WRAP_SPECS = {
     playerCameraGetRotation = { class = "PlayerCamera", fn = "getRotation", parameters = 1, describe = "(camera)" },
 }
 
--- wraps[key] = { class = <the table wrapped>, fn = <the function's name on it>, original = <what it was>, wrapper = <what the wrap put there> }
-local wraps = {}
-
--- How many parameters a Lua function declares, or nil when it takes any number or the runtime cannot tell.
-local function parameterCount(fn)
-    local library = _G and _G.debug
-    if type(library) ~= "table" then return nil end
-    if type(library.info) == "function" then
-        local ok, count, isVararg = pcall(library.info, fn, "a")
-        if ok and type(count) == "number" then return (not isVararg) and count or nil end
-    end
-    if type(library.getinfo) == "function" then
-        local ok, info = pcall(library.getinfo, fn, "u")
-        if ok and type(info) == "table" and type(info.nparams) == "number" then
-            return (not info.isvararg) and info.nparams or nil
-        end
-    end
-    return nil
-end
-
--- Why a function is not what its wrap expects, or nil when it is.
-local function shapeProblem(spec, fn)
-    if fn == nil then return "it is missing" end
-    if type(fn) ~= "function" then return "it is not a function" end
-    local count = parameterCount(fn)
-    if count ~= nil and count < spec.parameters then
-        return string.format("it takes %d parameters, not %s", count, spec.describe)
-    end
-    return nil
-end
-
--- Wraps a function on its class once per class table. A function that is not as expected is left alone (checkWraps reports it).
-local function wrapFunction(name)
-    local spec = WRAP_SPECS[name]
-    local class = engine(spec.class)
-    if type(class) ~= "table" or (spec.make == nil and not spec.shared) then return end
-    local current = wraps[name]
-    if current ~= nil and current.class == class then return end
-    local fn = spec.fn or name
-    local original = spec.shared and VRCompanion:getLookRayWrapOriginal() or class[fn]
-    if shapeProblem(spec, original) ~= nil then return end
-    if spec.shared then
-        if VRCompanion:holdLookRayWrap("handTools") then
-            wraps[name] = { class = class, fn = fn, original = VRCompanion:getLookRayWrapOriginal(), shared = true }
-        end
-        return
-    end
-    local wrapper = spec.make(original)
-    wraps[name] = { class = class, fn = fn, original = original, wrapper = wrapper }
-    class[fn] = wrapper
-end
+-- Giving up (ONE warning, every wrap lifted, so that the game's Hand Tools are exactly the game's) leaves Object Grab alone: it holds
+-- the look ray wrap itself. A game without a class at all has no Hand Tools to move, which is not a failure.
+local wraps = VRCompanion.GameWraps.newSet({
+    owner = "handTools",
+    giveUp = "Hand Tools disabled: %s. Hand Tools are unchanged.",
+    functions = WRAP_SPECS,
+})
 
 local function wrapAll()
-    for name in pairs(WRAP_SPECS) do wrapFunction(name) end
+    wraps:wrapAll()
 end
 
--- Takes the wraps off again, each only when it is still the wrapper put there.
-local function liftWraps()
-    for name, wrap in pairs(wraps) do
-        if wrap.shared then
-            VRCompanion:releaseLookRayWrap("handTools")  -- Core lifts it when Object Grab does not hold it either
-        elseif wrap.class[wrap.fn] == wrap.wrapper then
-            wrap.class[wrap.fn] = wrap.original
-        end
-    end
-    wraps = {}
-end
-
--- Hand Tools cannot rely on the game's functions: ONE warning, every wrap lifted, so that the game's Hand Tools are exactly
--- the game's.
-local function giveUp(problem)
-    state.problem = problem
-    liftWraps()
-    print("[FS25_VR] [Warning] Hand Tools disabled: " .. problem .. ". Hand Tools are unchanged.")
-end
-
--- At map load: gives up (once) when a function the wraps expect is missing or reshaped. A game without the class at all has
--- no Hand Tools to move, which is not a failure.
+-- At map load: gives up (once) when a function the wraps expect is missing or reshaped.
 local function checkWraps()
-    if state.problem ~= nil then return state.problem end
-    for name, spec in pairs(WRAP_SPECS) do
-        local class = engine(spec.class)
-        if type(class) == "table" then
-            local current = wraps[name]
-            local fn = spec.fn or name
-            local problem = shapeProblem(spec, current ~= nil and current.original or class[fn])
-            if problem ~= nil then
-                giveUp(spec.class .. "." .. fn .. ": " .. problem)
-                return state.problem
-            end
-        end
-    end
-    return nil
+    return wraps:check()
 end
 
 -- A TOOL WHOSE CLASS HAS NO GLOBAL NAME (the fishing rod's, a DLC's: SUPPORTED_TOOLS[].useHandlerSpecialization) cannot be checked
@@ -712,7 +628,7 @@ local function toolProblem(tool, entry, nowMs)
     if state.checkedTools[tool] then return nil end
     local problem = nil
     if entry.useHandlerSpecialization ~= nil then
-        problem = shapeProblem(USE_HANDLER_SHAPE, useHandlerOf(tool, entry))
+        problem = VRCompanion.GameWraps.shapeProblem(useHandlerOf(tool, entry), USE_HANDLER_SHAPE.parameters, USE_HANDLER_SHAPE.describe)
         if problem ~= nil then problem = entry.useHandlerSpecialization .. "." .. entry.useHandler .. ": " .. problem end
     end
     if problem == nil then
@@ -795,7 +711,7 @@ end
 local function toolHandFor(self, tool)
     if self.handToolsEnabled == false then return nil, "Hand Tools are off" end
     if self.motionControllersEnabled == false then return nil, "Motion Controllers are off" end
-    if state.problem ~= nil then return nil, "Hand Tools gave up (" .. state.problem .. ")" end
+    if wraps:problem() ~= nil then return nil, "Hand Tools gave up (" .. wraps:problem() .. ")" end
     if state.givingBack then return nil, "the tool is being given back to the game" end
     if tool == nil then return nil, "no Hand Tool is held" end
     local kind, entry = supportedKind(tool)
@@ -1371,8 +1287,7 @@ end
 
 -- The way the head looks: the game's own Player:getLookRay (the wrap's original: the wrap answers the tool's ray). nil when unknown.
 local function headDirection(player)
-    local wrap = wraps.getLookRay
-    return threeNumbersFrom(4, wrap ~= nil and wrap.original or player.getLookRay, player)
+    return threeNumbersFrom(4, wraps:original("getLookRay") or player.getLookRay, player)
 end
 
 -- Where the rod's bobber is, or nil when that cannot be read.
@@ -1538,8 +1453,8 @@ function VRCompanion:getHandToolLookRay(player)
     return x - dx * behind, y - dy * behind, z - dz * behind, dx, dy, dz
 end
 
--- The wrap of Player:getLookRay, the single source PlayerTargeter:update reads (and everything that highlights by look), is Core's:
--- the ray of the first subsystem that is aiming (VRCompanion:getAimedLookRay: the Hand Tools are asked first, see "Who aims the
+-- The wrap of Player:getLookRay, the single source PlayerTargeter:update reads (and everything that highlights by look), is the wrap
+-- helper's shared wrap "lookRay": the ray of the first subsystem that is aiming (VRCompanion:getAimedLookRay: the Hand Tools are asked first, see "Who aims the
 -- look ray" in Core), the game's own (the head's) otherwise. This module holds it (WRAP_SPECS.getLookRay is shared) and lets go of
 -- it with the rest when it gives up; Object Grab holds it too, so the look ray then stays Object Grab's to answer.
 
@@ -2098,7 +2013,7 @@ function VRCompanion:consoleCommandSetHandTools(arg)
         return "Usage: vrHandTools <on|off>"
     end
     self:setHandToolsEnabled(enabled, true)
-    showBlinkingWarning(string.format("VR Hand Tools: %s (Saved)", enabled and "on" or "off"))
+    showBlinkingWarning(VRCompanion.formatLocalisedText("vrHandTools_set", "VR Hand Tools: %s (Saved)", VRCompanion.onOffText(enabled)))
     print(string.format("[FS25_VR] Hand Tools set to: %s", enabled and "on" or "off"))
     return string.format("Hand Tools set to: %s (Saved)", enabled and "on" or "off")
 end
@@ -2127,7 +2042,9 @@ function VRCompanion:consoleCommandSetToolHand(arg)
         return "Usage: vrToolHand <left|right>"
     end
     self:setToolHand(hand, true)
-    showBlinkingWarning(string.format("VR Tool Hand: %s (Saved)", HAND_NAMES[hand]))
+    local handText = (hand == self.MOTION_HAND_LEFT) and VRCompanion.getLocalisedText("vrHandTools_left", "left")
+        or VRCompanion.getLocalisedText("vrHandTools_right", "right")
+    showBlinkingWarning(VRCompanion.formatLocalisedText("vrHandTools_toolHandSet", "VR Tool Hand: %s (Saved)", handText))
     print(string.format("[FS25_VR] Tool Hand set to: %s", HAND_NAMES[hand]))
     return string.format("Tool Hand set to: %s (Saved)", HAND_NAMES[hand])
 end
@@ -2151,7 +2068,11 @@ function VRCompanion:consoleCommandSetChainsawReach(arg)
     self.chainsawReach = reach
     self:saveConfiguration()
     local text = describeChainsawReach(self)
-    showBlinkingWarning(string.format("VR Chainsaw reach: %s (Saved)", text))
+    local metres = chainsawTipReach()
+    local shownReach = (metres == nil)
+        and VRCompanion.getLocalisedText("vrHandTools_chainsawReachOfTheGame", "the game's own distance (default)")
+        or VRCompanion.formatLocalisedText("vrHandTools_chainsawReachMetres", "%.2f m past the tip of its bar", metres)
+    showBlinkingWarning(VRCompanion.formatLocalisedText("vrHandTools_chainsawReachSet", "VR Chainsaw reach: %s (Saved)", shownReach))
     print(string.format("[FS25_VR] Chainsaw reach set to: %s", text))
     return string.format("Chainsaw reach set to: %s (Saved)%s", text,
         clamped and string.format(". %g m is the most.", self.MAX_CHAINSAW_REACH) or "")
@@ -2188,8 +2109,7 @@ local function diagnosticFields(self)
         toolText = kind ~= nil and ("held Hand Tool: " .. kind .. " (supported)") or "held Hand Tool: unsupported"
     end
     local function wrapStatus(name)
-        if state.problem ~= nil then return name .. " wrap: gave up (" .. state.problem .. ")" end
-        return name .. " wrap: " .. (wraps[name] ~= nil and "installed" or "not installed")
+        return wraps:status(name)
     end
     local wrapText = wrapStatus("attachToolToCamera")
     local lookRayWrapText = wrapStatus("getLookRay")
@@ -2516,7 +2436,7 @@ end
 -- unknown, not another one. The game places a held tool again whenever the view changes, so a tool noted in the first person
 -- view that is now seen from the third person view has been placed by another path since (nothing is wrapped to see that).
 local function describePlacement(tool, add)
-    if wraps.attachToolToCamera == nil then
+    if not wraps:isWrapped("attachToolToCamera") then
         add("placement: unknown (the placement wrap is not installed)")
         return
     end
@@ -2687,7 +2607,7 @@ end
 function VRCompanion:resetHandTools()
     local tool = state.linkedTool
     endTriggerUse()
-    liftWraps()
+    wraps:reset()
     liftRodEventWraps()
     liftRodDrawWrap()
     if tool ~= nil and heldTool() == tool then pcall(returnToTheGame, tool) end
@@ -2701,7 +2621,7 @@ wrapAll()  -- the game's HandTool is there as the files load
 -- Order. Map unload runs in reverse file order, so this one runs after Object Grab's and before Virtual Gamepad's, Wheel Grab's and
 -- the Virtual Hands': the tool hangs below a Virtual Hand, so this unload must come before the Virtual Hands delete their scene
 -- (they also call releaseHandToolsFromHands as they go). That holds as long as Hand Tools load after the Virtual Hands in modDesc.xml.
--- Object Grab and Hand Tools wrap different classes (they share only the look ray wrap, which Core lifts when the last holder lets go),
+-- Object Grab and Hand Tools wrap different classes (they share only the look ray wrap, which the wrap helper lifts when the last holder lets go),
 -- so which of the two lifts its wraps first does not matter.
 VRCompanion:registerSubsystem("handTools", {
     mapLoad = function(self)

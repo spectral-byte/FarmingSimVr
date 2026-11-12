@@ -187,8 +187,8 @@ function VRCompanion:consoleCommandSetHudSafeArea(horizontalStr, verticalStr)
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
-            mission:showBlinkingWarning(string.format("VR HUD Safe Area: Horizontal=%.2f, Vertical=%.2f (Saved)",
-                self.hudSafeAreaHorizontal, self.hudSafeAreaVertical), 2500)
+            mission:showBlinkingWarning(VRCompanion.formatLocalisedText("vrHud_safeAreaSet",
+                "VR HUD Safe Area: Horizontal=%.2f, Vertical=%.2f (Saved)", self.hudSafeAreaHorizontal, self.hudSafeAreaVertical), 2500)
         end)
     end
     return string.format("VR HUD Safe Area updated and saved: horizontal=%.2f, vertical=%.2f",
@@ -232,7 +232,9 @@ function VRCompanion:consoleCommandSetHudGroup(groupStr, horizontalStr, vertical
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
-            mission:showBlinkingWarning(string.format("VR HUD %s group: Horizontal=%.2f, Vertical=%.2f, Scale=%.2fx (Saved)",
+            -- The group as the player typed it in the command
+            mission:showBlinkingWarning(VRCompanion.formatLocalisedText("vrHud_groupLayoutSet",
+                "VR HUD %s group: Horizontal=%.2f, Vertical=%.2f, Scale=%.2fx (Saved)",
                 groupName, layout.marginX, layout.marginY, layout.scale), 2500)
         end)
     end
@@ -253,7 +255,7 @@ function VRCompanion:consoleCommandSetHudState(stateStr)
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
-            mission:showBlinkingWarning(string.format("VR HUD: %s (%d)", stateName, st), 2500)
+            mission:showBlinkingWarning(VRCompanion.formatLocalisedText("vrHud_stateSet", "VR HUD: %s (%d)", self:getHudStateText(st), st), 2500)
         end)
     end
     return string.format("VR HUD state set to: %s (%d)", stateName, st)
@@ -270,8 +272,10 @@ function VRCompanion:consoleCommandSetHudLoadNotification(enabledStr)
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
-            mission:showBlinkingWarning(string.format("VR HUD: Load Notification: %s (Saved)",
-                enabled and "Enabled" or "Disabled"), 2500)
+            local enabledText = enabled and VRCompanion.getLocalisedText("vrHud_loadNotificationEnabled", "Enabled")
+                or VRCompanion.getLocalisedText("vrHud_loadNotificationDisabled", "Disabled")
+            mission:showBlinkingWarning(VRCompanion.formatLocalisedText("vrHud_loadNotificationSet",
+                "VR HUD: Load Notification: %s (Saved)", enabledText), 2500)
         end)
     end
     return string.format("VR HUD load notification set to: %s", tostring(enabled))
@@ -308,8 +312,11 @@ function VRCompanion:consoleCommandHudGroupShow(groupStr, stateStr, onOffStr)
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
-            mission:showBlinkingWarning(string.format("VR HUD: %s group %s in %s HUD (Saved)",
-                label, enabled and "on" or "off", stateLabel), 2500)
+            local shownText = enabled and VRCompanion.getLocalisedText("vrHud_groupShown", "on")
+                or VRCompanion.getLocalisedText("vrHud_groupHidden", "off")
+            local stateText = self:getHudStateText((stateName == "streamlined") and self.HUD_STATE_STREAMLINED or self.HUD_STATE_FULL)
+            mission:showBlinkingWarning(VRCompanion.formatLocalisedText("vrHud_groupVisibilitySet", "VR HUD: %s group %s in %s HUD (Saved)",
+                self:getHudGroupText(groupName), shownText, stateText), 2500)
         end)
     end
     return string.format("VR HUD %s group (%s) %s in the %s HUD and saved.",
@@ -350,7 +357,7 @@ function VRCompanion:consoleCommandSetSnapTurnAngle(angleStr)
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
-            mission:showBlinkingWarning(string.format("VR Snap Turn Angle: %.1f deg (Saved)", deg), 2500)
+            mission:showBlinkingWarning(VRCompanion.formatLocalisedText("vrSnapTurn_angleSet", "VR Snap Turn Angle: %.1f deg (Saved)", deg), 2500)
         end)
     end
 
@@ -600,7 +607,10 @@ function VRCompanion:consoleCommandSetRenderingMode(modeStr)
 
     local newMode = self:setRenderingMode(modeStr, true)
     local modeLabel = (newMode == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS) and "Sequential Dual-Pass" or "Alternate Frame Rendering (AFR)"
-    local alertMsg = string.format("Stereo Presentation Mode: %s", modeLabel)
+    local shownLabel = (newMode == self.RENDERING_MODE_SEQUENTIAL_DUAL_PASS)
+        and VRCompanion.getLocalisedText("vrRendering_dualPass", "Sequential Dual-Pass")
+        or VRCompanion.getLocalisedText("vrRendering_afr", "Alternate Frame Rendering (AFR)")
+    local alertMsg = VRCompanion.formatLocalisedText("vrRendering_modeSet", "Stereo Presentation Mode: %s", shownLabel)
 
     local mission = g_currentMission or (_G and _G.g_currentMission)
     if mission ~= nil then

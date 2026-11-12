@@ -852,7 +852,8 @@ function VRCompanion:consoleCommandSetObjectGrab(arg)
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
-            mission:showBlinkingWarning(string.format("VR Object Grab: %s (Saved)", enabled and "on" or "off"), 2500)
+            mission:showBlinkingWarning(VRCompanion.formatLocalisedText("vrObjectGrab_set", "VR Object Grab: %s (Saved)",
+                VRCompanion.onOffText(enabled)), 2500)
         end)
     end
     print(string.format("[FS25_VR] Object Grab set to: %s", enabled and "on" or "off"))
