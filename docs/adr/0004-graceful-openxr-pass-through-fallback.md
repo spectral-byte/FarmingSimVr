@@ -1,7 +1,7 @@
 # Graceful OpenXR Pass-Through Fallback
 
 ## Context and Decision
-Players launch Farming Simulator 25 in diverse configurations, often wishing to play in standard 2D desktop mode without powering on or connecting an OpenXR VR headset. If `xrCreateInstance` fails or returns `XR_ERROR_RUNTIME_UNAVAILABLE`, the Injector (`dxgi.dll`) enters Pass-Through Mode, silently forwarding all DXGI and D3D12 calls to `C:\Windows\System32\dxgi.dll` without displaying error dialogs or aborting process execution.
+Players launch Farming Simulator 25 in diverse configurations, often wishing to play in standard 2D desktop mode without powering on or connecting an OpenXR VR headset. If `xrCreateInstance` fails or returns `XR_ERROR_RUNTIME_UNAVAILABLE`, the Injector (`dxgi.dll`) enters Pass-Through Mode, silently forwarding all DXGI and D3D12 calls to `C:\Windows\System32\dxgi.dll` without displaying error dialogs or aborting process execution. A runtime that refuses the session (`xrCreateSession` fails for the game's Direct3D 12 device, for example because the headset is on another GPU) also ends in Pass-Through Mode, before the Injector changes anything about the game's swap chain; it is not retried.
 
 ## Status
 Accepted
