@@ -1723,8 +1723,9 @@ end
 -- the player last chose; a first install starts Hidden for full VR immersion. Map unload: the HUD goes back to the full screen in
 -- the Full state, the diagnostics stop and the convergence state is reset. The camera and mission hooks (hookHud, hookGuiDraw,
 -- unhookHud, unhookGuiDraw) and updateHudConvergence stay direct calls of the core: a raise in updateHudConvergence reaches the
--- caller of update. Unload runs after Input's (no order matters between the two) and before Stereo's, whose leaving 2D Floating
--- Window Mode applies the Safe Area and the HUD state again (see the core's deleteMap).
+-- caller of update. Unload runs after Input's (no order matters between the two) and before Stereo's, as it did before the
+-- registry; Stereo's leaving 2D Floating Window Mode then applies the Safe Area and the HUD state again, after this hook (see the
+-- core's deleteMap).
 VRCompanion:registerSubsystem("hud", {
     mapLoad = function(self)
         self:applyHudSafeArea()

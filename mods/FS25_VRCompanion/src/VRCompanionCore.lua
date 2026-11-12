@@ -1341,9 +1341,11 @@ function VRCompanion:deleteMap()
     -- the VR action events and Locomotion forgets the vehicles' rotation states, in the mapUnload hooks below. The registry runs
     -- them after the core's teardown above and, in reverse file order, after the subsystems registered later. What that order
     -- has to give:
-    --  * The HUD unloads before Stereo (it registers after it): Stereo's mapUnload leaves 2D Floating Window Mode last of all.
-    --    When the map unloads in that mode, leaving it applies the HUD Safe Area and the HUD state again (set2DViewActive) after
-    --    the HUD went back to the full screen, so the game's HUD anchors are left at the Safe Area.
+    --  * The HUD unloads before Stereo (it registers after it). The order is kept because it is the order of the unload before
+    --    the registry, where the HUD went back to the full screen before Stereo left 2D Floating Window Mode, so that unloading
+    --    behaves as it did (the HUD's unload reads whether that mode is on). It is also why a map unloaded in 2D Floating Window Mode leaves the game's HUD anchors at the VR
+    --    Safe Area (a known bug): Stereo's mapUnload leaves the mode last of all, and leaving it applies the HUD Safe Area and
+    --    the HUD state again (set2DViewActive) after the HUD went back to the full screen.
     --  * Within Stereo's mapUnload the nodes go before the camera settings are restored; the restore skips every camera that no
     --    longer exists (entityExists), the eye nodes among them.
     --  * Hand Tools unload before the Virtual Hands (they register after them): a tool hangs below a hand.
