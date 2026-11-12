@@ -1,7 +1,8 @@
 // A Subsystem saves and loads its own settings through the registry (spec #280, ticket #286): registerSubsystem takes a
 // saveSettings and a loadSettings hook, and saveConfiguration / loadConfiguration run them. Seen from outside: the real Companion
 // Mod is loaded in modDesc order, the engine's XML functions are a fake settings file kept in Lua, and the tests assert what the
-// file holds after a save, what a load leads to (the mod's settings and the calls on VRBridge at map load) and what log.txt says.
+// file holds after a save, what a load leads to (the calls on VRBridge at map load, and the file a save after the load writes)
+// and what log.txt says.
 // The two characterization tests pin the settings file as it was before the registry took the settings over: the same keys and
 // values on save, and the same VRBridge calls in the same order when an old file is loaded at map load.
 
@@ -105,24 +106,35 @@ protected:
 }  // namespace
 
 // Every Subsystem setting away from its default, saved: the file holds what it held before the registry saved the settings.
+// The settings are set as the player sets them, with the console commands, after a map load. The Virtual Gamepad (whose command
+// rewrites the game's bindings), its defaults-written and Recenter-migrated flags (no command) and a Seat Offset (whose command
+// needs a vehicle to sit in) are set on VRCompanion directly; loading them from a file is the other test.
 TEST_F(SubsystemSettingsTest, ASavedFileHoldsTheSameKeysAndValuesAsBeforeTheRegistry) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
-        VRCompanion.motionControllersEnabled = false
-        VRCompanion.pointerConeDegrees = 7
-        VRCompanion.wheelGrabEnabled = false
-        VRCompanion.handToolsEnabled = false
-        VRCompanion.toolHand = 0
-        VRCompanion.chainsawReach = 0.15
-        VRCompanion.objectGrabEnabled = false
+        local commands = {}
+        _G.addConsoleCommand = function(name, _, method, target) commands[name] = { method = method, target = target } end
+        VRCompanion:loadMap("testMap")
+        local function run(name, ...)
+            local command = commands[name]
+            assert(command ~= nil, name .. " is not registered")
+            command.target[command.method](command.target, ...)
+        end
+        run("vrMotionControllers", "off")
+        run("vrPointerCone", "7")
+        run("vrWheelGrab", "off")
+        run("vrHandTools", "off")
+        run("vrToolHand", "left")
+        run("vrChainsawReach", "0.15")
+        run("vrObjectGrab", "off")
+        run("vrFishCatch", "sell")
+        run("vrDesktopMirror", "off")
+        run("vrFovOverscan", "10")
+        run("vrMenuDistance", "2.5")
+        run("vrMouseConfinement", "off")
+        run("vrDialogDepth", "3")
         VRCompanion.virtualGamepadEnabled = true
         VRCompanion.virtualGamepadDefaultsWritten = true
         VRCompanion.virtualGamepadRecenterMigrated = true
-        VRCompanion.fishCatchAnswer = "sell"
-        VRCompanion.desktopMirror = false
-        VRCompanion.fovOverscan = 10
-        VRCompanion.menuDistance = 2.5
-        VRCompanion.mouseConfinement = false
-        VRCompanion.stereoDialogDepth = 3
         VRCompanion.seatOffsets = { ["data/tractor.xml"] = { [2] = { forward = 0.1, up = 0.2, right = -0.1 } } }
         assert(VRCompanion:saveConfiguration(SETTINGS_PATH))
         _G.saved = dumpSettings(SETTINGS_PATH)
@@ -183,8 +195,9 @@ TEST_F(SubsystemSettingsTest, ASavedFileHoldsTheSameKeysAndValuesAsBeforeTheRegi
         "vrSettings.wheelGrab=false");
 }
 
-// A file written before the change, every Subsystem setting away from its default, loaded at map load: the mod holds the same
-// settings and makes the same calls on VRBridge, in the same order, as before the registry loaded the settings.
+// A file written before the change, every Subsystem setting away from its default, loaded at map load: the mod makes the same
+// calls on VRBridge, in the same order, as before the registry loaded the settings, and a save after the load writes every
+// setting of the old file back with the value it had.
 TEST_F(SubsystemSettingsTest, AnOldFileLoadsToTheSameSettingsAndTheSameVRBridgeCallsAtMapLoad) {
     ASSERT_EQ(RunLuauChunk(L, R"luau(
         xmlFiles[SETTINGS_PATH] = {
@@ -229,24 +242,26 @@ TEST_F(SubsystemSettingsTest, AnOldFileLoadsToTheSameSettingsAndTheSameVRBridgeC
                 end
             end
         end
+        local oldFile = {}
+        for k, v in pairs(xmlFiles[SETTINGS_PATH]) do oldFile[k] = v end
         VRCompanion:loadMap("testMap")
         _G.bridgeCalls = table.concat(calls, "\n")
-        local seat = VRCompanion.seatOffsets["data/tractor.xml"][2]
-        _G.loaded = table.concat({
-            tostring(VRCompanion.motionControllersEnabled), tostring(VRCompanion.pointerConeDegrees),
-            tostring(VRCompanion.wheelGrabEnabled), tostring(VRCompanion.handToolsEnabled), tostring(VRCompanion.toolHand),
-            tostring(VRCompanion.chainsawReach), tostring(VRCompanion.objectGrabEnabled),
-            tostring(VRCompanion.virtualGamepadEnabled), tostring(VRCompanion.virtualGamepadDefaultsWritten),
-            tostring(VRCompanion.virtualGamepadRecenterMigrated), tostring(VRCompanion.fishCatchAnswer),
-            tostring(VRCompanion.desktopMirror), tostring(VRCompanion.fovOverscan), tostring(VRCompanion.menuDistance),
-            tostring(VRCompanion.mouseConfinement), tostring(VRCompanion.stereoDialogDepth),
-            string.format("%g,%g,%g", seat.forward, seat.up, seat.right),
-            -- and the core's own settings around them
-            tostring(VRCompanion.persistedHudState), string.format("%g", math.deg(VRCompanion.snapTurnAngle)),
-            string.format("%g", VRCompanion.hudSafeAreaHorizontal), tostring(VRCompanion.dlssNearClipCab),
-        }, " ")
+
+        -- What the mod loaded, seen as it hands it back: saved to a second file, every key of the old file holds its value.
+        local resavedPath = "C:/mockAppPath/modSettings/FS25_VRCompanion/resaved.xml"
+        assert(VRCompanion:saveConfiguration(resavedPath))
+        local function text(v) return type(v) == "number" and string.format("%.4g", v) or tostring(v) end
+        local differences = {}
+        for k, v in pairs(oldFile) do
+            local resaved = xmlFiles[resavedPath][k]
+            if text(resaved) ~= text(v) then
+                differences[#differences + 1] = k .. ": " .. text(v) .. " -> " .. text(resaved)
+            end
+        end
+        table.sort(differences)
+        _G.differences = table.concat(differences, "\n")
     )luau", "=loadOldFile"), 0);
-    EXPECT_EQ(EvalLua(L, "loaded"), "false 7 false false 0 0.15 false true true true release false 12 3 false 4 0.1,0.2,-0.1 2 45 0.25 0.3");
+    EXPECT_EQ(EvalLua(L, "differences"), "") << "the old file's values, saved again after loading it";
     EXPECT_EQ(EvalLua(L, "bridgeCalls"),
         "set2DViewActive(false)\n"
         "handshake(nil,1.2.0.0)\n"
