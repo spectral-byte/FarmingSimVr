@@ -14,11 +14,19 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Reject proprietary files
         shell: pwsh
         run: scripts/check_proprietary.ps1
+
+      # Fails when a fetched dependency, an Action or the Inno Setup install is not pinned to fixed
+      # content; its own test proves, on scratch copies, that it can fail.
+      - name: Check pins
+        shell: pwsh
+        run: |
+          scripts/check_pins.ps1
+          scripts/test_check_pins.ps1
 
       # Loads vcvars64.bat and exports what it changes to later steps. Done by
       # hand because ilammy/msvc-dev-cmd has no release off deprecated Node 20.
@@ -41,9 +49,9 @@ jobs:
       # Fetched dependencies (OpenXR-SDK, GoogleTest, Luau) live outside the
       # build tree so they can be cached across runs. Only the sources and the
       # FetchContent stamps are cached; the *-build trees are rebuilt anyway.
-      # Keyed on CMakeLists.txt, where the pinned dependency tags are declared.
+      # Keyed on CMakeLists.txt, where the pinned dependency commits are declared.
       - name: Cache fetched dependencies
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             .deps/*-src
@@ -86,8 +94,10 @@ jobs:
 
       # Build the Installer exactly as a release does (the zip bundle and the Setup exe from the
       # same staged files), then drive it silently against a fake game folder.
+      # At a stated version, so a new Inno Setup release cannot change the Installer unnoticed;
+      # upgrade with --allow-downgrade also replaces a different version the runner image ships.
       - name: Install Inno Setup
-        run: choco install innosetup -y --no-progress
+        run: choco upgrade innosetup --version=6.7.1 --allow-downgrade -y --no-progress
 
       - name: Package release (zip bundle and Installer)
         shell: pwsh
@@ -116,7 +126,7 @@ jobs:
         run: scripts/test_installer.ps1
 
       - name: Upload version.dll
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: injector-dll
           path: |
@@ -127,21 +137,21 @@ jobs:
       # A release publishes these three files as built here: the zip bundle, the Setup exe and the
       # symbols zip.
       - name: Upload zip bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: bundle
           path: build/release/FS25_VR_v*[0-9].zip
           if-no-files-found: error
 
       - name: Upload Installer
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: installer
           path: build/release/FS25_VR_v*_Setup.exe
           if-no-files-found: error
 
       - name: Upload symbols
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: symbols
           path: build/release/FS25_VR_v*_Symbols.zip
