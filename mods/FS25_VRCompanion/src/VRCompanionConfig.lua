@@ -245,14 +245,8 @@ function VRCompanion:saveConfiguration(xmlPath)
             end
             setXmlBoolFn(xmlFile, "vrSettings.hudGroups.controls.expanded", self.controlsExpanded ~= false)
         end
-        self:saveMotionControllerSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn })
-        self:saveFishCatchSetting(xmlFile, { setString = setXmlStringFn })
-        self:saveDesktopMirrorSetting(xmlFile, { setBool = setXmlBoolFn })
-        self:saveFovOverscanSetting(xmlFile, { setFloat = setXmlFloatFn })
-        self:saveMenuDistanceSetting(xmlFile, { setFloat = setXmlFloatFn })
-        self:saveMouseConfinementSetting(xmlFile, { setBool = setXmlBoolFn })
-        self:saveStereoDialogDepthSetting(xmlFile, { setFloat = setXmlFloatFn })
-        self:saveSeatOffsetSettings(xmlFile, { setString = setXmlStringFn, setInt = setXmlIntFn,setFloat = setXmlFloatFn })
+        -- Each subsystem saves its own settings (its saveSettings hook, VRCompanionCore.lua); the engine's setters, any may be nil
+        self:runSubsystemSaveSettings(xmlFile, { setBool = setXmlBoolFn, setFloat = setXmlFloatFn, setString = setXmlStringFn, setInt = setXmlIntFn })
         if type(setXmlStringFn) == "function" then
             -- Persist the mode last requested, not VRBridge's: while the compositor is active the bridge
             -- only queues a change until the next frame boundary, so it still reports the old mode here.
@@ -358,14 +352,8 @@ function VRCompanion:loadConfiguration(xmlPath)
                     "vrSettings.hudGroups.controls.expanded")
                 if loadedControlsExpanded ~= nil then controlsExpanded = loadedControlsExpanded end
 
-                self:loadMotionControllerSettings(xmlFile, { getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn })
-                self:loadFishCatchSetting(xmlFile, { getString = getXmlStringFn })
-                self:loadDesktopMirrorSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn })
-                self:loadFovOverscanSetting(xmlFile, { getFloat = getXmlFloatFn })
-                self:loadMenuDistanceSetting(xmlFile, { getFloat = getXmlFloatFn })
-                self:loadMouseConfinementSetting(xmlFile, { getBool = getXmlBoolFn, getString = getXmlStringFn })
-                self:loadStereoDialogDepthSetting(xmlFile, { getFloat = getXmlFloatFn })
-                self:loadSeatOffsetSettings(xmlFile, { has = hasXmlPropertyFn, getString = getXmlStringFn, getInt = getXmlIntFn,getFloat = getXmlFloatFn })
+                -- Each subsystem loads its own settings (its loadSettings hook, VRCompanionCore.lua); the engine's getters, any may be nil
+                self:runSubsystemLoadSettings(xmlFile, { has = hasXmlPropertyFn, getBool = getXmlBoolFn, getFloat = getXmlFloatFn, getString = getXmlStringFn, getInt = getXmlIntFn })
 
                 local loadedSnapAngle = readXmlFloat(getXmlFloatFn, xmlFile,
                     "vrSettings.snapTurnAngle")

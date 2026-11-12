@@ -259,3 +259,84 @@ TEST_F(SubsystemSettingsTest, AnOldFileLoadsToTheSameSettingsAndTheSameVRBridgeC
         "setMouseConfinement(false)\n"
         "setDlssNearClip(0.15)");
 }
+
+TEST_F(SubsystemSettingsTest, ASubsystemRegisteredWithSaveAndLoadHooksHasItsValueWrittenOnSaveAndReadBackOnLoad) {
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion.probeLevel = 0.75
+        VRCompanion:registerSubsystem("probe", {
+            saveSettings = function(self, xmlFile, xml)
+                _G.saveSawSelf = (self == VRCompanion)
+                xml.setFloat(xmlFile, "vrSettings.probeLevel", self.probeLevel)
+            end,
+            loadSettings = function(self, xmlFile, xml)
+                _G.loadSawSelf = (self == VRCompanion)
+                local loaded = xml.getFloat(xmlFile, "vrSettings.probeLevel")
+                if loaded ~= nil then self.probeLevel = loaded end
+            end,
+        })
+        assert(VRCompanion:saveConfiguration(SETTINGS_PATH))
+        assert(xmlFiles[SETTINGS_PATH]["vrSettings.probeLevel"] == 0.75, "the value is in the file")
+
+        VRCompanion.probeLevel = 0.1
+        VRCompanion:loadConfiguration(SETTINGS_PATH)
+        _G.levelAfterLoad = VRCompanion.probeLevel
+    )luau", "=probeRoundTrip"), 0);
+    EXPECT_EQ(EvalLua(L, "levelAfterLoad"), "0.75");
+    EXPECT_EQ(EvalLua(L, "saveSawSelf"), "true");
+    EXPECT_EQ(EvalLua(L, "loadSawSelf"), "true");
+}
+
+TEST_F(SubsystemSettingsTest, ASaveOrLoadHookThatRaisesIsLoggedOnceAndTheOtherSubsystemsStillSaveAndLoad) {
+    ExpectHookErrors();
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:registerSubsystem("alpha", {
+            saveSettings = function() error("alpha save failed") end,
+            loadSettings = function() error("alpha load failed") end,
+        })
+        VRCompanion:registerSubsystem("beta", {
+            saveSettings = function(self, xmlFile, xml) xml.setString(xmlFile, "vrSettings.beta", "saved") end,
+            loadSettings = function(self, xmlFile, xml) _G.betaLoaded = xml.getString(xmlFile, "vrSettings.beta") end,
+        })
+        for _ = 1, 3 do
+            assert(VRCompanion:saveConfiguration(SETTINGS_PATH), "the save goes on past the hook that raised")
+            VRCompanion:loadConfiguration(SETTINGS_PATH)
+        end
+        _G.fishCatchSaved = xmlFiles[SETTINGS_PATH]["vrSettings.fishCatchAnswer"]
+    )luau", "=raisingSettingsHooks"), 0);
+    EXPECT_EQ(CountLines("[FS25_VR] [Error] Subsystem 'alpha' saveSettings hook raised: "), 1) << "three saves, one line";
+    EXPECT_EQ(CountLines("[FS25_VR] [Error] Subsystem 'alpha' loadSettings hook raised: "), 1) << "three loads, one line";
+    EXPECT_EQ(CountLines("alpha save failed"), 1) << "the error text is in the line";
+    EXPECT_EQ(CountLines("Subsystem 'beta'"), 0);
+    EXPECT_EQ(EvalLua(L, "betaLoaded"), "saved") << "the subsystem after the one that raised saved and loaded";
+    EXPECT_EQ(EvalLua(L, "fishCatchSaved"), "ask") << "and so did the mod's own subsystems";
+}
+
+TEST_F(SubsystemSettingsTest, SaveAndLoadHooksRunInRegistrationOrder) {
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local order = {}
+        for _, name in ipairs({ "first", "second", "third" }) do
+            VRCompanion:registerSubsystem(name, {
+                saveSettings = function() table.insert(order, name .. ":save") end,
+                loadSettings = function() table.insert(order, name .. ":load") end,
+            })
+        end
+        assert(VRCompanion:saveConfiguration(SETTINGS_PATH))
+        VRCompanion:loadConfiguration(SETTINGS_PATH)
+        _G.hookOrder = table.concat(order, ",")
+    )luau", "=settingsHookOrder"), 0);
+    EXPECT_EQ(EvalLua(L, "hookOrder"), "first:save,second:save,third:save,first:load,second:load,third:load");
+}
+
+TEST_F(SubsystemSettingsTest, ASaveOrLoadHookThatIsNotAFunctionRaisesWhenTheSubsystemRegisters) {
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        for _, hookName in ipairs({ "saveSettings", "loadSettings" }) do
+            local ok, err = pcall(function() VRCompanion:registerSubsystem("probe", { [hookName] = "vrSettings.probe" }) end)
+            assert(not ok, hookName .. ": registering must raise")
+            assert(string.find(tostring(err), hookName, 1, true), "the message names the hook: " .. tostring(err))
+            assert(string.find(tostring(err), "probe", 1, true), "and the subsystem: " .. tostring(err))
+        end
+        -- Nothing was left behind: a save and a load run
+        assert(VRCompanion:saveConfiguration(SETTINGS_PATH))
+        VRCompanion:loadConfiguration(SETTINGS_PATH)
+    )luau", "=settingsHookValidation"), 0);
+}

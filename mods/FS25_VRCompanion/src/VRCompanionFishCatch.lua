@@ -189,6 +189,8 @@ end
 -- Order: none matters against the other subsystems; the early phase is what places it before the poll.
 VRCompanion:registerSubsystem("fishCatch", {
     updateEarly = function(self) self:updateFishCatch() end,
+    saveSettings = function(self, xmlFile, xml) self:saveFishCatchSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadFishCatchSetting(xmlFile, xml) end,
     mapUnload = function(self)
         forgetDialog()
         warnedNoMethod = false
