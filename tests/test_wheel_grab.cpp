@@ -400,7 +400,7 @@ TEST_F(CompanionModTest, VrWheelGrabIsSavedAcrossSessions) {
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("console"), "=consoleStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, kXmlStubs, "=xmlStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, "savedXml['vrSettings.wheelGrab'] = false; VRCompanion:loadMap('x')", "=loadMapAgain"), 0);
     EXPECT_EQ(EvalLua(L, "VRCompanion.wheelGrabEnabled"), "false");

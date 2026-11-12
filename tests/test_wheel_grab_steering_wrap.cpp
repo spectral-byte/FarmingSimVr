@@ -29,7 +29,7 @@ void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& variant
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
     ASSERT_EQ(RunLuauChunk(L, StubChunk("steering_vehicle"), "=steeringVehicle"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("console"), "=consoleStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, ("StubSteer.install('" + variant + "')").c_str(), "=installGame"), 0);
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
     const std::string scene =

@@ -58,7 +58,7 @@ protected:
     // The mod started with a player on foot who has the game's spray can class, the Virtual Gamepad on and the game clock set.
     void Start() {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
-        stubs = std::string(kXmlStubs) + SprayCanStubs();
+        stubs = StubChunk("xml_settings") + SprayCanStubs();
         StartOptions options;
         options.extraStubs = stubs.c_str();
         ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge, options));

@@ -381,7 +381,7 @@ TEST_F(CompanionModTest, TheFishCatchSettingIsSavedAcrossSessions) {
     fs25vr::VRBridge secondBridge(secondHeadset.manager, nullptr);
     ASSERT_TRUE(secondBridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("console"), "=consoleStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, kFishStubs, "=fishStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, (std::string("savedXml['vrSettings.fishCatchAnswer'] = '") + saved + "'; VRCompanion:loadMap('x')").c_str(), "=loadMapAgain"), 0);
     EXPECT_NE(EvalLua(L, "runCommand('vrFishCatch')").find("release"), std::string::npos) << "the new session starts with the saved choice";

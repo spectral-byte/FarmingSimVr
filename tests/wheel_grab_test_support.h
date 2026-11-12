@@ -54,27 +54,6 @@ inline FakeOpenXrControllers::Inputs Grip(float value) {
     return inputs;
 }
 
-// The engine's console and menu globals the Companion Mod registers into and polls: the commands can be run with
-// runCommand(name, ...), and g_gui.visible opens and closes a menu.
-inline constexpr const char* kConsoleStubs = R"luau(
-    _G.registeredCommands = {}
-    _G.addConsoleCommand = function(name, desc, method, target)
-        _G.registeredCommands[name] = { desc = desc, method = method, target = target }
-    end
-    _G.removeConsoleCommand = function(name) _G.registeredCommands[name] = nil end
-    _G.runCommand = function(name, ...)
-        local command = _G.registeredCommands[name]
-        assert(command ~= nil, name .. " is not registered")
-        return command.target[command.method](command.target, ...)
-    end
-    _G.Input = { MOUSE_BUTTON_NONE = 0, MOUSE_BUTTON_LEFT = 1 }
-    _G.g_gui = {
-        visible = false,
-        getIsGuiVisible = function(self) return self.visible end,
-        mouseEvent = function() end,
-    }
-)luau";
-
 // Wheel Grab lets go of a hand that is further than WHEEL_GRAB_PULL_AWAY_DISTANCE from the point its Virtual Hand is
 // pinned to. Most of these tests turn the hand faster and further than an arm could while the Steering Wheel follows
 // (the stops, hand over hand), which the pull-away rule would take for a hand pulled off the Steering Wheel, so they set the
@@ -93,7 +72,7 @@ inline std::string SteerableCab(const std::string& options = "") {
 
 // Which stubs the mod is started with, besides the scene graph and the steering vehicle.
 struct StartOptions {
-    bool consoleStubs = true;   // kConsoleStubs
+    bool consoleStubs = true;   // console.luau
     bool modelLoading = false;  // model_loading.luau: the Virtual Hand's model (StubModel)
     bool noPullAway = false;    // kNoPullAway
     const char* extraStubs = "";  // one more Lua chunk, run after the stubs above and before the scene
@@ -108,7 +87,7 @@ inline void StartWheelGrabMod(lua_State* L, fs25vr::VRBridge& bridge, const std:
     ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
     if (options.modelLoading) ASSERT_EQ(RunLuauChunk(L, StubChunk("model_loading"), "=modelLoading"), 0);
     ASSERT_EQ(RunLuauChunk(L, StubChunk("steering_vehicle"), "=steeringVehicle"), 0);
-    if (options.consoleStubs) ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
+    if (options.consoleStubs) ASSERT_EQ(RunLuauChunk(L, StubChunk("console"), "=consoleStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, options.extraStubs, "=extraStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, scene.c_str(), "=scene"), 0);
     ASSERT_EQ(RunLuauChunk(L, "VRCompanion:loadMap('x')", "=loadMap"), 0);
