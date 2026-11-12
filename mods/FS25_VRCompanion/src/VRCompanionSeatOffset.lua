@@ -190,6 +190,13 @@ function VRCompanion:consoleCommandSeatOffset(...)
     return text
 end
 
+-- What the Seat Offset limit message names each clamped axis by: its l10n key (modDesc.xml); the English is the axis's name.
+local SEAT_AXIS_TEXTS = {
+    forward = { key = "vrSeatOffset_axisForward" },
+    up = { key = "vrSeatOffset_axisUp" },
+    right = { key = "vrSeatOffset_axisRight" },
+}
+
 -- A short blinking message on screen, when the mission can show one
 local function showBlinkingWarning(text)
     local mission = g_currentMission or _G.g_currentMission
@@ -231,7 +238,13 @@ function VRCompanion:onSeatSetAction()
     self:recenterView(true)
     self:saveConfiguration()
     if clamped ~= nil then
-        showBlinkingWarning(string.format("VR seat position stopped at the %s m limit: %s", tostring(self.SEAT_OFFSET_LIMIT), table.concat(clamped, ", ")))
+        local axes = {}
+        for i, name in ipairs(clamped) do
+            local text = SEAT_AXIS_TEXTS[name]
+            axes[i] = text and VRCompanion.getLocalisedText(text.key, name) or name
+        end
+        showBlinkingWarning(VRCompanion.formatLocalisedText("vrSeatOffset_limitReached", "VR seat position stopped at the %s m limit: %s",
+            tostring(self.SEAT_OFFSET_LIMIT), table.concat(axes, ", ")))
     end
 end
 

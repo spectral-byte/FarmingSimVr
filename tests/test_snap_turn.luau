@@ -1359,12 +1359,12 @@ test("ModDescDeclaresSnapTurnActionsBindingsL10nAndSettings", function()
     assert(string.find(modDescContent, '<text name="input_VR_SNAP_TURN_LEFT">') ~= nil, "Must have l10n for input_VR_SNAP_TURN_LEFT")
     assert(string.find(modDescContent, '<text name="input_VR_SNAP_TURN_RIGHT">') ~= nil, "Must have l10n for input_VR_SNAP_TURN_RIGHT")
 
-    assert(string.find(modDescContent, '<text name="setting_vrSnapTurnAngle">') ~= nil, "Must have l10n for setting_vrSnapTurnAngle")
+    assert(string.find(modDescContent, '<text name="vrSnapTurn_angleSet">') ~= nil, "Must have l10n for the snap turn angle notification")
 
     -- Check German translations exist
     assert(string.find(modDescContent, "VR%-Blickdrehung links") ~= nil, "Must have German translation for snap turn left")
     assert(string.find(modDescContent, "VR%-Blickdrehung rechts") ~= nil, "Must have German translation for snap turn right")
-    assert(string.find(modDescContent, "VR%-Blickdrehungswinkel") ~= nil, "Must have German translation for snap turn angle setting")
+    assert(string.find(modDescContent, "VR%-Blickdrehungswinkel") ~= nil, "Must have German translation for the snap turn angle notification")
 
     -- 4. Defaults live in the DEFAULT_* constants, not in modDesc.xml
     assert(string.find(modDescContent, "<vrSettings>", 1, true) == nil, "modDesc.xml must not define a <vrSettings> default block")

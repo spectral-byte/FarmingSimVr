@@ -87,21 +87,173 @@ CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/), modified: scaled, rigg
             <en>VR HUD: Full</en>
             <de>VR-HUD: Vollständig</de>
         </text>
-        <text name="setting_vrHudConvergenceDepth">
-            <en>VR HUD Convergence Depth (Meters)</en>
-            <de>VR-HUD Konvergenztiefe (Meter)</de>
+        <text name="vrNotification_on">
+            <en>on</en>
+            <de>an</de>
         </text>
-        <text name="setting_vrShowHudLoadNotification">
-            <en>Show VR HUD Map Load Alert</en>
-            <de>VR-HUD Kartenladehinweis anzeigen</de>
+        <text name="vrNotification_off">
+            <en>off</en>
+            <de>aus</de>
         </text>
-        <text name="setting_recenterVrTrackingSpace">
-            <en>Recenter VR Tracking Space upon Recenter</en>
-            <de>VR-Trackingraum bei Ansichtszentrierung zurücksetzen</de>
+        <text name="vrHandTools_set">
+            <en>VR Hand Tools: %s (Saved)</en>
+            <de>VR-Handwerkzeuge: %s (Gespeichert)</de>
         </text>
-        <text name="setting_vrSnapTurnAngle">
-            <en>VR Snap Turn Angle (Degrees)</en>
-            <de>VR-Blickdrehungswinkel (Grad)</de>
+        <text name="vrHandTools_toolHandSet">
+            <en>VR Tool Hand: %s (Saved)</en>
+            <de>VR-Werkzeughand: %s (Gespeichert)</de>
+        </text>
+        <text name="vrHandTools_left">
+            <en>left</en>
+            <de>links</de>
+        </text>
+        <text name="vrHandTools_right">
+            <en>right</en>
+            <de>rechts</de>
+        </text>
+        <text name="vrHandTools_chainsawReachSet">
+            <en>VR Chainsaw reach: %s (Saved)</en>
+            <de>VR-Kettensägen-Reichweite: %s (Gespeichert)</de>
+        </text>
+        <text name="vrHandTools_chainsawReachMetres">
+            <en>%.2f m past the tip of its bar</en>
+            <de>%.2f m über die Schwertspitze hinaus</de>
+        </text>
+        <text name="vrHandTools_chainsawReachOfTheGame">
+            <en>the game's own distance (default)</en>
+            <de>die Reichweite des Spiels (Standard)</de>
+        </text>
+        <text name="vrMotionControllers_set">
+            <en>VR Motion Controllers: %s (Saved)</en>
+            <de>VR-Motion-Controller: %s (Gespeichert)</de>
+        </text>
+        <text name="vrObjectGrab_set">
+            <en>VR Object Grab: %s (Saved)</en>
+            <de>VR-Objektgreifen: %s (Gespeichert)</de>
+        </text>
+        <text name="vrWheelGrab_set">
+            <en>VR Wheel Grab: %s (Saved)</en>
+            <de>VR-Lenkradgreifen: %s (Gespeichert)</de>
+        </text>
+        <text name="vrHud_safeAreaSet">
+            <en>VR HUD Safe Area: Horizontal=%.2f, Vertical=%.2f (Saved)</en>
+            <de>VR-HUD-Sicherheitsbereich: Horizontal=%.2f, Vertikal=%.2f (Gespeichert)</de>
+        </text>
+        <text name="vrHud_groupLayoutSet">
+            <en>VR HUD %s group: Horizontal=%.2f, Vertical=%.2f, Scale=%.2fx (Saved)</en>
+            <de>VR-HUD-Gruppe %s: Horizontal=%.2f, Vertikal=%.2f, Skalierung=%.2fx (Gespeichert)</de>
+        </text>
+        <text name="vrHud_stateSet">
+            <en>VR HUD: %s (%d)</en>
+            <de>VR-HUD: %s (%d)</de>
+        </text>
+        <text name="vrHud_stateChanged">
+            <en>VR HUD: %s</en>
+            <de>VR-HUD: %s</de>
+        </text>
+        <text name="vrHud_stateChangedWithGroups">
+            <en>VR HUD: %s (%s)</en>
+            <de>VR-HUD: %s (%s)</de>
+        </text>
+        <text name="vrHud_noGroups">
+            <en>none</en>
+            <de>keine</de>
+        </text>
+        <text name="vrHud_stateHidden">
+            <en>Hidden</en>
+            <de>Ausgeblendet</de>
+        </text>
+        <text name="vrHud_stateStreamlined">
+            <en>Streamlined</en>
+            <de>Reduziert</de>
+        </text>
+        <text name="vrHud_stateFull">
+            <en>Full</en>
+            <de>Vollständig</de>
+        </text>
+        <text name="vrHud_groupMap">
+            <en>Map</en>
+            <de>Karte</de>
+        </text>
+        <text name="vrHud_groupSpeedometer">
+            <en>Speedometer</en>
+            <de>Tacho</de>
+        </text>
+        <text name="vrHud_groupInfo">
+            <en>Info</en>
+            <de>Info</de>
+        </text>
+        <text name="vrHud_groupControls">
+            <en>Controls</en>
+            <de>Steuerung</de>
+        </text>
+        <text name="vrHud_loadNotificationSet">
+            <en>VR HUD: Load Notification: %s (Saved)</en>
+            <de>VR-HUD: Hinweis beim Kartenladen: %s (Gespeichert)</de>
+        </text>
+        <text name="vrHud_loadNotificationEnabled">
+            <en>Enabled</en>
+            <de>Aktiviert</de>
+        </text>
+        <text name="vrHud_loadNotificationDisabled">
+            <en>Disabled</en>
+            <de>Deaktiviert</de>
+        </text>
+        <text name="vrHud_groupVisibilitySet">
+            <en>VR HUD: %s group %s in %s HUD (Saved)</en>
+            <de>VR-HUD: Gruppe %s %s im HUD-Modus %s (Gespeichert)</de>
+        </text>
+        <text name="vrHud_groupShown">
+            <en>on</en>
+            <de>eingeblendet</de>
+        </text>
+        <text name="vrHud_groupHidden">
+            <en>off</en>
+            <de>ausgeblendet</de>
+        </text>
+        <text name="vrSnapTurn_angleSet">
+            <en>VR Snap Turn Angle: %.1f deg (Saved)</en>
+            <de>VR-Blickdrehungswinkel: %.1f° (Gespeichert)</de>
+        </text>
+        <text name="vrRendering_modeSet">
+            <en>Stereo Presentation Mode: %s</en>
+            <de>Stereo-Darstellungsmodus: %s</de>
+        </text>
+        <text name="vrRendering_dualPass">
+            <en>Sequential Dual-Pass</en>
+            <de>Sequenzieller Dual-Pass</de>
+        </text>
+        <text name="vrRendering_afr">
+            <en>Alternate Frame Rendering (AFR)</en>
+            <de>Abwechselndes Frame-Rendering (AFR)</de>
+        </text>
+        <text name="vrSeatOffset_limitReached">
+            <en>VR seat position stopped at the %s m limit: %s</en>
+            <de>VR-Sitzposition an der Grenze von %s m angehalten: %s</de>
+        </text>
+        <text name="vrSeatOffset_axisForward">
+            <en>forward</en>
+            <de>vorwärts</de>
+        </text>
+        <text name="vrSeatOffset_axisUp">
+            <en>up</en>
+            <de>aufwärts</de>
+        </text>
+        <text name="vrSeatOffset_axisRight">
+            <en>right</en>
+            <de>seitwärts</de>
+        </text>
+        <text name="vrVersion_mismatch">
+            <en>FS25 VR: The Companion Mod is version %s but the Injector is %s. Install both files from the same release.</en>
+            <de>FS25 VR: Die Companion Mod ist Version %s, der Injector aber %s. Installiere beide Dateien aus demselben Release.</de>
+        </text>
+        <text name="vrVersion_injectorVersion">
+            <en>version %s</en>
+            <de>Version %s</de>
+        </text>
+        <text name="vrVersion_injectorOlder">
+            <en>an older version</en>
+            <de>eine ältere Version</de>
         </text>
     </l10n>
     <actions>

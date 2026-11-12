@@ -32,6 +32,33 @@ VRCompanion.HUD_LOAD_ALERT_TEXTS = {
     [2] = { key = "vrHud_loadAlert_full", english = "VR HUD: Full" },
 }
 
+-- What a notification names each HUD state and HUD Group by: its l10n key (modDesc.xml) and its English text.
+local HUD_STATE_TEXTS = {
+    [0] = { key = "vrHud_stateHidden", english = "Hidden" },
+    [1] = { key = "vrHud_stateStreamlined", english = "Streamlined" },
+    [2] = { key = "vrHud_stateFull", english = "Full" },
+}
+local HUD_GROUP_TEXTS = {
+    map = { key = "vrHud_groupMap", english = "Map" },
+    speedometer = { key = "vrHud_groupSpeedometer", english = "Speedometer" },
+    info = { key = "vrHud_groupInfo", english = "Info" },
+    controls = { key = "vrHud_groupControls", english = "Controls" },
+}
+
+-- The HUD state's name in the game's language, for a notification (console output and log lines name it by HUD_STATE_NAMES).
+function VRCompanion:getHudStateText(state)
+    local text = HUD_STATE_TEXTS[state]
+    if text == nil then return (self.HUD_STATE_NAMES and self.HUD_STATE_NAMES[state]) or tostring(state) end
+    return VRCompanion.getLocalisedText(text.key, text.english)
+end
+
+-- The HUD Group's name in the game's language, for a notification (console output and log lines use getHudGroupLabel).
+function VRCompanion:getHudGroupText(groupName)
+    local text = HUD_GROUP_TEXTS[groupName]
+    if text == nil then return self:getHudGroupLabel(groupName) end
+    return VRCompanion.getLocalisedText(text.key, text.english)
+end
+
 -- VR HUD runtime state defaults (initialized only when not already set)
 if VRCompanion.hudState == nil then VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN end
 if VRCompanion.hudSafeAreaHorizontal == nil then VRCompanion.hudSafeAreaHorizontal = VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL end
@@ -1013,13 +1040,16 @@ function VRCompanion:cycleHudState()
 
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
-        local message = string.format("VR HUD: %s", stateName)
+        local stateText = self:getHudStateText(nextState)
+        local message = VRCompanion.formatLocalisedText("vrHud_stateChanged", "VR HUD: %s", stateText)
         if nextState ~= self.HUD_STATE_HIDDEN then
             local groupLabels = {}
             for _, name in ipairs(self:getEnabledHudGroups(nextState)) do
-                table.insert(groupLabels, self:getHudGroupLabel(name))
+                table.insert(groupLabels, self:getHudGroupText(name))
             end
-            message = string.format("%s (%s)", message, (#groupLabels > 0) and table.concat(groupLabels, ", ") or "none")
+            local groups = (#groupLabels > 0) and table.concat(groupLabels, ", ")
+                or VRCompanion.getLocalisedText("vrHud_noGroups", "none")
+            message = VRCompanion.formatLocalisedText("vrHud_stateChangedWithGroups", "VR HUD: %s (%s)", stateText, groups)
         end
         pcall(function()
             mission:showBlinkingWarning(message, 2500)
