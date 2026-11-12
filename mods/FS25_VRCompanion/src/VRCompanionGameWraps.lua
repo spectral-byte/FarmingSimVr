@@ -53,7 +53,7 @@
 --   GameWraps.shapeProblem(fn, parameters, describe, subject) -> reason|nil   "<subject> is missing", "... is not a function",
 --                                   "... takes N parameters, not <describe>"; subject defaults to "it"
 --   GameWraps.defineShared(key, { class, fn, make })   a wrap more than one Subsystem holds: put on with the first hold, lifted
---                                   when the last holder lets go. holdShared(key, owner), releaseShared(key, owner), sharedOriginal(key)
+--                                   when the last holder lets go; a set's function declared with `shared = key` holds it
 --
 -- CHECK ORDER: when two declared functions are missing or reshaped, the warning names the first one checked. A Subsystem whose
 -- own checks went down a list before the helper (Animated Objects: the trigger callback, the "can be triggered" check, the
@@ -135,7 +135,7 @@ end
 
 -- Holds the shared wrap for `owner`, putting it on the class when it is not there (or the game replaced the class table). Returns
 -- whether it is there.
-function GameWraps.holdShared(key, owner)
+local function holdShared(key, owner)
     local shared = sharedOf(key)
     local class = classOf(shared.spec)
     if class == nil then return false end
@@ -152,19 +152,13 @@ function GameWraps.holdShared(key, owner)
 end
 
 -- `owner` lets go; the class gets the game's function back when nobody holds the wrap any more and it is still the wrapper there.
-function GameWraps.releaseShared(key, owner)
+local function releaseShared(key, owner)
     local shared = sharedOf(key)
     shared.holders[owner] = nil
     if next(shared.holders) ~= nil or shared.wrap == nil then return end
     local wrap = shared.wrap
     shared.wrap = nil
     if wrap.class[shared.spec.fn] == wrap.wrapper then wrap.class[shared.spec.fn] = wrap.original end
-end
-
--- The game's function under the shared wrap while it is on, or nil.
-function GameWraps.sharedOriginal(key)
-    local wrap = sharedOf(key).wrap
-    return wrap ~= nil and wrap.original or nil
 end
 
 -- ---- A Subsystem's set of wraps ------------------------------------------------------------------------------------------
@@ -252,7 +246,7 @@ function Set:wrap(name)
     local original = spec.shared ~= nil and sharedOriginalOn(spec.shared, class) or class[fn]
     if GameWraps.shapeProblem(original, spec.parameters, spec.describe) ~= nil then return end
     if spec.shared ~= nil then
-        if GameWraps.holdShared(spec.shared, self.declaration.owner) then
+        if holdShared(spec.shared, self.declaration.owner) then
             self.wraps[name] = { class = class, fn = fn, original = sharedOriginalOn(spec.shared, class), shared = spec.shared }
         end
         return
@@ -312,7 +306,7 @@ function Set:liftAll()
     self:liftInstance()
     for _, wrap in pairs(self.wraps) do
         if wrap.shared ~= nil then
-            GameWraps.releaseShared(wrap.shared, self.declaration.owner)
+            releaseShared(wrap.shared, self.declaration.owner)
         elseif wrap.class[wrap.fn] == wrap.wrapper then
             wrap.class[wrap.fn] = wrap.original
         end
