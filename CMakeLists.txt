@@ -246,6 +246,7 @@ add_executable(fs25_vr_tests
     tests/test_companion_mod.cpp
     tests/test_subsystem_registry.cpp
     tests/test_companion_mod_stubs.cpp
+    tests/test_companion_mod_globals.cpp
     tests/test_injector_version_warning.cpp
     tests/test_motion_controllers.cpp
     tests/test_pointer_ray.cpp
