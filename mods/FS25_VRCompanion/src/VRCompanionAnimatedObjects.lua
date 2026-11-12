@@ -60,14 +60,32 @@ local engine = VRCompanion.getEngineGlobal
 local DEFAULT_REACH_BEHIND = 0.6
 local BEHIND_MARGIN = 0.1
 
--- The game's names the module relies on: class, function, how many parameters the function must declare at least (a reshaped
--- function declares fewer, self counts) and what they are, for the warning.
-local TRIGGER_CALLBACK = {
-    class = "AnimatedObject", fn = "triggerCallback", parameters = 6,
-    describe = "(object, triggerId, otherId, onEnter, onLeave, onStay)",
+-- The game's functions the module relies on, declared to the core's wrap helper (VRCompanionGameWraps.lua, which says what each field
+-- means): the trigger callback is wrapped (its `make` is attached with the zone below), the other two are CHECK-ONLY. Checked in the
+-- order of their names: the callback, the "can be triggered" check, the toggle handler.
+local WRAP_SPECS = {
+    callback = {
+        class = "AnimatedObject", fn = "triggerCallback", parameters = 6,
+        describe = "(object, triggerId, otherId, onEnter, onLeave, onStay)",
+        missingClass = "the game's AnimatedObject class was not found",
+    },
+    canBeTriggered = {
+        class = "AnimatedObject", fn = "getCanBeTriggered", parameters = 1, describe = "(object)",
+        missingClass = "the game's AnimatedObject class was not found",
+    },
+    toggle = {
+        class = "AnimatedObjectActivatable", fn = "onAnimationInputToggle", parameters = 1, describe = "(activatable)",
+        missingClass = "the game's AnimatedObjectActivatable class was not found",
+    },
 }
-local CAN_BE_TRIGGERED = { class = "AnimatedObject", fn = "getCanBeTriggered", parameters = 1, describe = "(object)" }
-local TOGGLE_HANDLER = { class = "AnimatedObjectActivatable", fn = "onAnimationInputToggle", parameters = 1, describe = "(activatable)" }
+
+-- Giving up is ONE warning, logged only when Motion Controllers are in use (see updateAnimatedObjects); nothing is wrapped then.
+local wraps = VRCompanion.GameWraps.newSet({
+    owner = "animatedObjects",
+    giveUp = "Animated Objects support disabled: %s. Motion Controllers cannot work doors and gates; the game's prompts are unchanged.",
+    nameAsSubject = true,
+    functions = WRAP_SPECS,
+})
 
 -- The collision flags the ray cast leaves out: the zone is made of trigger shapes, the player's own capsule is around the head, and the
 -- terrain is never a door.
@@ -77,11 +95,7 @@ local MAX_PARENTS = 64
 local function newState()
     return {
         installed = false,
-        gaveUp = false,    -- the support was found unusable (warned once); do not look again
         problem = nil,     -- why the support cannot be installed, found at map load (warned once, when Motion Controllers are in use)
-        class = nil,
-        original = nil,
-        wrapper = nil,
         zone = setmetatable({}, { __mode = "k" }),  -- [object] = true while the local player is in the object's zone
         parts = {},        -- scratch: [animation part node] = the object in the zone that can be worked now
         hit = {},          -- scratch: what the ray cast hit
@@ -91,50 +105,6 @@ local function newState()
 end
 
 local state = newState()
-
--- ---- Checking what the game has -------------------------------------------------------------------------------------------
-
--- How many parameters a Lua function declares, or nil when it takes any number or the runtime cannot tell.
-local function parameterCount(fn)
-    local library = _G and _G.debug
-    if type(library) ~= "table" then return nil end
-    if type(library.info) == "function" then
-        local ok, count, isVararg = pcall(library.info, fn, "a")
-        if ok and type(count) == "number" then return (not isVararg) and count or nil end
-    end
-    if type(library.getinfo) == "function" then
-        local ok, info = pcall(library.getinfo, fn, "u")
-        if ok and type(info) == "table" and type(info.nparams) == "number" then
-            return (not info.isvararg) and info.nparams or nil
-        end
-    end
-    return nil
-end
-
--- Why a function the module relies on is not what it expects, or nil when it is.
-local function shapeProblem(spec)
-    local class = engine(spec.class)
-    if type(class) ~= "table" then return "the game's " .. spec.class .. " class was not found" end
-    local fn = class[spec.fn]
-    local name = spec.class .. "." .. spec.fn
-    if fn == nil then return name .. " is missing" end
-    if type(fn) ~= "function" then return name .. " is not a function" end
-    local count = parameterCount(fn)
-    if count ~= nil and count < spec.parameters then
-        return string.format("%s takes %d parameters, not %s", name, count, spec.describe)
-    end
-    return nil
-end
-
-local function findProblem()
-    return shapeProblem(TRIGGER_CALLBACK) or shapeProblem(CAN_BE_TRIGGERED) or shapeProblem(TOGGLE_HANDLER)
-end
-
-local function giveUp(problem)
-    state.gaveUp = true
-    print("[FS25_VR] [Warning] Animated Objects support disabled: " .. problem
-        .. ". Motion Controllers cannot work doors and gates; the game's prompts are unchanged.")
-end
 
 -- ---- The zone -----------------------------------------------------------------------------------------------------------------
 
@@ -164,16 +134,17 @@ local function anyHandTracked(self)
         or self:getHandState(self.MOTION_HAND_RIGHT).tracked == true
 end
 
-local function install()
-    local class = engine(TRIGGER_CALLBACK.class)
-    local original = class[TRIGGER_CALLBACK.fn]
-    local wrapper = function(object, triggerId, otherId, onEnter, onLeave, ...)
+-- The wrap of the game's trigger callback: original first, then the zone is tracked (errors never reach the game).
+WRAP_SPECS.callback.make = function(original)
+    return function(object, triggerId, otherId, onEnter, onLeave, ...)
         local a, b, c = original(object, triggerId, otherId, onEnter, onLeave, ...)
         if state.installed then pcall(trackZone, object, otherId, onEnter, onLeave) end
         return a, b, c
     end
-    state.class, state.original, state.wrapper = class, original, wrapper
-    class[TRIGGER_CALLBACK.fn] = wrapper
+end
+
+local function install()
+    wraps:wrapAll()
     state.installed = true
     print("[FS25_VR] Animated Objects support: installed")
 end
@@ -181,16 +152,14 @@ end
 -- Map load: wraps the game's trigger callback when the game has what the module relies on. When it does not, the reason is kept and
 -- warned of once, when Motion Controllers are in use (a player without them is never told).
 function VRCompanion:loadAnimatedObjectsSupport()
-    if state.installed or state.gaveUp then return end
-    state.problem = findProblem()
+    if state.installed or wraps:problem() ~= nil then return end
+    state.problem = wraps:findProblem()
     if state.problem == nil then install() end
 end
 
--- Map unload (and the end of a session): hands the game's class back exactly as found.
+-- Map unload (and the end of a session): hands the game's class back exactly as found (unless something else wrapped it since).
 function VRCompanion:resetAnimatedObjectsSupport()
-    if state.installed and state.class ~= nil and state.class[TRIGGER_CALLBACK.fn] == state.wrapper then
-        state.class[TRIGGER_CALLBACK.fn] = state.original
-    end
+    wraps:reset()
     state = newState()
 end
 
@@ -312,8 +281,8 @@ end
 function VRCompanion:updateAnimatedObjects(dt, suppressed, rivalDistance)
     if not state.installed then
         -- Found unusable at map load: said once, to a player who uses Motion Controllers.
-        if state.problem ~= nil and not state.gaveUp and self.motionControllersEnabled ~= false and anyHandTracked(self) then
-            giveUp(state.problem)
+        if state.problem ~= nil and wraps:problem() == nil and self.motionControllersEnabled ~= false and anyHandTracked(self) then
+            wraps:giveUp(state.problem)
         end
         return false
     end
@@ -369,7 +338,7 @@ end
 
 -- One line for vrPointerDiagnostics: whether the wrap is installed and what it currently sees.
 function VRCompanion:getAnimatedObjectsDiagnostics()
-    if state.gaveUp then return "Animated Objects support: gave up (see the warning in the log)" end
+    if wraps:problem() ~= nil then return "Animated Objects support: gave up (see the warning in the log)" end
     if not state.installed then
         return "Animated Objects support: not installed" .. (state.problem ~= nil and (" (" .. state.problem .. ")") or " yet")
     end
