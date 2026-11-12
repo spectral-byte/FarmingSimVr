@@ -180,6 +180,20 @@ TEST_F(VrBridgePerFrameAllocationTest, EveryReasonTheVirtualGamepadCanGiveReache
     }
 }
 
+TEST_F(VrBridgePerFrameAllocationTest, TheAnchoredStringsTableHasNoArrayPart) {
+    // In the game, an array-part table made by the Injector crashed the engine when it was freed (the soft restart after
+    // quitting to the menu, or the first collection once nothing held the table): every table the Injector makes has a
+    // hash part only. A table filled by integer index 1..n has a border of n; one filled by key has a border of 0.
+    lua_getglobal(L, "VRBridge");
+    lua_getfield(L, -1, "getRenderingMode");
+    ASSERT_EQ(lua_type(L, -1), LUA_TFUNCTION);
+    ASSERT_NE(lua_getupvalue(L, -1, VRBridge::kAnchorsUpvalue), nullptr);
+    ASSERT_EQ(lua_type(L, -1), LUA_TTABLE);
+    EXPECT_EQ(lua_objlen(L, -1), 0) << "the table holds no integer keys, so it has no array part";
+    lua_rawgeti(L, -1, 1);
+    EXPECT_EQ(lua_type(L, -1), LUA_TNIL);
+}
+
 TEST_F(VrBridgePerFrameAllocationTest, ReadingTheRenderingModeAllocatesNothingInEitherMode) {
     // Each mode's name is a text the Injector hands out, so each must be one it keeps made at injection.
     for (fs25vr::VRRenderingMode mode : {fs25vr::VRRenderingMode::AFR, fs25vr::VRRenderingMode::SequentialDualPass}) {

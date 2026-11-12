@@ -6,6 +6,7 @@
 #include "fidelityfx/fidelityfx_interceptor.h"
 #include "input/virtual_gamepad.h"
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -124,11 +125,15 @@ bool VRBridge::Inject(lua_State* L) {
         // The strings the per-frame functions return, made once here and carried by every closure as kAnchorsUpvalue so that
         // returning one allocates nothing (see PushAnchoredString).
         const std::vector<const char*>& anchoredStrings = AnchoredStrings();
-        lua_createtable(L, static_cast<int>(anchoredStrings.size()), 0);
+        // A hash part only, like every other table made here: filled by integer index it had an array part, and the game
+        // crashed freeing it (ADR-0002, "the game's collector around VRBridge calls").
+        lua_createtable(L, 0, static_cast<int>(anchoredStrings.size()));
         const int anchors = lua_gettop(L);
         for (size_t i = 0; i < anchoredStrings.size(); ++i) {
+            char key[24];
+            std::snprintf(key, sizeof(key), "s%zu", i);
             lua_pushstring(L, anchoredStrings[i]);
-            lua_rawseti(L, anchors, static_cast<int>(i) + 1);
+            lua_setfield(L, anchors, key);
         }
 
         // Create table for VRBridge pre-allocated for all exposed fields (version + every table entry)
@@ -179,7 +184,9 @@ void VRBridge::PushAnchoredString(lua_State* L, int anchorsIndex, const char* te
         const std::vector<const char*>& strings = AnchoredStrings();
         for (size_t i = 0; i < strings.size(); ++i) {
             if (std::strcmp(strings[i], text) == 0) {
-                lua_rawgeti(L, anchorsIndex, static_cast<int>(i) + 1);
+                char key[24];
+                std::snprintf(key, sizeof(key), "s%zu", i);
+                lua_rawgetfield(L, anchorsIndex, key);
                 return;
             }
         }
