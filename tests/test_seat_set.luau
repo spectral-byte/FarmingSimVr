@@ -339,6 +339,43 @@ test("PressPastTheLimitOnSeveralAxesNamesThemAll", function()
         and string.find(warnings[1], "right", 1, true) == nil, "forward and up stopped, got: " .. tostring(warnings[1]))
 end)
 
+-- The limit warning in the game's language (ticket #292): the game's German texts (the mod's modDesc.xml l10n) name the axes in
+-- German; English is today's text
+local GERMAN_TEXTS = {
+    vrSeatOffset_limitReached = "VR-Sitzposition an der Grenze von %s m angehalten: %s",
+    vrSeatOffset_axisForward = "vorwärts",
+    vrSeatOffset_axisUp = "aufwärts",
+    vrSeatOffset_axisRight = "seitwärts",
+}
+
+local function pressPastTheLimitOnForwardAndUp()
+    setup()
+    local cam = trackedCab(0)
+    enter(makeVehicle(freshModel(), { cam }))
+    VRCompanion:consoleCommandSeatOffset("0.4", "-0.4", "0")
+    state.pose = poseAt(0, -0.3, -0.3)
+    viewAfterUpdate(cam)
+    VRCompanion:onSeatSetAction()
+    _G.g_i18n = nil
+    return warnings
+end
+
+test("UnderTheGamesGermanTextsTheLimitWarningIsGerman", function()
+    _G.g_i18n = {
+        hasText = function(self, name) return GERMAN_TEXTS[name] ~= nil end,
+        getText = function(self, name) return GERMAN_TEXTS[name] or ("Missing '" .. name .. "' in l10n") end,
+    }
+    local shown = pressPastTheLimitOnForwardAndUp()
+    assert(#shown == 1 and shown[1] == "VR-Sitzposition an der Grenze von 0.5 m angehalten: vorwärts, aufwärts",
+        "got: " .. tostring(shown[1]))
+end)
+
+test("WhereTheGameHasNoTextTheLimitWarningIsEnglish", function()
+    _G.g_i18n = { hasText = function() return false end, getText = function(self, name) return "Missing '" .. name .. "' in l10n" end }
+    local shown = pressPastTheLimitOnForwardAndUp()
+    assert(#shown == 1 and shown[1] == "VR seat position stopped at the 0.5 m limit: forward, up", "got: " .. tostring(shown[1]))
+end)
+
 -- Slice 6: outside an in-cab camera in the head-tracked view with no menu shown, a press does nothing
 local function assertPressDoesNothing(label)
     local flushes, savesBefore = state.flushes, saves

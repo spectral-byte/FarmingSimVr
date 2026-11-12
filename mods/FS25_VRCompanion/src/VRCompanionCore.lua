@@ -62,6 +62,21 @@ function VRCompanion.getLocalisedText(key, englishText)
     return englishText
 end
 
+-- A notification's text: the text for an l10n key (see getLocalisedText) formatted with the values, else englishFormat formatted
+-- with them, also when the game's text does not take these values. Console output and log lines are not made with it: they stay
+-- English.
+function VRCompanion.formatLocalisedText(key, englishFormat, ...)
+    local ok, text = pcall(string.format, VRCompanion.getLocalisedText(key, englishFormat), ...)
+    if ok then return text end
+    return string.format(englishFormat, ...)
+end
+
+-- "on" or "off" in the game's language, for a notification that a setting was turned on or off.
+function VRCompanion.onOffText(enabled)
+    if enabled then return VRCompanion.getLocalisedText("vrNotification_on", "on") end
+    return VRCompanion.getLocalisedText("vrNotification_off", "off")
+end
+
 -- ---- Who aims the look ray ----------------------------------------------------------------------------------
 -- The game's Player:getLookRay is wrapped once, by this file, for as long as a subsystem that aims holds the wrap (Hand Tools and
 -- Object Grab each hold it, so that one giving up leaves the other aiming: see holdLookRayWrap). The wrap asks each subsystem
@@ -355,6 +370,18 @@ function VRCompanion:describeVersionMismatch(injectorVersion)
         self.VERSION, injectorText)
 end
 
+-- The same warning as the player reads it on the screen: in the game's language, "FS25 VR: " and the sentence in English otherwise.
+-- log.txt keeps the English sentence (describeVersionMismatch).
+function VRCompanion:describeVersionMismatchOnScreen(injectorVersion)
+    if type(injectorVersion) ~= "string" or injectorVersion == self.VERSION then return nil end
+    local injectorText = (injectorVersion == self.LEGACY_INJECTOR_VERSION)
+        and VRCompanion.getLocalisedText("vrVersion_injectorOlder", "an older version")
+        or VRCompanion.formatLocalisedText("vrVersion_injectorVersion", "version %s", injectorVersion)
+    return VRCompanion.formatLocalisedText("vrVersion_mismatch",
+        "FS25 VR: The Companion Mod is version %s but the Injector is %s. Install both files from the same release.",
+        self.VERSION, injectorText)
+end
+
 function VRCompanion:loadMap(name)
     print(string.format("[FS25_VR] Initializing Companion Mod on map '%s'...", tostring(name)))
 
@@ -370,6 +397,7 @@ function VRCompanion:loadMap(name)
 
     -- 1. Perform native-to-Luau handshake via VRBridge
     local versionWarning = nil
+    local versionWarningOnScreen = nil
     if VRBridge ~= nil then
         local version = VRBridge.version or "unknown"
         local ready = false
@@ -389,6 +417,7 @@ function VRCompanion:loadMap(name)
         local injectorVersion = type(handshakeResult) == "table" and handshakeResult.version or VRBridge.version
         print(string.format("[FS25_VR] Versions: Companion Mod %s, Injector %s.", self.VERSION, tostring(injectorVersion)))
         versionWarning = self:describeVersionMismatch(injectorVersion)
+        versionWarningOnScreen = self:describeVersionMismatchOnScreen(injectorVersion)
         if versionWarning ~= nil then
             print("[FS25_VR] [Warning] " .. versionWarning)
         end
@@ -507,7 +536,7 @@ function VRCompanion:loadMap(name)
         local mission = g_currentMission or _G.g_currentMission
         if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
             pcall(function()
-                mission:showBlinkingWarning("FS25 VR: " .. versionWarning, self.VERSION_WARNING_MS)
+                mission:showBlinkingWarning(versionWarningOnScreen, self.VERSION_WARNING_MS)
             end)
         end
     end

@@ -2098,7 +2098,7 @@ function VRCompanion:consoleCommandSetHandTools(arg)
         return "Usage: vrHandTools <on|off>"
     end
     self:setHandToolsEnabled(enabled, true)
-    showBlinkingWarning(string.format("VR Hand Tools: %s (Saved)", enabled and "on" or "off"))
+    showBlinkingWarning(VRCompanion.formatLocalisedText("vrHandTools_set", "VR Hand Tools: %s (Saved)", VRCompanion.onOffText(enabled)))
     print(string.format("[FS25_VR] Hand Tools set to: %s", enabled and "on" or "off"))
     return string.format("Hand Tools set to: %s (Saved)", enabled and "on" or "off")
 end
@@ -2127,7 +2127,9 @@ function VRCompanion:consoleCommandSetToolHand(arg)
         return "Usage: vrToolHand <left|right>"
     end
     self:setToolHand(hand, true)
-    showBlinkingWarning(string.format("VR Tool Hand: %s (Saved)", HAND_NAMES[hand]))
+    local handText = (hand == self.MOTION_HAND_LEFT) and VRCompanion.getLocalisedText("vrHandTools_left", "left")
+        or VRCompanion.getLocalisedText("vrHandTools_right", "right")
+    showBlinkingWarning(VRCompanion.formatLocalisedText("vrHandTools_toolHandSet", "VR Tool Hand: %s (Saved)", handText))
     print(string.format("[FS25_VR] Tool Hand set to: %s", HAND_NAMES[hand]))
     return string.format("Tool Hand set to: %s (Saved)", HAND_NAMES[hand])
 end
@@ -2151,7 +2153,11 @@ function VRCompanion:consoleCommandSetChainsawReach(arg)
     self.chainsawReach = reach
     self:saveConfiguration()
     local text = describeChainsawReach(self)
-    showBlinkingWarning(string.format("VR Chainsaw reach: %s (Saved)", text))
+    local metres = chainsawTipReach()
+    local shownReach = (metres == nil)
+        and VRCompanion.getLocalisedText("vrHandTools_chainsawReachOfTheGame", "the game's own distance (default)")
+        or VRCompanion.formatLocalisedText("vrHandTools_chainsawReachMetres", "%.2f m past the tip of its bar", metres)
+    showBlinkingWarning(VRCompanion.formatLocalisedText("vrHandTools_chainsawReachSet", "VR Chainsaw reach: %s (Saved)", shownReach))
     print(string.format("[FS25_VR] Chainsaw reach set to: %s", text))
     return string.format("Chainsaw reach set to: %s (Saved)%s", text,
         clamped and string.format(". %g m is the most.", self.MAX_CHAINSAW_REACH) or "")
