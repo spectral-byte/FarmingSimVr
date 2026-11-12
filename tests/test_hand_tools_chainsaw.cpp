@@ -1,6 +1,6 @@
 // Hand Tools, the chainsaw (ADR-0029), seen from outside: the real Companion Mod runs against the real
 // VRBridge over FakeTrackedHeadset, with the game stood in by Lua stubs (companion_mod_stubs.h: StubHandTool and its chainsaw,
-// kStubHandToolChainsaw: the game's HandToolChainsaw with its update, cut handler and cut-state machine, trees for the
+// hand_tool_chainsaw.luau: the game's HandToolChainsaw with its update, cut handler and cut-state machine, trees for the
 // targeter to find). The test moves the fake Motion Controllers, drives frames the way the game would and asserts what the
 // game or the player would see: where the targeter found a tree, where the chainsaw's model points, the node the cut plane
 // hangs from and the plane the game would cut along, the chainsaw's cut state and the cuts it made, the calls of its own cut

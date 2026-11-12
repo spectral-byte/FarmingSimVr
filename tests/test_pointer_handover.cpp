@@ -70,8 +70,8 @@ constexpr const char* kGuiStubs = R"luau(
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge, bool withInteractiveControl = true) {
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubSceneGraph, "=sceneGraph"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubInteractiveControl, "=interactiveControl"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("interactive_control"), "=interactiveControl"), 0);
     ASSERT_EQ(RunLuauChunk(L, kStubs, "=stubs"), 0);
     if (withInteractiveControl) {
         ASSERT_EQ(RunLuauChunk(L, "StubIC.install('ok')", "=installIc"), 0);
