@@ -17,8 +17,6 @@ bool ThreadTrace::Record(uint32_t threadId) {
                           std::to_string(threadId);
     if (previous == kNoThread) {
         LogInfo(message);
-        // Info lines are buffered; flush so a crash during the session can't lose the sighting.
-        Logger::Instance().Flush();
         return true;
     }
 
