@@ -19,8 +19,7 @@ using fs25vr::Vector3;
 // The globals the Companion Mod creates on purpose. Add one here only when the mod means to create it; a global that
 // leaked by accident is fixed in the mod.
 const std::set<std::string> kPinnedModGlobals = {
-    "VRCompanion",    // the mod itself: every file adds to it, and addModEventListener(VRCompanion) hands it to the game
-    "currentCamera",  // VRCompanion:setRenderingCamera publishes the camera it made current, with activeCamera
+    "VRCompanion",  // the mod itself: every file adds to it, and addModEventListener(VRCompanion) hands it to the game
 };
 
 // Records, for every global created from now on, the source of the function that created it (debug.info(2, "s"), with

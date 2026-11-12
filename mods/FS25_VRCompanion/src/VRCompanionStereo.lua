@@ -323,7 +323,6 @@ function VRCompanion:bindRenderingCamera(targetCam)
     end
     self.activeRenderingCamera = targetCam
     if _G then
-        _G.currentCamera = targetCam
         _G.activeCamera = targetCam
     end
 end

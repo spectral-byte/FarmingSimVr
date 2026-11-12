@@ -439,7 +439,7 @@ TEST_F(CompanionModTest, InCabVehicleCameraFollowsHeadPoseWithCabReferenceBindin
     ASSERT_EQ(RunLuauChunk(L, R"(
         assert(_G.translations[101] == nil and _G.rotations[101] == nil,
             "the engine's Outside Camera node must not be modified")
-        local eye = _G.currentCamera
+        local eye = VRCompanion.activeRenderingCamera
         assert(eye ~= nil and eye ~= 101, "the head-tracked eye camera must be bound for rendering")
         local base = _G.parents[eye]
         assert(base ~= nil and _G.parents[base] == 1, "the eye camera must sit on a level base under the world root")
