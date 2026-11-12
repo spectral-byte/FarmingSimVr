@@ -152,3 +152,7 @@ TEST_F(LuauTestSuiteTest, TestVehicleCameraYaw) {
 TEST_F(LuauTestSuiteTest, TestPerfTrace) {
     RunSuite("tests/test_perf_trace.luau");
 }
+
+TEST_F(LuauTestSuiteTest, TestGameWraps) {
+    RunSuite("tests/test_game_wraps.luau");
+}

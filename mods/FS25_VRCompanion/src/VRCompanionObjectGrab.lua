@@ -64,7 +64,7 @@
 -- itself passes no joint index and is silent. The grip, if still held, does not grab again until it is let go and squeezed again. With
 -- super strength the game makes the joint unbreakable and nothing here changes.
 --
--- WRAPS: Player.getLookRay (shared with Hand Tools: Core owns the one wrap and each holds it, so that one giving up does not take the
+-- WRAPS: Player.getLookRay (shared with Hand Tools: the wrap helper owns the one wrap and each holds it, so that one giving up does not take the
 -- look ray away from the other), HandToolHands.onDraw, HandToolHands.updateKinematicNode and HandToolHands.onHeldItemJointBroken (the
 -- class AND the local player's hands tool, which may hold a copy of the last two); getCanPickUpNode is only checked. When one is missing or has another shape
 -- at map load, Object Grab gives up: ONE warning ("Object Grab disabled: ..."), its wraps are lifted, and picking up is the
@@ -99,7 +99,7 @@
 --   Console: vrObjectGrab [on|off], vrObjectGrabDiagnostics
 --
 -- Hooks into the rest of the mod:
---   Core               registerLookRayAimer("objectGrab", ...) and holdLookRayWrap("objectGrab")
+--   Core               registerLookRayAimer("objectGrab", ...); GameWraps (the wrap helper) holds the shared "lookRay" wrap
 --   MotionControllers  updatePointerRay -> peekObjectGrabRayTarget() / settleObjectGrabRayTarget() (after Interactive Control, with
 --                      the Animated Objects module in between: the nearer of the two wins); updateMotionControllers ->
 --                      updateObjectGrab(dt) on every path; isHandCarryingHeldObject(hand) keeps the hand in use and out of the Pointer
@@ -146,7 +146,6 @@ VRCompanion.OBJECT_GRAB_SNAP_PULSE_STRENGTH = 1.0
 
 local function newState()
     return {
-        problem = nil,       -- why Object Grab gave up, once it did (the warning is logged then and never again)
         landedNode = nil,    -- the node the Pointer Ray is on and has pulsed for
         gripDown = { [0] = false, [1] = false },     -- per hand: the grip was held on the pad at the end of the last update
         gripPressed = { [0] = false, [1] = false },  -- per hand: the grip went down in this update
@@ -163,156 +162,43 @@ end
 local state = newState()
 
 -- ---- Wraps ------------------------------------------------------------------------------------------------------------
--- WRAP_SPECS is keyed by the name of the function wrapped. Each entry:
---   class        the name of the global table the function is on
---   fn           the function's name on the class, when it is not the key
---   parameters   how many parameters the function must declare at least (a reshaped function declares fewer)
---   describe     what the parameters are, for the warning
---   make         function(original) -> the wrapper; an entry without one is CHECK-ONLY (checked at map load, never wrapped)
---   shared       the wrap is Core's (VRCompanion:holdLookRayWrap)
+-- The game functions Object Grab wraps or relies on, declared to the core's wrap helper (VRCompanionGameWraps.lua, which says what
+-- each field means). The wrappers (`make`) are attached by the sections that own them, below. getLookRay is the shared look ray
+-- wrap, which Hand Tools hold too; getCanPickUpNode is CHECK-ONLY.
 local WRAP_SPECS = {
-    getLookRay = { class = "Player", parameters = 1, describe = "(player)", shared = true },
+    getLookRay = { class = "Player", parameters = 1, describe = "(player)", shared = "lookRay" },
     handsOnDraw = { class = "HandToolHands", fn = "onDraw", parameters = 1, describe = "(tool)" },
     handsUpdateKinematicNode = { class = "HandToolHands", fn = "updateKinematicNode", parameters = 1, describe = "(tool)" },
     handsJointBroken = { class = "HandToolHands", fn = "onHeldItemJointBroken", parameters = 2, describe = "(tool, jointIndex)" },
     getCanPickUpNode = { class = "HandToolHands", parameters = 2, describe = "(tool, node)" },
 }
 
--- wraps[key] = { class = <the table wrapped>, fn = <the function's name on it>, original = <what it was>, wrapper = <what the wrap put there> }
-local wraps = {}
-
--- How many parameters a Lua function declares, or nil when it takes any number or the runtime cannot tell.
-local function parameterCount(fn)
-    local library = _G and _G.debug
-    if type(library) ~= "table" then return nil end
-    if type(library.info) == "function" then
-        local ok, count, isVararg = pcall(library.info, fn, "a")
-        if ok and type(count) == "number" then return (not isVararg) and count or nil end
-    end
-    if type(library.getinfo) == "function" then
-        local ok, info = pcall(library.getinfo, fn, "u")
-        if ok and type(info) == "table" and type(info.nparams) == "number" then
-            return (not info.isvararg) and info.nparams or nil
-        end
-    end
-    return nil
-end
-
--- Why a function is not what its wrap expects, or nil when it is.
-local function shapeProblem(spec, fn)
-    if fn == nil then return "it is missing" end
-    if type(fn) ~= "function" then return "it is not a function" end
-    local count = parameterCount(fn)
-    if count ~= nil and count < spec.parameters then
-        return string.format("it takes %d parameters, not %s", count, spec.describe)
-    end
-    return nil
-end
+-- Giving up (ONE warning, every wrap lifted, so that picking up is exactly the game's) leaves Hand Tools alone: they hold the look
+-- ray wrap themselves.
+local wraps = VRCompanion.GameWraps.newSet({
+    owner = "objectGrab",
+    giveUp = "Object Grab disabled: %s. Picking up is unchanged.",
+    functions = WRAP_SPECS,
+})
 
 -- Object Grab has hands to aim only in a game that has them.
 local function gameHasHands()
     return type(engine("HandToolHands")) == "table"
 end
 
-local function wrapFunction(name)
-    local spec = WRAP_SPECS[name]
-    local class = engine(spec.class)
-    if type(class) ~= "table" or (spec.make == nil and not spec.shared) then return end
-    local current = wraps[name]
-    if current ~= nil and current.class == class then return end
-    local fn = spec.fn or name
-    local original = spec.shared and VRCompanion:getLookRayWrapOriginal() or class[fn]
-    if shapeProblem(spec, original) ~= nil then return end
-    if spec.shared then
-        if VRCompanion:holdLookRayWrap("objectGrab") then
-            wraps[name] = { class = class, fn = fn, original = VRCompanion:getLookRayWrapOriginal(), shared = true }
-        end
-        return
-    end
-    local wrapper = spec.make(original)
-    wraps[name] = { class = class, fn = fn, original = original, wrapper = wrapper }
-    class[fn] = wrapper
+local function wrapAll()
+    if gameHasHands() then wraps:wrapAll() end
 end
 
-local function wrapAll()
-    if state.problem ~= nil or not gameHasHands() then return end
-    for name in pairs(WRAP_SPECS) do wrapFunction(name) end
+-- At map load: gives up (once) when a function the wraps expect is missing or reshaped.
+local function checkWraps()
+    if not gameHasHands() then return wraps:problem() end
+    return wraps:check()
 end
 
 -- The functions of the hands tool that the game registers on its type, and that the tool may hold its own copy of ("Placing the Held
 -- Object"): wrapped on the local player's hands tool itself for as long as it is the hands, unless the class wrap reaches it.
 local INSTANCE_WRAPS = { "handsUpdateKinematicNode", "handsJointBroken" }
-
--- { tool, entries = { [wrap name] = { original, hadOwn, wrapper } } }
-local instanceWrap = nil
-
--- Gives the hands tool its own copies back, each unless something else has replaced the wrapper since.
-local function unwrapInstance()
-    local current = instanceWrap
-    instanceWrap = nil
-    if current == nil then return end
-    for name, entry in pairs(current.entries) do
-        local fn = WRAP_SPECS[name].fn
-        if rawget(current.tool, fn) == entry.wrapper then
-            current.tool[fn] = entry.hadOwn and entry.original or nil
-        end
-    end
-end
-
--- Takes the wraps off again, each only when it is still the wrapper put there.
-local function liftWraps()
-    unwrapInstance()
-    for _, wrap in pairs(wraps) do
-        if wrap.shared then
-            VRCompanion:releaseLookRayWrap("objectGrab")  -- Core lifts it when Hand Tools do not hold it either
-        elseif wrap.class[wrap.fn] == wrap.wrapper then
-            wrap.class[wrap.fn] = wrap.original
-        end
-    end
-    wraps = {}
-end
-
--- Object Grab cannot rely on the game's functions: ONE warning, every wrap lifted, so that picking up is exactly the game's. Hand
--- Tools are not touched.
-local function giveUp(problem)
-    state.problem = problem
-    liftWraps()
-    print("[FS25_VR] [Warning] Object Grab disabled: " .. problem .. ". Picking up is unchanged.")
-end
-
--- At map load: gives up (once) when a function the wraps expect is missing or reshaped.
-local function checkWraps()
-    if state.problem ~= nil or not gameHasHands() then return state.problem end
-    for name, spec in pairs(WRAP_SPECS) do
-        local class = engine(spec.class)
-        if type(class) == "table" then
-            local current = wraps[name]
-            local fn = spec.fn or name
-            local problem = shapeProblem(spec, current ~= nil and current.original or class[fn])
-            if problem ~= nil then
-                giveUp(spec.class .. "." .. fn .. ": " .. problem)
-                return state.problem
-            end
-        end
-    end
-    return nil
-end
-
--- The names of the functions Object Grab wraps (WRAP_SPECS, sorted by name; a check-only entry is not wrapped, so has no status), so
--- that a wrap added to WRAP_SPECS is reported by the diagnostics without being listed again.
-local function wrapNames()
-    local names = {}
-    for name, spec in pairs(WRAP_SPECS) do
-        if spec.make ~= nil or spec.shared then names[#names + 1] = name end
-    end
-    table.sort(names)
-    return names
-end
-
-local function wrapStatus(name)
-    if state.problem ~= nil then return name .. " wrap: gave up (" .. state.problem .. ")" end
-    return name .. " wrap: " .. (wraps[name] ~= nil and "installed" or "not installed")
-end
 
 -- ---- Aiming -----------------------------------------------------------------------------------------------------------
 
@@ -353,7 +239,7 @@ end
 local function whyNotAiming(self, player)
     if self.objectGrabEnabled == false then return "Object Grab is off" end
     if self.motionControllersEnabled == false then return "Motion Controllers are off" end
-    if state.problem ~= nil then return "Object Grab gave up (" .. state.problem .. ")" end
+    if wraps:problem() ~= nil then return "Object Grab gave up (" .. wraps:problem() .. ")" end
     if type(player) ~= "table" or player ~= localPlayer() then return "not the local player" end
     if player.camera == nil or player.camera.isFirstPerson ~= true then return "not in the first person view" end
     if self:getControlledVehicle() ~= nil then return "in a vehicle" end
@@ -554,21 +440,7 @@ end
 -- onto the tool: a wrap of the class does not reach a tool that holds its own copy (the trap of Wheel Grab's steering wrap). So the
 -- local player's hands tool is wrapped itself, for as long as it is the hands, unless the class wrap reaches it.
 local function wrapInstance(tool)
-    if instanceWrap ~= nil and instanceWrap.tool ~= tool then unwrapInstance() end
-    for _, name in ipairs(INSTANCE_WRAPS) do
-        local spec = WRAP_SPECS[name]
-        local entry = instanceWrap ~= nil and instanceWrap.entries[name] or nil
-        if entry == nil or rawget(tool, spec.fn) ~= entry.wrapper then
-            local original = tool[spec.fn]
-            local classWrap = wraps[name]
-            if shapeProblem(spec, original) == nil and not (classWrap ~= nil and original == classWrap.wrapper) then
-                local wrapper = spec.make(original)
-                instanceWrap = instanceWrap or { tool = tool, entries = {} }
-                instanceWrap.entries[name] = { original = original, hadOwn = rawget(tool, spec.fn) ~= nil, wrapper = wrapper }
-                tool[spec.fn] = wrapper
-            end
-        end
-    end
+    wraps:wrapInstance(tool, INSTANCE_WRAPS)
 end
 
 -- The wrap of the game's onHeldItemJointBroken: the game's joint break report passes the joint's index, whereas its own letting go
@@ -801,7 +673,7 @@ end
 -- Whether the carry has ended without the grip being let go: the game dropped the object itself (getting into a vehicle, taking a Hand
 -- Tool, the object gone), or Object Grab or the Motion Controllers were switched off, or the hands are not the hands any more.
 local function carryHasEnded(self, carry)
-    if self.objectGrabEnabled == false or self.motionControllersEnabled == false or state.problem ~= nil then return true end
+    if self.objectGrabEnabled == false or self.motionControllersEnabled == false or wraps:problem() ~= nil then return true end
     return emptyHands(localPlayer()) ~= carry.hands or not holdsItem(carry.hands)
 end
 
@@ -809,7 +681,7 @@ end
 -- were, or it gave up. The game would go on carrying it along the head's look ray, with the grip back on the pad, so the hands let go
 -- (the game's dropHeldItem). A carry the game ended itself (the hands put away, the item gone, a snap) has nothing left to drop.
 local function mustDropOnEnd(self, carry)
-    if self.objectGrabEnabled ~= false and self.motionControllersEnabled ~= false and state.problem == nil then return false end
+    if self.objectGrabEnabled ~= false and self.motionControllersEnabled ~= false and wraps:problem() == nil then return false end
     return emptyHands(localPlayer()) == carry.hands and holdsItem(carry.hands)
 end
 
@@ -846,7 +718,7 @@ end
 function VRCompanion:updateObjectGrab(dt)
     state.dt = dt or 0
     trackGrips()
-    if state.problem == nil then
+    if wraps:problem() == nil then
         local hands = emptyHands(localPlayer())
         if hands ~= nil then wrapInstance(hands) end
     end
@@ -945,14 +817,14 @@ function VRCompanion:setObjectGrabEnabled(enabled, save)
     end
 end
 
--- Called from the Motion Controller settings with the open settings file and the engine's setters (any may be nil).
+-- The saveSettings hook: the open settings file and the engine's setters (any may be nil).
 function VRCompanion:saveObjectGrabSetting(xmlFile, xml)
     if type(xml.setBool) == "function" then
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.objectGrabEnabled ~= false)
     end
 end
 
--- Called from the Motion Controller settings with the open settings file and the engine's getters (any may be nil).
+-- The loadSettings hook: the open settings file and the engine's getters (any may be nil).
 -- A key that is missing keeps the current value.
 function VRCompanion:loadObjectGrabSetting(xmlFile, xml)
     local loaded = nil
@@ -1123,8 +995,8 @@ local function diagnosticFields(self)
     for _, field in ipairs(carryFields(self)) do fields[#fields + 1] = field end
     fields[#fields + 1] = releaseField()
     fields[#fields + 1] = snapField(self)
-    for _, name in ipairs(wrapNames()) do
-        fields[#fields + 1] = wrapStatus(name)
+    for _, name in ipairs(wraps:wrapNames()) do
+        fields[#fields + 1] = wraps:status(name)
     end
     return fields
 end
@@ -1145,7 +1017,7 @@ end
 -- Map unload: the wraps come off and everything seen this session is forgotten. The saved setting stays as it is. The registry
 -- removes the commands.
 function VRCompanion:resetObjectGrab()
-    liftWraps()
+    wraps:reset()
     state = newState()
 end
 
@@ -1153,13 +1025,15 @@ wrapAll()  -- the game's classes are there as the files load
 
 -- Map load: the classes are wrapped again (resetObjectGrab lifted the wraps with the last map), then checked. Map unload runs in
 -- reverse file order, so Object Grab lifts its wraps before Hand Tools do (their classes are different; they share only the look ray
--- wrap, which Core lifts when the last holder lets go).
+-- wrap, which the wrap helper lifts when the last holder lets go).
 VRCompanion:registerSubsystem("objectGrab", {
     mapLoad = function(self)
         wrapAll()
         checkWraps()
     end,
     mapUnload = function(self) self:resetObjectGrab() end,
+    saveSettings = function(self, xmlFile, xml) self:saveObjectGrabSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadObjectGrabSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrObjectGrab", description = "Turn Object Grab, picking up objects aimed by a Motion Controller, on or off (saved): vrObjectGrab [on|off]", method = "consoleCommandSetObjectGrab" },
         { name = "vrObjectGrabDiagnostics", description = "Report whether Object Grab is on and why not, the aim, the target against the game's limits, the carry and the last release: vrObjectGrabDiagnostics", method = "consoleCommandObjectGrabDiagnostics" },
