@@ -60,7 +60,7 @@ local engine = VRCompanion.getEngineGlobal
 local DEFAULT_REACH_BEHIND = 0.6
 local BEHIND_MARGIN = 0.1
 
--- The game's functions the module relies on, declared to the core's wrap helper (VRCompanionGameWraps.lua, which says what each field
+-- The game's functions the Subsystem relies on, declared to the core's wrap helper (VRCompanionGameWraps.lua, which says what each field
 -- means): the trigger callback is wrapped (its `make` is attached with the zone below), the other two are CHECK-ONLY. Checked in the
 -- order of their names: the callback, the "can be triggered" check, the toggle handler.
 local WRAP_SPECS = {
