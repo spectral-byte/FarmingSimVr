@@ -244,8 +244,6 @@ void DxgiProxy::EnsureVrInitialized() {
             LogWarn("DxgiProxy: No OpenXR manager supplied; forwarding all calls silently.");
         } else {
             LogInfo("Intercepted DXGI startup sequence. Initializing OpenXR subsystem...");
-            // Info lines are buffered; flush so a runtime that hangs below still leaves a log.
-            Logger::Instance().Flush();
             m_openXrManager->Initialize();
             if (m_openXrManager->IsPassThrough()) {
                 LogInfo("Injector operating in Pass-Through Mode (forwarding all calls silently).");
