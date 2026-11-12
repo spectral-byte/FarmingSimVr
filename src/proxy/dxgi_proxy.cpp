@@ -95,6 +95,28 @@ std::string DescribeObject(const void* object) {
     return ss.str();
 }
 
+bool SameLuid(const LUID& a, const LUID& b) { return a.LowPart == b.LowPart && a.HighPart == b.HighPart; }
+
+// The adapter's description as DXGI gives it (asked through the system's own factory export), else its LUID.
+std::string DescribeAdapter(PFN_CreateDXGIFactory1 createFactory, const LUID& luid) {
+    Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    DXGI_ADAPTER_DESC1 desc{};
+    if (createFactory && SUCCEEDED(createFactory(IID_PPV_ARGS(&factory))) &&
+        SUCCEEDED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))) && SUCCEEDED(adapter->GetDesc1(&desc)) &&
+        desc.Description[0] != L'\0') {
+        const int size = WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, nullptr, 0, nullptr, nullptr);
+        if (size > 1) {
+            std::string name(static_cast<size_t>(size - 1), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name.data(), size, nullptr, nullptr);
+            return name;
+        }
+    }
+    std::ostringstream ss;
+    ss << "LUID 0x" << std::hex << static_cast<unsigned long>(luid.HighPart) << ":0x" << luid.LowPart;
+    return ss.str();
+}
+
 bool SameAdapter(ID3D12Device* a, ID3D12Device* b) {
     const LUID la = a->GetAdapterLuid();
     const LUID lb = b->GetAdapterLuid();
@@ -290,6 +312,18 @@ void DxgiProxy::SetD3D12DeviceAndQueue(ID3D12Device* device, ID3D12CommandQueue*
         }
     }
     if (m_openXrManager && device && queue) {
+        if (m_openXrManager->IsActive() && !m_openXrManager->HasSession()) {
+            // The session is attempted next. A runtime bound to another GPU refuses the game's device; the attempt is
+            // still made, as the runtime decides, but the log says why VR may not start.
+            const LUID required = m_openXrManager->GetRuntimeInfo().adapterLuid;
+            const LUID game = device->GetAdapterLuid();
+            if (!SameLuid(required, game)) {
+                const auto createFactory = SystemPfn(&ISystemDxgi::GetCreateDXGIFactory1);
+                LogWarn("DxgiProxy: The OpenXR runtime needs the GPU " + DescribeAdapter(createFactory, required) +
+                        ", but the game renders on " + DescribeAdapter(createFactory, game) +
+                        "; the headset must be on the GPU the game renders on.");
+            }
+        }
         m_openXrManager->SetD3D12DeviceAndQueue(device, queue);
     }
 }

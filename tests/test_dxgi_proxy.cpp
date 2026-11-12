@@ -6408,6 +6408,39 @@ TEST(DxgiProxyTest, ARefusedSessionIsNotAttemptedAgainOnLaterPresentsOrSwapChain
     EXPECT_TRUE(rig.openXrManager->IsPassThrough());
 }
 
+TEST(DxgiProxyTest, WhenTheRuntimeNeedsAnotherAdapterThanTheGamesAWarningNamesBothAndTheSessionIsStillAttempted) {
+    RefusedSessionRig rig;  // the runtime names LUID 0x5678:0x1234, which no adapter has; the game renders on WARP
+    if (!rig.Ready()) GTEST_SKIP() << "no WARP D3D12 device";
+    LogCapture capture("fs25vr_refused_session_adapter_test.log");
+
+    rig.CreateForHwnd();
+
+    const std::string log = capture.Text();
+    std::string warning;
+    std::istringstream lines(log);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.find("[WARN]") != std::string::npos && line.find("GPU") != std::string::npos) warning = line;
+    }
+    ASSERT_FALSE(warning.empty()) << log;
+    EXPECT_NE(warning.find("LUID 0x5678:0x1234"), std::string::npos) << "the runtime's adapter, by LUID: " << warning;
+    EXPECT_NE(warning.find("Microsoft Basic Render Driver"), std::string::npos) << "the game's adapter, by name: " << warning;
+    EXPECT_NE(warning.find("the headset must be on the GPU the game renders on"), std::string::npos) << warning;
+    EXPECT_EQ(rig.runtime->createSessionCalls, 1u) << "the runtime decides";
+    EXPECT_LT(log.find(warning), log.find("refused to create the session")) << "the warning comes before the attempt";
+}
+
+TEST(DxgiProxyTest, WhenTheRuntimeNeedsTheGamesAdapterThereIsNoAdapterWarning) {
+    RefusedSessionRig rig(/*runtimeNeedsTheGamesAdapter=*/true);
+    if (!rig.Ready()) GTEST_SKIP() << "no WARP D3D12 device";
+    LogCapture capture("fs25vr_refused_session_adapter_test.log");
+
+    rig.CreateForHwnd();
+
+    const std::string log = capture.Text();
+    EXPECT_EQ(log.find("the headset must be on the GPU"), std::string::npos) << log;
+    EXPECT_EQ(rig.runtime->createSessionCalls, 1u);
+}
+
 } // namespace fs25vr
 
 
