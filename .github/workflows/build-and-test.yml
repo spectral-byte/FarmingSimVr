@@ -28,26 +28,16 @@ jobs:
           scripts/check_pins.ps1
           scripts/test_check_pins.ps1
 
-      # Loads vcvars64.bat and exports what it changes to later steps. Done by
-      # hand because ilammy/msvc-dev-cmd has no release off deprecated Node 20.
+      # The same script a local build runs (see "Building from source" in the README); under
+      # GitHub Actions it also exports the environment to the later steps. Done by a script of
+      # our own because ilammy/msvc-dev-cmd has no release off deprecated Node 20.
       - name: Set up MSVC developer environment
         shell: pwsh
-        run: |
-          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
-          $vs = & "$installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if (-not $vs) { throw 'No Visual Studio with the x64 C++ tools' }
-          $env:PATH += ";$installer"
-          $before = @{}
-          Get-ChildItem env: | ForEach-Object { $before[$_.Name] = $_.Value }
-          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set" | ForEach-Object {
-            if ($_ -match '^([^=]+)=(.*)$' -and $before[$Matches[1]] -ne $Matches[2]) {
-              "$($Matches[1])=$($Matches[2])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-            }
-          }
-          if ($LASTEXITCODE) { throw "vcvars64.bat failed ($LASTEXITCODE)" }
+        run: scripts/enter_msvc_env.ps1
 
-      # Fetched dependencies (OpenXR-SDK, GoogleTest, Luau) live outside the
-      # build tree so they can be cached across runs. Only the sources and the
+      # Fetched dependencies (OpenXR-SDK, GoogleTest, Luau, MinHook) live outside the
+      # build tree, in .deps (FETCHCONTENT_BASE_DIR in CMakePresets.json; change the two
+      # together), so they can be cached across runs. Only the sources and the
       # FetchContent stamps are cached; the *-build trees are rebuilt anyway.
       # Keyed on CMakeLists.txt, where the pinned dependency commits are declared.
       - name: Cache fetched dependencies
@@ -59,16 +49,14 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
           restore-keys: deps-${{ runner.os }}-
 
+      # The "ci" preset in CMakePresets.json: Ninja, RelWithDebInfo, warnings as errors, the
+      # build tree in build and fetched dependencies in .deps.
       - name: Configure
-        run: >
-          cmake -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DFS25VR_WARNINGS_AS_ERRORS=ON
-          -DFETCHCONTENT_BASE_DIR="${{ github.workspace }}/.deps"
+        run: cmake --preset ci
 
       # The shipped configuration compiles with full inlining (/Ob2); fail if the
       # cache says otherwise (e.g. CMake's default /Ob1 crept back in), or if the
-      # configure step above lost the warnings-as-errors option.
+      # ci preset lost the warnings-as-errors option.
       - name: Verify full inlining
         shell: pwsh
         run: scripts/check_build_config.ps1 build -RequireWarningsAsErrors

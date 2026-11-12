@@ -1,7 +1,7 @@
 ﻿# Verifies that a CMake build tree uses the shipped configuration:
 # RelWithDebInfo with full inlining (/Ob2) and debug info (/Zi).
 # With -RequireWarningsAsErrors it also requires the FS25VR_WARNINGS_AS_ERRORS option to be on
-# (CI passes it, so a configure step that forgets the option cannot go unnoticed).
+# (the ci preset sets it, so a CI configure that loses the option cannot go unnoticed).
 param(
     [string]$BuildDir = "build",
     [switch]$RequireWarningsAsErrors
@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 
 $cache = Join-Path $BuildDir "CMakeCache.txt"
 if (-not (Test-Path $cache)) {
-    Write-Error "$cache not found. Configure first: cmake -B $BuildDir -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo"
+    Write-Error "$cache not found. Configure first: cmake --preset local (or ci)"
 }
 
 function Get-CacheValue([string]$name) {
@@ -31,7 +31,7 @@ foreach ($var in "CMAKE_CXX_FLAGS_RELWITHDEBINFO", "CMAKE_C_FLAGS_RELWITHDEBINFO
 if ($RequireWarningsAsErrors) {
     $werror = Get-CacheValue "FS25VR_WARNINGS_AS_ERRORS"
     if ($werror -ne "ON") {
-        Write-Error "FS25VR_WARNINGS_AS_ERRORS is '$werror'; expected ON (configure with -DFS25VR_WARNINGS_AS_ERRORS=ON)."
+        Write-Error "FS25VR_WARNINGS_AS_ERRORS is '$werror'; expected ON (configure with cmake --preset ci)."
     }
 }
 Write-Host "Build configuration OK: RelWithDebInfo with /Ob2 and /Zi."

@@ -154,6 +154,40 @@ That removes the game's key, and the `LocalDumps` key above it too when nothing 
 
 Windows writes no dump if automatic debugging for application crashes is set up on your machine, that is, a debugger that Windows starts when an application crashes.
 
+## Building from source
+
+A local build runs the same commands as CI. Run them in PowerShell from the repository root.
+
+**Prerequisites**
+
+- Visual Studio 2022 or later, or the Build Tools for Visual Studio, with the *Desktop development with C++* workload (the MSVC x64 compiler and a Windows SDK).
+- CMake 3.20 or later and Ninja, on `PATH`. The copies Visual Studio installs with its *C++ CMake tools for Windows* component work once you've entered its environment (below).
+- Git, and internet access the first time you configure: CMake fetches OpenXR-SDK, GoogleTest, Luau and MinHook at pinned commits into `.deps`.
+- Inno Setup 6, only to build the Installer (`scripts\package_release.ps1`).
+
+**Configure, build and test**
+
+```powershell
+scripts\enter_msvc_env.ps1      # puts the MSVC x64 compiler on PATH for this PowerShell
+cmake --preset local
+cmake --build build --target injector fs25_vr_tests
+ctest --test-dir build --output-on-failure --timeout 120
+```
+
+This writes the Injector to `build\version.dll`. Run `ctest` without `-j`: some tests share files. To run the suite in one process instead, run `build\fs25_vr_tests.exe --gtest_brief=1`.
+
+The `local` preset is the shipped configuration (Ninja, RelWithDebInfo, the build tree in `build`, fetched dependencies in `.deps`). The `ci` preset is the same with compiler warnings treated as errors; use it to check a change the way CI will.
+
+The tests never talk to a real OpenXR runtime. The test executable points the OpenXR loader at a runtime manifest that does not exist, so a headset, SteamVR or any other installed runtime is never started, and the tests that need a running VR session use a fake runtime built into the tests.
+
+**Deploy to the game**
+
+```powershell
+scripts\deploy.ps1 -GameDir "D:\Games\Farming Simulator 25"
+```
+
+It copies `build\version.dll` into the game's `x64` folder and packs the Companion Mod into `Documents\My Games\FarmingSimulator2025\mods\FS25_VRCompanion.zip`. Without `-GameDir` it uses the default Steam folder. Close the game first.
+
 ## License
 
 Copyright (C) 2026 spectral-byte. Licensed under the [GNU General Public License v3.0](LICENSE). Built with Khronos OpenXR, Luau, MinHook and GoogleTest; release bundles include `THIRD_PARTY_NOTICES.txt`.
