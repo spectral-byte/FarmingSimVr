@@ -336,18 +336,3 @@ GameWraps.defineShared("lookRay", {
         end
     end,
 })
-
--- Hand Tools hold the look ray wrap through these (its WRAP_SPECS.getLookRay checks the shape itself); a set declares
--- `shared = "lookRay"` instead.
-function VRCompanion:holdLookRayWrap(owner)
-    return GameWraps.holdShared("lookRay", owner)
-end
-
-function VRCompanion:releaseLookRayWrap(owner)
-    GameWraps.releaseShared("lookRay", owner)
-end
-
--- The game's own Player:getLookRay while the wrap is on the class (the head's ray), or nil.
-function VRCompanion:getLookRayWrapOriginal()
-    return GameWraps.sharedOriginal("lookRay")
-end
