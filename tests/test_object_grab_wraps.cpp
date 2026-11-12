@@ -123,7 +123,8 @@ TEST_F(CompanionModTest, VrObjectGrabIsSavedAcrossSessions) {
     std::string saved;
     {
         StartOptions options;
-        options.extraStubs = kXmlStubs;
+        const std::string xmlStubs = StubChunk("xml_settings");
+        options.extraStubs = xmlStubs.c_str();
         OBJECT_GRAB_START_WITH(options, "ok");
         EXPECT_EQ(EvalLua(L, "VRCompanion.objectGrabEnabled"), "true") << "on by default";
         ASSERT_EQ(RunLuauChunk(L, "runCommand('vrObjectGrab', 'off')", "=off"), 0);
@@ -141,8 +142,8 @@ TEST_F(CompanionModTest, VrObjectGrabIsSavedAcrossSessions) {
     fs25vr::VRBridge bridge(headset.manager, nullptr);
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kXmlStubs, "=xmlStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("console"), "=consoleStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("xml_settings"), "=xmlStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, "savedXml['vrSettings.objectGrab'] = false; VRCompanion:loadMap('x')", "=loadMapAgain"), 0);
     EXPECT_EQ(EvalLua(L, "VRCompanion.objectGrabEnabled"), "false");
 

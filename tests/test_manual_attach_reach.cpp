@@ -36,7 +36,7 @@ TEST_F(VirtualGamepadManualAttachTest, AHitchWithNothingLinedUpAndNothingOnItIsN
 
 TEST_F(VirtualGamepadManualAttachTest, AnImplementNotLinedUpWithTheHitchIsNotAttachable) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua("StubManualAttach.misalign(plow)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), "none");
@@ -64,7 +64,7 @@ TEST_F(VirtualGamepadManualAttachTest, TheReachIsManualAttachsOwnConstantNotACop
 
 TEST_F(VirtualGamepadManualAttachTest, AVehicleManualAttachsDetectionHasNotFoundOffersNoHitch) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua("StubManualAttach.detect()");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), "none");
@@ -74,7 +74,7 @@ TEST_F(VirtualGamepadManualAttachTest, AVehicleManualAttachsDetectionHasNotFound
 
 TEST_F(VirtualGamepadManualAttachTest, AnImplementOfAnotherFarmIsNeverAttachedByPointing) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua("plow.farmId = 2");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), "none") << "Manual Attach would show no prompt for it";
@@ -87,7 +87,7 @@ TEST_F(VirtualGamepadManualAttachTest, AnImplementOfAnotherFarmIsNeverAttachedBy
 
 TEST_F(VirtualGamepadManualAttachTest, WithTwoHitchesInReachThePullWorksTheOneTheRayIsOnWhicheverIsNearer) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     FRAMES(1);
     ASSERT_EQ(EvalLua(L, "tostring(StubManualAttach.handler.attachable == frontLoader)"), "true") << "Manual Attach's own pick is the nearer, front hitch";
 
@@ -111,7 +111,7 @@ TEST_F(VirtualGamepadManualAttachTest, WithTwoHitchesInReachThePullWorksTheOneTh
 
 TEST_F(VirtualGamepadManualAttachTest, WithAnImplementOnOneHitchAndAnotherLinedUpAtTheOtherThePullWorksThePointedOne) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kFrontAndRear);
+    Lua(StubChunk("manual_attach_front_and_rear"));
     Lua("StubManualAttach.attach(tractor, rearPlow, 1, 1)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     PullTrigger(kRight);
@@ -160,7 +160,7 @@ TEST_F(VirtualGamepadManualAttachTest, ATrailersOwnHitchWorksTheSameWay) {
 
 TEST_F(VirtualGamepadManualAttachTest, ARefusedDetachStillTakesTheRayAndThePullShowsManualAttachsWarning) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua("StubManualAttach.attach(tractor, plow, 1, 1); StubManualAttach.raise(plow)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearHitch) << "the hitch is pointed at although Manual Attach will refuse";
@@ -172,7 +172,7 @@ TEST_F(VirtualGamepadManualAttachTest, ARefusedDetachStillTakesTheRayAndThePullS
 
 TEST_F(VirtualGamepadManualAttachTest, ADetachRefusedForAConnectedPtoOrHosesShowsTheMatchingWarning) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua("StubManualAttach.attach(tractor, plow, 1, 1); plow.ptoConnected = true");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     PullTrigger(kRight);

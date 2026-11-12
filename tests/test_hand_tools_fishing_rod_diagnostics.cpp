@@ -55,7 +55,7 @@ protected:
     // The mod started with a player on foot in a game with the Highlands Fishing DLC and the game clock set.
     void Start() {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
-        stubs = std::string(kXmlStubs) + FishingRodStubs("ok");
+        stubs = StubChunk("xml_settings") + FishingRodStubs("ok");
         StartOptions options;
         options.extraStubs = stubs.c_str();
         ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge, options));

@@ -24,7 +24,8 @@ protected:
     void Start() {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
         StartOptions options;
-        options.extraStubs = kXmlStubs;
+        const std::string xmlStubs = StubChunk("xml_settings");
+        options.extraStubs = xmlStubs.c_str();
         ASSERT_NO_FATAL_FAILURE(StartHandToolsMod(L, bridge, options));
         ASSERT_EQ(RunLuauChunk(L, "runCommand('vrVirtualGamepad', 'on')", "=padOn"), 0);
         SetGameTime(10000);
@@ -97,8 +98,8 @@ TEST_F(VirtualGamepadHandToolsLeftHandTest, TheToolHandIsSavedAcrossSessions) {
     fs25vr::VRBridge secondBridge(secondHeadset.manager, nullptr);
     ASSERT_TRUE(secondBridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kXmlStubs, "=xmlStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("console"), "=consoleStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("xml_settings"), "=xmlStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, "savedXml['vrSettings.toolHand'] = 'left'; VRCompanion:loadMap('x')", "=loadMapAgain"), 0);
     EXPECT_EQ(EvalLua(L, "VRCompanion:getToolHand()"), "0");
 
