@@ -30,6 +30,11 @@ endif()
 
 include(FetchContent)
 
+# Every fetched dependency is pinned to a full commit hash with its readable version in a comment, so
+# its sources cannot change under a moved tag; scripts/check_pins.ps1 enforces it. CMake can only
+# shallow clone a branch or a tag, so these are full clones (CI caches them). To bump one, resolve the
+# new tag with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha` and update both.
+
 # Fetch OpenXR-SDK
 set(DYNAMIC_LOADER OFF CACHE BOOL "Build static OpenXR loader" FORCE)
 set(BUILD_TESTS OFF CACHE BOOL "Do not build OpenXR tests" FORCE)
@@ -37,8 +42,7 @@ set(BUILD_TESTS OFF CACHE BOOL "Do not build OpenXR tests" FORCE)
 FetchContent_Declare(
     OpenXR
     GIT_REPOSITORY https://github.com/KhronosGroup/OpenXR-SDK.git
-    GIT_TAG release-1.1.63
-    GIT_SHALLOW TRUE
+    GIT_TAG f2448a8797c85814aa892efc1ab8707900fbcc78 # release-1.1.63
 )
 FetchContent_MakeAvailable(OpenXR)
 # As a static library the OpenXR loader sets its own MSVC_RUNTIME_LIBRARY to the dynamic CRT, which
@@ -52,8 +56,7 @@ endif()
 FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG v1.15.2
-    GIT_SHALLOW TRUE
+    GIT_TAG b514bdc898e2951020cbdca1304b75f5950d1f59 # v1.15.2
 )
 # GoogleTest must follow the static runtime chosen above (the test executable and the Injector agree).
 set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)
@@ -62,22 +65,22 @@ FetchContent_MakeAvailable(googletest)
 # Fetch Luau for in-process Luau VM interaction and TDD
 set(LUAU_BUILD_CLI OFF CACHE BOOL "Do not build Luau CLI" FORCE)
 set(LUAU_BUILD_TESTS OFF CACHE BOOL "Do not build Luau tests" FORCE)
-# Must match the Luau FS25 embeds; bumping it also means updating the host fingerprint (ADR-0002 amendment).
+# Must match the Luau FS25 embeds; bumping it also means updating the host fingerprint (ADR-0002
+# amendment) and GIT_TAG below to the commit this tag names. FS25VR_LUAU_TAG reaches the test that
+# compares it with kExpectedLuauVersion.
 set(FS25VR_LUAU_TAG 0.662)
 FetchContent_Declare(
     luau
     GIT_REPOSITORY https://github.com/luau-lang/luau.git
-    GIT_TAG ${FS25VR_LUAU_TAG}
-    GIT_SHALLOW TRUE
+    GIT_TAG c2e72666d9925b4d76d1e6689b176b770e52998c # 0.662 (FS25VR_LUAU_TAG)
 )
 FetchContent_MakeAvailable(luau)
 
-# Fetch MinHook for inline hooking (pinned release)
+# Fetch MinHook for inline hooking
 FetchContent_Declare(
     minhook
     GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-    GIT_TAG v1.3.4
-    GIT_SHALLOW TRUE
+    GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537 # v1.3.4
 )
 FetchContent_MakeAvailable(minhook)
 
@@ -243,6 +246,7 @@ add_executable(fs25_vr_tests
     tests/test_companion_mod.cpp
     tests/test_subsystem_registry.cpp
     tests/test_companion_mod_stubs.cpp
+    tests/test_companion_mod_globals.cpp
     tests/test_injector_version_warning.cpp
     tests/test_motion_controllers.cpp
     tests/test_pointer_ray.cpp
