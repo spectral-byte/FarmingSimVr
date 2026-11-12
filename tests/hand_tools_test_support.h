@@ -124,7 +124,7 @@ inline void HoldLance(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldLance, "=ho
 // which installs the game's HandToolFlashlight before the Companion Mod's files load, as the game has it. The flashlight is
 // made and held by HoldFlashlight / kHoldFlashlight.
 inline std::string FlashlightGame(const char* variant = "ok") {
-    return StubChunk("hand_tool_flashlight") + "\nStubHandTool.installFlashlight('" + variant + "')";
+    return StubInstalled("hand_tool_flashlight", std::string("StubHandTool.installFlashlight('") + variant + "')");
 }
 inline constexpr const char* kHoldFlashlight = "_G.flashlight = StubHandTool.flashlight(foot.player); StubHandTool.hold(flashlight)";
 inline void HoldFlashlight(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldFlashlight, "=holdFlashlight"), 0); }
@@ -137,7 +137,7 @@ inline void HoldOtherModTool(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldOthe
 // The chainsaw's game-side stub (hand_tool_chainsaw.luau) is not part of every test's game: a test that wants it passes
 // ChainsawStubs(variant) as StartOptions::extraStubs. variant is how HandToolChainsaw is: "ok", "missing", "reshaped" (onUpdate), "drawMissing", "drawReshaped" (onDraw), "minimumMissing" (MINIMUM_CUT_DISTANCE), ...
 inline std::string ChainsawStubs(const char* variant = "ok") {
-    return StubChunk("hand_tool_chainsaw") + "\nStubHandTool.installChainsaw('" + variant + "')\n";
+    return StubInstalled("hand_tool_chainsaw", std::string("StubHandTool.installChainsaw('") + variant + "')");
 }
 
 // The player takes the chainsaw in hand: _G.saw.
@@ -149,7 +149,7 @@ inline void HoldChainsaw(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldChainsaw
 // SprayCanStubs() as StartOptions::extraStubs (after xml_settings.luau, if it uses both: concatenate).
 // variant is how HandToolSprayCan.onDraw is: "ok", "missing", "reshaped".
 inline std::string SprayCanStubs(const char* variant = "ok") {
-    return StubChunk("hand_tool_spray_can") + "\nStubHandTool.installSprayCan('" + variant + "')\n";
+    return StubInstalled("hand_tool_spray_can", std::string("StubHandTool.installSprayCan('") + variant + "')");
 }
 
 // The player takes the spray can in hand: _G.can.
@@ -162,7 +162,7 @@ inline void HoldSprayCan(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldSprayCan
 // HandToolHorseBrush.onBrushAction is ("ok", "missing", "reshaped"), lookup how
 // HandToolHorseBrush.getHusbandryAndClusterFromNode is (the same three).
 inline std::string HorseBrushStubs(const char* handler = "ok", const char* lookup = "ok") {
-    return StubChunk("hand_tool_horse_brush") + "\nStubHandTool.installHorseBrush('" + handler + "', '" + lookup + "')\n";
+    return StubInstalled("hand_tool_horse_brush", std::string("StubHandTool.installHorseBrush('") + handler + "', '" + lookup + "')");
 }
 
 // The player takes the horse brush in hand: _G.brush.
@@ -175,7 +175,7 @@ inline void HoldHorseBrush(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldHorseB
 // any). A game without the DLC simply leaves it out. variant is how the class's ACTIVATE_HANDTOOL handler (onActivateAction) is:
 // "ok", "missing", "reshaped".
 inline std::string FishingRodStubs(const char* variant = "ok") {
-    return StubChunk("hand_tool_fishing_rod") + "\nStubHandTool.installFishingRod('" + variant + "')\n";
+    return StubInstalled("hand_tool_fishing_rod", std::string("StubHandTool.installFishingRod('") + variant + "')");
 }
 
 // The player takes the fishing rod in hand: _G.rod.

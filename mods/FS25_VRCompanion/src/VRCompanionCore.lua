@@ -48,35 +48,6 @@ function VRCompanion.getEngineGlobal(name)
     return _G and _G[name]
 end
 
--- The text the player reads for an l10n key (the game's own, or this mod's from modDesc.xml) in the game's current language,
--- else englishText: when the game has no text for the key, has no g_i18n, or asking it raises. A key is never returned as the
--- text. englishText may be nil, for a caller that tries something else next.
-function VRCompanion.getLocalisedText(key, englishText)
-    local i18n = VRCompanion.getEngineGlobal("g_i18n")
-    if type(key) ~= "string" or key == "" or type(i18n) ~= "table" then return englishText end
-    local ok, text = pcall(function()
-        if i18n:hasText(key) then return i18n:getText(key) end
-        return nil
-    end)
-    if ok and type(text) == "string" and text ~= "" then return text end
-    return englishText
-end
-
--- A notification's text: the text for an l10n key (see getLocalisedText) formatted with the values, else englishFormat formatted
--- with them, also when the game's text does not take these values. Console output and log lines are not made with it: they stay
--- English.
-function VRCompanion.formatLocalisedText(key, englishFormat, ...)
-    local ok, text = pcall(string.format, VRCompanion.getLocalisedText(key, englishFormat), ...)
-    if ok then return text end
-    return string.format(englishFormat, ...)
-end
-
--- "on" or "off" in the game's language, for a notification that a setting was turned on or off.
-function VRCompanion.onOffText(enabled)
-    if enabled then return VRCompanion.getLocalisedText("vrNotification_on", "on") end
-    return VRCompanion.getLocalisedText("vrNotification_off", "off")
-end
-
 -- ---- Who aims the look ray ----------------------------------------------------------------------------------
 -- The game's Player:getLookRay is wrapped once, as the shared wrap "lookRay" of VRCompanionGameWraps.lua, for as long as a
 -- subsystem that aims holds the wrap (Hand Tools and Object Grab each hold it, so that one giving up leaves the other aiming). The wrap asks each subsystem
@@ -347,12 +318,22 @@ VRCompanion.CORE_CONSOLE_COMMANDS = {
     { name = "vrHudGroupShow", description = "Show or hide a HUD Group in the Streamlined or Full HUD: vrHudGroupShow <map|speedometer|info|controls> <streamlined|full> <on|off>", method = "consoleCommandHudGroupShow" },
 }
 
--- Compares this Companion Mod's version with the Injector's. Returns nil when they are the same release (or the Injector reports
--- none, which no release does), else the sentence for both the player and log.txt. An Injector that reports the fixed text of the releases up to 1.2
--- is "an older version": the number would say nothing.
-function VRCompanion:describeVersionMismatch(injectorVersion)
+-- What the version mismatch warning calls the Injector, or nil when it is the same release as this Companion Mod (or reports
+-- none, which no release does). An Injector that reports the fixed text of the releases up to 1.2 is older(): the number would
+-- say nothing; any other is version(injectorVersion).
+local function mismatchedInjector(self, injectorVersion, older, version)
     if type(injectorVersion) ~= "string" or injectorVersion == self.VERSION then return nil end
-    local injectorText = (injectorVersion == self.LEGACY_INJECTOR_VERSION) and "an older version" or ("version " .. injectorVersion)
+    if injectorVersion == self.LEGACY_INJECTOR_VERSION then return older() end
+    return version(injectorVersion)
+end
+
+-- Compares this Companion Mod's version with the Injector's. Returns nil when they are the same release, else the sentence for
+-- log.txt (in English).
+function VRCompanion:describeVersionMismatch(injectorVersion)
+    local injectorText = mismatchedInjector(self, injectorVersion,
+        function() return "an older version" end,
+        function(version) return "version " .. version end)
+    if injectorText == nil then return nil end
     return string.format("The Companion Mod is version %s but the Injector is %s. Install both files from the same release.",
         self.VERSION, injectorText)
 end
@@ -360,10 +341,10 @@ end
 -- The same warning as the player reads it on the screen: in the game's language, "FS25 VR: " and the sentence in English otherwise.
 -- log.txt keeps the English sentence (describeVersionMismatch).
 function VRCompanion:describeVersionMismatchOnScreen(injectorVersion)
-    if type(injectorVersion) ~= "string" or injectorVersion == self.VERSION then return nil end
-    local injectorText = (injectorVersion == self.LEGACY_INJECTOR_VERSION)
-        and VRCompanion.getLocalisedText("vrVersion_injectorOlder", "an older version")
-        or VRCompanion.formatLocalisedText("vrVersion_injectorVersion", "version %s", injectorVersion)
+    local injectorText = mismatchedInjector(self, injectorVersion,
+        function() return VRCompanion.getLocalisedText("vrVersion_injectorOlder", "an older version") end,
+        function(version) return VRCompanion.formatLocalisedText("vrVersion_injectorVersion", "version %s", version) end)
+    if injectorText == nil then return nil end
     return VRCompanion.formatLocalisedText("vrVersion_mismatch",
         "FS25 VR: The Companion Mod is version %s but the Injector is %s. Install both files from the same release.",
         self.VERSION, injectorText)
@@ -1360,9 +1341,11 @@ function VRCompanion:deleteMap()
     -- the VR action events and Locomotion forgets the vehicles' rotation states, in the mapUnload hooks below. The registry runs
     -- them after the core's teardown above and, in reverse file order, after the subsystems registered later. What that order
     -- has to give:
-    --  * The HUD unloads before Stereo (it registers after it): Stereo's mapUnload leaves 2D Floating Window Mode last of all.
-    --    When the map unloads in that mode, leaving it applies the HUD Safe Area and the HUD state again (set2DViewActive) after
-    --    the HUD went back to the full screen, so the game's HUD anchors are left at the Safe Area.
+    --  * The HUD unloads before Stereo (it registers after it). The order is kept because it is the order of the unload before
+    --    the registry, where the HUD went back to the full screen before Stereo left 2D Floating Window Mode, so that unloading
+    --    behaves as it did (the HUD's unload reads whether that mode is on). It is also why a map unloaded in 2D Floating Window Mode leaves the game's HUD anchors at the VR
+    --    Safe Area (a known bug): Stereo's mapUnload leaves the mode last of all, and leaving it applies the HUD Safe Area and
+    --    the HUD state again (set2DViewActive) after the HUD went back to the full screen.
     --  * Within Stereo's mapUnload the nodes go before the camera settings are restored; the restore skips every camera that no
     --    longer exists (entityExists), the eye nodes among them.
     --  * Hand Tools unload before the Virtual Hands (they register after them): a tool hangs below a hand.

@@ -57,3 +57,8 @@ inline std::string StubChunk(const std::string& name) {
     buffer << file.rdbuf();
     return buffer.str();
 }
+
+// The stub called `name` followed by the Luau that installs it, e.g. StubInstalled("animated_objects", "StubAnimatedObject.install('ok')").
+inline std::string StubInstalled(const std::string& name, const std::string& install) {
+    return StubChunk(name) + "\n" + install + "\n";
+}

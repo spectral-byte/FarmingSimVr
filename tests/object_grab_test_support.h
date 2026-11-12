@@ -23,7 +23,7 @@ using namespace hand_tools_test;
 
 // The game's hands in the game (hand_tool_hands.luau), for StartOptions::extraStubs. variant: see the top of that file.
 inline std::string HandsStubs(const char* variant = "ok") {
-    return StubChunk("hand_tool_hands") + "\nStubHandTool.installHands('" + variant + "')\n";
+    return StubInstalled("hand_tool_hands", std::string("StubHandTool.installHands('") + variant + "')");
 }
 
 // The player's hands are empty: the game's hands tool (Player.hands) is held, as _G.hands.

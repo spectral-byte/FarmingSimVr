@@ -126,7 +126,7 @@ local state = newState()
 
 -- ---- Checking what Manual Attach has ---------------------------------------------------------------------------------------
 
--- Why a function of an owner is not what the module expects, or nil when it is (the core's wrap helper checks the shape).
+-- Why a function of an owner is not what the Subsystem expects, or nil when it is (the core's wrap helper checks the shape).
 local function shapeProblem(owner, ownerName, spec)
     return VRCompanion.GameWraps.shapeProblem(owner[spec.name], spec.parameters, spec.describe, ownerName .. "." .. spec.name)
 end
@@ -194,7 +194,7 @@ local function makeCandidateUpdate(original)
     end
 end
 
--- The one function the module wraps, declared to the core's wrap helper (VRCompanionGameWraps.lua): on the class found in Manual Attach's
+-- The one function the Subsystem wraps, declared to the core's wrap helper (VRCompanionGameWraps.lua): on the class found in Manual Attach's
 -- environment (findManualAttach, which checks it with the rest). Giving up is ONE warning and lifts the wrap; map unload forgets it.
 local wraps = VRCompanion.GameWraps.newSet({
     owner = "manualAttach",
@@ -230,7 +230,7 @@ local function tryInstall(dt)
 end
 
 -- Map unload (and the end of a session): the class's candidate update is handed back as found (unless something else wrapped it since, which
--- cannot be taken out from under it), and the module forgets, that it gave up included.
+-- cannot be taken out from under it), and the Subsystem forgets, that it gave up included.
 function VRCompanion:resetManualAttachSupport()
     wraps:reset()
     state = newState()

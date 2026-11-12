@@ -12,14 +12,33 @@
 #include "companion_mod_stubs.h"
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <regex>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
+
+// The text of a repo-relative file, found as the mod itself is found (ResolveProjectPath). A file that cannot be found or read
+// fails the test, so no check below passes over an empty file.
+std::string ReadProjectFile(const std::string& relativePath) {
+    const std::filesystem::path path = ResolveProjectPath(relativePath);
+    std::ifstream file;
+    if (!path.empty()) file.open(path, std::ios::binary);
+    if (!file.is_open()) {
+        ADD_FAILURE() << "file not found: " << relativePath;
+        return "";
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    const std::string text = buffer.str();
+    if (text.empty()) ADD_FAILURE() << "file is empty: " << relativePath;
+    return text;
+}
 
 struct ModText {
     std::string en;
@@ -28,7 +47,7 @@ struct ModText {
 
 // modDesc.xml's <l10n> texts by name, each with its English and German text ("" where a language is missing).
 std::map<std::string, ModText> ModDescTexts() {
-    const std::string modDesc = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
+    const std::string modDesc = ReadProjectFile("mods/FS25_VRCompanion/modDesc.xml");
     std::map<std::string, ModText> texts;
     const std::regex textRe(R"re(<text name="([^"]+)">([\s\S]*?)</text>)re");
     const std::regex enRe(R"re(<en>([\s\S]*?)</en>)re");
@@ -46,7 +65,7 @@ std::map<std::string, ModText> ModDescTexts() {
 
 // The mod's action names (modDesc.xml <actions>): the engine shows the text input_<action> for each by convention.
 std::set<std::string> ModDescActions() {
-    const std::string modDesc = ReadFile("mods/FS25_VRCompanion/modDesc.xml");
+    const std::string modDesc = ReadProjectFile("mods/FS25_VRCompanion/modDesc.xml");
     std::set<std::string> actions;
     const std::regex actionRe(R"re(<action name="([^"]+)")re");
     for (auto it = std::sregex_iterator(modDesc.begin(), modDesc.end(), actionRe); it != std::sregex_iterator(); ++it) {
@@ -60,10 +79,15 @@ std::set<std::string> ModDescActions() {
 std::set<std::string> KeysInModSource() {
     std::set<std::string> keys;
     const std::regex keyRe(R"re("((?:vr[A-Za-z0-9]*_[A-Za-z0-9_]+)|(?:input_[A-Z0-9_]+))")re");
-    const std::filesystem::path srcDir = std::filesystem::path(PROJECT_ROOT_DIR) / "mods" / "FS25_VRCompanion" / "src";
+    const std::string srcRel = "mods/FS25_VRCompanion/src";
+    const std::filesystem::path srcDir = ResolveProjectPath(srcRel);
+    if (srcDir.empty() || !std::filesystem::is_directory(srcDir)) {
+        ADD_FAILURE() << "folder not found: " << srcRel;
+        return keys;
+    }
     for (const auto& entry : std::filesystem::directory_iterator(srcDir)) {
         if (entry.path().extension() != ".lua") continue;
-        const std::string source = ReadFile(entry.path().string());
+        const std::string source = ReadProjectFile(srcRel + "/" + entry.path().filename().string());
         for (auto it = std::sregex_iterator(source.begin(), source.end(), keyRe); it != std::sregex_iterator(); ++it) {
             keys.insert((*it)[1].str());
         }
@@ -331,7 +355,9 @@ TEST_F(NotificationTextsTest, EveryKeyTheModNamesIsInModDescInEnglishAndGerman) 
 TEST_F(NotificationTextsTest, EveryTextInModDescIsUsed) {
     const std::set<std::string> keys = KeysInModSource();
     const std::set<std::string> actions = ModDescActions();
-    for (const auto& [name, text] : ModDescTexts()) {
+    const std::map<std::string, ModText> texts = ModDescTexts();
+    ASSERT_FALSE(texts.empty()) << "modDesc.xml defines no texts";
+    for (const auto& [name, text] : texts) {
         const bool actionText = name.rfind("input_", 0) == 0 && actions.count(name.substr(6)) == 1;
         EXPECT_TRUE(actionText || keys.count(name) == 1) << "modDesc.xml defines " << name << ", which nothing uses";
     }

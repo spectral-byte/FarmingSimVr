@@ -1720,6 +1720,10 @@ local function restoreOriginalCameraSettings(self)
     self.origCamSettings = {}
 end
 
+-- Map unload runs after the HUD's (the HUD registers after Stereo), as it did before the registry, so unloading behaves as it did. The
+-- nodes go before the camera settings are restored, which skips cameras that no longer exist. Leaving 2D Floating Window Mode
+-- last applies the HUD Safe Area and the HUD state again after the HUD went back to the full screen, so a map unloaded in that
+-- mode leaves the game's HUD anchors at the Safe Area (a known bug; see the core's deleteMap).
 VRCompanion:registerSubsystem("stereo", {
     mapLoad = function(self)
         self:initDualEyeCameraNodes()

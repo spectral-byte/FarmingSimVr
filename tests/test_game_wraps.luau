@@ -510,4 +510,95 @@ test("the Subsystem can tell which object's own copy is wrapped, for its diagnos
     expectEqual(set:instanceTarget(), nil, "none once lifted")
 end)
 
+-- ---- The give-up warning's sentence ---------------------------------------------------------------------------------------
+
+test("a give-up sentence without %s raises when the set is declared, naming the Subsystem", function()
+    for _, sentence in ipairs({ "Stub disabled. The game is unchanged.", 42 }) do
+        local ok, err = pcall(GameWraps.newSet, {
+            owner = "stub",
+            giveUp = sentence,
+            functions = { update = { class = "StubClass", parameters = 2, describe = "(object, dt)" } },
+        })
+        expectEqual(ok, false, "declaring " .. tostring(sentence))
+        expectEqual(string.find(tostring(err), "stub", 1, true) ~= nil, true, "the message names the Subsystem: " .. tostring(err))
+        expectEqual(string.find(tostring(err), "%s", 1, true) ~= nil, true, "and what is missing: " .. tostring(err))
+    end
+end)
+
+test("a give-up reason with a % in it is logged as it is", function()
+    _G.StubClass = {}
+    local set = stubSet(function(original) return original end)
+    set:giveUp("100% gone")
+    expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: 100% gone. The game is unchanged.", "the warning")
+end)
+
+-- ---- The order the functions are checked in -----------------------------------------------------------------------------
+
+test("a set declared with an order checks its functions in that order, so the first reason logged is the first declared", function()
+    _G.StubClass = {}
+    local set = GameWraps.newSet({
+        owner = "stub",
+        giveUp = "Stub disabled: %s. The game is unchanged.",
+        order = { "zeta", "alpha" },
+        functions = {
+            alpha = { class = "StubClass", parameters = 1, describe = "(object)" },
+            zeta = { class = "StubClass", parameters = 1, describe = "(object)" },
+        },
+    })
+    set:check()
+    expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: StubClass.zeta: it is missing. The game is unchanged.", "the warning")
+end)
+
+test("a set declared without an order checks its functions by name", function()
+    _G.StubClass = {}
+    local set = GameWraps.newSet({
+        owner = "stub",
+        giveUp = "Stub disabled: %s. The game is unchanged.",
+        functions = {
+            zeta = { class = "StubClass", parameters = 1, describe = "(object)" },
+            alpha = { class = "StubClass", parameters = 1, describe = "(object)" },
+        },
+    })
+    set:check()
+    expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: StubClass.alpha: it is missing. The game is unchanged.", "the warning")
+end)
+
+test("an order that leaves out a declared function, or names one that is not declared, raises when the set is declared", function()
+    for _, order in ipairs({ { "alpha" }, { "alpha", "zeta", "omega" } }) do
+        local ok, err = pcall(GameWraps.newSet, {
+            owner = "stub",
+            giveUp = "Stub disabled: %s.",
+            order = order,
+            functions = {
+                alpha = { class = "StubClass", parameters = 1, describe = "(object)" },
+                zeta = { class = "StubClass", parameters = 1, describe = "(object)" },
+            },
+        })
+        expectEqual(ok, false, "declaring the order " .. table.concat(order, ","))
+        expectEqual(string.find(tostring(err), "stub", 1, true) ~= nil, true, "the message names the Subsystem: " .. tostring(err))
+    end
+end)
+
+-- ---- Giving up once, without wraps ----------------------------------------------------------------------------------------
+
+test("a Subsystem that wraps by itself gives up once with one warning, and again after a reset", function()
+    local giveUp = GameWraps.newGiveUp("stub", "Stub disabled: %s. The game is unchanged.")
+    expectEqual(giveUp:problem(), nil, "not given up")
+    giveUp:giveUp("it broke")
+    giveUp:giveUp("it broke again")
+    expectEqual(#warnings(), 1, "warnings")
+    expectEqual(warnings()[1], "[FS25_VR] [Warning] Stub disabled: it broke. The game is unchanged.", "the warning")
+    expectEqual(giveUp:problem(), "it broke", "why")
+    giveUp:reset()
+    expectEqual(giveUp:problem(), nil, "forgotten at map unload")
+    giveUp:giveUp("it broke on the next map")
+    expectEqual(#warnings(), 2, "warned again on the next map")
+end)
+
+test("a give-up-once sentence without %s raises when it is made", function()
+    local ok, err = pcall(GameWraps.newGiveUp, "stub", "Stub disabled.")
+    expectEqual(ok, false, "making it")
+    expectEqual(string.find(tostring(err), "stub", 1, true) ~= nil, true, "the message names the Subsystem: " .. tostring(err))
+end)
+
 realPrint(string.format("GameWraps: %d passed, %d failed", passed, failed))

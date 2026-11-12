@@ -531,11 +531,11 @@ end
 -- The game functions Hand Tools wrap or rely on, declared to the core's wrap helper (VRCompanionGameWraps.lua, which says what
 -- each field means), keyed by a name of the function wrapped (`fn` is its name on the class when two classes have an `onUpdate`).
 -- The wrappers (`make`) are attached by the sections that own them, which need locals defined below this table; an entry without
--- one is CHECK-ONLY: a function the module depends on but does not wrap, which is only checked at map load (the feature gives up
--- when it is missing or reshaped). Every function the module depends on is listed here, so that the give-up check knows all of them.
+-- one is CHECK-ONLY: a function the Subsystem depends on but does not wrap, which is only checked at map load (the feature gives up
+-- when it is missing or reshaped). Every function the Subsystem depends on is listed here, so that the give-up check knows all of them.
 local WRAP_SPECS = {
     attachToolToCamera = { class = "HandTool", parameters = 1, describe = "(tool)" },
-    -- SHARED: the helper's look ray wrap "lookRay", which Object Grab holds too; this module holds it while it has not given up
+    -- SHARED: the helper's look ray wrap "lookRay", which Object Grab holds too; this Subsystem holds it while it has not given up
     getLookRay = { class = "Player", parameters = 1, describe = "(player)", shared = "lookRay" },
     -- The chainsaw: the specialization's update (the game's event dispatch reads it off the class at every call) and its roll
     -- action's handler

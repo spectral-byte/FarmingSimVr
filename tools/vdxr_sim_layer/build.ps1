@@ -9,19 +9,26 @@ $here = $PSScriptRoot
 $BuildDir = (Resolve-Path $BuildDir).Path
 $out = Join-Path $BuildDir 'vdxr_sim_layer'
 
-# The OpenXR SDK source: build\_deps\openxr-src, or the folder FETCHCONTENT_SOURCE_DIR_OPENXR points at.
-$openxrSrc = Join-Path $BuildDir '_deps\openxr-src'
+# The OpenXR SDK as the build fetched it: under FETCHCONTENT_BASE_DIR (the CMake presets put it in <repo>\.deps; <BuildDir>\_deps
+# without them), in openxr-src with the generated headers in openxr-build; or the source folder FETCHCONTENT_SOURCE_DIR_OPENXR
+# points at.
 $cache = Join-Path $BuildDir 'CMakeCache.txt'
-if (Test-Path $cache) {
-    $line = Select-String -Path $cache -Pattern '^FETCHCONTENT_SOURCE_DIR_OPENXR:[A-Z]+=(.+)$' | Select-Object -First 1
-    if ($line -and $line.Matches[0].Groups[1].Value.Trim()) { $openxrSrc = $line.Matches[0].Groups[1].Value.Trim() }
+function Get-CacheValue([string]$name) {
+    if (-not (Test-Path $cache)) { return $null }
+    $line = Select-String -Path $cache -Pattern "^${name}:[A-Z]+=(.+)$" | Select-Object -First 1
+    if ($line -and $line.Matches[0].Groups[1].Value.Trim()) { return $line.Matches[0].Groups[1].Value.Trim() }
+    return $null
 }
+$depsDir = Get-CacheValue 'FETCHCONTENT_BASE_DIR'
+if (-not $depsDir) { $depsDir = Join-Path $BuildDir '_deps' }
+$openxrSrc = Get-CacheValue 'FETCHCONTENT_SOURCE_DIR_OPENXR'
+if (-not $openxrSrc) { $openxrSrc = Join-Path $depsDir 'openxr-src' }
 $openxrInclude = Join-Path $openxrSrc 'include'
 if (-not (Test-Path (Join-Path $openxrInclude 'openxr\openxr.h'))) {
     throw "OpenXR headers not found in $openxrInclude. Configure the repository's CMake build in $BuildDir first."
 }
 $includes = @('/I', $openxrInclude)
-$generated = Join-Path $BuildDir '_deps\openxr-build\include'
+$generated = Join-Path $depsDir 'openxr-build\include'
 if (Test-Path $generated) { $includes += @('/I', $generated) }
 
 if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {

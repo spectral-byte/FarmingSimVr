@@ -10,8 +10,11 @@
 --
 --   local wraps = VRCompanion.GameWraps.newSet({
 --       owner = "objectGrab",                  -- the Subsystem's name: what holds a shared wrap
---       giveUp = "Object Grab disabled: %s. Picking up is unchanged.",   -- the warning, %s the reason ("[FS25_VR] [Warning] " before it)
+--       giveUp = "Object Grab disabled: %s. Picking up is unchanged.",   -- the warning, %s the reason ("[FS25_VR] [Warning] " before it);
+--                                              -- newSet raises when it is not a string with a %s
 --       nameAsSubject = false,                 -- reasons read "<Class.fn>: it is missing" (default) or "<Class.fn> is missing" (true)
+--       order = nil,                           -- { <name>, ... }: every declared name, in the order they are checked and wrapped,
+--                                              -- so the first reason logged is the first in it; nil: by name (see CHECK ORDER)
 --       functions = {                          -- keyed by a name the Subsystem uses for the function
 --           <name> = {
 --               class = "HandToolHands",       -- the engine global the function is on, or function() -> the table (another mod's environment)
@@ -28,7 +31,8 @@
 --
 --   wraps:wrapAll()                 wraps each function on its class (once per class table), none once the set gave up; a function
 --                                   that is not the expected shape is left alone (check reports it)
---   wraps:check() -> reason|nil     gives up (once) on the first declared function, by name, that is missing or reshaped
+--   wraps:check() -> reason|nil     gives up (once) on the first declared function (in `order`, or by name) that is missing or
+--                                   reshaped
 --   wraps:findProblem() -> reason|nil   the same reason without giving up (for a Subsystem that warns only later)
 --   wraps:giveUp(reason)            lifts every wrap and logs the warning, once: a later give-up is ignored
 --   wraps:problem() -> reason|nil   why the set gave up
@@ -42,11 +46,19 @@
 --   wraps:wrapNames(), wraps:status(name)         the wrapped (not check-only) names, sorted, and "<name> wrap: installed" (or
 --                                   "not installed", "gave up (<reason>)") for the diagnostics
 --
+--   GameWraps.newGiveUp(owner, sentence)   the give-up part alone, for a Subsystem that wraps by itself: giveUp(reason) logs the
+--                                   sentence (as a set's giveUp) once and returns true, false when it already gave up; problem();
+--                                   reset() at map unload. A set gives up through one of its own.
 --   GameWraps.parameterCount(fn) -> number|nil   nil when it takes any number, or the runtime cannot tell
 --   GameWraps.shapeProblem(fn, parameters, describe, subject) -> reason|nil   "<subject> is missing", "... is not a function",
 --                                   "... takes N parameters, not <describe>"; subject defaults to "it"
 --   GameWraps.defineShared(key, { class, fn, make })   a wrap more than one Subsystem holds: put on with the first hold, lifted
---                                   when the last holder lets go. holdShared(key, owner), releaseShared(key, owner), sharedOriginal(key)
+--                                   when the last holder lets go; a set's function declared with `shared = key` holds it
+--
+-- CHECK ORDER: when two declared functions are missing or reshaped, the warning names the first one checked. A Subsystem whose
+-- own checks went down a list before the helper (Animated Objects: the trigger callback, the "can be triggered" check, the
+-- toggle handler) declares that list as `order`, so it warns as before. Hand Tools and Object Grab went over their table with
+-- pairs, in no fixed order, so they declare none and are checked by name: a fixed order, where theirs had none.
 --
 -- THE SHARED LOOK RAY: Player:getLookRay is the shared wrap "lookRay", held by Hand Tools and Object Grab, so that one giving up
 -- leaves the other aiming. Its wrapper answers VRCompanion:getAimedLookRay (Core) and the game's own ray otherwise.
@@ -123,7 +135,7 @@ end
 
 -- Holds the shared wrap for `owner`, putting it on the class when it is not there (or the game replaced the class table). Returns
 -- whether it is there.
-function GameWraps.holdShared(key, owner)
+local function holdShared(key, owner)
     local shared = sharedOf(key)
     local class = classOf(shared.spec)
     if class == nil then return false end
@@ -140,7 +152,7 @@ function GameWraps.holdShared(key, owner)
 end
 
 -- `owner` lets go; the class gets the game's function back when nobody holds the wrap any more and it is still the wrapper there.
-function GameWraps.releaseShared(key, owner)
+local function releaseShared(key, owner)
     local shared = sharedOf(key)
     shared.holders[owner] = nil
     if next(shared.holders) ~= nil or shared.wrap == nil then return end
@@ -149,20 +161,65 @@ function GameWraps.releaseShared(key, owner)
     if wrap.class[shared.spec.fn] == wrap.wrapper then wrap.class[shared.spec.fn] = wrap.original end
 end
 
--- The game's function under the shared wrap while it is on, or nil.
-function GameWraps.sharedOriginal(key)
-    local wrap = sharedOf(key).wrap
-    return wrap ~= nil and wrap.original or nil
-end
-
 -- ---- A Subsystem's set of wraps ------------------------------------------------------------------------------------------
 
 local Set = {}
 Set.__index = Set
 
+-- Raises (at the Subsystem's declaration) unless the give-up sentence is a string with a %s for the reason.
+local function checkGiveUpSentence(owner, sentence)
+    if type(sentence) ~= "string" or string.find(sentence, "%s", 1, true) == nil then
+        error("Subsystem '" .. tostring(owner) .. "': the give-up sentence must be a string with a %s for the reason, not "
+            .. tostring(sentence), 3)
+    end
+end
+
+-- ---- Giving up once ---------------------------------------------------------------------------------------------------------
+
+local GiveUp = {}
+GiveUp.__index = GiveUp
+
+function GameWraps.newGiveUp(owner, sentence)
+    checkGiveUpSentence(owner, sentence)
+    return setmetatable({ sentence = sentence, because = nil }, GiveUp)
+end
+
+-- Logs the warning with the reason and returns true, the first time; a later give-up is ignored (false) until reset.
+function GiveUp:giveUp(problem)
+    if self.because ~= nil then return false end
+    self.because = problem
+    local at = string.find(self.sentence, "%s", 1, true)  -- there is one: newGiveUp checks the sentence
+    print("[FS25_VR] [Warning] " .. string.sub(self.sentence, 1, at - 1) .. problem .. string.sub(self.sentence, at + 2))
+    return true
+end
+
+function GiveUp:problem()
+    return self.because
+end
+
+function GiveUp:reset()
+    self.because = nil
+end
+
 -- wraps[name] = { class, fn, original, wrapper } (or { ..., shared = key } for a held shared wrap); instance = { target, entries }
 function GameWraps.newSet(declaration)
-    return setmetatable({ declaration = declaration, gaveUpBecause = nil, wraps = {}, instance = nil }, Set)
+    local givingUp = GameWraps.newGiveUp(declaration.owner, declaration.giveUp)
+    local order = declaration.order
+    if order ~= nil then
+        local listed = {}
+        for _, name in ipairs(order) do
+            if declaration.functions[name] == nil then
+                error("Subsystem '" .. tostring(declaration.owner) .. "': the order names " .. tostring(name) .. ", which is not declared", 2)
+            end
+            listed[name] = true
+        end
+        for name in pairs(declaration.functions) do
+            if not listed[name] then
+                error("Subsystem '" .. tostring(declaration.owner) .. "': the order leaves out " .. tostring(name), 2)
+            end
+        end
+    end
+    return setmetatable({ declaration = declaration, givingUp = givingUp, wraps = {}, instance = nil }, Set)
 end
 
 -- The declared names, sorted, so that the first reason found does not depend on the table's order.
@@ -171,6 +228,11 @@ local function sortedNames(functions)
     for name in pairs(functions) do names[#names + 1] = name end
     table.sort(names)
     return names
+end
+
+-- The declared names in the order they are checked and wrapped: the declared `order`, or by name.
+local function checkOrder(declaration)
+    return declaration.order or sortedNames(declaration.functions)
 end
 
 -- Wraps one declared function on its class, once per class table. A function that is not the expected shape is left alone.
@@ -184,7 +246,7 @@ function Set:wrap(name)
     local original = spec.shared ~= nil and sharedOriginalOn(spec.shared, class) or class[fn]
     if GameWraps.shapeProblem(original, spec.parameters, spec.describe) ~= nil then return end
     if spec.shared ~= nil then
-        if GameWraps.holdShared(spec.shared, self.declaration.owner) then
+        if holdShared(spec.shared, self.declaration.owner) then
             self.wraps[name] = { class = class, fn = fn, original = sharedOriginalOn(spec.shared, class), shared = spec.shared }
         end
         return
@@ -195,8 +257,8 @@ function Set:wrap(name)
 end
 
 function Set:wrapAll()
-    if self.gaveUpBecause ~= nil then return end
-    for _, name in ipairs(sortedNames(self.declaration.functions)) do self:wrap(name) end
+    if self.givingUp:problem() ~= nil then return end
+    for _, name in ipairs(checkOrder(self.declaration)) do self:wrap(name) end
 end
 
 -- Gives the target its own copies back, each unless something else has replaced the wrapper since.
@@ -215,7 +277,7 @@ end
 -- that is the class wrapper (the class wrap reaches it) or is not the expected shape is left alone; one the game replaced since
 -- is wrapped again.
 function Set:wrapInstance(target, names)
-    if self.gaveUpBecause ~= nil then return end
+    if self.givingUp:problem() ~= nil then return end
     if self.instance ~= nil and self.instance.target ~= target then self:liftInstance() end
     for _, name in ipairs(names) do
         local spec = self.declaration.functions[name]
@@ -244,7 +306,7 @@ function Set:liftAll()
     self:liftInstance()
     for _, wrap in pairs(self.wraps) do
         if wrap.shared ~= nil then
-            GameWraps.releaseShared(wrap.shared, self.declaration.owner)
+            releaseShared(wrap.shared, self.declaration.owner)
         elseif wrap.class[wrap.fn] == wrap.wrapper then
             wrap.class[wrap.fn] = wrap.original
         end
@@ -252,11 +314,11 @@ function Set:liftAll()
     self.wraps = {}
 end
 
--- The reason the first declared function (by name) is missing or reshaped, or nil. A wrapped function is checked as it was
--- when wrapped (the game's, under the wrapper).
+-- The reason the first declared function (in the declared order, or by name) is missing or reshaped, or nil. A wrapped function
+-- is checked as it was when wrapped (the game's, under the wrapper).
 function Set:findProblem()
     local functions = self.declaration.functions
-    for _, name in ipairs(sortedNames(functions)) do
+    for _, name in ipairs(checkOrder(self.declaration)) do
         local spec = functions[name]
         local class = classOf(spec)
         if class == nil then
@@ -280,28 +342,23 @@ end
 
 -- The Subsystem cannot rely on the game's functions: every wrap lifted, ONE warning. A later give-up is ignored until reset.
 function Set:giveUp(problem)
-    if self.gaveUpBecause ~= nil then return end
-    self.gaveUpBecause = problem
-    self:liftAll()
-    local template = self.declaration.giveUp
-    local at = string.find(template, "%s", 1, true)
-    print("[FS25_VR] [Warning] " .. string.sub(template, 1, at - 1) .. problem .. string.sub(template, at + 2))
+    if self.givingUp:giveUp(problem) then self:liftAll() end
 end
 
 function Set:check()
-    if self.gaveUpBecause ~= nil then return self.gaveUpBecause end
+    if self.givingUp:problem() ~= nil then return self.givingUp:problem() end
     local problem = self:findProblem()
     if problem ~= nil then self:giveUp(problem) end
     return problem
 end
 
 function Set:problem()
-    return self.gaveUpBecause
+    return self.givingUp:problem()
 end
 
 function Set:reset()
     self:liftAll()
-    self.gaveUpBecause = nil
+    self.givingUp:reset()
 end
 
 function Set:isWrapped(name)
@@ -323,7 +380,7 @@ function Set:wrapNames()
 end
 
 function Set:status(name)
-    if self.gaveUpBecause ~= nil then return name .. " wrap: gave up (" .. self.gaveUpBecause .. ")" end
+    if self.givingUp:problem() ~= nil then return name .. " wrap: gave up (" .. self.givingUp:problem() .. ")" end
     return name .. " wrap: " .. (self.wraps[name] ~= nil and "installed" or "not installed")
 end
 
