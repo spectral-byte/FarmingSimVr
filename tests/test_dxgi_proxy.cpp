@@ -22,6 +22,7 @@
 #include <functional>
 #include <future>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -6345,6 +6346,66 @@ TEST(DxgiProxyTest, ARefusedSessionLeavesTheGamesCreateSwapChainAsTheGameAskedAn
     EXPECT_EQ(g_systemCreationRequest.desc.BufferDesc.Height, 2160u);
     EXPECT_EQ(rig.Proxy().GetWindowController().GetTargetRenderWidth(), 0u) << "no Render Resolution recorded";
     rig.ExpectWindowUntouched();
+}
+
+TEST(DxgiProxyTest, AfterARefusedSessionTheDisplaysHdrIsNoLongerHiddenFromTheGame) {
+    RefusedSessionRig rig;
+    if (!rig.Ready()) GTEST_SKIP() << "no WARP D3D12 device";
+    std::vector<void*> vtable(29, nullptr);
+    vtable[0] = reinterpret_cast<void*>(&MockOutput6QI);
+    vtable[1] = reinterpret_cast<void*>(&MockAddRef);
+    vtable[2] = reinterpret_cast<void*>(&MockRelease);
+    vtable[kOutputGetDesc1VTableSlot] = reinterpret_cast<void*>(&MockOutputGetDesc1);
+    MockComObject mockOutput{ vtable.data() };
+    auto output6 = reinterpret_cast<IDXGIOutput6*>(&mockOutput);
+    ASSERT_TRUE(rig.Proxy().AttachOutput(reinterpret_cast<IDXGIOutput*>(&mockOutput)));
+    auto pfnGetDesc1 = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGIOutput6*, DXGI_OUTPUT_DESC1*)>(
+        vtable[kOutputGetDesc1VTableSlot]);
+    DXGI_OUTPUT_DESC1 desc{};
+    ASSERT_EQ(pfnGetDesc1(output6, &desc), S_OK);
+    ASSERT_EQ(desc.ColorSpace, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709) << "hidden while VR is active";
+
+    EXPECT_EQ(rig.CreateForHwnd(), S_OK);
+
+    EXPECT_EQ(pfnGetDesc1(output6, &desc), S_OK);
+    EXPECT_EQ(desc.ColorSpace, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) << "the display's HDR comes through";
+}
+
+TEST(DxgiProxyTest, ARefusedSessionLogsOneErrorLineWithTheResultAndPassThroughMode) {
+    RefusedSessionRig rig;
+    if (!rig.Ready()) GTEST_SKIP() << "no WARP D3D12 device";
+    LogCapture capture("fs25vr_refused_session_test.log");
+
+    rig.CreateForHwnd();
+
+    const std::string log = capture.Text();
+    size_t errorLines = 0;
+    std::string errorLine;
+    std::istringstream lines(log);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.find("[ERROR]") != std::string::npos) {
+            ++errorLines;
+            errorLine = line;
+        }
+    }
+    EXPECT_EQ(errorLines, 1u) << log;
+    EXPECT_NE(errorLine.find("session"), std::string::npos) << errorLine;
+    EXPECT_NE(errorLine.find("result " + std::to_string(XR_ERROR_GRAPHICS_DEVICE_INVALID)), std::string::npos) << errorLine;
+    EXPECT_NE(errorLine.find("Continuing in Pass-Through Mode"), std::string::npos) << errorLine;
+}
+
+TEST(DxgiProxyTest, ARefusedSessionIsNotAttemptedAgainOnLaterPresentsOrSwapChains) {
+    RefusedSessionRig rig;
+    if (!rig.Ready()) GTEST_SKIP() << "no WARP D3D12 device";
+    rig.CreateForHwnd();
+    ASSERT_EQ(rig.runtime->createSessionCalls, 1u);
+
+    for (int i = 0; i < 3; ++i) rig.Proxy().OnPresent(nullptr, 1, 0);
+    rig.CreateForHwnd();
+    rig.Proxy().SetD3D12DeviceAndQueue(rig.device.Get(), rig.queue.Get());
+
+    EXPECT_EQ(rig.runtime->createSessionCalls, 1u);
+    EXPECT_TRUE(rig.openXrManager->IsPassThrough());
 }
 
 } // namespace fs25vr
