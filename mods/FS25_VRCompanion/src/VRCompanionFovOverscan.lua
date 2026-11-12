@@ -117,9 +117,11 @@ end
 -- settings.xml by then. Map unload: the registry removes the command; the saved setting stays as it is, and the next map load reads
 -- it again (the Injector's VRBridge value is reset by VRBridge.onMapUnload).
 -- Order: Desktop Mirror (VRCompanionDesktopMirror.lua) sends its setting before this file does, then this file, then Menu Distance
--- and Mouse Confinement, which load after it: file order, as the core sent them before the registry.
+-- and Mouse Confinement, which load after it: file order. None matters: each sets an Injector field of its own.
 VRCompanion:registerSubsystem("fovOverscan", {
     mapLoad = function(self) self:applyFovOverscan() end,
+    saveSettings = function(self, xmlFile, xml) self:saveFovOverscanSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadFovOverscanSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrFovOverscan", description = "Widen the field of view the eyes are rendered with, in percent, to hide black edges during head movement (saved; 0 by default; a higher value softens the picture): vrFovOverscan [0-20]", method = "consoleCommandSetFovOverscan" },
     },

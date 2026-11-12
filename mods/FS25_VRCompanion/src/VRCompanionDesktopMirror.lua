@@ -90,9 +90,11 @@ end
 -- registry removes the command; the saved setting stays as it is, and the next map load reads it again (the Injector's VRBridge flag
 -- is reset by VRBridge.onMapUnload).
 -- Order: the saved settings reach VRBridge in file order, Desktop Mirror first, then FOV Overscan, Menu Distance and Mouse
--- Confinement (each registers after this file), as the core sent them before the registry.
+-- Confinement (each registers after this file). None matters: each sets an Injector field of its own (src/luau/vr_bridge.cpp).
 VRCompanion:registerSubsystem("desktopMirror", {
     mapLoad = function(self) self:applyDesktopMirror() end,
+    saveSettings = function(self, xmlFile, xml) self:saveDesktopMirrorSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadDesktopMirrorSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrDesktopMirror", description = "Turn the Desktop Mirror Window on or off while the headset is in use (saved; on by default; untested with frame generation): vrDesktopMirror [on|off]", method = "consoleCommandSetDesktopMirror" },
     },

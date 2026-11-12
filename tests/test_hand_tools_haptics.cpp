@@ -43,7 +43,7 @@ protected:
     // game clock set (the in-use timeout is on it).
     void Start() {
         headset.SetHeadPose(HandAt(0.0f, 0.0f, 0.0f));
-        stubs = std::string(kXmlStubs) + ChainsawStubs();
+        stubs = StubChunk("xml_settings") + ChainsawStubs();
         gameStubs = FlashlightGame();
         StartOptions options;
         options.extraStubs = stubs.c_str();

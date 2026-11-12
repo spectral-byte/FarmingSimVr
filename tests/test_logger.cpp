@@ -184,6 +184,56 @@ TEST_F(LoggerTest, WritesMessagesToFile) {
     RemoveLogAndBackup(testLogPath);
 }
 
+// A game that hangs instead of crashing never flushes the log again, so whatever reached it at Info or above must be
+// on disk already.
+TEST_F(LoggerTest, AnInfoLineIsInTheFileBeforeAnyFlush) {
+    const std::string testLogPath = "test_info_on_disk.log";
+    RemoveLogAndBackup(testLogPath);
+    auto& logger = fs25vr::Logger::Instance();
+    logger.SetLogFile(testLogPath);
+    logger.SetMinLevel(fs25vr::LogLevel::Info);
+
+    logger.Log(fs25vr::LogLevel::Info, "on-disk-info");
+
+    EXPECT_NE(ReadAll(testLogPath).find("on-disk-info"), std::string::npos);
+
+    logger.Close();
+    RemoveLogAndBackup(testLogPath);
+}
+
+TEST_F(LoggerTest, WarningAndErrorLinesAreInTheFileBeforeAnyFlush) {
+    const std::string testLogPath = "test_warning_on_disk.log";
+    RemoveLogAndBackup(testLogPath);
+    auto& logger = fs25vr::Logger::Instance();
+    logger.SetLogFile(testLogPath);
+
+    logger.Log(fs25vr::LogLevel::Warning, "on-disk-warning");
+    EXPECT_NE(ReadAll(testLogPath).find("on-disk-warning"), std::string::npos);
+    logger.Log(fs25vr::LogLevel::Error, "on-disk-error");
+    EXPECT_NE(ReadAll(testLogPath).find("on-disk-error"), std::string::npos);
+
+    logger.Close();
+    RemoveLogAndBackup(testLogPath);
+}
+
+// Debug logging writes many lines a frame; a file write for each would cost the frame rate it is meant to diagnose.
+TEST_F(LoggerTest, ADebugLineDoesNotFlushTheFile) {
+    const std::string testLogPath = "test_debug_buffered.log";
+    RemoveLogAndBackup(testLogPath);
+    auto& logger = fs25vr::Logger::Instance();
+    logger.SetLogFile(testLogPath);
+    logger.SetMinLevel(fs25vr::LogLevel::Debug);
+
+    logger.Log(fs25vr::LogLevel::Debug, "buffered-debug");
+    EXPECT_EQ(ReadAll(testLogPath).find("buffered-debug"), std::string::npos);
+
+    logger.Flush();
+    EXPECT_NE(ReadAll(testLogPath).find("buffered-debug"), std::string::npos);
+
+    logger.Close();
+    RemoveLogAndBackup(testLogPath);
+}
+
 // The crash reporter puts its line together by hand (TryLogWithoutWaiting) because the Log function needs more stack
 // and heap than a crashing process may have. Whoever reads fs25_vr.log, a person or a script, finds one layout, so the
 // two must not drift apart: a timestamp, the level in brackets, then the message.

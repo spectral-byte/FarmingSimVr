@@ -124,7 +124,7 @@ TEST_F(VirtualGamepadAnimatedObjectsNearerTest, TheObjectBehindTheDoorIsNeitherL
 
 TEST_F(VirtualGamepadAnimatedObjectsNearerTest, AClickPointWithinTheConeWinsOverBothTheObjectAndTheDoor) {
     ASSERT_NO_FATAL_FAILURE(StartWithDoorAndObject("1.5"));
-    ASSERT_EQ(RunLuauChunk(L, kStubInteractiveControl, "=interactiveControl"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("interactive_control"), "=interactiveControl"), 0);
     ASSERT_EQ(RunLuauChunk(L, "StubIC.install('ok'); _G.point = StubIC.addPoint('lever', -0.4, -0.2, 1.0)", "=clickPoint"), 0);
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "lever");

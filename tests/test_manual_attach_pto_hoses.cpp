@@ -20,7 +20,7 @@ protected:
     void ExpectTheSupportGivesUpWith(const char* variant) {
         SCOPED_TRACE(variant);
         ASSERT_NO_FATAL_FAILURE(StartWithManualAttach(variant));
-        Lua(kTractorWithAttachedImplement);
+        Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
         NoteManualAttachFunctions();
         POINT_HAND(kRight, kHandX, kHandY, kHandZ);
         FRAMES(3);
@@ -46,7 +46,7 @@ protected:
 
 TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnThePtoStubConnectsThePtoAndASecondPullDisconnectsIt) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearPtoStub) << "the ray ends on the vehicle's PTO stub";
     ASSERT_EQ(Performs(), 0);
@@ -65,7 +65,7 @@ TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnThePtoStubCo
 
 TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnAHoseCouplerConnectsAllTheHosesAndASecondPullDisconnectsThem) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     POINT_HAND(kRight, kHoseHandX, kHoseHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearHoseCoupler) << "the ray ends on the vehicle's hose coupler";
 
@@ -83,7 +83,7 @@ TEST_F(VirtualGamepadManualAttachTest, PullingTheTriggerWithTheRayOnAHoseCoupler
 
 TEST_F(VirtualGamepadManualAttachTest, ThePtoStubIsOfferedOnlyWhileTheImplementOnTheHitchHasAPto) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     Lua("plow.hasPto = false");
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), "none") << "an Implement with no PTO: no ray on the PTO stub";
@@ -99,7 +99,7 @@ TEST_F(VirtualGamepadManualAttachTest, ThePtoStubIsOfferedOnlyWhileTheImplementO
 
 TEST_F(VirtualGamepadManualAttachTest, TheHoseCouplersAreOfferedOnlyWhileTheImplementOnTheHitchHasHoses) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     Lua("plow.hasHoses = false");
     POINT_HAND(kRight, kHoseHandX, kHoseHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), "none") << "an Implement with no hoses: no ray on a hose coupler";
@@ -119,7 +119,7 @@ TEST_F(VirtualGamepadManualAttachTest, TheHoseCouplersAreOfferedOnlyWhileTheImpl
 
 TEST_F(VirtualGamepadManualAttachTest, WithNothingAttachedAtTheHitchNeitherThePtoStubNorTheHoseCouplersAreOffered) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
     Lua("plow.hasPto, plow.hasHoses = true, true");  // lined up with the hitch, not on it
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), "none");
@@ -164,7 +164,7 @@ TEST_F(VirtualGamepadManualAttachTest, APassThroughPtoOutputWithNoNodeOfItsOwnGi
 
 TEST_F(VirtualGamepadManualAttachTest, WithTheHitchThePtoStubAndAHoseCouplerAllWithinTheConeTheOneNearestTheCentreOfTheRayIsSelectedAndWorked) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     Lua("VRCompanion.pointerConeDegrees = 25");  // wide enough for all three from where the player stands
 
     POINT_HAND(kRight, kHandX, 0.1f, kHandZ);  // a little above the hitch, nearest the PTO stub
@@ -190,7 +190,7 @@ TEST_F(VirtualGamepadManualAttachTest, WithTheHitchThePtoStubAndAHoseCouplerAllW
 
 TEST_F(VirtualGamepadManualAttachTest, EachPullRunsExactlyOneOfManualAttachsPathsAndNeverAlsoTheOthers) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     Lua(R"luau(
         function _G.pathsRun()
             local kinds = {}
@@ -248,8 +248,8 @@ TEST_F(VirtualGamepadManualAttachPtoHosesWrapsTest, AVehicleWithNoPtoOutputsOrHo
 
 TEST_F(VirtualGamepadManualAttachTest, AClickPointAndThePtoStubBothInTheConeTheNearerTheRaysCentreWinsEitherWayRoundAndTheOtherSelectsNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('lever', -0.37, 0.2, 1.0)");  // 3 cm off the PTO stub's line, 0.7 m ahead: about 2.5 degrees
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);                            // the PTO stub is on the ray's centre
 
@@ -272,7 +272,7 @@ TEST_F(VirtualGamepadManualAttachTest, AClickPointAndThePtoStubBothInTheConeTheN
 
 TEST_F(VirtualGamepadManualAttachTest, ThePointerDiagnosticsNameWhichOfTheThreeCouplingPointsIsSelected) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     auto diagnostics = [&]() { return EvalLua(L, "runCommand('vrPointerDiagnostics')"); };
 
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
@@ -291,7 +291,7 @@ TEST_F(VirtualGamepadManualAttachTest, ThePointerDiagnosticsNameWhichOfTheThreeC
 
 TEST_F(VirtualGamepadManualAttachTest, MovingFromOneOfAHitchsCouplingPointsToAnotherPulsesAgainButMovingBetweenItsHoseCouplersDoesNot) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearPtoStub);
     EXPECT_EQ(PulsesTo(kRight), 1) << "one light pulse as the ray lands on the PTO stub";
@@ -313,7 +313,7 @@ TEST_F(VirtualGamepadManualAttachTest, MovingFromOneOfAHitchsCouplingPointsToAno
 
 TEST_F(VirtualGamepadManualAttachTest, ThePullThatRanManualAttachsPtoOrHosePathGivesTheFirmerPulse) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
     ASSERT_EQ(PulsesTo(kRight), 1);
     PullTrigger(kRight);
@@ -335,7 +335,7 @@ TEST_F(VirtualGamepadManualAttachTest, ThePullThatRanManualAttachsPtoOrHosePathG
 
 TEST_F(VirtualGamepadManualAttachTest, WhileTheRayIsOnThePtoStubOrAHoseCouplerThePointerHandsTriggerReadsReleasedOnThePad) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
     PullTrigger(kRight);
     ASSERT_EQ(Performs("pto"), 1);
@@ -359,7 +359,7 @@ TEST_F(VirtualGamepadManualAttachTest, WhileTheRayIsOnThePtoStubOrAHoseCouplerTh
 
 TEST_F(VirtualGamepadManualAttachTest, ATriggerHeldWhenTheRayLandsOnThePtoStubKeepsItsBindingAndWorksNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     POINT_HAND(kRight, kHandX, 1.0f, kHandZ);
     PullTrigger(kRight);
     ASSERT_EQ(Pad().bRightTrigger, 255);
@@ -376,7 +376,7 @@ TEST_F(VirtualGamepadManualAttachTest, ATriggerHeldWhenTheRayLandsOnThePtoStubKe
 
 TEST_F(VirtualGamepadManualAttachTest, ThePtoStubAndTheHoseCouplersFollowTheDeskMouseAMenuAndTheMotionControllerSwitchLikeTheHitch) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     POINT_HAND(kRight, kHandX, kPtoHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearPtoStub);
 
@@ -415,7 +415,7 @@ TEST_F(VirtualGamepadManualAttachTest, ThePtoStubAndTheHoseCouplersFollowTheDesk
 
 TEST_F(VirtualGamepadManualAttachTest, ACustomHoseTargetIsAHoseCouplerToo) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorWithAttachedImplement);
+    Lua(StubChunk("manual_attach_tractor_with_attached_implement"));
     POINT_HAND(kRight, kCustomHoseHandX, kHoseHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearCustomHoseCoupler);
 

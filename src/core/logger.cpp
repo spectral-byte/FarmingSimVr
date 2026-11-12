@@ -159,7 +159,9 @@ void Logger::Log(LogLevel level, const std::string& message) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_fileStream.is_open()) {
         m_fileStream << formatted;
-        if (level == LogLevel::Warning || level == LogLevel::Error) {
+        // On disk at once, so a game that hangs leaves a complete log. Debug lines stay buffered: debug logging
+        // would otherwise cost a file write per line.
+        if (level >= LogLevel::Info) {
             m_fileStream.flush();
         }
     }

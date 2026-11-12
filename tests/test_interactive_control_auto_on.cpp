@@ -30,8 +30,8 @@ HeadPose HandAt(float x, float y, float z) {
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge, bool initialState, const char* icVariant = "ok") {
     ASSERT_TRUE(bridge.Inject(L));
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubSceneGraph, "=sceneGraph"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubInteractiveControl, "=interactiveControl"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("interactive_control"), "=interactiveControl"), 0);
     if (icVariant != nullptr) {
         ASSERT_EQ(RunLuauChunk(L, std::string("StubIC.install('") + icVariant + "')", "=installIc"), 0);
     }

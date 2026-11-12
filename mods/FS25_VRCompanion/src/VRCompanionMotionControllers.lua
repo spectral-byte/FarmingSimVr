@@ -83,8 +83,8 @@
 --   Hooks into the rest of the mod:
 --     Core.lua    registers this subsystem (see the end of this file): the poll is its update hook (updateMotionControllers(dt)),
 --                 the four commands below are its console commands, and it resets at map unload (resetMotionControllers())
---     Config.lua  saveConfiguration -> saveMotionControllerSettings(...)
---                 loadConfiguration -> loadMotionControllerSettings(...)
+--     Config.lua  saveConfiguration / loadConfiguration run its saveSettings / loadSettings hooks
+--                 (saveMotionControllerSettings / loadMotionControllerSettings)
 --     Locomotion  onRecenterAction -> resetMotionControllerMovement() (a recenter moves every pose)
 --     MenuPointer updateMotionControllers -> updateMenuPointer(dt) at the end of every update; it registers its own unload (resetMenuPointer())
 --                 (VRCompanionMenuPointer.lua)
@@ -92,15 +92,14 @@
 --                 ignored, so the hands hide); it registers its own console commands and unload (VRCompanionVirtualHands.lua).
 --                 The Virtual Hands place the grip pose through VRCompanion:headRelativePoseToWorld, the transform the Pointer Ray uses too.
 --     WheelGrab   updateMotionControllers -> updateWheelGrab(dt) after the hands are polled and before the Pointer Hand is chosen
---                 (also when input is ignored, or the Injector offers no hand states, so a held Steering Wheel is let go), the saved setting rides on
---                 save/loadMotionControllerSettings (saveWheelGrabSetting / loadWheelGrabSetting), and it registers its own
---                 console commands, map load (the Drivable wrap) and unload (VRCompanionWheelGrab.lua). A hand
+--                 (also when input is ignored, or the Injector offers no hand states, so a held Steering Wheel is let go), and it registers its own
+--                 settings hooks (saveWheelGrabSetting / loadWheelGrabSetting), console commands, map load (the Drivable wrap) and unload (VRCompanionWheelGrab.lua). A hand
 --                 holding the Steering Wheel (isHandHoldingSteeringWheel) stays in use but is never a Pointer Hand
 --                 candidate, so it casts no Pointer Ray; Interactive Control's auto-on keeps its state while it holds.
 --     HandTools   updateMotionControllers -> updateHandTools(dt) on every path, after the hands are polled and before the Pointer Hand
 --                 is chosen (also when input is ignored, or the Injector offers no hand states, so a Hand Tool goes back to
---                 where the game puts it), the saved setting rides on save/loadMotionControllerSettings (saveHandToolsSetting /
---                 loadHandToolsSetting); the map-load and unload hooks and the console commands are registered
+--                 where the game puts it); the settings hooks (saveHandToolsSetting / loadHandToolsSetting), the map-load and
+--                 unload hooks and the console commands are registered
 --                 with the core by the file itself, its unload before the Virtual Hands go (VRCompanionHandTools.lua, ADR-0029). The Tool Hand holding a
 --                 supported Hand Tool (isHandHoldingHandTool) is never a Pointer Hand candidate in the world, as a hand on the
 --                 Steering Wheel is not; in a menu either hand can. While its Hand Tool keeps it in use
@@ -121,12 +120,11 @@
 --                 selectNone) (told to select none when the Coupling Point won), all before Animated Objects and Object Grab (either one selected
 --                 suppresses both; also, as suppressed, on the paths where input is ignored, so the selection clears), getPointerDiagnostics -> getManualAttachDiagnostics()
 --                 (VRCompanionManualAttach.lua, ADR-0035; its unload hook is registered by the file). The one thing of Manual Attach it wraps is the handler class's candidate update.
---     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the saved
---                 setting rides on save/loadMotionControllerSettings, the status command ends with the pad's state and
---                 it registers its own console command and unload (VRCompanionVirtualGamepad.lua, ADR-0028)
+--     VirtualGamepad updateMotionControllers -> updateVirtualGamepad(dt) first of all (also when input is ignored), the status
+--                 command ends with the pad's state and it registers its own settings hooks, console command and unload (VRCompanionVirtualGamepad.lua, ADR-0028)
 --     The buttons, triggers and thumbsticks do nothing here beyond the uses above (pointing, Click Points, menus, Wheel Grab):
 --                 Snap Turn, the Recenter Action and the HUD Toggle Action from the Motion Controllers arrive only as game actions
---                 bound on the Virtual Gamepad (ADR-0028). The old button mapping and its settings are gone.
+--                 bound on the Virtual Gamepad (ADR-0028). No button is mapped to an action here, and no setting does it.
 -- ====================================================================
 
 VRCompanion = VRCompanion or {}
@@ -642,7 +640,7 @@ end
 -- (VRCompanion.VIRTUAL_HAND_POINTER, VRCompanionVirtualHands.lua, the relaxed finger of the glove, so the ray does not
 -- twitch as the trigger curls the finger) applied to the GRIP pose. It does not depend on Virtual Hands being shown or
 -- their model loaded. Only when the grip pose is not tracked (a runtime that refuses it) does the ray start at the aim
--- pose and run along its -Z axis, as it did before the ray moved to the finger.
+-- pose and run along its -Z axis.
 --
 -- VRCompanion.POINTER_RAY_FOLLOWS_FINGER_DIRECTION  true (default): the ray runs along the finger. false: it keeps the
 --     aim pose's direction (-Z) and only starts at the fingertip.
@@ -946,19 +944,15 @@ function VRCompanion:setMotionControllersEnabled(enabled, save)
     end
 end
 
--- Called from saveConfiguration with the open settings file and the engine's setters (any may be nil).
+-- The saveSettings hook (see the registration): the open settings file and the engine's setters (any may be nil).
 function VRCompanion:saveMotionControllerSettings(xmlFile, xml)
     if type(xml.setBool) == "function" then
         xml.setBool(xmlFile, SETTING_KEY_ENABLED, self.motionControllersEnabled ~= false)
     end
     self:savePointerConeSetting(xmlFile, xml)
-    self:saveWheelGrabSetting(xmlFile, xml)
-    self:saveHandToolsSetting(xmlFile, xml)
-    self:saveObjectGrabSetting(xmlFile, xml)
-    self:saveVirtualGamepadSetting(xmlFile, xml)
 end
 
--- Called from loadConfiguration with the open settings file and the engine's getters (any may be nil).
+-- The loadSettings hook (see the registration): the open settings file and the engine's getters (any may be nil).
 -- A key that is missing keeps the current value.
 function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
     local loaded = nil
@@ -973,10 +967,6 @@ function VRCompanion:loadMotionControllerSettings(xmlFile, xml)
         self.motionControllersEnabled = loaded
     end
     self:loadPointerConeSetting(xmlFile, xml)
-    self:loadWheelGrabSetting(xmlFile, xml)
-    self:loadHandToolsSetting(xmlFile, xml)
-    self:loadObjectGrabSetting(xmlFile, xml)
-    self:loadVirtualGamepadSetting(xmlFile, xml)
 end
 
 -- vrPointerCone: the cone (degrees) inside which a Click Point is selected.
@@ -1030,7 +1020,8 @@ function VRCompanion:consoleCommandSetMotionControllers(arg)
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
         pcall(function()
-            mission:showBlinkingWarning(string.format("VR Motion Controllers: %s (Saved)", enabled and "on" or "off"), 2500)
+            mission:showBlinkingWarning(VRCompanion.formatLocalisedText("vrMotionControllers_set", "VR Motion Controllers: %s (Saved)",
+                VRCompanion.onOffText(enabled)), 2500)
         end)
     end
     print(string.format("[FS25_VR] Motion Controllers set to: %s", enabled and "on" or "off"))
@@ -1115,11 +1106,10 @@ end
 --     Grab and Virtual Gamepad) is not the order they run in.
 --   mapUnload: runs last of the Motion Controller subsystems (it registered first, and unload runs in reverse), after the Virtual
 --     Gamepad, Wheel Grab, Virtual Hands and Menu Pointer and the subsystems of the fan-out have reset; nothing of theirs reads this state.
---     The group's resets used to run in this order: Menu Pointer, Hand Tools, Object Grab, Virtual Hands, Wheel Grab, Virtual
---     Gamepad, then Interactive Control, Animated Objects, Manual Attach, then this state. They run in reverse file order now
---     (Manual Attach, Animated Objects, Interactive Control, Object Grab, Hand Tools, Virtual Gamepad, Wheel Grab, Virtual Hands,
---     Menu Pointer, this state). Where order matters it is kept: Hand Tools reset before the Virtual Hands (a tool hangs below a
---     hand), this state last. Everything else is independent, because each reset touches only its own state and:
+--     The group's resets run in reverse file order (Manual Attach, Animated Objects, Interactive Control, Object Grab, Hand Tools,
+--     Virtual Gamepad, Wheel Grab, Virtual Hands, Menu Pointer, this state). Two orders matter, and file order gives both: Hand
+--     Tools reset before the Virtual Hands (a tool hangs below a hand), this state last. Everything else is independent, because
+--     each reset touches only its own state and:
 --       Menu Pointer      lets go of a held mouse button (g_gui) and of the drawn cursor (VRBridge.setMenuCursor)
 --       Hand Tools        ends a use in progress (the tool's own use handler, called with the trigger released), lifts the wraps of
 --                         HandTool and of Player.getLookRay (held through the core's count), gives the held tool back to the game
@@ -1134,8 +1124,12 @@ end
 --     independent Injector fields (src/luau/vr_bridge.cpp: Lua_SetMenuCursor, Lua_SetVirtualGamepad, Lua_SetVirtualGamepadUse)
 --     that its threads read later; neither side can see the order of two of them. The Perf Trace stop (Injector) and the Dual
 --     Pass Physics release (engine) of the other subsystems are likewise independent of the group.
+-- Settings: the Motion Controllers' on/off and the Pointer Cone. Wheel Grab, Hand Tools, Object Grab and the Virtual Gamepad save
+-- and load their own; none of the loads reads a setting another one loads, so their order does not matter.
 VRCompanion:registerSubsystem("motionControllers", {
     update = function(self, dt) self:updateMotionControllers(dt) end,
+    saveSettings = function(self, xmlFile, xml) self:saveMotionControllerSettings(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadMotionControllerSettings(xmlFile, xml) end,
     mapUnload = function(self) self:resetMotionControllers() end,
     consoleCommands = {
         { name = "vrPointerDiagnostics", description = "Report why the Pointer Ray may not select Click Points: vrPointerDiagnostics", method = "consoleCommandPointerDiagnostics" },

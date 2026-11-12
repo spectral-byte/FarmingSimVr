@@ -27,9 +27,9 @@ constexpr const char* kPhoneTiltValue = "0.55";
 // options, e.g. "copyOfOriginal = true" for a vehicle whose copy was taken before the class was wrapped.
 void StartMod(lua_State* L, fs25vr::VRBridge& bridge, const std::string& variant = "ok", const std::string& equipOptions = "") {
     ASSERT_TRUE(bridge.Inject(L));
-    ASSERT_EQ(RunLuauChunk(L, kStubSceneGraph, "=sceneGraph"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubSteeringVehicle, "=steeringVehicle"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("steering_vehicle"), "=steeringVehicle"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("console"), "=consoleStubs"), 0);
     ASSERT_EQ(RunLuauChunk(L, ("StubSteer.install('" + variant + "')").c_str(), "=installGame"), 0);
     ASSERT_EQ(LoadCompanionModChecked(L), 0);
     const std::string scene =
@@ -267,6 +267,62 @@ TEST_F(CompanionModTest, WithSetSteeringInputMissingWheelGrabIsUnavailableWarnsO
 
 TEST_F(CompanionModTest, WithSetSteeringInputReshapedWheelGrabIsUnavailableWarnsOnceAndOtherDevicesStillSteer) {
     WHEEL_GRAB_GIVES_UP_WHEN_STEERING_INPUT_IS("reshaped");
+}
+
+// The warning's exact words: what is wrong with which function, and that the other devices are unchanged.
+namespace {
+int ExactLogLines(const std::string& line) {
+    int count = 0;
+    for (const auto& logged : s_capturedLogs) {
+        if (logged == line) ++count;
+    }
+    return count;
+}
+
+std::string WheelGrabWarning(const std::string& problem) {
+    return "[FS25_VR] [Warning] Wheel Grab disabled: " + problem
+        + ". Steering from the keyboard, a gamepad or a Wheel Peripheral is unchanged.";
+}
+}  // namespace
+
+TEST_F(CompanionModTest, TheWheelGrabWarningSaysTheClassSteeringFunctionIsMissing) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "missing"));
+    SetGameTime(10000);
+    TRY_TO_STEER(kRight);
+    EXPECT_EQ(ExactLogLines(WheelGrabWarning("Drivable.setSteeringInput: it is missing")), 1);
+}
+
+TEST_F(CompanionModTest, TheWheelGrabWarningSaysHowTheClassSteeringFunctionIsReshaped) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge, "reshaped"));
+    SetGameTime(10000);
+    TRY_TO_STEER(kRight);
+    EXPECT_EQ(ExactLogLines(WheelGrabWarning(
+                  "Drivable.setSteeringInput: it takes 2 parameters, not (vehicle, value, isAnalog, deviceCategory)")), 1);
+}
+
+TEST_F(CompanionModTest, TheWheelGrabWarningSaysHowTheVehiclesOwnCopyIsReshaped) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+    ASSERT_EQ(RunLuauChunk(L, "cab.vehicle.setSteeringInput = function(vehicle) end", "=reshapedCopy"), 0);
+    TRY_TO_STEER(kRight);
+    EXPECT_EQ(ExactLogLines(WheelGrabWarning(
+                  "the vehicle's setSteeringInput: it takes 1 parameters, not (vehicle, value, isAnalog, deviceCategory)")), 1);
+}
+
+TEST_F(CompanionModTest, TheWheelGrabWarningOfAGameWithoutDrivableSaysSo) {
+    FakeTrackedHeadset headset;
+    fs25vr::VRBridge bridge(headset.manager, nullptr);
+    ASSERT_NO_FATAL_FAILURE(StartMod(L, bridge));
+    SetGameTime(10000);
+    ASSERT_EQ(RunLuauChunk(L, "_G.Drivable = nil", "=noDrivable"), 0);
+    TRY_TO_STEER(kRight);
+    EXPECT_EQ(ExactLogLines(WheelGrabWarning("Drivable is missing")), 1);
 }
 
 // A game whose steering function does not work the way Wheel Grab calls it: the call raises. Whether the engine can tell

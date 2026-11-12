@@ -12,6 +12,8 @@ inline const std::vector<std::string>& CompanionModLoadOrder() {
     static const std::vector<std::string> order = {
         "src/VRCompanionConfig.lua",
         "src/VRCompanionCore.lua",
+        "src/VRCompanionLocalisedTexts.lua",
+        "src/VRCompanionGameWraps.lua",
         "src/VRCompanionStereo.lua",
         "src/VRCompanionDualPassPhysics.lua",
         "src/VRCompanionLocomotion.lua",

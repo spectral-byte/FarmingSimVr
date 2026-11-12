@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "description": "The shipped configuration. Fetched dependencies live in .deps, outside the build tree, so CI can cache them and a fresh build tree does not fetch them again.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/.deps"
+      }
+    },
+    {
+      "name": "ci",
+      "inherits": "base",
+      "displayName": "CI",
+      "description": "Exactly what CI configures: the shipped configuration with compiler warnings as errors.",
+      "cacheVariables": { "FS25VR_WARNINGS_AS_ERRORS": "ON" }
+    },
+    {
+      "name": "local",
+      "inherits": "base",
+      "displayName": "Local",
+      "description": "The CI configuration, except that compiler warnings are not errors.",
+      "cacheVariables": { "FS25VR_WARNINGS_AS_ERRORS": "OFF" }
+    }
+  ]
+}

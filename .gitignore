@@ -41,3 +41,6 @@ skills-lock.json
 # Proprietary / third-party reference scripts (keep local copies only, never commit)
 /dataS/
 /reference/
+
+# Per-machine CMake presets (CMakePresets.json is the shared one)
+CMakeUserPresets.json

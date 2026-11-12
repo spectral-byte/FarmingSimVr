@@ -63,7 +63,6 @@ local OFF_SCREEN = -1000
 local function newState()
     return {
         installed = false,
-        gaveUp = false,       -- the support was found unusable (warned once); do not look again
         class = nil,
         originals = {},
         wrappers = {},
@@ -99,10 +98,13 @@ local function missingFunctions(owner, names)
     return missing
 end
 
+-- Giving up goes through the give-up part of the core's wrap helper (VRCompanionGameWraps.lua): ONE warning. Interactive Control installs
+-- its wraps itself (installWrappers) and only once everything was checked, so there is nothing to lift; map unload forgets it gave up.
+local giveUpOnce = VRCompanion.GameWraps.newGiveUp("interactiveControl",
+    "Interactive Control support disabled: %s. Motion Controllers cannot select Click Points; Interactive Control itself is unchanged.")
+
 local function giveUp(reason)
-    state.gaveUp = true
-    print("[FS25_VR] [Warning] Interactive Control support disabled: " .. reason
-        .. ". Motion Controllers cannot select Click Points; Interactive Control itself is unchanged.")
+    giveUpOnce:giveUp(reason)
 end
 
 local function isPointActive(point)
@@ -296,7 +298,7 @@ end
 
 -- One line for vrPointerDiagnostics: whether the wrap is installed and what it currently sees.
 function VRCompanion:getInteractiveControlDiagnostics()
-    if state.gaveUp then return "Interactive Control support: gave up (see the warning in the log)" end
+    if giveUpOnce:problem() ~= nil then return "Interactive Control support: gave up (see the warning in the log)" end
     if not state.installed then
         return "Interactive Control support: not installed yet (" .. (state.waitingLogged and "no manager"
             or "waiting for a tracked Motion Controller") .. ")"
@@ -495,7 +497,7 @@ end
 -- Click Point is selected for this update (none is clickable, and Interactive Control's hover state follows).
 function VRCompanion:updateInteractiveControl(dt, selectNone)
     if not state.installed then
-        if state.gaveUp or self.motionControllersEnabled == false or not anyHandTracked(self) then
+        if giveUpOnce:problem() ~= nil or self.motionControllersEnabled == false or not anyHandTracked(self) then
             return false
         end
         tryInstall(self)
@@ -545,6 +547,7 @@ function VRCompanion:resetInteractiveControlSupport()
             end
         end
     end
+    giveUpOnce:reset()
     state = newState()
 end
 

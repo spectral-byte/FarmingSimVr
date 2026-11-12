@@ -85,7 +85,7 @@ function VRCompanion:consoleCommandPerfTrace(arg)
 end
 
 -- No update hook: the Injector ends a trace by itself, and the core's update notices (refreshPerfTracing), as the very first step
--- of the update, where it always was: a camera hook that runs in the steps after it, and the update's own sections, must not
+-- of the update, a direct call because no run point is that early: a camera hook that runs in the steps after it, and the update's own sections, must not
 -- time into a trace the Injector has ended. Map unload: the registry removes the command, then a running trace ends with its
 -- summary.
 -- Order: none matters against the other subsystems.

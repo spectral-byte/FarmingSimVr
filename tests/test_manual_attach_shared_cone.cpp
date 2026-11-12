@@ -23,8 +23,8 @@ constexpr const char* kTractorHitchOffCentre = R"luau(
 
 TEST_F(VirtualGamepadManualAttachTest, AHitchNearerTheRaysCentreThanAClickPointIsTheTargetAndTheClickPointSelectsNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);  // the rear hitch is on the ray's centre
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));  // the rear hitch is on the ray's centre
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('lever', -0.37, -0.2, 1.0)");  // 3 cm off the centre, 0.7 m ahead: about 2.5 degrees
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
 
@@ -39,7 +39,7 @@ TEST_F(VirtualGamepadManualAttachTest, AHitchNearerTheRaysCentreThanAClickPointI
 TEST_F(VirtualGamepadManualAttachTest, AClickPointNearerTheRaysCentreThanAHitchIsTheTargetAndTheHitchWorksNothing) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(kTractorHitchOffCentre);
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('lever', -0.4, -0.2, 1.0)");  // on the ray's centre
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
 
@@ -54,7 +54,7 @@ TEST_F(VirtualGamepadManualAttachTest, AClickPointNearerTheRaysCentreThanAHitchI
 TEST_F(VirtualGamepadManualAttachTest, MovingTheRayBetweenAClickPointAndAHitchHandsTheSelectionOverWithTheSelectPulseOfTheNewOne) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(kTractorHitchOffCentre);
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('lever', -0.4, -0.2, 1.5)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);  // the Click Point is on the centre, the hitch 2.4 degrees off it
     ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "lever");
@@ -74,8 +74,8 @@ TEST_F(VirtualGamepadManualAttachTest, MovingTheRayBetweenAClickPointAndAHitchHa
 
 TEST_F(VirtualGamepadManualAttachTest, AClickPointToldToSelectNoneShowsNoHoverBlinkInInteractiveControl) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);  // the hitch is on the ray's centre
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));  // the hitch is on the ray's centre
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('lever', -0.37, -0.2, 1.0)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     ASSERT_EQ(DrawnEnd(), kRearHitch);
@@ -85,8 +85,8 @@ TEST_F(VirtualGamepadManualAttachTest, AClickPointToldToSelectNoneShowsNoHoverBl
 
 TEST_F(VirtualGamepadManualAttachTest, WithOnlyAnAnalogClickPointInTheConeInteractiveControlActsEveryFrameTheTriggerIsHeldAsBefore) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);  // the hitch is 25 degrees off the ray below, outside the cone
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));  // the hitch is 25 degrees off the ray below, outside the cone
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('dial', -1.2, -0.2, 1.0, { analog = true })");
     POINT_HAND(kRight, kHandX + 0.8f, kHandY, kHandZ);
     ASSERT_EQ(EvalLua(L, "StubIC.selected()"), "dial");
@@ -103,8 +103,8 @@ TEST_F(VirtualGamepadManualAttachTest, WithOnlyAnAnalogClickPointInTheConeIntera
 
 TEST_F(VirtualGamepadManualAttachTest, WithOnlyAHitchInTheConeItWorksAsInTheFirstTicketWhileAClickPointOutsideItIsLeftAlone) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('farOff', 3.0, 1.5, 1.0)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_EQ(DrawnEnd(), kRearHitch);
@@ -115,8 +115,8 @@ TEST_F(VirtualGamepadManualAttachTest, WithOnlyAHitchInTheConeItWorksAsInTheFirs
 
 TEST_F(VirtualGamepadManualAttachTest, InTheCabNoHitchIsOfferedSoTheClickPointKeepsTheRayAndInteractiveControlSwitchesOn) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
-    Lua(kTractorAndImplement);  // the hitch is on the ray's centre, the Click Point 2.5 degrees off it
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("manual_attach_tractor_and_implement"));  // the hitch is on the ray's centre, the Click Point 2.5 degrees off it
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('lever', -0.37, -0.2, 1.0)");
     Lua("g_currentMission.controlledVehicle = { getActiveCamera = function() return nil end }; StubIC.equip(g_currentMission.controlledVehicle, false)");
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
@@ -132,7 +132,7 @@ TEST_F(VirtualGamepadManualAttachTest, InTheCabNoHitchIsOfferedSoTheClickPointKe
 TEST_F(VirtualGamepadManualAttachTest, EitherOfThemSelectedWinsOverAnAnimatedObjectAndAnObjectObjectGrabCouldPickUp) {
     ASSERT_NO_FATAL_FAILURE(StartWithManualAttach());
     Lua(kTractorHitchOffCentre);
-    Lua(kStubInteractiveControl);
+    Lua(StubChunk("interactive_control"));
     Lua("StubIC.install('ok'); StubIC.addPoint('lever', -0.4, -0.2, 1.5)");
     Lua("_G.door = StubAnimatedObject.door({ name = 'door', x = -0.4, y = -0.2, z = 1.2 }); StubAnimatedObject.enterZone(door)");
     Lua("_G.bale = StubHandTool.looseObject(-0.4, -0.2, 1.3, 0.05, { name = 'bale' })");

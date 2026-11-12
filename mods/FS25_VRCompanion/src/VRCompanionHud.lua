@@ -24,6 +24,41 @@ VRCompanion.HUD_STATE_NAMES = {
     [2] = "Full"
 }
 
+-- The map-load HUD alert for each HUD state: its l10n key (modDesc.xml) and its English text. It names no key or button, since
+-- the HUD Toggle Action can be rebound.
+VRCompanion.HUD_LOAD_ALERT_TEXTS = {
+    [0] = { key = "vrHud_loadAlert_hidden", english = "VR HUD: Hidden" },
+    [1] = { key = "vrHud_loadAlert_streamlined", english = "VR HUD: Streamlined" },
+    [2] = { key = "vrHud_loadAlert_full", english = "VR HUD: Full" },
+}
+
+-- What a notification names each HUD state and HUD Group by: its l10n key (modDesc.xml) and its English text.
+local HUD_STATE_TEXTS = {
+    [0] = { key = "vrHud_stateHidden", english = "Hidden" },
+    [1] = { key = "vrHud_stateStreamlined", english = "Streamlined" },
+    [2] = { key = "vrHud_stateFull", english = "Full" },
+}
+local HUD_GROUP_TEXTS = {
+    map = { key = "vrHud_groupMap", english = "Map" },
+    speedometer = { key = "vrHud_groupSpeedometer", english = "Speedometer" },
+    info = { key = "vrHud_groupInfo", english = "Info" },
+    controls = { key = "vrHud_groupControls", english = "Controls" },
+}
+
+-- The HUD state's name in the game's language, for a notification (console output and log lines name it by HUD_STATE_NAMES).
+function VRCompanion:getHudStateText(state)
+    local text = HUD_STATE_TEXTS[state]
+    if text == nil then return (self.HUD_STATE_NAMES and self.HUD_STATE_NAMES[state]) or tostring(state) end
+    return VRCompanion.getLocalisedText(text.key, text.english)
+end
+
+-- The HUD Group's name in the game's language, for a notification (console output and log lines use getHudGroupLabel).
+function VRCompanion:getHudGroupText(groupName)
+    local text = HUD_GROUP_TEXTS[groupName]
+    if text == nil then return self:getHudGroupLabel(groupName) end
+    return VRCompanion.getLocalisedText(text.key, text.english)
+end
+
 -- VR HUD runtime state defaults (initialized only when not already set)
 if VRCompanion.hudState == nil then VRCompanion.hudState = VRCompanion.HUD_STATE_HIDDEN end
 if VRCompanion.hudSafeAreaHorizontal == nil then VRCompanion.hudSafeAreaHorizontal = VRCompanion.DEFAULT_HUD_SAFE_AREA_HORIZONTAL end
@@ -245,7 +280,7 @@ end
 
 -- The share of the screen width each eye's HUD is shifted by so that it reads `depth` metres away: each eye sees a point that
 -- far straight ahead half the IPD to the side, (ipd / 2) / depth in tangent, on a screen 2 tan(fovX / 2) wide. Without a
--- headset projection, the old fixed factor (right for a 73 degree view) stands in, shrunk by the FOV Overscan.
+-- headset projection, a fixed factor (right for a 73 degree view) stands in, shrunk by the FOV Overscan.
 function VRCompanion:computeConvergenceDisparity(ipd, depth)
     local targetDepth = depth or self.hudConvergenceDepth or self.DEFAULT_HUD_DEPTH
     if targetDepth == nil or targetDepth <= 0.001 then
@@ -1005,13 +1040,16 @@ function VRCompanion:cycleHudState()
 
     local mission = g_currentMission or _G.g_currentMission
     if mission ~= nil and type(mission.showBlinkingWarning) == "function" then
-        local message = string.format("VR HUD: %s", stateName)
+        local stateText = self:getHudStateText(nextState)
+        local message = VRCompanion.formatLocalisedText("vrHud_stateChanged", "VR HUD: %s", stateText)
         if nextState ~= self.HUD_STATE_HIDDEN then
             local groupLabels = {}
             for _, name in ipairs(self:getEnabledHudGroups(nextState)) do
-                table.insert(groupLabels, self:getHudGroupLabel(name))
+                table.insert(groupLabels, self:getHudGroupText(name))
             end
-            message = string.format("%s (%s)", message, (#groupLabels > 0) and table.concat(groupLabels, ", ") or "none")
+            local groups = (#groupLabels > 0) and table.concat(groupLabels, ", ")
+                or VRCompanion.getLocalisedText("vrHud_noGroups", "none")
+            message = VRCompanion.formatLocalisedText("vrHud_stateChangedWithGroups", "VR HUD: %s (%s)", stateText, groups)
         end
         pcall(function()
             mission:showBlinkingWarning(message, 2500)
@@ -1080,7 +1118,7 @@ function VRCompanion:onHudToggleAction(...)
 end
 
 -- The HUD Safe Area: the engine's global HUD anchors, which keep everything outside the HUD Groups
--- (warnings, notifications, other mods' HUDs) inside the lens. It no longer places the groups.
+-- (warnings, notifications, other mods' HUDs) inside the lens. It does not place the HUD Groups.
 function VRCompanion:calculateHudAnchors(horizontal, vertical)
     local clampedHorizontal = self:clamp(horizontal or self.DEFAULT_HUD_SAFE_AREA_HORIZONTAL, self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_HORIZONTAL)
     local clampedVertical = self:clamp(vertical or self.DEFAULT_HUD_SAFE_AREA_VERTICAL, self.MIN_HUD_SAFE_AREA, self.MAX_HUD_SAFE_AREA_VERTICAL)
@@ -1685,7 +1723,9 @@ end
 -- the player last chose; a first install starts Hidden for full VR immersion. Map unload: the HUD goes back to the full screen in
 -- the Full state, the diagnostics stop and the convergence state is reset. The camera and mission hooks (hookHud, hookGuiDraw,
 -- unhookHud, unhookGuiDraw) and updateHudConvergence stay direct calls of the core: a raise in updateHudConvergence reaches the
--- caller of update. Unload runs after Input's and before Stereo's, as it did.
+-- caller of update. Unload runs after Input's (no order matters between the two) and before Stereo's, as it did before the
+-- registry; Stereo's leaving 2D Floating Window Mode then applies the Safe Area and the HUD state again, after this hook (see the
+-- core's deleteMap).
 VRCompanion:registerSubsystem("hud", {
     mapLoad = function(self)
         self:applyHudSafeArea()
@@ -1705,6 +1745,9 @@ VRCompanion:registerSubsystem("hud", {
         self:stopHudTrace()
         self.hudEyeTestEye = nil
     end,
+    -- The Stereo Dialog depth; the HUD Safe Area, the HUD Groups and the HUD state are the core's settings (VRCompanionConfig.lua)
+    saveSettings = function(self, xmlFile, xml) self:saveStereoDialogDepthSetting(xmlFile, xml) end,
+    loadSettings = function(self, xmlFile, xml) self:loadStereoDialogDepthSetting(xmlFile, xml) end,
     consoleCommands = {
         { name = "vrDialogDepth", description = "How far back a Stereo Dialog (the fish catch dialog) reads in the headset, in metres (saved; 2.5 by default; the HUD is at 1.8): vrDialogDepth [0.5-5.0]", method = "consoleCommandSetStereoDialogDepth" },
     },

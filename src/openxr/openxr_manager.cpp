@@ -325,7 +325,12 @@ bool OpenXrManager::CreateSession(ID3D12Device* device, ID3D12CommandQueue* queu
 
     XrResult res = m_dispatch->CreateSession(m_instance, &sessionInfo, &m_session);
     if (XR_FAILED(res)) {
-        LogError("OpenXrManager::CreateSession failed with result " + std::to_string(res));
+        // Final, like a lost session (ADR-0004): the session is attempted once the game's device is known, and a
+        // runtime that refuses that device refuses it again. The swap chain hooks see Pass-Through and change nothing.
+        m_session = XR_NULL_HANDLE;
+        LogError("OpenXrManager: The OpenXR runtime refused to create the session (result " + std::to_string(res) +
+                 "). Continuing in Pass-Through Mode.");
+        ReleaseAndEnterPassThrough("session refused");
         return false;
     }
     m_sessionState = XR_SESSION_STATE_IDLE;

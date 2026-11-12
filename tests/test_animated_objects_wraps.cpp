@@ -156,3 +156,57 @@ TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, ThePointerDiagnosticsSayTheSuppor
     POINT_HAND(kRight, kHandX, kHandY, kHandZ);
     EXPECT_NE(EvalLua(L, "runCommand('vrPointerDiagnostics')").find("Animated Objects support: gave up (see the warning in the log)"), std::string::npos);
 }
+
+// ---- The warning's exact words ---------------------------------------------------------------------------------------------------
+
+namespace {
+// How many of the game's log lines are exactly `line`.
+int ExactLogLines(const std::string& line) {
+    int count = 0;
+    for (const auto& logged : s_capturedLogs) {
+        if (logged == line) ++count;
+    }
+    return count;
+}
+
+std::string AnimatedObjectsWarning(const std::string& problem) {
+    return "[FS25_VR] [Warning] Animated Objects support disabled: " + problem
+        + ". Motion Controllers cannot work doors and gates; the game's prompts are unchanged.";
+}
+}  // namespace
+
+TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, TheWarningSaysWhichFunctionIsMissing) {
+    ASSERT_NO_FATAL_FAILURE(StartWithDoor("triggerCallbackMissing"));
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(3);
+    EXPECT_EQ(ExactLogLines(AnimatedObjectsWarning("AnimatedObject.triggerCallback is missing")), 1);
+}
+
+TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, TheWarningSaysHowTheTriggerCallbackIsReshaped) {
+    ASSERT_NO_FATAL_FAILURE(StartWithDoor("triggerCallbackReshaped"));
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(3);
+    EXPECT_EQ(ExactLogLines(AnimatedObjectsWarning(
+                  "AnimatedObject.triggerCallback takes 1 parameters, not (object, triggerId, otherId, onEnter, onLeave, onStay)")), 1);
+}
+
+TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, TheWarningSaysHowTheCanBeTriggeredCheckIsReshaped) {
+    ASSERT_NO_FATAL_FAILURE(StartWithDoor("canBeTriggeredReshaped"));
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(3);
+    EXPECT_EQ(ExactLogLines(AnimatedObjectsWarning("AnimatedObject.getCanBeTriggered takes 0 parameters, not (object)")), 1);
+}
+
+TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, TheWarningSaysTheToggleHandlerIsMissing) {
+    ASSERT_NO_FATAL_FAILURE(StartWithDoor("toggleMissing"));
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(3);
+    EXPECT_EQ(ExactLogLines(AnimatedObjectsWarning("AnimatedObjectActivatable.onAnimationInputToggle is missing")), 1);
+}
+
+TEST_F(VirtualGamepadAnimatedObjectsWrapsTest, TheWarningOfAGameWithoutAnimatedObjectsSaysTheClassWasNotFound) {
+    ASSERT_NO_FATAL_FAILURE(Start());
+    POINT_HAND(kRight, kHandX, kHandY, kHandZ);
+    FRAMES(3);
+    EXPECT_EQ(ExactLogLines(AnimatedObjectsWarning("the game's AnimatedObject class was not found")), 1);
+}

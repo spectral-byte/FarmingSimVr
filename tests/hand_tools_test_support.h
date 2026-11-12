@@ -61,81 +61,6 @@ inline FakeOpenXrControllers::Inputs Squeeze(float trigger, float grip) {
     return inputs;
 }
 
-// The engine's console and menu globals the Companion Mod registers into and polls: the commands can be run with
-// runCommand(name, ...), and g_gui.visible opens and closes a menu.
-inline constexpr const char* kConsoleStubs = R"luau(
-    _G.registeredCommands = {}
-    _G.addConsoleCommand = function(name, desc, method, target)
-        _G.registeredCommands[name] = { desc = desc, method = method, target = target }
-    end
-    _G.removeConsoleCommand = function(name) _G.registeredCommands[name] = nil end
-    _G.runCommand = function(name, ...)
-        local command = _G.registeredCommands[name]
-        assert(command ~= nil, name .. " is not registered")
-        return command.target[command.method](command.target, ...)
-    end
-    _G.Input = { MOUSE_BUTTON_NONE = 0, MOUSE_BUTTON_LEFT = 1 }
-    _G.g_gui = {
-        visible = false,
-        getIsGuiVisible = function(self) return self.visible end,
-        mouseEvent = function() end,
-    }
-)luau";
-
-// Stubs of the engine's XML settings API that remember what was saved (in savedXml), so a "session" can be replayed into a
-// fresh Lua state (the same as test_motion_controllers.cpp and test_wheel_grab.cpp). Pass them as StartOptions::extraStubs.
-inline constexpr const char* kXmlStubs = R"luau(
-    _G.savedXml = _G.savedXml or {}
-    _G.getUserProfileAppPath = function() return "C:/mockAppPath/" end
-    _G.createFolder = function() return true end
-    _G.createXMLFile = function() return 1 end
-    _G.setXMLFloat = function(file, key, value) _G.savedXml[key] = value end
-    _G.setXMLBool = function(file, key, value) _G.savedXml[key] = value end
-    _G.setXMLString = function(file, key, value) _G.savedXml[key] = value end
-    _G.saveXMLFile = function() return true end
-    _G.loadXMLFile = function() return 2 end
-    _G.getXMLFloat = function(file, key) local v = _G.savedXml[key]; return type(v) == "number" and v or nil end
-    _G.getXMLBool = function(file, key) local v = _G.savedXml[key]; if type(v) == "boolean" then return v end return nil end
-    _G.getXMLString = function(file, key) local v = _G.savedXml[key]; return type(v) == "string" and v or nil end
-)luau";
-
-// Lua helpers for reading the scene as the player would see it, run once after the scene exists.
-//   isBelow(node, ancestor)           the node hangs somewhere below the ancestor
-//   handHolder(which)                 the Virtual Hand's node ("left" or "right"), nil without one
-//   distance(a, b)                    metres between two nodes' world positions
-//   offsetInHolder(node, which)       the node's position in the Virtual Hand's space, x y z
-//   shown(which)                      the Virtual Hand is shown
-//   fingerCurl(which, finger)         the curl of the three joints of a finger of a Virtual Hand, radians, toward the palm
-inline constexpr const char* kSceneHelpers = R"luau(
-    function _G.isBelow(node, ancestor)
-        local guard = 0
-        while node ~= nil and node ~= 0 and guard < 100 do
-            if node == ancestor then return true end
-            node = getParent(node)
-            guard = guard + 1
-        end
-        return false
-    end
-    function _G.handHolder(which) return StubModel.hands()[which] end
-    function _G.shown(which)
-        local node = StubModel.hands()[which]
-        return node ~= nil and StubModel.isShown(node)
-    end
-    function _G.distance(a, b)
-        local ax, ay, az = getWorldTranslation(a)
-        local bx, by, bz = getWorldTranslation(b)
-        return math.sqrt((ax - bx) ^ 2 + (ay - by) ^ 2 + (az - bz) ^ 2)
-    end
-    function _G.offsetInHolder(node, which)
-        local x, y, z = getWorldTranslation(node)
-        return worldToLocal(StubModel.hands()[which], x, y, z)
-    end
-    function _G.fingerCurl(which, finger)
-        local hand = StubModel.hands()[which]
-        return { StubModel.curl(hand, finger .. '1'), StubModel.curl(hand, finger .. '2'), StubModel.curl(hand, finger .. '3') }
-    end
-)luau";
-
 // Which game the mod is started in and what is on the map.
 struct StartOptions {
     const char* variant = "ok";              // StubHandTool.install variant: how HandTool.attachToolToCamera is in this game
@@ -149,11 +74,11 @@ struct StartOptions {
 // files load, as they are in the game, and the scene before loadMap.
 inline void StartHandToolsMod(lua_State* L, fs25vr::VRBridge& bridge, const StartOptions& options = StartOptions()) {
     ASSERT_TRUE(bridge.Inject(L));
-    ASSERT_EQ(RunLuauChunk(L, kStubSceneGraph, "=sceneGraph"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubModelLoading, "=modelLoading"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kStubHandTool, "=handTool"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kConsoleStubs, "=consoleStubs"), 0);
-    ASSERT_EQ(RunLuauChunk(L, kSceneHelpers, "=sceneHelpers"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("scene_graph"), "=sceneGraph"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("model_loading"), "=modelLoading"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("hand_tool"), "=handTool"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("console"), "=consoleStubs"), 0);
+    ASSERT_EQ(RunLuauChunk(L, StubChunk("hand_tools_scene_helpers"), "=sceneHelpers"), 0);
     const std::string install = std::string("StubHandTool.install('") + options.variant + "', { getLookRay = '" + options.lookRayVariant + "' })";
     ASSERT_EQ(RunLuauChunk(L, install.c_str(), "=installGame"), 0);
     ASSERT_EQ(RunLuauChunk(L, options.gameStubs, "=gameStubs"), 0);
@@ -199,7 +124,7 @@ inline void HoldLance(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldLance, "=ho
 // which installs the game's HandToolFlashlight before the Companion Mod's files load, as the game has it. The flashlight is
 // made and held by HoldFlashlight / kHoldFlashlight.
 inline std::string FlashlightGame(const char* variant = "ok") {
-    return std::string(kStubHandToolFlashlight) + "\nStubHandTool.installFlashlight('" + variant + "')";
+    return StubInstalled("hand_tool_flashlight", std::string("StubHandTool.installFlashlight('") + variant + "')");
 }
 inline constexpr const char* kHoldFlashlight = "_G.flashlight = StubHandTool.flashlight(foot.player); StubHandTool.hold(flashlight)";
 inline void HoldFlashlight(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldFlashlight, "=holdFlashlight"), 0); }
@@ -209,10 +134,10 @@ inline constexpr const char* kHoldOtherModTool = "_G.otherTool = StubHandTool.ot
 inline void HoldOtherModTool(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldOtherModTool, "=holdOtherModTool"), 0); }
 
 // ---- chainsaw -----------------------------------------------------------------------------------------------
-// The chainsaw's game-side stub (kStubHandToolChainsaw) is not part of every test's game: a test that wants it passes
+// The chainsaw's game-side stub (hand_tool_chainsaw.luau) is not part of every test's game: a test that wants it passes
 // ChainsawStubs(variant) as StartOptions::extraStubs. variant is how HandToolChainsaw is: "ok", "missing", "reshaped" (onUpdate), "drawMissing", "drawReshaped" (onDraw), "minimumMissing" (MINIMUM_CUT_DISTANCE), ...
 inline std::string ChainsawStubs(const char* variant = "ok") {
-    return std::string(kStubHandToolChainsaw) + "\nStubHandTool.installChainsaw('" + variant + "')\n";
+    return StubInstalled("hand_tool_chainsaw", std::string("StubHandTool.installChainsaw('") + variant + "')");
 }
 
 // The player takes the chainsaw in hand: _G.saw.
@@ -220,11 +145,11 @@ inline constexpr const char* kHoldChainsaw = "_G.saw = StubHandTool.chainsaw(foo
 inline void HoldChainsaw(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldChainsaw, "=holdChainsaw"), 0); }
 
 // ---- spray can (ADR-0030) -----------------------------------------------------------------------------------------
-// The spray can's game-side stub (kStubHandToolSprayCan) is not part of every test's game: a test that wants it passes
-// SprayCanStubs() as StartOptions::extraStubs (after kXmlStubs, if it uses both: concatenate).
+// The spray can's game-side stub (hand_tool_spray_can.luau) is not part of every test's game: a test that wants it passes
+// SprayCanStubs() as StartOptions::extraStubs (after xml_settings.luau, if it uses both: concatenate).
 // variant is how HandToolSprayCan.onDraw is: "ok", "missing", "reshaped".
 inline std::string SprayCanStubs(const char* variant = "ok") {
-    return std::string(kStubHandToolSprayCan) + "\nStubHandTool.installSprayCan('" + variant + "')\n";
+    return StubInstalled("hand_tool_spray_can", std::string("StubHandTool.installSprayCan('") + variant + "')");
 }
 
 // The player takes the spray can in hand: _G.can.
@@ -232,12 +157,12 @@ inline constexpr const char* kHoldSprayCan = "_G.can = StubHandTool.sprayCan(foo
 inline void HoldSprayCan(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldSprayCan, "=holdSprayCan"), 0); }
 
 // ---- horse brush (ADR-0030) ---------------------------------------------------------------------------------------
-// The horse brush's game-side stub (kStubHandToolHorseBrush) is not part of every test's game: a test that wants it passes
+// The horse brush's game-side stub (hand_tool_horse_brush.luau) is not part of every test's game: a test that wants it passes
 // HorseBrushStubs() as StartOptions::extraStubs (concatenated after the spray can's, if both). handler is how
 // HandToolHorseBrush.onBrushAction is ("ok", "missing", "reshaped"), lookup how
 // HandToolHorseBrush.getHusbandryAndClusterFromNode is (the same three).
 inline std::string HorseBrushStubs(const char* handler = "ok", const char* lookup = "ok") {
-    return std::string(kStubHandToolHorseBrush) + "\nStubHandTool.installHorseBrush('" + handler + "', '" + lookup + "')\n";
+    return StubInstalled("hand_tool_horse_brush", std::string("StubHandTool.installHorseBrush('") + handler + "', '" + lookup + "')");
 }
 
 // The player takes the horse brush in hand: _G.brush.
@@ -245,12 +170,12 @@ inline constexpr const char* kHoldHorseBrush = "_G.brush = StubHandTool.horseBru
 inline void HoldHorseBrush(lua_State* L) { ASSERT_EQ(RunLuauChunk(L, kHoldHorseBrush, "=holdHorseBrush"), 0); }
 
 // ---- fishing rod (ADR-0031) ---------------------------------------------------------------------------------------
-// The Highlands Fishing DLC's rod (kStubHandToolFishingRod, shaped after the #125 probe dump) is not part of every test's game: a
+// The Highlands Fishing DLC's rod (hand_tool_fishing_rod.luau, shaped after the #125 probe dump) is not part of every test's game: a
 // test that wants the DLC passes FishingRodStubs() as StartOptions::extraStubs (concatenated after the other tools' chunks, if
 // any). A game without the DLC simply leaves it out. variant is how the class's ACTIVATE_HANDTOOL handler (onActivateAction) is:
 // "ok", "missing", "reshaped".
 inline std::string FishingRodStubs(const char* variant = "ok") {
-    return std::string(kStubHandToolFishingRod) + "\nStubHandTool.installFishingRod('" + variant + "')\n";
+    return StubInstalled("hand_tool_fishing_rod", std::string("StubHandTool.installFishingRod('") + variant + "')");
 }
 
 // The player takes the fishing rod in hand: _G.rod.
