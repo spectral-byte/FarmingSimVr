@@ -1,6 +1,13 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Issues, specs and tickets for this repo live as GitHub issues in the **private** repo `spectral-byte/FarmingSimVr-issues`, not in the public code repo `spectral-byte/FarmingSimVr`. Use the `gh` CLI for all operations.
+
+## Which repo
+
+- Pass `--repo spectral-byte/FarmingSimVr-issues` on **every** `gh issue` command below. `gh` would otherwise infer the public repo from `git remote -v`.
+- For `gh api` calls, use `repos/spectral-byte/FarmingSimVr-issues/...` wherever `<owner>/<repo>` appears.
+- Never create, edit or comment on issues in `spectral-byte/FarmingSimVr`. Pull requests still live there.
+- Because issues and code are in different repos, cite an issue in full in commits, PR bodies and docs: `spectral-byte/FarmingSimVr-issues#N`. A bare `#N` links to the public repo, and `Closes #N` in a PR closes nothing, so close tickets by hand with `gh issue close`.
 
 ## Conventions
 
@@ -11,7 +18,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
 
-Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+Each command above also takes `--repo spectral-byte/FarmingSimVr-issues` (see **Which repo**).
 
 ## Pull requests as a triage surface
 
@@ -27,15 +34,15 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 
 ## When a skill says "publish to the issue tracker"
 
-Create a GitHub issue.
+Create a GitHub issue in `spectral-byte/FarmingSimVr-issues`: `gh issue create --repo spectral-byte/FarmingSimVr-issues ...`.
 
 ## When a skill says "fetch the relevant ticket"
 
-Run `gh issue view <number> --comments`.
+Run `gh issue view <number> --comments --repo spectral-byte/FarmingSimVr-issues`.
 
 ## Wayfinding operations
 
-Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
+Used by `/wayfinder`. All of this happens in `spectral-byte/FarmingSimVr-issues`, so `<owner>/<repo>` below is `spectral-byte/FarmingSimVr-issues`. The **map** is a single issue with **child** issues as tickets.
 
 - **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
 - **Child ticket**: an issue linked to the map as a GitHub sub-issue (`gh api` on the sub-issues endpoint). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
