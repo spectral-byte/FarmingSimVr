@@ -11,10 +11,8 @@ This ADR supersedes the telemetry probe portion of ADR-0003. The AFR frame-pacin
 
 1. **No hooks on D3D12 command list or command queue methods.** `GraphicsTelemetryProbe` and `D3D12Interceptor` are removed. The Injector installs only DXGI hooks.
 2. **No native-stereo present path.** `DxgiProxy::OnPresent` presents through the floating quad layer, AFR or SDP only.
-3. **VRBridge's Lua API is unchanged**, so the Companion Mod needs no change. The functions now return a fixed verdict:
+3. **VRBridge keeps `getRequiresAfrFallback` and `requiresAfrFallback`, now fixed, and drops the rest of the probe's Lua API.** The Companion Mod called neither `getStereoTelemetry` nor `isStereoActive` once the probe was retired, and no caller outside this repository is documented, so both are removed. The two that stay:
    - `VRBridge.getRequiresAfrFallback()` and `VRBridge.requiresAfrFallback` are `true` from the first frame.
-   - `VRBridge.isStereoActive()` is `false`.
-   - `VRBridge.getStereoTelemetry()` returns `nativeStereo = false`, `afrFallback = true`, `verdict = "AfrFallbackRequired"`, and zero counters.
 
 ## Status
 Accepted. Supersedes the telemetry probe in [ADR-0003](0003-afr-frame-pacing-and-telemetry-probe.md).
@@ -22,4 +20,4 @@ Accepted. Supersedes the telemetry probe in [ADR-0003](0003-afr-frame-pacing-and
 ## Considered Options
 - **Keep the probe but make it thread-safe** (rejected: the answer is already known and recorded in ADR-0015, so any hook on the render path is pure cost and risk).
 - **Keep the probe but disable it by default** (rejected: dead code that still contradicts ADR-0015 and can be re-enabled by mistake).
-- **Remove the probe and fix the verdict (selected).** Removes the data race and the shadow-cascade misclassification, and keeps the Companion Mod contract stable.
+- **Remove the probe and fix the verdict (selected).** Removes the data race and the shadow-cascade misclassification, and the Companion Mod, which called neither removed function, needs no change.
