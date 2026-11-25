@@ -33,6 +33,40 @@ HRESULT ForwardFactoryCall(const char* funcName, PFN pfn, Args&&... args) {
 
 thread_local const DxgiProxy* t_initializingProxy = nullptr;
 
+constexpr GUID kGameSwapChainSentinelName = { 0x6f1d0c3a, 0x5b7e, 0x4c2a, { 0x9e, 0x41, 0x7a, 0x0d, 0xb3, 0x58, 0xc2, 0x1f } };
+
+class GameSwapChainSentinel final : public IUnknown {
+public:
+    GameSwapChainSentinel(std::shared_ptr<GameSwapChainRecord> record, const void* swapChain)
+        : m_record(std::move(record)), m_swapChain(swapChain) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == __uuidof(IUnknown)) {
+            *ppv = static_cast<IUnknown*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++m_references; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = --m_references;
+        if (remaining == 0) {
+            const void* expected = m_swapChain;
+            m_record->address.compare_exchange_strong(expected, nullptr);
+            delete this;
+        }
+        return remaining;
+    }
+
+private:
+    std::shared_ptr<GameSwapChainRecord> m_record;
+    const void* m_swapChain;
+    std::atomic<ULONG> m_references{ 1 };
+};
+
 std::string ModuleNameAt(const void* address) {
     HMODULE module = nullptr;
     wchar_t path[MAX_PATH * 2] = {};
@@ -414,7 +448,7 @@ bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
     } else if (gameHwnd && !m_windowController->IsWindowSubclassed() && m_openXrManager && m_openXrManager->IsActive()) {
         m_windowController->AttachWindowSubclass(gameHwnd);
     }
-    m_gameSwapChain = swapChain;
+    RecordGameSwapChain(swapChain);
     if (m_swapChainAttached) return true;
     if (!m_ownedByRuntime) {
         LogWarn("DxgiProxy::AttachSwapChain: Not owned by a live InjectorRuntime; detours not installed.");
@@ -485,6 +519,17 @@ bool DxgiProxy::AttachSwapChain(IDXGISwapChain* swapChain) {
                 std::to_string(m_windowController->GetTargetRenderWidth()) + "x" + std::to_string(m_windowController->GetTargetRenderHeight()) + ").");
     }
     return m_swapChainAttached;
+}
+
+void DxgiProxy::RecordGameSwapChain(IDXGISwapChain* swapChain) {
+    if (m_gameSwapChain->address.load() == swapChain) return;
+    auto* sentinel = new GameSwapChainSentinel(m_gameSwapChain, swapChain);
+    const HRESULT hr = swapChain->SetPrivateDataInterface(kGameSwapChainSentinelName, sentinel);
+    sentinel->Release();
+    if (FAILED(hr)) {
+        LogWarn("DxgiProxy: The game's swap chain could not be marked to be forgotten when it is released.");
+    }
+    m_gameSwapChain->address.store(swapChain);
 }
 
 bool DxgiProxy::AttachFactory(IDXGIFactory* factory) {
@@ -592,7 +637,7 @@ void DxgiProxy::DetachAll() {
     m_lastSetColorSpace.reset();
     m_loggedHiddenColorSpaces = 0;
     m_loggedHiddenOutputHdr = false;
-    m_gameSwapChain = nullptr;
+    m_gameSwapChain->address.store(nullptr);
     ReleaseCachedBackBuffers();
     m_lastPresentSuppressed = false;
     m_desktopMirrorOffAnnounced = false;
