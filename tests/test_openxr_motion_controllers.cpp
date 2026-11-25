@@ -361,7 +361,7 @@ TEST(OpenXrManagerTest, HandAimPoseUsesTheHeadPoseReferenceSpaceAndPredictedDisp
 TEST(OpenXrManagerTest, HandAimPoseUsesTheSameOrientationConventionAsTheHeadPose) {
     FakeTrackedHeadset headset;
     HeadPose aimed = PoseAt(0.0f, 1.0f, 0.0f);
-    aimed.rotation = EulerAngles(0.0f, 0.5f, 0.0f);
+    aimed.orientation = QuaternionFromEuler(0.0f, 0.5f, 0.0f);
     headset.SetHeadPose(aimed);
     headset.SetHandPose(1, aimed);
     headset.NextFrame();
@@ -373,8 +373,37 @@ TEST(OpenXrManagerTest, HandAimPoseUsesTheSameOrientationConventionAsTheHeadPose
     EXPECT_NEAR(hand.aim.orientation.y, head.orientation.y, 1e-6f);
     EXPECT_NEAR(hand.aim.orientation.z, head.orientation.z, 1e-6f);
     EXPECT_NEAR(hand.aim.orientation.w, head.orientation.w, 1e-6f);
-    EXPECT_NEAR(hand.aim.rotation.yaw, head.rotation.yaw, 1e-6f);
-    EXPECT_NEAR(hand.aim.rotation.yaw, 0.5f, 1e-4f);
+    EXPECT_NEAR(hand.aim.Rotation().yaw, head.Rotation().yaw, 1e-6f);
+    EXPECT_NEAR(hand.aim.Rotation().yaw, 0.5f, 1e-4f);
+}
+
+TEST(OpenXrManagerTest, AControllerOrientationThatIsZeroButFlaggedValidReadsAsIdentityOnBothPoses) {
+    FakeTrackedHeadset headset;
+    HeadPose zeroed = PoseAt(0.2f, 1.1f, -0.4f);
+    zeroed.orientation = Quaternion(0.0f, 0.0f, 0.0f, 0.0f);
+    headset.SetHandPose(0, zeroed);
+    headset.NextFrame();
+
+    const HandState hand = headset.manager->GetHandState(0);
+    ASSERT_TRUE(hand.aim.isValid);
+    ASSERT_TRUE(hand.gripPose.isValid);
+    EXPECT_EQ(hand.aim.orientation, Quaternion(0.0f, 0.0f, 0.0f, 1.0f));
+    EXPECT_EQ(hand.gripPose.orientation, Quaternion(0.0f, 0.0f, 0.0f, 1.0f));
+    EXPECT_FLOAT_EQ(hand.aim.position.x, 0.2f);
+}
+
+TEST(OpenXrManagerTest, AControllerOrientationOffUnitLengthReadsAsTheUnitQuaternionOfTheSameRotation) {
+    FakeTrackedHeadset headset;
+    HeadPose scaled = PoseAt(0.0f, 1.0f, 0.0f);
+    scaled.orientation = Quaternion(0.0f, 1.2f, 0.0f, 1.6f);
+    headset.SetHandPose(1, scaled);
+    headset.NextFrame();
+
+    const HandState hand = headset.manager->GetHandState(1);
+    EXPECT_NEAR(hand.aim.orientation.y, 0.6f, 1e-6f);
+    EXPECT_NEAR(hand.aim.orientation.w, 0.8f, 1e-6f);
+    EXPECT_NEAR(hand.gripPose.orientation.y, 0.6f, 1e-6f);
+    EXPECT_NEAR(hand.gripPose.orientation.w, 0.8f, 1e-6f);
 }
 
 TEST(OpenXrManagerTest, HandAimPoseFollowsTheRecenterActionAtOnce) {
@@ -382,7 +411,7 @@ TEST(OpenXrManagerTest, HandAimPoseFollowsTheRecenterActionAtOnce) {
     // The head stands at (1, 1.6, 0.5) looking 90 degrees to the left; the hand is one metre
     // straight ahead of it: (0, 0, -1) in head space.
     HeadPose head = PoseAt(1.0f, 1.6f, 0.5f);
-    head.rotation = EulerAngles(0.0f, 1.5707964f, 0.0f);
+    head.orientation = QuaternionFromEuler(0.0f, 1.5707964f, 0.0f);
     headset.SetHeadPose(head);
     headset.SetHandPose(1, PoseAt(0.0f, 1.6f, 0.5f));
     headset.NextFrame();
@@ -429,7 +458,7 @@ TEST(OpenXrManagerTest, HandGripPoseUsesTheHeadPoseReferenceSpaceAndPredictedDis
 TEST(OpenXrManagerTest, HandGripPoseUsesTheSameOrientationConventionAsTheHeadPose) {
     FakeTrackedHeadset headset;
     HeadPose gripped = PoseAt(0.0f, 1.0f, 0.0f);
-    gripped.rotation = EulerAngles(0.0f, 0.5f, 0.0f);
+    gripped.orientation = QuaternionFromEuler(0.0f, 0.5f, 0.0f);
     headset.SetHeadPose(gripped);
     headset.SetHandGripPose(1, gripped);
     headset.NextFrame();
@@ -441,14 +470,14 @@ TEST(OpenXrManagerTest, HandGripPoseUsesTheSameOrientationConventionAsTheHeadPos
     EXPECT_NEAR(hand.gripPose.orientation.y, head.orientation.y, 1e-6f);
     EXPECT_NEAR(hand.gripPose.orientation.z, head.orientation.z, 1e-6f);
     EXPECT_NEAR(hand.gripPose.orientation.w, head.orientation.w, 1e-6f);
-    EXPECT_NEAR(hand.gripPose.rotation.yaw, head.rotation.yaw, 1e-6f);
-    EXPECT_NEAR(hand.gripPose.rotation.yaw, 0.5f, 1e-4f);
+    EXPECT_NEAR(hand.gripPose.Rotation().yaw, head.Rotation().yaw, 1e-6f);
+    EXPECT_NEAR(hand.gripPose.Rotation().yaw, 0.5f, 1e-4f);
 }
 
 TEST(OpenXrManagerTest, HandGripPoseFollowsTheRecenterActionAtOnce) {
     FakeTrackedHeadset headset;
     HeadPose head = PoseAt(1.0f, 1.6f, 0.5f);
-    head.rotation = EulerAngles(0.0f, 1.5707964f, 0.0f);
+    head.orientation = QuaternionFromEuler(0.0f, 1.5707964f, 0.0f);
     headset.SetHeadPose(head);
     headset.SetHandPose(1, PoseAt(5.0f, 5.0f, 5.0f));
     headset.SetHandGripPose(1, PoseAt(0.0f, 1.6f, 0.5f));

@@ -177,40 +177,12 @@ TEST_F(VrBridgeTest, TheRuntimeBuildsItsBridgeWithTheBuildsVersionOrOneATestSupp
     }
 }
 
-TEST_F(VrBridgeTest, ReportsFixedStereoTelemetryVerdictToLuauScript) {
-    fs25vr::VRBridge bridge(nullptr, nullptr);
-    ASSERT_TRUE(bridge.Inject(L));
-
-    std::string script = R"(
-        assert(type(VRBridge.getStereoTelemetry) == "function", "getStereoTelemetry must be a function")
-        assert(type(VRBridge.isStereoActive) == "function", "isStereoActive must be a function")
-
-        local t = VRBridge.getStereoTelemetry()
-        assert(type(t) == "table", "getStereoTelemetry must return a table")
-        assert(type(t.frameIndex) == "number", "frameIndex must be a number")
-        assert(type(t.maxViewports) == "number", "maxViewports must be a number")
-        assert(type(t.passCount) == "number", "passCount must be a number")
-        assert(t.nativeStereo == false, "nativeStereo must be false")
-        assert(t.afrFallback == true, "afrFallback must be true")
-        assert(t.verdict == "AfrFallbackRequired", "verdict must be AfrFallbackRequired from the first frame")
-        assert(type(t.summary) == "string", "summary must be string")
-
-        assert(VRBridge.isStereoActive() == false, "isStereoActive must be false")
-    )";
-
-    int status = RunLuauString(L, script);
-    if (status != 0) {
-        const char* err = lua_tostring(L, -1);
-        FAIL() << "Luau script error: " << (err ? err : "unknown error");
-    }
-}
-
 TEST_F(VrBridgeTest, ExposesHeadPoseToLuauScript) {
     fs25vr::FakeTrackedHeadset headset;
     auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.12f, -0.05f, 0.88f);
-    simPose.rotation = fs25vr::EulerAngles(0.25f, -0.15f, 0.05f);
+    simPose.orientation = fs25vr::QuaternionFromEuler(0.25f, -0.15f, 0.05f);
     simPose.isValid = true;
     simPose.positionTracked = true;
     simPose.orientationTracked = true;
@@ -248,7 +220,7 @@ TEST_F(VrBridgeTest, RecenterViaLuauResetsTranslationalOffsets) {
     auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(1.5f, 0.5f, -2.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.1f, 0.3f, 0.0f);
+    simPose.orientation = fs25vr::QuaternionFromEuler(0.1f, 0.3f, 0.0f);
     simPose.isValid = true;
     simPose.positionTracked = true;
     simPose.orientationTracked = true;
@@ -413,7 +385,6 @@ TEST_F(VrBridgeTest, ExposesEyePoseWithInterpupillaryShiftToLuau) {
     auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.0f, 1.7f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.orientation = fs25vr::Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
@@ -455,7 +426,6 @@ TEST_F(VrBridgeTest, FillsCallerSuppliedTablesInPlaceForPoseAndProjection) {
     auto oxr = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.12f, 1.7f, 0.88f);
-    simPose.rotation = fs25vr::EulerAngles(0.25f, -0.15f, 0.05f);
     simPose.orientation = fs25vr::Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     simPose.isValid = true;
     simPose.positionTracked = true;
@@ -531,7 +501,7 @@ TEST_F(VrBridgeTest, GetHandStateReportsAimPoseAndRawInputsPerHandIntoACallerSup
     auto oxr = headset.manager;
     fs25vr::HeadPose aim;
     aim.position = fs25vr::Vector3(0.30f, 1.20f, -0.40f);
-    aim.rotation = fs25vr::EulerAngles(0.10f, -0.20f, 0.0f);
+    aim.orientation = fs25vr::QuaternionFromEuler(0.10f, -0.20f, 0.0f);
     aim.isValid = true;
     aim.positionTracked = true;
     aim.orientationTracked = true;
@@ -589,7 +559,7 @@ TEST_F(VrBridgeTest, GetHandStateReportsTheGripPoseNextToTheAimPoseWithItsOwnTra
     aim.position = fs25vr::Vector3(0.30f, 1.20f, -0.40f);
     fs25vr::HeadPose grip;
     grip.position = fs25vr::Vector3(0.25f, 1.10f, -0.30f);
-    grip.rotation = fs25vr::EulerAngles(0.10f, -0.20f, 0.05f);
+    grip.orientation = fs25vr::QuaternionFromEuler(0.10f, -0.20f, 0.05f);
     headset.SetHandPose(1, aim);
     headset.SetHandGripPose(1, grip);
     headset.SetHandPose(0, aim);
@@ -827,7 +797,7 @@ TEST_F(VrBridgeTest, SetMenuVisibleTrueTriggersQuadAlignmentOnOpenXrManager) {
     auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(2.0f, 1.8f, -1.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 1.5707963f, 0.0f);
+    simPose.orientation = fs25vr::QuaternionFromEuler(0.0f, 1.5707963f, 0.0f);
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
     openXrManager->PollHeadPose();
@@ -853,7 +823,6 @@ TEST_F(VrBridgeTest, ExposesAlignMenuQuadToLuau) {
     auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(0.0f, 1.5f, 0.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
 
@@ -1061,7 +1030,6 @@ TEST_F(VrBridgeTest, Set2DViewActiveTrueTriggersQuadAlignmentOnOpenXrManager) {
     auto openXrManager = headset.manager;
     fs25vr::HeadPose simPose;
     simPose.position = fs25vr::Vector3(1.0f, 1.7f, 2.0f);
-    simPose.rotation = fs25vr::EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
     headset.SetHeadPose(simPose);
     openXrManager->PollHeadPose();
@@ -1477,8 +1445,6 @@ TEST_F(VrBridgeTest, ExposesAllExpectedBridgeKeysAndPreallocatesCapacity) {
         "handshake",
         "isCompanionActive",
         "onMapUnload",
-        "getStereoTelemetry",
-        "isStereoActive",
         "getRequiresAfrFallback",
         "getHeadPose",
         "getHandState",

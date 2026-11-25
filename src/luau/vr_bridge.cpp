@@ -266,43 +266,6 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
     return 0;
 }
 
-int VRBridge::Lua_GetStereoTelemetry(lua_State* L) {
-    VRBridge* self = &FromUpvalue(L);
-    const bool afrFallback = self->RequiresAfrFallback();
-
-    lua_createtable(L, 0, 7);
-
-    lua_pushinteger(L, 0);
-    lua_setfield(L, -2, "frameIndex");
-
-    lua_pushinteger(L, 0);
-    lua_setfield(L, -2, "maxViewports");
-
-    lua_pushinteger(L, 0);
-    lua_setfield(L, -2, "passCount");
-
-    lua_pushboolean(L, afrFallback ? 0 : 1);
-    lua_setfield(L, -2, "nativeStereo");
-
-    lua_pushboolean(L, afrFallback ? 1 : 0);
-    lua_setfield(L, -2, "afrFallback");
-
-    lua_pushstring(L, afrFallback ? "AfrFallbackRequired" : "NativeStereoDetected");
-    lua_setfield(L, -2, "verdict");
-
-    lua_pushstring(L, afrFallback ? "Native stereo is not available under D3D12; AFR or SDP is required."
-                                  : "Native stereo is available.");
-    lua_setfield(L, -2, "summary");
-
-    return 1;
-}
-
-int VRBridge::Lua_IsStereoActive(lua_State* L) {
-    VRBridge* self = &FromUpvalue(L);
-    lua_pushboolean(L, self->RequiresAfrFallback() ? 0 : 1);
-    return 1;
-}
-
 HeadPose VRBridge::GetHeadPose() {
     return GetHeadPoseForEye(GetFrameParity());
 }
@@ -454,9 +417,10 @@ void VRBridge::FillPoseTable(lua_State* L, int tableIndex, const HeadPose& pose,
     lua_pushnumber(L, pose.position.x); lua_setfield(L, -2, "x");
     lua_pushnumber(L, pose.position.y); lua_setfield(L, -2, "y");
     lua_pushnumber(L, pose.position.z); lua_setfield(L, -2, "z");
-    lua_pushnumber(L, pose.rotation.pitch); lua_setfield(L, -2, "pitch");
-    lua_pushnumber(L, pose.rotation.yaw); lua_setfield(L, -2, "yaw");
-    lua_pushnumber(L, pose.rotation.roll); lua_setfield(L, -2, "roll");
+    const EulerAngles rotation = pose.Rotation();
+    lua_pushnumber(L, rotation.pitch); lua_setfield(L, -2, "pitch");
+    lua_pushnumber(L, rotation.yaw); lua_setfield(L, -2, "yaw");
+    lua_pushnumber(L, rotation.roll); lua_setfield(L, -2, "roll");
     lua_pushnumber(L, pose.orientation.x); lua_setfield(L, -2, "qx");
     lua_pushnumber(L, pose.orientation.y); lua_setfield(L, -2, "qy");
     lua_pushnumber(L, pose.orientation.z); lua_setfield(L, -2, "qz");
@@ -508,13 +472,14 @@ void VRBridge::FillHandStateTable(lua_State* L, int tableIndex, const HandState&
     lua_pushboolean(L, hand.menu ? 1 : 0); lua_setfield(L, -2, "menu");
 
     const HeadPose& grip = hand.gripPose;
+    const EulerAngles gripRotation = grip.Rotation();
     lua_pushboolean(L, hand.gripTracked ? 1 : 0); lua_setfield(L, -2, "gripPoseTracked");
     lua_pushnumber(L, grip.position.x); lua_setfield(L, -2, "gripPoseX");
     lua_pushnumber(L, grip.position.y); lua_setfield(L, -2, "gripPoseY");
     lua_pushnumber(L, grip.position.z); lua_setfield(L, -2, "gripPoseZ");
-    lua_pushnumber(L, grip.rotation.pitch); lua_setfield(L, -2, "gripPosePitch");
-    lua_pushnumber(L, grip.rotation.yaw); lua_setfield(L, -2, "gripPoseYaw");
-    lua_pushnumber(L, grip.rotation.roll); lua_setfield(L, -2, "gripPoseRoll");
+    lua_pushnumber(L, gripRotation.pitch); lua_setfield(L, -2, "gripPosePitch");
+    lua_pushnumber(L, gripRotation.yaw); lua_setfield(L, -2, "gripPoseYaw");
+    lua_pushnumber(L, gripRotation.roll); lua_setfield(L, -2, "gripPoseRoll");
     lua_pushnumber(L, grip.orientation.x); lua_setfield(L, -2, "gripPoseQx");
     lua_pushnumber(L, grip.orientation.y); lua_setfield(L, -2, "gripPoseQy");
     lua_pushnumber(L, grip.orientation.z); lua_setfield(L, -2, "gripPoseQz");

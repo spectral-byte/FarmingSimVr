@@ -118,8 +118,6 @@ public:
     static int Lua_Handshake(lua_State* L);
     static int Lua_IsCompanionActive(lua_State* L);
     static int Lua_OnMapUnload(lua_State* L);
-    static int Lua_GetStereoTelemetry(lua_State* L);
-    static int Lua_IsStereoActive(lua_State* L);
     static int Lua_RequiresAfrFallback(lua_State* L);
     static int Lua_GetHeadPose(lua_State* L);
     static int Lua_GetHandState(lua_State* L);
@@ -202,8 +200,6 @@ public:
         {"handshake", &Lua_Handshake, CallKind::Occasional},
         {"isCompanionActive", &Lua_IsCompanionActive, CallKind::PerFrame},
         {"onMapUnload", &Lua_OnMapUnload, CallKind::Occasional},
-        {"getStereoTelemetry", &Lua_GetStereoTelemetry, CallKind::Occasional},
-        {"isStereoActive", &Lua_IsStereoActive, CallKind::Occasional},
         {"getRequiresAfrFallback", &Lua_RequiresAfrFallback, CallKind::PerFrame},
         {"getHeadPose", &Lua_GetHeadPose, CallKind::PerFrame},
         {"getHandState", &Lua_GetHandState, CallKind::PerFrame},

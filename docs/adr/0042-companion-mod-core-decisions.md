@@ -40,6 +40,7 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
         mapUnload       = function(self) end,        -- map unload: undo what mapLoad did
         update          = function(self, dt) end,    -- every update
         updateEarly     = function(self, dt) end,    -- every update, before the core polls the GUI (see below); rarely needed
+        updateBeforeActions = function(self, dt) end, -- every update, before the core checks the VR action events (see below); rarely needed
         saveSettings    = function(self, xmlFile, xml) end,   -- saveConfiguration: write its settings with xml.setBool / setFloat /
                                                               -- setString / setInt (the engine's setters, any may be nil)
         loadSettings    = function(self, xmlFile, xml) end,   -- loadConfiguration: read them back with xml.has / getBool / getFloat
@@ -71,6 +72,11 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
     update    runSubsystemUpdateEarly    right before the core polls the GUI visibility (pollGuiVisibility), so a hook that has to
                                          change what the poll sees (the fish catch answers its dialog, which must be gone when the
                                          poll looks) runs here, in registration order; for hooks that truly need it, not a default
+    update    runSubsystemUpdateBeforeActions   after the core has hooked the game's classes and the GUI draw, right before the core
+                                         checks the VR action events (updateActionEvents) and the vehicle transition, so a hook sees
+                                         this update's GUI poll and nothing of the action events or the transition; the HUD's
+                                         convergence (updateHudConvergence) runs here, where it ran as a direct call before it was a
+                                         hook, so the order of the update is the one it was
     update    runSubsystemUpdate         after the core's own update steps, so a hook sees this update's GUI poll and vehicle
                                          transition; before applyDlssNearClip, which reads only the controlled vehicle and its
                                          camera, which no update hook changes
@@ -82,13 +88,18 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
                                          the DLSS near planes, the HUD state and the Stereo Presentation Mode), in registration
                                          order. Every load hook stores only its own fields, so none needs another's to have run
                                          first; one that does says so in a comment at its registration
-  Three steps of the update are direct calls of the core, because no run point is where they must be: the Perf Trace refresh
-  (the very top: the Injector may have ended the trace, and nothing after it may time into an ended trace), the menu's
-  background camera (right after the GUI poll) and the Input subsystem's check of the VR action events (before the vehicle
-  transition, see updateActionEvents in VRCompanionInput.lua).
+  Two steps of the update are direct calls of the core, because no run point is where they must be: the Perf Trace refresh
+  (the very top: the Injector may have ended the trace, and nothing after it may time into an ended trace) and the menu's
+  background camera (right after the GUI poll).
+
+  A third, the Input subsystem's check of the VR action events (updateActionEvents in VRCompanionInput.lua), is a direct call
+  that a run point could now hold: updateBeforeActions runs right before it, and Input registers after the HUD (its file loads
+  after the HUD's in modDesc.xml), so a hook of Input's would run after the HUD's convergence and before the vehicle
+  transition, the order ADR-0045 gives. It was not moved, so the update is as it was; as a hook, a raise in the check would be
+  logged once per subsystem instead of reaching the caller of update.
 
   A hook that raises is caught: it is logged once per subsystem and hook, as
-    [FS25_VR] [Error] Subsystem '<name>' <mapLoad|updateEarly|update|mapUnload|saveSettings|loadSettings> hook raised: <error>
+    [FS25_VR] [Error] Subsystem '<name>' <mapLoad|updateEarly|updateBeforeActions|update|mapUnload|saveSettings|loadSettings> hook raised: <error>
   and the other hooks still run. This is by design (spec #244: a fault in one subsystem does not cost the player the others), so a
   raise in a hook, the Motion Controllers' update included, does not reach the caller of update or of loadMap; the log line is
   how it is found, and the test harnesses fail a test in which that line was logged unless the test expects it. The log-once set
@@ -96,8 +107,8 @@ This record holds the non-obvious decisions behind the Companion Mod core: the s
   the next: the same fault every time is one line, not one per map; test_subsystem_registry.cpp pins it).
   ```
 
-- **`updateEarlyHooks`**: The subsystems with an updateEarly / update hook, in registration order, as { name = \<string>, hook = \<function> }: built when a subsystem registers, so that an update loops over the few that update and not over every subsystem (it runs every frame)
-- **`VRCompanion:runSubsystemUpdateEarly`**: The two update run points run every frame: plain loops over the flat lists, no allocation
+- **`updateEarlyHooks`, `updateBeforeActionsHooks`**: The subsystems with an updateEarly / updateBeforeActions / update hook, in registration order, as { name = \<string>, hook = \<function> }: built when a subsystem registers, so that an update loops over the few that update and not over every subsystem (it runs every frame)
+- **`VRCompanion:runSubsystemUpdateEarly`**: The three update run points run every frame: plain loops over the flat lists, no allocation
 - **`mismatchedInjector`**: What the version mismatch warning calls the Injector, or nil when it is the same release as this Companion Mod (or reports none, which no release does). An Injector that reports the fixed text of the releases up to 1.2 is older(): the number would say nothing; any other is version(injectorVersion).
 - **`VRCompanion:describeVersionMismatchOnScreen`**: The same warning as the player reads it on the screen: in the game's language, "FS25 VR: " and the sentence in English otherwise. log.txt keeps the English sentence (describeVersionMismatch).
 - **`VRCompanion:loadMap`, `if VRBridge == nil and type(isHeadTrackingAvailable) == "function" then`**: Proactively trigger native detour in case loadMap executes before any camera update

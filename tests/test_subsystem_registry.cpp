@@ -240,6 +240,57 @@ TEST_F(SubsystemRegistryTest, AnUpdateRunsTheCoresStepsAndTheSubsystemsInTheOrde
         "registerActionEvents,onVehicleTransition,registerActionEvents,updateMotionControllers,applyDlssNearClip");
 }
 
+TEST_F(SubsystemRegistryTest, AnUpdateBeforeActionsHookRunsAfterTheCamerasAreHookedAndBeforeTheActionEventsAreChecked) {
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local order = {}
+        for _, name in ipairs({ "pollGuiVisibility", "hookGuiDraw", "updateActionEvents", "onVehicleTransition", "applyDlssNearClip" }) do
+            local original = VRCompanion[name]
+            VRCompanion[name] = function(self, ...)
+                table.insert(order, name)
+                return original(self, ...)
+            end
+        end
+        VRCompanion:registerSubsystem("probe", {
+            updateEarly = function() table.insert(order, "probe:early") end,
+            updateBeforeActions = function(self, dt) table.insert(order, "probe:beforeActions:" .. tostring(dt)) end,
+            update = function() table.insert(order, "probe:update") end,
+        })
+        VRCompanion:registerSubsystem("other", {
+            updateBeforeActions = function() table.insert(order, "other:beforeActions") end,
+        })
+        VRCompanion:loadMap("testMap")
+        order = {}
+        VRCompanion.guiDrawHook = nil
+        VRCompanion:update(16)
+        _G.beforeActionsOrder = table.concat(order, ",")
+    )luau", "=updateBeforeActionsOrder"), 0);
+    EXPECT_EQ(EvalLua(L, "beforeActionsOrder"),
+        "probe:early,pollGuiVisibility,hookGuiDraw,probe:beforeActions:16,other:beforeActions,updateActionEvents,probe:update,applyDlssNearClip");
+}
+
+TEST_F(SubsystemRegistryTest, AnUpdateBeforeActionsHookThatRaisesIsLoggedOnceAndTheRestOfTheUpdateStillRuns) {
+    ExpectHookErrors();
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        VRCompanion:registerSubsystem("boom", {
+            updateBeforeActions = function() error("before actions failed") end,
+            update = function() table.insert(events, "boom:update") end,
+        })
+        VRCompanion:loadMap("testMap")
+        for _ = 1, 3 do VRCompanion:update(16) end
+    )luau", "=raisingBeforeActions"), 0);
+    EXPECT_EQ(CountLines("[FS25_VR] [Error] Subsystem 'boom' updateBeforeActions hook raised: "), 1) << "three frames, one line";
+    EXPECT_EQ(CountLines("before actions failed"), 1);
+    EXPECT_EQ(EvalLua(L, "#events"), "3") << "the update hook of the same subsystem ran each frame";
+}
+
+TEST_F(SubsystemRegistryTest, AnUpdateBeforeActionsHookThatIsNotAFunctionRaisesWhenTheSubsystemRegisters) {
+    ASSERT_EQ(RunLuauChunk(L, R"luau(
+        local ok, err = pcall(function() VRCompanion:registerSubsystem("probe", { updateBeforeActions = 5 }) end)
+        assert(not ok, "registering must raise")
+        assert(string.find(tostring(err), "updateBeforeActions", 1, true), tostring(err))
+    )luau", "=badBeforeActions"), 0);
+}
+
 TEST_F(SubsystemRegistryTest, AHookThatRaisesIsLoggedOnceWithTheSubsystemAndHookNamesAndTheOthersStillRun) {
     ExpectHookErrors();
     ASSERT_EQ(RunLuauChunk(L, R"luau(

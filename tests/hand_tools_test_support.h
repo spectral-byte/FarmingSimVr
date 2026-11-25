@@ -26,7 +26,7 @@ inline HeadPose HandAt(float x, float y, float z) {
 
 inline HeadPose HandAt(float x, float y, float z, float pitch, float yaw) {
     HeadPose pose = HandAt(x, y, z);
-    pose.rotation = fs25vr::EulerAngles(pitch, yaw, 0.0f);
+    pose.orientation = fs25vr::QuaternionFromEuler(pitch, yaw, 0.0f);
     return pose;
 }
 

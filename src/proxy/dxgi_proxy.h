@@ -32,6 +32,10 @@ inline constexpr size_t kOutputGetDesc1VTableSlot = 27;
 
 bool IsHdrColorSpace(DXGI_COLOR_SPACE_TYPE colorSpace);
 
+struct GameSwapChainRecord {
+    std::atomic<const void*> address{ nullptr };
+};
+
 class DxgiProxy {
 public:
     DxgiProxy(std::shared_ptr<ISystemDxgi> systemDxgi,
@@ -161,8 +165,9 @@ private:
     void UpdateMouseConfinement();
     bool m_mouseConfinementUpdated = false;
 
-    std::atomic<const void*> m_gameSwapChain{ nullptr };
-    bool IsGameSwapChain(const void* swapChain) const { return swapChain && swapChain == m_gameSwapChain.load(); }
+    std::shared_ptr<GameSwapChainRecord> m_gameSwapChain = std::make_shared<GameSwapChainRecord>();
+    bool IsGameSwapChain(const void* swapChain) const { return swapChain && swapChain == m_gameSwapChain->address.load(); }
+    void RecordGameSwapChain(IDXGISwapChain* swapChain);
     bool IsForGameWindow(HWND window) const;
     bool PrepareGameSwapChainCreation(const char* hookName, HWND window);
     void ReleaseCachedBackBuffers();
