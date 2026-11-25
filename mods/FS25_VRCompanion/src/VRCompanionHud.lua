@@ -1574,6 +1574,7 @@ function VRCompanion:unhookGuiDraw()
 end
 
 VRCompanion:registerSubsystem("hud", {
+    updateBeforeActions = function(self, dt) self:updateHudConvergence(dt) end,
     mapLoad = function(self)
         self:applyHudSafeArea()
         self:setHudState(self.persistedHudState or self.DEFAULT_HUD_STATE)
