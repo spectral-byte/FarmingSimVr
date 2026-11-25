@@ -457,6 +457,12 @@ TEST_F(FidelityFxInterceptorTest, DispatchesOfOtherTypesOnAVirtualContextGoToThe
 
 constexpr uint32_t kSupportedCreateFlags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_DEPTH_INVERTED;
 
+TEST(FfxDefsTest, ResourceStatesCarryTheSdkValues) {
+    EXPECT_EQ(FFX_API_RESOURCE_STATE_COMPUTE_READ, 4u);
+    EXPECT_EQ(FFX_API_RESOURCE_STATE_PIXEL_READ, 8u);
+    EXPECT_EQ(FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ, 12u);
+}
+
 TEST(FfxMvConventionsTest, ReadsTheMotionVectorScaleAndJitterFromTheDispatchDescription) {
     auto desc = MakeUpscaleDispatchDesc(0.25f, -0.125f);
     desc.motionVectorScale = {-2.0f, 3.0f};
