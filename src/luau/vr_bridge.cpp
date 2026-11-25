@@ -266,43 +266,6 @@ int VRBridge::Lua_OnMapUnload(lua_State* L) {
     return 0;
 }
 
-int VRBridge::Lua_GetStereoTelemetry(lua_State* L) {
-    VRBridge* self = &FromUpvalue(L);
-    const bool afrFallback = self->RequiresAfrFallback();
-
-    lua_createtable(L, 0, 7);
-
-    lua_pushinteger(L, 0);
-    lua_setfield(L, -2, "frameIndex");
-
-    lua_pushinteger(L, 0);
-    lua_setfield(L, -2, "maxViewports");
-
-    lua_pushinteger(L, 0);
-    lua_setfield(L, -2, "passCount");
-
-    lua_pushboolean(L, afrFallback ? 0 : 1);
-    lua_setfield(L, -2, "nativeStereo");
-
-    lua_pushboolean(L, afrFallback ? 1 : 0);
-    lua_setfield(L, -2, "afrFallback");
-
-    lua_pushstring(L, afrFallback ? "AfrFallbackRequired" : "NativeStereoDetected");
-    lua_setfield(L, -2, "verdict");
-
-    lua_pushstring(L, afrFallback ? "Native stereo is not available under D3D12; AFR or SDP is required."
-                                  : "Native stereo is available.");
-    lua_setfield(L, -2, "summary");
-
-    return 1;
-}
-
-int VRBridge::Lua_IsStereoActive(lua_State* L) {
-    VRBridge* self = &FromUpvalue(L);
-    lua_pushboolean(L, self->RequiresAfrFallback() ? 0 : 1);
-    return 1;
-}
-
 HeadPose VRBridge::GetHeadPose() {
     return GetHeadPoseForEye(GetFrameParity());
 }

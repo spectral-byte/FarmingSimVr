@@ -22,6 +22,7 @@
 #include <functional>
 #include <future>
 #include <iterator>
+#include <map>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -464,6 +465,7 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE MockQueryInterface(IUnknown*, REF
 }
 __declspec(noinline) ULONG STDMETHODCALLTYPE MockAddRef(IUnknown*) { return 2; }
 __declspec(noinline) ULONG STDMETHODCALLTYPE MockRelease(IUnknown*) { return 1; }
+__declspec(noinline) HRESULT STDMETHODCALLTYPE MockSetPrivateDataInterface(IDXGISwapChain*, REFGUID, const IUnknown*) { return S_OK; }
 
 static void* s_activeMockDevice = nullptr;
 static void* s_activeMockQueue = nullptr;
@@ -949,6 +951,7 @@ TEST(DxgiProxyTest, AttachSwapChainDetourSuppressesPhysicalPresentOnSubPass0) {
     vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ vtable.data() };
 
     ASSERT_TRUE(proxy.AttachSwapChain(reinterpret_cast<IDXGISwapChain*>(&mockSwapChain)));
@@ -1013,6 +1016,7 @@ struct MirrorPresentRig {
         vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
         vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
         vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+        vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
         EXPECT_TRUE(runtime->GetDxgiProxy().AttachSwapChain(swapChain));
         void** hookedVTable = *reinterpret_cast<void***>(swapChain);
         pfnPresent = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT)>(hookedVTable[kPresentVTableSlot]);
@@ -1504,6 +1508,7 @@ TEST(DxgiProxyTest, AttachSwapChainHooksPresentAndInvokesOnPresent) {
     vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ vtable.data() };
 
     ASSERT_TRUE(proxy.AttachSwapChain(reinterpret_cast<IDXGISwapChain*>(&mockSwapChain)));
@@ -1548,6 +1553,7 @@ TEST(DxgiProxyTest, PresentHookActsForTheRuntimeThatInstalledItAndIsRemovedWithI
     vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ vtable.data() };
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
     ASSERT_TRUE(installer->GetDxgiProxy().AttachSwapChain(pSwapChain));
@@ -1584,6 +1590,7 @@ TEST(DxgiProxyTest, StandaloneProxyInstallsNoDetours) {
     vtable[2] = reinterpret_cast<void*>(&MockRelease);
     vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ vtable.data() };
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
 
@@ -1920,6 +1927,7 @@ TEST(DxgiProxyTest, SwapChainReportsHdrColorSpacesUnsupportedOnlyWhileVrIsActive
     vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    vtable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     vtable[kCheckColorSpaceSupportVTableSlot] = reinterpret_cast<void*>(&MockCheckColorSpaceSupport);
     vtable[kSetColorSpace1VTableSlot] = reinterpret_cast<void*>(&MockSetColorSpace1);
     MockComObject mockSwapChain{ vtable.data() };
@@ -2212,6 +2220,7 @@ TEST(DxgiProxyTest, ConfiguresBackbufferMatchedOpenXrEyeSwapchainDimensionsOnPre
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     scVTable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    scVTable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ scVTable.data() };
 
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
@@ -2250,6 +2259,7 @@ TEST(DxgiProxyTest, FallsBackToRecommendedDimensionsWhenBackbufferDimensionsUnav
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     scVTable[12] = reinterpret_cast<void*>(&MockGetDescZeroDimensions);
+    scVTable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ scVTable.data() };
 
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
@@ -2288,6 +2298,7 @@ TEST(DxgiProxyTest, FallsBackToDefaultDimensionsWhenBothBackbufferAndRecommended
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     scVTable[12] = reinterpret_cast<void*>(&MockGetDescZeroDimensions);
+    scVTable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     MockComObject mockSwapChain{ scVTable.data() };
 
     auto pSwapChain = reinterpret_cast<IDXGISwapChain*>(&mockSwapChain);
@@ -4131,6 +4142,7 @@ TEST(DxgiProxyTest, AttachSwapChainDetoursResizeBuffersAndOverridesTargetResolut
     scVTable[kPresentVTableSlot] = reinterpret_cast<void*>(&MockPresent);
     scVTable[9] = reinterpret_cast<void*>(&MockGetBuffer);
     scVTable[12] = reinterpret_cast<void*>(&MockGetDesc);
+    scVTable[4] = reinterpret_cast<void*>(&MockSetPrivateDataInterface);
     scVTable[kResizeBuffersVTableSlot] = reinterpret_cast<void*>(&MockResizeBuffersImpl);
     MockComObject mockSwapChain{ scVTable.data() };
 
@@ -5273,6 +5285,26 @@ HWND g_windowTheSystemWasAskedFor = nullptr;
 // point it at their own locals, so the rig clears it when it goes, however the test ends.
 std::function<void()> g_onSystemCreation;
 
+std::map<const void*, IUnknown*> g_privateDataInterfaces;
+
+__declspec(noinline) HRESULT STDMETHODCALLTYPE RecordingSetPrivateDataInterface(IDXGISwapChain* self, REFGUID, const IUnknown* data) {
+    IUnknown* incoming = const_cast<IUnknown*>(data);
+    if (incoming) incoming->AddRef();
+    IUnknown*& slot = g_privateDataInterfaces[self];
+    IUnknown* old = slot;
+    slot = incoming;
+    if (old) old->Release();
+    return S_OK;
+}
+
+void DestroyTheSwapChain(const void* swapChain) {
+    auto found = g_privateDataInterfaces.find(swapChain);
+    if (found == g_privateDataInterfaces.end()) return;
+    IUnknown* held = found->second;
+    g_privateDataInterfaces.erase(found);
+    if (held) held->Release();
+}
+
 struct TestWindow {
     HWND handle = nullptr;
     explicit TestWindow(const char* title) {
@@ -5310,6 +5342,7 @@ struct GameAndOtherSwapChainRig {
         g_swapChainTheSystemCreates = nullptr;
         g_windowTheSystemWasAskedFor = nullptr;
         g_onSystemCreation = nullptr;
+        DestroyEverySwapChain();
         EXPECT_TRUE(openXrManager->Initialize());
         EXPECT_TRUE(openXrManager->CreateSession());
         EXPECT_TRUE(openXrManager->CreateTrackingSpaces());
@@ -5326,6 +5359,7 @@ struct GameAndOtherSwapChainRig {
         vtable[kPresentVTableSlot] = reinterpret_cast<void*>(&RecordingPresent);
         vtable[9] = reinterpret_cast<void*>(&MockGetBuffer);
         vtable[12] = reinterpret_cast<void*>(&MockGetDesc);
+        vtable[4] = reinterpret_cast<void*>(&RecordingSetPrivateDataInterface);
         vtable[kPresent1VTableSlot] = reinterpret_cast<void*>(&RecordingPresent1);
         vtable[kResizeBuffersVTableSlot] = reinterpret_cast<void*>(&RecordingResizeBuffers);
         vtable[kResizeBuffers1VTableSlot] = reinterpret_cast<void*>(&RecordingResizeBuffers1);
@@ -5336,7 +5370,12 @@ struct GameAndOtherSwapChainRig {
     }
     ~GameAndOtherSwapChainRig() {
         g_onSystemCreation = nullptr;
-        runtime->GetDxgiProxy().DetachAll();
+        if (runtime) runtime->GetDxgiProxy().DetachAll();
+        DestroyEverySwapChain();
+    }
+
+    static void DestroyEverySwapChain() {
+        while (!g_privateDataInterfaces.empty()) DestroyTheSwapChain(g_privateDataInterfaces.begin()->first);
     }
 
     HWND MakeWindow(const char* title) {
@@ -5637,7 +5676,7 @@ TEST(DxgiProxyTest, ASwapChainCreatedLaterForTheGameWindowReplacesTheGamesSwapCh
     EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u);
 }
 
-TEST(DxgiProxyTest, TheFirstSwapChainCreatedThroughTheHookedFactoryIsTakenForTheGamesWhoeverCreatesIt) {
+TEST(DxgiProxyTest, TheFirstSwapChainCreatedThroughTheHookedFactoryIsTheGamesUntilItIsReleased) {
     GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
     HWND firstWindow = rig.MakeWindow("FirstCreationWnd");
     CreatingFactory creating(rig.runtime->GetDxgiProxy());
@@ -5647,6 +5686,92 @@ TEST(DxgiProxyTest, TheFirstSwapChainCreatedThroughTheHookedFactoryIsTakenForThe
 
     EXPECT_EQ(rig.runtime->GetDxgiProxy().GetWindowController().GetGameHwnd(), firstWindow);
     rig.Present(rig.other, 1, 0);
+    EXPECT_TRUE(rig.openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u);
+
+    DestroyTheSwapChain(rig.other);
+    rig.Present(rig.other, 1, 0);
+    EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u) << "a released swap chain is no longer the game's";
+
+    creating.CreateForHwnd(rig.game, firstWindow);
+    rig.Present(rig.game, 1, 0);
+    EXPECT_EQ(rig.vrBridge->GetFrameParity(), 0u);
+}
+
+TEST(DxgiProxyTest, ASwapChainCreatedAtTheReleasedGamesAddressIsNotTheGamesUntilTheGameCreatesIt) {
+    GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
+    HWND gameWindow = rig.MakeWindow("ReleasedSwapChainGameWnd1");
+    CreatingFactory creating(rig.runtime->GetDxgiProxy());
+    creating.CreateForHwnd(rig.game, gameWindow);
+    rig.Present(rig.game, 1, 0);
+    ASSERT_EQ(rig.vrBridge->GetFrameParity(), 1u);
+    const uint32_t waitFramesBefore = rig.dispatch->waitFrameCalls;
+    const size_t systemPresentsBefore = g_systemPresents.size();
+
+    DestroyTheSwapChain(rig.game);
+    rig.Present(rig.game, 1, 0);
+
+    EXPECT_EQ(rig.dispatch->waitFrameCalls, waitFramesBefore) << "the Injector does nothing for it";
+    EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u);
+    EXPECT_EQ(g_systemPresents.size(), systemPresentsBefore + 1) << "its Present reaches DXGI as its caller made it";
+    creating.CreateForHwnd(rig.game, gameWindow);
+    rig.Present(rig.game, 1, 0);
+    EXPECT_EQ(rig.vrBridge->GetFrameParity(), 0u);
+    EXPECT_EQ(rig.dispatch->waitFrameCalls, waitFramesBefore + 1);
+}
+
+TEST(DxgiProxyTest, TheGamesSwapChainIsForgottenWhenItIsReleasedOnAnotherThread) {
+    GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
+    HWND gameWindow = rig.MakeWindow("ReleasedSwapChainGameWnd2");
+    CreatingFactory creating(rig.runtime->GetDxgiProxy());
+    creating.CreateForHwnd(rig.game, gameWindow);
+    rig.Present(rig.game, 1, 0);
+    ASSERT_EQ(rig.vrBridge->GetFrameParity(), 1u);
+
+    std::thread releasing([&] { DestroyTheSwapChain(rig.game); });
+    releasing.join();
+
+    rig.Present(rig.game, 1, 0);
+    EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u);
+}
+
+TEST(DxgiProxyTest, TheOldGamesSwapChainBeingReleasedAfterAReplacementKeepsTheReplacementAsTheGames) {
+    GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
+    HWND gameWindow = rig.MakeWindow("ReleasedSwapChainGameWnd3");
+    CreatingFactory creating(rig.runtime->GetDxgiProxy());
+    creating.CreateForHwnd(rig.game, gameWindow);
+    creating.CreateForHwnd(rig.replacement, gameWindow);
+
+    DestroyTheSwapChain(rig.game);
+
+    rig.Present(rig.replacement, 1, 0);
+    EXPECT_TRUE(rig.openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
+    EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u);
+}
+
+TEST(DxgiProxyTest, TheGamesSwapChainBeingReleasedAfterTheInjectorIsGoneTouchesNothing) {
+    GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
+    HWND gameWindow = rig.MakeWindow("ReleasedSwapChainGameWnd4");
+    {
+        CreatingFactory creating(rig.runtime->GetDxgiProxy());
+        creating.CreateForHwnd(rig.game, gameWindow);
+    }
+    rig.runtime.reset();
+
+    DestroyTheSwapChain(rig.game);
+
+    EXPECT_TRUE(g_privateDataInterfaces.empty());
+}
+
+TEST(DxgiProxyTest, ReattachingTheSwapChainTheProxyIsAlreadyAttachedToKeepsItAsTheGames) {
+    GameAndOtherSwapChainRig rig(VRRenderingMode::AFR, false);
+    HWND gameWindow = rig.MakeWindow("ReleasedSwapChainGameWnd5");
+    CreatingFactory creating(rig.runtime->GetDxgiProxy());
+    creating.CreateForHwnd(rig.game, gameWindow);
+
+    creating.CreateForHwnd(rig.game, gameWindow);
+
+    rig.Present(rig.game, 1, 0);
     EXPECT_TRUE(rig.openXrManager->GetEyeSwapchain(0).hasCopiedFrame);
     EXPECT_EQ(rig.vrBridge->GetFrameParity(), 1u);
 }
