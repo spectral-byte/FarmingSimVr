@@ -185,6 +185,7 @@ TEST(OpenXrEyeCopyD3D12Test, EyeCopyOnARealDeviceReportsNoDebugLayerErrors) {
 
     auto runtime = std::make_shared<FakeD3D12OpenXrRuntime>();
     runtime->device = gpu.device.Get();
+    runtime->tracking.SetEyeFov(0, { -0.8f, 0.8f, 0.8f, -0.8f });
     {
         OpenXrManager manager(runtime);
         ASSERT_TRUE(manager.Initialize());
