@@ -23,15 +23,7 @@ void MenuQuad::SetDistance(float distance) {
 }
 
 XrPosef MenuQuad::PoseFromHeadPose(const HeadPose& headPose, float distance) {
-    float yaw = headPose.rotation.yaw;
-    if (std::abs(yaw) < 1e-6f && (std::abs(headPose.orientation.x) > 1e-6f ||
-                                 std::abs(headPose.orientation.y) > 1e-6f ||
-                                 std::abs(headPose.orientation.z) > 1e-6f ||
-                                 std::abs(headPose.orientation.w - 1.0f) > 1e-6f)) {
-        yaw = QuaternionToEuler(headPose.orientation).yaw;
-    }
-
-    float halfYaw = yaw * 0.5f;
+    float halfYaw = headPose.Rotation().yaw * 0.5f;
     Quaternion qYaw(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
 
     Vector3 forwardOffset(0.0f, 0.0f, -distance);

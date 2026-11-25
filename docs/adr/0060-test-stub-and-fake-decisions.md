@@ -71,6 +71,7 @@ This record holds the non-obvious decisions behind the Lua stubs of the game, th
 
 ### `tests/fake_openxr_tracking.h`
 
+- **`QuaternionFromEuler`**: The quaternion of Euler angles composed R = Ry(yaw) * Rx(pitch) * Rz(roll), the order `QuaternionToEuler` reads back. A test that wants a head or hand turned by angles builds the pose's quaternion with it, because a `HeadPose` holds the quaternion alone, as the runtime reports it. `SetHeadPose` and `SetHandPose` pass that quaternion on unchanged.
 - **`FakeOpenXrTracking`, `SetEyeFov`**: Sets one eye's field of view. A runtime always reports both eyes, so an eye that was never set mirrors the first one set (left/right swapped and negated). Eyes sit at the head origin so the manager keeps its configured IPD.
 - **`FakeOpenXrTracking`, `LocateSpace`**: Locates the head relative to baseSpace; a LOCAL base is re-based by its pose in the runtime's tracking origin.
 - **`FakeOpenXrTracking`, `RebasePose`**: A pose given in the runtime's tracking origin, expressed in baseSpace. A LOCAL base is re-based by its pose (which is how Recenter() moves the origin); any other space leaves the pose in the tracking origin. Hands and the head share this so they always agree.

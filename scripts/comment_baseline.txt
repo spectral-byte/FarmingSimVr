@@ -40,7 +40,7 @@
 2 src/ngx/ngx_interceptor.h
 10 src/openxr/d3d12_eye_copy.h
 6 src/openxr/menu_quad.h
-2 src/openxr/openxr_manager.cpp
+1 src/openxr/openxr_manager.cpp
 2 src/openxr/openxr_manager.h
 8 src/openxr/openxr_types.h
 1 src/proxy/desktop_cursor_port.h
@@ -55,7 +55,7 @@
 15 tests/fake_openxr_controllers.h
 1 tests/fake_openxr_events.h
 10 tests/fake_openxr_runtime.h
-3 tests/fake_openxr_tracking.h
+1 tests/fake_openxr_tracking.h
 10 tests/hand_tools_test_support.h
 1 tests/luau_test_runner.cpp
 1 tests/luau_test_runner.h

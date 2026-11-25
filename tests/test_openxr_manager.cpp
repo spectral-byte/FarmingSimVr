@@ -687,9 +687,9 @@ TEST(OpenXrManagerTest, PollsHeadPoseFromOpenXrSpaceAndCalculatesEulerAngles) {
     EXPECT_NEAR(pose.position.x, 0.1f, 0.001f);
     EXPECT_NEAR(pose.position.y, 0.2f, 0.001f);
     EXPECT_NEAR(pose.position.z, 0.3f, 0.001f);
-    EXPECT_NEAR(pose.rotation.pitch, 0.5235988f, 0.005f);
-    EXPECT_NEAR(pose.rotation.yaw, 0.0f, 0.005f);
-    EXPECT_NEAR(pose.rotation.roll, 0.0f, 0.005f);
+    EXPECT_NEAR(pose.Rotation().pitch, 0.5235988f, 0.005f);
+    EXPECT_NEAR(pose.Rotation().yaw, 0.0f, 0.005f);
+    EXPECT_NEAR(pose.Rotation().roll, 0.0f, 0.005f);
 }
 
 TEST(OpenXrManagerTest, RecenteringZeroesTranslationalAndYawOffsets) {
@@ -716,7 +716,7 @@ TEST(OpenXrManagerTest, RecenteringZeroesTranslationalAndYawOffsets) {
     EXPECT_NEAR(after.position.x, 0.0f, 0.001f);
     EXPECT_NEAR(after.position.y, 0.0f, 0.001f);
     EXPECT_NEAR(after.position.z, 0.0f, 0.001f);
-    EXPECT_NEAR(after.rotation.yaw, 0.0f, 0.005f);
+    EXPECT_NEAR(after.Rotation().yaw, 0.0f, 0.005f);
     EXPECT_NEAR(after.orientation.x, 0.0f, 0.001f);
     EXPECT_NEAR(after.orientation.y, 0.0f, 0.001f);
     EXPECT_NEAR(after.orientation.z, 0.0f, 0.001f);
@@ -806,15 +806,15 @@ TEST(OpenXrManagerTest, PollHeadPoseNativelyReflectsRecenteredReferenceFrameAndP
     EXPECT_NEAR(polled.position.x, 0.0f, 0.001f);
     EXPECT_NEAR(polled.position.y, 0.0f, 0.001f);
     EXPECT_NEAR(polled.position.z, 0.0f, 0.001f);
-    EXPECT_NEAR(polled.rotation.yaw, 0.0f, 0.005f);
-    EXPECT_NEAR(polled.rotation.pitch, pitch, 0.01f);
+    EXPECT_NEAR(polled.Rotation().yaw, 0.0f, 0.005f);
+    EXPECT_NEAR(polled.Rotation().pitch, pitch, 0.01f);
 
     HeadPose raw = manager.GetRawPose();
     EXPECT_NEAR(raw.position.x, 2.0f, 0.001f);
     EXPECT_NEAR(raw.position.y, 1.2f, 0.001f);
     EXPECT_NEAR(raw.position.z, -1.0f, 0.001f);
-    EXPECT_NEAR(raw.rotation.yaw, yaw, 0.01f);
-    EXPECT_NEAR(raw.rotation.pitch, pitch, 0.01f);
+    EXPECT_NEAR(raw.Rotation().yaw, yaw, 0.01f);
+    EXPECT_NEAR(raw.Rotation().pitch, pitch, 0.01f);
 }
 
 TEST(OpenXrManagerTest, RecenterRebasesLaterHeadMovementToTheRecenteredOrigin) {
@@ -827,7 +827,7 @@ TEST(OpenXrManagerTest, RecenterRebasesLaterHeadMovementToTheRecenteredOrigin) {
 
     HeadPose simPose;
     simPose.position = Vector3(1.0f, 2.0f, 3.0f);
-    simPose.rotation = EulerAngles(0.0f, 0.4f, 0.0f);
+    simPose.orientation = QuaternionFromEuler(0.0f, 0.4f, 0.0f);
     simPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(simPose);
 
@@ -837,11 +837,11 @@ TEST(OpenXrManagerTest, RecenterRebasesLaterHeadMovementToTheRecenteredOrigin) {
     EXPECT_NEAR(polled.position.x, 0.0f, 0.001f);
     EXPECT_NEAR(polled.position.y, 0.0f, 0.001f);
     EXPECT_NEAR(polled.position.z, 0.0f, 0.001f);
-    EXPECT_NEAR(polled.rotation.yaw, 0.0f, 0.005f);
+    EXPECT_NEAR(polled.Rotation().yaw, 0.0f, 0.005f);
 
     HeadPose movedPose;
     movedPose.position = Vector3(1.0f, 2.5f, 3.0f);
-    movedPose.rotation = EulerAngles(0.0f, 0.4f, 0.0f);
+    movedPose.orientation = QuaternionFromEuler(0.0f, 0.4f, 0.0f);
     movedPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(movedPose);
 
@@ -883,7 +883,7 @@ TEST(OpenXrManagerTest, PollHeadPoseReportsEulerPoseDrivenThroughFakeTracking) {
 
     HeadPose placed;
     placed.position = Vector3(0.4f, 1.7f, -0.2f);
-    placed.rotation = EulerAngles(0.25f, -0.15f, 0.05f);
+    placed.orientation = QuaternionFromEuler(0.25f, -0.15f, 0.05f);
     placed.isValid = true;
     mockDispatch->tracking.SetHeadPose(placed);
 
@@ -891,9 +891,9 @@ TEST(OpenXrManagerTest, PollHeadPoseReportsEulerPoseDrivenThroughFakeTracking) {
     EXPECT_TRUE(polled.isValid);
     EXPECT_FALSE(polled.positionTracked);
     EXPECT_NEAR(polled.position.y, 1.7f, 0.0001f);
-    EXPECT_NEAR(polled.rotation.pitch, 0.25f, 0.001f);
-    EXPECT_NEAR(polled.rotation.yaw, -0.15f, 0.001f);
-    EXPECT_NEAR(polled.rotation.roll, 0.05f, 0.001f);
+    EXPECT_NEAR(polled.Rotation().pitch, 0.25f, 0.001f);
+    EXPECT_NEAR(polled.Rotation().yaw, -0.15f, 0.001f);
+    EXPECT_NEAR(polled.Rotation().roll, 0.05f, 0.001f);
 }
 TEST(OpenXrManagerTest, ShutdownDestroysBaseLocalSpaceAndLocalSpace) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
@@ -1390,7 +1390,6 @@ TEST(OpenXrManagerTest, ComputesStereoEyePositionsAndPosesCorrectly) {
     HeadPose headPose(
         Vector3(0.0f, 1.7f, 0.0f),
         Quaternion(0.0f, 0.0f, 0.0f, 1.0f),
-        EulerAngles(0.0f, 0.0f, 0.0f),
         true, true, true
     );
 
@@ -1412,11 +1411,10 @@ TEST(OpenXrManagerTest, ComputesStereoEyePositionsAndPosesCorrectly) {
     EXPECT_NEAR(leftEyePose.position.y, 1.7f, 0.001f);
 }
 
-TEST(OpenXrManagerTest, HeadPoseConsolidatesStructuredPrimitives) {
+TEST(OpenXrManagerTest, HeadPoseStoresTheQuaternionAndDerivesTheEulerAnglesFromIt) {
     HeadPose pose(
         Vector3(1.5f, 2.5f, -3.5f),
-        Quaternion(0.1f, 0.2f, 0.3f, 0.9f),
-        EulerAngles(0.15f, -0.25f, 0.05f)
+        Quaternion(0.1f, 0.2f, 0.3f, 0.9f)
     );
 
     EXPECT_EQ(pose.position.x, 1.5f);
@@ -1428,9 +1426,12 @@ TEST(OpenXrManagerTest, HeadPoseConsolidatesStructuredPrimitives) {
     EXPECT_EQ(pose.orientation.z, 0.3f);
     EXPECT_EQ(pose.orientation.w, 0.9f);
 
-    EXPECT_EQ(pose.rotation.pitch, 0.15f);
-    EXPECT_EQ(pose.rotation.yaw, -0.25f);
-    EXPECT_EQ(pose.rotation.roll, 0.05f);
+    EXPECT_EQ(pose.Rotation(), QuaternionToEuler(Quaternion(0.1f, 0.2f, 0.3f, 0.9f)));
+
+    const HeadPose turned(Vector3(), QuaternionFromEuler(0.15f, -0.25f, 0.05f));
+    EXPECT_NEAR(turned.Rotation().pitch, 0.15f, 1e-5f);
+    EXPECT_NEAR(turned.Rotation().yaw, -0.25f, 1e-5f);
+    EXPECT_NEAR(turned.Rotation().roll, 0.05f, 1e-5f);
 }
 
 TEST(OpenXrManagerTest, QueriesRecommendedViewConfigurationDimensions) {
@@ -1865,6 +1866,40 @@ TEST(OpenXrManagerTest, SubmitFramePairSubmitsTheRenderedFovAndNormalizedOrienta
     }
 }
 
+TEST(OpenXrManagerTest, AnUnlocatedHeadWithAZeroQuaternionPollsAsIdentityAndSubmitsIdentity) {
+    auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
+    mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
+
+    OpenXrManager manager(mockDispatch);
+    ASSERT_TRUE(manager.Initialize());
+    ASSERT_TRUE(manager.CreateSession());
+    ASSERT_TRUE(manager.CreateTrackingSpaces());
+    ASSERT_TRUE(manager.CreateEyeSwapchains(1920, 1080));
+
+    HeadPose unlocated;
+    unlocated.position = Vector3(0.1f, 1.6f, -0.2f);
+    unlocated.orientation = Quaternion(0.0f, 0.0f, 0.0f, 0.0f);
+    unlocated.isValid = false;
+    mockDispatch->tracking.SetHeadPose(unlocated);
+
+    const HeadPose polled = manager.PollHeadPose();
+    EXPECT_FALSE(polled.isValid);
+    EXPECT_EQ(polled.orientation, Quaternion(0.0f, 0.0f, 0.0f, 1.0f));
+    EXPECT_EQ(polled.Rotation(), EulerAngles(0.0f, 0.0f, 0.0f));
+    EXPECT_EQ(manager.GetRawPose().orientation, Quaternion(0.0f, 0.0f, 0.0f, 1.0f));
+
+    EXPECT_TRUE(manager.CopyBackBufferToEye(0, nullptr));
+    EXPECT_TRUE(manager.CopyBackBufferToEye(1, nullptr));
+    EXPECT_TRUE(manager.SubmitFramePair());
+    ASSERT_EQ(mockDispatch->lastSubmittedProjectionViews.size(), 2u);
+    for (const auto& pv : mockDispatch->lastSubmittedProjectionViews) {
+        EXPECT_EQ(pv.pose.orientation.x, 0.0f);
+        EXPECT_EQ(pv.pose.orientation.y, 0.0f);
+        EXPECT_EQ(pv.pose.orientation.z, 0.0f);
+        EXPECT_EQ(pv.pose.orientation.w, 1.0f);
+    }
+}
+
 TEST(OpenXrManagerTest, BeginFrameLocatesViewsAndRefreshesProjectionsAndPose) {
     auto mockDispatch = std::make_shared<MockOpenXrDispatch>();
     mockDispatch->availableExtensions = { XR_KHR_D3D12_ENABLE_EXTENSION_NAME };
@@ -2008,7 +2043,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadRespectsRecenterOffset) {
     HeadPose simPose;
     simPose.position = Vector3(1.0f, 0.5f, -2.0f);
     simPose.orientation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
-    simPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     simPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(simPose);
 
@@ -2095,7 +2129,7 @@ TEST(OpenXrManagerTest, ChangingTheMenuDistanceMovesAPlacedQuadAlongTheWayItFace
 
     HeadPose head;
     head.position = Vector3(2.0f, 1.7f, 3.0f);
-    head.rotation = EulerAngles(0.0f, -1.5707963f, 0.0f);
+    head.orientation = QuaternionFromEuler(0.0f, -1.5707963f, 0.0f);
     head.isValid = true;
     manager.AlignMenuQuadToHeadPose(&head);
     const XrPosef placed = manager.ComputeMenuQuadPose();
@@ -2122,7 +2156,6 @@ TEST(OpenXrManagerTest, ChangingTheMenuDistanceMovesAPlacedQuadAlongTheWayItFace
     EXPECT_NEAR(manager.ComputeMenuQuadPose().position.x, 3.0f, 0.01f);
     HeadPose ahead;
     ahead.position = Vector3(0.0f, 1.6f, 0.0f);
-    ahead.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     ahead.isValid = true;
     manager.SetMenuQuadDistance(4.0f);
     manager.AlignMenuQuadToHeadPose(&ahead);
@@ -2153,7 +2186,7 @@ TEST(OpenXrManagerTest, SubmitMenuQuadResetsCopiedFlagsForBothSwapchains) {
 TEST(OpenXrManagerTest, ComputeMenuQuadPosePlacesQuadAtGazeVectorAndDecouplesPitchAndRoll) {
     HeadPose headPoseYawRight;
     headPoseYawRight.position = Vector3(2.0f, 1.7f, 3.0f);
-    headPoseYawRight.rotation = EulerAngles(0.4f, -1.5707963f, -0.3f);
+    headPoseYawRight.orientation = QuaternionFromEuler(0.4f, -1.5707963f, -0.3f);
     headPoseYawRight.isValid = true;
 
     XrPosef quadPose = OpenXrManager::ComputeMenuQuadPoseFromHeadPose(headPoseYawRight, 1.5f);
@@ -2171,7 +2204,7 @@ TEST(OpenXrManagerTest, ComputeMenuQuadPosePlacesQuadAtGazeVectorAndDecouplesPit
 
     HeadPose headPoseForward;
     headPoseForward.position = Vector3(-1.0f, 1.5f, 2.0f);
-    headPoseForward.rotation = EulerAngles(-0.5f, 0.0f, 0.2f);
+    headPoseForward.orientation = QuaternionFromEuler(-0.5f, 0.0f, 0.2f);
     headPoseForward.isValid = true;
 
     XrPosef quadPoseFwd = OpenXrManager::ComputeMenuQuadPoseFromHeadPose(headPoseForward, 1.5f);
@@ -2196,7 +2229,6 @@ TEST(OpenXrManagerTest, SubmitMenuQuadAlignsToHeadPoseOnRecenter) {
 
     HeadPose simPose;
     simPose.position = Vector3(3.0f, 1.0f, -1.0f);
-    simPose.rotation = EulerAngles(0.2f, 0.785398f, 0.0f);
     float halfYaw = 0.785398f * 0.5f;
     simPose.orientation = Quaternion(0.0f, std::sin(halfYaw), 0.0f, std::cos(halfYaw));
     simPose.isValid = true;
@@ -2235,7 +2267,6 @@ TEST(OpenXrManagerTest, MenuQuadRemainsAnchoredInLocalSpaceAcrossHeadMotion) {
 
     HeadPose initialPose;
     initialPose.position = Vector3(0.0f, 1.7f, 0.0f);
-    initialPose.rotation = EulerAngles(0.0f, 0.0f, 0.0f);
     initialPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(initialPose);
     manager.PollHeadPose();
@@ -2244,7 +2275,7 @@ TEST(OpenXrManagerTest, MenuQuadRemainsAnchoredInLocalSpaceAcrossHeadMotion) {
 
     HeadPose movedPose;
     movedPose.position = Vector3(0.0f, 1.7f, -0.5f);
-    movedPose.rotation = EulerAngles(0.3f, 0.2f, 0.1f);
+    movedPose.orientation = QuaternionFromEuler(0.3f, 0.2f, 0.1f);
     movedPose.isValid = true;
     mockDispatch->tracking.SetHeadPose(movedPose);
 
@@ -2276,7 +2307,7 @@ struct MenuQuadSession {
     void SetHead(float x, float y, float z, float yaw, bool valid) {
         HeadPose pose;
         pose.position = Vector3(x, y, z);
-        pose.rotation = EulerAngles(0.0f, yaw, 0.0f);
+        pose.orientation = QuaternionFromEuler(0.0f, yaw, 0.0f);
         pose.isValid = valid;
         pose.positionTracked = valid;
         pose.orientationTracked = valid;
